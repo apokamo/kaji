@@ -35,7 +35,7 @@ $ARGUMENTS = <issue-number> [prefix]
 $ARGUMENTS から issue-number と prefix を取得してください。
 - prefix が指定されていない場合は `feat` をデフォルトとする
 - ブランチ名: `[prefix]/[issue-number]`
-- ディレクトリ: `../kamo2-[prefix]-[issue-number]`
+- ディレクトリ: `../[prefix]-[issue-number]`
 
 ### Step 1: PRのマージ
 
@@ -48,8 +48,8 @@ gh pr merge --merge --delete-branch
 ### Step 2: メインリポジトリに移動してworktree削除
 
 ```bash
-cd /home/aki/claude/kamo2
-git worktree remove ../kamo2-[prefix]-[issue-number]
+cd /home/aki/dev/dev-agent-orchestra/main
+git worktree remove ../[prefix]-[issue-number]
 ```
 
 ### Step 3: 完了報告
@@ -65,5 +65,5 @@ git worktree remove ../kamo2-[prefix]-[issue-number]
 | worktree | 削除済み |
 | リモートブランチ | 削除済み (--delete-branch) |
 
-作業ディレクトリは /home/aki/claude/kamo2 に戻りました。
+作業ディレクトリは /home/aki/dev/dev-agent-orchestra/main に戻りました。
 ```
