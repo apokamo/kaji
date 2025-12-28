@@ -29,7 +29,7 @@ $ARGUMENTS = <issue-number> [prefix]
 ## 命名規則
 
 - **ブランチ名**: `[prefix]/[issue-number]` (例: `docs/247`)
-- **ディレクトリ**: `../kamo2-[prefix]-[issue-number]` (例: `../kamo2-docs-247`)
+- **ディレクトリ**: `../[prefix]-[issue-number]` (例: `../docs-247`)
 
 ## 実行手順
 
@@ -40,10 +40,10 @@ $ARGUMENTS から issue-number と prefix を取得してください。
 
 ### Step 1: ブランチとWorktreeの作成
 
-現在のディレクトリ（/home/aki/claude/kamo2）から実行:
+現在のディレクトリ（/home/aki/dev/dev-agent-orchestra/main）から実行:
 
 ```bash
-git worktree add -b [prefix]/[issue-number] ../kamo2-[prefix]-[issue-number] main
+git worktree add -b [prefix]/[issue-number] ../[prefix]-[issue-number] main
 ```
 
 ### Step 2: Worktreeの確認
@@ -65,20 +65,20 @@ git worktree list
 |------|-----|
 | Issue | #[issue-number] |
 | ブランチ | [prefix]/[issue-number] |
-| ディレクトリ | ../kamo2-[prefix]-[issue-number] |
+| ディレクトリ | ../[prefix]-[issue-number] |
 | 基点ブランチ | main |
 
 ### 次のステップ
 
 このタスクに関する今後のコマンドは、すべて以下のディレクトリ内で実行してください:
 
-cd ../kamo2-[prefix]-[issue-number]
+cd ../[prefix]-[issue-number]
 
 ### クリーンアップ（作業完了後）
 
 作業が完了したら、以下のコマンドでworktreeを削除できます:
 
-cd /home/aki/claude/kamo2
-git worktree remove ../kamo2-[prefix]-[issue-number]
+cd /home/aki/dev/dev-agent-orchestra/main
+git worktree remove ../[prefix]-[issue-number]
 git branch -d [prefix]/[issue-number]  # マージ済みの場合
 ```
