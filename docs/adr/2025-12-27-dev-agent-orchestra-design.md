@@ -184,67 +184,11 @@ dao --list-workflows
 
 ---
 
-## 4. Git Worktree 構成
+## 4. 開発環境
 
-### 4.1 推奨構成: Bare Repository パターン
+Git Worktree + Bare Repository パターンを採用。
 
-2024-2025年のベストプラクティスに基づく構成:
-
-```
-/home/aki/dev/dev-agent-orchestra/    # プロジェクトコンテナ
-├── .bare/                            # bare git repository (実データ)
-├── .git                              # ポインタファイル → .bare を参照
-├── main/                             # worktree (main ブランチ)
-├── feature-design/                   # worktree (feature-design ブランチ)
-└── issue-42/                         # worktree (issue-42 ブランチ)
-```
-
-### 4.2 構成のメリット
-
-| 観点 | メリット |
-|------|----------|
-| **整理性** | 1リポジトリ = 1ディレクトリ、他リポジトリと混ざらない |
-| **分離** | bare repo は純粋なGitデータ、worktree がファイル操作 |
-| **AI並列開発** | 各worktreeで独立したClaude Codeセッション実行可能 |
-| **コンテキスト保持** | ブランチごとに会話履歴・状態が保持される |
-
-### 4.3 セットアップ手順
-
-```bash
-# 1. プロジェクトコンテナ作成
-mkdir -p /home/aki/dev/dev-agent-orchestra
-cd /home/aki/dev/dev-agent-orchestra
-
-# 2. GitHubリポジトリ作成
-gh repo create apokamo/dev-agent-orchestra --public \
-  --description "AI-driven software development workflow orchestrator"
-
-# 3. bare repository として初期化
-git clone --bare git@github.com:apokamo/dev-agent-orchestra.git .bare
-
-# 4. .git ポインタファイル作成
-echo "gitdir: ./.bare" > .git
-
-# 5. fetch 設定追加
-git config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
-
-# 6. main worktree 作成
-git worktree add main -b main
-cd main
-git commit --allow-empty -m "Initial commit"
-git push -u origin main
-```
-
-### 4.4 運用ルール
-
-**Do:**
-- ディレクトリ移動でブランチ切り替え (`cd ../feature-xxx`)
-- worktree管理はプロジェクトルートから実行
-- 各worktreeでupstream設定 (`git branch --set-upstream-to=origin/xxx`)
-
-**Don't:**
-- `git checkout` を使わない（ディレクトリ移動で対応）
-- プロジェクトルートで一般的なgitコマンドを実行しない
+詳細は [Git Worktree ガイド](../guides/git-worktree.md) を参照。
 
 ---
 
@@ -274,15 +218,6 @@ git push -u origin main
 ---
 
 ## 6. 参考資料
-
-### Git Worktree ベストプラクティス
-- [How to use git worktree and in a clean way](https://morgan.cugerone.com/blog/how-to-use-git-worktree-and-in-a-clean-way/)
-- [Bare Git Worktrees AGENTS.md](https://gist.github.com/ben-vargas/fd99be9bbce6d485c70442dd939f1a3d)
-- [Git Worktree Best Practices and Tools](https://gist.github.com/ChristopherA/4643b2f5e024578606b9cd5d2e6815cc)
-
-### AI並列開発
-- [incident.io: Shipping faster with Claude Code and Git Worktrees](https://incident.io/blog/shipping-faster-with-claude-code-and-git-worktrees)
-- [Parallel AI Coding with Git Worktrees](https://docs.agentinterviews.com/blog/parallel-ai-coding-with-gitworktrees/)
 
 ### 既存実装
 - bugfix-v5: `.claude/agents/bugfix-v5/`
