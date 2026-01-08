@@ -1,10 +1,10 @@
 ---
-description: イシュー着手時に使用。ブランチ作成ではなくworktreeで分離された開発環境を構築する
+description: イシュー着手時に使用。worktreeで分離された開発環境を構築し、Issue本文にメタ情報を追記する
 ---
 
 # Issue Start
 
-イシュー対応を開始するためのworktreeをセットアップします。
+イシュー対応を開始するためのworktreeをセットアップし、Issue本文にメタ情報を追記します。
 
 ## いつ使うか
 
@@ -22,14 +22,14 @@ description: イシュー着手時に使用。ブランチ作成ではなくwork
 $ARGUMENTS = <issue-number> [prefix]
 ```
 
-- `issue-number` (必須): Issue番号 (例: 247)
+- `issue-number` (必須): Issue番号 (例: 6)
 - `prefix` (任意): ブランチプレフィックス (デフォルト: feat)
   - 例: docs, fix, feat, refactor, test
 
 ## 命名規則
 
-- **ブランチ名**: `[prefix]/[issue-number]` (例: `docs/247`)
-- **ディレクトリ**: `../[prefix]-[issue-number]` (例: `../docs-247`)
+- **ブランチ名**: `[prefix]/[issue-number]` (例: `docs/6`)
+- **ディレクトリ**: `../[prefix]-[issue-number]` (例: `../docs-6`)
 
 ## 実行手順
 
@@ -54,7 +54,29 @@ git worktree list
 
 ワークツリーが正しく作成されたことを確認してください。
 
-### Step 3: セットアップ完了報告
+### Step 3: Issue本文にメタ情報を追記
+
+Issue本文の先頭にWorktree情報を追記します:
+
+```bash
+# 現在のIssue本文を取得
+CURRENT_BODY=$(gh issue view [issue-number] --json body -q '.body')
+
+# メタ情報を先頭に追加した新しい本文を作成
+NEW_BODY=$(cat <<EOF
+> [!NOTE]
+> **Worktree**: \`../[prefix]-[issue-number]\`
+> **Branch**: \`[prefix]/[issue-number]\`
+
+$CURRENT_BODY
+EOF
+)
+
+# Issue本文を更新
+gh issue edit [issue-number] --body "$NEW_BODY"
+```
+
+### Step 4: セットアップ完了報告
 
 以下の形式で報告してください:
 
@@ -67,6 +89,7 @@ git worktree list
 | ブランチ | [prefix]/[issue-number] |
 | ディレクトリ | ../[prefix]-[issue-number] |
 | 基点ブランチ | main |
+| メタ情報 | Issue本文に追記済み |
 
 ### 次のステップ
 
@@ -76,9 +99,5 @@ cd ../[prefix]-[issue-number]
 
 ### クリーンアップ（作業完了後）
 
-作業が完了したら、以下のコマンドでworktreeを削除できます:
-
-cd /home/aki/dev/dev-agent-orchestra/main
-git worktree remove ../[prefix]-[issue-number]
-git branch -d [prefix]/[issue-number]  # マージ済みの場合
+作業が完了したら `/issue-close [issue-number] [prefix]` を実行してください。
 ```
