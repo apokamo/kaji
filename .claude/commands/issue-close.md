@@ -17,59 +17,42 @@ description: イシュー完了時に使用。PRマージ・worktree削除・ブ
 ## 引数
 
 ```
-$ARGUMENTS = <issue-number>
+$ARGUMENTS = <issue-number> [prefix]
 ```
 
-- `issue-number` (必須): Issue番号 (例: 6)
+- `issue-number` (必須): Issue番号 (例: 247)
+- `prefix` (任意): ブランチプレフィックス (デフォルト: feat)
 
 ## 前提条件
 
-- `/issue-pr` でPRが作成済みであること
 - Merge commit方式を使用（ブランチ履歴を保持）
+- マージコメントの追加入力は不要
 
 ## 実行手順
 
-### Step 1: Worktree情報の取得
+### Step 0: 引数の解析
 
-Issue本文からWorktree情報を取得します:
+$ARGUMENTS から issue-number と prefix を取得してください。
+- prefix が指定されていない場合は `feat` をデフォルトとする
+- ブランチ名: `[prefix]/[issue-number]`
+- ディレクトリ: `../[prefix]-[issue-number]`
 
-```bash
-gh issue view [issue-number] --json body -q '.body'
-```
-
-以下の情報を抽出:
-- `> **Worktree**: \`../[prefix]-[number]\`` → worktree パス
-- `> **Branch**: \`[prefix]/[number]\`` → ブランチ名
-
-### Step 2: メインリポジトリに移動
-
-worktree内にいる場合は先にメインリポジトリに移動:
+### Step 1: PRのマージ
 
 ```bash
-cd /home/aki/dev/dev-agent-orchestra/main
-```
-
-### Step 3: PRのマージ
-
-```bash
-gh pr merge [branch-name] --merge --delete-branch
+gh pr merge --merge --delete-branch
 ```
 
 マージコミットを作成してブランチ履歴を保持する。
 
-### Step 4: worktree削除
+### Step 2: メインリポジトリに移動してworktree削除
 
 ```bash
-git worktree remove [worktree-path]
+cd /home/aki/dev/dev-agent-orchestra/main
+git worktree remove ../[prefix]-[issue-number]
 ```
 
-### Step 5: mainを最新化
-
-```bash
-git pull origin main
-```
-
-### Step 6: 完了報告
+### Step 3: 完了報告
 
 以下の形式で報告してください:
 
@@ -78,11 +61,9 @@ git pull origin main
 
 | 項目 | 状態 |
 |------|------|
-| Issue | #[issue-number] |
 | PR | マージ済み |
 | worktree | 削除済み |
 | リモートブランチ | 削除済み (--delete-branch) |
-| main | 最新化済み |
 
 作業ディレクトリは /home/aki/dev/dev-agent-orchestra/main に戻りました。
 ```
