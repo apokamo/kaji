@@ -141,8 +141,57 @@ git commit -m "chore: remove draft design (moved to PR)"
 
 ```bash
 git push -u origin HEAD
+```
 
-gh pr create --title "[prefix]: タイトル (#[issue-number])" --body "..."
+**設計書がある場合:**
+
+```bash
+gh pr create --title "[prefix]: タイトル (#[issue-number])" --body "$(cat <<'EOF'
+## Summary
+
+(Issueの概要)
+
+Closes #[issue-number]
+
+## Design
+
+<details>
+<summary>設計書</summary>
+
+(設計書の内容)
+
+</details>
+
+## Changes
+
+- (変更点)
+
+## Test Plan
+
+- [x] テストパス
+EOF
+)"
+```
+
+**設計書がない場合:**
+
+```bash
+gh pr create --title "[prefix]: タイトル (#[issue-number])" --body "$(cat <<'EOF'
+## Summary
+
+(Issueの概要)
+
+Closes #[issue-number]
+
+## Changes
+
+- (変更点)
+
+## Test Plan
+
+- [x] テストパス
+EOF
+)"
 ```
 
 ### Step 8: 完了報告
