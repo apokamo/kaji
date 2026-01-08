@@ -55,13 +55,25 @@ REVIEW ──(PASS)──> COMPLETE
 
 ### VERDICTプロトコルとの関係
 
-VERDICTプロトコル自体は変更しない（後方互換性維持）:
+**結論: VERDICTプロトコルは拡張しない**
 
 ```
 PASS / RETRY / BACK_DESIGN / ABORT
 ```
 
-`review` と `verify` の区別はステート遷移ロジックで行う。同じ `RETRY` でも、どのステートから発行されたかで遷移先が変わる。
+**理由:**
+
+1. **後方互換性**: 既存のVERDICTパーサーやテストに影響を与えない
+2. **ステート遷移で区別可能**: `review` と `verify` の違いはVERDICT値ではなく、どのステートから発行されたかで判断できる
+3. **シンプルさ**: 新しいVERDICT値を追加すると、すべてのワークフローで対応が必要になり複雑化する
+
+同じ `RETRY` でも、どのステートから発行されたかで遷移先が変わる。
+
+### 収束保証の制約
+
+- verify → fix → verify ループは**最大3回**までとする
+- 3回を超えた場合、ループカウンタにより強制的に ABORT へ遷移
+- この制約は `SessionState.loop_counters` で管理
 
 ## Consequences
 
