@@ -85,6 +85,8 @@ class AIToolProtocol(Protocol):
 
 ## Workflows
 
+すべてのワークフローは `review → fix → verify` パターンを採用（[ADR-001](adr/001-review-cycle-pattern.md)）。
+
 ### Design Workflow
 
 ```
@@ -95,7 +97,18 @@ DESIGN ──(always)──> DESIGN_REVIEW
                   PASS        RETRY
                     │           │
                     v           v
-                COMPLETE     DESIGN
+                COMPLETE    DESIGN_FIX
+                                │
+                           (always)
+                                v
+                         DESIGN_VERIFY
+                                │
+                    ┌───────────┴───────────┐
+                    │                       │
+                  PASS                    RETRY
+                    │                       │
+                    v                       v
+                COMPLETE                DESIGN_FIX
 ```
 
 ### Implement Workflow (TODO)
@@ -108,9 +121,21 @@ IMPLEMENT ──(always)──> IMPLEMENT_REVIEW
                   PASS      RETRY   BACK_DESIGN
                     │         │         │
                     v         v         v
-                COMPLETE  IMPLEMENT  (external)
+                COMPLETE  IMPLEMENT_FIX  (external)
+                              │
+                         (always)
+                              v
+                       IMPLEMENT_VERIFY
+                              │
+                    ┌─────────┴─────────┐
+                    │                   │
+                  PASS                RETRY
+                    │                   │
+                    v                   v
+                COMPLETE            IMPLEMENT_FIX
 ```
 
 ### Bugfix Workflow (TODO)
 
 9ステートのフルワークフロー。bugfix-v5 から移植予定。
+`review → fix → verify` パターンを適用予定。
