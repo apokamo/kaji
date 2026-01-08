@@ -40,7 +40,9 @@ class ImplementState(Enum):
     COMPLETE = auto()
 ```
 
-#### VERDICTプロトコル拡張
+#### VERDICTプロトコル検討結果
+
+**結論: VERDICTプロトコルは拡張しない**
 
 ```python
 class Verdict(Enum):
@@ -50,7 +52,13 @@ class Verdict(Enum):
     ABORT = "ABORT"
 ```
 
-VERDICTプロトコル自体は変更しない。ステート遷移ロジックで `review` と `verify` を区別する。
+**理由:**
+
+1. **後方互換性**: 既存のVERDICTパーサー (`parse_verdict()`) やテストに影響を与えない
+2. **ステート遷移で区別可能**: `review` と `verify` の違いはVERDICT値ではなく、どのステートから発行されたかで判断できる
+3. **シンプルさ**: 新しいVERDICT値（例: `VERIFY_PASS`）を追加すると、すべてのワークフローで対応が必要になり複雑化する
+
+同じ `RETRY` でも、`DESIGN_REVIEW` から発行されれば `DESIGN_FIX` へ、`DESIGN_VERIFY` から発行されれば再び `DESIGN_FIX` へ遷移する。この区別はステートマシンの遷移テーブルで表現する。
 
 ### 出力
 
@@ -143,6 +151,12 @@ assert next_state == DesignState.DESIGN_FIX
 - verifyステートは「新規指摘を追加しない」という運用ルールで収束を保証
 - このルールはプロンプト設計で担保する（コードでの強制は困難）
 
+### 収束保証の制約
+
+- **無限ループ防止**: verify → fix → verify ループは最大3回までとする
+- 3回を超えた場合、ループカウンタにより強制的に ABORT へ遷移
+- この制約は `SessionState.loop_counters` で管理し、ワークフロー実装時に適用
+
 ### 依存関係
 
 - `src/core/verdict.py`: 変更なし
@@ -152,45 +166,33 @@ assert next_state == DesignState.DESIGN_FIX
 
 ## 方針
 
-### Phase 1: ADR作成
+### 本Issueのスコープ（#11）
 
-`docs/adr/001-review-cycle-pattern.md` を作成し、以下を文書化:
+以下の2点をこのIssueで完了する:
 
-1. `review` vs `verify` の違い
-   - review: フルレビュー、新規指摘あり
-   - verify: 修正確認のみ、新規指摘なし（収束保証）
-2. 収束保証のメカニズム
-3. VERDICTプロトコルとの関係
+1. **ADR作成**: `docs/adr/001-review-cycle-pattern.md`
+   - `review` vs `verify` の違い
+   - 収束保証のメカニズム
+   - VERDICTプロトコルとの関係（拡張しない判断）
 
-### Phase 2: architecture.md更新
+2. **architecture.md更新**: ワークフロー図の更新
+   - Design Workflowに `DESIGN_FIX` / `DESIGN_VERIFY` を追加
+   - Implement Workflowに `IMPLEMENT_FIX` / `IMPLEMENT_VERIFY` を追加
 
-`docs/architecture.md` のワークフロー図を更新:
+### 将来の実装ロードマップ（別Issue）
 
-- Design Workflowに `DESIGN_FIX` / `DESIGN_VERIFY` を追加
-- Implement Workflowに `IMPLEMENT_FIX` / `IMPLEMENT_VERIFY` を追加
+以下は本Issueのスコープ外。必要に応じて別Issueで対応:
 
-### Phase 3: ステートマシン実装
+1. **ステートマシン実装**
+   - `src/workflows/design/states.py` にステート追加
+   - `src/workflows/design/workflow.py` に遷移ロジック追加
+   - 対応するハンドラーの実装
 
-1. `src/workflows/design/states.py` にステート追加
-2. `src/workflows/design/workflow.py` に遷移ロジック追加
-3. 対応するハンドラーの実装（handlers/）
+2. **プロンプト設計**
+   - `design_fix.md`, `design_verify.md` 等の作成
 
-### Phase 4: プロンプト設計
-
-`prompts/` ディレクトリに以下を作成:
-
-- `design_fix.md`: 指摘事項に対する修正プロンプト
-- `design_verify.md`: 修正確認専用プロンプト（新規指摘禁止を明示）
-- `implement_fix.md`: 同様
-- `implement_verify.md`: 同様
-
-### Phase 5: draft/design/ パターンの組み込み（任意）
-
-設計書ライフサイクルをドキュメント化:
-
-```
-draft/design/ → PR本文転記 → draft/削除 → (必要に応じて) docs/design/
-```
+3. **draft/design/ パターンの組み込み**
+   - 設計書ライフサイクルのドキュメント化
 
 ## 検証観点
 
