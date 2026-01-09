@@ -139,3 +139,7 @@ IMPLEMENT ──(always)──> IMPLEMENT_REVIEW
 
 9ステートのフルワークフロー。bugfix-v5 から移植予定。
 `review → fix → verify` パターンを適用予定。
+
+## Related
+
+- [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) - Claude Code スキルによる開発ワークフロー（`draft/design/` パターン等）
