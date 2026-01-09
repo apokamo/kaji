@@ -46,7 +46,17 @@ $ARGUMENTS から issue-number と prefix を取得してください。
 git worktree add -b [prefix]/[issue-number] ../[prefix]-[issue-number] main
 ```
 
-### Step 2: Worktreeの確認
+### Step 2: venv シンボリックリンク作成
+
+main の `.venv` へのシンボリックリンクを作成:
+
+```bash
+ln -s ../main/.venv ../[prefix]-[issue-number]/.venv
+```
+
+これにより `ruff`、`mypy`、`pytest` が即座に実行可能になります。
+
+### Step 3: Worktreeの確認
 
 ```bash
 git worktree list
@@ -54,7 +64,7 @@ git worktree list
 
 ワークツリーが正しく作成されたことを確認してください。
 
-### Step 3: Issue本文にメタ情報を追記
+### Step 4: Issue本文にメタ情報を追記
 
 Issue本文の先頭にWorktree情報を追記します:
 
@@ -76,7 +86,7 @@ EOF
 gh issue edit [issue-number] --body "$NEW_BODY"
 ```
 
-### Step 4: セットアップ完了報告
+### Step 5: セットアップ完了報告
 
 以下の形式で報告してください:
 
@@ -89,7 +99,17 @@ gh issue edit [issue-number] --body "$NEW_BODY"
 | ブランチ | [prefix]/[issue-number] |
 | ディレクトリ | ../[prefix]-[issue-number] |
 | 基点ブランチ | main |
+| .venv | main へのシンボリックリンク |
 | メタ情報 | Issue本文に追記済み |
+
+### 注意事項
+
+⚠️ `.venv` は main のシンボリックリンクです:
+- `pip install` は main に影響します
+- pyproject.toml を変更する場合は個別 venv を作成してください:
+  ```bash
+  rm .venv && python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"
+  ```
 
 ### 次のステップ
 
