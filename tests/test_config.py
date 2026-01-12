@@ -71,6 +71,15 @@ class TestSettingsEnvFile:
         settings = Settings()
         assert settings.log_level == "INFO"
 
+    def test_env_file_is_loaded(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Settings should be loaded from .env file when env var is not set."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("DAO_LOG_LEVEL=WARNING\n")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("DAO_LOG_LEVEL", raising=False)
+        settings = Settings()
+        assert settings.log_level == "WARNING"
+
     def test_env_var_overrides_env_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
