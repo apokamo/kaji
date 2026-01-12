@@ -15,7 +15,7 @@ src/
 ├── core/                   # 共通ライブラリ
 │   ├── __init__.py
 │   ├── verdict.py          # VERDICT パーサー
-│   ├── config.py           # 設定読み込み (TODO)
+│   ├── config.py           # 設定管理 (pydantic-settings)
 │   ├── session.py          # セッション管理 (TODO)
 │   └── tools/
 │       ├── __init__.py
