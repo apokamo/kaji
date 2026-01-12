@@ -79,6 +79,42 @@ git config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
 git worktree add main main
 ```
 
+## Python 仮想環境
+
+### 初回セットアップ（main worktree）
+
+```bash
+cd /home/user/dev/project-name/main
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+### 新規 worktree での .venv 共有
+
+新しい worktree を作成したら、main の `.venv` へシンボリックリンクを作成:
+
+```bash
+# プロジェクトルートから実行
+cd /home/user/dev/project-name
+ln -s ../main/.venv ./feature-xxx/.venv
+```
+
+これにより `ruff`、`mypy`、`pytest` が即座に実行可能になる。
+
+### 注意事項
+
+⚠️ `.venv` は main のシンボリックリンク:
+- `pip install` は main に影響する
+- pyproject.toml の依存関係を変更する場合は個別 venv を作成:
+  ```bash
+  cd ./feature-xxx
+  rm .venv
+  python3 -m venv .venv
+  source .venv/bin/activate
+  pip install -e ".[dev]"
+  ```
+
 ## 日常運用
 
 ### Worktree の作成
@@ -92,6 +128,9 @@ git worktree add -b feature/new-feature ./feature-new-feature main
 
 # 既存ブランチでworktree作成
 git worktree add ./hotfix-123 hotfix/123
+
+# .venv シンボリックリンク作成
+ln -s ../main/.venv ./feature-new-feature/.venv
 ```
 
 ### Worktree の一覧表示

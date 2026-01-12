@@ -59,19 +59,27 @@ gh pr merge [branch-name] --merge --delete-branch
 
 マージコミットを作成してブランチ履歴を保持する。
 
-### Step 4: worktree削除
+### Step 4: venv シンボリックリンク削除
+
+worktree 削除前に `.venv` シンボリックリンクを削除（untracked files エラー回避）:
+
+```bash
+rm [worktree-path]/.venv
+```
+
+### Step 5: worktree削除
 
 ```bash
 git worktree remove [worktree-path]
 ```
 
-### Step 5: mainを最新化
+### Step 6: mainを最新化
 
 ```bash
 git pull origin main
 ```
 
-### Step 6: 完了報告
+### Step 7: 完了報告
 
 以下の形式で報告してください:
 
@@ -82,6 +90,7 @@ git pull origin main
 |------|------|
 | Issue | #[issue-number] |
 | PR | マージ済み |
+| .venv symlink | 削除済み |
 | worktree | 削除済み |
 | リモートブランチ | 削除済み (--delete-branch) |
 | main | 最新化済み |
