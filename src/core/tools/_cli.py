@@ -75,8 +75,10 @@ def run_cli_streaming(
             elif verbose:
                 print(line, end="", flush=True)
 
-        stderr_thread.join(timeout=5.0)
         returncode = process.wait()
+
+        # Join stderr thread after process.wait() to ensure all stderr is collected
+        stderr_thread.join(timeout=5.0)
 
         if timeout_occurred.is_set():
             raise subprocess.TimeoutExpired(args, timeout or 0)
@@ -89,8 +91,8 @@ def run_cli_streaming(
 
     if log_dir is not None:
         log_dir.mkdir(parents=True, exist_ok=True)
-        (log_dir / "stdout.log").write_text(stdout)
-        (log_dir / "stderr.log").write_text(stderr)
+        (log_dir / "stdout.log").write_text(stdout, encoding="utf-8")
+        (log_dir / "stderr.log").write_text(stderr, encoding="utf-8")
 
     return stdout, stderr, returncode
 
