@@ -40,8 +40,9 @@ AIツール（Claude/Codex/Gemini）の共通インターフェース `AIToolPro
 
 ```
 src/core/tools/
-├── __init__.py       # 更新: MockTool, ClaudeTool 追加
+├── __init__.py       # 更新: MockTool, ClaudeTool, 例外クラス追加
 ├── protocol.py       # 変更なし（既存）
+├── errors.py         # 新規: 例外クラス定義
 ├── mock.py           # 新規: MockTool
 ├── claude.py         # 新規: ClaudeTool
 └── _cli.py           # 新規: CLI実行ユーティリティ（内部用）
@@ -49,7 +50,39 @@ src/core/tools/
 
 ## インターフェース定義
 
+### 0. 例外クラス (errors.py)
+
+```python
+class AIToolError(Exception):
+    """AIツール実行エラーの基底クラス"""
+
+    def __init__(self, message: str, stderr: str = "", returncode: int | None = None):
+        super().__init__(message)
+        self.stderr = stderr
+        self.returncode = returncode
+
+
+class AIToolNotFoundError(AIToolError):
+    """CLIが見つからない"""
+    pass
+
+
+class AIToolTimeoutError(AIToolError):
+    """タイムアウト"""
+    pass
+
+
+class AIToolExecutionError(AIToolError):
+    """実行エラー（非ゼロ終了）"""
+    pass
+```
+
 ### 1. AIToolProtocol (既存・変更なし)
+
+**設計判断**: Protocol に `name`/`model` プロパティを追加しない。
+
+- **理由**: 移植元と同じシンプルな `run()` メソッドのみのインターフェースを維持
+- 将来的に必要になった場合は別途拡張を検討
 
 ```python
 class AIToolProtocol(Protocol):
@@ -113,18 +146,25 @@ class ClaudeTool:
         model: str = "sonnet",
         timeout: int = 600,
         permission_mode: str = "default",
+        skip_permissions: bool = False,
         verbose: bool = True,
     ):
         """
         Args:
             model: モデル名 ("sonnet", "opus", "haiku")
             timeout: タイムアウト秒数
-            permission_mode: 権限モード ("default", "bypassPermissions")
+            permission_mode: 権限モード ("default", "acceptEdits", "bypassPermissions", "delegate", "dontAsk", "plan")
+            skip_permissions: Trueの場合 --dangerously-skip-permissions を付与（明示的opt-in）
             verbose: 実行中の出力表示
+
+        Note:
+            skip_permissions=True は信頼できる閉じた環境（サンドボックス等）でのみ使用すること。
+            デフォルトは False（安全側）。
         """
         self.model = model
         self.timeout = timeout
         self.permission_mode = permission_mode
+        self.skip_permissions = skip_permissions
         self.verbose = verbose
 
     def run(
@@ -155,7 +195,8 @@ class ClaudeTool:
             args += ["--permission-mode", self.permission_mode]
         if session_id:
             args += ["-r", session_id]
-        args.append("--dangerously-skip-permissions")
+        if self.skip_permissions:
+            args.append("--dangerously-skip-permissions")
         args.append(full_prompt)
 
         # 実行
@@ -168,9 +209,15 @@ class ClaudeTool:
                 tool_name="claude",
             )
             if returncode != 0:
-                return "ERROR", session_id
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            return "ERROR", session_id
+                raise AIToolExecutionError(
+                    f"Claude CLI exited with code {returncode}",
+                    stderr=stderr,
+                    returncode=returncode,
+                )
+        except FileNotFoundError as e:
+            raise AIToolNotFoundError("Claude CLI not found. Is 'claude' installed?") from e
+        except subprocess.TimeoutExpired as e:
+            raise AIToolTimeoutError(f"Claude CLI timed out after {self.timeout}s") from e
 
         # 出力パース
         return self._parse_json_output(stdout, session_id)
@@ -228,12 +275,25 @@ stream-json形式の出力から結果を抽出:
 
 #### エラーハンドリング
 
-| 状況 | 処理 |
-|------|------|
-| CLI未インストール | FileNotFoundError → ("ERROR", session_id) |
-| タイムアウト | TimeoutExpired → ("ERROR", session_id) |
-| 非ゼロ終了 | returncode != 0 → ("ERROR", session_id) |
-| JSONパース失敗 | 素の出力を返す |
+| 状況 | 例外 | 情報 |
+|------|------|------|
+| CLI未インストール | `AIToolNotFoundError` | メッセージ |
+| タイムアウト | `AIToolTimeoutError` | メッセージ |
+| 非ゼロ終了 | `AIToolExecutionError` | stderr, returncode |
+| JSONパース失敗 | なし | 素の出力を返す |
+
+**呼び出し側での処理例**:
+
+```python
+try:
+    response, session_id = tool.run(prompt)
+except AIToolNotFoundError:
+    # CLIインストール案内
+except AIToolTimeoutError:
+    # リトライまたはタイムアウト延長
+except AIToolExecutionError as e:
+    # e.stderr, e.returncode を使ってエラー詳細を表示
+```
 
 ### 4. CLI実行ユーティリティ (_cli.py)
 
@@ -252,7 +312,7 @@ def run_cli_streaming(
 
     処理フロー:
     1. subprocess.Popen でプロセス起動
-    2. stdout をリアルタイムで読み取り（バッファリングも行う）
+    2. stdout/stderr を別スレッドで並行読み取り（デッドロック回避）
     3. verbose=True の場合、整形して表示
     4. タイムアウトは threading.Timer で実装
     5. log_dir 指定時は stdout.log, stderr.log を保存
@@ -271,6 +331,10 @@ def run_cli_streaming(
     Raises:
         FileNotFoundError: コマンドが見つからない
         subprocess.TimeoutExpired: タイムアウト
+
+    Note:
+        デッドロック回避のため、stderr は別スレッドで読み取る。
+        Claude CLI は stderr に大量出力することはないが、念のため並行処理。
     """
     process = subprocess.Popen(
         args,
@@ -282,6 +346,15 @@ def run_cli_streaming(
 
     stdout_lines: list[str] = []
     stderr_lines: list[str] = []
+
+    # stderr を別スレッドで読み取り（デッドロック回避）
+    def read_stderr() -> None:
+        assert process.stderr is not None
+        for line in process.stderr:
+            stderr_lines.append(line)
+
+    stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+    stderr_thread.start()
 
     # タイムアウト用タイマー
     timeout_occurred = threading.Event()
@@ -296,6 +369,8 @@ def run_cli_streaming(
         timer.start()
 
     try:
+        # stdout をメインスレッドで読み取り
+        assert process.stdout is not None
         for line in process.stdout:
             stdout_lines.append(line)
             if verbose and tool_name:
@@ -305,8 +380,8 @@ def run_cli_streaming(
             elif verbose:
                 print(line, end="", flush=True)
 
-        for line in process.stderr:
-            stderr_lines.append(line)
+        # stderr スレッドの終了を待機
+        stderr_thread.join(timeout=5.0)
 
         returncode = process.wait()
 
@@ -360,15 +435,30 @@ def format_jsonl_line(line: str, tool_name: str) -> str | None:
 
 ### 5. コンテキスト構築ユーティリティ
 
+#### context パラメータの仕様
+
+| 型 | 意味 | 処理 |
+|----|------|------|
+| `str` | テキストコンテンツそのもの | そのまま使用 |
+| `list[str]` | テキストコンテンツのリスト | 改行で結合 |
+
+**重要**: context は「ファイルパス」ではなく「テキストコンテンツ」を受け取る。ファイル読み込みは呼び出し側の責務。
+
 ```python
 def _build_context(context: str | list[str]) -> str:
     """コンテキストを文字列に変換
 
     Args:
-        context: 文字列またはファイルパスのリスト
+        context: テキストコンテンツ（文字列またはリスト）
+            - str: そのまま使用
+            - list[str]: 改行で結合
 
     Returns:
         結合されたコンテキスト文字列
+
+    Note:
+        ファイルパスではなくテキストコンテンツを受け取る。
+        ファイル読み込みは呼び出し側で行うこと。
     """
     if isinstance(context, str):
         return context
@@ -453,6 +543,48 @@ class TestRunCliStreaming:
 
 - 外部: なし（標準ライブラリのみ）
 - 内部: `src.core.config` (将来的に設定取得で使用可能)
+
+## CLI仕様の根拠 (Source of Truth)
+
+### 対象CLI
+
+- **Claude Code CLI v2.1.6+**
+- 仕様確認コマンド: `claude --help`
+
+### 使用するオプション
+
+| オプション | 説明 | 根拠 |
+|-----------|------|------|
+| `-p, --print` | 非インタラクティブモード | `claude --help` |
+| `--output-format stream-json` | ストリーミングJSON出力 | `claude --help`, choices: text/json/stream-json |
+| `--verbose` | 詳細出力（stream-json使用時に必須） | `claude --help` |
+| `--model <model>` | モデル指定 | `claude --help` |
+| `-r, --resume [value]` | セッションID指定で再開 | `claude --help` |
+| `--permission-mode <mode>` | 権限モード | choices: acceptEdits/bypassPermissions/default/delegate/dontAsk/plan |
+| `--dangerously-skip-permissions` | 全権限チェックスキップ | `claude --help` |
+
+### stream-json 出力スキーマ
+
+詳細は [Claude Code CLI ガイド](../../docs/guides/claude-code-cli-guide.md) セクション5.3を参照。
+
+```json
+// イベント1: 初期化 (type: system)
+{"type": "system", "subtype": "init", "session_id": "uuid", ...}
+
+// イベント2: アシスタント応答 (type: assistant)
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "..."}]}, "session_id": "uuid"}
+
+// イベント3: 結果 (type: result) ← 最終応答として採用
+{"type": "result", "subtype": "success", "result": "応答テキスト", "session_id": "uuid", ...}
+```
+
+**採用ルール**: `type: result` のイベントから `result` フィールドを最終応答として採用。`session_id` も同イベントから取得。
+
+### セッション継続仕様
+
+1. **session_id の取得**: `type: result` イベントの `session_id` フィールド
+2. **継続フラグ**: `-r <session_id>` または `--resume <session_id>`
+3. **確認コマンド**: `claude --help` の `-r, --resume [value]` を参照
 
 ## 参考資料
 
