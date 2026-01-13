@@ -20,7 +20,10 @@ src/
 │   └── tools/
 │       ├── __init__.py
 │       ├── protocol.py     # AIToolProtocol
-│       ├── claude.py       # ClaudeTool (TODO)
+│       ├── errors.py       # AIToolError, AIToolNotFoundError, etc.
+│       ├── _cli.py         # CLI execution utilities (internal)
+│       ├── mock.py         # MockTool (for testing)
+│       ├── claude.py       # ClaudeTool
 │       ├── codex.py        # CodexTool (TODO)
 │       └── gemini.py       # GeminiTool (TODO)
 │
@@ -82,6 +85,11 @@ class AIToolProtocol(Protocol):
         log_dir: Path | None = None,
     ) -> tuple[str, str | None]: ...
 ```
+
+**移植元**: `/home/aki/claude/kamo2/.claude/agents/bugfix-v5`
+- `bugfix_agent/tools/base.py` → `AIToolProtocol`, `MockTool`
+- `bugfix_agent/tools/claude.py` → `ClaudeTool`
+- `bugfix_agent/cli.py` → `run_cli_streaming()`, `format_jsonl_line()`
 
 ## Workflows
 
