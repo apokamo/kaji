@@ -30,7 +30,7 @@ def parse_verdict(
 |-----------|-----|------|------|
 | text | str | Yes | パース対象のAI出力テキスト |
 | ai_formatter | AIFormatterFunc \| None | No | Step 3 用の AI 整形関数 |
-| max_retries | int | No | AI Formatter リトライ回数（デフォルト: 2） |
+| max_retries | int | No | AI Formatter リトライ回数（デフォルト: 2、v5踏襲） |
 
 #### `handle_abort_verdict()` 関数（新規）
 
@@ -97,6 +97,7 @@ verdict = handle_abort_verdict(verdict, ai_output)  # ABORT なら例外
 - **AI Formatter 入力制限**: 最大 8000 文字（約 2000 トークン）。超過分は head+tail 方式で切り詰め
 - **max_retries >= 1**: 1未満の場合は ValueError
 - **AIToolProtocol 準拠**: create_ai_formatter() は AIToolProtocol を実装したツールを要求
+- **AI Formatter 通信エラー**: `create_ai_formatter()` が返す関数内で発生する `AIToolError` 系例外（タイムアウト、実行エラー等）は呼び出し元に伝播する。`parse_verdict()` はこれらをキャッチせず、オーケストレーター側でハンドリングする責務
 
 ## 方針
 
@@ -158,7 +159,7 @@ FORMATTER_PROMPT = """以下の出力からVERDICTを抽出し、正確なフォ
 
 ### エラー定義の追加
 
-`src/core/errors.py` に以下を追加:
+`src/core/verdict.py` 内に以下を追加（既存の `VerdictParseError`, `InvalidVerdictValueError` と同じモジュールに配置）:
 
 ```python
 class AgentAbortError(Exception):
@@ -168,6 +169,8 @@ class AgentAbortError(Exception):
         self.suggestion = suggestion
         super().__init__(f"Agent aborted: {reason}")
 ```
+
+**配置の根拠**: verdict.py 内に関連エラー（`VerdictParseError`, `InvalidVerdictValueError`, `AgentAbortError`）を集約することで、モジュールの凝集度を高める。`src/core/tools/errors.py` は AIToolError 系専用として分離を維持。
 
 ## 検証観点
 
