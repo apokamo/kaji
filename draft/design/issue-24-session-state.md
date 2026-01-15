@@ -78,6 +78,9 @@ session.is_completed("INIT")  # -> True
 - **設計上の判断**:
   - v5 の `current_state` フィールドは含めない（ワークフロー側で管理）
   - ループカウンター名は任意の文字列を許容（ステート名に限定しない）
+  - `max_loop_count` の境界値動作:
+    - `max_loop_count=0`: 「ループ禁止」として扱う（初回から `is_loop_exceeded()` が `True`）
+    - `max_loop_count < 0`: 呼び出し側の責任（実行時検証なし、YAGNI原則）
 
 ## 方針
 
@@ -154,7 +157,7 @@ class SessionState:
 - 未登録のステート名に対する `increment_loop()` が 1 を返すか
 - 未登録のステート名に対する `is_loop_exceeded()` が False を返すか
 - 未登録のロールに対する `get_conversation_id()` が None を返すか
-- `max_loop_count=0` の場合、最初の `is_loop_exceeded()` が False を返すか（0 >= 0 は False）
+- `max_loop_count=0` の場合、初回から `is_loop_exceeded()` が True を返すか（0 >= 0 は True、ループ禁止）
 - `max_loop_count=1` の場合、1回目の `increment_loop()` 後に `is_loop_exceeded()` が True になるか
 
 ### 後方互換性
