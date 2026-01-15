@@ -65,9 +65,7 @@ class DesignWorkflow(WorkflowBase):
             raise ValueError(f"No prompt for state: {state}")
         return prompt_files[state]
 
-    def _handle_design(
-        self, ctx: AgentContext, session: SessionState
-    ) -> Enum:
+    def _handle_design(self, ctx: AgentContext, session: SessionState) -> Enum:
         """Handle DESIGN state.
 
         TODO: Implement actual design generation logic.
@@ -75,9 +73,7 @@ class DesignWorkflow(WorkflowBase):
         # Placeholder - will call analyzer AI
         return DesignState.DESIGN_REVIEW
 
-    def _handle_design_review(
-        self, ctx: AgentContext, session: SessionState
-    ) -> Enum:
+    def _handle_design_review(self, ctx: AgentContext, session: SessionState) -> Enum:
         """Handle DESIGN_REVIEW state.
 
         TODO: Implement actual design review logic.
