@@ -59,6 +59,25 @@ src/
 - `get_next_state()`: 次ステート決定
 - `get_prompt_path()`: プロンプトファイルパス
 
+### SessionState
+
+ワークフロー実行時のランタイム状態を管理する dataclass。
+
+**フィールド:**
+- `completed_states: list[str]` - 完了済みステート名リスト
+- `loop_counters: dict[str, int]` - ステートごとのループカウンタ
+- `active_conversations: dict[str, str | None]` - ロールごとの会話ID
+- `max_loop_count: int` - ループ上限（デフォルト: 3）
+
+**メソッド:**
+- `increment_loop(state_name)` - カウンタをインクリメント
+- `reset_loop(state_name)` - カウンタを 0 にリセット
+- `is_loop_exceeded(state_name)` - ループ上限に達したか判定
+- `set_conversation_id(role, conv_id)` - 会話IDを設定
+- `get_conversation_id(role)` - 会話IDを取得
+- `mark_completed(state_name)` - ステートを完了マーク
+- `is_completed(state_name)` - 完了済みか判定
+
 ### VERDICT Protocol
 
 すべてのAIエージェントが出力する統一フォーマット:
