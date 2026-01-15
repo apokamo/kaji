@@ -1,6 +1,7 @@
 """Design workflow implementation."""
 
 from enum import Enum
+from typing import cast
 
 from src.core.verdict import Verdict
 from src.workflows.base import AgentContext, SessionState, StateHandler, WorkflowBase
@@ -37,9 +38,10 @@ class DesignWorkflow(WorkflowBase):
             DesignState.DESIGN: self._handle_design,
             DesignState.DESIGN_REVIEW: self._handle_design_review,
         }
-        if state not in handlers:
+        design_state = cast(DesignState, state)
+        if design_state not in handlers:
             raise ValueError(f"No handler for state: {state}")
-        return handlers[state]
+        return handlers[design_state]
 
     def get_next_state(self, current: Enum, verdict: Verdict) -> Enum:
         """Determine next state based on verdict."""
@@ -50,7 +52,7 @@ class DesignWorkflow(WorkflowBase):
             (DesignState.DESIGN_REVIEW, Verdict.PASS): DesignState.COMPLETE,
             (DesignState.DESIGN_REVIEW, Verdict.RETRY): DesignState.DESIGN,
         }
-        key = (current, verdict)
+        key = (cast(DesignState, current), verdict)
         if key not in transitions:
             raise ValueError(f"Invalid transition: {current} + {verdict}")
         return transitions[key]
@@ -61,13 +63,12 @@ class DesignWorkflow(WorkflowBase):
             DesignState.DESIGN: "workflows/design/prompts/design.md",
             DesignState.DESIGN_REVIEW: "workflows/design/prompts/design_review.md",
         }
-        if state not in prompt_files:
+        design_state = cast(DesignState, state)
+        if design_state not in prompt_files:
             raise ValueError(f"No prompt for state: {state}")
-        return prompt_files[state]
+        return prompt_files[design_state]
 
-    def _handle_design(
-        self, ctx: AgentContext, session: SessionState
-    ) -> Enum:
+    def _handle_design(self, ctx: AgentContext, session: SessionState) -> Enum:
         """Handle DESIGN state.
 
         TODO: Implement actual design generation logic.
@@ -75,9 +76,7 @@ class DesignWorkflow(WorkflowBase):
         # Placeholder - will call analyzer AI
         return DesignState.DESIGN_REVIEW
 
-    def _handle_design_review(
-        self, ctx: AgentContext, session: SessionState
-    ) -> Enum:
+    def _handle_design_review(self, ctx: AgentContext, session: SessionState) -> Enum:
         """Handle DESIGN_REVIEW state.
 
         TODO: Implement actual design review logic.
