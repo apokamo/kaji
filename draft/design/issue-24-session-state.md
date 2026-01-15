@@ -39,10 +39,10 @@ v5 bugfix-v5 の `SessionState` は以下の機能を持つ:
 | メソッド | 戻り値 | 説明 |
 |---------|-------|------|
 | `increment_loop(state_name)` | int | カウンタをインクリメントし、新しい値を返す |
-| `reset_loop(state_name)` | None | カウンタをリセット |
-| `is_loop_exceeded(state_name)` | bool | ループ上限に達したか |
-| `set_conversation_id(role, conv_id)` | None | 会話IDを設定 |
-| `get_conversation_id(role)` | str \| None | 会話IDを取得 |
+| `reset_loop(state_name)` | None | カウンタを 0 にリセット（キー削除ではない） |
+| `is_loop_exceeded(state_name)` | bool | ループ上限に達したか（`counter >= max_loop_count`） |
+| `set_conversation_id(role, conv_id)` | None | 会話IDを設定（role: エージェント役割名） |
+| `get_conversation_id(role)` | str \| None | 会話IDを取得（role: エージェント役割名） |
 | `mark_completed(state_name)` | None | ステートを完了としてマーク |
 | `is_completed(state_name)` | bool | ステートが完了済みか |
 
@@ -52,20 +52,34 @@ v5 bugfix-v5 の `SessionState` は以下の機能を持つ:
 from src.workflows.base import SessionState
 
 # 初期化
-session = SessionState(max_loop_count=5)
+session = SessionState(max_loop_count=3)
 
-# ループカウンター
+# ループカウンター（推奨パターン: increment → check）
 session.increment_loop("DESIGN")  # -> 1
+session.is_loop_exceeded("DESIGN")  # -> False (1 < 3)
 session.increment_loop("DESIGN")  # -> 2
-session.is_loop_exceeded("DESIGN")  # -> False (< 5)
+session.is_loop_exceeded("DESIGN")  # -> False (2 < 3)
+session.increment_loop("DESIGN")  # -> 3
+session.is_loop_exceeded("DESIGN")  # -> True (3 >= 3)
 
-# 会話ID管理
-session.set_conversation_id("reviewer", "conv-123")
+# 会話ID管理（role: エージェント役割名）
+session.set_conversation_id("reviewer", "conv-123")  # reviewer = レビュー担当エージェント
 session.get_conversation_id("reviewer")  # -> "conv-123"
+session.set_conversation_id("implementer", "conv-456")  # implementer = 実装担当エージェント
 
 # 完了ステート管理
 session.mark_completed("INIT")
 session.is_completed("INIT")  # -> True
+```
+
+#### ループカウンターの利用パターン
+
+```python
+# 推奨: increment → check パターン
+count = session.increment_loop("DESIGN")
+if session.is_loop_exceeded("DESIGN"):
+    raise RuntimeError(f"Loop limit exceeded for DESIGN (count={count})")
+# ... ステート処理 ...
 ```
 
 ## 制約・前提条件
@@ -78,9 +92,14 @@ session.is_completed("INIT")  # -> True
 - **設計上の判断**:
   - v5 の `current_state` フィールドは含めない（ワークフロー側で管理）
   - ループカウンター名は任意の文字列を許容（ステート名に限定しない）
-  - `max_loop_count` の境界値動作:
-    - `max_loop_count=0`: 「ループ禁止」として扱う（初回から `is_loop_exceeded()` が `True`）
-    - `max_loop_count < 0`: 呼び出し側の責任（実行時検証なし、YAGNI原則）
+  - `role` はエージェント役割名を想定（例: `analyzer`, `reviewer`, `implementer`）
+  - `reset_loop()` は 0 にリセット（キー削除ではない）。カウンタ履歴を保持する設計。
+  - `max_loop_count` の境界条件:
+    - **定義**: `is_loop_exceeded()` は `counter >= max_loop_count` で判定
+    - **意味**: 「最大 N 回まで許容」ではなく「N 回目で上限到達」
+    - `max_loop_count=0`: 「ループ禁止」（初回 increment 前から `is_loop_exceeded()` が `True`）
+    - `max_loop_count=1`: 1回目の `increment_loop()` 後に `is_loop_exceeded()` が `True`
+    - `max_loop_count < 0`: `__post_init__` で `ValueError` を発生
 
 ## 方針
 
@@ -102,12 +121,16 @@ class SessionState:
     active_conversations: dict[str, str | None] = field(default_factory=dict)
     max_loop_count: int = 3
 
+    def __post_init__(self) -> None:
+        if self.max_loop_count < 0:
+            raise ValueError(f"max_loop_count must be >= 0, got {self.max_loop_count}")
+
     def increment_loop(self, state_name: str) -> int:
         self.loop_counters[state_name] = self.loop_counters.get(state_name, 0) + 1
         return self.loop_counters[state_name]
 
     def reset_loop(self, state_name: str) -> None:
-        self.loop_counters[state_name] = 0
+        self.loop_counters[state_name] = 0  # キー削除ではなく 0 にリセット
 
     def is_loop_exceeded(self, state_name: str) -> bool:
         return self.loop_counters.get(state_name, 0) >= self.max_loop_count
@@ -155,10 +178,12 @@ class SessionState:
 ### 異常系・境界値
 
 - 未登録のステート名に対する `increment_loop()` が 1 を返すか
-- 未登録のステート名に対する `is_loop_exceeded()` が False を返すか
+- 未登録のステート名に対する `is_loop_exceeded()` が False を返すか（`max_loop_count > 0` の場合）
 - 未登録のロールに対する `get_conversation_id()` が None を返すか
-- `max_loop_count=0` の場合、初回から `is_loop_exceeded()` が True を返すか（0 >= 0 は True、ループ禁止）
-- `max_loop_count=1` の場合、1回目の `increment_loop()` 後に `is_loop_exceeded()` が True になるか
+- `max_loop_count=0` の場合、初回 increment 前から `is_loop_exceeded()` が True を返すか（0 >= 0 は True、ループ禁止）
+- `max_loop_count=1` の場合、1回目の `increment_loop()` 後に `is_loop_exceeded()` が True になるか（1 >= 1）
+- `max_loop_count < 0` の場合、`__post_init__` で `ValueError` が発生するか
+- `reset_loop()` 後に `loop_counters[state_name]` が 0 であるか（キーが存在する）
 
 ### 後方互換性
 
