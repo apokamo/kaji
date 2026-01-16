@@ -16,6 +16,9 @@ src/
 │   ├── __init__.py
 │   ├── verdict.py          # VERDICT パーサー
 │   ├── config.py           # 設定管理 (pydantic-settings)
+│   ├── context.py          # AgentContext, create_context()
+│   ├── providers.py        # IssueProvider Protocol, GitHubIssueProvider
+│   ├── errors.py           # IssueProviderError 階層
 │   ├── session.py          # セッション管理 (TODO)
 │   └── tools/
 │       ├── __init__.py
@@ -58,6 +61,48 @@ src/
 - `get_handler()`: ステートハンドラ取得
 - `get_next_state()`: 次ステート決定
 - `get_prompt_path()`: プロンプトファイルパス
+
+### AgentContext
+
+ステートハンドラに渡すコンテキスト。AIツール・Issueプロバイダー・証跡管理を統合。
+
+**フィールド:**
+- `analyzer: AIToolProtocol` - 分析・ドキュメント作成用ツール
+- `reviewer: AIToolProtocol` - レビュー・判断用ツール
+- `implementer: AIToolProtocol` - 実装・操作用ツール
+- `issue_provider: IssueProvider` - Issue操作プロバイダー
+- `artifacts_base: Path` - 証跡ベースパス（デフォルト: `artifacts`）
+- `run_timestamp: str` - 実行タイムスタンプ（YYMMDDhhmm形式）
+
+**プロパティ/メソッド:**
+- `artifacts_dir` - 実行単位の証跡ディレクトリ `{base}/{issue_number}/{timestamp}`
+- `artifacts_state_dir(state)` - ステート別ディレクトリ `{artifacts_dir}/{state}`
+- `ensure_artifacts_dir(state=None)` - ディレクトリを作成して返す
+
+**ファクトリ関数:**
+- `create_context(issue_url, tool_override=None, model_override=None, artifacts_base=None)` - 本番用コンテキスト生成
+
+### IssueProvider
+
+Issue操作を抽象化する Protocol。structural subtyping により明示的継承不要。
+
+**メソッド:**
+- `get_issue_body() -> str` - Issue本文取得
+- `add_comment(body: str) -> None` - コメント追加
+- `update_body(body: str) -> None` - 本文更新
+
+**プロパティ:**
+- `issue_number: int` - Issue番号
+- `issue_url: str` - Issue URL
+
+**実装:**
+- `GitHubIssueProvider` - gh CLI を使用した GitHub 実装
+
+**エラー階層:**
+- `IssueProviderError` - 基底例外
+- `IssueNotFoundError` - Issue不存在
+- `IssueAuthenticationError` - 認証エラー
+- `IssueRateLimitError` - レート制限
 
 ### SessionState
 
