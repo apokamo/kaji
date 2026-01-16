@@ -5,20 +5,18 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 
+from src.core.context import AgentContext
 from src.core.verdict import Verdict
 
 # Type alias for state handlers
-StateHandler = Callable[["AgentContext", "SessionState"], Enum]
+StateHandler = Callable[[AgentContext, "SessionState"], Enum]
 
-
-class AgentContext:
-    """Context for agent execution.
-
-    Holds references to AI tools and other shared resources.
-    """
-
-    # TODO: Implement with actual tool references
-    pass
+__all__ = [
+    "AgentContext",
+    "SessionState",
+    "StateHandler",
+    "WorkflowBase",
+]
 
 
 @dataclass
