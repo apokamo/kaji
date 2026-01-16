@@ -68,7 +68,7 @@ class TestGitHubIssueProviderInit:
 class TestGitHubIssueProviderGetIssueBody:
     """Test GitHubIssueProvider.get_issue_body."""
 
-    @patch("subprocess.run")
+    @patch("src.core.providers.subprocess.run")
     def test_returns_issue_body(self, mock_run: MagicMock) -> None:
         """Returns issue body from gh CLI."""
         mock_run.return_value.returncode = 0
@@ -84,7 +84,7 @@ class TestGitHubIssueProviderGetIssueBody:
         assert "issue" in call_args[0][0]
         assert "view" in call_args[0][0]
 
-    @patch("subprocess.run")
+    @patch("src.core.providers.subprocess.run")
     def test_not_found_error(self, mock_run: MagicMock) -> None:
         """Raises IssueNotFoundError when issue doesn't exist."""
         mock_run.return_value.returncode = 1
@@ -95,7 +95,7 @@ class TestGitHubIssueProviderGetIssueBody:
         with pytest.raises(IssueNotFoundError):
             provider.get_issue_body()
 
-    @patch("subprocess.run")
+    @patch("src.core.providers.subprocess.run")
     def test_auth_error(self, mock_run: MagicMock) -> None:
         """Raises IssueAuthenticationError when not authenticated."""
         mock_run.return_value.returncode = 1
@@ -110,7 +110,7 @@ class TestGitHubIssueProviderGetIssueBody:
 class TestGitHubIssueProviderAddComment:
     """Test GitHubIssueProvider.add_comment."""
 
-    @patch("subprocess.run")
+    @patch("src.core.providers.subprocess.run")
     def test_adds_comment_successfully(self, mock_run: MagicMock) -> None:
         """Adds comment via gh CLI."""
         mock_run.return_value.returncode = 0
@@ -124,7 +124,7 @@ class TestGitHubIssueProviderAddComment:
         assert "issue" in call_args[0][0]
         assert "comment" in call_args[0][0]
 
-    @patch("subprocess.run")
+    @patch("src.core.providers.subprocess.run")
     def test_rate_limit_error(self, mock_run: MagicMock) -> None:
         """Raises IssueRateLimitError on rate limit."""
         mock_run.return_value.returncode = 1
@@ -139,7 +139,7 @@ class TestGitHubIssueProviderAddComment:
 class TestGitHubIssueProviderUpdateBody:
     """Test GitHubIssueProvider.update_body."""
 
-    @patch("subprocess.run")
+    @patch("src.core.providers.subprocess.run")
     def test_updates_body_successfully(self, mock_run: MagicMock) -> None:
         """Updates issue body via gh CLI."""
         mock_run.return_value.returncode = 0
@@ -153,7 +153,7 @@ class TestGitHubIssueProviderUpdateBody:
         assert "issue" in call_args[0][0]
         assert "edit" in call_args[0][0]
 
-    @patch("subprocess.run")
+    @patch("src.core.providers.subprocess.run")
     def test_generic_error(self, mock_run: MagicMock) -> None:
         """Raises IssueProviderError on unknown error."""
         mock_run.return_value.returncode = 1

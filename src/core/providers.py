@@ -53,7 +53,7 @@ class IssueProvider(Protocol):
             body: Comment content.
 
         Raises:
-            IssueProviderError: On API failure (after retries if configured).
+            IssueProviderError: On API failure.
         """
         ...
 
