@@ -61,14 +61,34 @@ def _handle_design(self, ctx: AgentContext, session: SessionState) -> Verdict:
     # 2. artifacts ディレクトリ確保
     artifacts_dir = ctx.ensure_artifacts_dir("design")
 
-    # 3. プロンプト読み込み（テンプレート変数展開）
+    # 3. イベントログ: ハンドラ開始
+    save_jsonl_log(artifacts_dir, "handler_start", {
+        "handler": "design",
+        "loop_count": session.loop_counters.get("design", 0),
+    })
+
+    # 4. 要求入力ファイルがあれば読み込み（CLIから設定済み）
+    requirements_content = session.get_context("requirements_content", "")
+
+    # 5. プロンプト読み込み（テンプレート変数展開 + 必須変数バリデーション）
+    prompt_vars = {
+        "issue_url": ctx.issue_provider.issue_url,
+        "issue_body": ctx.issue_provider.get_issue_body(),
+        "requirements": requirements_content,
+    }
     prompt = load_prompt(
         self.get_prompt_path(DesignState.DESIGN),
-        issue_url=ctx.issue_provider.issue_url,
-        issue_body=ctx.issue_provider.get_issue_body(),
+        required_vars=["issue_url", "issue_body"],  # バリデーション対象
+        **prompt_vars,
     )
 
-    # 4. AI呼び出し（会話継続のためrole名でsession_id管理）
+    # 6. イベントログ: AI呼び出し前
+    save_jsonl_log(artifacts_dir, "ai_call_start", {
+        "role": "analyzer",
+        "prompt_length": len(prompt),
+    })
+
+    # 7. AI呼び出し（会話継続のためrole名でsession_id管理）
     session_id = session.get_conversation_id("analyzer")  # ロール名で管理
     result, new_session_id = ctx.analyzer.run(
         prompt=prompt,
@@ -77,18 +97,35 @@ def _handle_design(self, ctx: AgentContext, session: SessionState) -> Verdict:
         log_dir=artifacts_dir,
     )
 
-    # 5. 証跡保存
+    # 8. イベントログ: AI呼び出し後
+    save_jsonl_log(artifacts_dir, "ai_call_end", {
+        "role": "analyzer",
+        "response_length": len(result),
+        "session_id": new_session_id,
+    })
+
+    # 9. 証跡保存
     save_artifact(artifacts_dir, "prompt.md", prompt)
     save_artifact(artifacts_dir, "response.md", result)
 
-    # 6. session_id更新（ロール名で保持）
+    # 10. 設計出力をSessionStateに保存（レビューで参照）
+    session.set_context("design_output", result)
+    session.set_context("design_output_path", str(artifacts_dir / "response.md"))
+
+    # 11. session_id更新（ロール名で保持）
     if new_session_id:
         session.set_conversation_id("analyzer", new_session_id)
 
-    # 7. ループカウンタ更新
+    # 12. ループカウンタ更新
     session.increment_loop("design")
 
-    # 8. DESIGNハンドラは常にPASS（レビューへ遷移）
+    # 13. イベントログ: ハンドラ終了
+    save_jsonl_log(artifacts_dir, "handler_end", {
+        "handler": "design",
+        "verdict": "PASS",
+    })
+
+    # 14. DESIGNハンドラは常にPASS（レビューへ遷移）
     return Verdict.PASS
 ```
 
@@ -97,43 +134,97 @@ def _handle_design_review(self, ctx: AgentContext, session: SessionState) -> Ver
     # 1. artifacts ディレクトリ確保
     log_dir = ctx.ensure_artifacts_dir("design_review")
 
-    # 2. プロンプト読み込み
+    # 2. イベントログ: ハンドラ開始
+    save_jsonl_log(log_dir, "handler_start", {
+        "handler": "design_review",
+    })
+
+    # 3. 設計成果物を取得（DESIGNハンドラが保存したもの）
+    design_output = session.get_context("design_output", "")
+    design_output_path = session.get_context("design_output_path", "")
+
+    if not design_output:
+        raise PromptLoadError("Design output not found in session. Run DESIGN first.")
+
+    # 4. プロンプト読み込み（設計成果物を含む）
     prompt = load_prompt(
         self.get_prompt_path(DesignState.DESIGN_REVIEW),
+        required_vars=["issue_url", "design_output"],  # バリデーション対象
         issue_url=ctx.issue_provider.issue_url,
+        design_output=design_output,
+        design_output_path=design_output_path,
     )
 
-    # 3. AI呼び出し（レビューは新規会話）
+    # 5. イベントログ: AI呼び出し前
+    save_jsonl_log(log_dir, "ai_call_start", {
+        "role": "reviewer",
+        "prompt_length": len(prompt),
+        "design_output_length": len(design_output),
+    })
+
+    # 6. AI呼び出し（レビューは新規会話）
     decision, _ = ctx.reviewer.run(
         prompt=prompt,
         context=ctx.issue_provider.issue_url,
         log_dir=log_dir,
     )
 
-    # 4. 証跡保存
+    # 7. イベントログ: AI呼び出し後
+    save_jsonl_log(log_dir, "ai_call_end", {
+        "role": "reviewer",
+        "response_length": len(decision),
+    })
+
+    # 8. 証跡保存
     save_artifact(log_dir, "prompt.md", prompt)
     save_artifact(log_dir, "response.md", decision)
 
-    # 5. VERDICT解析（AI Formatter付き）
+    # 9. VERDICT解析（AI Formatter付き）
     ai_formatter = create_ai_formatter(ctx.reviewer, context="", log_dir=log_dir)
+
+    # 10. イベントログ: VERDICT解析開始
+    save_jsonl_log(log_dir, "verdict_parse_start", {
+        "raw_response_length": len(decision),
+    })
+
     verdict = parse_verdict(decision, ai_formatter=ai_formatter, max_retries=2)
 
-    # 6. 証跡にVERDICT追記
+    # 11. 証跡にVERDICT追記
     save_artifact(log_dir, "verdict.txt", verdict.value)
 
-    # 7. ABORT処理（例外送出）
+    # 12. イベントログ: VERDICT確定（元のverdictを保持）
+    original_verdict = verdict
+    save_jsonl_log(log_dir, "verdict_determined", {
+        "verdict": verdict.value,
+        "original_verdict": original_verdict.value,  # 変換前の値も記録
+    })
+
+    # 13. ABORT処理（例外送出）
     handle_abort_verdict(verdict, decision)
 
-    # 8. BACK_DESIGN処理（本ワークフローでは RETRY と同じ扱い）
+    # 14. BACK_DESIGN処理（本ワークフローでは RETRY と同じ扱い）
     if verdict == Verdict.BACK_DESIGN:
+        # イベントログ: BACK_DESIGN→RETRY変換を記録
+        save_jsonl_log(log_dir, "verdict_converted", {
+            "original": "BACK_DESIGN",
+            "converted_to": "RETRY",
+            "reason": "DesignWorkflow treats BACK_DESIGN as RETRY",
+        })
         # DesignWorkflowでは BACK_DESIGN は RETRY 相当
         # Implement/BugfixWorkflowでは外部への遷移シグナル
-        return Verdict.RETRY
+        verdict = Verdict.RETRY
 
-    # 9. 完了マーク（PASSの場合）
+    # 15. 完了マーク（PASSの場合）
     if verdict == Verdict.PASS:
         session.mark_completed("design_review")
         session.reset_loop("design")  # 次のワークフロー用にリセット
+
+    # 16. イベントログ: ハンドラ終了
+    save_jsonl_log(log_dir, "handler_end", {
+        "handler": "design_review",
+        "original_verdict": original_verdict.value,
+        "final_verdict": verdict.value,
+    })
 
     return verdict
 ```
@@ -197,7 +288,12 @@ class PromptLoadError(Exception):
     pass
 
 
-def load_prompt(relative_path: str, **kwargs: str) -> str:
+def load_prompt(
+    relative_path: str,
+    *,
+    required_vars: list[str] | None = None,
+    **kwargs: str,
+) -> str:
     """Load prompt file and substitute template variables.
 
     Uses string.Template which safely handles missing keys and
@@ -205,19 +301,30 @@ def load_prompt(relative_path: str, **kwargs: str) -> str:
 
     Args:
         relative_path: Relative path from src/ directory
+        required_vars: List of variable names that MUST be provided.
+                      If any are missing, raises PromptLoadError.
         **kwargs: Template variables to substitute
 
     Returns:
         Formatted prompt text
 
     Raises:
-        PromptLoadError: If file not found or template substitution fails
+        PromptLoadError: If file not found, required vars missing,
+                        or template substitution fails
     """
     src_dir = Path(__file__).parent.parent
     path = src_dir / relative_path
 
     if not path.exists():
         raise PromptLoadError(f"Prompt file not found: {path}")
+
+    # 必須変数のバリデーション
+    if required_vars:
+        missing = [var for var in required_vars if var not in kwargs or not kwargs[var]]
+        if missing:
+            raise PromptLoadError(
+                f"Missing required prompt variables for {relative_path}: {missing}"
+            )
 
     try:
         template_text = path.read_text(encoding="utf-8")
@@ -230,19 +337,15 @@ def load_prompt(relative_path: str, **kwargs: str) -> str:
 
 # プロンプト内で使用可能な変数をドキュメント化
 PROMPT_VARIABLES = {
-    "design": ["issue_url", "issue_body"],
-    "design_review": ["issue_url"],
+    "design": {
+        "required": ["issue_url", "issue_body"],
+        "optional": ["requirements"],
+    },
+    "design_review": {
+        "required": ["issue_url", "design_output"],
+        "optional": ["design_output_path"],
+    },
 }
-
-
-def validate_prompt_variables(prompt_name: str, provided: dict[str, str]) -> list[str]:
-    """Validate that all required variables are provided.
-
-    Returns:
-        List of missing variable names (empty if all provided)
-    """
-    required = PROMPT_VARIABLES.get(prompt_name, [])
-    return [var for var in required if var not in provided]
 ```
 
 ### 6. プロンプトファイル配置とエスケープ規則
@@ -336,18 +439,43 @@ def save_jsonl_log(
 
 **確認点**: `dao design --input requirements.md` の扱い
 
+**修正**: Issue本文への追記はリスキー（再実行で重複、他ワークフローと競合）。artifacts保存方式に変更。
+
 **設計**:
 ```python
-# CLI側で入力ファイルを処理
-if args.input:
-    requirements_content = Path(args.input).read_text()
-    # Issue本文に追記、または artifacts にコピー
-    ctx.issue_provider.update_body(
-        ctx.issue_provider.get_issue_body() + "\n\n## Requirements\n" + requirements_content
-    )
+# CLI側で入力ファイルを処理（ワークフロー開始前）
+def setup_workflow_context(args, session: SessionState) -> None:
+    """CLI引数からワークフロー実行コンテキストを設定"""
+    if args.input:
+        input_path = Path(args.input)
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input file not found: {input_path}")
+
+        requirements_content = input_path.read_text(encoding="utf-8")
+
+        # SessionStateに保存（ハンドラからアクセス可能）
+        session.set_context("requirements_content", requirements_content)
+        session.set_context("requirements_path", str(input_path.absolute()))
+
+        # artifacts にもコピー（証跡として保存）
+        artifacts_dir = Path(session.artifacts_base_dir) / "input"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        (artifacts_dir / "requirements.md").write_text(
+            requirements_content, encoding="utf-8"
+        )
 ```
 
-**方針**: 入力ファイルの内容はIssue本文に追記される。プロンプトは `${issue_body}` 経由でアクセス。
+**フロー**:
+1. CLI: `--input` ファイルを読み込み、`session.set_context()` で保存
+2. CLI: artifacts/input/ にコピー（証跡）
+3. ハンドラ: `session.get_context("requirements_content")` で取得
+4. プロンプト: `${requirements}` 変数で内容にアクセス
+
+**メリット**:
+- Issue本文を汚さない
+- 再実行しても重複しない
+- 他ワークフローと競合しない
+- 証跡がartifactsに残る
 
 ### 10. エラーハンドリング階層
 
@@ -386,11 +514,13 @@ ai_formatter = create_ai_formatter(
 
 | 対象 | テストケース |
 |------|------------|
-| `load_prompt` | ファイル存在、変数展開、エスケープ、ファイル不存在 |
+| `load_prompt` | ファイル存在、変数展開、エスケープ、ファイル不存在、**必須変数欠落でPromptLoadError** |
 | `save_artifact` | 通常保存、追記モード、ディレクトリ不存在 |
+| `save_jsonl_log` | イベント追記、タイムスタンプ付与、複数イベント |
 | `LoopLimitExceededError` | ループ上限超過検出 |
-| `handle_design` | 正常フロー、ループ上限、AI呼び出し失敗 |
-| `handle_design_review` | PASS/RETRY/BACK_DESIGN/ABORT各パターン |
+| `handle_design` | 正常フロー、ループ上限、AI呼び出し失敗、**設計出力のSessionState保存** |
+| `handle_design_review` | PASS/RETRY/BACK_DESIGN/ABORT各パターン、**設計成果物が無い場合のエラー**、**BACK_DESIGN→RETRY変換のログ記録** |
+| `setup_workflow_context` | 入力ファイル読み込み、artifacts保存、ファイル不存在エラー |
 
 ### 統合テスト（MockTool使用）
 
