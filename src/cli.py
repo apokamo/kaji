@@ -3,6 +3,8 @@
 import argparse
 import sys
 
+from src.workflows.design.runner import run_design_workflow
+
 
 def main() -> int:
     """Main entry point for the CLI."""
@@ -49,7 +51,11 @@ def main() -> int:
         print("  bugfix    - Full bugfix workflow (9 states)")
         return 0
 
-    # TODO: Implement workflow execution
+    # Execute workflow
+    if args.workflow == "design":
+        return run_design_workflow(args)
+
+    # Other workflows not yet implemented
     print(f"Workflow '{args.workflow}' is not yet implemented.")
     return 1
 
