@@ -831,6 +831,35 @@ def test_design_review_retry_flow():
 - session_idが初回None、2回目以降は継続
 - max_loop_count=3 でちょうど3回目の呼び出し
 
+## 実装時の注意点
+
+> **レビュー時の指摘・フォロー事項（実装漏れ防止用）**
+
+### 必須対応
+
+1. **CLI実装の更新**
+   - `src/cli.py` に `--issue` 引数を追加
+   - 既存テストの調整が必要な場合あり
+   - サブコマンド分離ファイル（`src/cli/commands/design.py`）の作成を検討
+
+2. **テンプレート変数の整合性確認**
+   - `design.md` が `${requirements}` を実際に使うかどうか確認
+   - 使う場合は `required_vars` に含めるか、空文字列デフォルトで対応
+   - テンプレート変更時は `PROMPT_VARIABLES` も必ず更新
+
+### 推奨対応
+
+3. **静的解析のテスト**
+   - `extract_template_variables()` をユニットテストで最低1回呼ぶ
+   - これにより変数抽出ロジックの漏れを早期検知可能
+   - CI統合はPhase 3以降だが、テストは先に書いておく
+
+### 確認事項
+
+4. **既存コードとの整合性**
+   - `AgentContext.ensure_artifacts_dir()` が期待通り動作するか確認
+   - `SessionState` への新規メソッド追加時、既存テストへの影響確認
+
 ## 参考
 
 - [v5 handlers/design.py](/home/aki/claude/kamo2/.claude/agents/bugfix-v5/bugfix_agent/handlers/design.py)
