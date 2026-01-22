@@ -128,8 +128,10 @@ class TestRunDesignWorkflow:
     @patch("src.workflows.design.runner.GitHubIssueProvider")
     @patch("src.workflows.design.runner.ClaudeTool")
     @patch("src.workflows.design.runner._run_workflow_loop")
+    @patch("src.workflows.design.runner.setup_workflow_context")
     def test_calls_workflow_loop_with_context(
         self,
+        mock_setup_context: MagicMock,
         mock_run_loop: MagicMock,
         mock_claude: MagicMock,
         mock_provider: MagicMock,
@@ -150,6 +152,7 @@ class TestRunDesignWorkflow:
 
         # Assert
         assert result == 0
+        mock_setup_context.assert_called_once()
         mock_run_loop.assert_called_once()
         call_args = mock_run_loop.call_args
         assert isinstance(call_args[0][0], DesignWorkflow)
@@ -158,8 +161,10 @@ class TestRunDesignWorkflow:
     @patch("src.workflows.design.runner.GitHubIssueProvider")
     @patch("src.workflows.design.runner.ClaudeTool")
     @patch("src.workflows.design.runner._run_workflow_loop")
+    @patch("src.workflows.design.runner.AgentContext")
     def test_loads_input_file_when_provided(
         self,
+        mock_agent_context: MagicMock,
         mock_run_loop: MagicMock,
         mock_claude: MagicMock,
         mock_provider: MagicMock,
@@ -169,6 +174,11 @@ class TestRunDesignWorkflow:
         # Arrange
         mock_run_loop.return_value = 0
         mock_provider.return_value.issue_number = 1
+
+        # Mock AgentContext to use tmp_path for artifacts
+        mock_ctx = MagicMock()
+        mock_ctx.ensure_artifacts_dir.return_value = tmp_path / "artifacts" / "input"
+        mock_agent_context.return_value = mock_ctx
 
         # Create input file
         input_file = tmp_path / "requirements.md"
