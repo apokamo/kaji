@@ -39,3 +39,29 @@ class IssueRateLimitError(IssueProviderError):
     """
 
     pass
+
+
+class LoopLimitExceededError(Exception):
+    """Raised when loop count exceeds the maximum.
+
+    This error indicates that a workflow state has exceeded its maximum
+    allowed retry count, preventing infinite loops.
+
+    Attributes:
+        state: The state name that exceeded the limit.
+        count: The current loop count.
+        max_count: The maximum allowed loop count.
+    """
+
+    def __init__(self, state: str, count: int, max_count: int) -> None:
+        """Initialize LoopLimitExceededError.
+
+        Args:
+            state: The state name that exceeded the limit.
+            count: The current loop count.
+            max_count: The maximum allowed loop count.
+        """
+        self.state = state
+        self.count = count
+        self.max_count = max_count
+        super().__init__(f"Loop limit exceeded for {state}: {count} >= {max_count}")

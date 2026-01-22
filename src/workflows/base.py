@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 from src.core.context import AgentContext
 from src.core.verdict import Verdict
@@ -36,6 +37,7 @@ class SessionState:
     loop_counters: dict[str, int] = field(default_factory=dict)
     active_conversations: dict[str, str | None] = field(default_factory=dict)
     max_loop_count: int = 3
+    _context: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate initialization parameters."""
@@ -116,6 +118,41 @@ class SessionState:
             True if state is completed, False otherwise.
         """
         return state_name in self.completed_states
+
+    def set_context(self, key: str, value: Any) -> None:
+        """Set a context value for cross-handler communication.
+
+        Args:
+            key: Context key (e.g., "design_output", "requirements_content").
+            value: Any serializable value.
+
+        Example:
+            session.set_context("design_output", result)
+        """
+        self._context[key] = value
+
+    def get_context(self, key: str, default: Any = None) -> Any:
+        """Get a context value.
+
+        Args:
+            key: Context key.
+            default: Default value if key not found.
+
+        Returns:
+            Stored value or default.
+
+        Example:
+            design_output = session.get_context("design_output", "")
+        """
+        return self._context.get(key, default)
+
+    def clear_context(self, key: str) -> None:
+        """Remove a context value.
+
+        Args:
+            key: Context key to remove.
+        """
+        self._context.pop(key, None)
 
 
 class WorkflowBase(ABC):

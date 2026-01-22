@@ -227,6 +227,84 @@ class TestCompletedStates:
         assert len(session.completed_states) == 3
 
 
+class TestContextMethods:
+    """コンテキスト共有機能テスト（set_context, get_context, clear_context）."""
+
+    def test_set_and_get_context(self) -> None:
+        """コンテキスト値を設定・取得できること."""
+        session = SessionState()
+
+        session.set_context("design_output", "# Design Document")
+
+        assert session.get_context("design_output") == "# Design Document"
+
+    def test_get_context_with_default(self) -> None:
+        """未設定キーでデフォルト値を返すこと."""
+        session = SessionState()
+
+        result = session.get_context("nonexistent", "default_value")
+
+        assert result == "default_value"
+
+    def test_get_context_default_is_none(self) -> None:
+        """デフォルト引数なしで None を返すこと."""
+        session = SessionState()
+
+        result = session.get_context("nonexistent")
+
+        assert result is None
+
+    def test_clear_context(self) -> None:
+        """コンテキスト値をクリアできること."""
+        session = SessionState()
+        session.set_context("key", "value")
+
+        session.clear_context("key")
+
+        assert session.get_context("key") is None
+
+    def test_clear_context_nonexistent_key(self) -> None:
+        """存在しないキーの clear_context でエラーが発生しないこと."""
+        session = SessionState()
+
+        # Should not raise
+        session.clear_context("nonexistent")
+
+    def test_context_overwrite(self) -> None:
+        """既存のコンテキスト値を上書きできること."""
+        session = SessionState()
+        session.set_context("key", "old_value")
+
+        session.set_context("key", "new_value")
+
+        assert session.get_context("key") == "new_value"
+
+    def test_context_isolation_between_instances(self) -> None:
+        """異なるインスタンス間でコンテキストが独立していること."""
+        session1 = SessionState()
+        session2 = SessionState()
+
+        session1.set_context("key", "value1")
+        session2.set_context("key", "value2")
+
+        assert session1.get_context("key") == "value1"
+        assert session2.get_context("key") == "value2"
+
+    def test_context_with_various_types(self) -> None:
+        """様々な型の値をコンテキストに保存できること."""
+        session = SessionState()
+
+        session.set_context("string", "text")
+        session.set_context("number", 42)
+        session.set_context("list", [1, 2, 3])
+        session.set_context("dict", {"nested": "value"})
+
+        assert session.get_context("string") == "text"
+        assert session.get_context("number") == 42
+        assert session.get_context("list") == [1, 2, 3]
+        assert session.get_context("dict") == {"nested": "value"}
+
+
 class TestIntegration:
     """統合テスト - 複合シナリオ."""
 
