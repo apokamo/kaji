@@ -3,7 +3,7 @@
 <!--
 Template Variables:
 - ${issue_url}: GitHub Issue URL (required)
-- ${issue_body}: Issue本文 (required)
+- ${issue_body}: Issue本文（オプション、空の場合あり）
 - ${requirements}: 追加要件（オプション、空文字列がデフォルト）
 -->
 
