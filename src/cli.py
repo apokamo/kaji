@@ -24,7 +24,6 @@ def main() -> int:
     design_parser = subparsers.add_parser("design", help="Design workflow")
     design_parser.add_argument("--issue", required=True, help="GitHub issue URL")
     design_parser.add_argument("--input", "-i", help="Input requirements file (optional)")
-    design_parser.add_argument("--output", "-o", help="Output design file")
 
     # Implement workflow
     impl_parser = subparsers.add_parser("implement", help="Implementation workflow")

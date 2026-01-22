@@ -38,6 +38,9 @@ def run_design_workflow(args: Namespace) -> int:
         return 1
 
     # 2. Create AI tools (using Claude for all roles)
+    # TODO: Permission settings are intentionally permissive for initial development.
+    #       After PG verification, adjust to safer defaults (e.g., remove bypassPermissions).
+    #       See: https://github.com/owner/repo/issues/28 review comment
     claude_tool = ClaudeTool(
         model="sonnet",
         permission_mode="bypassPermissions",
