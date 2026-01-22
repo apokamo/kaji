@@ -1,5 +1,6 @@
 """Tests for DesignWorkflow handlers - TDD approach."""
 
+from argparse import Namespace
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -10,6 +11,7 @@ from src.core.prompts import PromptLoadError
 from src.core.tools.mock import MockTool
 from src.core.verdict import AgentAbortError, Verdict
 from src.workflows.base import SessionState
+from src.workflows.design import setup_workflow_context
 from src.workflows.design.states import DesignState
 from src.workflows.design.workflow import DesignWorkflow
 
@@ -373,3 +375,77 @@ class TestDesignWorkflowIntegration:
         verdict2 = workflow._handle_design_review(mock_context, session)
         assert verdict2 == Verdict.PASS
         assert workflow.get_next_state(DesignState.DESIGN_REVIEW, verdict2) == DesignState.COMPLETE
+
+
+class TestSetupWorkflowContext:
+    """setup_workflow_context のテスト."""
+
+    def test_sets_requirements_content_from_input_file(self, tmp_path: Path) -> None:
+        """--input ファイルから requirements_content を設定すること."""
+        # Arrange
+        input_file = tmp_path / "requirements.md"
+        input_file.write_text("# Requirements\n\nTest requirements")
+
+        args = Namespace(issue="https://github.com/test/repo/issues/1", input=str(input_file))
+        ctx = MagicMock()
+        ctx.ensure_artifacts_dir.return_value = tmp_path / "artifacts" / "input"
+        (tmp_path / "artifacts" / "input").mkdir(parents=True)
+
+        session = SessionState()
+
+        # Act
+        setup_workflow_context(args, ctx, session)
+
+        # Assert
+        assert session.get_context("requirements_content") == "# Requirements\n\nTest requirements"
+
+    def test_saves_requirements_to_artifacts(self, tmp_path: Path) -> None:
+        """requirements ファイルを artifacts に保存すること."""
+        # Arrange
+        input_file = tmp_path / "requirements.md"
+        input_file.write_text("# Requirements")
+
+        artifacts_dir = tmp_path / "artifacts" / "input"
+        artifacts_dir.mkdir(parents=True)
+
+        args = Namespace(issue="https://github.com/test/repo/issues/1", input=str(input_file))
+        ctx = MagicMock()
+        ctx.ensure_artifacts_dir.return_value = artifacts_dir
+
+        session = SessionState()
+
+        # Act
+        setup_workflow_context(args, ctx, session)
+
+        # Assert
+        saved_file = artifacts_dir / "requirements.md"
+        assert saved_file.exists()
+        assert saved_file.read_text() == "# Requirements"
+
+    def test_sets_empty_requirements_when_no_input(self, tmp_path: Path) -> None:
+        """--input がない場合に空文字列を設定すること."""
+        # Arrange
+        args = Namespace(issue="https://github.com/test/repo/issues/1", input=None)
+        ctx = MagicMock()
+        session = SessionState()
+
+        # Act
+        setup_workflow_context(args, ctx, session)
+
+        # Assert
+        assert session.get_context("requirements_content") == ""
+
+    def test_handles_missing_input_file_gracefully(self, tmp_path: Path) -> None:
+        """存在しない入力ファイルを指定しても空文字列を設定すること."""
+        # Arrange
+        args = Namespace(
+            issue="https://github.com/test/repo/issues/1", input="/nonexistent/file.md"
+        )
+        ctx = MagicMock()
+        session = SessionState()
+
+        # Act
+        setup_workflow_context(args, ctx, session)
+
+        # Assert
+        assert session.get_context("requirements_content") == ""

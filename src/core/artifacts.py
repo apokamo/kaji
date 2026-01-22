@@ -16,8 +16,11 @@ def save_artifact(
     content: str,
     *,
     append: bool = False,
-) -> Path:
+) -> Path | None:
     """Save artifact to the specified directory.
+
+    Best-effort operation: IO failures are logged as warnings but do not
+    stop workflow execution.
 
     Args:
         artifacts_dir: Directory to save to (must exist).
@@ -26,13 +29,18 @@ def save_artifact(
         append: If True, append to existing file.
 
     Returns:
-        Path to the saved file.
+        Path to the saved file, or None if save failed.
     """
     filepath = artifacts_dir / filename
     mode = "a" if append else "w"
-    with open(filepath, mode, encoding="utf-8") as f:
-        f.write(content)
-    return filepath
+    try:
+        with open(filepath, mode, encoding="utf-8") as f:
+            f.write(content)
+        return filepath
+    except OSError as e:
+        # Artifact save failure does not stop workflow (best-effort)
+        print(f"Warning: Failed to save artifact {filename}: {e}", file=sys.stderr)
+        return None
 
 
 def save_jsonl_log(

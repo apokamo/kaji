@@ -1,9 +1,8 @@
 """Design workflow implementation."""
 
+from collections.abc import Callable
 from enum import Enum
 from typing import cast
-
-from collections.abc import Callable
 
 from src.core.artifacts import save_artifact, save_jsonl_log
 from src.core.errors import LoopLimitExceededError
@@ -131,7 +130,7 @@ class DesignWorkflow(WorkflowBase):
         }
         prompt = load_prompt(
             self.get_prompt_path(DesignState.DESIGN),
-            required_vars=["issue_url", "issue_body"],
+            required_vars=["issue_url"],  # issue_body can be empty
             **prompt_vars,
         )
 
@@ -227,7 +226,10 @@ class DesignWorkflow(WorkflowBase):
             raise PromptLoadError("Design output not found in session. Run DESIGN first.")
 
         # 4. Load prompt with design output (summarized if too long)
-        design_output_for_prompt = summarize_for_prompt(design_output)
+        design_output_for_prompt = summarize_for_prompt(
+            design_output,
+            full_content_path=design_output_path,
+        )
 
         prompt = load_prompt(
             self.get_prompt_path(DesignState.DESIGN_REVIEW),
