@@ -188,3 +188,23 @@ class TestSummarizeForPrompt:
         long_content = "x" * (MAX_INLINE_CONTENT_LENGTH + 1000)
         result = summarize_for_prompt(long_content)
         assert len(result) < len(long_content)
+
+    def test_full_content_path_included_in_summary(self) -> None:
+        """full_content_path が省略メッセージに含まれること."""
+        from src.core.prompts import summarize_for_prompt
+
+        content = "A" * 200
+        result = summarize_for_prompt(
+            content, max_length=100, full_content_path="/path/to/design.md"
+        )
+
+        assert "/path/to/design.md" in result
+
+    def test_default_path_message_when_no_path(self) -> None:
+        """full_content_path が未指定の場合はデフォルトメッセージが使われること."""
+        from src.core.prompts import summarize_for_prompt
+
+        content = "A" * 200
+        result = summarize_for_prompt(content, max_length=100)
+
+        assert "the full document" in result

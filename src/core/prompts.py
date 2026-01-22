@@ -125,12 +125,15 @@ def load_prompt(
 def summarize_for_prompt(
     content: str,
     max_length: int = MAX_INLINE_CONTENT_LENGTH,
+    *,
+    full_content_path: str = "",
 ) -> str:
     """Summarize long content for prompt inclusion.
 
     Args:
         content: Original content.
         max_length: Maximum length before summarization.
+        full_content_path: Path to the full content file (used in truncation message).
 
     Returns:
         Original content if under limit, otherwise summarized version.
@@ -138,8 +141,9 @@ def summarize_for_prompt(
     if len(content) <= max_length:
         return content
 
-    # Calculate head and tail lengths, ensuring they are positive
-    delimiter = "\n\n... [中略: 全文は ${design_output_path} を参照] ...\n\n"
+    # Build delimiter with actual path if provided
+    path_reference = full_content_path if full_content_path else "the full document"
+    delimiter = f"\n\n... [中略: 全文は {path_reference} を参照] ...\n\n"
     delimiter_length = len(delimiter)
     available = max_length - delimiter_length
 
@@ -157,11 +161,11 @@ def summarize_for_prompt(
 # Prompt variable documentation
 PROMPT_VARIABLES = {
     "design": {
-        "required": ["issue_url", "issue_body"],
-        "optional": ["requirements"],
+        "required": ["issue_url"],
+        "optional": ["issue_body", "requirements"],
         "description": {
             "issue_url": "GitHub Issue URL",
-            "issue_body": "Issue本文（Markdown）",
+            "issue_body": "Issue本文（Markdown、空の場合あり）",
             "requirements": "追加要件ファイルの内容（オプション、空文字列がデフォルト）",
         },
     },
