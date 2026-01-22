@@ -12,6 +12,72 @@ DesignWorkflowの`handle_design`と`handle_design_review`を実装し、v5から
 - v5の実績あるハンドラパターンをdaoに適用
 - DesignWorkflowを動作可能な状態にする
 
+## SessionState 拡張
+
+### 追加インターフェース
+
+現行の `SessionState` に以下のメソッドを追加する。
+
+```python
+@dataclass
+class SessionState:
+    # 既存フィールド
+    completed_states: list[str] = field(default_factory=list)
+    loop_counters: dict[str, int] = field(default_factory=dict)
+    active_conversations: dict[str, str | None] = field(default_factory=dict)
+    max_loop_count: int = 3
+
+    # 新規フィールド: ハンドラ間のコンテキスト共有用
+    _context: dict[str, Any] = field(default_factory=dict)
+
+    def set_context(self, key: str, value: Any) -> None:
+        """Set a context value for cross-handler communication.
+
+        Args:
+            key: Context key (e.g., "design_output", "requirements_content").
+            value: Any serializable value.
+
+        Example:
+            session.set_context("design_output", result)
+        """
+        self._context[key] = value
+
+    def get_context(self, key: str, default: Any = None) -> Any:
+        """Get a context value.
+
+        Args:
+            key: Context key.
+            default: Default value if key not found.
+
+        Returns:
+            Stored value or default.
+
+        Example:
+            design_output = session.get_context("design_output", "")
+        """
+        return self._context.get(key, default)
+
+    def clear_context(self, key: str) -> None:
+        """Remove a context value.
+
+        Args:
+            key: Context key to remove.
+        """
+        self._context.pop(key, None)
+```
+
+### artifacts パスについて
+
+**重要**: `artifacts_base_dir` は SessionState ではなく **AgentContext** が管理する。
+
+| コンポーネント | 責務 |
+|--------------|------|
+| `AgentContext.artifacts_dir` | 実行単位の artifacts パス（`{base}/{issue_number}/{timestamp}`） |
+| `AgentContext.ensure_artifacts_dir(state)` | ステート別ディレクトリ作成 |
+| `SessionState._context` | ハンドラ間の値受け渡し（パス、出力テキスト等） |
+
+設計書内で使用していた `session.artifacts_base_dir` は削除し、`ctx.ensure_artifacts_dir()` に統一する。
+
 ## インターフェース
 
 ### 入力
@@ -281,11 +347,33 @@ class LoopLimitExceededError(Exception):
 # src/core/prompts.py
 from pathlib import Path
 from string import Template
+import re
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class PromptLoadError(Exception):
     """Raised when prompt file cannot be loaded or formatted."""
     pass
+
+
+def extract_template_variables(template_text: str) -> set[str]:
+    """Extract all variable names from a string.Template text.
+
+    Args:
+        template_text: Template text with ${var} placeholders.
+
+    Returns:
+        Set of variable names found in the template.
+
+    Example:
+        >>> extract_template_variables("Hello ${name}, your ${item} is ready")
+        {'name', 'item'}
+    """
+    # Match ${identifier} but not $${escaped}
+    pattern = r'(?<!\$)\$\{(\w+)\}'
+    return set(re.findall(pattern, template_text))
 
 
 def load_prompt(
@@ -303,6 +391,7 @@ def load_prompt(
         relative_path: Relative path from src/ directory
         required_vars: List of variable names that MUST be provided.
                       If any are missing, raises PromptLoadError.
+                      If None, auto-detects from template.
         **kwargs: Template variables to substitute
 
     Returns:
@@ -318,6 +407,11 @@ def load_prompt(
     if not path.exists():
         raise PromptLoadError(f"Prompt file not found: {path}")
 
+    try:
+        template_text = path.read_text(encoding="utf-8")
+    except Exception as e:
+        raise PromptLoadError(f"Failed to read prompt {path}: {e}") from e
+
     # 必須変数のバリデーション
     if required_vars:
         missing = [var for var in required_vars if var not in kwargs or not kwargs[var]]
@@ -326,8 +420,17 @@ def load_prompt(
                 f"Missing required prompt variables for {relative_path}: {missing}"
             )
 
+    # テンプレート内の変数を静的解析して警告
+    template_vars = extract_template_variables(template_text)
+    provided_vars = set(kwargs.keys())
+    undefined_vars = template_vars - provided_vars
+    if undefined_vars:
+        logger.warning(
+            f"Template {relative_path} has undefined variables: {undefined_vars}. "
+            "These will remain as ${var} in the output."
+        )
+
     try:
-        template_text = path.read_text(encoding="utf-8")
         template = Template(template_text)
         # safe_substitute: 未定義変数は ${varname} のまま残す
         return template.safe_substitute(**kwargs)
@@ -336,17 +439,38 @@ def load_prompt(
 
 
 # プロンプト内で使用可能な変数をドキュメント化
+# テンプレートファイル変更時はこのリストも更新すること
 PROMPT_VARIABLES = {
     "design": {
         "required": ["issue_url", "issue_body"],
-        "optional": ["requirements"],
+        "optional": ["requirements"],  # --input 経由で提供される場合
+        "description": {
+            "issue_url": "GitHub Issue URL",
+            "issue_body": "Issue本文（Markdown）",
+            "requirements": "追加要件ファイルの内容（オプション）",
+        },
     },
     "design_review": {
         "required": ["issue_url", "design_output"],
         "optional": ["design_output_path"],
+        "description": {
+            "issue_url": "GitHub Issue URL",
+            "design_output": "設計ドキュメントの内容（または先頭サマリ）",
+            "design_output_path": "設計ドキュメントのファイルパス",
+        },
     },
 }
 ```
+
+**テンプレート変数の静的解析**:
+- `extract_template_variables()` でテンプレート内の `${var}` を自動検出
+- 提供されていない変数は警告ログを出力（処理は継続）
+- 必須変数が欠落した場合は `PromptLoadError` を送出
+
+**テンプレートファイル管理**:
+- 各テンプレートの先頭にコメントで変数リストを記載（自己文書化）
+- `PROMPT_VARIABLES` でコード側からも参照可能
+- テンプレート変更時は両方を更新するルール
 
 ### 6. プロンプトファイル配置とエスケープ規則
 
@@ -360,6 +484,65 @@ src/workflows/design/prompts/
 - `${variable}` → テンプレート変数（展開される）
 - `$${literal}` → リテラル `${literal}`（展開されない）
 - `$` 単体 → そのまま
+
+### 6.1 design_output の長大化対策
+
+**問題**: 設計出力全文をプロンプトにインライン展開すると、トークン数が膨大になる可能性がある。
+
+**対策**:
+
+```python
+# src/core/prompts.py
+
+# 設計出力の最大文字数（超過時はサマリ化）
+MAX_INLINE_CONTENT_LENGTH = 10_000
+
+
+def summarize_for_prompt(content: str, max_length: int = MAX_INLINE_CONTENT_LENGTH) -> str:
+    """Summarize long content for prompt inclusion.
+
+    Args:
+        content: Original content.
+        max_length: Maximum length before summarization.
+
+    Returns:
+        Original content if under limit, otherwise summarized version.
+    """
+    if len(content) <= max_length:
+        return content
+
+    # 先頭と末尾を抽出してサマリ化
+    head_length = max_length // 2 - 50
+    tail_length = max_length // 2 - 50
+
+    return (
+        content[:head_length]
+        + "\n\n... [中略: 全文は ${design_output_path} を参照] ...\n\n"
+        + content[-tail_length:]
+    )
+```
+
+**使用箇所**:
+```python
+# handle_design_review 内
+design_output = session.get_context("design_output", "")
+design_output_path = session.get_context("design_output_path", "")
+
+# プロンプトには要約版を使用
+design_output_for_prompt = summarize_for_prompt(design_output)
+
+prompt = load_prompt(
+    self.get_prompt_path(DesignState.DESIGN_REVIEW),
+    required_vars=["issue_url", "design_output"],
+    issue_url=ctx.issue_provider.issue_url,
+    design_output=design_output_for_prompt,  # 要約版
+    design_output_path=design_output_path,   # フルパス（参照用）
+)
+```
+
+**プロンプト側の対応**:
+- `design_review.md` テンプレートに「全文は ${design_output_path} を参照してください」の文言を追加
+- レビューアは必要に応じてファイルを直接参照
 
 ### 7. 監査ログ（証跡保存）
 
@@ -402,20 +585,29 @@ def save_jsonl_log(
 ) -> None:
     """Append event to JSONL log file.
 
+    Best-effort logging: IO failures are logged as warnings but do not
+    stop workflow execution.
+
     Args:
         artifacts_dir: Directory containing log file
         event_type: Type of event (e.g., "ai_call", "verdict")
         data: Event data dictionary
     """
     import json
+    import sys
+
     log_path = artifacts_dir / "events.jsonl"
     event = {
         "timestamp": datetime.now().isoformat(),
         "type": event_type,
         **data,
     }
-    with open(log_path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    try:
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    except OSError as e:
+        # ログ失敗はワークフローを止めない（best-effort）
+        print(f"Warning: Failed to write event log: {e}", file=sys.stderr)
 ```
 
 **保存される証跡**:
@@ -443,9 +635,22 @@ def save_jsonl_log(
 
 **設計**:
 ```python
-# CLI側で入力ファイルを処理（ワークフロー開始前）
-def setup_workflow_context(args, session: SessionState) -> None:
-    """CLI引数からワークフロー実行コンテキストを設定"""
+# src/cli/commands/design.py
+def setup_workflow_context(
+    args: argparse.Namespace,
+    ctx: AgentContext,
+    session: SessionState,
+) -> None:
+    """CLI引数からワークフロー実行コンテキストを設定.
+
+    Args:
+        args: CLI引数（args.input が入力ファイルパス）
+        ctx: AgentContext（artifacts パス管理）
+        session: SessionState（コンテキスト共有）
+
+    Raises:
+        FileNotFoundError: 入力ファイルが存在しない場合
+    """
     if args.input:
         input_path = Path(args.input)
         if not input_path.exists():
@@ -457,25 +662,49 @@ def setup_workflow_context(args, session: SessionState) -> None:
         session.set_context("requirements_content", requirements_content)
         session.set_context("requirements_path", str(input_path.absolute()))
 
-        # artifacts にもコピー（証跡として保存）
-        artifacts_dir = Path(session.artifacts_base_dir) / "input"
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
-        (artifacts_dir / "requirements.md").write_text(
+        # artifacts にコピー（証跡として保存）
+        # AgentContext.ensure_artifacts_dir を使用
+        input_dir = ctx.ensure_artifacts_dir("input")
+        (input_dir / "requirements.md").write_text(
             requirements_content, encoding="utf-8"
         )
 ```
 
+**呼び出しタイミング**: CLI の `design` コマンドハンドラ内で、Orchestrator 起動前に呼び出す。
+
+```python
+# src/cli/commands/design.py
+def run_design_command(args: argparse.Namespace) -> int:
+    # 1. AgentContext 作成
+    ctx = create_context(args.issue_url)
+
+    # 2. SessionState 作成
+    session = SessionState()
+
+    # 3. ワークフローコンテキスト設定（--input 処理）
+    setup_workflow_context(args, ctx, session)
+
+    # 4. Orchestrator 起動
+    orchestrator = Orchestrator(DesignWorkflow(), ctx, session)
+    return orchestrator.run()
+```
+
 **フロー**:
-1. CLI: `--input` ファイルを読み込み、`session.set_context()` で保存
-2. CLI: artifacts/input/ にコピー（証跡）
-3. ハンドラ: `session.get_context("requirements_content")` で取得
-4. プロンプト: `${requirements}` 変数で内容にアクセス
+1. CLI: `create_context()` で AgentContext 作成
+2. CLI: `SessionState()` 作成
+3. CLI: `setup_workflow_context()` で `--input` ファイルを読み込み
+   - `session.set_context()` でハンドラに共有
+   - `ctx.ensure_artifacts_dir("input")` で証跡保存
+4. Orchestrator 起動
+5. ハンドラ: `session.get_context("requirements_content")` で取得
+6. プロンプト: `${requirements}` 変数で内容にアクセス
 
 **メリット**:
 - Issue本文を汚さない
 - 再実行しても重複しない
 - 他ワークフローと競合しない
 - 証跡がartifactsに残る
+- `ctx.ensure_artifacts_dir()` により既存APIと整合
 
 ### 10. エラーハンドリング階層
 
@@ -514,13 +743,16 @@ ai_formatter = create_ai_formatter(
 
 | 対象 | テストケース |
 |------|------------|
-| `load_prompt` | ファイル存在、変数展開、エスケープ、ファイル不存在、**必須変数欠落でPromptLoadError** |
+| `load_prompt` | ファイル存在、変数展開、エスケープ、ファイル不存在、**必須変数欠落でPromptLoadError**、**未定義変数の警告ログ** |
+| `extract_template_variables` | 変数抽出、エスケープ済み変数の除外 |
+| `summarize_for_prompt` | 短いコンテンツはそのまま、長いコンテンツは先頭・末尾抽出 |
 | `save_artifact` | 通常保存、追記モード、ディレクトリ不存在 |
-| `save_jsonl_log` | イベント追記、タイムスタンプ付与、複数イベント |
+| `save_jsonl_log` | イベント追記、タイムスタンプ付与、複数イベント、**IO失敗時の警告出力と処理継続** |
 | `LoopLimitExceededError` | ループ上限超過検出 |
+| `SessionState.set_context/get_context` | 値の設定・取得、デフォルト値、clear_context |
 | `handle_design` | 正常フロー、ループ上限、AI呼び出し失敗、**設計出力のSessionState保存** |
-| `handle_design_review` | PASS/RETRY/BACK_DESIGN/ABORT各パターン、**設計成果物が無い場合のエラー**、**BACK_DESIGN→RETRY変換のログ記録** |
-| `setup_workflow_context` | 入力ファイル読み込み、artifacts保存、ファイル不存在エラー |
+| `handle_design_review` | PASS/RETRY/BACK_DESIGN/ABORT各パターン、**設計成果物が無い場合のエラー**、**BACK_DESIGN→RETRY変換のログ記録**、**長大な設計出力のサマリ化** |
+| `setup_workflow_context` | 入力ファイル読み込み、**ctx.ensure_artifacts_dir経由のartifacts保存**、ファイル不存在エラー |
 
 ### 統合テスト（MockTool使用）
 
