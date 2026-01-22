@@ -447,7 +447,7 @@ PROMPT_VARIABLES = {
         "description": {
             "issue_url": "GitHub Issue URL",
             "issue_body": "Issue本文（Markdown）",
-            "requirements": "追加要件ファイルの内容（オプション）",
+            "requirements": "追加要件ファイルの内容（オプション、空文字列がデフォルト）",
         },
     },
     "design_review": {
@@ -462,10 +462,35 @@ PROMPT_VARIABLES = {
 }
 ```
 
+**オプション変数の扱い**:
+- `requirements` は常に渡す（未提供の場合は空文字列）
+- テンプレート側で `${requirements}` が空の場合は何も表示されない
+- これにより「プレースホルダが残る」問題を回避
+
+```python
+# handle_design 内
+prompt_vars = {
+    "issue_url": ctx.issue_provider.issue_url,
+    "issue_body": ctx.issue_provider.get_issue_body(),
+    "requirements": session.get_context("requirements_content", ""),  # 空文字列がデフォルト
+}
+```
+
 **テンプレート変数の静的解析**:
 - `extract_template_variables()` でテンプレート内の `${var}` を自動検出
 - 提供されていない変数は警告ログを出力（処理は継続）
 - 必須変数が欠落した場合は `PromptLoadError` を送出
+
+**静的解析の実行タイミング**:
+| タイミング | 動作 | 失敗時 |
+|-----------|------|-------|
+| 実行時（`load_prompt` 内） | 未定義変数を警告ログ出力 | 処理継続（警告のみ） |
+| CI（Phase 3以降で追加） | テンプレートと `PROMPT_VARIABLES` の整合性チェック | テスト失敗 |
+
+**Phase 2での運用**:
+- 実行時の警告ログで開発者が気づく
+- テンプレート変更時は手動で `PROMPT_VARIABLES` を更新
+- 漏れがあっても `safe_substitute` により致命的エラーにはならない
 
 **テンプレートファイル管理**:
 - 各テンプレートの先頭にコメントで変数リストを記載（自己文書化）
@@ -629,7 +654,22 @@ def save_jsonl_log(
 
 ### 9. CLI/入力との接続
 
-**確認点**: `dao design --input requirements.md` の扱い
+**確認点**: `dao design --issue <url>` の扱い
+
+**CLI仕様変更**: 現行の `design` サブコマンドに `--issue` 引数を追加する。
+
+```python
+# src/cli.py の design_parser 変更
+design_parser = subparsers.add_parser("design", help="Design workflow")
+design_parser.add_argument("--issue", "-I", required=True, help="GitHub issue URL")
+design_parser.add_argument("--input", "-i", help="Optional input requirements file")
+design_parser.add_argument("--output", "-o", help="Output design file")
+```
+
+**変更理由**:
+- DesignWorkflow は Issue 起点で動作する（IssueProvider が必要）
+- `--issue` は必須、`--input` はオプション（追加要件がある場合のみ）
+- `bugfix` サブコマンドとの整合性を確保
 
 **修正**: Issue本文への追記はリスキー（再実行で重複、他ワークフローと競合）。artifacts保存方式に変更。
 
@@ -675,8 +715,8 @@ def setup_workflow_context(
 ```python
 # src/cli/commands/design.py
 def run_design_command(args: argparse.Namespace) -> int:
-    # 1. AgentContext 作成
-    ctx = create_context(args.issue_url)
+    # 1. AgentContext 作成（--issue 引数から）
+    ctx = create_context(args.issue)  # args.issue = GitHub Issue URL
 
     # 2. SessionState 作成
     session = SessionState()
