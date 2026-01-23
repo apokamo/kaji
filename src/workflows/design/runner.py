@@ -40,7 +40,7 @@ def run_design_workflow(args: Namespace) -> int:
     # 2. Create AI tools (using Claude for all roles)
     # TODO: Permission settings are intentionally permissive for initial development.
     #       After PG verification, adjust to safer defaults (e.g., remove bypassPermissions).
-    #       See: https://github.com/owner/repo/issues/28 review comment
+    #       See: https://github.com/apokamo/dev-agent-orchestra/issues/28
     claude_tool = ClaudeTool(
         model="sonnet",
         permission_mode="bypassPermissions",

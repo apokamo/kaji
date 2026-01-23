@@ -12,6 +12,32 @@ DesignWorkflowの`handle_design`と`handle_design_review`を実装し、v5から
 - v5の実績あるハンドラパターンをdaoに適用
 - DesignWorkflowを動作可能な状態にする
 
+## 処理フロー（Mermaid）
+
+```mermaid
+flowchart TD
+    A[CLI: dao design --issue --input] --> B[run_design_workflow]
+    B --> C[GitHubIssueProvider 作成]
+    B --> D[AgentContext 作成]
+    B --> E[SessionState 作成]
+    B --> F[setup_workflow_context\nrequirements読み込み・artifacts保存]
+    B --> G[DesignWorkflow 初期化]
+    G --> H[_run_workflow_loop]
+    H --> I{state == DESIGN?}
+    I --> J[handle_design\nprompt作成→analyzer.run\nartifacts+events保存\nsessionにdesign_output保存]
+    J --> K[Verdict.PASS]
+    K --> L[DESIGN_REVIEW]
+    L --> M[handle_design_review\nprompt作成→reviewer.run\nverdict解析]
+    M --> N{Verdict}
+    N -->|PASS| O[COMPLETE]
+    N -->|RETRY| I
+    N -->|BACK_DESIGN| P[RETRYに変換してDESIGNへ]
+    N -->|ABORT| Q[AgentAbortError]
+    O --> R[Issue に成功コメント]
+    H --> S[例外捕捉]
+    S --> T[Issue にエラーコメント]
+```
+
 ## SessionState 拡張
 
 ### 追加インターフェース
@@ -663,7 +689,7 @@ def save_jsonl_log(
 design_parser = subparsers.add_parser("design", help="Design workflow")
 design_parser.add_argument("--issue", "-I", required=True, help="GitHub issue URL")
 design_parser.add_argument("--input", "-i", help="Optional input requirements file")
-design_parser.add_argument("--output", "-o", help="Output design file")
+# --output is not supported; artifacts are saved to artifacts/ directory
 ```
 
 **変更理由**:
