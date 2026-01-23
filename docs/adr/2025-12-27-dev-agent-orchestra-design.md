@@ -179,7 +179,7 @@ dao design --issue <url> --input requirements.md
 dao implement --input design.md --workdir ./src
 
 # ワークフロー一覧
-dao --list-workflows
+dao list
 ```
 
 ---

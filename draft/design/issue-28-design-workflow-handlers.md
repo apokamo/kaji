@@ -687,7 +687,7 @@ def save_jsonl_log(
 ```python
 # src/cli.py の design_parser 変更
 design_parser = subparsers.add_parser("design", help="Design workflow")
-design_parser.add_argument("--issue", "-I", required=True, help="GitHub issue URL")
+design_parser.add_argument("--issue", required=True, help="GitHub issue URL")
 design_parser.add_argument("--input", "-i", help="Optional input requirements file")
 # --output is not supported; artifacts are saved to artifacts/ directory
 ```
