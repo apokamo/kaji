@@ -170,7 +170,7 @@ def _handle_design(self, ctx: AgentContext, session: SessionState) -> Verdict:
     }
     prompt = load_prompt(
         self.get_prompt_path(DesignState.DESIGN),
-        required_vars=["issue_url", "issue_body"],  # バリデーション対象
+        required_vars=["issue_url"],  # issue_body can be empty
         **prompt_vars,
     )
 
