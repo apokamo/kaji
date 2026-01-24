@@ -3,6 +3,8 @@
 import argparse
 import sys
 
+from src.workflows.design.runner import run_design_workflow
+
 
 def main() -> int:
     """Main entry point for the CLI."""
@@ -20,8 +22,8 @@ def main() -> int:
 
     # Design workflow
     design_parser = subparsers.add_parser("design", help="Design workflow")
-    design_parser.add_argument("--input", "-i", required=True, help="Input requirements file")
-    design_parser.add_argument("--output", "-o", help="Output design file")
+    design_parser.add_argument("--issue", required=True, help="GitHub issue URL")
+    design_parser.add_argument("--input", "-i", help="Input requirements file (optional)")
 
     # Implement workflow
     impl_parser = subparsers.add_parser("implement", help="Implementation workflow")
@@ -48,7 +50,11 @@ def main() -> int:
         print("  bugfix    - Full bugfix workflow (9 states)")
         return 0
 
-    # TODO: Implement workflow execution
+    # Execute workflow
+    if args.workflow == "design":
+        return run_design_workflow(args)
+
+    # Other workflows not yet implemented
     print(f"Workflow '{args.workflow}' is not yet implemented.")
     return 1
 

@@ -173,13 +173,13 @@ class WorkflowBase(ABC):
 dao bugfix --issue <url>
 
 # 設計ループ
-dao design --input requirements.md --output design.md
+dao design --issue <url> --input requirements.md
 
 # 実装ループ
 dao implement --input design.md --workdir ./src
 
 # ワークフロー一覧
-dao --list-workflows
+dao list
 ```
 
 ---
