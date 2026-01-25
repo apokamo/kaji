@@ -22,6 +22,47 @@
 - dao側の参照用インデックス: `docs/bugfix-v5/README.md`（正本へのリンク・取得メタのみ記載）
 - スナップショットID: 取得時に `git rev-parse HEAD` もしくは `sha256` を記録
 
+**取得手順（例）**:
+```bash
+# 1) スナップショット取得
+rm -rf external/bugfix-v5
+cp -a /home/aki/claude/kamo2/.claude/agents/bugfix-v5/ external/bugfix-v5/
+
+# 2) スナップショットメタ情報を記録
+cat > external/bugfix-v5/.snapshot_meta <<'EOF'
+snapshot_date: 2026-01-25T00:00:00Z
+source_path: /home/aki/claude/kamo2/.claude/agents/bugfix-v5/
+source_git_rev: <git rev-parse HEAD もしくは "unknown">
+source_checksum: <sha256sum>
+python_version: <python --version>
+dependencies: <requirements.txt もしくは requirements.lock のパス>
+EOF
+```
+
+**取得メタ情報フォーマット**:
+`external/bugfix-v5/.snapshot_meta` を YAML 形式で保存する。
+- `snapshot_date`: 取得日時（ISO-8601）
+- `source_path`: 取得元パス
+- `source_git_rev`: 取得元の git commit（不明なら `unknown`）
+- `source_checksum`: スナップショット全体のチェックサム（例: `tar | sha256sum`）
+- `python_version`: 使用 Python バージョン
+- `dependencies`: 依存関係ファイルのパス（`requirements.txt` / `requirements.lock`）
+
+**v5 ディレクトリ構成（参照固定）**:
+- スナップショット取得後に `tree` 出力を保存して参照可能にする。
+```bash
+tree -L 3 external/bugfix-v5 > docs/bugfix-v5/tree.txt
+```
+- 設計書に記載するパスは、以降この `docs/bugfix-v5/tree.txt` を正本とする。
+- **主要パス（取得後に `tree.txt` で検証）**:
+  - `external/bugfix-v5/bugfix_agent/`（`config.py`, `verdict.py`, `state.py`, `context.py`, `run_logger.py`）
+  - `external/bugfix-v5/handlers/`（`design.py`）
+  - `external/bugfix-v5/prompts/`
+  - `external/bugfix-v5/tests/`
+  - `external/bugfix-v5/docs/`
+  - `external/bugfix-v5/bugfix_agent_orchestrator.py`（CLI 入口）
+- **検証**: `docs/bugfix-v5/README.md` に `.snapshot_meta` と `tree.txt` の更新履歴を記録する。
+
 ### 移植判定基準（全移植方針の明確化）
 
 「不要なもの以外は全移植」の「不要」判定基準:
@@ -151,6 +192,10 @@ def _is_rate_limit_error(stderr: str) -> bool:
     """gh コマンドの stderr から RateLimit を判定"""
     return "rate limit" in stderr.lower()
 ```
+
+**HTTP ステータス取得元**:
+- `gh api ... --include` を使用できる場合は、そのレスポンスヘッダ/ステータスを参照する。
+- `gh issue comment` など `--include` が使えないケースは stderr 判定を優先する。
 
 #### 3) Verdict/Abort の一致
 
@@ -380,6 +425,10 @@ python bugfix_agent_orchestrator.py --design --issue <URL>
 - 初期状態: DESIGN
 - オプションなしで bugfix_agent を実行した場合: 従来通り bugfix ワークフロー
 
+**COMPLETE の成果物**:
+- Issue 本文に設計内容が追記されていること
+- artifacts/{state}/ に prompt/response/verdict が保存されていること
+
 #### 2) Designプロンプト移植
 
 **移植元（正本）**:
@@ -511,6 +560,13 @@ diff external/bugfix-v5/prompts/detail_design_review.md src/workflows/design/pro
 2) RETRY 時は同一ロールの session_id を継続
 3) フェーズ切替（Design→Implement等）では必要に応じて明示リセット
 
+## 運用・移行方針（明示）
+- **記載の通りを正とする**: 実装時の判断は本書の記載内容を正とし、追加仕様が必要なら文書化してから着手する。
+- **エラー時の挙動**: 原則としてエラーは例外を送出してプロセスを終了する。リトライ対象（RateLimit 等）以外は継続しない。
+  - ただし、本書で「スキップ+警告」と明記したケースは「エラー」ではなく警告扱いとする。
+- **移行タイミング**: v5 の動作確認（完了条件達成）後に dao への移行を検討する。本 Issue のスコープ外。
+- **言語/I18N**: エラーメッセージの言語は v5 既存の方針を踏襲する。日本語/国際化対応は将来課題として別途扱う。
+
 ## 作業順序（依存順）
 1) config統合
 2) errors / providers
@@ -521,6 +577,13 @@ diff external/bugfix-v5/prompts/detail_design_review.md src/workflows/design/pro
 7) tests
 
 ## テスト・検証
+
+### テスト実行の前提条件
+- **Python バージョン**: `external/bugfix-v5/.snapshot_meta` の `python_version` を使用する。
+- **依存関係**:
+  - `external/bugfix-v5/requirements.txt` が存在する場合はそれを使用。
+  - 存在しない場合は v5 実行環境の `pip freeze` を `docs/bugfix-v5/requirements.lock` に保存して使用する。
+- **スナップショット正本**: テスト対象は `external/bugfix-v5/` を正本とし、編集しない。
 
 ### 回帰テスト（既存動作の維持）
 - [ ] v5 既存ユニットテスト通過
