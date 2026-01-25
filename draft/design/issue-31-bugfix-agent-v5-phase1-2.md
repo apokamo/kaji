@@ -66,6 +66,16 @@
 - 型変換失敗 → `ValidationError` で起動失敗（設定ミスは早期検出）
 - 必須値の欠落 → デフォルト値を使用（上表参照）
 
+**環境変数プレフィックスの互換性**:
+
+| プレフィックス | 状態 | 説明 |
+|---------------|------|------|
+| `BUGFIX_AGENT_` | ✅ 採用 | v5 ホストのため、新プレフィックスを採用 |
+| `DAO_` | ❌ 非互換 | 読み込まない（将来の dao 統合時に移行予定） |
+
+- 今回は v5 ホストのため `BUGFIX_AGENT_` を使用
+- 将来 dao へ統合する際は `DAO_` へ移行し、`BUGFIX_AGENT_` を deprecated エイリアスとして一定期間維持する想定
+
 **get_config_value() 互換ラッパー**:
 ```python
 def get_config_value(key_path: str, default: Any = None) -> Any:
@@ -125,6 +135,22 @@ IssueProviderError (基底)
 | `IssueNotFoundError` | ❌ No | 永続的エラー |
 | `IssueAuthenticationError` | ❌ No | 設定問題、リトライ無意味 |
 | `ValueError` (URL不正) | ❌ No | 入力エラー |
+
+**RateLimit 判定条件**:
+
+`gh` コマンドの出力を基に判定する:
+
+| 判定根拠 | パターン | 例 |
+|---------|---------|-----|
+| stderr メッセージ | `rate limit` を含む（case-insensitive） | `"API rate limit exceeded"` |
+| HTTP ステータス | `403` または `429` | `gh` が返す JSON 内の status |
+| 終了コード | `gh` が非ゼロで、上記メッセージを含む | - |
+
+```python
+def _is_rate_limit_error(stderr: str) -> bool:
+    """gh コマンドの stderr から RateLimit を判定"""
+    return "rate limit" in stderr.lower()
+```
 
 #### 3) Verdict/Abort の一致
 
@@ -421,6 +447,8 @@ diff external/bugfix-v5/prompts/detail_design_review.md src/workflows/design/pro
 - [ ] 禁止事項セクション（次ステート責務の実行禁止）
 - [ ] VERDICT出力形式
 - [ ] 判定ガイドライン（PASS→IMPLEMENT / RETRY→DETAIL_DESIGN）
+
+> **DesignWorkflow での補足**: 既存プロンプトの「PASS→IMPLEMENT」は bugfix ワークフローの遷移先を示す。DesignWorkflow では PASS = COMPLETE（設計完了）として扱う。プロンプト自体は変更せず、呼び出し側（ワークフロー）が適切な終端状態に遷移する。
 
 ### _common.md
 - [ ] Output Format (VERDICT)
