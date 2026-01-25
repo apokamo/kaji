@@ -15,28 +15,72 @@
 ## スコープ（移植対象）
 
 ### v5 スナップショット方針（再現性のため必須）
-- 取得元: `/home/aki/claude/kamo2/.claude/agents/bugfix-v5/`
-- 取得先: `external/bugfix-v5/`（**repo内に丸ごとコピー固定**）
-- 編集方針: `external/bugfix-v5/` は**スナップショット専用**（直接編集しない）
-- 仕様ドキュメントの正本: `external/bugfix-v5/docs/`
-- dao側の参照用インデックス: `docs/bugfix-v5/README.md`（正本へのリンク・取得メタのみ記載）
-- スナップショットID: 取得時に `git rev-parse HEAD` もしくは `sha256` を記録
 
-**取得手順（例）**:
+#### スナップショットと改変先の明確化
+
+| ディレクトリ | 役割 | 編集可否 |
+|------------|------|---------|
+| `external/bugfix-v5/` | スナップショット（参照専用） | ❌ 編集禁止 |
+| `src/bugfix_agent/` | **改変対象**（v5 をコピーして開発） | ✅ 編集対象 |
+
+**ワークフロー**:
+1. v5 をスナップショットとして `external/bugfix-v5/` に取得（参照専用）
+2. スナップショットを `src/bugfix_agent/` にコピーして開発開始
+3. 以降の修正はすべて `src/bugfix_agent/` に対して行う
+4. `external/bugfix-v5/` は差分確認用の参照として保持
+
 ```bash
+# 初回セットアップ
+cp -a external/bugfix-v5/bugfix_agent/ src/bugfix_agent/
+cp -a external/bugfix-v5/handlers/ src/bugfix_agent/handlers/
+cp -a external/bugfix-v5/prompts/ src/bugfix_agent/prompts/
+cp external/bugfix-v5/bugfix_agent_orchestrator.py src/bugfix_agent/
+```
+
+#### スナップショット取得元の汎用化
+
+取得元パスを環境変数または引数で指定可能にする:
+
+| パラメータ | 優先順位 | デフォルト値 |
+|-----------|---------|-------------|
+| 引数 `--source` | 1（最優先） | - |
+| 環境変数 `BUGFIX_V5_SOURCE` | 2 | - |
+| 設定ファイル `snapshot.toml` の `source_path` | 3 | - |
+| フォールバック | 4 | `/home/aki/claude/kamo2/.claude/agents/bugfix-v5/` |
+
+**取得スクリプト（汎用化）**:
+```bash
+#!/bin/bash
+# scripts/snapshot-v5.sh
+set -euo pipefail
+
+# 取得元の決定（優先順位: 引数 > 環境変数 > デフォルト）
+SOURCE_PATH="${1:-${BUGFIX_V5_SOURCE:-/home/aki/claude/kamo2/.claude/agents/bugfix-v5/}}"
+DEST_PATH="external/bugfix-v5"
+
+if [[ ! -d "$SOURCE_PATH" ]]; then
+    echo "ERROR: Source path does not exist: $SOURCE_PATH" >&2
+    echo "Usage: $0 <source_path>" >&2
+    echo "  or set BUGFIX_V5_SOURCE environment variable" >&2
+    exit 1
+fi
+
 # 1) スナップショット取得
-rm -rf external/bugfix-v5
-cp -a /home/aki/claude/kamo2/.claude/agents/bugfix-v5/ external/bugfix-v5/
+rm -rf "$DEST_PATH"
+cp -a "$SOURCE_PATH" "$DEST_PATH/"
 
 # 2) スナップショットメタ情報を記録
-cat > external/bugfix-v5/.snapshot_meta <<'EOF'
-snapshot_date: 2026-01-25T00:00:00Z
-source_path: /home/aki/claude/kamo2/.claude/agents/bugfix-v5/
-source_git_rev: <git rev-parse HEAD もしくは "unknown">
-source_checksum: <sha256sum>
-python_version: <python --version>
-dependencies: <requirements.txt もしくは requirements.lock のパス>
+cat > "$DEST_PATH/.snapshot_meta" <<EOF
+snapshot_date: $(date -Iseconds)
+source_path: $SOURCE_PATH
+source_git_rev: $(cd "$SOURCE_PATH" && git rev-parse HEAD 2>/dev/null || echo "unknown")
+source_checksum: $(tar -cf - "$DEST_PATH" 2>/dev/null | sha256sum | cut -d' ' -f1)
+python_version: $(python --version 2>&1)
+dependencies: requirements.txt
 EOF
+
+echo "Snapshot created: $DEST_PATH"
+echo "Metadata: $DEST_PATH/.snapshot_meta"
 ```
 
 **取得メタ情報フォーマット**:
@@ -90,6 +134,45 @@ tree -L 3 external/bugfix-v5 > docs/bugfix-v5/tree.txt
 1. 環境変数（BUGFIX_AGENT_ prefix）  ← 最優先
 2. config.toml                        ← ファイル設定
 3. Settings クラスのデフォルト値      ← フォールバック
+```
+
+**config.toml の探索ルール**:
+
+| 優先順位 | パス | 説明 |
+|---------|------|------|
+| 1 | 環境変数 `BUGFIX_AGENT_CONFIG` | 明示指定（フルパス） |
+| 2 | `--config` オプション | CLI 引数で指定 |
+| 3 | `{workdir}/config.toml` | 作業ディレクトリ直下 |
+| 4 | `{CWD}/config.toml` | カレントディレクトリ |
+| 5 | `~/.config/bugfix-agent/config.toml` | ユーザー設定 |
+| 6 | (なし) | デフォルト値のみ使用 |
+
+```python
+def find_config_file(workdir: Path | None = None) -> Path | None:
+    """設定ファイルを探索順に検索"""
+    # 1. 環境変数
+    if env_config := os.environ.get("BUGFIX_AGENT_CONFIG"):
+        path = Path(env_config)
+        if path.exists():
+            return path
+
+    # 2. workdir 指定時
+    if workdir:
+        path = workdir / "config.toml"
+        if path.exists():
+            return path
+
+    # 3. カレントディレクトリ
+    path = Path.cwd() / "config.toml"
+    if path.exists():
+        return path
+
+    # 4. ユーザー設定
+    path = Path.home() / ".config" / "bugfix-agent" / "config.toml"
+    if path.exists():
+        return path
+
+    return None
 ```
 
 **互換マッピング表**:
@@ -177,25 +260,75 @@ IssueProviderError (基底)
 | `IssueAuthenticationError` | ❌ No | 設定問題、リトライ無意味 |
 | `ValueError` (URL不正) | ❌ No | 入力エラー |
 
-**RateLimit 判定条件**:
+**RateLimit/Auth 判定条件と優先順位**:
 
-`gh` コマンドの出力を基に判定する:
+`gh` コマンドの出力を基に判定する。判定は以下の優先順位で実行:
 
-| 判定根拠 | パターン | 例 |
-|---------|---------|-----|
-| stderr メッセージ | `rate limit` を含む（case-insensitive） | `"API rate limit exceeded"` |
-| HTTP ステータス | `403` または `429` | `gh` が返す JSON 内の status |
-| 終了コード | `gh` が非ゼロで、上記メッセージを含む | - |
+```
+1. HTTP ステータスコード（`gh api --include` 使用時）
+   └─ 429: RateLimitError
+   └─ 403 + "rate limit" in body: RateLimitError
+   └─ 403 (その他): AuthenticationError
+   └─ 401: AuthenticationError
+   └─ 404: NotFoundError
 
-```python
-def _is_rate_limit_error(stderr: str) -> bool:
-    """gh コマンドの stderr から RateLimit を判定"""
-    return "rate limit" in stderr.lower()
+2. stderr メッセージ（`gh issue comment` 等、`--include` 非対応時）
+   └─ "rate limit" を含む: RateLimitError
+   └─ "authentication" / "unauthorized" を含む: AuthenticationError
+   └─ "not found" を含む: NotFoundError
+
+3. 終了コード（上記で判定できない場合）
+   └─ 非ゼロ: CalledProcessError として伝播
 ```
 
-**HTTP ステータス取得元**:
-- `gh api ... --include` を使用できる場合は、そのレスポンスヘッダ/ステータスを参照する。
-- `gh issue comment` など `--include` が使えないケースは stderr 判定を優先する。
+**判定フロー図**:
+```
+gh コマンド実行
+    │
+    ├─ gh api --include が使える場合
+    │   └─ HTTP ステータスコードで判定（優先順位 1）
+    │       ├─ 429 → RateLimitError
+    │       ├─ 403 + "rate limit" → RateLimitError
+    │       ├─ 403 (その他) → AuthenticationError
+    │       ├─ 401 → AuthenticationError
+    │       └─ 404 → NotFoundError
+    │
+    └─ gh issue comment 等（--include 非対応）
+        └─ stderr メッセージで判定（優先順位 2）
+            ├─ "rate limit" → RateLimitError
+            ├─ "authentication" → AuthenticationError
+            └─ "not found" → NotFoundError
+```
+
+```python
+def _classify_gh_error(returncode: int, stderr: str, http_status: int | None = None) -> Exception:
+    """gh コマンドのエラーを例外に分類"""
+    stderr_lower = stderr.lower()
+
+    # 1. HTTP ステータスコードによる判定（最優先）
+    if http_status is not None:
+        if http_status == 429:
+            return IssueRateLimitError("API rate limit exceeded")
+        if http_status == 403:
+            if "rate limit" in stderr_lower:
+                return IssueRateLimitError("API rate limit exceeded")
+            return IssueAuthenticationError("Forbidden")
+        if http_status == 401:
+            return IssueAuthenticationError("Unauthorized")
+        if http_status == 404:
+            return IssueNotFoundError("Issue not found")
+
+    # 2. stderr メッセージによる判定
+    if "rate limit" in stderr_lower:
+        return IssueRateLimitError("API rate limit exceeded")
+    if "authentication" in stderr_lower or "unauthorized" in stderr_lower:
+        return IssueAuthenticationError("Authentication failed")
+    if "not found" in stderr_lower:
+        return IssueNotFoundError("Issue not found")
+
+    # 3. 分類できない場合は CalledProcessError
+    return subprocess.CalledProcessError(returncode, "gh", stderr=stderr)
+```
 
 #### 3) Verdict/Abort の一致
 
@@ -406,24 +539,72 @@ stateDiagram-v2
 | DESIGN_REVIEW | BACK_DESIGN | DESIGN | RETRY として扱う（DesignWorkflow では同義） |
 | DESIGN_REVIEW | ABORT | - | AgentAbortError 送出 |
 
-**CLI 入口**:
+**CLI 入口（確定仕様）**:
 
 ```bash
-# オプション名（実装時に確定、以下は想定）
-python -m bugfix_agent --workflow design --issue <URL>
+# 推奨コマンド
+python -m bugfix_agent design <ISSUE_URL>
 
 # または
-python bugfix_agent_orchestrator.py --design --issue <URL>
+python src/bugfix_agent/bugfix_agent_orchestrator.py design <ISSUE_URL>
 ```
 
-| オプション | 説明 |
-|-----------|------|
-| `--workflow design` または `--design` | DesignWorkflow を実行 |
-| `--issue <URL>` | 対象 Issue URL（必須） |
+**CLI インターフェース仕様**:
+
+| コマンド | 形式 | 説明 |
+|---------|------|------|
+| `bugfix` | `python -m bugfix_agent bugfix <ISSUE_URL>` | bugfix ワークフロー（既存互換） |
+| `design` | `python -m bugfix_agent design <ISSUE_URL>` | DesignWorkflow を実行 |
+| (引数なし) | `python -m bugfix_agent <ISSUE_URL>` | bugfix ワークフロー（後方互換） |
+
+**引数**:
+
+| 引数 | 必須 | 説明 |
+|------|-----|------|
+| `<ISSUE_URL>` | ✅ | 対象 Issue URL（`https://github.com/owner/repo/issues/123` 形式） |
+
+**オプション（共通）**:
+
+| オプション | 型 | デフォルト | 説明 |
+|-----------|-----|-----------|------|
+| `--workdir` / `-w` | Path | カレントディレクトリ | 作業ディレクトリ |
+| `--dry-run` | flag | False | 実際の Issue 更新を行わない |
+| `--verbose` / `-v` | flag | False | 詳細ログ出力 |
+
+**既存 CLI との互換性**:
+
+| 既存コマンド | 新コマンド | 互換性 |
+|-------------|-----------|--------|
+| `python bugfix_agent_orchestrator.py <URL>` | `python -m bugfix_agent bugfix <URL>` | ✅ 完全互換（後方互換エイリアス維持） |
+| (新規) | `python -m bugfix_agent design <URL>` | (新規追加) |
+
+**実装方針**:
+- `argparse` のサブコマンドパターンを採用
+- 第一引数が `design` / `bugfix` の場合はサブコマンドとして解釈
+- 第一引数が URL 形式の場合は後方互換として `bugfix` を適用
+
+```python
+# CLI エントリポイント例
+parser = argparse.ArgumentParser(prog="bugfix_agent")
+subparsers = parser.add_subparsers(dest="command", required=False)
+
+# bugfix サブコマンド
+bugfix_parser = subparsers.add_parser("bugfix", help="Run bugfix workflow")
+bugfix_parser.add_argument("issue_url", type=str)
+
+# design サブコマンド
+design_parser = subparsers.add_parser("design", help="Run design workflow")
+design_parser.add_argument("issue_url", type=str)
+
+# 後方互換: 引数が URL の場合は bugfix として扱う
+args = parser.parse_args()
+if args.command is None and looks_like_url(args.issue_url):
+    args.command = "bugfix"
+```
 
 **デフォルト動作**:
 - 初期状態: DESIGN
-- オプションなしで bugfix_agent を実行した場合: 従来通り bugfix ワークフロー
+- コマンドなしで URL のみ指定した場合: 従来通り bugfix ワークフロー（後方互換）
 
 **COMPLETE の成果物**:
 - Issue 本文に設計内容が追記されていること
@@ -469,11 +650,25 @@ diff external/bugfix-v5/prompts/detail_design_review.md src/workflows/design/pro
 
 | ファイル | 形式 | 保存先 | 内容 |
 |---------|------|--------|------|
-| `run.log` | JSONL | artifacts/ | ハンドラ実行ログ（handler_start, ai_call_*, verdict_*） |
-| `prompt.md` | Markdown | artifacts/{state}/ | AI に送信したプロンプト |
-| `response.md` | Markdown | artifacts/{state}/ | AI からの応答 |
-| `verdict.txt` | Text | artifacts/{state}/ | 解析された VERDICT 値 |
-| `cli_console.log` | Text | ./ | コンソール出力のコピー |
+| `run.log` | JSONL | `{workdir}/artifacts/` | ハンドラ実行ログ（handler_start, ai_call_*, verdict_*） |
+| `prompt.md` | Markdown | `{workdir}/artifacts/{state}/` | AI に送信したプロンプト |
+| `response.md` | Markdown | `{workdir}/artifacts/{state}/` | AI からの応答 |
+| `verdict.txt` | Text | `{workdir}/artifacts/{state}/` | 解析された VERDICT 値 |
+| `cli_console.log` | Text | `{workdir}/` | コンソール出力のコピー |
+
+**artifacts 保存先の基準パス**:
+
+| 変数 | 決定方法 | デフォルト |
+|------|---------|-----------|
+| `{workdir}` | CLI `--workdir` > 環境変数 `BUGFIX_AGENT_WORKDIR` > CWD | カレントディレクトリ |
+| `{state}` | 現在のワークフローステート名（例: `design`, `design_review`） | - |
+
+```python
+def get_artifacts_dir(state: str, workdir: Path | None = None) -> Path:
+    """成果物保存ディレクトリを取得"""
+    base = workdir or Path(os.environ.get("BUGFIX_AGENT_WORKDIR", "."))
+    return base / "artifacts" / state
+```
 
 **JSONL ログイベント**:
 
