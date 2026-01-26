@@ -134,12 +134,12 @@ def resolve_workdir(
     Priority:
     1. CLI --workdir argument (highest)
     2. Environment variable BUGFIX_AGENT_WORKDIR
-    3. Settings.workdir (from config.toml via Settings)
+    3. config.toml agent.workdir
     4. Current working directory (fallback)
 
     Args:
         cli_workdir: CLI --workdir argument.
-        settings: Settings instance (optional).
+        settings: Settings instance (optional, used if workdir explicitly set via env).
 
     Returns:
         Resolved working directory as absolute path.
@@ -148,13 +148,14 @@ def resolve_workdir(
     if cli_workdir is not None:
         return cli_workdir.resolve()
 
-    # 2. Environment variable
+    # 2. Environment variable (check directly, not via Settings)
     if env_workdir := os.environ.get("BUGFIX_AGENT_WORKDIR"):
         return Path(env_workdir).resolve()
 
-    # 3. Settings (from config.toml or env)
-    if settings and settings.workdir:
-        return settings.workdir.resolve()
+    # 3. config.toml agent.workdir
+    config = load_config()
+    if toml_workdir := config.get("agent", {}).get("workdir"):
+        return Path(toml_workdir).resolve()
 
     # 4. Current working directory
     return Path.cwd()
@@ -187,12 +188,11 @@ _SETTINGS_KEY_MAP: dict[str, str] = {
 
 
 def get_config_value(key_path: str, default: Any = None) -> Any:
-    """Get config value with Settings priority.
+    """Get config value with priority: env > config.toml > defaults.
 
     Backward-compatible wrapper that:
-    1. Checks if key_path maps to a Settings attribute (priority)
-    2. Falls back to config.toml for unmapped keys (legacy)
-    3. Returns default if not found anywhere
+    1. For mapped keys: env (via Settings) > config.toml > Settings defaults
+    2. For unmapped keys: config.toml > provided default
 
     Args:
         key_path: Dot-notation key path (e.g., "agent.max_loop_count")
@@ -201,19 +201,32 @@ def get_config_value(key_path: str, default: Any = None) -> Any:
     Returns:
         Configuration value.
     """
-    # 1. Check Settings mapping first (priority)
+    # Load config.toml once
+    config = load_config()
+
+    # 1. Check Settings mapping
     if key_path in _SETTINGS_KEY_MAP:
         settings = get_settings()
         attr_name = _SETTINGS_KEY_MAP[key_path]
-        settings_value = getattr(settings, attr_name, None)
-        if settings_value is not None:
-            return settings_value
-        # If Settings value is None, fall through to toml
 
-    # 2. Fall back to config.toml (legacy)
-    config = load_config()
+        # If env variable explicitly set, use Settings value (priority 1)
+        if attr_name in settings.model_fields_set:
+            return getattr(settings, attr_name)
+
+        # Check config.toml (priority 2)
+        keys = key_path.split(".")
+        toml_value: Any = config
+        for key in keys:
+            if isinstance(toml_value, dict) and key in toml_value:
+                toml_value = toml_value[key]
+            else:
+                # Not in toml, return Settings default (priority 3)
+                return getattr(settings, attr_name)
+        return toml_value
+
+    # 2. Unmapped keys: Fall back to config.toml (legacy)
     keys = key_path.split(".")
-    toml_value: Any = config
+    toml_value = config
     for key in keys:
         if isinstance(toml_value, dict) and key in toml_value:
             toml_value = toml_value[key]
