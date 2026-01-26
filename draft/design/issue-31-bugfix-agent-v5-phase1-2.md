@@ -136,44 +136,118 @@ tree -L 3 external/bugfix-v5 > docs/bugfix-v5/tree.txt
 3. Settings クラスのデフォルト値      ← フォールバック
 ```
 
+**workdir の決定ルール（一元定義）**:
+
+| 優先順位 | ソース | 説明 |
+|---------|--------|------|
+| 1 | CLI `--workdir` / `-w` | コマンドライン引数 |
+| 2 | 環境変数 `BUGFIX_AGENT_WORKDIR` | 環境変数 |
+| 3 | config.toml の `agent.workdir` | 設定ファイル |
+| 4 | `Path.cwd()` | カレントディレクトリ（デフォルト） |
+
+```python
+def resolve_workdir(
+    cli_workdir: Path | None = None,
+    settings: Settings | None = None,
+) -> Path:
+    """workdir を優先順位に従って決定
+
+    Returns:
+        解決された workdir の絶対パス
+    """
+    # 1. CLI 引数（最優先）
+    if cli_workdir is not None:
+        return cli_workdir.resolve()
+
+    # 2. 環境変数
+    if env_workdir := os.environ.get("BUGFIX_AGENT_WORKDIR"):
+        return Path(env_workdir).resolve()
+
+    # 3. 設定ファイル
+    if settings and settings.workdir:
+        return settings.workdir.resolve()
+
+    # 4. カレントディレクトリ
+    return Path.cwd()
+```
+
+> **注意**: この `resolve_workdir()` は config.toml 探索、artifacts 保存先、context の allowed_root 等で共通使用される。
+
 **config.toml の探索ルール**:
 
 | 優先順位 | パス | 説明 |
 |---------|------|------|
 | 1 | 環境変数 `BUGFIX_AGENT_CONFIG` | 明示指定（フルパス） |
-| 2 | `--config` オプション | CLI 引数で指定 |
+| 2 | CLI `--config` オプション | 引数で指定（フルパス） |
 | 3 | `{workdir}/config.toml` | 作業ディレクトリ直下 |
 | 4 | `{CWD}/config.toml` | カレントディレクトリ |
 | 5 | `~/.config/bugfix-agent/config.toml` | ユーザー設定 |
 | 6 | (なし) | デフォルト値のみ使用 |
 
 ```python
-def find_config_file(workdir: Path | None = None) -> Path | None:
-    """設定ファイルを探索順に検索"""
-    # 1. 環境変数
+def find_config_file(
+    config_path: Path | None = None,  # CLI --config から渡される
+    workdir: Path | None = None,
+) -> Path | None:
+    """設定ファイルを探索順に検索
+
+    Args:
+        config_path: CLI --config オプションで指定されたパス
+        workdir: 作業ディレクトリ（CLI --workdir から）
+
+    Returns:
+        見つかった設定ファイルのパス、または None
+    """
+    # 1. 環境変数（最優先）
     if env_config := os.environ.get("BUGFIX_AGENT_CONFIG"):
         path = Path(env_config)
         if path.exists():
             return path
 
-    # 2. workdir 指定時
+    # 2. CLI --config オプション
+    if config_path is not None:
+        if config_path.exists():
+            return config_path
+        # 明示指定されたパスが存在しない場合はエラー
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
+    # 3. workdir 指定時
     if workdir:
         path = workdir / "config.toml"
         if path.exists():
             return path
 
-    # 3. カレントディレクトリ
+    # 4. カレントディレクトリ
     path = Path.cwd() / "config.toml"
     if path.exists():
         return path
 
-    # 4. ユーザー設定
+    # 5. ユーザー設定
     path = Path.home() / ".config" / "bugfix-agent" / "config.toml"
     if path.exists():
         return path
 
     return None
 ```
+
+**引数の流れ**:
+```
+CLI 入力 → argparse → find_config_file(config_path=args.config, workdir=args.workdir)
+                          ↓
+                     Settings 初期化
+```
+
+**依存関係・互換性の制約**:
+
+| 依存パッケージ | 最小バージョン | 備考 |
+|---------------|---------------|------|
+| Python | >=3.11 | `tomllib` 標準ライブラリ使用のため |
+| pydantic | >=2.0 | pydantic-settings v2 系対応 |
+| pydantic-settings | >=2.0 | 環境変数バインディング |
+
+**requirements.txt 更新方針**:
+- 既存の `requirements.txt` に `pydantic-settings>=2.0` を追加
+- 開発時は `pip install -e ".[dev]"` でインストール
 
 **互換マッピング表**:
 
@@ -219,10 +293,47 @@ def get_config_value(key_path: str, default: Any = None) -> Any:
 - v5 リトライロジックを維持しつつ dao 例外階層を追加
 - API互換を維持しハンドラ破壊を避ける
 
-**URL検証仕様**:
+**URL検証仕様（IssueProvider と CLI で共通使用）**:
+
 ```python
-# 許容フォーマット（正規表現）
-r"^https://github\.com/([^/]+)/([^/]+)/issues/(\d+)/?$"
+# 共通の URL 検証正規表現（唯一の定義場所）
+GITHUB_ISSUE_URL_PATTERN = re.compile(
+    r"^https://github\.com/([^/]+)/([^/]+)/issues/(\d+)/?$"
+)
+
+def is_valid_issue_url(url: str) -> bool:
+    """URL が GitHub Issue URL として有効かを判定
+
+    IssueProvider と CLI の両方からこの関数を使用し、
+    URL 受理条件の一貫性を保証する。
+
+    Args:
+        url: 検証対象の URL
+
+    Returns:
+        有効な GitHub Issue URL の場合 True
+    """
+    return GITHUB_ISSUE_URL_PATTERN.match(url) is not None
+
+def parse_issue_url(url: str) -> tuple[str, str, int]:
+    """URL をパースして owner, repo, issue_number を抽出
+
+    Args:
+        url: GitHub Issue URL
+
+    Returns:
+        (owner, repo, issue_number) のタプル
+
+    Raises:
+        ValueError: 無効な URL 形式の場合
+    """
+    match = GITHUB_ISSUE_URL_PATTERN.match(url)
+    if not match:
+        raise ValueError(
+            f"Invalid GitHub Issue URL: {url}\n"
+            f"Expected format: https://github.com/{{owner}}/{{repo}}/issues/{{number}}"
+        )
+    return match.group(1), match.group(2), int(match.group(3))
 
 # 例: OK
 "https://github.com/owner/repo/issues/123"
@@ -233,6 +344,16 @@ r"^https://github\.com/([^/]+)/([^/]+)/issues/(\d+)/?$"
 "http://github.com/owner/repo/issues/123"  # http
 "github.com/owner/repo/issues/123"         # プロトコルなし
 ```
+
+**CLI と IssueProvider での使用**:
+
+| コンポーネント | 用途 | 使用関数 |
+|---------------|------|---------|
+| CLI エントリポイント | 後方互換判定（URL か サブコマンドか） | `is_valid_issue_url()` |
+| CLI 引数検証 | URL 形式の検証 | `parse_issue_url()` |
+| IssueProvider | インスタンス生成時の検証 | `parse_issue_url()` |
+
+**配置**: `src/bugfix_agent/url_utils.py`（または `providers.py` 内に定義）
 
 **例外階層**:
 ```
@@ -281,11 +402,30 @@ IssueProviderError (基底)
    └─ 非ゼロ: CalledProcessError として伝播
 ```
 
+**gh 公式仕様への準拠**:
+
+| エラー種別 | 一次情報（HTTP ステータス） | 二次情報（stderr キーワード） | 参照 |
+|-----------|---------------------------|------------------------------|------|
+| Rate Limit | 429, 403 (secondary) | "rate limit", "API rate limit exceeded" | [GitHub REST API - Rate limiting](https://docs.github.com/en/rest/rate-limit) |
+| Auth Error | 401, 403 | "authentication", "unauthorized", "Bad credentials" | [GitHub REST API - Authentication](https://docs.github.com/en/rest/authentication) |
+| Not Found | 404 | "not found", "Could not resolve" | 標準 HTTP セマンティクス |
+
+**コマンド別の判定方法**:
+
+| コマンド | HTTPステータス取得 | 判定方法 |
+|---------|-------------------|---------|
+| `gh api --include` | ✅ 可能 | ステータスコードを優先使用 |
+| `gh api` (--include なし) | ❌ 不可 | stderr + 終了コード |
+| `gh issue view` | ❌ 不可 | stderr + 終了コード |
+| `gh issue comment` | ❌ 不可 | stderr + 終了コード |
+
+**推奨**: Issue 情報取得には `gh api repos/{owner}/{repo}/issues/{number} --include` を使用し、HTTPステータスコードによる信頼性の高い判定を行う。コメント投稿等で `gh issue` サブコマンドを使う場合のみ stderr フォールバックを使用する。
+
 **判定フロー図**:
 ```
 gh コマンド実行
     │
-    ├─ gh api --include が使える場合
+    ├─ gh api --include が使える場合（推奨）
     │   └─ HTTP ステータスコードで判定（優先順位 1）
     │       ├─ 429 → RateLimitError
     │       ├─ 403 + "rate limit" → RateLimitError
@@ -299,6 +439,11 @@ gh コマンド実行
             ├─ "authentication" → AuthenticationError
             └─ "not found" → NotFoundError
 ```
+
+**ロケール非依存性への対応**:
+- gh CLI の stderr 出力は英語固定（ロケール設定に依存しない）
+- ただし、バージョン間でメッセージが変わる可能性があるため、HTTP ステータスコードを第一優先とする
+- stderr 判定は小文字変換後にキーワード検索を行い、表記揺れに対応
 
 ```python
 def _classify_gh_error(returncode: int, stderr: str, http_status: int | None = None) -> Exception:
@@ -488,6 +633,35 @@ for path_str in context:
 | 読み取り権限なし (PermissionError) | スキップ + 警告出力 | 処理継続を優先 |
 | max_chars 超過 | 先頭から切り詰め | 情報欠落を最小化 |
 
+**警告出力の定義**:
+
+| 出力先 | 形式 | 用途 |
+|--------|------|------|
+| `cli_console.log` | `[WARN] {timestamp} {message}` | ユーザー向けコンソール出力 |
+| `run.log` | JSONL: `{"event": "warning", "message": "...", "timestamp": "..."}` | 構造化ログ |
+
+```python
+def warn(message: str) -> None:
+    """警告を出力（コンソールとログファイル両方）
+
+    例: warn("Skipping path outside allowed_root: /etc/passwd")
+    """
+    timestamp = datetime.now().isoformat()
+
+    # 1. コンソール出力（cli_console.log）
+    console_msg = f"[WARN] {timestamp} {message}"
+    print(console_msg, file=sys.stderr)
+    # cli_console.log にも追記
+
+    # 2. 構造化ログ（run.log）
+    log_entry = {
+        "event": "warning",
+        "message": message,
+        "timestamp": timestamp,
+    }
+    # run.log に JSONL 形式で追記
+```
+
 ### B. DesignWorkflow（Phase2の成果）
 
 #### 1) DesignWorkflow wrapper
@@ -597,8 +771,9 @@ design_parser = subparsers.add_parser("design", help="Run design workflow")
 design_parser.add_argument("issue_url", type=str)
 
 # 後方互換: 引数が URL の場合は bugfix として扱う
+# is_valid_issue_url() を使用して IssueProvider と同一の受理条件を適用
 args = parser.parse_args()
-if args.command is None and looks_like_url(args.issue_url):
+if args.command is None and is_valid_issue_url(args.issue_url):
     args.command = "bugfix"
 ```
 
