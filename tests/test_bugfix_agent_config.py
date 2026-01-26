@@ -219,34 +219,53 @@ class TestResolveWorkdir:
         result = resolve_workdir(cli_workdir=cli_workdir)
         assert result == cli_workdir.resolve()
 
-    def test_env_var_takes_priority_over_settings(
+    def test_env_var_takes_priority_over_toml(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """BUGFIX_AGENT_WORKDIR env var should take priority over settings."""
+        """BUGFIX_AGENT_WORKDIR env var should take priority over toml."""
         env_workdir = tmp_path / "env_workdir"
         env_workdir.mkdir()
+        toml_workdir = tmp_path / "toml_workdir"
+        toml_workdir.mkdir()
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(f"[agent]\nworkdir = '{toml_workdir}'\n")
+        monkeypatch.setenv("BUGFIX_AGENT_CONFIG", str(config_path))
         monkeypatch.setenv("BUGFIX_AGENT_WORKDIR", str(env_workdir))
-        from src.bugfix_agent.config import Settings, resolve_workdir
+        import src.bugfix_agent.config as config_module
 
-        settings = Settings(workdir=tmp_path / "settings_workdir")
-        result = resolve_workdir(settings=settings)
+        config_module.load_config.cache_clear()
+        from src.bugfix_agent.config import resolve_workdir
+
+        result = resolve_workdir()
         assert result == env_workdir.resolve()
 
-    def test_settings_workdir_used(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Settings workdir should be used when no CLI or env."""
+    def test_toml_workdir_used_when_no_cli_or_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """config.toml workdir should be used when no CLI or env."""
         monkeypatch.delenv("BUGFIX_AGENT_WORKDIR", raising=False)
-        settings_workdir = tmp_path / "settings_workdir"
-        settings_workdir.mkdir()
-        from src.bugfix_agent.config import Settings, resolve_workdir
+        toml_workdir = tmp_path / "toml_workdir"
+        toml_workdir.mkdir()
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(f"[agent]\nworkdir = '{toml_workdir}'\n")
+        monkeypatch.setenv("BUGFIX_AGENT_CONFIG", str(config_path))
+        import src.bugfix_agent.config as config_module
 
-        settings = Settings(workdir=settings_workdir)
-        result = resolve_workdir(settings=settings)
-        assert result == settings_workdir.resolve()
+        config_module.load_config.cache_clear()
+        from src.bugfix_agent.config import resolve_workdir
+
+        result = resolve_workdir()
+        assert result == toml_workdir.resolve()
 
     def test_cwd_fallback(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """CWD should be used as fallback."""
         monkeypatch.delenv("BUGFIX_AGENT_WORKDIR", raising=False)
+        monkeypatch.delenv("BUGFIX_AGENT_CONFIG", raising=False)
         monkeypatch.chdir(tmp_path)
+        # Clear caches
+        import src.bugfix_agent.config as config_module
+
+        config_module.load_config.cache_clear()
         from src.bugfix_agent.config import resolve_workdir
 
         result = resolve_workdir()
@@ -256,15 +275,19 @@ class TestResolveWorkdir:
 class TestGetConfigValue:
     """Test get_config_value() backward compatibility wrapper."""
 
-    def test_settings_value_takes_priority(
+    def test_env_value_takes_priority_over_toml(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Settings value should take priority over toml."""
+        """Env variable should take priority over toml."""
         monkeypatch.setenv("BUGFIX_AGENT_MAX_LOOP_COUNT", "7")
-        monkeypatch.delenv("BUGFIX_AGENT_CONFIG", raising=False)
-        monkeypatch.chdir(tmp_path)
         config_path = tmp_path / "config.toml"
         config_path.write_text("[agent]\nmax_loop_count = 5\n")
+        monkeypatch.setenv("BUGFIX_AGENT_CONFIG", str(config_path))
+        # Clear caches
+        import src.bugfix_agent.config as config_module
+
+        config_module._settings_cache = None
+        config_module.load_config.cache_clear()
         from src.bugfix_agent.config import get_config_value
 
         result = get_config_value("agent.max_loop_count")
@@ -274,10 +297,14 @@ class TestGetConfigValue:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Unmapped keys should fall back to toml."""
-        monkeypatch.delenv("BUGFIX_AGENT_CONFIG", raising=False)
-        monkeypatch.chdir(tmp_path)
         config_path = tmp_path / "config.toml"
         config_path.write_text("[custom]\nkey = 'value'\n")
+        monkeypatch.setenv("BUGFIX_AGENT_CONFIG", str(config_path))
+        # Clear caches
+        import src.bugfix_agent.config as config_module
+
+        config_module._settings_cache = None
+        config_module.load_config.cache_clear()
         from src.bugfix_agent.config import get_config_value
 
         result = get_config_value("custom.key")
@@ -335,3 +362,112 @@ class TestConfigPriorityIntegration:
         result = get_config_value("custom.special_value")
         # This comes from toml because it's not mapped to Settings
         assert result == 42
+
+
+class TestTomlOverridesDefaults:
+    """Tests for config.toml overriding Settings defaults when env is not set."""
+
+    def test_toml_overrides_default_max_loop_count(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """config.toml value should override Settings default when env not set."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[agent]\nmax_loop_count = 10\n")
+        monkeypatch.setenv("BUGFIX_AGENT_CONFIG", str(config_path))
+        monkeypatch.delenv("BUGFIX_AGENT_MAX_LOOP_COUNT", raising=False)
+        # Clear caches
+        import src.bugfix_agent.config as config_module
+
+        config_module._settings_cache = None
+        config_module.load_config.cache_clear()
+        from src.bugfix_agent.config import get_config_value
+
+        result = get_config_value("agent.max_loop_count")
+        # Should be 10 from toml, not default 3
+        assert result == 10
+
+    def test_toml_overrides_default_max_comment_retries(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """config.toml github.max_comment_retries should override default."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[github]\nmax_comment_retries = 5\n")
+        monkeypatch.setenv("BUGFIX_AGENT_CONFIG", str(config_path))
+        monkeypatch.delenv("BUGFIX_AGENT_MAX_COMMENT_RETRIES", raising=False)
+        import src.bugfix_agent.config as config_module
+
+        config_module._settings_cache = None
+        config_module.load_config.cache_clear()
+        from src.bugfix_agent.config import get_config_value
+
+        result = get_config_value("github.max_comment_retries")
+        assert result == 5
+
+    def test_toml_overrides_default_retry_delay(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """config.toml github.retry_delay should override default."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[github]\nretry_delay = 3.5\n")
+        monkeypatch.setenv("BUGFIX_AGENT_CONFIG", str(config_path))
+        monkeypatch.delenv("BUGFIX_AGENT_RETRY_DELAY", raising=False)
+        import src.bugfix_agent.config as config_module
+
+        config_module._settings_cache = None
+        config_module.load_config.cache_clear()
+        from src.bugfix_agent.config import get_config_value
+
+        result = get_config_value("github.retry_delay")
+        assert result == 3.5
+
+    def test_toml_overrides_default_context_max_chars(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """config.toml tools.context_max_chars should override default."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[tools]\ncontext_max_chars = 8000\n")
+        monkeypatch.setenv("BUGFIX_AGENT_CONFIG", str(config_path))
+        monkeypatch.delenv("BUGFIX_AGENT_CONTEXT_MAX_CHARS", raising=False)
+        import src.bugfix_agent.config as config_module
+
+        config_module._settings_cache = None
+        config_module.load_config.cache_clear()
+        from src.bugfix_agent.config import get_config_value
+
+        result = get_config_value("tools.context_max_chars")
+        assert result == 8000
+
+    def test_toml_workdir_resolved(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """config.toml agent.workdir should be resolved by resolve_workdir()."""
+        workdir = tmp_path / "toml_workdir"
+        workdir.mkdir()
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(f"[agent]\nworkdir = '{workdir}'\n")
+        monkeypatch.setenv("BUGFIX_AGENT_CONFIG", str(config_path))
+        monkeypatch.delenv("BUGFIX_AGENT_WORKDIR", raising=False)
+        import src.bugfix_agent.config as config_module
+
+        config_module._settings_cache = None
+        config_module.load_config.cache_clear()
+        from src.bugfix_agent.config import resolve_workdir
+
+        result = resolve_workdir()
+        assert result == workdir.resolve()
+
+    def test_env_still_overrides_toml(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Environment variable should still override toml value."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[agent]\nmax_loop_count = 10\n")
+        monkeypatch.setenv("BUGFIX_AGENT_CONFIG", str(config_path))
+        monkeypatch.setenv("BUGFIX_AGENT_MAX_LOOP_COUNT", "20")
+        import src.bugfix_agent.config as config_module
+
+        config_module._settings_cache = None
+        config_module.load_config.cache_clear()
+        from src.bugfix_agent.config import get_config_value
+
+        result = get_config_value("agent.max_loop_count")
+        # Should be 20 from env, not 10 from toml
+        assert result == 20
