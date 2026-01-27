@@ -245,6 +245,44 @@ class TestHandleAbortVerdict:
         assert exc_info.value.reason == "No reason provided"
         assert exc_info.value.suggestion == ""
 
+    def test_abort_extracts_summary_field(self) -> None:
+        """ABORT should extract Summary field as reason (Issue #34 spec)."""
+        raw_output = "- Summary: Environment issue detected\n- Reason: Secondary reason"
+
+        with pytest.raises(AgentAbortError) as exc_info:
+            handle_abort_verdict(Verdict.ABORT, raw_output)
+
+        # Summary should take precedence over Reason
+        assert exc_info.value.reason == "Environment issue detected"
+
+    def test_abort_extracts_next_action_field(self) -> None:
+        """ABORT should extract Next Action field as suggestion (Issue #34 spec)."""
+        raw_output = "- Reason: Test failure\n- Next Action: Check CI logs\n- Suggestion: Secondary suggestion"
+
+        with pytest.raises(AgentAbortError) as exc_info:
+            handle_abort_verdict(Verdict.ABORT, raw_output)
+
+        # Next Action should take precedence over Suggestion
+        assert exc_info.value.suggestion == "Check CI logs"
+
+    def test_abort_fallback_to_reason_when_no_summary(self) -> None:
+        """ABORT should fall back to Reason when Summary not present."""
+        raw_output = "- Reason: Fallback reason used"
+
+        with pytest.raises(AgentAbortError) as exc_info:
+            handle_abort_verdict(Verdict.ABORT, raw_output)
+
+        assert exc_info.value.reason == "Fallback reason used"
+
+    def test_abort_fallback_to_suggestion_when_no_next_action(self) -> None:
+        """ABORT should fall back to Suggestion when Next Action not present."""
+        raw_output = "- Reason: Test\n- Suggestion: Fallback suggestion"
+
+        with pytest.raises(AgentAbortError) as exc_info:
+            handle_abort_verdict(Verdict.ABORT, raw_output)
+
+        assert exc_info.value.suggestion == "Fallback suggestion"
+
 
 class TestCreateAIFormatter:
     """Tests for create_ai_formatter factory function."""
