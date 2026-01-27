@@ -7,6 +7,7 @@ This module provides context data construction:
 from pathlib import Path
 
 from .config import get_config_value, get_workdir
+from .logging import warn
 
 
 def build_context(
@@ -27,8 +28,9 @@ def build_context(
     Returns:
         構築されたコンテキスト文字列
 
-    Raises:
-        ValueError: 許可されていないパスへのアクセス試行時
+    Note:
+        allowed_root 配下でないパスや読み取り権限のないファイルは
+        スキップされ、警告が stderr に出力されます。
     """
     # 文字列入力の場合もmax_chars適用
     if isinstance(context, str):
@@ -55,14 +57,14 @@ def build_context(
             resolved.relative_to(allowed_root)
         except ValueError:
             # allowed_root 配下でない場合はスキップ（警告出力）
-            print(f"⚠️ Skipping unauthorized path: {path_str} (not under {allowed_root})")
+            warn(f"Skipping path outside allowed_root: {path_str} (not under {allowed_root})")
             continue
 
         try:
             content = resolved.read_text(encoding="utf-8")
             result_parts.append(f"\n--- {path_str} ---\n{content}\n")
         except (PermissionError, OSError) as e:
-            print(f"⚠️ Failed to read {path_str}: {e}")
+            warn(f"Failed to read {path_str}: {e}")
             continue
 
     result = "".join(result_parts)
