@@ -1,5 +1,7 @@
 """Issue provider protocol and implementations."""
 
+import json
+import re
 import subprocess
 import time
 from typing import Protocol
@@ -39,7 +41,12 @@ def get_config_value(key: str, default: int | float) -> int | float:
         return default
 
 
-def classify_gh_error(returncode: int, stderr: str, http_status: int | None = None) -> Exception:
+def classify_gh_error(
+    returncode: int,
+    stderr: str,
+    http_status: int | None = None,
+    body: str | None = None,
+) -> Exception:
     """Classify gh CLI error into appropriate exception.
 
     Priority order:
@@ -51,6 +58,7 @@ def classify_gh_error(returncode: int, stderr: str, http_status: int | None = No
         returncode: Exit code from gh CLI.
         stderr: Error output from gh CLI.
         http_status: HTTP status code if available (from `gh api --include`).
+        body: Response body from gh API (for 403 rate limit detection in body).
 
     Returns:
         Appropriate exception instance (NOT raised, just returned).
@@ -59,15 +67,20 @@ def classify_gh_error(returncode: int, stderr: str, http_status: int | None = No
         >>> error = classify_gh_error(1, "rate limit exceeded", http_status=429)
         >>> isinstance(error, IssueRateLimitError)
         True
+        >>> error = classify_gh_error(1, "", http_status=403, body="rate limit exceeded")
+        >>> isinstance(error, IssueRateLimitError)
+        True
     """
     stderr_lower = stderr.lower()
+    body_lower = (body or "").lower()
 
     # Priority 1: HTTP status code (most reliable)
     if http_status is not None:
         if http_status == 429:
             return IssueRateLimitError("API rate limit exceeded")
         if http_status == 403:
-            if "rate limit" in stderr_lower:
+            # Check both stderr and body for rate limit indicators
+            if "rate limit" in stderr_lower or "rate limit" in body_lower:
                 return IssueRateLimitError("API rate limit exceeded")
             return IssueAuthenticationError("Forbidden")
         if http_status == 401:
@@ -89,6 +102,56 @@ def classify_gh_error(returncode: int, stderr: str, http_status: int | None = No
 
     # Priority 3: CalledProcessError fallback
     return subprocess.CalledProcessError(returncode, "gh", stderr=stderr)
+
+
+def _parse_http_status(output: str) -> int | None:
+    """Parse HTTP status code from gh api --include output.
+
+    The output format is:
+    HTTP/2.0 200 OK
+    Header: Value
+    ...
+    (blank line)
+    JSON body
+
+    Args:
+        output: stdout from `gh api --include`.
+
+    Returns:
+        HTTP status code as int, or None if not found.
+    """
+    if not output:
+        return None
+
+    # First line should be HTTP status line
+    first_line = output.split("\n", 1)[0]
+    match = re.match(r"HTTP/[\d.]+ (\d+)", first_line)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _parse_gh_api_response(output: str) -> tuple[int | None, str]:
+    """Parse gh api --include response into HTTP status and body.
+
+    Args:
+        output: stdout from `gh api --include`.
+
+    Returns:
+        Tuple of (http_status, body). Status may be None if not parseable.
+    """
+    http_status = _parse_http_status(output)
+
+    # Find the blank line separating headers from body
+    # Headers end with a blank line (double newline)
+    parts = re.split(r"\r?\n\r?\n", output, maxsplit=1)
+    if len(parts) == 2:
+        body = parts[1]
+    else:
+        # No blank line found, assume entire output is body
+        body = output
+
+    return http_status, body
 
 
 def _is_retryable_error(error: Exception) -> bool:
@@ -228,36 +291,53 @@ class GitHubIssueProvider:
     def get_issue_body(self) -> str:
         """Get the issue body content.
 
+        Uses `gh api --include` to get HTTP status codes for reliable error
+        classification, per design spec.
+
         Returns:
             The issue body as a string.
 
         Raises:
             IssueNotFoundError: If the issue doesn't exist.
             IssueAuthenticationError: If gh is not authenticated.
+            IssueRateLimitError: If API rate limit is exceeded.
             IssueProviderError: On other API failures.
         """
         result = subprocess.run(
             [
                 "gh",
-                "issue",
-                "view",
-                str(self._issue_number),
-                "--repo",
-                f"{self._owner}/{self._repo}",
-                "--json",
-                "body",
-                "-q",
-                ".body",
+                "api",
+                "--include",
+                f"repos/{self._owner}/{self._repo}/issues/{self._issue_number}",
             ],
             capture_output=True,
             text=True,
         )
 
         if result.returncode != 0:
-            error = classify_gh_error(result.returncode, result.stderr)
+            # gh api --include outputs headers + body to stdout on error too
+            http_status = _parse_http_status(result.stdout)
+            error = classify_gh_error(
+                result.returncode, result.stderr, http_status=http_status, body=result.stdout
+            )
             raise error
 
-        return result.stdout
+        # Parse response: first line is HTTP status, then headers, blank line, then body
+        http_status, body = _parse_gh_api_response(result.stdout)
+
+        # Check for error status even on returncode=0 (shouldn't happen but be safe)
+        if http_status is not None and http_status >= 400:
+            error = classify_gh_error(
+                result.returncode, result.stderr, http_status=http_status, body=body
+            )
+            raise error
+
+        # Extract the "body" field from the JSON response
+        try:
+            data: dict[str, str] = json.loads(body)
+            return data.get("body", "")
+        except json.JSONDecodeError as e:
+            raise IssueProviderError(f"Failed to parse GitHub API response: {e}") from e
 
     def add_comment(self, body: str) -> None:
         """Add a comment to the issue with retry logic.
