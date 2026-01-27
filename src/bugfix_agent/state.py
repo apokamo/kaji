@@ -103,7 +103,20 @@ class ExecutionConfig:
 
 @dataclass
 class SessionState:
-    """実行中の状態（変数として保持）"""
+    """実行中の状態（変数として保持）
+
+    Attributes:
+        completed_states: 完了したステートのリスト
+        current_state: 現在のステート
+        loop_counters: ステート名 → ループカウント
+        active_conversations: ロール名 → 会話ID
+        max_loop_count: デフォルトの最大ループ回数
+
+    Session 3原則:
+        1) ロール単位で session_id を保持（analyzer / reviewer / implementer）
+        2) RETRY 時は同一ロールの session_id を継続
+        3) フェーズ切替（Design→Implement等）では必要に応じて明示リセット
+    """
 
     completed_states: list[str] = field(default_factory=list)
     current_state: State = State.INIT
@@ -120,3 +133,62 @@ class SessionState:
             "Implement_Loop_conversation_id": None,
         }
     )
+    max_loop_count: int = 3
+
+    def increment_loop(self, key: str) -> int:
+        """ループカウンタをインクリメントし、新しい値を返す
+
+        Args:
+            key: ループカウンタのキー（ステート名等）
+
+        Returns:
+            インクリメント後のカウント値
+        """
+        self.loop_counters[key] = self.loop_counters.get(key, 0) + 1
+        return self.loop_counters[key]
+
+    def reset_loop(self, key: str) -> None:
+        """ループカウンタをリセット（0に戻す）
+
+        Note:
+            キーを削除するのではなく、0を設定する。
+            未登録キーの場合は新規作成して0を設定。
+
+        Args:
+            key: ループカウンタのキー
+        """
+        self.loop_counters[key] = 0
+
+    def is_loop_exceeded(self, key: str, max_count: int | None = None) -> bool:
+        """ループ上限を超えたか判定
+
+        Args:
+            key: ループカウンタのキー
+            max_count: 上限値（None の場合は self.max_loop_count を使用）
+
+        Returns:
+            カウンタ >= 上限の場合 True
+        """
+        if max_count is None:
+            max_count = self.max_loop_count
+        return self.loop_counters.get(key, 0) >= max_count
+
+    def get_conversation_id(self, role: str) -> str | None:
+        """ロールのセッションIDを取得
+
+        Args:
+            role: エージェントロール名（analyzer/reviewer/implementer 等）
+
+        Returns:
+            会話ID、未設定の場合は None
+        """
+        return self.active_conversations.get(role)
+
+    def set_conversation_id(self, role: str, session_id: str | None) -> None:
+        """ロールのセッションIDを設定
+
+        Args:
+            role: エージェントロール名
+            session_id: 会話ID（None でクリア）
+        """
+        self.active_conversations[role] = session_id
