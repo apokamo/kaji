@@ -28,7 +28,7 @@ class RunLogger:
     def _log(self, event: str, **kwargs: Any) -> None:
         """イベントを JSONL 形式で出力"""
         entry = {
-            "ts": datetime.now(UTC).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "event": event,
             **kwargs,
         }

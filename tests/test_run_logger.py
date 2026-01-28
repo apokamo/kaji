@@ -1,7 +1,16 @@
-"""Tests for RunLogger - JSONL形式の実行ログ出力テスト.
+"""Tests for RunLogger - ワークフローレベルの JSONL ログ (run.log) 出力テスト.
 
 Issue #38: Tests/Verification Phase1/2 - RunLogger のユニットテスト
-設計書セクション: ログ出力テスト
+
+ログファイルの役割分担:
+- run.log: ワークフロー全体のライフサイクルログ ({workdir}/artifacts/)
+  → RunLogger が run_start, state_enter/exit, run_end を記録
+  → このテストクラスでカバー
+- events.jsonl: ハンドラ内の詳細イベントログ ({workdir}/artifacts/{state}/)
+  → save_jsonl_log が handler_start, ai_call_*, handler_end を記録
+  → test_design_handlers.py の TestDesignWorkflowEventLogs でテスト
+
+設計書セクション: C. ログ・実行基盤
 """
 
 import json
@@ -62,7 +71,7 @@ class TestRunLoggerLogRunStart:
         assert data["run_id"] == "20260129T100000"
 
     def test_includes_timestamp(self, tmp_path: Path) -> None:
-        """タイムスタンプが含まれること."""
+        """タイムスタンプが含まれること（キー名は設計書準拠で timestamp）."""
         log_path = tmp_path / "run.log"
         logger = RunLogger(log_path)
 
@@ -71,10 +80,10 @@ class TestRunLoggerLogRunStart:
         content = log_path.read_text().strip()
         data = json.loads(content)
 
-        assert "ts" in data
+        assert "timestamp" in data
         # ISO 8601 形式チェック
-        assert "T" in data["ts"]
-        assert data["ts"].startswith("20")
+        assert "T" in data["timestamp"]
+        assert data["timestamp"].startswith("20")
 
 
 class TestRunLoggerLogStateEnter:

@@ -593,11 +593,17 @@ class TestDesignWorkflowArtifacts:
 
 
 class TestDesignWorkflowEventLogs:
-    """DesignWorkflow events.jsonl 出力テスト.
+    """DesignWorkflow ハンドラ内イベントログ (events.jsonl) 出力テスト.
 
-    設計書セクション: ログ出力テスト
-    - run.log（events.jsonl）が JSONL 形式で出力される
-    - handler_start, ai_call_start, ai_call_end, handler_end イベントを記録
+    ログファイルの役割分担:
+    - run.log: ワークフロー全体のライフサイクルログ ({workdir}/artifacts/)
+      → RunLogger が run_start, state_enter/exit, run_end を記録
+      → test_run_logger.py でテスト
+    - events.jsonl: ハンドラ内の詳細イベントログ ({workdir}/artifacts/{state}/)
+      → save_jsonl_log が handler_start, ai_call_*, handler_end を記録
+      → このテストクラスでカバー
+
+    設計書セクション: C. ログ・実行基盤
     """
 
     def test_design_logs_handler_start_event(self, mock_context: MagicMock, tmp_path: Path) -> None:
