@@ -15,7 +15,8 @@ from string import Template
 from typing import Any
 
 # プロンプトディレクトリの定義
-PROMPT_DIR = Path(__file__).parent.parent / "prompts"
+# src/bugfix_agent/prompts/ を指す
+PROMPT_DIR = Path(__file__).parent / "prompts"
 COMMON_PROMPT_FILE = PROMPT_DIR / "_common.md"
 REVIEW_PREAMBLE_FILE = PROMPT_DIR / "_review_preamble.md"
 FOOTER_VERDICT_FILE = PROMPT_DIR / "_footer_verdict.md"
