@@ -106,12 +106,14 @@ class DesignWorkflow(WorkflowBase):
                 max_count=session.max_loop_count,
             )
 
-        # 2. Ensure artifacts directory
+        # 2. Ensure artifacts directory (state-specific for prompt/response)
         artifacts_dir = ctx.ensure_artifacts_dir("design")
+        # run.log is written to artifacts root per design spec
+        run_log_dir = ctx.artifacts_dir
 
-        # 3. Event log: handler start
+        # 3. Event log: handler start (to run.log at artifacts root)
         save_jsonl_log(
-            artifacts_dir,
+            run_log_dir,
             "handler_start",
             {
                 "handler": "design",
@@ -134,9 +136,9 @@ class DesignWorkflow(WorkflowBase):
             **prompt_vars,
         )
 
-        # 6. Event log: AI call start
+        # 6. Event log: AI call start (to run.log at artifacts root)
         save_jsonl_log(
-            artifacts_dir,
+            run_log_dir,
             "ai_call_start",
             {
                 "role": "analyzer",
@@ -153,9 +155,9 @@ class DesignWorkflow(WorkflowBase):
             log_dir=artifacts_dir,
         )
 
-        # 8. Event log: AI call end
+        # 8. Event log: AI call end (to run.log at artifacts root)
         save_jsonl_log(
-            artifacts_dir,
+            run_log_dir,
             "ai_call_end",
             {
                 "role": "analyzer",
@@ -179,9 +181,9 @@ class DesignWorkflow(WorkflowBase):
         # 12. Increment loop counter
         session.increment_loop("design")
 
-        # 13. Event log: handler end
+        # 13. Event log: handler end (to run.log at artifacts root)
         save_jsonl_log(
-            artifacts_dir,
+            run_log_dir,
             "handler_end",
             {
                 "handler": "design",
@@ -206,12 +208,14 @@ class DesignWorkflow(WorkflowBase):
             PromptLoadError: If design output is missing.
             AgentAbortError: If reviewer returns ABORT verdict.
         """
-        # 1. Ensure artifacts directory
+        # 1. Ensure artifacts directory (state-specific for prompt/response)
         log_dir = ctx.ensure_artifacts_dir("design_review")
+        # run.log is written to artifacts root per design spec
+        run_log_dir = ctx.artifacts_dir
 
-        # 2. Event log: handler start
+        # 2. Event log: handler start (to run.log at artifacts root)
         save_jsonl_log(
-            log_dir,
+            run_log_dir,
             "handler_start",
             {
                 "handler": "design_review",
@@ -239,9 +243,9 @@ class DesignWorkflow(WorkflowBase):
             design_output_path=design_output_path,
         )
 
-        # 5. Event log: AI call start
+        # 5. Event log: AI call start (to run.log at artifacts root)
         save_jsonl_log(
-            log_dir,
+            run_log_dir,
             "ai_call_start",
             {
                 "role": "reviewer",
@@ -257,9 +261,9 @@ class DesignWorkflow(WorkflowBase):
             log_dir=log_dir,
         )
 
-        # 7. Event log: AI call end
+        # 7. Event log: AI call end (to run.log at artifacts root)
         save_jsonl_log(
-            log_dir,
+            run_log_dir,
             "ai_call_end",
             {
                 "role": "reviewer",
@@ -274,9 +278,9 @@ class DesignWorkflow(WorkflowBase):
         # 9. Parse VERDICT with AI formatter fallback
         ai_formatter = create_ai_formatter(ctx.reviewer, context="", log_dir=log_dir)
 
-        # 10. Event log: VERDICT parse start
+        # 10. Event log: VERDICT parse start (to run.log at artifacts root)
         save_jsonl_log(
-            log_dir,
+            run_log_dir,
             "verdict_parse_start",
             {
                 "raw_response_length": len(decision),
@@ -288,10 +292,10 @@ class DesignWorkflow(WorkflowBase):
         # 11. Save verdict artifact
         save_artifact(log_dir, "verdict.txt", verdict.value)
 
-        # 12. Event log: VERDICT determined (keep original)
+        # 12. Event log: VERDICT determined (to run.log at artifacts root)
         original_verdict = verdict
         save_jsonl_log(
-            log_dir,
+            run_log_dir,
             "verdict_determined",
             {
                 "verdict": verdict.value,
@@ -305,7 +309,7 @@ class DesignWorkflow(WorkflowBase):
         # 14. Convert BACK_DESIGN to RETRY for this workflow
         if verdict == Verdict.BACK_DESIGN:
             save_jsonl_log(
-                log_dir,
+                run_log_dir,
                 "verdict_converted",
                 {
                     "original": "BACK_DESIGN",
@@ -320,9 +324,9 @@ class DesignWorkflow(WorkflowBase):
             session.mark_completed("design_review")
             session.reset_loop("design")
 
-        # 16. Event log: handler end
+        # 16. Event log: handler end (to run.log at artifacts root)
         save_jsonl_log(
-            log_dir,
+            run_log_dir,
             "handler_end",
             {
                 "handler": "design_review",

@@ -593,21 +593,19 @@ class TestDesignWorkflowArtifacts:
 
 
 class TestDesignWorkflowEventLogs:
-    """DesignWorkflow ハンドラ内イベントログ (events.jsonl) 出力テスト.
+    """DesignWorkflow ハンドライベントログ (run.log) 出力テスト.
 
-    ログファイルの役割分担:
-    - run.log: ワークフロー全体のライフサイクルログ ({workdir}/artifacts/)
-      → RunLogger が run_start, state_enter/exit, run_end を記録
-      → test_run_logger.py でテスト
-    - events.jsonl: ハンドラ内の詳細イベントログ ({workdir}/artifacts/{state}/)
-      → save_jsonl_log が handler_start, ai_call_*, handler_end を記録
-      → このテストクラスでカバー
+    ログファイルの役割:
+    - run.log: {workdir}/artifacts/ に出力
+      → ワークフロー全体: RunLogger が run_start, state_enter/exit, run_end を記録
+      → ハンドラ内: save_jsonl_log が handler_start, ai_call_*, handler_end を記録
+      → このテストクラスではハンドライベントをカバー
 
     設計書セクション: C. ログ・実行基盤
     """
 
     def test_design_logs_handler_start_event(self, mock_context: MagicMock, tmp_path: Path) -> None:
-        """DESIGN ハンドラが handler_start イベントを記録すること."""
+        """DESIGN ハンドラが handler_start イベントを run.log に記録すること."""
         # Arrange
         mock_analyzer = MockTool(responses=["## Design Output"])
         mock_context.analyzer = mock_analyzer
@@ -618,19 +616,17 @@ class TestDesignWorkflowEventLogs:
         # Act
         workflow._handle_design(mock_context, session)
 
-        # Assert
-        artifacts_dir = mock_context.ensure_artifacts_dir.call_args[0][0]
-        target_dir = mock_context.artifacts_dir / artifacts_dir.lower()
-        events_file = target_dir / "events.jsonl"
-        assert events_file.exists()
+        # Assert: run.log is at artifacts root per design spec
+        run_log_file = mock_context.artifacts_dir / "run.log"
+        assert run_log_file.exists()
 
-        events = [json.loads(line) for line in events_file.read_text().strip().split("\n")]
+        events = [json.loads(line) for line in run_log_file.read_text().strip().split("\n")]
         handler_start_events = [e for e in events if e.get("type") == "handler_start"]
         assert len(handler_start_events) >= 1
         assert handler_start_events[0]["handler"] == "design"
 
     def test_design_logs_ai_call_events(self, mock_context: MagicMock, tmp_path: Path) -> None:
-        """DESIGN ハンドラが ai_call_start/ai_call_end イベントを記録すること."""
+        """DESIGN ハンドラが ai_call_start/ai_call_end イベントを run.log に記録すること."""
         # Arrange
         mock_analyzer = MockTool(responses=["## Design Output"])
         mock_context.analyzer = mock_analyzer
@@ -641,12 +637,10 @@ class TestDesignWorkflowEventLogs:
         # Act
         workflow._handle_design(mock_context, session)
 
-        # Assert
-        artifacts_dir = mock_context.ensure_artifacts_dir.call_args[0][0]
-        target_dir = mock_context.artifacts_dir / artifacts_dir.lower()
-        events_file = target_dir / "events.jsonl"
+        # Assert: run.log is at artifacts root per design spec
+        run_log_file = mock_context.artifacts_dir / "run.log"
 
-        events = [json.loads(line) for line in events_file.read_text().strip().split("\n")]
+        events = [json.loads(line) for line in run_log_file.read_text().strip().split("\n")]
 
         ai_call_start = [e for e in events if e.get("type") == "ai_call_start"]
         assert len(ai_call_start) >= 1
@@ -659,7 +653,7 @@ class TestDesignWorkflowEventLogs:
         assert "response_length" in ai_call_end[0]
 
     def test_design_logs_handler_end_event(self, mock_context: MagicMock, tmp_path: Path) -> None:
-        """DESIGN ハンドラが handler_end イベントを記録すること."""
+        """DESIGN ハンドラが handler_end イベントを run.log に記録すること."""
         # Arrange
         mock_analyzer = MockTool(responses=["## Design Output"])
         mock_context.analyzer = mock_analyzer
@@ -670,12 +664,10 @@ class TestDesignWorkflowEventLogs:
         # Act
         workflow._handle_design(mock_context, session)
 
-        # Assert
-        artifacts_dir = mock_context.ensure_artifacts_dir.call_args[0][0]
-        target_dir = mock_context.artifacts_dir / artifacts_dir.lower()
-        events_file = target_dir / "events.jsonl"
+        # Assert: run.log is at artifacts root per design spec
+        run_log_file = mock_context.artifacts_dir / "run.log"
 
-        events = [json.loads(line) for line in events_file.read_text().strip().split("\n")]
+        events = [json.loads(line) for line in run_log_file.read_text().strip().split("\n")]
         handler_end_events = [e for e in events if e.get("type") == "handler_end"]
         assert len(handler_end_events) >= 1
         assert handler_end_events[0]["handler"] == "design"
@@ -684,7 +676,7 @@ class TestDesignWorkflowEventLogs:
     def test_design_review_logs_verdict_determined_event(
         self, mock_context: MagicMock, tmp_path: Path
     ) -> None:
-        """DESIGN_REVIEW ハンドラが verdict_determined イベントを記録すること."""
+        """DESIGN_REVIEW ハンドラが verdict_determined イベントを run.log に記録すること."""
         # Arrange
         review_response = "## VERDICT\n- Result: PASS\n- Reason: OK"
         mock_reviewer = MockTool(responses=[review_response])
@@ -699,18 +691,16 @@ class TestDesignWorkflowEventLogs:
         # Act
         workflow._handle_design_review(mock_context, session)
 
-        # Assert
-        artifacts_dir = mock_context.ensure_artifacts_dir.call_args[0][0]
-        target_dir = mock_context.artifacts_dir / artifacts_dir.lower()
-        events_file = target_dir / "events.jsonl"
+        # Assert: run.log is at artifacts root per design spec
+        run_log_file = mock_context.artifacts_dir / "run.log"
 
-        events = [json.loads(line) for line in events_file.read_text().strip().split("\n")]
+        events = [json.loads(line) for line in run_log_file.read_text().strip().split("\n")]
         verdict_events = [e for e in events if e.get("type") == "verdict_determined"]
         assert len(verdict_events) >= 1
         assert verdict_events[0]["verdict"] == "PASS"
 
     def test_events_include_timestamp(self, mock_context: MagicMock, tmp_path: Path) -> None:
-        """イベントにタイムスタンプが含まれること."""
+        """run.log イベントにタイムスタンプが含まれること."""
         # Arrange
         mock_analyzer = MockTool(responses=["## Design Output"])
         mock_context.analyzer = mock_analyzer
@@ -721,12 +711,10 @@ class TestDesignWorkflowEventLogs:
         # Act
         workflow._handle_design(mock_context, session)
 
-        # Assert
-        artifacts_dir = mock_context.ensure_artifacts_dir.call_args[0][0]
-        target_dir = mock_context.artifacts_dir / artifacts_dir.lower()
-        events_file = target_dir / "events.jsonl"
+        # Assert: run.log is at artifacts root per design spec
+        run_log_file = mock_context.artifacts_dir / "run.log"
 
-        events = [json.loads(line) for line in events_file.read_text().strip().split("\n")]
+        events = [json.loads(line) for line in run_log_file.read_text().strip().split("\n")]
         for event in events:
             assert "timestamp" in event
             # ISO 8601 形式チェック
