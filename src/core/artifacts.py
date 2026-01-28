@@ -47,18 +47,25 @@ def save_jsonl_log(
     artifacts_dir: Path,
     event_type: str,
     data: dict[str, object],
+    *,
+    log_filename: str = "run.log",
 ) -> None:
     """Append event to JSONL log file.
 
     Best-effort logging: IO failures are logged as warnings but do not
     stop workflow execution.
 
+    設計書仕様:
+    - run.log: {workdir}/artifacts/ に出力（ハンドラ実行ログ）
+    - 内容: handler_start, ai_call_*, verdict_*, workflow_* イベント
+
     Args:
         artifacts_dir: Directory containing log file.
         event_type: Type of event (e.g., "ai_call", "verdict").
         data: Event data dictionary.
+        log_filename: Name of log file (default: "run.log").
     """
-    log_path = artifacts_dir / "events.jsonl"
+    log_path = artifacts_dir / log_filename
     event = {
         "timestamp": datetime.now().isoformat(),
         "type": event_type,

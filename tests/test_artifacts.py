@@ -48,15 +48,18 @@ class TestSaveArtifact:
 
 
 class TestSaveJsonlLog:
-    """save_jsonl_log 関数テスト."""
+    """save_jsonl_log 関数テスト.
+
+    設計書仕様: run.log は {workdir}/artifacts/ に JSONL 形式で出力
+    """
 
     def test_save_jsonl_log_basic(self, tmp_path: Path) -> None:
-        """JSONL ログを保存できること."""
+        """JSONL ログを run.log に保存できること."""
         from src.core.artifacts import save_jsonl_log
 
         save_jsonl_log(tmp_path, "test_event", {"key": "value"})
 
-        log_path = tmp_path / "events.jsonl"
+        log_path = tmp_path / "run.log"
         assert log_path.exists()
 
         content = log_path.read_text()
@@ -74,7 +77,7 @@ class TestSaveJsonlLog:
         save_jsonl_log(tmp_path, "event2", {"n": 2})
         save_jsonl_log(tmp_path, "event3", {"n": 3})
 
-        log_path = tmp_path / "events.jsonl"
+        log_path = tmp_path / "run.log"
         lines = log_path.read_text().strip().split("\n")
 
         assert len(lines) == 3
@@ -88,7 +91,7 @@ class TestSaveJsonlLog:
 
         save_jsonl_log(tmp_path, "test_event", {})
 
-        content = (tmp_path / "events.jsonl").read_text()
+        content = (tmp_path / "run.log").read_text()
         data = json.loads(content.strip())
         timestamp = data["timestamp"]
 
@@ -102,7 +105,7 @@ class TestSaveJsonlLog:
 
         save_jsonl_log(tmp_path, "test_event", {"message": "日本語", "emoji": "🎉"})
 
-        content = (tmp_path / "events.jsonl").read_text(encoding="utf-8")
+        content = (tmp_path / "run.log").read_text(encoding="utf-8")
         data = json.loads(content.strip())
 
         assert data["message"] == "日本語"
@@ -116,8 +119,8 @@ class TestSaveJsonlLog:
         readonly_dir = tmp_path / "readonly"
         readonly_dir.mkdir()
 
-        # events.jsonl をディレクトリとして作成（書き込みエラーを発生させる）
-        (readonly_dir / "events.jsonl").mkdir()
+        # run.log をディレクトリとして作成（書き込みエラーを発生させる）
+        (readonly_dir / "run.log").mkdir()
 
         # Should not raise
         save_jsonl_log(readonly_dir, "test_event", {"key": "value"})

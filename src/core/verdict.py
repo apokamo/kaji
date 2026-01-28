@@ -226,6 +226,10 @@ def extract_verdict_field(text: str, field: str) -> str | None:
 def handle_abort_verdict(verdict: Verdict, raw_output: str) -> Verdict:
     """Handle ABORT verdict by raising AgentAbortError.
 
+    Field extraction priority (Issue #34 spec):
+    - reason: Summary > Reason > default
+    - suggestion: Next Action > Suggestion > default
+
     Args:
         verdict: Parsed verdict from parse_verdict()
         raw_output: Raw AI output text for extracting Reason/Suggestion
@@ -239,8 +243,18 @@ def handle_abort_verdict(verdict: Verdict, raw_output: str) -> Verdict:
     if verdict != Verdict.ABORT:
         return verdict
 
-    reason = extract_verdict_field(raw_output, "Reason") or "No reason provided"
-    suggestion = extract_verdict_field(raw_output, "Suggestion") or ""
+    # Issue #34: Summary takes precedence over Reason
+    reason = (
+        extract_verdict_field(raw_output, "Summary")
+        or extract_verdict_field(raw_output, "Reason")
+        or "No reason provided"
+    )
+    # Issue #34: Next Action takes precedence over Suggestion
+    suggestion = (
+        extract_verdict_field(raw_output, "Next Action")
+        or extract_verdict_field(raw_output, "Suggestion")
+        or ""
+    )
 
     raise AgentAbortError(reason=reason, suggestion=suggestion)
 

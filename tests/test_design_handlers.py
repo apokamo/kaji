@@ -1,5 +1,6 @@
 """Tests for DesignWorkflow handlers - TDD approach."""
 
+import json
 from argparse import Namespace
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -449,3 +450,272 @@ class TestSetupWorkflowContext:
 
         # Assert
         assert session.get_context("requirements_content") == ""
+
+
+class TestDesignWorkflowArtifacts:
+    """DesignWorkflow artifacts 出力テスト.
+
+    設計書セクション: ログ出力テスト
+    - artifacts/{state}/ に prompt.md, response.md が保存される
+    - design_review では verdict.txt も保存される
+    """
+
+    def test_design_saves_prompt_md(self, mock_context: MagicMock, tmp_path: Path) -> None:
+        """DESIGN ハンドラが prompt.md を保存すること."""
+        # Arrange
+        mock_analyzer = MockTool(responses=["## Design Output"])
+        mock_context.analyzer = mock_analyzer
+
+        session = SessionState()
+        workflow = DesignWorkflow()
+
+        # Act
+        workflow._handle_design(mock_context, session)
+
+        # Assert
+        artifacts_dir = mock_context.ensure_artifacts_dir.call_args[0][0]
+        target_dir = mock_context.artifacts_dir / artifacts_dir.lower()
+        prompt_file = target_dir / "prompt.md"
+        assert prompt_file.exists()
+        assert len(prompt_file.read_text()) > 0
+
+    def test_design_saves_response_md(self, mock_context: MagicMock, tmp_path: Path) -> None:
+        """DESIGN ハンドラが response.md を保存すること."""
+        # Arrange
+        mock_analyzer = MockTool(responses=["## Design Output Content"])
+        mock_context.analyzer = mock_analyzer
+
+        session = SessionState()
+        workflow = DesignWorkflow()
+
+        # Act
+        workflow._handle_design(mock_context, session)
+
+        # Assert
+        artifacts_dir = mock_context.ensure_artifacts_dir.call_args[0][0]
+        target_dir = mock_context.artifacts_dir / artifacts_dir.lower()
+        response_file = target_dir / "response.md"
+        assert response_file.exists()
+        assert "Design Output Content" in response_file.read_text()
+
+    def test_design_review_saves_prompt_md(self, mock_context: MagicMock, tmp_path: Path) -> None:
+        """DESIGN_REVIEW ハンドラが prompt.md を保存すること."""
+        # Arrange
+        review_response = "## VERDICT\n- Result: PASS\n- Reason: OK"
+        mock_reviewer = MockTool(responses=[review_response])
+        mock_context.reviewer = mock_reviewer
+
+        session = SessionState()
+        session.set_context("design_output", "## Design Document")
+        session.set_context("design_output_path", str(tmp_path / "design.md"))
+
+        workflow = DesignWorkflow()
+
+        # Act
+        workflow._handle_design_review(mock_context, session)
+
+        # Assert
+        artifacts_dir = mock_context.ensure_artifacts_dir.call_args[0][0]
+        target_dir = mock_context.artifacts_dir / artifacts_dir.lower()
+        prompt_file = target_dir / "prompt.md"
+        assert prompt_file.exists()
+
+    def test_design_review_saves_response_md(self, mock_context: MagicMock, tmp_path: Path) -> None:
+        """DESIGN_REVIEW ハンドラが response.md を保存すること."""
+        # Arrange
+        review_response = "## VERDICT\n- Result: PASS\n- Reason: OK"
+        mock_reviewer = MockTool(responses=[review_response])
+        mock_context.reviewer = mock_reviewer
+
+        session = SessionState()
+        session.set_context("design_output", "## Design Document")
+        session.set_context("design_output_path", str(tmp_path / "design.md"))
+
+        workflow = DesignWorkflow()
+
+        # Act
+        workflow._handle_design_review(mock_context, session)
+
+        # Assert
+        artifacts_dir = mock_context.ensure_artifacts_dir.call_args[0][0]
+        target_dir = mock_context.artifacts_dir / artifacts_dir.lower()
+        response_file = target_dir / "response.md"
+        assert response_file.exists()
+        assert "VERDICT" in response_file.read_text()
+
+    def test_design_review_saves_verdict_txt(self, mock_context: MagicMock, tmp_path: Path) -> None:
+        """DESIGN_REVIEW ハンドラが verdict.txt を保存すること."""
+        # Arrange
+        review_response = "## VERDICT\n- Result: PASS\n- Reason: OK"
+        mock_reviewer = MockTool(responses=[review_response])
+        mock_context.reviewer = mock_reviewer
+
+        session = SessionState()
+        session.set_context("design_output", "## Design Document")
+        session.set_context("design_output_path", str(tmp_path / "design.md"))
+
+        workflow = DesignWorkflow()
+
+        # Act
+        workflow._handle_design_review(mock_context, session)
+
+        # Assert
+        artifacts_dir = mock_context.ensure_artifacts_dir.call_args[0][0]
+        target_dir = mock_context.artifacts_dir / artifacts_dir.lower()
+        verdict_file = target_dir / "verdict.txt"
+        assert verdict_file.exists()
+        assert verdict_file.read_text() == "PASS"
+
+    def test_design_review_retry_saves_verdict_txt(
+        self, mock_context: MagicMock, tmp_path: Path
+    ) -> None:
+        """RETRY 判定時も verdict.txt を保存すること."""
+        # Arrange
+        review_response = "## VERDICT\n- Result: RETRY\n- Reason: Incomplete"
+        mock_reviewer = MockTool(responses=[review_response])
+        mock_context.reviewer = mock_reviewer
+
+        session = SessionState()
+        session.set_context("design_output", "## Design Document")
+        session.set_context("design_output_path", str(tmp_path / "design.md"))
+
+        workflow = DesignWorkflow()
+
+        # Act
+        workflow._handle_design_review(mock_context, session)
+
+        # Assert
+        artifacts_dir = mock_context.ensure_artifacts_dir.call_args[0][0]
+        target_dir = mock_context.artifacts_dir / artifacts_dir.lower()
+        verdict_file = target_dir / "verdict.txt"
+        assert verdict_file.exists()
+        assert verdict_file.read_text() == "RETRY"
+
+
+class TestDesignWorkflowEventLogs:
+    """DesignWorkflow ハンドライベントログ (run.log) 出力テスト.
+
+    ログファイルの役割:
+    - run.log: {workdir}/artifacts/ に出力
+      → ワークフロー全体: RunLogger が run_start, state_enter/exit, run_end を記録
+      → ハンドラ内: save_jsonl_log が handler_start, ai_call_*, handler_end を記録
+      → このテストクラスではハンドライベントをカバー
+
+    設計書セクション: C. ログ・実行基盤
+    """
+
+    def test_design_logs_handler_start_event(self, mock_context: MagicMock, tmp_path: Path) -> None:
+        """DESIGN ハンドラが handler_start イベントを run.log に記録すること."""
+        # Arrange
+        mock_analyzer = MockTool(responses=["## Design Output"])
+        mock_context.analyzer = mock_analyzer
+
+        session = SessionState()
+        workflow = DesignWorkflow()
+
+        # Act
+        workflow._handle_design(mock_context, session)
+
+        # Assert: run.log is at artifacts root per design spec
+        run_log_file = mock_context.artifacts_dir / "run.log"
+        assert run_log_file.exists()
+
+        events = [json.loads(line) for line in run_log_file.read_text().strip().split("\n")]
+        handler_start_events = [e for e in events if e.get("type") == "handler_start"]
+        assert len(handler_start_events) >= 1
+        assert handler_start_events[0]["handler"] == "design"
+
+    def test_design_logs_ai_call_events(self, mock_context: MagicMock, tmp_path: Path) -> None:
+        """DESIGN ハンドラが ai_call_start/ai_call_end イベントを run.log に記録すること."""
+        # Arrange
+        mock_analyzer = MockTool(responses=["## Design Output"])
+        mock_context.analyzer = mock_analyzer
+
+        session = SessionState()
+        workflow = DesignWorkflow()
+
+        # Act
+        workflow._handle_design(mock_context, session)
+
+        # Assert: run.log is at artifacts root per design spec
+        run_log_file = mock_context.artifacts_dir / "run.log"
+
+        events = [json.loads(line) for line in run_log_file.read_text().strip().split("\n")]
+
+        ai_call_start = [e for e in events if e.get("type") == "ai_call_start"]
+        assert len(ai_call_start) >= 1
+        assert ai_call_start[0]["role"] == "analyzer"
+        assert "prompt_length" in ai_call_start[0]
+
+        ai_call_end = [e for e in events if e.get("type") == "ai_call_end"]
+        assert len(ai_call_end) >= 1
+        assert ai_call_end[0]["role"] == "analyzer"
+        assert "response_length" in ai_call_end[0]
+
+    def test_design_logs_handler_end_event(self, mock_context: MagicMock, tmp_path: Path) -> None:
+        """DESIGN ハンドラが handler_end イベントを run.log に記録すること."""
+        # Arrange
+        mock_analyzer = MockTool(responses=["## Design Output"])
+        mock_context.analyzer = mock_analyzer
+
+        session = SessionState()
+        workflow = DesignWorkflow()
+
+        # Act
+        workflow._handle_design(mock_context, session)
+
+        # Assert: run.log is at artifacts root per design spec
+        run_log_file = mock_context.artifacts_dir / "run.log"
+
+        events = [json.loads(line) for line in run_log_file.read_text().strip().split("\n")]
+        handler_end_events = [e for e in events if e.get("type") == "handler_end"]
+        assert len(handler_end_events) >= 1
+        assert handler_end_events[0]["handler"] == "design"
+        assert handler_end_events[0]["verdict"] == "PASS"
+
+    def test_design_review_logs_verdict_determined_event(
+        self, mock_context: MagicMock, tmp_path: Path
+    ) -> None:
+        """DESIGN_REVIEW ハンドラが verdict_determined イベントを run.log に記録すること."""
+        # Arrange
+        review_response = "## VERDICT\n- Result: PASS\n- Reason: OK"
+        mock_reviewer = MockTool(responses=[review_response])
+        mock_context.reviewer = mock_reviewer
+
+        session = SessionState()
+        session.set_context("design_output", "## Design Document")
+        session.set_context("design_output_path", str(tmp_path / "design.md"))
+
+        workflow = DesignWorkflow()
+
+        # Act
+        workflow._handle_design_review(mock_context, session)
+
+        # Assert: run.log is at artifacts root per design spec
+        run_log_file = mock_context.artifacts_dir / "run.log"
+
+        events = [json.loads(line) for line in run_log_file.read_text().strip().split("\n")]
+        verdict_events = [e for e in events if e.get("type") == "verdict_determined"]
+        assert len(verdict_events) >= 1
+        assert verdict_events[0]["verdict"] == "PASS"
+
+    def test_events_include_timestamp(self, mock_context: MagicMock, tmp_path: Path) -> None:
+        """run.log イベントにタイムスタンプが含まれること."""
+        # Arrange
+        mock_analyzer = MockTool(responses=["## Design Output"])
+        mock_context.analyzer = mock_analyzer
+
+        session = SessionState()
+        workflow = DesignWorkflow()
+
+        # Act
+        workflow._handle_design(mock_context, session)
+
+        # Assert: run.log is at artifacts root per design spec
+        run_log_file = mock_context.artifacts_dir / "run.log"
+
+        events = [json.loads(line) for line in run_log_file.read_text().strip().split("\n")]
+        for event in events:
+            assert "timestamp" in event
+            # ISO 8601 形式チェック
+            assert "T" in event["timestamp"]
