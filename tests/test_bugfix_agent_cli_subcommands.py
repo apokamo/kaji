@@ -231,3 +231,51 @@ class TestInputOption:
 
         call_args = mock_run.call_args[0][0]
         assert call_args.input == "req.md"
+
+
+class TestWorkdirOption:
+    """Tests for --workdir option."""
+
+    @patch("src.bugfix_agent.main.run_design_workflow")
+    def test_workdir_option_passed_to_design_workflow(self, mock_run: MagicMock) -> None:
+        """--workdir option is passed to design workflow."""
+        mock_run.return_value = 0
+
+        main(["design", "https://github.com/owner/repo/issues/1", "--workdir", "/tmp/work"])
+
+        call_args = mock_run.call_args[0][0]
+        assert call_args.workdir == "/tmp/work"
+
+    @patch("src.bugfix_agent.main.run_bugfix_workflow")
+    def test_workdir_option_passed_to_bugfix_workflow(self, mock_run: MagicMock) -> None:
+        """--workdir option is passed to bugfix workflow."""
+        mock_run.return_value = 0
+
+        main(["bugfix", "https://github.com/owner/repo/issues/1", "--workdir", "/tmp/work"])
+
+        call_args = mock_run.call_args[0][0]
+        assert call_args.workdir == "/tmp/work"
+
+
+class TestDryRunOption:
+    """Tests for --dry-run option."""
+
+    @patch("src.bugfix_agent.main.run_design_workflow")
+    def test_dry_run_option_passed_to_design_workflow(self, mock_run: MagicMock) -> None:
+        """--dry-run option is passed to design workflow."""
+        mock_run.return_value = 0
+
+        main(["design", "https://github.com/owner/repo/issues/1", "--dry-run"])
+
+        call_args = mock_run.call_args[0][0]
+        assert call_args.dry_run is True
+
+    @patch("src.bugfix_agent.main.run_bugfix_workflow")
+    def test_dry_run_option_passed_to_bugfix_workflow(self, mock_run: MagicMock) -> None:
+        """--dry-run option is passed to bugfix workflow."""
+        mock_run.return_value = 0
+
+        main(["bugfix", "https://github.com/owner/repo/issues/1", "--dry-run"])
+
+        call_args = mock_run.call_args[0][0]
+        assert call_args.dry_run is True

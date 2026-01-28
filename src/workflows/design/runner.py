@@ -25,7 +25,8 @@ def run_design_workflow(args: Namespace) -> int:
     """Run the design workflow.
 
     Args:
-        args: Parsed CLI arguments with 'issue' and optionally 'input'.
+        args: Parsed CLI arguments with 'issue' and optionally 'input',
+              'workdir', and 'dry_run'.
 
     Returns:
         Exit code (0 for success, non-zero for failure).
@@ -47,32 +48,44 @@ def run_design_workflow(args: Namespace) -> int:
         skip_permissions=True,
     )
 
-    # 3. Create AgentContext
+    # 3. Determine artifacts base path from --workdir option
+    workdir = getattr(args, "workdir", None)
+    if workdir:
+        artifacts_base = Path(workdir) / "artifacts"
+    else:
+        artifacts_base = Path("artifacts")
+
+    # 4. Create AgentContext
     ctx = AgentContext(
         analyzer=claude_tool,
         reviewer=claude_tool,
         implementer=claude_tool,
         issue_provider=issue_provider,
-        artifacts_base=Path("artifacts"),
+        artifacts_base=artifacts_base,
     )
 
-    # 4. Create SessionState
+    # 5. Create SessionState
     session = SessionState()
 
-    # 5. Setup workflow context (load --input file if provided)
+    # 6. Setup workflow context (load --input file if provided)
     setup_workflow_context(args, ctx, session)
 
-    # 6. Create workflow
+    # 7. Create workflow
     workflow = DesignWorkflow()
 
-    # 7. Run workflow loop
-    return _run_workflow_loop(workflow, ctx, session)
+    # 8. Get dry_run flag
+    dry_run = getattr(args, "dry_run", False)
+
+    # 9. Run workflow loop
+    return _run_workflow_loop(workflow, ctx, session, dry_run=dry_run)
 
 
 def _run_workflow_loop(
     workflow: DesignWorkflow,
     ctx: AgentContext,
     session: SessionState,
+    *,
+    dry_run: bool = False,
 ) -> int:
     """Execute the workflow state machine loop.
 
@@ -80,6 +93,7 @@ def _run_workflow_loop(
         workflow: The workflow to execute.
         ctx: Agent context with tools and issue provider.
         session: Session state for tracking progress.
+        dry_run: If True, skip Issue updates (comments).
 
     Returns:
         Exit code (0 for success, non-zero for failure).
@@ -95,6 +109,7 @@ def _run_workflow_loop(
             "workflow": workflow.name,
             "issue_url": ctx.issue_provider.issue_url,
             "issue_number": ctx.issue_provider.issue_number,
+            "dry_run": dry_run,
         },
     )
 
@@ -136,38 +151,49 @@ def _run_workflow_loop(
             {"final_state": current_state.name},
         )
 
-        # Report success to issue
-        _report_success(ctx, artifacts_dir)
+        # Report success to issue (skip if dry_run)
+        _report_success(ctx, artifacts_dir, dry_run=dry_run)
         return 0
 
     except LoopLimitExceededError as e:
-        _report_error(ctx, artifacts_dir, "loop_limit_exceeded", str(e))
+        _report_error(ctx, artifacts_dir, "loop_limit_exceeded", str(e), dry_run=dry_run)
         return 1
 
     except AIToolError as e:
-        _report_error(ctx, artifacts_dir, "ai_tool_error", str(e))
+        _report_error(ctx, artifacts_dir, "ai_tool_error", str(e), dry_run=dry_run)
         return 1
 
     except VerdictParseError as e:
-        _report_error(ctx, artifacts_dir, "verdict_parse_error", str(e))
+        _report_error(ctx, artifacts_dir, "verdict_parse_error", str(e), dry_run=dry_run)
         return 1
 
     except AgentAbortError as e:
-        _report_error(ctx, artifacts_dir, "agent_abort", str(e))
+        _report_error(ctx, artifacts_dir, "agent_abort", str(e), dry_run=dry_run)
         return 1
 
     except PromptLoadError as e:
-        _report_error(ctx, artifacts_dir, "prompt_load_error", str(e))
+        _report_error(ctx, artifacts_dir, "prompt_load_error", str(e), dry_run=dry_run)
         return 1
 
     except Exception as e:
-        _report_error(ctx, artifacts_dir, "unexpected_error", str(e))
+        _report_error(ctx, artifacts_dir, "unexpected_error", str(e), dry_run=dry_run)
         return 1
 
 
-def _report_success(ctx: AgentContext, artifacts_dir: Path) -> None:
-    """Report workflow success to the issue."""
-    save_jsonl_log(artifacts_dir, "report_success", {})
+def _report_success(
+    ctx: AgentContext,
+    artifacts_dir: Path,
+    *,
+    dry_run: bool = False,
+) -> None:
+    """Report workflow success to the issue.
+
+    Args:
+        ctx: Agent context with issue provider.
+        artifacts_dir: Path to artifacts directory.
+        dry_run: If True, skip Issue comment (log only).
+    """
+    save_jsonl_log(artifacts_dir, "report_success", {"dry_run": dry_run})
 
     design_output_path = artifacts_dir / "design" / "response.md"
     message = f"""## DesignWorkflow 完了
@@ -176,6 +202,11 @@ def _report_success(ctx: AgentContext, artifacts_dir: Path) -> None:
 
 **成果物**: `{design_output_path}`
 """
+
+    if dry_run:
+        print("[dry-run] Would post success comment to Issue")
+        return
+
     try:
         ctx.issue_provider.add_comment(message)
     except Exception as e:
@@ -187,12 +218,22 @@ def _report_error(
     artifacts_dir: Path,
     error_type: str,
     message: str,
+    *,
+    dry_run: bool = False,
 ) -> None:
-    """Report workflow error to the issue."""
+    """Report workflow error to the issue.
+
+    Args:
+        ctx: Agent context with issue provider.
+        artifacts_dir: Path to artifacts directory.
+        error_type: Type of error that occurred.
+        message: Error message details.
+        dry_run: If True, skip Issue comment (log only).
+    """
     save_jsonl_log(
         artifacts_dir,
         "workflow_error",
-        {"error_type": error_type, "message": message},
+        {"error_type": error_type, "message": message, "dry_run": dry_run},
     )
 
     error_message = f"""## DesignWorkflow エラー
@@ -202,6 +243,11 @@ def _report_error(
 **エラー種別**: `{error_type}`
 **詳細**: {message}
 """
+
+    if dry_run:
+        print(f"[dry-run] Would post error comment to Issue: {error_type}")
+        return
+
     try:
         ctx.issue_provider.add_comment(error_message)
     except Exception as e:
