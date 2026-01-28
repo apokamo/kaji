@@ -66,13 +66,27 @@ class TestGitHubIssueProviderInit:
 
 
 class TestGitHubIssueProviderGetIssueBody:
-    """Test GitHubIssueProvider.get_issue_body."""
+    """Test GitHubIssueProvider.get_issue_body.
+
+    Note: get_issue_body uses `gh api --include` for HTTP status-based
+    error classification. The response format is:
+        HTTP/2.0 200 OK
+        Header: Value
+        ...
+        (blank line)
+        {"body": "..."}
+    """
 
     @patch("src.core.providers.subprocess.run")
     def test_returns_issue_body(self, mock_run: MagicMock) -> None:
-        """Returns issue body from gh CLI."""
+        """Returns issue body from gh API."""
+        # Simulate gh api --include response format
         mock_run.return_value.returncode = 0
-        mock_run.return_value.stdout = "## Summary\nThis is the issue body"
+        mock_run.return_value.stdout = (
+            "HTTP/2.0 200 OK\nContent-Type: application/json\n\n"
+            '{"body": "## Summary\\nThis is the issue body"}'
+        )
+        mock_run.return_value.stderr = ""
 
         provider = GitHubIssueProvider("https://github.com/owner/repo/issues/123")
         body = provider.get_issue_body()
@@ -81,14 +95,17 @@ class TestGitHubIssueProviderGetIssueBody:
         mock_run.assert_called_once()
         call_args = mock_run.call_args
         assert "gh" in call_args[0][0]
-        assert "issue" in call_args[0][0]
-        assert "view" in call_args[0][0]
+        assert "api" in call_args[0][0]
+        assert "--include" in call_args[0][0]
 
     @patch("src.core.providers.subprocess.run")
     def test_not_found_error(self, mock_run: MagicMock) -> None:
-        """Raises IssueNotFoundError when issue doesn't exist."""
+        """Raises IssueNotFoundError when issue doesn't exist (HTTP 404)."""
         mock_run.return_value.returncode = 1
-        mock_run.return_value.stderr = "Could not resolve to an Issue"
+        mock_run.return_value.stdout = (
+            'HTTP/2.0 404 Not Found\nContent-Type: application/json\n\n{"message": "Not Found"}'
+        )
+        mock_run.return_value.stderr = ""
 
         provider = GitHubIssueProvider("https://github.com/owner/repo/issues/999")
 
@@ -97,13 +114,47 @@ class TestGitHubIssueProviderGetIssueBody:
 
     @patch("src.core.providers.subprocess.run")
     def test_auth_error(self, mock_run: MagicMock) -> None:
-        """Raises IssueAuthenticationError when not authenticated."""
+        """Raises IssueAuthenticationError when not authenticated (HTTP 401)."""
         mock_run.return_value.returncode = 1
-        mock_run.return_value.stderr = "gh auth login"
+        mock_run.return_value.stdout = (
+            "HTTP/2.0 401 Unauthorized\nContent-Type: application/json\n\n"
+            '{"message": "Requires authentication"}'
+        )
+        mock_run.return_value.stderr = ""
 
         provider = GitHubIssueProvider("https://github.com/owner/repo/issues/1")
 
         with pytest.raises(IssueAuthenticationError):
+            provider.get_issue_body()
+
+    @patch("src.core.providers.subprocess.run")
+    def test_rate_limit_error_http_429(self, mock_run: MagicMock) -> None:
+        """Raises IssueRateLimitError on HTTP 429."""
+        mock_run.return_value.returncode = 1
+        mock_run.return_value.stdout = (
+            "HTTP/2.0 429 Too Many Requests\nContent-Type: application/json\n\n"
+            '{"message": "API rate limit exceeded"}'
+        )
+        mock_run.return_value.stderr = ""
+
+        provider = GitHubIssueProvider("https://github.com/owner/repo/issues/1")
+
+        with pytest.raises(IssueRateLimitError):
+            provider.get_issue_body()
+
+    @patch("src.core.providers.subprocess.run")
+    def test_rate_limit_error_http_403_with_body(self, mock_run: MagicMock) -> None:
+        """Raises IssueRateLimitError on HTTP 403 with rate limit in body."""
+        mock_run.return_value.returncode = 1
+        mock_run.return_value.stdout = (
+            "HTTP/2.0 403 Forbidden\nContent-Type: application/json\n\n"
+            '{"message": "API rate limit exceeded for user"}'
+        )
+        mock_run.return_value.stderr = ""
+
+        provider = GitHubIssueProvider("https://github.com/owner/repo/issues/1")
+
+        with pytest.raises(IssueRateLimitError):
             provider.get_issue_body()
 
 

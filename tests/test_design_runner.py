@@ -198,3 +198,114 @@ class TestRunDesignWorkflow:
         # Session should have requirements content
         session = mock_run_loop.call_args[0][2]
         assert session.get_context("requirements_content") == "## Requirements\n\nTest requirements"
+
+    @patch("src.workflows.design.runner.GitHubIssueProvider")
+    @patch("src.workflows.design.runner.ClaudeTool")
+    @patch("src.workflows.design.runner._run_workflow_loop")
+    @patch("src.workflows.design.runner.AgentContext")
+    def test_workdir_affects_artifacts_base(
+        self,
+        mock_agent_context: MagicMock,
+        mock_run_loop: MagicMock,
+        mock_claude: MagicMock,
+        mock_provider: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """--workdir オプションが artifacts_base に反映されること."""
+        # Arrange
+        mock_run_loop.return_value = 0
+        mock_provider.return_value.issue_number = 1
+
+        workdir = tmp_path / "custom_workdir"
+        args = Namespace(
+            issue="https://github.com/test/repo/issues/1",
+            input=None,
+            workdir=str(workdir),
+            dry_run=False,
+            verbose=False,
+        )
+
+        # Act
+        result = run_design_workflow(args)
+
+        # Assert
+        assert result == 0
+        # AgentContext should be initialized with workdir/artifacts as base
+        call_kwargs = mock_agent_context.call_args[1]
+        assert call_kwargs["artifacts_base"] == workdir / "artifacts"
+
+    @patch("src.workflows.design.runner.GitHubIssueProvider")
+    @patch("src.workflows.design.runner.ClaudeTool")
+    @patch("src.workflows.design.runner._run_workflow_loop")
+    @patch("src.workflows.design.runner.AgentContext")
+    def test_dry_run_passed_to_workflow_loop(
+        self,
+        mock_agent_context: MagicMock,
+        mock_run_loop: MagicMock,
+        mock_claude: MagicMock,
+        mock_provider: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """--dry-run オプションが workflow loop に渡されること."""
+        # Arrange
+        mock_run_loop.return_value = 0
+        mock_provider.return_value.issue_number = 1
+
+        args = Namespace(
+            issue="https://github.com/test/repo/issues/1",
+            input=None,
+            workdir=None,
+            dry_run=True,
+            verbose=False,
+        )
+
+        # Act
+        result = run_design_workflow(args)
+
+        # Assert
+        assert result == 0
+        # dry_run should be passed as keyword argument
+        call_kwargs = mock_run_loop.call_args[1]
+        assert call_kwargs.get("dry_run") is True
+
+
+class TestDryRunBehavior:
+    """--dry-run option behavior tests."""
+
+    def test_dry_run_skips_success_comment(self, mock_context: MagicMock, tmp_path: Path) -> None:
+        """--dry-run で成功時の Issue コメントがスキップされること."""
+        # Arrange: Design -> PASS -> Review -> PASS -> Complete
+        mock_analyzer = MockTool(responses=["## Design Output\n\nDesign content"])
+        mock_reviewer = MockTool(responses=["## VERDICT\n- Result: PASS\n- Reason: LGTM"])
+        mock_context.analyzer = mock_analyzer
+        mock_context.reviewer = mock_reviewer
+
+        session = SessionState()
+        workflow = DesignWorkflow()
+
+        # Act
+        result = _run_workflow_loop(workflow, mock_context, session, dry_run=True)
+
+        # Assert
+        assert result == 0
+        # Issue comment should NOT be called in dry-run mode
+        mock_context.issue_provider.add_comment.assert_not_called()
+
+    def test_dry_run_skips_error_comment(self, mock_context: MagicMock, tmp_path: Path) -> None:
+        """--dry-run でエラー時の Issue コメントがスキップされること."""
+        # Arrange: session already at loop limit
+        mock_analyzer = MockTool(responses=["## Design Output"])
+        mock_context.analyzer = mock_analyzer
+
+        session = SessionState(max_loop_count=1)
+        session.loop_counters["design"] = 1  # Already at limit
+
+        workflow = DesignWorkflow()
+
+        # Act
+        result = _run_workflow_loop(workflow, mock_context, session, dry_run=True)
+
+        # Assert
+        assert result == 1
+        # Issue comment should NOT be called in dry-run mode
+        mock_context.issue_provider.add_comment.assert_not_called()
