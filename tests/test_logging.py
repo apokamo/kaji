@@ -14,16 +14,26 @@ from src.bugfix_agent.logging import warn
 class TestWarnStderr:
     """warn() - stderr 出力のテスト."""
 
-    def test_warn_outputs_to_stderr(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_warn_outputs_to_stderr(
+        self, capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """warn() が stderr に出力すること."""
+        # get_workdir() をモックして CWD への副作用を防ぐ
+        monkeypatch.setattr("src.bugfix_agent.logging.get_workdir", lambda: tmp_path)
+
         warn("Test warning message", log_dir=None)
 
         captured = capsys.readouterr()
         assert "[WARN]" in captured.err
         assert "Test warning message" in captured.err
 
-    def test_warn_includes_timestamp(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_warn_includes_timestamp(
+        self, capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """warn() の出力にタイムスタンプが含まれること."""
+        # get_workdir() をモックして CWD への副作用を防ぐ
+        monkeypatch.setattr("src.bugfix_agent.logging.get_workdir", lambda: tmp_path)
+
         warn("Test message", log_dir=None)
 
         captured = capsys.readouterr()
