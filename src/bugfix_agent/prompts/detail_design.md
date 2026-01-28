@@ -2,6 +2,8 @@
 
 Issue ${issue_url} の INVESTIGATE 結果に基づき、詳細設計を作成してください。
 
+**ループ状態**: ${loop_count} / ${max_loop_count}
+
 ## タスク
 
 1. **変更計画**: 対象ファイル・関数と計画する変更内容を詳細に記載

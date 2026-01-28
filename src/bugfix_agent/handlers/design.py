@@ -32,6 +32,8 @@ def handle_detail_design(ctx: AgentContext, state: SessionState) -> State:
         "detail_design",
         issue_url=ctx.issue_url,
         artifacts_dir=artifacts_dir,
+        loop_count=state.loop_counters["Detail_Design_Loop"],
+        max_loop_count=state.max_loop_count,
     )
 
     result, new_session = ctx.analyzer.run(
