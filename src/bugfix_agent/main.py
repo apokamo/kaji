@@ -138,9 +138,11 @@ def route_command(args: Namespace) -> Namespace:
 
 
 def run_bugfix_workflow(args: Namespace) -> int:
-    """Run the bugfix workflow (9-state).
+    """Run the bugfix workflow (9-state) via external orchestrator.
 
-    This is a placeholder that will call the existing v5 orchestrator.
+    Calls the v5 orchestrator from external/bugfix-v5/ as a subprocess
+    to maintain backward compatibility while keeping the orchestrator
+    code as a reference snapshot.
 
     Args:
         args: Parsed CLI arguments.
@@ -148,10 +150,58 @@ def run_bugfix_workflow(args: Namespace) -> int:
     Returns:
         Exit code (0 for success, non-zero for failure).
     """
-    # TODO: Integrate with existing v5 orchestrator
+    import subprocess
+    from pathlib import Path
+
+    # Locate the orchestrator script
+    # src/bugfix_agent/main.py → project root → external/bugfix-v5/
+    project_root = Path(__file__).resolve().parent.parent.parent
+    orchestrator_path = project_root / "external" / "bugfix-v5" / "bugfix_agent_orchestrator.py"
+
+    if not orchestrator_path.exists():
+        print(
+            f"Error: v5 orchestrator not found at {orchestrator_path}\n"
+            f"Please ensure external/bugfix-v5/ is properly set up.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Build command arguments
+    cmd = [sys.executable, str(orchestrator_path), "--issue", args.issue_url]
+
+    # Pass through workdir if specified
+    # Note: v5 orchestrator doesn't have --workdir, but we can use cwd
+    cwd = None
+    if getattr(args, "workdir", None):
+        cwd = args.workdir
+
+    # Note: v5 orchestrator doesn't support --dry-run or --verbose directly
+    # These options are handled at the CLI level for design workflow only
+
     print(f"Running bugfix workflow for: {args.issue_url}")
-    print("Note: Full bugfix workflow integration pending")
-    return 0
+    print(f"Orchestrator: {orchestrator_path}")
+
+    try:
+        # Run the orchestrator as subprocess
+        # Use PYTHONPATH to include the v5 directory for its internal imports
+        env = dict(__import__("os").environ)
+        v5_dir = orchestrator_path.parent
+        existing_path = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = f"{v5_dir}:{existing_path}" if existing_path else str(v5_dir)
+
+        result = subprocess.run(
+            cmd,
+            cwd=cwd,
+            env=env,
+            check=False,  # Don't raise on non-zero exit
+        )
+        return result.returncode
+    except FileNotFoundError as e:
+        print(f"Error: Failed to run orchestrator: {e}", file=sys.stderr)
+        return 1
+    except subprocess.SubprocessError as e:
+        print(f"Error: Orchestrator subprocess failed: {e}", file=sys.stderr)
+        return 1
 
 
 def _convert_args_for_design_runner(args: Namespace) -> Namespace:
