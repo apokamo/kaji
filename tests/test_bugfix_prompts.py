@@ -36,9 +36,11 @@ class TestDetailDesignPrompt:
         assert "```" in prompt_content
 
     def test_has_template_variables(self, prompt_content: str) -> None:
-        """テンプレート変数が含まれること: issue_url, artifacts_dir."""
+        """テンプレート変数が含まれること: issue_url, artifacts_dir, loop_count, max_loop_count."""
         assert "${issue_url}" in prompt_content, "Missing ${issue_url}"
         assert "${artifacts_dir}" in prompt_content, "Missing ${artifacts_dir}"
+        assert "${loop_count}" in prompt_content, "Missing ${loop_count}"
+        assert "${max_loop_count}" in prompt_content, "Missing ${max_loop_count}"
 
     def test_has_issue_update_method(self, prompt_content: str) -> None:
         """Issue更新方法セクション（Loop=1 vs Loop>=2 の分岐）が存在すること."""
