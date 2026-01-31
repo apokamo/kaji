@@ -1,0 +1,40 @@
+# ============================================================================
+# dao config.toml
+# ============================================================================
+# Tool and workflow settings for dev-agent-orchestra.
+# Priority: env > config.toml > hardcoded defaults
+
+# ----------------------------------------------------------------------------
+# Tool Settings
+# ----------------------------------------------------------------------------
+# Each tool section defines defaults for that tool.
+# Constructor arguments always override these values.
+
+[tools.claude]
+model = "opus"
+permission_mode = "default"
+timeout = 1800
+
+[tools.codex]
+model = "gpt-5.1-codex-max"
+sandbox = "workspace-write"
+timeout = 900
+
+[tools.gemini]
+model = "gemini-2.5-pro"
+timeout = 900
+
+# ----------------------------------------------------------------------------
+# State-based Settings (Phase 2 - Future)
+# ----------------------------------------------------------------------------
+# Override tool/model per workflow state.
+# Uncomment when implementing state-based model switching.
+
+# [states.INIT]
+# agent = "claude"
+# model = "opus"
+
+# [states.INVESTIGATE_REVIEW]
+# agent = "codex"
+# model = "gpt-5.2"
+# timeout = 300
