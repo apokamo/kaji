@@ -2,7 +2,9 @@
 # dao config.toml
 # ============================================================================
 # Tool and workflow settings for dev-agent-orchestra.
-# Priority: env > config.toml > hardcoded defaults
+#
+# Tool settings priority: constructor arg > config.toml > hardcoded defaults
+# (Environment variable override for tool settings is not yet implemented)
 
 # ----------------------------------------------------------------------------
 # Tool Settings
