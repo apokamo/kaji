@@ -4,7 +4,7 @@ Issue: #40
 
 ## 概要
 
-v5 の config.toml にあるモデル設定機能を dao に移植し、ツール別・ステート別のモデル指定を可能にする。
+v5 の config.toml にあるモデル設定機能を dao に移植し、ツール別のモデル指定を可能にする。
 
 ## 背景・目的
 
@@ -71,23 +71,66 @@ assert tool.model == "sonnet"  # ハードコードデフォルト
 - **config.toml 探索パス**: 既存の `find_config_file()` ロジックを使用
 - **後方互換性**: コンストラクタ引数は引き続き動作する
 - **ステート別設定は Phase 2**: 本 Issue では `[tools.XXX]` セクションのみ対応
-- **bugfix_agent は既に対応済み**: 主に `src/core/tools/` の対応が必要
+
+## 対象範囲
+
+### ツール実装状況
+
+| ツール | src/core/tools/ | src/bugfix_agent/tools/ | 本 Issue 対応 |
+|--------|-----------------|-------------------------|---------------|
+| claude | `claude.py` 存在 | `claude.py` 存在（対応済み） | **対象** |
+| codex | 未実装 | 未実装 | スコープ外 |
+| gemini | 未実装 | 未実装 | スコープ外 |
+
+**注記**: `src/core/tools/` には現時点で `claude.py` のみ実装。codex/gemini は将来の拡張時に同様のパターンで対応。
+
+### 設定キーの適用対象
+
+| 設定キー | claude | codex | gemini | 備考 |
+|----------|--------|-------|--------|------|
+| `model` | ✅ | ✅ | ✅ | 全ツール共通 |
+| `timeout` | ✅ | ✅ | ✅ | 全ツール共通 |
+| `permission_mode` | ✅ | - | - | Claude CLI 固有 |
+| `sandbox` | - | ✅ | - | Codex CLI 固有 |
+
+**未対応時の扱い**: 設定キーが存在しない場合、各ツールのハードコードデフォルト値を使用。
 
 ## 方針
 
-### Phase 1: config.toml 作成と core/tools 対応
+### アーキテクチャ: 依存関係の整理
+
+```
+src/core/config.py          ← config.toml 読み込み機能（移動先）
+    ↑
+src/core/tools/claude.py    ← core 層ツール
+
+src/bugfix_agent/config.py  ← core/config.py を import（wrapper）
+    ↑
+src/bugfix_agent/tools/     ← bugfix_agent 層ツール（既存）
+```
+
+**原則**: core 層は上位レイヤ（bugfix_agent）に依存しない。
+
+### Phase 1: config.toml 作成と設定読み込み共通化
 
 1. **config.toml をプロジェクトルートに作成**
    - v5 の `[tools.XXX]` セクションを踏襲
    - `[states.XXX]` はコメントアウトで将来対応を示唆
 
-2. **src/core/tools/claude.py の修正**
-   - `get_config_value()` を `src/bugfix_agent/config.py` から import
-   - コンストラクタで config.toml を参照するよう変更
+2. **`src/core/config.py` に設定読み込み機能を追加**
+   - `find_config_file()` を移動
+   - `load_config()` を移動
+   - `get_config_value()` を移動
+   - 環境変数プレフィックスは `DAO_` を使用（core 層の既存規約）
 
-3. **設定読み込みの共通化（オプション）**
-   - `src/core/config.py` に `get_config_value()` を移動または re-export
-   - `src/bugfix_agent/config.py` は `src/core/config.py` を import
+3. **`src/bugfix_agent/config.py` のリファクタリング**
+   - `src/core/config.py` から import
+   - 後方互換性のため既存 API は維持（re-export）
+   - `BUGFIX_AGENT_` プレフィックスの Settings は維持
+
+4. **`src/core/tools/claude.py` の修正**
+   - `src/core/config.py` から `get_config_value()` を import
+   - コンストラクタで config.toml を参照するよう変更
 
 ### Phase 2: ステート別設定（将来対応）
 
@@ -101,6 +144,7 @@ assert tool.model == "sonnet"  # ハードコードデフォルト
 - config.toml が存在する場合、ツール設定が正しく読み込まれる
 - コンストラクタ引数が config.toml より優先される
 - config.toml がない場合、ハードコードデフォルトが使用される
+- `src/bugfix_agent/config.py` の既存 API が引き続き動作する
 
 ### 異常系
 - config.toml の構文エラー時にわかりやすいエラーメッセージ
@@ -109,6 +153,10 @@ assert tool.model == "sonnet"  # ハードコードデフォルト
 ### 境界値
 - 空の config.toml（ファイル存在、内容なし）
 - `[tools]` セクションのみ存在（`[tools.claude]` なし）
+
+### 依存関係
+- `src/core/tools/claude.py` が `src/bugfix_agent/` に依存しないこと
+- `src/bugfix_agent/config.py` が `src/core/config.py` を正しく import すること
 
 ## 参考
 
