@@ -23,26 +23,42 @@ class ClaudeTool:
 
     def __init__(
         self,
-        model: str = "sonnet",
-        timeout: int = 600,
-        permission_mode: str = "default",
+        model: str | None = None,
+        timeout: int | None = None,
+        permission_mode: str | None = None,
         skip_permissions: bool = False,
         verbose: bool = True,
     ) -> None:
         """Initialize ClaudeTool.
 
         Args:
-            model: Model name ("sonnet", "opus", "haiku")
-            timeout: Timeout in seconds
+            model: Model name ("sonnet", "opus", "haiku"). If None, uses
+                config.toml value or defaults to "sonnet".
+            timeout: Timeout in seconds. If None, uses config.toml value
+                or defaults to 600.
             permission_mode: Permission mode ("default", "acceptEdits",
-                "bypassPermissions", "delegate", "dontAsk", "plan")
+                "bypassPermissions", "delegate", "dontAsk", "plan"). If None,
+                uses config.toml value or defaults to "default".
             skip_permissions: If True, add --dangerously-skip-permissions flag.
                 Only use in trusted, sandboxed environments.
             verbose: Enable real-time output display
         """
-        self.model = model
-        self.timeout = timeout
-        self.permission_mode = permission_mode
+        from src.core.config import get_config_value
+
+        # Priority: constructor arg > config.toml > hardcoded default
+        self.model = (
+            model if model is not None else get_config_value("tools.claude.model", default="sonnet")
+        )
+        self.timeout = (
+            timeout
+            if timeout is not None
+            else get_config_value("tools.claude.timeout", default=600)
+        )
+        self.permission_mode = (
+            permission_mode
+            if permission_mode is not None
+            else get_config_value("tools.claude.permission_mode", default="default")
+        )
         self.skip_permissions = skip_permissions
         self.verbose = verbose
 
