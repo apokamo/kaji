@@ -6,6 +6,15 @@ This module provides configuration loading and access functions:
 - resolve_workdir: Determine working directory with priority rules
 - get_config_value: Access nested config values via dot notation (backward compatible)
 - load_config: Load config.toml with caching (legacy)
+
+Note:
+    This module maintains its own find_config_file/load_config/get_config_value
+    implementations separate from src.core.config to support:
+    - BUGFIX_AGENT_CONFIG environment variable (vs DAO_CONFIG)
+    - ~/.config/bugfix-agent/ user config path (vs ~/.config/dao/)
+    - Settings-based priority mapping for bugfix_agent specific keys
+
+    For core-layer tools (src.core.tools), use src.core.config instead.
 """
 
 import os
