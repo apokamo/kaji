@@ -2,6 +2,7 @@
 
 import os
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -177,3 +178,70 @@ def get_config_value(key_path: str, default: Any = None) -> Any:
         else:
             return default
     return value
+
+
+# ============================================================================
+# Phase 2: State-based configuration
+# ============================================================================
+
+
+@dataclass
+class StateConfig:
+    """State-specific configuration.
+
+    Attributes:
+        agent: Tool name to use ("claude" | "codex" | "gemini")
+        model: Model name (inherits from [tools.{agent}].model if None)
+        timeout: Timeout in seconds (inherits from [tools.{agent}].timeout if None)
+    """
+
+    agent: str
+    model: str | None = None
+    timeout: int | None = None
+
+
+def get_state_config(state_name: str) -> StateConfig | None:
+    """Get state configuration from config.toml.
+
+    Args:
+        state_name: State name (e.g., "INIT", "INVESTIGATE")
+
+    Returns:
+        StateConfig if [states.{state_name}] exists with agent field, else None.
+
+    Note:
+        model/timeout being None means they should be inherited from
+        [tools.{agent}] section. Inheritance logic is handled by caller
+        (e.g., create_tool_for_state).
+    """
+    config = load_config()
+
+    states = config.get("states", {})
+    state_data = states.get(state_name, {})
+
+    # agent is required
+    agent = state_data.get("agent")
+    if not agent:
+        return None
+
+    return StateConfig(
+        agent=agent,
+        model=state_data.get("model"),
+        timeout=state_data.get("timeout"),
+    )
+
+
+def get_tool_config(tool_name: str) -> dict[str, Any]:
+    """Get tool configuration from config.toml.
+
+    Args:
+        tool_name: Tool name (e.g., "claude", "codex", "gemini")
+
+    Returns:
+        Tool configuration dict from [tools.{tool_name}], or empty dict if not found.
+    """
+    config = load_config()
+
+    tools: dict[str, Any] = config.get("tools", {})
+    tool_cfg: dict[str, Any] = tools.get(tool_name, {})
+    return tool_cfg
