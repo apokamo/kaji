@@ -20,7 +20,7 @@ class TestDesignParserOptions:
                     main()
 
         help_output = mock_stdout.getvalue()
-        assert "--workdir" in help_output or "-w" in help_output
+        assert "--workdir" in help_output and "-w" in help_output
 
     def test_dry_run_option_exists(self) -> None:
         """--dry-run オプションが design サブコマンドに存在すること."""
