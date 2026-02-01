@@ -434,3 +434,104 @@ timeout = 120
         assert isinstance(pr_tool, ClaudeTool)
         assert pr_tool.model == "haiku"
         assert pr_tool.timeout == 120
+
+
+class TestGitRootSearch:
+    """Test git repository root search in find_config_file."""
+
+    def test_finds_config_in_git_root_from_subdir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Should find config.toml in git root when running from subdirectory."""
+        from unittest.mock import patch
+
+        from src.core import config as core_config
+        from src.core.config import find_config_file
+
+        # Simulate git root
+        git_root = tmp_path / "repo"
+        git_root.mkdir()
+        subdir = git_root / "src" / "module"
+        subdir.mkdir(parents=True)
+
+        # Create config.toml in git root only
+        config_file = git_root / "config.toml"
+        config_file.write_text("[tools.claude]\nmodel = 'from-git-root'\n")
+
+        # Run from subdirectory
+        monkeypatch.chdir(subdir)
+        monkeypatch.delenv("DAO_CONFIG", raising=False)
+        core_config._config_cache = None
+
+        # Mock _find_git_root to return our fake git root
+        with patch("src.core.config._find_git_root", return_value=git_root):
+            result = find_config_file()
+
+        assert result == config_file
+
+    def test_cwd_takes_priority_over_git_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """CWD config should be found before git root config."""
+        from unittest.mock import patch
+
+        from src.core import config as core_config
+        from src.core.config import find_config_file
+
+        # Simulate git root with config
+        git_root = tmp_path / "repo"
+        git_root.mkdir()
+        git_config = git_root / "config.toml"
+        git_config.write_text("[tools.claude]\nmodel = 'from-git-root'\n")
+
+        # Create subdirectory with its own config
+        subdir = git_root / "subproject"
+        subdir.mkdir()
+        subdir_config = subdir / "config.toml"
+        subdir_config.write_text("[tools.claude]\nmodel = 'from-cwd'\n")
+
+        # Run from subdirectory
+        monkeypatch.chdir(subdir)
+        monkeypatch.delenv("DAO_CONFIG", raising=False)
+        core_config._config_cache = None
+
+        with patch("src.core.config._find_git_root", return_value=git_root):
+            result = find_config_file()
+
+        # CWD should take priority
+        assert result == subdir_config
+
+
+class TestZeroValueInheritance:
+    """Test that explicit zero/empty values are preserved during inheritance."""
+
+    def test_explicit_timeout_zero_is_preserved(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Explicit timeout=0 in state config should not be overwritten."""
+        from src.bugfix_agent.tool_factory import create_tool_for_state
+        from src.core import config as core_config
+        from src.core.tools.claude import ClaudeTool
+
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            """
+[tools.claude]
+model = "opus"
+timeout = 1800
+
+[states.QUICK_CHECK]
+agent = "claude"
+timeout = 0
+"""
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("DAO_CONFIG", raising=False)
+        core_config._config_cache = None
+
+        tool = create_tool_for_state("QUICK_CHECK")
+        assert isinstance(tool, ClaudeTool)
+        # timeout=0 should be preserved, not overwritten by tools.claude.timeout
+        assert tool.timeout == 0
+        # model should be inherited from [tools.claude]
+        assert tool.model == "opus"
