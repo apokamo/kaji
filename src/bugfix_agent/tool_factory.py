@@ -62,10 +62,11 @@ def _create_tool_from_config(state_config: StateConfig) -> AIToolProtocol:
         from src.core.tools.claude import ClaudeTool
 
         # Apply inheritance: state > tools > hardcoded defaults
-        # ClaudeTool's __init__ already handles config.toml fallback,
-        # but we need to pass explicit values from state_config
-        model = state_config.model or tool_config.get("model")
-        timeout = state_config.timeout or tool_config.get("timeout")
+        # Use 'is not None' to preserve explicit 0/empty values
+        model = state_config.model if state_config.model is not None else tool_config.get("model")
+        timeout = (
+            state_config.timeout if state_config.timeout is not None else tool_config.get("timeout")
+        )
         permission_mode = tool_config.get("permission_mode")
 
         return ClaudeTool(

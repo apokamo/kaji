@@ -64,6 +64,29 @@ _DEFAULT_ENV_VAR = "DAO_CONFIG"
 _DEFAULT_USER_CONFIG_DIR = "dao"
 
 
+def _find_git_root() -> Path | None:
+    """Find the root of the git repository.
+
+    Returns:
+        Path to git root, or None if not in a git repository.
+    """
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return Path(result.stdout.strip())
+    except (FileNotFoundError, OSError):
+        # git not installed or other OS error
+        pass
+    return None
+
+
 def find_config_file(
     config_path: Path | None = None,
     workdir: Path | None = None,
@@ -78,8 +101,9 @@ def find_config_file(
     2. CLI --config option (config_path parameter)
     3. {workdir}/config.toml
     4. {CWD}/config.toml
-    5. ~/.config/{user_config_dir}/config.toml (user config)
-    6. None (use defaults only)
+    5. Git repository root/config.toml
+    6. ~/.config/{user_config_dir}/config.toml (user config)
+    7. None (use defaults only)
 
     Args:
         config_path: CLI --config option path (explicit path).
@@ -118,7 +142,14 @@ def find_config_file(
     if path.exists():
         return path
 
-    # 5. User config
+    # 5. Git repository root/config.toml
+    git_root = _find_git_root()
+    if git_root:
+        path = git_root / "config.toml"
+        if path.exists():
+            return path
+
+    # 6. User config
     path = Path.home() / ".config" / user_config_dir / "config.toml"
     if path.exists():
         return path
