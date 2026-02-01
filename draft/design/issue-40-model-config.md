@@ -132,31 +132,245 @@ src/bugfix_agent/tools/     ← bugfix_agent 層ツール（既存）
    - `src/core/config.py` から `get_config_value()` を import
    - コンストラクタで config.toml を参照するよう変更
 
-### Phase 2: ステート別設定（将来対応）
+### Phase 2: ステート別設定
 
-- `[states.XXX]` セクションの読み込み
-- ワークフロー実行時にステートに応じたツール/モデル切り替え
-- **本 Issue のスコープ外**
+ステート遷移時に `[states.XXX]` の設定に基づきツール/モデルを切り替える。
+
+#### 2.1 ステート設定のデータモデル
+
+```python
+# src/core/config.py に追加
+
+@dataclass
+class StateConfig:
+    """ステート別設定
+
+    Attributes:
+        agent: 使用するツール名 ("claude" | "codex" | "gemini")
+        model: モデル名（省略時は [tools.{agent}].model を継承）
+        timeout: タイムアウト秒数（省略時は [tools.{agent}].timeout を継承）
+    """
+    agent: str
+    model: str | None = None
+    timeout: int | None = None
+
+
+def get_state_config(state_name: str) -> StateConfig | None:
+    """ステート設定を取得
+
+    Args:
+        state_name: ステート名（例: "INIT", "INVESTIGATE"）
+
+    Returns:
+        StateConfig if [states.{state_name}] exists, else None
+
+    Note:
+        model/timeout が未指定の場合、対応する [tools.{agent}] から継承される。
+        継承ロジックは呼び出し側（create_tool_for_state）で実装。
+    """
+```
+
+#### 2.2 設定継承ルール
+
+```
+[states.INIT]           → StateConfig(agent="claude", model=None, timeout=None)
+    ↓ 継承
+[tools.claude]          → model="opus", timeout=1800
+    ↓ 最終値
+agent=claude, model=opus, timeout=1800
+```
+
+優先順位:
+1. `[states.XXX].model` / `[states.XXX].timeout` （明示指定）
+2. `[tools.{agent}].model` / `[tools.{agent}].timeout` （継承）
+3. ツールのハードコードデフォルト
+
+#### 2.3 ツール生成関数
+
+```python
+# src/bugfix_agent/tool_factory.py（新規）
+
+def create_tool_for_state(state_name: str) -> AIToolProtocol:
+    """ステート設定に基づいてツールを生成
+
+    Args:
+        state_name: ステート名（例: "INIT", "INVESTIGATE"）
+
+    Returns:
+        設定に基づいて初期化された AIToolProtocol 実装
+
+    Raises:
+        ValueError: 不明なエージェント名の場合
+
+    Example:
+        # config.toml:
+        # [states.INIT]
+        # agent = "claude"
+        # model = "opus"
+
+        tool = create_tool_for_state("INIT")
+        assert isinstance(tool, ClaudeTool)
+        assert tool.model == "opus"
+    """
+```
+
+#### 2.4 ワークフローへの統合
+
+現在の AgentContext は初期化時に固定のツールを受け取るが、
+ステート別設定では各ステート遷移時にツールを切り替える必要がある。
+
+**方針 A: 遅延評価型（推奨）**
+```python
+@dataclass
+class AgentContext:
+    # 既存フィールドは維持
+    analyzer: AIToolProtocol
+    reviewer: AIToolProtocol
+    implementer: AIToolProtocol
+
+    # ステート別設定を有効化するフラグ
+    use_state_config: bool = False
+
+    def get_tool_for_state(self, state_name: str) -> AIToolProtocol:
+        """ステートに応じたツールを取得
+
+        use_state_config=True の場合:
+            config.toml の [states.{state_name}] からツール生成
+        use_state_config=False の場合:
+            既存ロジック（analyzer/reviewer/implementer を使用）
+        """
+```
+
+**利点**:
+- 既存の DI パターンを維持（テスト容易性）
+- ステート設定がない場合のフォールバックが明確
+- 段階的移行が可能
+
+**方針 B: 毎回生成型**
+```python
+# オーケストレータのメインループ内
+while current != State.COMPLETE:
+    tool = create_tool_for_state(current.name)
+    handler(ctx_with_tool, session_state)
+```
+
+**欠点**: 既存のハンドラシグネチャとの互換性が低い
+
+#### 2.5 config.toml への追加
+
+```toml
+# ステート別設定
+[states.INIT]
+agent = "claude"
+model = "opus"
+
+[states.INVESTIGATE]
+agent = "claude"
+model = "opus"
+timeout = 600
+
+[states.INVESTIGATE_REVIEW]
+agent = "codex"
+model = "gpt-5.2"
+timeout = 300
+
+[states.DETAIL_DESIGN]
+agent = "claude"
+model = "opus"
+timeout = 900
+
+[states.DETAIL_DESIGN_REVIEW]
+agent = "codex"
+model = "gpt-5.2"
+
+[states.IMPLEMENT]
+agent = "claude"
+model = "opus"
+timeout = 1800
+
+[states.IMPLEMENT_REVIEW]
+agent = "codex"
+model = "gpt-5.2"
+timeout = 600
+
+[states.PR_CREATE]
+agent = "claude"
+model = "sonnet"
+```
+
+#### 2.6 実装ステップ
+
+1. **`StateConfig` データクラスと `get_state_config()` を追加**
+   - `src/core/config.py` に実装
+   - 継承ロジックは含めない（純粋な設定読み込み）
+
+2. **`create_tool_for_state()` を実装**
+   - `src/bugfix_agent/tool_factory.py` を新規作成
+   - 継承ロジックをここで実装
+   - ClaudeTool / CodexTool / GeminiTool の生成
+
+3. **`AgentContext.get_tool_for_state()` を追加**
+   - `use_state_config` フラグで既存動作と切り替え
+   - 既存テストへの影響を最小化
+
+4. **オーケストレータを修正**
+   - メインループでステート別ツール取得を呼び出し
+   - `run_bugfix_workflow` をネイティブ実装に置き換え（オプション）
+
+#### 2.7 スコープ
+
+| 項目 | Phase 2 対象 | 備考 |
+|------|-------------|------|
+| `get_state_config()` | ✅ | config.toml 読み込み |
+| `create_tool_for_state()` | ✅ | ツール生成ファクトリ |
+| AgentContext 拡張 | ✅ | `get_tool_for_state()` 追加 |
+| オーケストレータ修正 | ⚠️ 部分的 | 既存 v5 呼び出しを維持可能 |
+| codex/gemini ツール実装 | ❌ | 別 Issue で対応 |
 
 ## 検証観点
 
-### 正常系
+### Phase 1: ツール設定
+
+#### 正常系
 - config.toml が存在する場合、ツール設定が正しく読み込まれる
 - コンストラクタ引数が config.toml より優先される
 - config.toml がない場合、ハードコードデフォルトが使用される
 - `src/bugfix_agent/config.py` の既存 API が引き続き動作する
 
-### 異常系
+#### 異常系
 - config.toml の構文エラー時にわかりやすいエラーメッセージ
 - 存在しないキーへのアクセスでデフォルト値が返る
 
-### 境界値
+#### 境界値
 - 空の config.toml（ファイル存在、内容なし）
 - `[tools]` セクションのみ存在（`[tools.claude]` なし）
 
-### 依存関係
+#### 依存関係
 - `src/core/tools/claude.py` が `src/bugfix_agent/` に依存しないこと
 - `src/bugfix_agent/config.py` が `src/core/config.py` を正しく import すること
+
+### Phase 2: ステート別設定
+
+#### 正常系
+- `[states.XXX]` が存在する場合、`get_state_config()` が StateConfig を返す
+- `[states.XXX]` が存在しない場合、`get_state_config()` が None を返す
+- `create_tool_for_state()` が正しいツールを正しいモデルで生成する
+- model/timeout 未指定時に `[tools.{agent}]` から継承される
+- `AgentContext.get_tool_for_state()` がステート設定に基づいてツールを返す
+- `use_state_config=False` の場合、既存ロジック（固定ツール）が動作する
+
+#### 異常系
+- 不明なエージェント名で ValueError
+- `[states.XXX].agent` 未指定で適切なエラー
+
+#### 境界値
+- `[states.XXX]` に agent のみ指定（model/timeout なし）→ 継承テスト
+- `[states.XXX]` が空セクション（`[states.INIT]` のみ、キーなし）
+- `[tools.{agent}]` も存在しない場合 → ハードコードデフォルト
+
+#### 統合
+- ワークフロー実行中にステート遷移ごとにツールが切り替わる
+- 既存テストが `use_state_config=False` で引き続きパスする
 
 ## 参考
 
