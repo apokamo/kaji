@@ -8,13 +8,9 @@ This module provides configuration loading and access functions:
 - load_config: Load config.toml with caching (legacy)
 
 Note:
-    This module maintains its own find_config_file/load_config/get_config_value
-    implementations separate from src.core.config to support:
-    - BUGFIX_AGENT_CONFIG environment variable (vs DAO_CONFIG)
-    - ~/.config/bugfix-agent/ user config path (vs ~/.config/dao/)
-    - Settings-based priority mapping for bugfix_agent specific keys
-
-    For core-layer tools (src.core.tools), use src.core.config instead.
+    find_config_file and load_config use src.core.config as the base implementation,
+    with bugfix_agent-specific environment variable (BUGFIX_AGENT_CONFIG) and
+    user config path (~/.config/bugfix-agent/).
 """
 
 import os
@@ -26,8 +22,14 @@ from typing import Any
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.core.config import find_config_file as _core_find_config_file
+
 # Default config path (relative to this file's parent directory)
 CONFIG_PATH = Path(__file__).parent.parent / "config.toml"
+
+# Bugfix agent specific configuration
+_BUGFIX_AGENT_ENV_VAR = "BUGFIX_AGENT_CONFIG"
+_BUGFIX_AGENT_USER_CONFIG_DIR = "bugfix-agent"
 
 
 class Settings(BaseSettings):
@@ -84,6 +86,10 @@ def find_config_file(
 ) -> Path | None:
     """Search for config.toml in priority order.
 
+    Uses src.core.config.find_config_file with bugfix_agent-specific settings:
+    - Environment variable: BUGFIX_AGENT_CONFIG
+    - User config path: ~/.config/bugfix-agent/config.toml
+
     Priority:
     1. Environment variable BUGFIX_AGENT_CONFIG (highest)
     2. CLI --config option (config_path parameter)
@@ -102,36 +108,12 @@ def find_config_file(
     Raises:
         FileNotFoundError: If config_path is specified but doesn't exist.
     """
-    # 1. Environment variable (highest priority)
-    if env_config := os.environ.get("BUGFIX_AGENT_CONFIG"):
-        path = Path(env_config)
-        if path.exists():
-            return path
-
-    # 2. CLI --config option
-    if config_path is not None:
-        if config_path.exists():
-            return config_path
-        # Explicit path must exist
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-
-    # 3. workdir/config.toml
-    if workdir:
-        path = workdir / "config.toml"
-        if path.exists():
-            return path
-
-    # 4. CWD/config.toml
-    path = Path.cwd() / "config.toml"
-    if path.exists():
-        return path
-
-    # 5. User config
-    path = Path.home() / ".config" / "bugfix-agent" / "config.toml"
-    if path.exists():
-        return path
-
-    return None
+    return _core_find_config_file(
+        config_path=config_path,
+        workdir=workdir,
+        env_var=_BUGFIX_AGENT_ENV_VAR,
+        user_config_dir=_BUGFIX_AGENT_USER_CONFIG_DIR,
+    )
 
 
 def resolve_workdir(
