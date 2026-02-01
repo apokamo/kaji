@@ -113,24 +113,95 @@ src/bugfix_agent/tools/     ← bugfix_agent 層ツール（既存）
 
 ### Phase 1: config.toml 作成と設定読み込み共通化
 
-1. **config.toml をプロジェクトルートに作成**
-   - v5 の `[tools.XXX]` セクションを踏襲
-   - `[states.XXX]` はコメントアウトで将来対応を示唆
+#### 1.1 config.toml をプロジェクトルートに作成
+- v5 の `[tools.XXX]` セクションを踏襲
+- `[states.XXX]` はコメントアウトで将来対応を示唆
 
-2. **`src/core/config.py` に設定読み込み機能を追加**
-   - `find_config_file()` を移動
-   - `load_config()` を移動
-   - `get_config_value()` を移動
-   - 環境変数プレフィックスは `DAO_` を使用（core 層の既存規約）
+#### 1.2 config.toml 探索優先順位
 
-3. **`src/bugfix_agent/config.py` のリファクタリング**
-   - `src/core/config.py` から import
-   - 後方互換性のため既存 API は維持（re-export）
-   - `BUGFIX_AGENT_` プレフィックスの Settings は維持
+以下の順序で config.toml を探索し、最初に見つかったものを使用:
 
-4. **`src/core/tools/claude.py` の修正**
-   - `src/core/config.py` から `get_config_value()` を import
-   - コンストラクタで config.toml を参照するよう変更
+1. **環境変数**: `DAO_CONFIG` (core) / `BUGFIX_AGENT_CONFIG` (bugfix_agent)
+2. **ワーキングディレクトリ**: `./config.toml`
+3. **Git リポジトリルート**: リポジトリルートの `config.toml`
+4. **ユーザー設定ディレクトリ**: `~/.config/dao/config.toml` (core) / `~/.config/bugfix-agent/config.toml` (bugfix_agent)
+
+**フォールバック**: いずれも見つからない場合、各ツールのハードコードデフォルト値を使用。
+
+#### 1.3 core/config への集約と互換性維持の方式
+
+**方式: パラメータ化された共通関数 + レイヤ固有ラッパー**
+
+```python
+# src/core/config.py（共通ロジック）
+def find_config_file(
+    env_var: str = "DAO_CONFIG",
+    user_config_dir: str = "~/.config/dao"
+) -> Path | None:
+    """汎用の config.toml 探索関数
+
+    Args:
+        env_var: 設定ファイルパスを指定する環境変数名
+        user_config_dir: ユーザー設定ディレクトリのパス
+
+    Returns:
+        見つかった config.toml のパス、または None
+    """
+    # 探索ロジック（env_var → CWD → git root → user_config_dir）
+
+
+# src/bugfix_agent/config.py（レイヤ固有ラッパー）
+from src.core.config import find_config_file as _find_config_file
+
+def find_config_file() -> Path | None:
+    """bugfix_agent 固有の設定ファイル探索
+
+    bugfix_agent 固有の環境変数名とユーザー設定パスを使用。
+    """
+    return _find_config_file(
+        env_var="BUGFIX_AGENT_CONFIG",
+        user_config_dir="~/.config/bugfix-agent"
+    )
+```
+
+**責務分離**:
+- `src/core/config.py`: 探索ロジックの共通実装（パラメータ化）
+- `src/bugfix_agent/config.py`: bugfix_agent 固有の設定（環境変数名、ユーザー設定パス）を維持
+
+**後方互換性**:
+- `src/bugfix_agent/config.py` の既存 API シグネチャは維持
+- `BUGFIX_AGENT_CONFIG` 環境変数、`~/.config/bugfix-agent/` パスは引き続き動作
+
+#### 1.4 エラーハンドリング
+
+| エラー種別 | 例外 | タイミング | 動作 |
+|-----------|------|-----------|------|
+| TOML 構文エラー | `tomllib.TOMLDecodeError` | `load_config()` 呼び出し時 | 即座に例外を raise（フォールバックなし） |
+| ファイル読み込みエラー | `OSError` | `load_config()` 呼び出し時 | 即座に例外を raise |
+| 設定ファイル未発見 | なし（None 返却） | `find_config_file()` 呼び出し時 | ハードコードデフォルトにフォールバック |
+| 設定キー未存在 | なし（デフォルト返却） | `get_config_value()` 呼び出し時 | 引数で指定したデフォルト値を返却 |
+
+**エラーメッセージ例**:
+```
+TOMLDecodeError: Invalid TOML in /path/to/config.toml at line 5:
+  Expected '=' after key name, found ':'
+```
+
+#### 1.5 `src/core/config.py` に設定読み込み機能を追加
+- `find_config_file()` を汎用化して移動
+- `load_config()` を移動
+- `get_config_value()` を移動
+- 環境変数プレフィックスは `DAO_` を使用（core 層の既存規約）
+
+#### 1.6 `src/bugfix_agent/config.py` のリファクタリング
+- `src/core/config.py` の汎用関数を import
+- bugfix_agent 固有パラメータを渡すラッパー関数を定義
+- 後方互換性のため既存 API シグネチャは維持（re-export）
+- `BUGFIX_AGENT_` プレフィックスの Settings は維持
+
+#### 1.7 `src/core/tools/claude.py` の修正
+- `src/core/config.py` から `get_config_value()` を import
+- コンストラクタで config.toml を参照するよう変更
 
 ### Phase 2: ステート別設定
 
