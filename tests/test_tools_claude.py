@@ -1,6 +1,9 @@
 """Tests for ClaudeTool."""
 
+from __future__ import annotations
+
 import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,8 +20,12 @@ from src.core.tools.protocol import AIToolProtocol
 class TestClaudeToolInit:
     """Tests for ClaudeTool initialization."""
 
-    def test_default_values(self) -> None:
-        """Default initialization values."""
+    def test_default_values(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Default initialization values (without config.toml)."""
+        # Move to tmp_path so no config.toml is found
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("DAO_CONFIG", raising=False)
+
         tool = ClaudeTool()
         assert tool.model == "sonnet"
         assert tool.timeout == 600
@@ -51,13 +58,22 @@ class TestClaudeToolBuildCommand:
     """Tests for ClaudeTool command building."""
 
     @patch("src.core.tools.claude.run_cli_streaming")
-    def test_builds_basic_command(self, mock_run: MagicMock) -> None:
+    def test_builds_basic_command(
+        self,
+        mock_run: MagicMock,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """Basic CLI command is built correctly."""
         mock_run.return_value = (
             '{"type":"result","result":"response","session_id":"uuid"}',
             "",
             0,
         )
+        # Move to tmp_path so no config.toml is found
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("DAO_CONFIG", raising=False)
+
         tool = ClaudeTool(verbose=False)
         tool.run("test prompt")
 
