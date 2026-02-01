@@ -58,24 +58,34 @@ def get_settings(use_cache: bool = True) -> Settings:
 # config.toml support
 # ============================================================================
 
+# Default configuration for DAO (dev-agent-orchestra)
+_DEFAULT_ENV_VAR = "DAO_CONFIG"
+_DEFAULT_USER_CONFIG_DIR = "dao"
+
 
 def find_config_file(
     config_path: Path | None = None,
     workdir: Path | None = None,
+    *,
+    env_var: str = _DEFAULT_ENV_VAR,
+    user_config_dir: str = _DEFAULT_USER_CONFIG_DIR,
 ) -> Path | None:
     """Search for config.toml in priority order.
 
     Priority:
-    1. Environment variable DAO_CONFIG (highest)
+    1. Environment variable (env_var parameter, default: DAO_CONFIG)
     2. CLI --config option (config_path parameter)
     3. {workdir}/config.toml
     4. {CWD}/config.toml
-    5. ~/.config/dao/config.toml (user config)
+    5. ~/.config/{user_config_dir}/config.toml (user config)
     6. None (use defaults only)
 
     Args:
         config_path: CLI --config option path (explicit path).
         workdir: Working directory (CLI --workdir option).
+        env_var: Environment variable name for config path (default: DAO_CONFIG).
+        user_config_dir: User config directory name under ~/.config/
+            (default: dao).
 
     Returns:
         Found config file path, or None if not found.
@@ -84,7 +94,7 @@ def find_config_file(
         FileNotFoundError: If config_path is specified but doesn't exist.
     """
     # 1. Environment variable (highest priority)
-    if env_config := os.environ.get("DAO_CONFIG"):
+    if env_config := os.environ.get(env_var):
         path = Path(env_config)
         if path.exists():
             return path
@@ -108,7 +118,7 @@ def find_config_file(
         return path
 
     # 5. User config
-    path = Path.home() / ".config" / "dao" / "config.toml"
+    path = Path.home() / ".config" / user_config_dir / "config.toml"
     if path.exists():
         return path
 
