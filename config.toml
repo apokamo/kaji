@@ -27,16 +27,47 @@ model = "gemini-2.5-pro"
 timeout = 900
 
 # ----------------------------------------------------------------------------
-# State-based Settings (Phase 2 - Future)
+# State-based Settings (Phase 2)
 # ----------------------------------------------------------------------------
-# Override tool/model per workflow state.
-# Uncomment when implementing state-based model switching.
+# Override tool/model per workflow state. If model/timeout is omitted,
+# values are inherited from [tools.{agent}] above.
+#
+# Usage:
+#   from src.bugfix_agent.tool_factory import create_tool_for_state
+#   tool = create_tool_for_state("INIT")  # Returns ClaudeTool with opus model
 
 # [states.INIT]
 # agent = "claude"
 # model = "opus"
 
+# [states.INVESTIGATE]
+# agent = "claude"
+# # Inherits model and timeout from [tools.claude]
+
 # [states.INVESTIGATE_REVIEW]
 # agent = "codex"
 # model = "gpt-5.2"
 # timeout = 300
+
+# [states.DETAIL_DESIGN]
+# agent = "claude"
+# model = "opus"
+# timeout = 900
+
+# [states.DETAIL_DESIGN_REVIEW]
+# agent = "codex"
+# model = "gpt-5.2"
+
+# [states.IMPLEMENT]
+# agent = "claude"
+# model = "opus"
+# timeout = 1800
+
+# [states.IMPLEMENT_REVIEW]
+# agent = "codex"
+# model = "gpt-5.2"
+# timeout = 600
+
+# [states.PR_CREATE]
+# agent = "claude"
+# model = "sonnet"
