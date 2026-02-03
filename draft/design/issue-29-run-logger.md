@@ -45,6 +45,33 @@ class RunLogger:
     def log_run_end(self, status: str, loop_counters: dict[str, int], error: str | None = None) -> None: ...
 ```
 
+#### 出力パス規約
+
+```
+artifacts/<workflow>/<timestamp>/
+├── run.log                    # RunLogger (オーケストレーター)
+├── init/
+│   ├── stdout.log             # _cli.py (run_cli_streaming)
+│   ├── stderr.log             # _cli.py (run_cli_streaming)
+│   └── cli_console.log        # _cli.py (run_cli_streaming, tool_name指定時)
+├── investigate/
+│   └── ...
+└── fix/
+    └── ...
+```
+
+#### 呼び出し元
+
+| コンポーネント | 呼び出し元 | タイミング |
+|---------------|-----------|-----------|
+| RunLogger | `src/workflows/*/runner.py` | ワークフロー開始時にインスタンス化 |
+| cli_console.log | `src/core/tools/_cli.py` | `run_cli_streaming(tool_name=...)` 呼び出し時 |
+| stdout/stderr.log | `src/core/tools/_cli.py` | `run_cli_streaming(log_dir=...)` 呼び出し時 |
+
+**責務分離**:
+- **runner.py**: artifacts ディレクトリ作成、RunLogger インスタンス化、状態遷移ログ
+- **_cli.py**: 各状態内での CLI 実行ログ（stdout/stderr/cli_console）
+
 ### 2. `src/core/tools/_cli.py` を `src/bugfix_agent/cli.py` 相当に拡張
 
 現在の `_cli.py` に不足している機能:
@@ -91,6 +118,32 @@ tail -f artifacts/<workflow>/<timestamp>/init/cli_console.log
 **追加対応**:
 - `tool_name="gemini"`: `{"type":"response","response":{"content":[...]}}`
 - `tool_name="codex"`: `{"type":"item.completed","item":{...}}`
+
+#### フォーマット仕様
+
+各ツールのJSONL形式と抽出ルール:
+
+| ツール | 必須フィールド | 抽出対象 | 出力形式 |
+|-------|---------------|---------|---------|
+| claude | `type`, `result` or `message.content` | `type=result`: result値 / `type=assistant`: content[].text | テキスト結合 |
+| gemini | `type=response`, `response.content` | content[type=text].text | テキスト結合 |
+| codex | `type=item.completed`, `item.type` | reasoning/agent_message: item.text / command_execution: command + aggregated_output | 整形出力 |
+
+**Codex command_execution 整形ルール**:
+- コマンド表示: `$ <command>`（bash wrapper は除去）
+- 出力表示: `> <line>` 形式、最大3行、超過分は `... (N more lines)` 表示
+- 非ゼロ終了コード: `[exit: N]` を末尾に付加
+
+#### エラー時挙動
+
+| 入力 | 挙動 | 戻り値 |
+|------|------|--------|
+| 不正なJSON | 文字列をそのまま返す（空白のみの場合は `None`） | `str \| None` |
+| 未知の `tool_name` | 抽出せずスキップ | `None` |
+| 必須フィールド欠落 | 抽出せずスキップ | `None` |
+| 空の抽出結果 | 出力しない | `None` |
+
+**設計根拠**: ログ整形は補助機能であり、パース失敗で例外を投げるとワークフロー全体が停止するリスクがある。そのため、失敗時は静かに `None` を返し、呼び出し元で無視する方針とする。
 
 ## 制約・前提条件
 
