@@ -8,6 +8,7 @@ from .errors import (
     IssueRateLimitError,
 )
 from .providers import GitHubIssueProvider, IssueProvider
+from .run_logger import RunLogger
 from .verdict import Verdict, VerdictParseError, parse_verdict
 
 __all__ = [
@@ -26,4 +27,6 @@ __all__ = [
     "Verdict",
     "VerdictParseError",
     "parse_verdict",
+    # Run Logger
+    "RunLogger",
 ]
