@@ -17,6 +17,8 @@ import json
 from pathlib import Path
 
 from src.bugfix_agent.run_logger import RunLogger
+from src.core import RunLogger as CoreRunLogger
+from src.core.run_logger import RunLogger as DirectCoreRunLogger
 
 
 class TestRunLoggerInit:
@@ -221,3 +223,22 @@ class TestRunLoggerUtf8:
         data = json.loads(content)
 
         assert data["issue_url"] == "https://github.com/テスト/リポジトリ/issues/1"
+
+
+class TestRunLoggerImports:
+    """RunLogger import paths test."""
+
+    def test_import_from_core_module(self) -> None:
+        """Can import from src.core module."""
+        assert CoreRunLogger is RunLogger
+
+    def test_import_from_core_run_logger(self) -> None:
+        """Can import directly from src.core.run_logger."""
+        assert DirectCoreRunLogger is RunLogger
+
+    def test_backward_compatibility(self, tmp_path: Path) -> None:
+        """Backward compatibility: bugfix_agent import works."""
+        log_path = tmp_path / "run.log"
+        logger = RunLogger(log_path)
+        logger.log_run_start(issue_url="https://example.com", run_id="test")
+        assert log_path.exists()
