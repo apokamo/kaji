@@ -44,6 +44,7 @@ def run_cli_streaming(
 
     stdout_lines: list[str] = []
     stderr_lines: list[str] = []
+    console_lines: list[str] = []
 
     def read_stderr() -> None:
         assert process.stderr is not None
@@ -68,10 +69,12 @@ def run_cli_streaming(
         assert process.stdout is not None
         for line in process.stdout:
             stdout_lines.append(line)
-            if verbose and tool_name:
+            if tool_name:
                 formatted = format_jsonl_line(line, tool_name)
                 if formatted:
-                    print(formatted, flush=True)
+                    console_lines.append(formatted)
+                    if verbose:
+                        print(formatted, flush=True)
             elif verbose:
                 print(line, end="", flush=True)
 
@@ -93,6 +96,10 @@ def run_cli_streaming(
         log_dir.mkdir(parents=True, exist_ok=True)
         (log_dir / "stdout.log").write_text(stdout, encoding="utf-8")
         (log_dir / "stderr.log").write_text(stderr, encoding="utf-8")
+        if tool_name and console_lines:
+            (log_dir / "cli_console.log").write_text(
+                "\n".join(console_lines) + "\n", encoding="utf-8"
+            )
 
     return stdout, stderr, returncode
 
@@ -102,7 +109,7 @@ def format_jsonl_line(line: str, tool_name: str) -> str | None:
 
     Args:
         line: JSONL formatted line
-        tool_name: Tool name ("claude")
+        tool_name: Tool name ("claude", "gemini", "codex")
 
     Returns:
         Extracted content, or None if not extractable
@@ -115,6 +122,10 @@ def format_jsonl_line(line: str, tool_name: str) -> str | None:
 
     if tool_name == "claude":
         return _format_claude_jsonl(data)
+    if tool_name == "gemini":
+        return _format_gemini_jsonl(data)
+    if tool_name == "codex":
+        return _format_codex_jsonl(data)
 
     return None
 
@@ -133,5 +144,67 @@ def _format_claude_jsonl(data: dict[str, Any]) -> str | None:
             content = message.get("content", [])
             texts = [c.get("text", "") for c in content if c.get("type") == "text"]
             return "\n".join(texts) if texts else None
+
+    return None
+
+
+def _format_gemini_jsonl(data: dict[str, Any]) -> str | None:
+    """Format Gemini-specific JSONL data.
+
+    Format: {"type":"response","response":{"content":[{"type":"text","text":"..."}]}}
+    """
+    if data.get("type") != "response":
+        return None
+
+    content = data.get("response", {}).get("content", [])
+    texts = [c.get("text", "") for c in content if c.get("type") == "text"]
+    return "\n".join(texts) if texts else None
+
+
+def _format_codex_jsonl(data: dict[str, Any]) -> str | None:
+    """Format Codex-specific JSONL data.
+
+    Format: {"type":"item.completed","item":{"type":"reasoning|agent_message","text":"..."}}
+            {"type":"item.completed","item":{"type":"command_execution","aggregated_output":"..."}}
+    """
+    if data.get("type") != "item.completed":
+        return None
+
+    item = data.get("item", {})
+    item_type = item.get("type")
+
+    # reasoning or agent_message: return text
+    if item_type in ("reasoning", "agent_message"):
+        text = item.get("text", "")
+        return text if text else None
+
+    # command_execution: command + output summary
+    if item_type == "command_execution":
+        command = item.get("command", "")
+        output = item.get("aggregated_output", "")
+        exit_code = item.get("exit_code")
+
+        # Extract actual command from /bin/bash -lc 'cd ... && cmd' format
+        if " && " in command:
+            command = command.split(" && ", 1)[-1].rstrip("'")
+        elif command.startswith("/bin/bash") and "'" in command:
+            command = command.split("'", 1)[-1].rstrip("'")
+
+        # Truncate output to first 3 lines
+        max_lines = 3
+        lines = output.strip().split("\n") if output else []
+        if len(lines) > max_lines:
+            truncated = "\n  > ".join(lines[:max_lines])
+            result = f"$ {command}\n  > {truncated}\n  > ... ({len(lines) - max_lines} more lines)"
+        elif lines:
+            result = f"$ {command}\n  > " + "\n  > ".join(lines)
+        else:
+            result = f"$ {command}"
+
+        # Show non-zero exit code
+        if exit_code and exit_code != 0:
+            result += f"  [exit: {exit_code}]"
+
+        return result
 
     return None
