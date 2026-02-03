@@ -218,6 +218,17 @@ class TestFormatJsonlLineCodex:
         result = format_jsonl_line(line, "codex")
         assert result is None
 
+    def test_codex_command_with_ampersand_preserved(self) -> None:
+        """Commands with && that are NOT bash wrapper are preserved."""
+        # This is a direct command like "echo a && echo b", not wrapped in /bin/bash
+        line = '{"type":"item.completed","item":{"type":"command_execution","command":"echo a && echo b","aggregated_output":"a\\nb","exit_code":0}}'
+        result = format_jsonl_line(line, "codex")
+        assert result is not None
+        # The full command should be preserved (not split)
+        assert "$ echo a && echo b" in result
+        assert "a" in result
+        assert "b" in result
+
 
 class TestCliConsoleLog:
     """Tests for cli_console.log functionality."""
@@ -281,3 +292,54 @@ class TestCliConsoleLog:
             assert (log_dir / "stdout.log").exists()
             # cli_console.log should NOT exist
             assert not (log_dir / "cli_console.log").exists()
+
+    def test_cli_console_log_realtime_write(self, monkeypatch) -> None:
+        """cli_console.log is written in real-time with flush."""
+        import subprocess as real_subprocess
+
+        class MockProcess:
+            def __init__(self, *args, **kwargs):
+                self._lines = [
+                    '{"type":"response","response":{"content":[{"type":"text","text":"First"}]}}\n',
+                    '{"type":"response","response":{"content":[{"type":"text","text":"Second"}]}}\n',
+                ]
+                self._index = 0
+                self.stderr = iter([])
+                self.returncode = 0
+
+            @property
+            def stdout(self):
+                return self
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                if self._index >= len(self._lines):
+                    raise StopIteration
+                line = self._lines[self._index]
+                self._index += 1
+                # Capture file size after each line is processed
+                # (done via callback in the streaming code)
+                return line
+
+            def wait(self, timeout=None):
+                return self.returncode
+
+        monkeypatch.setattr(real_subprocess, "Popen", MockProcess)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_dir = Path(tmpdir)
+            console_path = log_dir / "cli_console.log"
+
+            # Run with tool_name to trigger cli_console.log writing
+            run_cli_streaming(["echo", "test"], log_dir=log_dir, tool_name="gemini", verbose=False)
+
+            # Verify file was created and contains expected content
+            assert console_path.exists()
+            content = console_path.read_text()
+            assert "First" in content
+            assert "Second" in content
+            # Verify each line is on separate line (real-time write adds \n)
+            lines = content.strip().split("\n")
+            assert len(lines) == 2

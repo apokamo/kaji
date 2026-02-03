@@ -25,7 +25,7 @@ def run_cli_streaming(
         verbose: Enable real-time output display
         env: Environment variables (None to inherit current)
         log_dir: Directory to save logs
-        tool_name: Tool name ("claude") for format_jsonl_line
+        tool_name: Tool name ("claude", "gemini", "codex") for format_jsonl_line
 
     Returns:
         Tuple of (stdout, stderr, returncode)
@@ -44,7 +44,12 @@ def run_cli_streaming(
 
     stdout_lines: list[str] = []
     stderr_lines: list[str] = []
-    console_lines: list[str] = []
+
+    # Prepare cli_console.log file handle for real-time writing
+    console_file = None
+    if log_dir is not None and tool_name:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        console_file = open(log_dir / "cli_console.log", "w", encoding="utf-8")
 
     def read_stderr() -> None:
         assert process.stderr is not None
@@ -72,7 +77,9 @@ def run_cli_streaming(
             if tool_name:
                 formatted = format_jsonl_line(line, tool_name)
                 if formatted:
-                    console_lines.append(formatted)
+                    if console_file is not None:
+                        console_file.write(formatted + "\n")
+                        console_file.flush()
                     if verbose:
                         print(formatted, flush=True)
             elif verbose:
@@ -88,6 +95,8 @@ def run_cli_streaming(
     finally:
         if timer is not None:
             timer.cancel()
+        if console_file is not None:
+            console_file.close()
 
     stdout = "".join(stdout_lines)
     stderr = "".join(stderr_lines)
@@ -96,10 +105,6 @@ def run_cli_streaming(
         log_dir.mkdir(parents=True, exist_ok=True)
         (log_dir / "stdout.log").write_text(stdout, encoding="utf-8")
         (log_dir / "stderr.log").write_text(stderr, encoding="utf-8")
-        if tool_name and console_lines:
-            (log_dir / "cli_console.log").write_text(
-                "\n".join(console_lines) + "\n", encoding="utf-8"
-            )
 
     return stdout, stderr, returncode
 
@@ -185,10 +190,12 @@ def _format_codex_jsonl(data: dict[str, Any]) -> str | None:
         exit_code = item.get("exit_code")
 
         # Extract actual command from /bin/bash -lc 'cd ... && cmd' format
-        if " && " in command:
-            command = command.split(" && ", 1)[-1].rstrip("'")
-        elif command.startswith("/bin/bash") and "'" in command:
-            command = command.split("'", 1)[-1].rstrip("'")
+        # Only strip bash wrapper when command starts with /bin/bash
+        if command.startswith("/bin/bash"):
+            if " && " in command:
+                command = command.split(" && ", 1)[-1].rstrip("'")
+            elif "'" in command:
+                command = command.split("'", 1)[-1].rstrip("'")
 
         # Truncate output to first 3 lines
         max_lines = 3
