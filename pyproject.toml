@@ -1,6 +1,6 @@
 [project]
 name = "dev-agent-orchestra"
-version = "0.1.0"
+version = "0.2.0"
 description = "AI-driven software development workflow orchestrator"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -18,11 +18,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
-dependencies = [
-    "tomli>=2.0.0",
-    "tomli-w>=1.0.0",
-    "pydantic-settings>=2.0.0",
-]
+dependencies = []
 
 [project.optional-dependencies]
 dev = [
@@ -32,8 +28,8 @@ dev = [
     "mypy>=1.10.0",
 ]
 
-[project.scripts]
-dao = "src.cli:main"
+# V5 is run directly: python bugfix_agent_orchestrator.py --issue <URL>
+# [project.scripts]
 
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
@@ -41,7 +37,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src*"]
+include = ["bugfix_agent*"]
 
 [tool.ruff]
 line-length = 100

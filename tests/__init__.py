@@ -1,1 +1,1 @@
-"""Tests for dev-agent-orchestra."""
+"""Tests for Bugfix Agent v5."""
