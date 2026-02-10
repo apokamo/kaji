@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .providers import GitHubIssueProvider, IssueProvider
+from .run_logger import RunLogger
 from .tools import AIToolProtocol, ClaudeTool, CodexTool
 
 
@@ -30,6 +31,9 @@ class AgentContext:
 
     # Issue プロバイダー（GitHub API抽象化）
     issue_provider: IssueProvider
+
+    # 実行ロガー
+    logger: RunLogger
 
     # 証跡ベースパス
     artifacts_base: Path = field(default_factory=lambda: Path("test-artifacts/bugfix-agent"))
@@ -94,6 +98,13 @@ def create_default_context(
     # 実行タイムスタンプを生成（YYMMDDhhmm 形式）
     run_timestamp = datetime.now(UTC).strftime("%y%m%d%H%M")
 
+    # 証跡ディレクトリ
+    artifacts_base = Path("test-artifacts/bugfix-agent")
+    artifacts_dir = artifacts_base / str(issue_number) / run_timestamp
+
+    # ロガー
+    logger = RunLogger(artifacts_dir / "run.log")
+
     # Issue プロバイダー（デフォルトは GitHub API）
     if issue_provider is None:
         issue_provider = GitHubIssueProvider(issue_url)
@@ -108,7 +119,9 @@ def create_default_context(
             issue_url=issue_url,
             issue_number=issue_number,
             issue_provider=issue_provider,
+            logger=logger,
             run_timestamp=run_timestamp,
+            artifacts_base=artifacts_base,
         )
 
     # デフォルト: 各ロールに専用ツール
@@ -121,5 +134,7 @@ def create_default_context(
         issue_url=issue_url,
         issue_number=issue_number,
         issue_provider=issue_provider,
+        logger=logger,
         run_timestamp=run_timestamp,
+        artifacts_base=artifacts_base,
     )

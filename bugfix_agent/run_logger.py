@@ -61,3 +61,7 @@ class RunLogger:
         if error:
             kwargs["error"] = error
         self._log("run_end", **kwargs)
+
+    def log_warning(self, message: str, **kwargs: Any) -> None:
+        """警告イベントを記録"""
+        self._log("warning", message=message, **kwargs)

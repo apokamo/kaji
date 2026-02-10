@@ -8,6 +8,8 @@ This module provides:
 from pathlib import Path
 from typing import Protocol
 
+from ..run_logger import RunLogger
+
 
 class AIToolProtocol(Protocol):
     """AI CLI ツールの統一インターフェース
@@ -33,6 +35,7 @@ class AIToolProtocol(Protocol):
                 - 各実装で適切に処理
             session_id: 継続するセッションの ID（None で新規）
             log_dir: ログ保存ディレクトリ（None で保存しない）
+            logger: 実行ロガー
 
         Returns:
             tuple[str, str | None]: (応答テキスト, 新しいセッション ID)

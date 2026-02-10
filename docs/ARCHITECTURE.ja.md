@@ -71,7 +71,7 @@ stateDiagram-v2
     state "DETAIL_DESIGN_REVIEW\n(reviewer: Codex)" as DETAIL_DESIGN_REVIEW
     state "IMPLEMENT\n(implementer: Claude)\n[Implement_Loop++]" as IMPLEMENT
     state "IMPLEMENT_REVIEW\n(reviewer: Codex)" as IMPLEMENT_REVIEW
-    state "PR_CREATE\n(implementer: Claude)" as PR_CREATE
+    state "PR_CREATE" as PR_CREATE
 
     INIT --> INVESTIGATE: PASS
 
@@ -446,34 +446,14 @@ Issue本文にバグ修正を開始するための最低限の情報が含まれ
 ### 4.8 PR_CREATE
 
 #### 役割
-PRを作成し、Issueで共有します。
+`gh` CLIを使用してプルリクエストを作成し、そのURLをIssueで共有します。
 
-#### 必須出力
-
-| # | 項目 | 説明 |
-|---|------|------|
-| 1 | PR URL | 作成されたPRのURL |
-| 2 | PR Title | Conventional Commits形式 |
-| 3 | PR Summary | 変更の概要 |
-| 4 | 最終テスト結果 | 全テストパスの確認 |
-
-#### 出力フォーマット
-
-```markdown
-## Bugfix agent PR_CREATE
-
-### PR_CREATE / Pull Request
-- URL: https://github.com/...
-- Title: fix(scope): description
-- Reason: ...
-- Test Result: All passed
-
-## VERDICT
-- Result: PASS
-- Reason: PR creation complete
-- Evidence: PR URL
-- Suggestion: Human review and merge pending
-```
+#### プロセス
+1.  **Git情報の取得**: ハンドラは現在のブランチ名とコミットSHAを取得します。
+2.  **PRの構築**: プルリクエストのタイトルと本文が構築されます。タイトルは`fix: issue #<issue_number>`の形式に従い、本文にはIssueへのリンク、簡単な要約、ブランチ/コミット情報が含まれます。
+3.  **`gh pr create`の実行**: 構築されたタイトルと本文で`gh pr create`コマンドが実行されます。
+4.  **Issueへのコメント**: 新しく作成されたプルリクエストのURLがコマンドの出力から抽出され、元のGitHub Issueにコメントとして投稿されます。
+5.  **遷移**: その後、ステートマシンは`COMPLETE`に遷移します。
 
 ---
 
@@ -571,7 +551,7 @@ prompts/
 ├── detail_design_review.md
 ├── implement.md
 ├── implement_review.md
-└── pr_create.md
+
 ```
 
 ### 7.3 共通プロンプト内容
@@ -765,11 +745,7 @@ sequenceDiagram
         X-->>O: VERDICT (PASS/RETRY/BACK_DESIGN/ABORT)
     end
 
-    rect rgba(0, 0, 24, 1)
-        Note over O,I: PR_CREATE - プルリクエスト
-        O->>I: 全成果物
-        I-->>O: プルリクエストURL
-    end
+    
 ```
 
 #### エージェントの役割
@@ -778,7 +754,7 @@ sequenceDiagram
 |-------------|------|--------------|
 | **Claude** | Analyzer (分析) | INIT, INVESTIGATE, DETAIL_DESIGN |
 | **Codex** | Reviewer (レビュー) | INIT (review), INVESTIGATE_REVIEW, DETAIL_DESIGN_REVIEW, IMPLEMENT_REVIEW |
-| **Claude** | Implementer (実装) | IMPLEMENT, PR_CREATE |
+| **Claude** | Implementer (実装) | IMPLEMENT |
 
 #### 各ステートの呼び出しフロー
 
@@ -792,7 +768,7 @@ sequenceDiagram
 | DETAIL_DESIGN_REVIEW | Codex | 設計出力 | VERDICT (PASS/RETRY/ABORT) |
 | IMPLEMENT | Claude | 設計仕様, workdir | コード変更、テスト結果 |
 | IMPLEMENT_REVIEW | Codex | 実装出力 | VERDICT (PASS/RETRY/BACK_DESIGN/ABORT) |
-| PR_CREATE | Claude | 全成果物 | プルリクエスト |
+
 
 #### 通信プロトコル
 
@@ -1630,7 +1606,7 @@ def get_state_timeout(state: str) -> int:
 │   ├── detail_design_review.md
 │   ├── implement.md
 │   ├── implement_review.md
-│   └── pr_create.md
+│   
 ├── test-artifacts/              # Execution logs
 └── test-fixtures/               # E2E fixtures
 ```
