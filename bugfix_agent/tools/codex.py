@@ -4,13 +4,20 @@ This module provides:
 - CodexTool: Reviewer for code review, judgment, web search tasks
 """
 
+from __future__ import annotations
+
 import json
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..cli import run_cli_streaming
 from ..config import get_config_value, get_workdir
 from ..context import build_context
+
+if TYPE_CHECKING:
+    from ..run_logger import RunLogger
+
 
 
 class CodexTool:
@@ -50,6 +57,7 @@ class CodexTool:
             context: コンテキスト情報（config の context_max_chars まで）
             session_id: 継続するセッションの ID（thread_id）
             log_dir: ログ保存ディレクトリ（None で保存しない）
+            logger: 実行ロガー
 
         Returns:
             (応答テキスト, 新しいセッション ID)

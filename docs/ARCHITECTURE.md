@@ -71,7 +71,7 @@ stateDiagram-v2
     state "DETAIL_DESIGN_REVIEW\n(reviewer: Codex)" as DETAIL_DESIGN_REVIEW
     state "IMPLEMENT\n(implementer: Claude)\n[Implement_Loop++]" as IMPLEMENT
     state "IMPLEMENT_REVIEW\n(reviewer: Codex)" as IMPLEMENT_REVIEW
-    state "PR_CREATE\n(implementer: Claude)" as PR_CREATE
+    state "PR_CREATE" as PR_CREATE
 
     INIT --> INVESTIGATE: PASS
 
@@ -446,34 +446,14 @@ If coverage plugin fails, retry with `pytest --no-cov`.
 ### 4.8 PR_CREATE
 
 #### Role
-Create PR and share with Issue.
+Create a Pull Request using the `gh` CLI and share the URL to the issue.
 
-#### Required Output
-
-| # | Item | Description |
-|---|------|-------------|
-| 1 | PR URL | Created PR URL |
-| 2 | PR Title | Conventional Commits format |
-| 3 | PR Summary | Change summary |
-| 4 | Final test results | All tests pass confirmation |
-
-#### Output Format
-
-```markdown
-## Bugfix agent PR_CREATE
-
-### PR_CREATE / Pull Request
-- URL: https://github.com/...
-- Title: fix(scope): description
-- Reason: ...
-- Test Result: All passed
-
-## VERDICT
-- Result: PASS
-- Reason: PR creation complete
-- Evidence: PR URL
-- Suggestion: Human review and merge pending
-```
+#### Process
+1.  **Get Git Info**: The handler retrieves the current branch name and commit SHA.
+2.  **Construct PR**: A Pull Request title and body are constructed. The title follows the format `fix: issue #<issue_number>`, and the body includes a link to the issue, a brief summary, and the branch/commit information.
+3.  **Execute `gh pr create`**: The `gh pr create` command is executed with the constructed title and body.
+4.  **Comment on Issue**: The URL of the newly created Pull Request is extracted from the command's output and posted as a comment on the original GitHub issue.
+5.  **Transition**: The state machine then transitions to `COMPLETE`.
 
 ---
 
@@ -571,7 +551,7 @@ prompts/
 ├── detail_design_review.md
 ├── implement.md
 ├── implement_review.md
-└── pr_create.md
+
 ```
 
 ### 7.3 Common Prompt Content
@@ -765,11 +745,7 @@ sequenceDiagram
         X-->>O: VERDICT (PASS/RETRY/BACK_DESIGN/ABORT)
     end
 
-    rect rgba(0, 0, 24, 1)
-        Note over O,I: PR_CREATE - Pull Request
-        O->>I: All artifacts
-        I-->>O: Pull request URL
-    end
+    
 ```
 
 #### Agent Responsibilities
@@ -778,7 +754,7 @@ sequenceDiagram
 |-------|------|--------|
 | **Claude** | Analyzer | INIT, INVESTIGATE, DETAIL_DESIGN |
 | **Codex** | Reviewer | INIT (review), INVESTIGATE_REVIEW, DETAIL_DESIGN_REVIEW, IMPLEMENT_REVIEW |
-| **Claude** | Implementer | IMPLEMENT, PR_CREATE |
+| **Claude** | Implementer | IMPLEMENT |
 
 #### Call Flow Per State
 
@@ -792,7 +768,7 @@ sequenceDiagram
 | DETAIL_DESIGN_REVIEW | Codex | Design output | VERDICT (PASS/RETRY/ABORT) |
 | IMPLEMENT | Claude | Design spec, workdir | Code changes, test results |
 | IMPLEMENT_REVIEW | Codex | Implementation output | VERDICT (PASS/RETRY/BACK_DESIGN/ABORT) |
-| PR_CREATE | Claude | All artifacts | Pull request |
+
 
 #### Communication Protocol
 
@@ -1724,7 +1700,7 @@ def get_state_timeout(state: str) -> int:
 │   ├── detail_design_review.md
 │   ├── implement.md
 │   ├── implement_review.md
-│   └── pr_create.md
+│   
 ├── test-artifacts/              # Execution logs
 └── test-fixtures/               # E2E fixtures
 ```

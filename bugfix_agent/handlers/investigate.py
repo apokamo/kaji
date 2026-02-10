@@ -71,11 +71,15 @@ def handle_investigate_review(ctx: AgentContext, state: SessionState) -> State:
     log_dir = ctx.artifacts_state_dir("investigate_review")
     prompt = load_prompt("investigate_review", issue_url=ctx.issue_url)
 
-    decision, _ = ctx.reviewer.run(prompt=prompt, context=ctx.issue_url, log_dir=log_dir)
+    decision, _ = ctx.reviewer.run(
+        prompt=prompt, context=ctx.issue_url, log_dir=log_dir
+    )
     check_tool_result(decision, "reviewer")
 
     # VERDICT形式でパース（Issue #292: ハイブリッドフォールバック対応）
-    ai_formatter = create_ai_formatter(ctx.reviewer, context=ctx.issue_url, log_dir=log_dir)
+    ai_formatter = create_ai_formatter(
+        ctx.reviewer, context=ctx.issue_url, log_dir=log_dir
+    )
     verdict = parse_verdict(decision, ai_formatter=ai_formatter)
 
     # ABORTの場合は例外を送出（Issue #292 責務分離）
