@@ -194,7 +194,7 @@ def test_gemini_tool_run_success_new_session(monkeypatch):
         assert "-o" in args and "stream-json" in args
         return _fake_streaming_result(stdout)
 
-    monkeypatch.setattr(mod, "run_cli_streaming", fake_streaming)
+    monkeypatch.setattr("bugfix_agent.tools.gemini.run_cli_streaming", fake_streaming)
 
     tool = mod.GeminiTool(model="test-model")
     response, session_id = tool.run("analyze this", context="some context")
@@ -213,7 +213,7 @@ def test_gemini_tool_run_resume_session(monkeypatch):
         assert "gemini-123" in args
         return _fake_streaming_result(stdout)
 
-    monkeypatch.setattr(mod, "run_cli_streaming", fake_streaming)
+    monkeypatch.setattr("bugfix_agent.tools.gemini.run_cli_streaming", fake_streaming)
 
     tool = mod.GeminiTool()
     response, session_id = tool.run("continue", session_id="gemini-123")
@@ -228,7 +228,7 @@ def test_gemini_tool_run_error(monkeypatch):
     def fake_streaming(args, **kwargs):
         return _fake_streaming_result("", stderr="error", returncode=1)
 
-    monkeypatch.setattr(mod, "run_cli_streaming", fake_streaming)
+    monkeypatch.setattr("bugfix_agent.tools.gemini.run_cli_streaming", fake_streaming)
 
     tool = mod.GeminiTool()
     response, session_id = tool.run("fail")
@@ -242,7 +242,7 @@ def test_gemini_tool_run_error(monkeypatch):
 def test_gemini_tool_run_malformed_json(monkeypatch):
     stdout = '{invalid json}\n{"role": "assistant", "content": "ok"}'
 
-    monkeypatch.setattr(mod, "run_cli_streaming", lambda *a, **k: _fake_streaming_result(stdout))
+    monkeypatch.setattr("bugfix_agent.tools.gemini.run_cli_streaming", lambda *a, **k: _fake_streaming_result(stdout))
 
     tool = mod.GeminiTool()
     response, session_id = tool.run("test")
@@ -259,7 +259,7 @@ def test_gemini_tool_custom_model(monkeypatch):
         captured_args.extend(args)
         return _fake_streaming_result('{"role": "assistant", "content": "ok"}')
 
-    monkeypatch.setattr(mod, "run_cli_streaming", fake_streaming)
+    monkeypatch.setattr("bugfix_agent.tools.gemini.run_cli_streaming", fake_streaming)
 
     tool = mod.GeminiTool(model="custom-model")
     tool.run("test")
@@ -277,7 +277,7 @@ def test_gemini_tool_auto_model(monkeypatch):
         captured_args.extend(args)
         return _fake_streaming_result('{"role": "assistant", "content": "ok"}')
 
-    monkeypatch.setattr(mod, "run_cli_streaming", fake_streaming)
+    monkeypatch.setattr("bugfix_agent.tools.gemini.run_cli_streaming", fake_streaming)
 
     tool = mod.GeminiTool(model="auto")
     tool.run("test")
@@ -291,7 +291,7 @@ def test_gemini_tool_json_error_session(monkeypatch):
     # Malformed JSON in init line
     stdout = '{"type": "init", INVALID}\n{"role": "assistant", "content": "ok"}'
 
-    monkeypatch.setattr(mod, "run_cli_streaming", lambda *a, **k: _fake_streaming_result(stdout))
+    monkeypatch.setattr("bugfix_agent.tools.gemini.run_cli_streaming", lambda *a, **k: _fake_streaming_result(stdout))
 
     tool = mod.GeminiTool()
     response, session_id = tool.run("test")
@@ -307,7 +307,7 @@ def test_gemini_tool_json_error_assistant(monkeypatch):
     # Valid init but malformed assistant message
     stdout = '{"type": "init", "session_id": "sid"}\n{"role": "assistant", INVALID}\n{"role": "assistant", "content": "final"}'
 
-    monkeypatch.setattr(mod, "run_cli_streaming", lambda *a, **k: _fake_streaming_result(stdout))
+    monkeypatch.setattr("bugfix_agent.tools.gemini.run_cli_streaming", lambda *a, **k: _fake_streaming_result(stdout))
 
     tool = mod.GeminiTool()
     response, session_id = tool.run("test")
@@ -356,9 +356,9 @@ def test_codex_tool_run_success_new_session(monkeypatch):
         assert "gpt-5.1-codex" in args
         return _fake_streaming_result(stdout)
 
-    monkeypatch.setattr(mod, "run_cli_streaming", fake_streaming)
+    monkeypatch.setattr("bugfix_agent.tools.codex.run_cli_streaming", fake_streaming)
 
-    tool = mod.CodexTool()
+    tool = mod.CodexTool(model="gpt-5.1-codex")
     response, session_id = tool.run("review", context="code content")
 
     assert response == "PASS"
@@ -375,7 +375,7 @@ def test_codex_tool_run_resume_session(monkeypatch):
         assert "codex-456" in args
         return _fake_streaming_result(stdout)
 
-    monkeypatch.setattr(mod, "run_cli_streaming", fake_streaming)
+    monkeypatch.setattr("bugfix_agent.tools.codex.run_cli_streaming", fake_streaming)
 
     tool = mod.CodexTool()
     response, session_id = tool.run("review again", session_id="codex-456")
@@ -390,7 +390,7 @@ def test_codex_tool_run_error(monkeypatch):
     def fake_streaming(args, **kwargs):
         return _fake_streaming_result("", stderr="error", returncode=1)
 
-    monkeypatch.setattr(mod, "run_cli_streaming", fake_streaming)
+    monkeypatch.setattr("bugfix_agent.tools.codex.run_cli_streaming", fake_streaming)
 
     tool = mod.CodexTool()
     response, session_id = tool.run("fail")
@@ -404,7 +404,7 @@ def test_codex_tool_run_error(monkeypatch):
 def test_codex_tool_fallback_stdout(monkeypatch):
     stdout = "plain text output"
 
-    monkeypatch.setattr(mod, "run_cli_streaming", lambda *a, **k: _fake_streaming_result(stdout))
+    monkeypatch.setattr("bugfix_agent.tools.codex.run_cli_streaming", lambda *a, **k: _fake_streaming_result(stdout))
 
     tool = mod.CodexTool()
     response, session_id = tool.run("test")
@@ -422,7 +422,7 @@ def test_codex_tool_context_truncation(monkeypatch):
         captured_prompt.append(args[-1])
         return _fake_streaming_result('{"type":"item.completed","item":{"text":"ok"}}')
 
-    monkeypatch.setattr(mod, "run_cli_streaming", fake_streaming)
+    monkeypatch.setattr("bugfix_agent.tools.codex.run_cli_streaming", fake_streaming)
 
     tool = mod.CodexTool()
     long_context = "x" * 5000  # 5000 chars input
@@ -443,7 +443,7 @@ def test_codex_tool_custom_settings(monkeypatch):
         captured_args.extend(args)
         return _fake_streaming_result('{"type":"item.completed","item":{"text":"ok"}}')
 
-    monkeypatch.setattr(mod, "run_cli_streaming", fake_streaming)
+    monkeypatch.setattr("bugfix_agent.tools.codex.run_cli_streaming", fake_streaming)
 
     tool = mod.CodexTool(model="custom", workdir="/custom/dir", sandbox="read-only")
     tool.run("test")
@@ -460,7 +460,7 @@ def test_codex_tool_json_error_thread(monkeypatch):
     # This is intentional design for mcp_tool_call mode where VERDICT is plain text
     stdout = '{"type":"thread.started","thread_id":"tid123"}\nINVALID JSON LINE\n{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}'
 
-    monkeypatch.setattr(mod, "run_cli_streaming", lambda *a, **k: _fake_streaming_result(stdout))
+    monkeypatch.setattr("bugfix_agent.tools.codex.run_cli_streaming", lambda *a, **k: _fake_streaming_result(stdout))
 
     tool = mod.CodexTool()
     response, session_id = tool.run("test")
@@ -478,7 +478,7 @@ def test_codex_tool_json_error_item(monkeypatch):
     # This is intentional design for mcp_tool_call mode where VERDICT is plain text
     stdout = '{"type":"thread.started","thread_id":"tid"}\n{INVALID}\n{"type":"item.completed","item":{"type":"agent_message","text":"final"}}'
 
-    monkeypatch.setattr(mod, "run_cli_streaming", lambda *a, **k: _fake_streaming_result(stdout))
+    monkeypatch.setattr("bugfix_agent.tools.codex.run_cli_streaming", lambda *a, **k: _fake_streaming_result(stdout))
 
     tool = mod.CodexTool()
     response, session_id = tool.run("test")
@@ -530,7 +530,7 @@ def test_claude_tool_run_success_json(monkeypatch):
         assert "--verbose" in args
         return _fake_streaming_result(stdout)
 
-    monkeypatch.setattr(mod, "run_cli_streaming", fake_streaming)
+    monkeypatch.setattr("bugfix_agent.tools.claude.run_cli_streaming", fake_streaming)
 
     tool = mod.ClaudeTool()
     response, session_id = tool.run("implement feature")
@@ -554,7 +554,7 @@ def test_claude_tool_run_resume_session(monkeypatch):
         assert "claude-789" in args
         return _fake_streaming_result(stdout)
 
-    monkeypatch.setattr(mod, "run_cli_streaming", fake_streaming)
+    monkeypatch.setattr("bugfix_agent.tools.claude.run_cli_streaming", fake_streaming)
 
     tool = mod.ClaudeTool()
     response, session_id = tool.run("continue", session_id="claude-789")
@@ -569,7 +569,7 @@ def test_claude_tool_run_error(monkeypatch):
     def fake_streaming(args, **kwargs):
         return _fake_streaming_result("some output", stderr="error", returncode=1)
 
-    monkeypatch.setattr(mod, "run_cli_streaming", fake_streaming)
+    monkeypatch.setattr("bugfix_agent.tools.claude.run_cli_streaming", fake_streaming)
 
     tool = mod.ClaudeTool()
     response, session_id = tool.run("fail")
@@ -583,7 +583,7 @@ def test_claude_tool_run_error(monkeypatch):
 def test_claude_tool_fallback_stdout(monkeypatch):
     stdout = "not valid json"
 
-    monkeypatch.setattr(mod, "run_cli_streaming", lambda *a, **k: _fake_streaming_result(stdout))
+    monkeypatch.setattr("bugfix_agent.tools.claude.run_cli_streaming", lambda *a, **k: _fake_streaming_result(stdout))
 
     tool = mod.ClaudeTool()
     response, session_id = tool.run("test")
@@ -601,7 +601,7 @@ def test_claude_tool_custom_settings(monkeypatch):
         captured_args.extend(args)
         return _fake_streaming_result(json.dumps({"result": {"text": "ok"}}))
 
-    monkeypatch.setattr(mod, "run_cli_streaming", fake_streaming)
+    monkeypatch.setattr("bugfix_agent.tools.claude.run_cli_streaming", fake_streaming)
 
     tool = mod.ClaudeTool(model="sonnet", permission_mode="allow-all")
     tool.run("test")
@@ -621,7 +621,7 @@ def test_claude_tool_default_permission(monkeypatch):
         captured_args.extend(args)
         return _fake_streaming_result(json.dumps({"result": {"text": "ok"}}))
 
-    monkeypatch.setattr(mod, "run_cli_streaming", fake_streaming)
+    monkeypatch.setattr("bugfix_agent.tools.claude.run_cli_streaming", fake_streaming)
 
     tool = mod.ClaudeTool(permission_mode="default")
     tool.run("test")
@@ -642,8 +642,9 @@ def test_claude_tool_creates_directories(monkeypatch, tmp_path):
         assert (tmp_path / "cache").exists()
         return _fake_streaming_result(json.dumps({"result": {"text": "ok"}}))
 
-    monkeypatch.setattr(mod.os, "environ", env_copy)
-    monkeypatch.setattr(mod, "run_cli_streaming", fake_streaming)
+    import bugfix_agent.tools.claude as _claude_mod
+    monkeypatch.setattr(_claude_mod.os, "environ", env_copy)
+    monkeypatch.setattr("bugfix_agent.tools.claude.run_cli_streaming", fake_streaming)
 
     tool = mod.ClaudeTool()
     tool.run("test")
@@ -660,7 +661,7 @@ def test_claude_tool_dirty_input_warning_prefix(monkeypatch):
         }
     })
 
-    monkeypatch.setattr(mod, "run_cli_streaming", lambda *a, **k: _fake_streaming_result(dirty_stdout))
+    monkeypatch.setattr("bugfix_agent.tools.claude.run_cli_streaming", lambda *a, **k: _fake_streaming_result(dirty_stdout))
 
     tool = mod.ClaudeTool()
     response, session_id = tool.run("test")
@@ -680,7 +681,7 @@ def test_claude_tool_dirty_input_multiline_warning(monkeypatch):
         }
     })
 
-    monkeypatch.setattr(mod, "run_cli_streaming", lambda *a, **k: _fake_streaming_result(dirty_stdout))
+    monkeypatch.setattr("bugfix_agent.tools.claude.run_cli_streaming", lambda *a, **k: _fake_streaming_result(dirty_stdout))
 
     tool = mod.ClaudeTool()
     response, session_id = tool.run("test")
@@ -700,7 +701,7 @@ def test_claude_tool_dirty_input_trailing_garbage(monkeypatch):
         }
     }) + '\nSome trailing output'
 
-    monkeypatch.setattr(mod, "run_cli_streaming", lambda *a, **k: _fake_streaming_result(dirty_stdout))
+    monkeypatch.setattr("bugfix_agent.tools.claude.run_cli_streaming", lambda *a, **k: _fake_streaming_result(dirty_stdout))
 
     tool = mod.ClaudeTool()
     response, session_id = tool.run("test")
@@ -782,7 +783,7 @@ def test_gemini_tool_passes_log_dir(tmp_path, monkeypatch):
         stdout = '{"type": "init", "session_id": "test-session"}\n{"role": "assistant", "content": "response"}'
         return stdout, "", 0
 
-    monkeypatch.setattr(mod, "run_cli_streaming", mock_streaming)
+    monkeypatch.setattr("bugfix_agent.tools.gemini.run_cli_streaming", mock_streaming)
 
     tool = mod.GeminiTool()
     log_dir = tmp_path / "gemini_logs"
@@ -967,7 +968,8 @@ def testrun_cli_streaming_no_console_log_without_tool_name(tmp_path, monkeypatch
 def test_get_config_value_missing_key():
     """存在しないキーの場合はデフォルト値を返す"""
     # キャッシュをクリア
-    mod.load_config.cache_clear()
+    from bugfix_agent.config import load_config
+    load_config.cache_clear()
     result = mod.get_config_value("nonexistent.key", "default_value")
     assert result == "default_value"
 
@@ -977,9 +979,11 @@ def test_get_config_value_missing_key():
 def test_get_workdir_auto_detect(monkeypatch):
     """workdir が設定されていない場合は自動検出"""
     monkeypatch.delenv("BUGFIX_AGENT_WORKDIR", raising=False)
-    mod.load_config.cache_clear()
+    from bugfix_agent.config import load_config
+    load_config.cache_clear()
 
-    workdir = mod.get_workdir()
+    from bugfix_agent.config import get_workdir
+    workdir = get_workdir()
     # 自動検出されたパスは Path オブジェクト
     assert isinstance(workdir, Path)
 
@@ -1154,13 +1158,14 @@ def test_create_default_context_tool_model_override():
 @allure.description("Verifies _create_tool factory function.")
 def test_create_tool_factory():
     """_create_tool: 各ツールタイプを正しく生成"""
-    codex = mod._create_tool("codex")
+    from bugfix_agent.agent_context import _create_tool
+    codex = _create_tool("codex")
     assert isinstance(codex, mod.CodexTool)
 
-    gemini = mod._create_tool("gemini")
+    gemini = _create_tool("gemini")
     assert isinstance(gemini, mod.GeminiTool)
 
-    claude = mod._create_tool("claude")
+    claude = _create_tool("claude")
     assert isinstance(claude, mod.ClaudeTool)
 
 
@@ -1168,10 +1173,11 @@ def test_create_tool_factory():
 @allure.description("Verifies _create_tool applies model override.")
 def test_create_tool_with_model():
     """_create_tool: モデル指定"""
-    codex = mod._create_tool("codex", "o4-mini")
+    from bugfix_agent.agent_context import _create_tool
+    codex = _create_tool("codex", "o4-mini")
     assert codex.model == "o4-mini"
 
-    gemini = mod._create_tool("gemini", "gemini-2.5-flash")
+    gemini = _create_tool("gemini", "gemini-2.5-flash")
     assert gemini.model == "gemini-2.5-flash"
 
 
@@ -1179,19 +1185,21 @@ def test_create_tool_with_model():
 @allure.description("Verifies _create_tool raises ValueError for unknown tool.")
 def test_create_tool_unknown():
     """_create_tool: 不明なツールでエラー"""
+    from bugfix_agent.agent_context import _create_tool
     with pytest.raises(ValueError, match="Unknown tool"):
-        mod._create_tool("unknown")
+        _create_tool("unknown")
 
 
 @allure.title("create_test_context: injects MockTools")
 @allure.description("Verifies test factory function creates MockTools correctly.")
-def test_create_test_context():
+def test_create_test_context(tmp_path):
     ctx = create_test_context(
         analyzer_responses=["analyze1", "analyze2"],
         reviewer_responses=["PASS", "BLOCKED"],
         implementer_responses=["implemented"],
         issue_url="https://github.com/apokamo/kamo2/issues/999",
         run_timestamp="2511281430",
+        artifacts_base=tmp_path,
     )
 
     assert ctx.issue_number == 999
@@ -1199,6 +1207,8 @@ def test_create_test_context():
     assert isinstance(ctx.analyzer, mod.MockTool)
     assert isinstance(ctx.reviewer, mod.MockTool)
     assert isinstance(ctx.implementer, mod.MockTool)
+    assert isinstance(ctx.logger, mod.RunLogger)
+    assert ctx.logger.log_path.parent == tmp_path / "999" / "2511281430"
 
     # Test mock responses work
     resp1, _ = ctx.analyzer.run("test")
@@ -1209,8 +1219,8 @@ def test_create_test_context():
 
 @allure.title("create_test_context: default values")
 @allure.description("Verifies test factory uses default values correctly.")
-def test_create_test_context_defaults():
-    ctx = create_test_context([], [], [])
+def test_create_test_context_defaults(tmp_path):
+    ctx = create_test_context([], [], [], artifacts_base=tmp_path)
     assert ctx.issue_number == 999  # default
     assert ctx.run_timestamp == "2511281430"  # default
 
@@ -1874,7 +1884,7 @@ def test_artifacts_directory_creation():
     )
     state = SessionState()
 
-    with patch("bugfix_agent_orchestrator.Path.mkdir") as mock_mkdir:
+    with patch("pathlib.Path.mkdir") as mock_mkdir:
         handle_investigate(ctx, state)
         assert mock_mkdir.called
 
@@ -2473,7 +2483,7 @@ def test_gemini_tool_allowed_tools_includes_web_fetch(monkeypatch):
         stdout = '{"type": "init", "session_id": "test"}\n{"role": "assistant", "content": "ok"}'
         return stdout, "", 0
 
-    monkeypatch.setattr(mod, "run_cli_streaming", mock_streaming)
+    monkeypatch.setattr("bugfix_agent.tools.gemini.run_cli_streaming", mock_streaming)
 
     tool = mod.GeminiTool()
     tool.run(prompt="test")

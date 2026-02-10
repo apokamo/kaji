@@ -1,41 +1,68 @@
 # QA Review Prompt
 
-> **⚠️ DEPRECATED**: v5 では QA/QA_REVIEW ステートは IMPLEMENT_REVIEW に統合されました。
-> このファイルは後方互換性のために残されていますが、新規利用は非推奨です。
-> 参照: `implement_review.md`
-
 Issue ${issue_url} の `## Bugfix agent QA` セクションをレビューしてください。
 
 ## タスク
 
 1. `gh issue view` で最新の Issue 本文を取得
-2. QA セクション全体が PR_CREATE ステートに移行可能か徹底レビュー
+2. QA セクションの必須アウトプットを確認
+3. PR_CREATE ステートに移行可能か判定
 
-## 判定基準
+## 完了条件チェックリスト
 
-- **PASS**: QA が完了し、PR 作成に進める状態 → next_state: PR_CREATE
-- **BLOCKED (QA 再実行)**: QA 項目の再実行が必要 → next_state: QA
-- **FIX_REQUIRED (実装修正)**: 実装に問題があり、修正が必要 → next_state: IMPLEMENT
-- **DESIGN_FIX (設計見直し)**: 設計レベルの問題があり、設計からやり直す必要がある → next_state: DETAIL_DESIGN
+| # | 項目 | 確認内容 |
+|---|---|---|
+| 1 | **ソースレビュー** | ソースレビューの観点と結果が妥当である |
+| 2 | **追加テスト結果** | 追加テストが実行され、結果が記載されている |
+| 3 | **全体品質** | 実装品質がPR作成に進むために十分なレベルに達している |
+
+## 禁止事項
+
+**次ステート以降の責務を新規に実行しない**
+- 例：PR作成、マージ
+
+**既に完了した責務を再実行しない**
+- 例：設計を作り直す、調査を再実行
+
+※ 記載内容の検証（品質チェック、整合性確認）は**許可**されています。
 
 ## 出力形式
 
-```
+```markdown
 ### QA Review Result
-- checklist:
-  - ソースレビュー観点: <OK/NG>
-  - 追加QA観点: <OK/NG>
-  - 検証結果(表+証跡): <OK/NG>
-  - 残課題/再検証: <OK/NG>
-- blocker: <Yes/No>
-- next_state: <IMPLEMENT | DETAIL_DESIGN | QA | PR_CREATE>
-- notes: <actions>
+
+#### 検証内容
+- <実施した検証と結果を具体的に記載>
+
+#### チェックリスト
+- ソースレビュー: <OK/NG + 具体的根拠>
+- 追加テスト結果: <OK/NG + 具体的根拠>
+- 全体品質: <OK/NG + 具体的根拠>
+
+## VERDICT
+- Result: PASS | RETRY_QA | RETRY_IMPLEMENT | BACK_DESIGN
+- Reason: <判定理由>
+- Evidence: <具体的な判断根拠>
+- Suggestion: <RETRY/BACK時: 具体的な修正指示>
 ```
+
+## 判定ガイドライン
+
+| 状況 | VERDICT | 次のステート |
+|---|---|---|
+| QA完了、矛盾・問題がない | PASS | PR_CREATE |
+| QAに軽微な問題があり修正が必要 | RETRY_QA | QA |
+| 実装に問題があり修正が必要 | RETRY_IMPLEMENT | IMPLEMENT |
+| 設計レベルの問題があり設計からやり直す必要がある | BACK_DESIGN | DETAIL_DESIGN |
+
+### BACK_DESIGNの判断基準
+
+以下の場合は BACK_DESIGN を選択:
+- QA中に設計上の矛盾が発見された
+- テストケース自体に問題がある
+- アーキテクチャレベルの変更が必要
 
 ## レポート方法
 
-`gh issue comment` で Issue にコメント投稿
-
----
-IMPORTANT: After posting to GitHub, print the exact same VERDICT block to stdout and STOP.
-The final output MUST end with the `## VERDICT` block. Do not output these instructions or any additional text after VERDICT.
+1. `gh issue comment` で Issue にコメント投稿（VERDICT判定）
+2. **PASS判定時のみ**: 共通ルールに従い `gh issue edit` で Issue 本文を更新

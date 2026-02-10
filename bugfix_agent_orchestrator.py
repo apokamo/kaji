@@ -353,9 +353,9 @@ def run(config: ExecutionConfig, ctx: AgentContext | None = None) -> None:
             model_override=config.model_override,
         )
     session_state = SessionState()
+    logger = ctx.logger
 
     # JSONL ロガー初期化
-    logger = RunLogger(ctx.artifacts_dir / "run.log")
     logger.log_run_start(config.issue_url, ctx.run_timestamp)
 
     print(f"=== 🚀 Bugfix Agent v5 Started (mode={config.mode.name}) ===")

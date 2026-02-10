@@ -4,13 +4,20 @@ This module provides:
 - GeminiTool: Analyzer for issue analysis, documentation, long-context tasks
 """
 
+from __future__ import annotations
+
 import json
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..cli import run_cli_streaming
 from ..config import get_config_value
 from ..context import build_context
+
+if TYPE_CHECKING:
+    from ..run_logger import RunLogger
+
 
 
 class GeminiTool:
@@ -41,6 +48,7 @@ class GeminiTool:
             context: str なら直接追加、list[str] ならファイルパスとして読み込み
             session_id: 継続するセッションの ID
             log_dir: ログ保存ディレクトリ（None で保存しない）
+            logger: 実行ロガー
 
         Returns:
             (応答テキスト, 新しいセッション ID)

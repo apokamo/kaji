@@ -5,8 +5,10 @@ This module provides context data construction:
 """
 
 from pathlib import Path
+from typing import Any
 
 from .config import get_config_value, get_workdir
+from .run_logger import RunLogger
 
 
 def build_context(
@@ -23,6 +25,7 @@ def build_context(
         max_chars: 最大文字数（None で config から取得、0 で無制限）
         allowed_root: 読み込み許可するルートディレクトリ（Path Traversal 対策）
             None の場合は get_workdir() を使用
+        logger: 実行ロガー
 
     Returns:
         構築されたコンテキスト文字列
@@ -30,6 +33,7 @@ def build_context(
     Raises:
         ValueError: 許可されていないパスへのアクセス試行時
     """
+
     # 文字列入力の場合もmax_chars適用
     if isinstance(context, str):
         if max_chars is None:
@@ -55,14 +59,14 @@ def build_context(
             resolved.relative_to(allowed_root)
         except ValueError:
             # allowed_root 配下でない場合はスキップ（警告出力）
-            print(f"⚠️ Skipping unauthorized path: {path_str} (not under {allowed_root})")
+            print(f"⚠️ Skipping path outside allowed_root: {path_str}")
             continue
 
         try:
             content = resolved.read_text(encoding="utf-8")
             result_parts.append(f"\n--- {path_str} ---\n{content}\n")
         except (PermissionError, OSError) as e:
-            print(f"⚠️ Failed to read {path_str}: {e}")
+            _log_warning(f"Failed to read {path_str}: {e}")
             continue
 
     result = "".join(result_parts)
