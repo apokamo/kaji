@@ -42,6 +42,7 @@ class TestImplementReviewSessionHandling:
             issue_number=provider.issue_number,
             issue_provider=provider,
             run_timestamp="2512181200",
+            logger=MagicMock(),
         )
 
     def test_implement_review_calls_reviewer_with_session_id_none(

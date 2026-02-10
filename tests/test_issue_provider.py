@@ -7,6 +7,7 @@ These tests verify:
 """
 
 import pytest
+from unittest.mock import MagicMock
 
 from bugfix_agent.agent_context import AgentContext
 from bugfix_agent.errors import AgentAbortError
@@ -112,6 +113,7 @@ class TestHandlerWithIssueProvider:
             issue_number=provider.issue_number,
             issue_provider=provider,
             run_timestamp="2512151200",
+            logger=MagicMock(),
         )
 
     def test_handle_init_pass_posts_comment(self):

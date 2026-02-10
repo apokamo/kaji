@@ -4,7 +4,10 @@ This module provides:
 - create_test_context: Create test context with mock tools and MockIssueProvider
 """
 
+from pathlib import Path
+
 from bugfix_agent.agent_context import AgentContext
+from bugfix_agent.run_logger import RunLogger
 from bugfix_agent.tools import MockTool
 
 from .providers import MockIssueProvider
@@ -17,6 +20,7 @@ def create_test_context(
     issue_url: str = "https://github.com/test/repo/issues/999",
     run_timestamp: str = "2511281430",
     issue_provider: MockIssueProvider | None = None,
+    artifacts_base: Path | None = None,
 ) -> AgentContext:
     """テスト用のコンテキストを生成
 
@@ -28,6 +32,7 @@ def create_test_context(
         run_timestamp: 実行タイムスタンプ（デフォルト: テスト用固定値）
         issue_provider: MockIssueProvider インスタンス
                        （None なら自動生成）
+        artifacts_base: 成果物ベースディレクトリ（テストでtmp_pathを指定）
 
     Returns:
         MockTool と MockIssueProvider を注入した AgentContext
@@ -49,6 +54,14 @@ def create_test_context(
             repo_url=issue_url.rsplit("/issues/", 1)[0],
         )
 
+    # テスト時は /tmp/pytest-of-hoge/pytest-current/testname/
+    # などに作成される
+    if artifacts_base is None:
+        artifacts_base = Path("test-artifacts/bugfix-agent")
+
+    artifacts_dir = artifacts_base / str(issue_number) / run_timestamp
+    logger = RunLogger(artifacts_dir / "run.log")
+
     return AgentContext(
         analyzer=MockTool(analyzer_responses),
         reviewer=MockTool(reviewer_responses),
@@ -57,4 +70,6 @@ def create_test_context(
         issue_number=issue_number,
         issue_provider=issue_provider,
         run_timestamp=run_timestamp,
+        artifacts_base=artifacts_base,
+        logger=logger,
     )
