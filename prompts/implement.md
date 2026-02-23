@@ -2,18 +2,29 @@
 
 Issue ${issue_url} の DETAIL_DESIGN に従って実装してください。
 
+> **CRITICAL: テスト省略禁止**
+> Size M（連携/異常系）および Size L（統合/E2E）のテストを省略してはならない。
+> 「時間がない」「難しい」などの理由でテストをスキップすることは禁止。
+> テストなし実装は IMPLEMENT_REVIEW で必ず RETRY される。
+
 ## タスク
 
 1. **ブランチ作成**: 専用ブランチを作成し、ブランチ名と HEAD コミット ID を記録
 
-2. **実装**: DETAIL_DESIGN に従って変更を実装
+2. **Red フェーズ**: DETAIL_DESIGN のテストケースをすべて先に実装し、失敗することを確認
 
-3. **テスト実行**: 計画されたテストと新規追加したテストを実行
-   - 各テストに `E` (Existing) または `A` (Added) のタグを付与
+3. **Green フェーズ**: テストが PASS するよう実装を行う
 
-4. **証跡保存**: テスト証跡を `${artifacts_dir}` に保存
+4. **リファクタリング**: コードの整理・重複排除（テストは引き続き PASS であること）
 
-5. **補足記載**: 残作業、レビュー観点、リスクを記載
+5. **品質チェック**: 以下をすべてパスすること
+   ```
+   ruff check bugfix_agent/ tests/ && ruff format bugfix_agent/ tests/ && mypy bugfix_agent/ && pytest
+   ```
+
+6. **証跡保存**: テスト証跡を `${artifacts_dir}` に保存
+
+7. **補足記載**: 残作業、レビュー観点、リスクを記載
 
 ## 出力形式
 
@@ -25,8 +36,14 @@ Issue ${issue_url} の DETAIL_DESIGN に従って実装してください。
 - Commit: <sha>
 
 ### IMPLEMENT / テスト結果
-| Test | Tag(E/A) | Result | Evidence |
-|------|----------|--------|----------|
+| Test | Tag(E/A) | Size(S/M/L) | Result | Evidence |
+|------|----------|-------------|--------|----------|
+
+### IMPLEMENT / 品質チェック
+- ruff check: PASS/FAIL
+- ruff format: PASS/FAIL
+- mypy: PASS/FAIL
+- pytest: PASS/FAIL (<passed>/<total> tests)
 
 ### IMPLEMENT / 補足
 - 残作業:
