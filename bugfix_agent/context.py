@@ -5,10 +5,8 @@ This module provides context data construction:
 """
 
 from pathlib import Path
-from typing import Any
 
 from .config import get_config_value, get_workdir
-from .run_logger import RunLogger
 
 
 def build_context(
@@ -66,7 +64,7 @@ def build_context(
             content = resolved.read_text(encoding="utf-8")
             result_parts.append(f"\n--- {path_str} ---\n{content}\n")
         except (PermissionError, OSError) as e:
-            _log_warning(f"Failed to read {path_str}: {e}")
+            print(f"⚠️ Failed to read {path_str}: {e}")
             continue
 
     result = "".join(result_parts)

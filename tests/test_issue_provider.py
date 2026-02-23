@@ -6,8 +6,9 @@ These tests verify:
 3. Handler integration with IssueProvider
 """
 
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 from bugfix_agent.agent_context import AgentContext
 from bugfix_agent.errors import AgentAbortError

@@ -87,9 +87,7 @@ def handle_implement_review(ctx: AgentContext, state: SessionState) -> State:
     check_tool_result(decision, "reviewer")
 
     # VERDICT形式でパース（Issue #292: ハイブリッドフォールバック対応）
-    ai_formatter = create_ai_formatter(
-        ctx.reviewer, context=ctx.issue_url, log_dir=log_dir
-    )
+    ai_formatter = create_ai_formatter(ctx.reviewer, context=ctx.issue_url, log_dir=log_dir)
     verdict = parse_verdict(decision, ai_formatter=ai_formatter)
 
     # ABORTの場合は例外を送出（Issue #292 責務分離）
