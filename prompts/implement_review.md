@@ -9,9 +9,13 @@ IMPLEMENT_REVIEWは従来のQA/QA_REVIEWを統合したステートです。
 
 ## タスク
 
-1. `gh issue view` で最新の Issue 本文を取得
-2. IMPLEMENT セクションの必須アウトプットを確認
-3. PR_CREATE ステートに移行可能か判定
+1. **独立テスト実行**: レビュワー自身が以下を実行し、結果を記録する
+   ```
+   ruff check bugfix_agent/ tests/ && ruff format bugfix_agent/ tests/ && mypy bugfix_agent/ && pytest
+   ```
+2. `gh issue view` で最新の Issue 本文を取得
+3. IMPLEMENT セクションの必須アウトプットを確認
+4. PR_CREATE ステートに移行可能か判定
 
 ## 完了条件チェックリスト
 
@@ -29,6 +33,8 @@ IMPLEMENT_REVIEWは従来のQA/QA_REVIEWを統合したステートです。
 |---|------|----------|
 | 4 | **ソースレビュー** | 変更全体のソースレビュー（diff + 周辺コード）に問題がない |
 | 5 | **リグレッション** | 既存機能への影響がないことが確認されている |
+| 6 | **テスト S/M/L 網羅性（PASSED）** | S・M・L 各サイズのテストが実装され、すべて PASSED であること |
+| 7 | **独立テスト実行** | レビュワー自身が pytest を実行し、PASS を確認している |
 
 ## 禁止事項
 
@@ -48,10 +54,17 @@ IMPLEMENT_REVIEWは従来のQA/QA_REVIEWを統合したステートです。
 #### 検証内容
 - <実施した検証と結果を具体的に記載>
 
+#### 独立テスト実行結果
+```
+<ruff check / ruff format / mypy / pytest の実行ログを貼り付ける>
+```
+
 #### チェックリスト
 - ブランチ情報: <OK/NG + 具体的根拠>
 - 実装内容: <OK/NG + 具体的根拠>
 - テスト結果: <OK/NG + 具体的根拠>
+- テスト S/M/L 網羅性（PASSED）: <OK/NG + 各サイズの件数>
+- 独立テスト実行（PASSED）: <OK/NG + pytest サマリー>
 - ソースレビュー: <OK/NG + 具体的根拠>
 - リグレッション: <OK/NG + 具体的根拠>
 
@@ -68,6 +81,8 @@ IMPLEMENT_REVIEWは従来のQA/QA_REVIEWを統合したステートです。
 |------|---------|-------------|
 | 実装完了、矛盾・問題がない | PASS | PR_CREATE |
 | 実装に軽微な問題があり修正が必要 | RETRY | IMPLEMENT |
+| pytest 出力が Issue コメントに記載されていない | RETRY | IMPLEMENT |
+| テスト S/M/L いずれかが欠如または FAILED | RETRY | IMPLEMENT |
 | 設計レベルの問題があり設計からやり直す必要がある | BACK_DESIGN | DETAIL_DESIGN |
 
 ### BACK_DESIGNの判断基準
