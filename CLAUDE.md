@@ -77,6 +77,14 @@ dao design --help     # Design workflow help
 
 | Topic | Location |
 |-------|----------|
-| Architecture | docs/architecture.md |
+| Architecture | docs/ARCHITECTURE.md |
 | ADR | docs/adr/ |
-| Guides | docs/guides/ |
+| Guides | docs/cli-guides/ |
+| Development Workflow | docs/dev/development_workflow.md |
+| Testing Convention | docs/dev/testing-convention.md |
+
+## Development Skills
+
+スキルは `.claude/skills/` に格納。`/issue-create` から `/issue-close` までのライフサイクルを管理。
+
+詳細: [Development Workflow](docs/dev/development_workflow.md)
