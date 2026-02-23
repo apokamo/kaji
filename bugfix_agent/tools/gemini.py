@@ -9,14 +9,10 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from ..cli import run_cli_streaming
 from ..config import get_config_value
 from ..context import build_context
-
-if TYPE_CHECKING:
-    pass
 
 
 class GeminiTool:
