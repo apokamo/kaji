@@ -8,8 +8,6 @@ This module provides:
 from pathlib import Path
 from typing import Protocol
 
-from ..run_logger import RunLogger
-
 
 class AIToolProtocol(Protocol):
     """AI CLI ツールの統一インターフェース
