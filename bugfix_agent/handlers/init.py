@@ -32,15 +32,11 @@ def handle_init(ctx: AgentContext, state: SessionState) -> State:
     log_dir = ctx.artifacts_state_dir("init")
     prompt = load_prompt("init", issue_url=ctx.issue_url)
 
-    result, _ = ctx.reviewer.run(
-        prompt=prompt, context=ctx.issue_url, log_dir=log_dir
-    )
+    result, _ = ctx.reviewer.run(prompt=prompt, context=ctx.issue_url, log_dir=log_dir)
     check_tool_result(result, "reviewer")
 
     # VERDICT形式でパース（Issue #292: ハイブリッドフォールバック対応）
-    ai_formatter = create_ai_formatter(
-        ctx.reviewer, context=ctx.issue_url, log_dir=log_dir
-    )
+    ai_formatter = create_ai_formatter(ctx.reviewer, context=ctx.issue_url, log_dir=log_dir)
     verdict = parse_verdict(result, ai_formatter=ai_formatter)
 
     # ABORTの場合はコメントを投稿してから例外を送出

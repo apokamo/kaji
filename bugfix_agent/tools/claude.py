@@ -9,15 +9,14 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from ..cli import run_cli_streaming
 from ..config import get_config_value
 from ..context import build_context
 
 if TYPE_CHECKING:
-    from ..run_logger import RunLogger
-
+    pass
 
 
 class ClaudeTool:

@@ -22,7 +22,7 @@ Treat the user as an equal partner. Goal: clarity, traction, and progress.
 ## ⚠️ Pre-Commit (REQUIRED)
 ```bash
 source .venv/bin/activate
-ruff check src/ tests/ && ruff format src/ tests/ && mypy src/ && pytest
+ruff check bugfix_agent/ tests/ && ruff format bugfix_agent/ tests/ && mypy bugfix_agent/ && pytest
 ```
 
 ## Essential Commands
@@ -34,10 +34,10 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 
 # Quality checks (run before commit)
-ruff check src/ tests/       # Lint
-ruff format src/ tests/      # Format
-mypy src/                    # Type check
-pytest                       # Test
+ruff check bugfix_agent/ tests/       # Lint
+ruff format bugfix_agent/ tests/      # Format
+mypy bugfix_agent/                    # Type check
+pytest                                # Test
 
 # CLI
 dao list              # List workflows

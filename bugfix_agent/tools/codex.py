@@ -16,8 +16,7 @@ from ..config import get_config_value, get_workdir
 from ..context import build_context
 
 if TYPE_CHECKING:
-    from ..run_logger import RunLogger
-
+    pass
 
 
 class CodexTool:

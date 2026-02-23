@@ -65,9 +65,9 @@ $ARGUMENTS = <issue-number>
 
 ```bash
 cd [worktree-absolute-path] && source .venv/bin/activate && \
-  ruff check src/ tests/ && \
+  ruff check bugfix_agent/ tests/ && \
   ruff format --check src/ tests/ && \
-  mypy src/ && \
+  mypy bugfix_agent/ && \
   pytest
 ```
 
