@@ -1,5 +1,6 @@
 ---
 description: Issue作成とラベル付与を行う。開発ワークフローの起点。
+argument-hint: <title> [type] [description]
 ---
 
 # Issue Create
@@ -20,7 +21,7 @@ $ARGUMENTS = <title> [type] [description]
 ```
 
 - `title` (必須): Issueタイトル
-- `type` (任意): `feat` / `fix` / `refactor` / `docs` (デフォルト: feat)
+- `type` (任意): `feat` / `fix` / `refactor` / `docs` / `test` / `chore` / `perf` (デフォルト: feat)
 - `description` (任意): 詳細説明。省略時は対話で収集。
 
 ## type → ラベル マッピング
