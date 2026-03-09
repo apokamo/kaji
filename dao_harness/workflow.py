@@ -76,6 +76,11 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
             raise WorkflowValidationError(
                 f"Step at index {i} missing required key(s): {', '.join(missing)}"
             )
+        raw_on = step_data.get("on") or step_data.get(True) or {}
+        if not isinstance(raw_on, dict):
+            raise WorkflowValidationError(
+                f"Step '{step_data['id']}' 'on' must be a mapping, got {type(raw_on).__name__}"
+            )
         steps.append(
             Step(
                 id=step_data["id"],
@@ -87,7 +92,7 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                 max_turns=step_data.get("max_turns"),
                 timeout=step_data.get("timeout"),
                 resume=step_data.get("resume"),
-                on=step_data.get("on") or step_data.get(True) or {},
+                on=raw_on,
             )
         )
 
@@ -111,12 +116,27 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
             raise WorkflowValidationError(
                 f"Cycle '{cycle_name}' missing required key(s): {', '.join(missing_cycle)}"
             )
+        raw_loop = cycle_data["loop"]
+        if not isinstance(raw_loop, list):
+            raise WorkflowValidationError(
+                f"Cycle '{cycle_name}' 'loop' must be a list, got {type(raw_loop).__name__}"
+            )
+        raw_max_iter = cycle_data["max_iterations"]
+        if not isinstance(raw_max_iter, int) or isinstance(raw_max_iter, bool):
+            raise WorkflowValidationError(
+                f"Cycle '{cycle_name}' 'max_iterations' must be an integer, "
+                f"got {type(raw_max_iter).__name__}"
+            )
+        if raw_max_iter < 1:
+            raise WorkflowValidationError(
+                f"Cycle '{cycle_name}' 'max_iterations' must be >= 1, got {raw_max_iter}"
+            )
         cycles.append(
             CycleDefinition(
                 name=cycle_name,
                 entry=cycle_data["entry"],
-                loop=cycle_data["loop"],
-                max_iterations=cycle_data["max_iterations"],
+                loop=raw_loop,
+                max_iterations=raw_max_iter,
                 on_exhaust=cycle_data["on_exhaust"],
             )
         )
