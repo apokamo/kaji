@@ -322,7 +322,7 @@ def validate_skill_exists(skill_name: str, agent: str, workdir: Path) -> None:
 ### ビジネス制約
 
 1. **既存のワークフロー互換性**: 現行の `/issue-create` → `/issue-close` のスキルチェーンを変更せずにハーネスで自動化できること
-2. **段階的移行**: 既存の `bugfix_agent/` を即座に削除せず、新ハーネスと並行稼働できること
+2. **段階的移行**: 既存の `bugfix_agent/` を即座に削除せず、V7 実装完了まで参照可能な状態を維持する。V6 は**移行期間中の参照用アーカイブ**であり、保守・機能追加の対象ではない
 
 ### 移行戦略（V6 → V7）
 
