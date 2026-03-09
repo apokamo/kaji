@@ -196,7 +196,7 @@ def _build_gemini_args(
     session_id: str | None,
     execution_policy: str,
 ) -> list[str]:
-    args = ["gemini", "-p", "-o", "stream-json"]
+    args = ["gemini", "-p", prompt, "-o", "stream-json"]
     if step.model:
         args += ["-m", step.model]
     if session_id:
@@ -206,5 +206,4 @@ def _build_gemini_args(
             args += ["--approval-mode", "yolo"]
         case "sandbox":
             args.append("-s")
-    args.append(prompt)
     return args

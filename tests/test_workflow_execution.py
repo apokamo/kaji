@@ -2,7 +2,7 @@
 
 Tests the full workflow execution loop using mock CLI processes.
 Verifies state transitions, retry cycles, abort handling, --from resume,
---step single execution, and MissingResumeSessionError.
+--step single execution, MissingResumeSessionError, and run log terminal state.
 """
 
 from pathlib import Path
@@ -341,3 +341,109 @@ class TestWorkflowSessionManagement:
 
         assert state.sessions.get("design") == "sess-1"
         assert state.sessions.get("review") == "sess-2"
+
+
+@pytest.mark.medium
+class TestWorkflowEndLogging:
+    """Verify run.log terminal state reflects actual workflow outcome."""
+
+    def test_abort_workflow_logs_abort_status(self, tmp_path: Path) -> None:
+        """Workflow ending via ABORT logs status=ABORT in workflow_end."""
+        workflow = _simple_workflow()
+        logged_calls: list[dict] = []
+
+        def capture_workflow_end(status: str, cycle_counts: dict, **kwargs: object) -> None:
+            logged_calls.append({"status": status, **kwargs})
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            return _make_cli_result("ABORT")
+
+        with (
+            patch("dao_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("dao_harness.runner.validate_skill_exists"),
+            patch("dao_harness.state.SessionState._persist"),
+            patch(
+                "dao_harness.logger.RunLogger.log_workflow_end",
+                side_effect=capture_workflow_end,
+            ),
+        ):
+            runner = WorkflowRunner(
+                workflow=workflow,
+                issue_number=99,
+                workdir=tmp_path,
+            )
+            runner.run()
+
+        assert len(logged_calls) == 1
+        assert logged_calls[0]["status"] == "ABORT"
+
+    def test_pass_workflow_logs_complete_status(self, tmp_path: Path) -> None:
+        """Workflow ending via PASS logs status=COMPLETE in workflow_end."""
+        workflow = _simple_workflow()
+        logged_calls: list[dict] = []
+
+        def capture_workflow_end(status: str, cycle_counts: dict, **kwargs: object) -> None:
+            logged_calls.append({"status": status, **kwargs})
+
+        results = [
+            _make_cli_result("PASS", session_id="sess-1"),
+            _make_cli_result("PASS", session_id="sess-2"),
+        ]
+        call_count = 0
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            nonlocal call_count
+            r = results[call_count]
+            call_count += 1
+            return r
+
+        with (
+            patch("dao_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("dao_harness.runner.validate_skill_exists"),
+            patch("dao_harness.state.SessionState._persist"),
+            patch(
+                "dao_harness.logger.RunLogger.log_workflow_end",
+                side_effect=capture_workflow_end,
+            ),
+        ):
+            runner = WorkflowRunner(
+                workflow=workflow,
+                issue_number=99,
+                workdir=tmp_path,
+            )
+            runner.run()
+
+        assert len(logged_calls) == 1
+        assert logged_calls[0]["status"] == "COMPLETE"
+
+    def test_exception_logs_error_status(self, tmp_path: Path) -> None:
+        """Exception during workflow logs status=ERROR with error message."""
+        workflow = _simple_workflow()
+        logged_calls: list[dict] = []
+
+        def capture_workflow_end(status: str, cycle_counts: dict, **kwargs: object) -> None:
+            logged_calls.append({"status": status, **kwargs})
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            raise RuntimeError("test failure")
+
+        with (
+            patch("dao_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("dao_harness.runner.validate_skill_exists"),
+            patch("dao_harness.state.SessionState._persist"),
+            patch(
+                "dao_harness.logger.RunLogger.log_workflow_end",
+                side_effect=capture_workflow_end,
+            ),
+        ):
+            runner = WorkflowRunner(
+                workflow=workflow,
+                issue_number=99,
+                workdir=tmp_path,
+            )
+            with pytest.raises(RuntimeError):
+                runner.run()
+
+        assert len(logged_calls) == 1
+        assert logged_calls[0]["status"] == "ERROR"
+        assert "RuntimeError" in logged_calls[0]["error"]

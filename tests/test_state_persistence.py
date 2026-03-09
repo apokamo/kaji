@@ -90,12 +90,34 @@ class TestStatePersistence:
         state = SessionState.load_or_create(300)
         state.increment_cycle("code-review")
         state.increment_cycle("code-review")
-        # Need to trigger persist
-        verdict = Verdict(status="PASS", reason="ok", evidence="ok", suggestion="")
-        state.record_step("verify", verdict)
 
         loaded = SessionState.load_or_create(300)
         assert loaded.cycle_iterations("code-review") == 2
+
+    def test_session_id_persisted_immediately(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """save_session_id persists immediately without needing record_step."""
+        monkeypatch.setattr("dao_harness.state.STATE_DIR", tmp_path)
+
+        state = SessionState.load_or_create(301)
+        state.save_session_id("design", "sess-abc-123")
+
+        # Load from disk without any record_step
+        loaded = SessionState.load_or_create(301)
+        assert loaded.sessions["design"] == "sess-abc-123"
+
+    def test_increment_cycle_persisted_immediately(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """increment_cycle persists immediately without needing record_step."""
+        monkeypatch.setattr("dao_harness.state.STATE_DIR", tmp_path)
+
+        state = SessionState.load_or_create(302)
+        state.increment_cycle("code-review")
+
+        loaded = SessionState.load_or_create(302)
+        assert loaded.cycle_iterations("code-review") == 1
 
     def test_multiple_steps_persisted(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -167,34 +167,44 @@ class TestGeminiAdapter:
         assert adapter.extract_session_id(event) is None
 
     @pytest.mark.small
-    def test_extract_text_from_response_event(self, adapter: GeminiAdapter) -> None:
-        """Response event with text content returns the text."""
-        event = {
-            "type": "response",
-            "response": {"content": [{"type": "text", "text": "hello"}]},
-        }
+    def test_extract_text_from_assistant_message(self, adapter: GeminiAdapter) -> None:
+        """Assistant message event returns content text."""
+        event = {"type": "message", "role": "assistant", "content": "hello"}
         assert adapter.extract_text(event) == "hello"
 
     @pytest.mark.small
+    def test_extract_text_returns_none_for_user_message(self, adapter: GeminiAdapter) -> None:
+        """User message event returns None."""
+        event = {"type": "message", "role": "user", "content": "question"}
+        assert adapter.extract_text(event) is None
+
+    @pytest.mark.small
     def test_extract_text_returns_none_for_non_matching(self, adapter: GeminiAdapter) -> None:
-        """Non-response event returns None."""
+        """Non-message event returns None."""
         event = {"type": "other"}
         assert adapter.extract_text(event) is None
 
     @pytest.mark.small
-    def test_extract_cost_returns_none_for_any_event(self, adapter: GeminiAdapter) -> None:
-        """Gemini cost extraction always returns None (no cost info)."""
-        event = {"type": "response", "response": {"content": [{"type": "text", "text": "hi"}]}}
-        assert adapter.extract_cost(event) is None
+    def test_extract_cost_from_result_event(self, adapter: GeminiAdapter) -> None:
+        """Result event with stats returns CostInfo with token counts."""
+        event = {
+            "type": "result",
+            "status": "success",
+            "stats": {"input_tokens": 1000, "output_tokens": 50},
+        }
+        cost = adapter.extract_cost(event)
+        assert cost is not None
+        assert cost.input_tokens == 1000
+        assert cost.output_tokens == 50
 
     @pytest.mark.small
     def test_extract_cost_returns_none_for_non_matching(self, adapter: GeminiAdapter) -> None:
-        """Non-matching event also returns None for cost."""
-        event = {"type": "other"}
+        """Non-result event returns None for cost."""
+        event = {"type": "message", "role": "assistant", "content": "hi"}
         assert adapter.extract_cost(event) is None
 
     @pytest.mark.small
-    def test_extract_cost_always_none(self, adapter: GeminiAdapter) -> None:
-        """Gemini adapter never returns cost info regardless of event type."""
+    def test_extract_cost_returns_none_for_init(self, adapter: GeminiAdapter) -> None:
+        """Init event returns None for cost."""
         event = {"type": "init", "session_id": "gem-789"}
         assert adapter.extract_cost(event) is None
