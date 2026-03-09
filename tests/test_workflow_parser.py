@@ -24,6 +24,8 @@ MINIMAL_WORKFLOW_YAML = dedent("""\
       - id: step_a
         skill: analyse
         agent: claude
+        on:
+          PASS: step_b
       - id: step_b
         skill: review
         agent: codex
@@ -357,6 +359,8 @@ class TestParsingErrors:
               - id: step1
                 skill: s
                 agent: claude
+                on:
+                  PASS: end
         """)
 
         with pytest.raises(WorkflowValidationError, match="execution_policy must be one of"):
@@ -373,6 +377,8 @@ class TestParsingErrors:
                   - id: step1
                     skill: s
                     agent: claude
+                    on:
+                      PASS: end
             """)
             wf = load_workflow_from_str(yaml_str)
             assert wf.execution_policy == policy
@@ -386,12 +392,58 @@ class TestParsingErrors:
               - id: step1
                 skill: s
                 agent: claude
+                on:
+                  PASS: end
             cycles:
               my-cycle:
                 entry: step1
         """)
 
         with pytest.raises(WorkflowValidationError, match="Cycle 'my-cycle' missing required"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_step_missing_on_raises_validation_error(self) -> None:
+        """Step without 'on' key raises WorkflowValidationError."""
+        yaml_str = dedent("""\
+            name: test
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+        """)
+
+        with pytest.raises(WorkflowValidationError, match="missing required key 'on'"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_step_on_null_raises_validation_error(self) -> None:
+        """Step with on: null raises WorkflowValidationError."""
+        yaml_str = dedent("""\
+            name: test
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+                on: null
+        """)
+
+        with pytest.raises(WorkflowValidationError, match="'on' must be a mapping"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_step_on_empty_mapping_raises_validation_error(self) -> None:
+        """Step with on: {} raises WorkflowValidationError."""
+        yaml_str = dedent("""\
+            name: test
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+                on: {}
+        """)
+
+        with pytest.raises(WorkflowValidationError, match="'on' must not be empty"):
             load_workflow_from_str(yaml_str)
 
     @pytest.mark.small
@@ -434,6 +486,8 @@ class TestParsingErrors:
               - id: step1
                 skill: s
                 agent: claude
+                on:
+                  PASS: end
             cycles:
               my-cycle:
                 entry: step1
@@ -454,6 +508,8 @@ class TestParsingErrors:
               - id: step1
                 skill: s
                 agent: claude
+                on:
+                  PASS: end
             cycles:
               my-cycle:
                 entry: step1
@@ -474,6 +530,8 @@ class TestParsingErrors:
               - id: step1
                 skill: s
                 agent: claude
+                on:
+                  PASS: end
             cycles:
               my-cycle:
                 entry: step1
@@ -495,6 +553,8 @@ class TestParsingErrors:
               - id: step1
                 skill: s
                 agent: claude
+                on:
+                  PASS: end
             cycles:
               my-cycle:
                 entry: step1
@@ -516,6 +576,8 @@ class TestParsingErrors:
               - id: step1
                 skill: s
                 agent: claude
+                on:
+                  PASS: end
             cycles:
               my-cycle:
                 entry: step1
