@@ -18,7 +18,9 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
-dependencies = []
+dependencies = [
+    "pyyaml>=6.0",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -37,7 +39,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["bugfix_agent*"]
+include = ["bugfix_agent*", "dao_harness*"]
 
 [tool.ruff]
 line-length = 100
@@ -56,3 +58,8 @@ warn_unused_ignores = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --tb=short"
+markers = [
+    "small: Small tests - no external dependencies",
+    "medium: Medium tests - file I/O, mock processes",
+    "large: Large tests - real CLI, E2E",
+]
