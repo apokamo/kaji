@@ -332,7 +332,7 @@ def validate_skill_exists(skill_name: str, agent: str, workdir: Path) -> None:
 # 1. 現状をタグで保存（参照用）
 git tag v6.0
 
-# 2. 新パッケージを作成（bugfix_agent/ と並行稼働）
+# 2. 新パッケージを作成（bugfix_agent/ は参照用として保持）
 mkdir -p dao_harness/
 
 # 3. V7 完了後に bugfix_agent/ を削除
