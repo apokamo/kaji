@@ -11,6 +11,7 @@ from textwrap import dedent
 import pytest
 
 from dao_harness.errors import WorkflowValidationError
+from dao_harness.models import CycleDefinition, Step, Workflow
 from dao_harness.workflow import load_workflow, load_workflow_from_str, validate_workflow
 
 # ============================================================
@@ -624,4 +625,163 @@ class TestValidationErrors:
         wf = load_workflow_from_str(yaml_str)
 
         with pytest.raises(WorkflowValidationError, match="loop must not be empty"):
+            validate_workflow(wf)
+
+
+# ============================================================
+# Test class: validate_workflow schema invariants (direct model construction)
+# ============================================================
+
+
+def _make_valid_step(step_id: str = "step1") -> Step:
+    """Helper to construct a minimal valid Step."""
+    return Step(id=step_id, skill="s", agent="claude", on={"PASS": "end"})
+
+
+def _make_valid_workflow(*, extra_step: Step | None = None) -> Workflow:
+    """Helper to construct a minimal valid Workflow."""
+    steps = [_make_valid_step()]
+    if extra_step:
+        steps.append(extra_step)
+    return Workflow(name="test", description="", execution_policy="auto", steps=steps)
+
+
+class TestValidateWorkflowSchemaInvariants:
+    """validate_workflow enforces schema invariants even on directly-constructed models.
+
+    This guards against callers that bypass load_workflow / _parse_workflow
+    and construct Workflow / Step / CycleDefinition objects by hand.
+    """
+
+    # --- execution_policy ---
+
+    @pytest.mark.small
+    def test_invalid_execution_policy_direct_construction_raises(self) -> None:
+        """execution_policy typo on directly-constructed Workflow raises WorkflowValidationError."""
+        wf = _make_valid_workflow()
+        wf.execution_policy = "yolo"  # bypass parser
+
+        with pytest.raises(WorkflowValidationError, match="execution_policy must be one of"):
+            validate_workflow(wf)
+
+    @pytest.mark.small
+    def test_all_valid_execution_policies_pass_direct_construction(self) -> None:
+        """All three valid execution_policy values pass validate_workflow."""
+        for policy in ("auto", "sandbox", "interactive"):
+            wf = _make_valid_workflow()
+            wf.execution_policy = policy
+            validate_workflow(wf)  # must not raise
+
+    # --- step.on schema ---
+
+    @pytest.mark.small
+    def test_step_on_empty_dict_direct_construction_raises(self) -> None:
+        """Step with on={} on directly-constructed model raises WorkflowValidationError."""
+        step = Step(id="step1", skill="s", agent="claude", on={})
+        wf = Workflow(name="test", description="", execution_policy="auto", steps=[step])
+
+        with pytest.raises(WorkflowValidationError, match="'on' must be a non-empty mapping"):
+            validate_workflow(wf)
+
+    @pytest.mark.small
+    def test_step_on_non_dict_direct_construction_raises(self) -> None:
+        """Step with on=None on directly-constructed model raises WorkflowValidationError."""
+        step = Step(id="step1", skill="s", agent="claude")
+        step.on = None  # type: ignore[assignment]  # bypass type system
+        wf = Workflow(name="test", description="", execution_policy="auto", steps=[step])
+
+        with pytest.raises(WorkflowValidationError, match="'on' must be a non-empty mapping"):
+            validate_workflow(wf)
+
+    # --- cycle.loop schema ---
+
+    @pytest.mark.small
+    def test_cycle_loop_non_list_direct_construction_raises(self) -> None:
+        """CycleDefinition with loop=123 on directly-constructed model raises WorkflowValidationError."""
+        step = _make_valid_step()
+        cycle = CycleDefinition(
+            name="c",
+            entry="step1",
+            loop=123,
+            max_iterations=3,
+            on_exhaust="ABORT",  # type: ignore[arg-type]
+        )
+        wf = Workflow(
+            name="test", description="", execution_policy="auto", steps=[step], cycles=[cycle]
+        )
+
+        with pytest.raises(WorkflowValidationError, match="'loop' must be a list"):
+            validate_workflow(wf)
+
+    # --- cycle.max_iterations schema ---
+
+    @pytest.mark.small
+    def test_cycle_max_iterations_string_direct_construction_raises(self) -> None:
+        """CycleDefinition with max_iterations='oops' raises WorkflowValidationError."""
+        step = _make_valid_step("step1")
+        step2 = Step(id="step2", skill="s", agent="claude", on={"PASS": "end", "RETRY": "step1"})
+        cycle = CycleDefinition(
+            name="c",
+            entry="step1",
+            loop=["step1", "step2"],
+            max_iterations="oops",  # type: ignore[arg-type]
+            on_exhaust="ABORT",
+        )
+        wf = Workflow(
+            name="test",
+            description="",
+            execution_policy="auto",
+            steps=[step, step2],
+            cycles=[cycle],
+        )
+
+        with pytest.raises(WorkflowValidationError, match="'max_iterations' must be an integer"):
+            validate_workflow(wf)
+
+    @pytest.mark.small
+    def test_cycle_max_iterations_zero_direct_construction_raises(self) -> None:
+        """CycleDefinition with max_iterations=0 raises WorkflowValidationError."""
+        step = _make_valid_step("step1")
+        step2 = Step(id="step2", skill="s", agent="claude", on={"PASS": "end", "RETRY": "step1"})
+        cycle = CycleDefinition(
+            name="c",
+            entry="step1",
+            loop=["step1", "step2"],
+            max_iterations=0,
+            on_exhaust="ABORT",
+        )
+        wf = Workflow(
+            name="test",
+            description="",
+            execution_policy="auto",
+            steps=[step, step2],
+            cycles=[cycle],
+        )
+
+        with pytest.raises(
+            WorkflowValidationError, match="'max_iterations' must be an integer >= 1"
+        ):
+            validate_workflow(wf)
+
+    @pytest.mark.small
+    def test_cycle_max_iterations_bool_direct_construction_raises(self) -> None:
+        """CycleDefinition with max_iterations=True (bool) raises WorkflowValidationError."""
+        step = _make_valid_step("step1")
+        step2 = Step(id="step2", skill="s", agent="claude", on={"PASS": "end", "RETRY": "step1"})
+        cycle = CycleDefinition(
+            name="c",
+            entry="step1",
+            loop=["step1", "step2"],
+            max_iterations=True,  # type: ignore[arg-type]  # bool subclasses int
+            on_exhaust="ABORT",
+        )
+        wf = Workflow(
+            name="test",
+            description="",
+            execution_policy="auto",
+            steps=[step, step2],
+            cycles=[cycle],
+        )
+
+        with pytest.raises(WorkflowValidationError, match="'max_iterations' must be an integer"):
             validate_workflow(wf)

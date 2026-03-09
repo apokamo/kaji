@@ -177,12 +177,35 @@ def validate_workflow(workflow: Workflow) -> None:
     errors: list[str] = []
     valid_verdicts = {"PASS", "RETRY", "BACK", "ABORT"}
 
+    # ---- スキーマレベルのバリデーション ----
+    # execution_policy の enum 検証（_parse_workflow() を経由しない場合も担保）
+    if workflow.execution_policy not in VALID_EXECUTION_POLICIES:
+        errors.append(
+            f"execution_policy must be one of {sorted(VALID_EXECUTION_POLICIES)}, "
+            f"got '{workflow.execution_policy}'"
+        )
+
     # ワークフローレベルの検証
     if not workflow.steps:
         errors.append("Workflow must have at least one step")
 
     # ステップレベルの検証
     for step in workflow.steps:
+        # スキーマ: step.on は非空の dict であること
+        if not isinstance(step.on, dict) or not step.on:
+            errors.append(f"Step '{step.id}' 'on' must be a non-empty mapping")
+            # on が不正な場合、以降の遷移検証はスキップ
+            if step.resume:
+                target = workflow.find_step(step.resume)
+                if not target:
+                    errors.append(f"Step '{step.id}' resumes unknown step '{step.resume}'")
+                elif target.agent != step.agent:
+                    errors.append(
+                        f"Step '{step.id}' resumes '{step.resume}' but agents differ "
+                        f"({step.agent} != {target.agent})"
+                    )
+            continue
+
         # 1. resume 先が存在し、同一 agent であること
         if step.resume:
             target = workflow.find_step(step.resume)
@@ -208,6 +231,24 @@ def validate_workflow(workflow: Workflow) -> None:
 
     # サイクルレベルの検証
     for cycle in workflow.cycles:
+        # スキーマ: cycle.loop は list であること
+        if not isinstance(cycle.loop, list):
+            errors.append(
+                f"Cycle '{cycle.name}' 'loop' must be a list, got {type(cycle.loop).__name__}"
+            )
+            continue
+
+        # スキーマ: cycle.max_iterations は正の整数であること
+        if (
+            not isinstance(cycle.max_iterations, int)
+            or isinstance(cycle.max_iterations, bool)
+            or cycle.max_iterations < 1
+        ):
+            errors.append(
+                f"Cycle '{cycle.name}' 'max_iterations' must be an integer >= 1, "
+                f"got {cycle.max_iterations!r}"
+            )
+
         # 4. loop が非空であること
         if not cycle.loop:
             errors.append(f"Cycle '{cycle.name}' loop must not be empty")
