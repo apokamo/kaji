@@ -76,11 +76,19 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
             raise WorkflowValidationError(
                 f"Step at index {i} missing required key(s): {', '.join(missing)}"
             )
-        raw_on = step_data.get("on") or step_data.get(True) or {}
+        if "on" in step_data:
+            raw_on = step_data["on"]
+        elif True in step_data:
+            # YAML 1.1 interprets bare `on` as boolean True
+            raw_on = step_data[True]
+        else:
+            raise WorkflowValidationError(f"Step '{step_data['id']}' missing required key 'on'")
         if not isinstance(raw_on, dict):
             raise WorkflowValidationError(
                 f"Step '{step_data['id']}' 'on' must be a mapping, got {type(raw_on).__name__}"
             )
+        if not raw_on:
+            raise WorkflowValidationError(f"Step '{step_data['id']}' 'on' must not be empty")
         steps.append(
             Step(
                 id=step_data["id"],
