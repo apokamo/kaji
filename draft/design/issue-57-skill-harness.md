@@ -324,6 +324,38 @@ def validate_skill_exists(skill_name: str, agent: str, workdir: Path) -> None:
 1. **既存のワークフロー互換性**: 現行の `/issue-create` → `/issue-close` のスキルチェーンを変更せずにハーネスで自動化できること
 2. **段階的移行**: 既存の `bugfix_agent/` を即座に削除せず、新ハーネスと並行稼働できること
 
+### 移行戦略（V6 → V7）
+
+スクラップビルド方式で V7.0 として刷新する。現状を `v6.0` タグで保存し、`dao_harness/` を新規作成:
+
+```bash
+# 1. 現状をタグで保存（参照用）
+git tag v6.0
+
+# 2. 新パッケージを作成（bugfix_agent/ と並行稼働）
+mkdir -p dao_harness/
+
+# 3. V7 完了後に bugfix_agent/ を削除
+```
+
+#### リポジトリ構成の変更
+
+| 対象 | V7 での扱い | 理由 |
+|------|------------|------|
+| `bugfix_agent/` | `dao_harness/` に置換（V7完了後削除） | スクラップビルド対象 |
+| `pyproject.toml` | パッケージ名・エントリポイント変更 | `dao_harness` へ |
+| `CLAUDE.md` | 更新（Essential Commands, パス変更） | 新パッケージに合わせる |
+| `docs/ARCHITECTURE.md` | 全面改訂 | ハーネスアーキテクチャ |
+| `docs/dev/development_workflow.md` | 更新 | ハーネス経由の自動実行フロー追記 |
+| `docs/dev/skill-authoring.md` | **新規作成** | スキル作成マニュアル |
+| `docs/dev/workflow-authoring.md` | **新規作成** | ワークフロー定義マニュアル |
+| `docs/cli-guides/` | そのまま維持 | 最新化済み |
+| `docs/dev/testing-convention.md` | そのまま維持 | 変更なし |
+| `docs/guides/` | そのまま維持 | git worktree 等は共通 |
+| `docs/adr/` | 維持 + V7 ADR 追加 | 履歴保存 |
+
+> **参照方法**: V6 のコードを参照する場合は `git show v6.0:bugfix_agent/verdict.py` 等で即座にアクセス可能。V6 フォルダへの物理移動は行わない。
+
 ### エラー階層
 
 現行オーケストレータの5種エラークラスを継承・再編:
@@ -1305,19 +1337,22 @@ suggestion: "次のアクション提案"（ABORT/BACK時必須）
 > （Codex/Gemini）をプロジェクト設定として自動ロードする。ハーネスが skill loader / prompt assembler を
 > 再実装することを明確に避ける。
 
-### 既存コードからの流用
+### V6 からの設計知見の継承
 
-| 現行モジュール | 流用 | 変更点 |
-|---------------|------|--------|
-| `bugfix_agent/cli.py` | ○ ストリーミング実行 + `format_jsonl_line()` | `stream_and_log()` + CLI 別アダプタに再構成。行単位 flush・verbose 出力のパターンを継承 |
-| `bugfix_agent/verdict.py` | △ パーサ + エラー分類 | 5段フォールバック → デリミタ+JSON/JSONL の2段に簡素化。4フィールド形式と `InvalidVerdictValue` 回復不能エラーを継承 |
-| `bugfix_agent/run_logger.py` | ○ JSONL ログ | イベント名を step 系に改名、verdict 4フィールド・コスト・duration を追加 |
-| `bugfix_agent/state.py` | × 削除 | SessionState に置換 |
-| `bugfix_agent/handlers/` | × 削除 | スキルが担う |
-| `bugfix_agent/tools/` | × 削除 | `build_*_args` 関数に置換 |
-| `bugfix_agent/context.py` | × 削除 | スキル側の責務 |
-| `bugfix_agent/prompts.py` | × 削除 | スキル側の責務 |
-| `bugfix_agent/config.py` | △ 部分流用 | ワークフロー YAML ローダーに置換 |
+`dao_harness/` はスクラップビルドだが、V6（`bugfix_agent/`）の設計知見は継承する。
+V6 のコード参照は `git show v6.0:<path>` で行う:
+
+| V6 モジュール | 継承する知見 | V7 での実装先 |
+|---------------|------------|--------------|
+| `bugfix_agent/cli.py` | ストリーミング実行、行単位 flush パターン | `dao_harness/cli.py` — `stream_and_log()` + CLI 別アダプタ |
+| `bugfix_agent/verdict.py` | 4フィールド形式、回復不能エラーの分類 | `dao_harness/verdict.py` — YAML パーサに刷新 |
+| `bugfix_agent/run_logger.py` | JSONL ログ、即時 flush | `dao_harness/logger.py` — イベント名改名 + コスト・duration 追加 |
+| `bugfix_agent/errors.py` | エラー分類のセマンティクス | `dao_harness/errors.py` — 10 クラスに再編 |
+| `bugfix_agent/config.py` | TOML 設定のパターン | `dao_harness/workflow.py` — YAML ローダーに置換 |
+| `bugfix_agent/state.py` | *(継承なし)* | `dao_harness/state.py` — issue-scoped state に全面刷新 |
+| `bugfix_agent/handlers/` | *(継承なし)* | スキル側の責務 |
+| `bugfix_agent/tools/` | *(継承なし)* | `dao_harness/cli.py` — `build_*_args` 関数 |
+| `bugfix_agent/prompts/` | *(継承なし)* | スキル側の責務 |
 
 ## テスト戦略
 
@@ -1363,9 +1398,11 @@ suggestion: "次のアクション提案"（ABORT/BACK時必須）
 | docs/dev/development_workflow.md | あり | ハーネス経由の自動実行フローを追記 |
 | docs/dev/skill-authoring.md | あり | **新規作成**。スキル作成マニュアル（AI 参照前提） |
 | docs/dev/workflow-authoring.md | あり | **新規作成**。ワークフロー定義マニュアル（AI 参照前提） |
-| docs/cli-guides/ | なし | 今回の更新で最新化済み |
-| CLAUDE.md | あり | Essential Commands セクションの更新 |
-| pyproject.toml | あり | パッケージ名・エントリポイントの変更 |
+| docs/cli-guides/ | なし | 最新化済み、そのまま維持 |
+| docs/dev/testing-convention.md | なし | そのまま維持 |
+| docs/guides/ | なし | git worktree 等は共通、そのまま維持 |
+| CLAUDE.md | あり | Essential Commands・パス変更（`bugfix_agent/` → `dao_harness/`） |
+| pyproject.toml | あり | パッケージ名・エントリポイント変更（`dao_harness`） |
 
 ## 参照情報（Primary Sources）
 
