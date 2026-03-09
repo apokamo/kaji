@@ -229,12 +229,12 @@ class TestGeminiArgs:
 
     @pytest.mark.small
     def test_basic_new_session(self, workdir: Path) -> None:
-        """Basic Gemini invocation without optional parameters."""
+        """Basic Gemini invocation: -p takes prompt as value, -o stream-json."""
         step = _make_step("gemini")
         args = build_cli_args(
             step, "do stuff", workdir, session_id=None, execution_policy="interactive"
         )
-        assert args == ["gemini", "-p", "-o", "stream-json", "do stuff"]
+        assert args == ["gemini", "-p", "do stuff", "-o", "stream-json"]
 
     @pytest.mark.small
     def test_with_model(self, workdir: Path) -> None:

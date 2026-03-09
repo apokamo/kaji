@@ -57,8 +57,9 @@ class SessionState:
         return STATE_DIR / str(self.issue_number)
 
     def save_session_id(self, step_id: str, session_id: str) -> None:
-        """ステップのセッション ID を保存する。"""
+        """ステップのセッション ID を保存し、即時永続化する。"""
         self.sessions[step_id] = session_id
+        self._persist()
 
     def get_session_id(self, resume_target: str | None) -> str | None:
         """resume 対象のセッション ID を取得する。"""
@@ -71,8 +72,9 @@ class SessionState:
         return self.cycle_counts.get(cycle_name, 0)
 
     def increment_cycle(self, cycle_name: str) -> None:
-        """サイクルのイテレーション回数をインクリメントする。"""
+        """サイクルのイテレーション回数をインクリメントし、即時永続化する。"""
         self.cycle_counts[cycle_name] = self.cycle_iterations(cycle_name) + 1
+        self._persist()
 
     def record_step(self, step_id: str, verdict: Verdict) -> None:
         """ステップ実行結果を記録し、永続化する。"""

@@ -100,14 +100,18 @@ class TestRealGeminiCLI:
         """GeminiAdapter correctly parses known JSONL structures."""
         adapter = GeminiAdapter()
 
-        init_event = {"type": "init", "session_id": "gem-real-789"}
+        init_event = {"type": "init", "session_id": "gem-real-789", "model": "auto"}
         assert adapter.extract_session_id(init_event) == "gem-real-789"
 
-        text_event = {
-            "type": "response",
-            "response": {"content": [{"type": "text", "text": "Gemini output"}]},
-        }
+        text_event = {"type": "message", "role": "assistant", "content": "Gemini output"}
         assert adapter.extract_text(text_event) == "Gemini output"
 
-        # Gemini has no cost info
-        assert adapter.extract_cost(text_event) is None
+        # Cost from result event stats
+        result_event = {
+            "type": "result",
+            "status": "success",
+            "stats": {"input_tokens": 1000, "output_tokens": 50},
+        }
+        cost = adapter.extract_cost(result_event)
+        assert cost is not None
+        assert cost.input_tokens == 1000

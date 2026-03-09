@@ -103,13 +103,15 @@ class TestStreamAndLog:
         assert result.cost.input_tokens == 100
 
     def test_gemini_streaming(self, tmp_path: Path) -> None:
-        """Gemini JSONL stream extracts session_id and text."""
+        """Gemini JSONL stream extracts session_id, text, and cost from stats."""
         jsonl_lines = [
-            json.dumps({"type": "init", "session_id": "gem-xyz"}),
+            json.dumps({"type": "init", "session_id": "gem-xyz", "model": "auto"}),
+            json.dumps({"type": "message", "role": "assistant", "content": "Gemini says hi"}),
             json.dumps(
                 {
-                    "type": "response",
-                    "response": {"content": [{"type": "text", "text": "Gemini says hi"}]},
+                    "type": "result",
+                    "status": "success",
+                    "stats": {"input_tokens": 500, "output_tokens": 20},
                 }
             ),
         ]
@@ -126,7 +128,8 @@ class TestStreamAndLog:
 
         assert result.session_id == "gem-xyz"
         assert "Gemini says hi" in result.full_output
-        assert result.cost is None  # Gemini has no cost info
+        assert result.cost is not None
+        assert result.cost.input_tokens == 500
 
     def test_console_log_written(self, tmp_path: Path) -> None:
         """Console log contains decoded text (not raw JSONL)."""
