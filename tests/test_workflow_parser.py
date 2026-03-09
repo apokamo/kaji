@@ -10,7 +10,8 @@ from textwrap import dedent
 
 import pytest
 
-from dao_harness.workflow import load_workflow, load_workflow_from_str
+from dao_harness.errors import WorkflowValidationError
+from dao_harness.workflow import load_workflow, load_workflow_from_str, validate_workflow
 
 # ============================================================
 # Shared YAML fixtures (embedded strings)
@@ -151,6 +152,24 @@ class TestWorkflowParsing:
 
         assert wf.cycles == []
 
+    @pytest.mark.small
+    def test_yaml_1_1_on_key_parsed_correctly(self) -> None:
+        """YAML 1.1 interprets bare 'on' as True; parser handles this fallback."""
+        yaml_str = dedent("""\
+            name: test
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+                on:
+                  PASS: end
+        """)
+        wf = load_workflow_from_str(yaml_str)
+
+        step = wf.find_step("step1")
+        assert step is not None
+        assert step.on == {"PASS": "end"}
+
 
 # ============================================================
 # Test class: Workflow helper methods
@@ -240,9 +259,173 @@ class TestParsingErrors:
     """Tests for error handling in load_workflow_from_str."""
 
     @pytest.mark.small
-    def test_invalid_yaml_raises_error(self) -> None:
-        """Malformed YAML raises an appropriate error."""
+    def test_invalid_yaml_syntax_raises_validation_error(self) -> None:
+        """Malformed YAML syntax raises WorkflowValidationError."""
         bad_yaml = "name: test\nsteps:\n  - id: [unclosed"
 
-        with pytest.raises((ValueError, TypeError, KeyError, Exception)):  # noqa: B017
+        with pytest.raises(WorkflowValidationError, match="YAML parse error"):
             load_workflow_from_str(bad_yaml)
+
+    @pytest.mark.small
+    def test_non_mapping_root_raises_validation_error(self) -> None:
+        """Non-mapping root (e.g. a list) raises WorkflowValidationError."""
+        with pytest.raises(WorkflowValidationError, match="must be a YAML mapping"):
+            load_workflow_from_str("- item1\n- item2")
+
+    @pytest.mark.small
+    def test_steps_null_raises_validation_error(self) -> None:
+        """steps: null raises WorkflowValidationError."""
+        yaml_str = "name: test\nsteps: null"
+
+        with pytest.raises(WorkflowValidationError, match="'steps' must be a list, got null"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_steps_not_a_list_raises_validation_error(self) -> None:
+        """steps as a scalar raises WorkflowValidationError."""
+        yaml_str = "name: test\nsteps: not-a-list"
+
+        with pytest.raises(WorkflowValidationError, match="'steps' must be a list"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_step_not_mapping_raises_validation_error(self) -> None:
+        """Step item that is a plain string raises WorkflowValidationError."""
+        yaml_str = "name: test\nsteps:\n  - just-a-string"
+
+        with pytest.raises(WorkflowValidationError, match="Step at index 0 must be a mapping"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_step_missing_id_raises_validation_error(self) -> None:
+        """Step missing 'id' raises WorkflowValidationError."""
+        yaml_str = dedent("""\
+            name: test
+            steps:
+              - skill: s
+                agent: claude
+        """)
+
+        with pytest.raises(WorkflowValidationError, match="missing required key.*id"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_step_missing_skill_raises_validation_error(self) -> None:
+        """Step missing 'skill' raises WorkflowValidationError."""
+        yaml_str = dedent("""\
+            name: test
+            steps:
+              - id: step1
+                agent: claude
+        """)
+
+        with pytest.raises(WorkflowValidationError, match="missing required key.*skill"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_step_missing_agent_raises_validation_error(self) -> None:
+        """Step missing 'agent' raises WorkflowValidationError."""
+        yaml_str = dedent("""\
+            name: test
+            steps:
+              - id: step1
+                skill: s
+        """)
+
+        with pytest.raises(WorkflowValidationError, match="missing required key.*agent"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_step_missing_multiple_keys_reports_all(self) -> None:
+        """Step missing multiple required keys reports all missing keys."""
+        yaml_str = dedent("""\
+            name: test
+            steps:
+              - skill: s
+        """)
+
+        with pytest.raises(WorkflowValidationError, match="id.*agent"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_invalid_execution_policy_raises_validation_error(self) -> None:
+        """Typo in execution_policy raises WorkflowValidationError."""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: yolo
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+        """)
+
+        with pytest.raises(WorkflowValidationError, match="execution_policy must be one of"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_valid_execution_policies_accepted(self) -> None:
+        """All valid execution_policy values are accepted."""
+        for policy in ("auto", "sandbox", "interactive"):
+            yaml_str = dedent(f"""\
+                name: test
+                execution_policy: {policy}
+                steps:
+                  - id: step1
+                    skill: s
+                    agent: claude
+            """)
+            wf = load_workflow_from_str(yaml_str)
+            assert wf.execution_policy == policy
+
+    @pytest.mark.small
+    def test_cycle_missing_required_keys_raises_validation_error(self) -> None:
+        """Cycle missing required keys raises WorkflowValidationError."""
+        yaml_str = dedent("""\
+            name: test
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+            cycles:
+              my-cycle:
+                entry: step1
+        """)
+
+        with pytest.raises(WorkflowValidationError, match="Cycle 'my-cycle' missing required"):
+            load_workflow_from_str(yaml_str)
+
+
+class TestValidationErrors:
+    """Tests for validate_workflow catching structural issues."""
+
+    @pytest.mark.small
+    def test_empty_steps_raises_validation_error(self) -> None:
+        """Workflow with steps: [] raises WorkflowValidationError on validation."""
+        yaml_str = "name: test\nsteps: []"
+        wf = load_workflow_from_str(yaml_str)
+
+        with pytest.raises(WorkflowValidationError, match="at least one step"):
+            validate_workflow(wf)
+
+    @pytest.mark.small
+    def test_empty_cycle_loop_raises_validation_error(self) -> None:
+        """Cycle with loop: [] raises WorkflowValidationError on validation."""
+        yaml_str = dedent("""\
+            name: test
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+                on:
+                  PASS: end
+            cycles:
+              my-cycle:
+                entry: step1
+                loop: []
+                max_iterations: 3
+                on_exhaust: ABORT
+        """)
+        wf = load_workflow_from_str(yaml_str)
+
+        with pytest.raises(WorkflowValidationError, match="loop must not be empty"):
+            validate_workflow(wf)

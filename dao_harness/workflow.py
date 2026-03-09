@@ -49,13 +49,33 @@ def load_workflow_from_str(yaml_str: str) -> Workflow:
     return _parse_workflow(data)
 
 
+VALID_EXECUTION_POLICIES = {"auto", "sandbox", "interactive"}
+
+_STEP_REQUIRED_KEYS = ("id", "skill", "agent")
+
+
 def _parse_workflow(data: dict[str, Any]) -> Workflow:
     """YAML data dict をワークフローオブジェクトに変換する。"""
     if not isinstance(data, dict):
         raise WorkflowValidationError("Workflow definition must be a YAML mapping")
 
+    raw_steps = data.get("steps", [])
+    if raw_steps is None:
+        raise WorkflowValidationError("'steps' must be a list, got null")
+    if not isinstance(raw_steps, list):
+        raise WorkflowValidationError(f"'steps' must be a list, got {type(raw_steps).__name__}")
+
     steps = []
-    for step_data in data.get("steps", []):
+    for i, step_data in enumerate(raw_steps):
+        if not isinstance(step_data, dict):
+            raise WorkflowValidationError(
+                f"Step at index {i} must be a mapping, got {type(step_data).__name__}"
+            )
+        missing = [k for k in _STEP_REQUIRED_KEYS if k not in step_data]
+        if missing:
+            raise WorkflowValidationError(
+                f"Step at index {i} missing required key(s): {', '.join(missing)}"
+            )
         steps.append(
             Step(
                 id=step_data["id"],
@@ -71,8 +91,26 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
             )
         )
 
+    raw_cycles = data.get("cycles", {})
+    if raw_cycles is None:
+        raw_cycles = {}
+    if not isinstance(raw_cycles, dict):
+        raise WorkflowValidationError(
+            f"'cycles' must be a mapping, got {type(raw_cycles).__name__}"
+        )
+
     cycles = []
-    for cycle_name, cycle_data in data.get("cycles", {}).items():
+    for cycle_name, cycle_data in raw_cycles.items():
+        if not isinstance(cycle_data, dict):
+            raise WorkflowValidationError(
+                f"Cycle '{cycle_name}' must be a mapping, got {type(cycle_data).__name__}"
+            )
+        cycle_required = ("entry", "loop", "max_iterations", "on_exhaust")
+        missing_cycle = [k for k in cycle_required if k not in cycle_data]
+        if missing_cycle:
+            raise WorkflowValidationError(
+                f"Cycle '{cycle_name}' missing required key(s): {', '.join(missing_cycle)}"
+            )
         cycles.append(
             CycleDefinition(
                 name=cycle_name,
@@ -83,10 +121,17 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
             )
         )
 
+    execution_policy = data.get("execution_policy", "auto")
+    if execution_policy not in VALID_EXECUTION_POLICIES:
+        raise WorkflowValidationError(
+            f"execution_policy must be one of {sorted(VALID_EXECUTION_POLICIES)}, "
+            f"got '{execution_policy}'"
+        )
+
     return Workflow(
         name=data.get("name", ""),
         description=data.get("description", ""),
-        execution_policy=data.get("execution_policy", "auto"),
+        execution_policy=execution_policy,
         steps=steps,
         cycles=cycles,
     )
@@ -103,6 +148,10 @@ def validate_workflow(workflow: Workflow) -> None:
     """
     errors: list[str] = []
     valid_verdicts = {"PASS", "RETRY", "BACK", "ABORT"}
+
+    # ワークフローレベルの検証
+    if not workflow.steps:
+        errors.append("Workflow must have at least one step")
 
     # ステップレベルの検証
     for step in workflow.steps:
@@ -131,16 +180,21 @@ def validate_workflow(workflow: Workflow) -> None:
 
     # サイクルレベルの検証
     for cycle in workflow.cycles:
-        # 4. entry ステップが存在すること
+        # 4. loop が非空であること
+        if not cycle.loop:
+            errors.append(f"Cycle '{cycle.name}' loop must not be empty")
+            continue
+
+        # 5. entry ステップが存在すること
         if not workflow.find_step(cycle.entry):
             errors.append(f"Cycle '{cycle.name}' entry step '{cycle.entry}' not found")
 
-        # 5. loop 内ステップが存在すること
+        # 6. loop 内ステップが存在すること
         for step_id in cycle.loop:
             if not workflow.find_step(step_id):
                 errors.append(f"Cycle '{cycle.name}' loop step '{step_id}' not found")
 
-        # 6. loop 末尾ステップが RETRY 時に loop 先頭へ遷移すること
+        # 7. loop 末尾ステップが RETRY 時に loop 先頭へ遷移すること
         tail_step = workflow.find_step(cycle.loop[-1])
         if tail_step and tail_step.on.get("RETRY") != cycle.loop[0]:
             errors.append(
@@ -148,7 +202,7 @@ def validate_workflow(workflow: Workflow) -> None:
                 f"transition to loop head '{cycle.loop[0]}'"
             )
 
-        # 7. entry/loop 内ステップが PASS 時にサイクル外へ遷移すること
+        # 8. entry/loop 内ステップが PASS 時にサイクル外へ遷移すること
         all_cycle_steps = {cycle.entry} | set(cycle.loop)
         has_exit = False
         for cycle_step_id in all_cycle_steps:
@@ -159,7 +213,7 @@ def validate_workflow(workflow: Workflow) -> None:
         if not has_exit:
             errors.append(f"Cycle '{cycle.name}' has no exit (PASS never leaves the cycle)")
 
-        # 8. on_exhaust が有効な verdict であること
+        # 9. on_exhaust が有効な verdict であること
         if cycle.on_exhaust not in valid_verdicts:
             errors.append(f"Cycle '{cycle.name}' on_exhaust '{cycle.on_exhaust}' is invalid")
 
