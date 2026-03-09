@@ -394,6 +394,140 @@ class TestParsingErrors:
         with pytest.raises(WorkflowValidationError, match="Cycle 'my-cycle' missing required"):
             load_workflow_from_str(yaml_str)
 
+    @pytest.mark.small
+    def test_step_on_scalar_raises_validation_error(self) -> None:
+        """step.on as a scalar string raises WorkflowValidationError."""
+        yaml_str = dedent("""\
+            name: test
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+                on: nope
+        """)
+
+        with pytest.raises(WorkflowValidationError, match="'on' must be a mapping.*str"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_step_on_list_raises_validation_error(self) -> None:
+        """step.on as a list raises WorkflowValidationError."""
+        yaml_str = dedent("""\
+            name: test
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+                on:
+                  - PASS
+        """)
+
+        with pytest.raises(WorkflowValidationError, match="'on' must be a mapping.*list"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_cycle_loop_not_list_raises_validation_error(self) -> None:
+        """cycle.loop as an integer raises WorkflowValidationError."""
+        yaml_str = dedent("""\
+            name: test
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+            cycles:
+              my-cycle:
+                entry: step1
+                loop: 123
+                max_iterations: 3
+                on_exhaust: ABORT
+        """)
+
+        with pytest.raises(WorkflowValidationError, match="'loop' must be a list.*int"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_cycle_loop_string_raises_validation_error(self) -> None:
+        """cycle.loop as a string raises WorkflowValidationError."""
+        yaml_str = dedent("""\
+            name: test
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+            cycles:
+              my-cycle:
+                entry: step1
+                loop: foo
+                max_iterations: 3
+                on_exhaust: ABORT
+        """)
+
+        with pytest.raises(WorkflowValidationError, match="'loop' must be a list.*str"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_cycle_max_iterations_string_raises_validation_error(self) -> None:
+        """cycle.max_iterations as a string raises WorkflowValidationError."""
+        yaml_str = dedent("""\
+            name: test
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+            cycles:
+              my-cycle:
+                entry: step1
+                loop:
+                  - step1
+                max_iterations: oops
+                on_exhaust: ABORT
+        """)
+
+        with pytest.raises(WorkflowValidationError, match="'max_iterations' must be an integer"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_cycle_max_iterations_zero_raises_validation_error(self) -> None:
+        """cycle.max_iterations of 0 raises WorkflowValidationError."""
+        yaml_str = dedent("""\
+            name: test
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+            cycles:
+              my-cycle:
+                entry: step1
+                loop:
+                  - step1
+                max_iterations: 0
+                on_exhaust: ABORT
+        """)
+
+        with pytest.raises(WorkflowValidationError, match="'max_iterations' must be >= 1"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_cycle_max_iterations_negative_raises_validation_error(self) -> None:
+        """cycle.max_iterations of -1 raises WorkflowValidationError."""
+        yaml_str = dedent("""\
+            name: test
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+            cycles:
+              my-cycle:
+                entry: step1
+                loop:
+                  - step1
+                max_iterations: -1
+                on_exhaust: ABORT
+        """)
+
+        with pytest.raises(WorkflowValidationError, match="'max_iterations' must be >= 1"):
+            load_workflow_from_str(yaml_str)
+
 
 class TestValidationErrors:
     """Tests for validate_workflow catching structural issues."""
