@@ -250,18 +250,38 @@ class TestPackageInstallation:
     """E2E verification of package installation boundary."""
 
     def test_bugfix_agent_not_importable_after_install(self) -> None:
-        """After pip install, bugfix_agent must not be importable."""
+        """pip install -e '.[dev]' then import bugfix_agent raises ModuleNotFoundError.
+
+        E2E verification: reinstall the package from the current worktree,
+        then confirm that bugfix_agent is excluded from the installed packages.
+        """
+        # Reinstall package to ensure pyproject.toml changes take effect
+        install_result = subprocess.run(
+            [VENV_PYTHON, "-m", "pip", "install", "-e", ".[dev]", "-q"],
+            capture_output=True,
+            text=True,
+            cwd=str(ROOT),
+        )
+        assert install_result.returncode == 0, (
+            f"pip install failed:\nstderr: {install_result.stderr}"
+        )
+
+        # Verify bugfix_agent is not importable
         result = subprocess.run(
             [VENV_PYTHON, "-c", "import bugfix_agent"],
             capture_output=True,
             text=True,
             cwd=str(ROOT),
         )
-        assert result.returncode != 0, "bugfix_agent should not be importable"
+        assert result.returncode != 0, "bugfix_agent should not be importable after install"
         assert "ModuleNotFoundError" in result.stderr
 
     def test_pytest_collection_no_errors(self) -> None:
-        """pytest --collect-only tests/ must have no collection errors."""
+        """E2E: subprocess pytest --collect-only tests/ has 0 collection errors.
+
+        Verifies that after V5 test removal, pytest can discover and collect
+        all remaining V7 tests without ImportError or other collection failures.
+        """
         result = subprocess.run(
             [VENV_PYTHON, "-m", "pytest", "--collect-only", "-q", "tests/"],
             capture_output=True,
