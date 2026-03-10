@@ -203,31 +203,20 @@ class TestWorkflowResumeConfig:
         assert step.resume is not None, "fix-code must have resume configured"
 
 
-# ============================================================
-# Large Tests: E2E workflow + skill execution
-# ============================================================
+@pytest.mark.medium
+class TestSkillVerdictParseable:
+    """Read actual SKILL.md files and verify their verdict examples parse correctly.
 
-
-@pytest.mark.large
-class TestSkillVerdictParseE2E:
-    """E2E test: read actual SKILL.md files and verify their verdict examples parse correctly.
-
-    This validates the full chain: filesystem → skill content → verdict parser,
-    ensuring that the verdict blocks embedded in each skill are structurally valid
-    and can be parsed by the harness verdict parser.
-
-    Note: `dao run --step` E2E is not possible because the `dao` CLI entry point
-    is not yet implemented (pyproject.toml [project.scripts] is commented out).
+    Validates the chain: filesystem → skill content → verdict parser.
+    This is Medium (file I/O + internal service integration).
     """
 
     @pytest.mark.parametrize("skill_name", WORKFLOW_SKILLS)
     def test_skill_verdict_example_is_parseable(self, skill_name: str) -> None:
         """Read each skill's SKILL.md and verify its verdict example parses."""
-        content = _read_skill(skill_name)
-
-        # Extract the verdict example from the skill content
-        # Skills should have a verdict block in their "Verdict 出力" section
         import re
+
+        content = _read_skill(skill_name)
 
         match = re.search(
             r"---VERDICT---\s*\n(.*?)\n\s*---END_VERDICT---",
@@ -236,44 +225,64 @@ class TestSkillVerdictParseE2E:
         )
         assert match is not None, f"{skill_name} verdict example block not found in SKILL.md"
 
-        # Build the full verdict block as it would appear in CLI output
         verdict_text = f"---VERDICT---\n{match.group(1)}\n---END_VERDICT---"
 
-        # Get valid statuses for this skill from the workflow YAML
         workflow = load_workflow(WORKFLOW_YAML_PATH)
         step = workflow.find_step(skill_name.replace("issue-", ""))
         assert step is not None, f"Step for {skill_name} not found in workflow"
 
         valid_statuses = set(step.on.keys())
 
-        # Parse the verdict — this exercises the full verdict parser
         verdict = parse_verdict(verdict_text, valid_statuses)
         assert verdict.status in valid_statuses
         assert verdict.reason != ""
         assert verdict.evidence != ""
 
-    def test_full_workflow_load_validate_and_transitions(self) -> None:
-        """Load, validate, and verify all step transitions are reachable."""
+
+@pytest.mark.medium
+class TestWorkflowTransitions:
+    """Validate all workflow step transitions are reachable."""
+
+    def test_all_transitions_reachable(self) -> None:
         workflow = load_workflow(WORKFLOW_YAML_PATH)
         validate_workflow(workflow)
 
-        # Verify all skills exist on filesystem
         for step in workflow.steps:
             validate_skill_exists(step.skill, step.agent, PROJECT_ROOT)
 
-        # Verify first step is design
         assert workflow.steps[0].id == "design"
 
-        # Verify last step transitions to end on PASS
         last_step = workflow.steps[-1]
         assert "end" in last_step.on.values(), (
             f"Last step '{last_step.id}' should transition to 'end'"
         )
 
-        # Verify all on targets are reachable
         step_ids = {s.id for s in workflow.steps} | {"end"}
         for step in workflow.steps:
             for verdict, target in step.on.items():
                 assert target in step_ids, (
                     f"Step '{step.id}' on {verdict} targets '{target}' which doesn't exist"
                 )
+
+
+# ============================================================
+# Large Tests: E2E workflow + skill execution
+# ============================================================
+
+
+@pytest.mark.large
+class TestSingleStepE2E:
+    """E2E test: `dao run --step <step-id>` single-step execution + verdict parse.
+
+    Skipped: physically impossible to implement.
+    1. `dao` CLI entry point is not implemented (pyproject.toml [project.scripts] commented out)
+    2. Single-step execution requires WorkflowRunner → execute_cli() →
+       subprocess.Popen(["claude", ...]), which needs a live AI agent process + API key.
+       This cannot be configured in CI.
+    """
+
+    @pytest.mark.skip(
+        reason="dao CLI entry point not implemented and agent subprocess requires live API key"
+    )
+    def test_single_step_verdict_parse(self) -> None:
+        """Run a single workflow step via `dao run --step` and verify verdict is parsed."""
