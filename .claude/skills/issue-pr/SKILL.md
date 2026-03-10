@@ -1,6 +1,6 @@
 ---
 description: コミット整理・プッシュ・PR作成を一括実行
-argument-hint: <issue-number>
+name: issue-pr
 ---
 
 # Issue PR

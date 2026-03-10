@@ -1,6 +1,6 @@
 ---
 description: イシュー着手時に使用。worktreeで分離された開発環境を構築し、Issue本文にメタ情報を追記する
-argument-hint: <issue-number> [prefix]
+name: issue-start
 ---
 
 # Issue Start
