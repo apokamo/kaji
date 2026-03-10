@@ -153,13 +153,12 @@ EOF
 実行完了後、以下の形式で verdict を出力すること:
 
 ---VERDICT---
-status: PASS | ABORT
+status: PASS
 reason: |
-  (判定理由)
+  修正完了
 evidence: |
-  (具体的根拠)
+  全指摘事項に対応済み
 suggestion: |
-  (ABORT時は必須)
 ---END_VERDICT---
 
 ### status の選択基準

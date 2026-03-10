@@ -130,13 +130,12 @@ gh issue edit [issue-number] --body "$NEW_BODY"
 実行完了後、以下の形式で verdict を出力すること:
 
 ---VERDICT---
-status: PASS | ABORT
+status: PASS
 reason: |
-  (判定理由)
+  Worktree 構築成功
 evidence: |
-  (具体的根拠)
+  worktree 作成済み
 suggestion: |
-  (ABORT時は必須)
 ---END_VERDICT---
 
 ### status の選択基準

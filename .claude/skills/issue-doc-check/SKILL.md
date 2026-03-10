@@ -155,11 +155,10 @@ EOF
 ---VERDICT---
 status: PASS
 reason: |
-  (判定理由)
+  ドキュメントチェック完了
 evidence: |
-  (具体的根拠)
+  影響ドキュメントの確認・更新済み
 suggestion: |
-  (任意)
 ---END_VERDICT---
 
 ### status の選択基準

@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from dao_harness.skill import validate_skill_exists
+from dao_harness.verdict import parse_verdict
 from dao_harness.workflow import load_workflow, validate_workflow
 
 # ============================================================
@@ -208,15 +209,55 @@ class TestWorkflowResumeConfig:
 
 
 @pytest.mark.large
-class TestWorkflowE2E:
-    """End-to-end test: load workflow, validate, and verify step transitions."""
+class TestSkillVerdictParseE2E:
+    """E2E test: read actual SKILL.md files and verify their verdict examples parse correctly.
+
+    This validates the full chain: filesystem → skill content → verdict parser,
+    ensuring that the verdict blocks embedded in each skill are structurally valid
+    and can be parsed by the harness verdict parser.
+
+    Note: `dao run --step` E2E is not possible because the `dao` CLI entry point
+    is not yet implemented (pyproject.toml [project.scripts] is commented out).
+    """
+
+    @pytest.mark.parametrize("skill_name", WORKFLOW_SKILLS)
+    def test_skill_verdict_example_is_parseable(self, skill_name: str) -> None:
+        """Read each skill's SKILL.md and verify its verdict example parses."""
+        content = _read_skill(skill_name)
+
+        # Extract the verdict example from the skill content
+        # Skills should have a verdict block in their "Verdict 出力" section
+        import re
+
+        match = re.search(
+            r"---VERDICT---\s*\n(.*?)\n\s*---END_VERDICT---",
+            content,
+            re.DOTALL,
+        )
+        assert match is not None, f"{skill_name} verdict example block not found in SKILL.md"
+
+        # Build the full verdict block as it would appear in CLI output
+        verdict_text = f"---VERDICT---\n{match.group(1)}\n---END_VERDICT---"
+
+        # Get valid statuses for this skill from the workflow YAML
+        workflow = load_workflow(WORKFLOW_YAML_PATH)
+        step = workflow.find_step(skill_name.replace("issue-", ""))
+        assert step is not None, f"Step for {skill_name} not found in workflow"
+
+        valid_statuses = set(step.on.keys())
+
+        # Parse the verdict — this exercises the full verdict parser
+        verdict = parse_verdict(verdict_text, valid_statuses)
+        assert verdict.status in valid_statuses
+        assert verdict.reason != ""
+        assert verdict.evidence != ""
 
     def test_full_workflow_load_validate_and_transitions(self) -> None:
         """Load, validate, and verify all step transitions are reachable."""
         workflow = load_workflow(WORKFLOW_YAML_PATH)
         validate_workflow(workflow)
 
-        # Verify all skills exist
+        # Verify all skills exist on filesystem
         for step in workflow.steps:
             validate_skill_exists(step.skill, step.agent, PROJECT_ROOT)
 

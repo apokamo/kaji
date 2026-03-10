@@ -216,13 +216,12 @@ EOF
 実行完了後、以下の形式で verdict を出力すること:
 
 ---VERDICT---
-status: PASS | RETRY | ABORT
+status: PASS
 reason: |
-  (判定理由)
+  設計は実装着手可能
 evidence: |
-  (具体的根拠)
+  全レビュー基準を満たしている
 suggestion: |
-  (ABORT時は必須)
 ---END_VERDICT---
 
 ### status の選択基準

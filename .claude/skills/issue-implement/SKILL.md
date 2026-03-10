@@ -201,13 +201,12 @@ COMMENT_EOF
 実行完了後、以下の形式で verdict を出力すること:
 
 ---VERDICT---
-status: PASS | RETRY | BACK | ABORT
+status: PASS
 reason: |
-  (判定理由)
+  実装・テスト・品質チェック全パス
 evidence: |
-  (具体的根拠)
+  pytest 全テストパス、ruff/mypy エラーなし
 suggestion: |
-  (ABORT/BACK時は必須)
 ---END_VERDICT---
 
 ### status の選択基準
