@@ -785,3 +785,46 @@ class TestValidateWorkflowSchemaInvariants:
 
         with pytest.raises(WorkflowValidationError, match="'max_iterations' must be an integer"):
             validate_workflow(wf)
+
+    # --- invalid step.on + cycle combination ---
+
+    @pytest.mark.small
+    def test_invalid_on_step_in_single_step_cycle_does_not_raise_attribute_error(self) -> None:
+        """Invalid step.on in a single-step cycle yields WorkflowValidationError, not AttributeError."""
+        step = Step(id="impl", skill="s", agent="claude")
+        step.on = None  # type: ignore[assignment]
+        cycle = CycleDefinition(
+            name="c", entry="impl", loop=["impl"], max_iterations=3, on_exhaust="ABORT"
+        )
+        wf = Workflow(
+            name="test",
+            description="",
+            execution_policy="auto",
+            steps=[step],
+            cycles=[cycle],
+        )
+
+        # Must raise WorkflowValidationError (not AttributeError) even for cycle path
+        with pytest.raises(WorkflowValidationError, match="'on' must be a non-empty mapping"):
+            validate_workflow(wf)
+
+    @pytest.mark.small
+    def test_invalid_on_step_in_multi_step_cycle_does_not_raise_attribute_error(self) -> None:
+        """Invalid step.on in a multi-step cycle yields WorkflowValidationError, not AttributeError."""
+        step1 = Step(id="review", skill="s", agent="claude")
+        step1.on = None  # type: ignore[assignment]
+        step2 = Step(id="fix", skill="s", agent="claude", on={"PASS": "end", "RETRY": "review"})
+        cycle = CycleDefinition(
+            name="c", entry="review", loop=["review", "fix"], max_iterations=3, on_exhaust="ABORT"
+        )
+        wf = Workflow(
+            name="test",
+            description="",
+            execution_policy="auto",
+            steps=[step1, step2],
+            cycles=[cycle],
+        )
+
+        # Must raise WorkflowValidationError (not AttributeError) even for multi-step cycle path
+        with pytest.raises(WorkflowValidationError, match="'on' must be a non-empty mapping"):
+            validate_workflow(wf)

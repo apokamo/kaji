@@ -176,6 +176,8 @@ def validate_workflow(workflow: Workflow) -> None:
     """
     errors: list[str] = []
     valid_verdicts = {"PASS", "RETRY", "BACK", "ABORT"}
+    # on が不正な step id を収集。cycle 遷移チェック（.on.get() 呼び出し）から除外するために使用する
+    invalid_on_step_ids: set[str] = set()
 
     # ---- スキーマレベルのバリデーション ----
     # execution_policy の enum 検証（_parse_workflow() を経由しない場合も担保）
@@ -194,6 +196,7 @@ def validate_workflow(workflow: Workflow) -> None:
         # スキーマ: step.on は非空の dict であること
         if not isinstance(step.on, dict) or not step.on:
             errors.append(f"Step '{step.id}' 'on' must be a non-empty mapping")
+            invalid_on_step_ids.add(step.id)
             # on が不正な場合、以降の遷移検証はスキップ
             if step.resume:
                 target = workflow.find_step(step.resume)
@@ -264,17 +267,25 @@ def validate_workflow(workflow: Workflow) -> None:
                 errors.append(f"Cycle '{cycle.name}' loop step '{step_id}' not found")
 
         # 7. loop 末尾ステップが RETRY 時に loop 先頭へ遷移すること
+        # step.on が不正な場合は .get() を呼ばず、この検証をスキップする
         tail_step = workflow.find_step(cycle.loop[-1])
-        if tail_step and tail_step.on.get("RETRY") != cycle.loop[0]:
+        if (
+            tail_step
+            and tail_step.id not in invalid_on_step_ids
+            and tail_step.on.get("RETRY") != cycle.loop[0]
+        ):
             errors.append(
                 f"Cycle '{cycle.name}' loop tail '{cycle.loop[-1]}' RETRY should "
                 f"transition to loop head '{cycle.loop[0]}'"
             )
 
         # 8. entry/loop 内ステップが PASS 時にサイクル外へ遷移すること
+        # step.on が不正なステップは exit 判定から除外する
         all_cycle_steps = {cycle.entry} | set(cycle.loop)
         has_exit = False
         for cycle_step_id in all_cycle_steps:
+            if cycle_step_id in invalid_on_step_ids:
+                continue
             cycle_step = workflow.find_step(cycle_step_id)
             if cycle_step and cycle_step.on.get("PASS") not in all_cycle_steps:
                 has_exit = True
