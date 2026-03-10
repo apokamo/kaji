@@ -19,11 +19,34 @@ name: issue-review-code
 
 **ワークフロー内の位置**: implement → **review-code** → (fix → verify) → doc-check → pr → close
 
-## 引数
+## 入力
+
+### ハーネス経由（コンテキスト変数）
+
+**常に注入される変数:**
+
+| 変数 | 型 | 説明 |
+|------|-----|------|
+| `issue_number` | int | GitHub Issue 番号 |
+| `step_id` | str | 現在のステップ ID |
+
+**条件付きで注入される変数:**
+
+| 変数 | 型 | 条件 | 説明 |
+|------|-----|------|------|
+| `cycle_count` | int | サイクル内ステップのみ | 現在のイテレーション番号 |
+| `max_iterations` | int | サイクル内ステップのみ | サイクルの上限回数 |
+
+### 手動実行（スラッシュコマンド）
 
 ```
 $ARGUMENTS = <issue-number>
 ```
+
+### 解決ルール
+
+コンテキスト変数 `issue_number` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
 
 ## 前提知識の読み込み
 
@@ -63,13 +86,7 @@ $ARGUMENTS = <issue-number>
 レビュワー自身が独立した環境でテストを実行し、結果を確認する。
 実装者の報告だけに依存せず、テスト結果を独自に検証することが目的。
 
-```bash
-cd [worktree-absolute-path] && source .venv/bin/activate && \
-  ruff check bugfix_agent/ tests/ && \
-  ruff format --check bugfix_agent/ tests/ && \
-  mypy bugfix_agent/ && \
-  pytest
-```
+CLAUDE.md の「Pre-Commit (REQUIRED)」セクションに記載されたコマンドを実行すること。
 
 - 上記が exit 0 でなければ **Changes Requested**
 - テスト総数、passed/failed/errors/skipped を記録しておく
@@ -148,3 +165,25 @@ EOF
 - Approve: `/issue-doc-check [issue-number]` でドキュメントチェック
 - Changes Requested: `/issue-fix-code [issue-number]` で修正
 ```
+
+## Verdict 出力
+
+実行完了後、以下の形式で verdict を出力すること:
+
+---VERDICT---
+status: PASS
+reason: |
+  コード品質基準を満たしている
+evidence: |
+  設計整合性・テストカバレッジ・品質チェックすべて合格
+suggestion: |
+---END_VERDICT---
+
+### status の選択基準
+
+| status | 条件 |
+|--------|------|
+| PASS | Approve |
+| RETRY | Changes Requested |
+| BACK | 設計に問題 |
+| ABORT | 重大な問題 |

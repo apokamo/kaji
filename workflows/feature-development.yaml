@@ -1,0 +1,105 @@
+name: feature-development
+description: |
+  Issue の設計から PR クローズまでの開発ワークフロー。
+  issue-create / issue-start は事前に手動実行済みであることが前提。
+execution_policy: auto
+
+cycles:
+  design-review:
+    entry: review-design
+    loop: [fix-design, verify-design]
+    max_iterations: 3
+    on_exhaust: ABORT
+  code-review:
+    entry: review-code
+    loop: [fix-code, verify-code]
+    max_iterations: 3
+    on_exhaust: ABORT
+
+steps:
+  - id: design
+    skill: issue-design
+    agent: claude
+    on:
+      PASS: review-design
+      ABORT: end
+
+  - id: review-design
+    skill: issue-review-design
+    agent: claude
+    on:
+      PASS: implement
+      RETRY: fix-design
+      ABORT: end
+
+  - id: fix-design
+    skill: issue-fix-design
+    agent: claude
+    resume: review-design
+    on:
+      PASS: verify-design
+      ABORT: end
+
+  - id: verify-design
+    skill: issue-verify-design
+    agent: claude
+    on:
+      PASS: implement
+      RETRY: fix-design
+      ABORT: end
+
+  - id: implement
+    skill: issue-implement
+    agent: claude
+    on:
+      PASS: review-code
+      RETRY: implement
+      BACK: design
+      ABORT: end
+
+  - id: review-code
+    skill: issue-review-code
+    agent: claude
+    on:
+      PASS: doc-check
+      RETRY: fix-code
+      BACK: design
+      ABORT: end
+
+  - id: fix-code
+    skill: issue-fix-code
+    agent: claude
+    resume: review-code
+    on:
+      PASS: verify-code
+      ABORT: end
+
+  - id: verify-code
+    skill: issue-verify-code
+    agent: claude
+    on:
+      PASS: doc-check
+      RETRY: fix-code
+      ABORT: end
+
+  - id: doc-check
+    skill: issue-doc-check
+    agent: claude
+    on:
+      PASS: pr
+
+  - id: pr
+    skill: issue-pr
+    agent: claude
+    on:
+      PASS: close
+      RETRY: pr
+      ABORT: end
+
+  - id: close
+    skill: issue-close
+    agent: claude
+    on:
+      PASS: end
+      RETRY: close
+      ABORT: end
