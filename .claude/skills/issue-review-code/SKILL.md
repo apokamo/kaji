@@ -1,6 +1,6 @@
 ---
 description: 実装完了後の成果物に対し、設計整合性とコード品質の観点から厳格なレビューを実施する
-argument-hint: <issue-number>
+name: issue-review-code
 ---
 
 # Issue Review Code

@@ -1,6 +1,6 @@
 ---
 description: Issue要件に基づき、draft/design/に設計書を作成する。worktree内での作業が前提。
-argument-hint: <issue-number>
+name: issue-design
 ---
 
 # Issue Design

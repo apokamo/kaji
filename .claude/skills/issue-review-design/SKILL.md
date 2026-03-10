@@ -1,6 +1,6 @@
 ---
 description: 設計ドキュメントに対し、汎用的なソフトウェア設計原則に基づいてレビューを行う。
-argument-hint: <issue-number>
+name: issue-review-design
 ---
 
 # Issue Review Design

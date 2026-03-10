@@ -1,6 +1,6 @@
 ---
 description: 設計レビューの指摘事項に基づき、設計ドキュメントを修正または議論する。
-argument-hint: <issue-number>
+name: issue-fix-design
 ---
 
 # Issue Fix Design

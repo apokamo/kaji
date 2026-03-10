@@ -1,6 +1,6 @@
 ---
 description: コード修正が適切に行われたかを確認する。新規指摘は行わない（レビュー収束のため）。
-argument-hint: <issue-number>
+name: issue-verify-code
 ---
 
 # Issue Verify Code

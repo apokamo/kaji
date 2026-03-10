@@ -1,6 +1,6 @@
 ---
 description: 設計書（draft/design/）に基づき、TDD（テスト駆動開発）アプローチを用いて機能を実装する。
-argument-hint: <issue-number>
+name: issue-implement
 ---
 
 # Issue Implement
