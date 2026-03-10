@@ -34,11 +34,14 @@ V7（dao_harness）への移行が完了し、#57/#58でマージ済み。しか
 ls legacy/
 # bugfix_agent/  bugfix_agent_orchestrator.py  config.toml  tests/  ...
 
-# V7のコマンドは変更なし（python -m 経由で起動）
-python -m dao_harness run workflows/feature-development.yaml 57
+# V7テストの実行（legacy移動後も変わらず動作）
+pytest tests/
+
+# V7の品質チェック
+ruff check dao_harness/ tests/ && mypy dao_harness/
 ```
 
-> **注意**: 現時点では `pyproject.toml` に `[project.scripts]` が未定義のため、`dao` コマンドは利用できない。`dao` エントリポイントの追加はこのIssueのスコープ外であり、別途対応する。
+> **注意**: 現時点では `dao_harness` にCLIエントリポイントが存在しない（`__main__.py` 未作成、`pyproject.toml` の `[project.scripts]` 未定義）。CLIエントリポイントの追加はこのIssueのスコープ外であり、別途対応する。本Issueはファイル整理とドキュメント更新のみをスコープとする。
 
 ## 制約・前提条件
 
@@ -130,7 +133,7 @@ V7 dao_harness ベースの内容で書き換え。以下を含む:
 - プロジェクト概要（dao_harnessの役割）
 - 3層アーキテクチャの簡潔な説明
 - セットアップ手順
-- CLI 起動方法 (`python -m dao_harness run`)
+- CLIエントリポイントは未実装のため、起動方法セクションは設けない（別Issue対応）
 - 開発ワークフロー（`/issue-create` ~ `/issue-close`）
 - 品質チェックコマンド
 - ドキュメントリンク一覧
@@ -153,14 +156,15 @@ V7 dao_harness ベースの内容で書き換え。以下を含む:
 - `grep -r "from bugfix_agent\|import bugfix_agent" dao_harness/ tests/` が0件であること（依存隔離の検証）
 
 ### Medium テスト
-- `pip install -e ".[dev]"` 後に `legacy/` 配下のモジュールが Python パッケージとしてインストールされていないこと（パッケージ配布境界の検証）
 - V7テストのうち、ファイルI/Oを伴うテスト（ワークフローYAML読み込み・状態永続化等）が正常パスすること（ファイルI/O結合の検証）
+- `legacy/` ディレクトリ内のファイルが `pyproject.toml` のパッケージ探索対象に含まれないことを、setuptools の `find_packages` 結果で検証（パッケージ構成の結合検証）
 
 ### Large テスト
-- `python -m dao_harness run --help` が正常動作すること（CLIプロセスの実起動・E2E疎通の検証）
+- サブプロセスで `pip install -e ".[dev]"` を実行し、インストール後に `import bugfix_agent` が `ModuleNotFoundError` になることを検証（パッケージ配布境界のE2E検証）
+- サブプロセスで `pytest --collect-only tests/` を実行し、収集エラー（ImportError等）が0件であることを検証（テスト基盤のE2E疎通）
 
 ### スキップするサイズ（該当する場合のみ）
-- なし（全サイズ実施可能）
+- なし
 
 ### 検証手順（テスト外）
 以下はテストサイズ分類ではなく、Phase 6 の品質ゲートとして実施する静的解析:
