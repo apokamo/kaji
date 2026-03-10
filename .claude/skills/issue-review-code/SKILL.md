@@ -171,13 +171,12 @@ EOF
 実行完了後、以下の形式で verdict を出力すること:
 
 ---VERDICT---
-status: PASS | RETRY | BACK | ABORT
+status: PASS
 reason: |
-  (判定理由)
+  コード品質基準を満たしている
 evidence: |
-  (具体的根拠)
+  設計整合性・テストカバレッジ・品質チェックすべて合格
 suggestion: |
-  (ABORT/BACK時は必須)
 ---END_VERDICT---
 
 ### status の選択基準

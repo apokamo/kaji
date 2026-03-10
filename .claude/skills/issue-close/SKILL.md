@@ -167,13 +167,12 @@ git pull origin main
 実行完了後、以下の形式で verdict を出力すること:
 
 ---VERDICT---
-status: PASS | RETRY | ABORT
+status: PASS
 reason: |
-  (判定理由)
+  クローズ完了
 evidence: |
-  (具体的根拠)
+  PR マージ・worktree 削除・main 最新化済み
 suggestion: |
-  (ABORT/RETRY時は必須)
 ---END_VERDICT---
 
 ### status の選択基準

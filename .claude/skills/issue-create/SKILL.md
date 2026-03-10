@@ -91,13 +91,12 @@ gh issue create --title "[title]" --body "[body]" --label "[label]"
 実行完了後、以下の形式で verdict を出力すること:
 
 ---VERDICT---
-status: PASS | ABORT
+status: PASS
 reason: |
-  (判定理由)
+  Issue 作成成功
 evidence: |
-  (具体的根拠)
+  Issue #XX を作成
 suggestion: |
-  (ABORT時は必須)
 ---END_VERDICT---
 
 ### status の選択基準
