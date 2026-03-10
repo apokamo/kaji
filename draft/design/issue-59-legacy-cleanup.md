@@ -34,9 +34,11 @@ V7（dao_harness）への移行が完了し、#57/#58でマージ済み。しか
 ls legacy/
 # bugfix_agent/  bugfix_agent_orchestrator.py  config.toml  tests/  ...
 
-# V7のコマンドは変更なし
-dao run workflows/feature-development.yaml 57
+# V7のコマンドは変更なし（python -m 経由で起動）
+python -m dao_harness run workflows/feature-development.yaml 57
 ```
+
+> **注意**: 現時点では `pyproject.toml` に `[project.scripts]` が未定義のため、`dao` コマンドは利用できない。`dao` エントリポイントの追加はこのIssueのスコープ外であり、別途対応する。
 
 ## 制約・前提条件
 
@@ -128,11 +130,12 @@ V7 dao_harness ベースの内容で書き換え。以下を含む:
 - プロジェクト概要（dao_harnessの役割）
 - 3層アーキテクチャの簡潔な説明
 - セットアップ手順
-- CLI コマンド (`dao run`)
+- CLI 起動方法 (`python -m dao_harness run`)
 - 開発ワークフロー（`/issue-create` ~ `/issue-close`）
 - 品質チェックコマンド
 - ドキュメントリンク一覧
 - `legacy/` の説明（V5/V6参照用）
+- README 冒頭に「V7 (dao_harness) が現在の正規エントリポイントであり、`legacy/` は参照専用で非サポート」を明記する
 - README の詳細は `docs/ARCHITECTURE.md` および `docs/dev/*` に委譲し、過剰な詳細化を避ける
 
 ### Phase 6: 検証
@@ -145,19 +148,24 @@ V7 dao_harness ベースの内容で書き換え。以下を含む:
 > **CRITICAL**: S/M/L すべてのサイズのテスト方針を定義すること。
 
 ### Small テスト
-- V7テスト（`tests/` に残るテスト全件）が全パスすること
+- V7テスト（`tests/` に残るテスト全件）が全パスすること（純粋なロジック・バリデーション・マッピングの検証）
 - V5テスト移動後に `pytest` のテスト収集でエラーが発生しないこと（import失敗等）
-- `grep -r "from bugfix_agent\|import bugfix_agent" dao_harness/ tests/` が0件であること
+- `grep -r "from bugfix_agent\|import bugfix_agent" dao_harness/ tests/` が0件であること（依存隔離の検証）
 
 ### Medium テスト
-- `pip install -e ".[dev]"` が `legacy/` 配下を含まずに正常完了すること
-- `mypy dao_harness/` がパスすること
+- `pip install -e ".[dev]"` 後に `legacy/` 配下のモジュールが Python パッケージとしてインストールされていないこと（パッケージ配布境界の検証）
+- V7テストのうち、ファイルI/Oを伴うテスト（ワークフローYAML読み込み・状態永続化等）が正常パスすること（ファイルI/O結合の検証）
 
 ### Large テスト
-- `dao run --help` が正常動作すること（CLIエントリポイントの疎通）
+- `python -m dao_harness run --help` が正常動作すること（CLIプロセスの実起動・E2E疎通の検証）
 
 ### スキップするサイズ（該当する場合のみ）
 - なし（全サイズ実施可能）
+
+### 検証手順（テスト外）
+以下はテストサイズ分類ではなく、Phase 6 の品質ゲートとして実施する静的解析:
+- `ruff check dao_harness/ tests/ && ruff format --check dao_harness/ tests/`
+- `mypy dao_harness/`
 
 ## 影響ドキュメント
 
@@ -178,3 +186,5 @@ V7 dao_harness ベースの内容で書き換え。以下を含む:
 | V7アーキテクチャ | `docs/ARCHITECTURE.md` | L161-163: 「V7安定後にbugfix_agent/を削除予定」→ 今回legacy/への移動で実施 |
 | Issue #57 | `https://github.com/apokamo/dev-agent-orchestra/issues/57` | V7実装完了・マージ済みの記録 |
 | V5テストのimport分析 | `grep -r "from bugfix_agent" tests/` | conftest.py, test_handlers.py, test_issue_provider.py, test_prompts.py, utils/ がV5依存。V7テストは全てdao_harness importのみ |
+| pyproject.toml エントリポイント確認 | `pyproject.toml` L30付近 | `[project.scripts]` がコメントアウト済み。`dao` コマンドは未定義。CLIは `python -m dao_harness` 経由で起動 |
+| テスト規約 | `docs/dev/testing-convention.md` | S=外部依存なし純粋ロジック、M=ファイルI/O・DB・内部サービス結合、L=実API・E2E・外部サービス疎通 |
