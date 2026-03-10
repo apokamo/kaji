@@ -149,6 +149,61 @@ git add <files> && git commit -m "feat: implement X component"
 git add <files> && git commit -m "test: add tests for X"
 ```
 
+## 手動・ハーネス両立スキルの書き方
+
+ワークフロー対象スキルは、ハーネス駆動と手動スラッシュコマンドの**両方で動作**するよう設計する。
+
+### 入力セクション
+
+`## 引数` の代わりに `## 入力` セクションを使い、両方の入力ソースを記載する。
+
+```markdown
+## 入力
+
+### ハーネス経由（コンテキスト変数）
+
+| 変数 | 型 | 説明 |
+|------|-----|------|
+| `issue_number` | int | GitHub Issue 番号 |
+| `step_id` | str | 現在のステップ ID |
+
+### 手動実行（スラッシュコマンド）
+
+$ARGUMENTS = <issue-number>
+
+### 解決ルール
+
+コンテキスト変数 `issue_number` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
+```
+
+**優先順位**: コンテキスト変数 > `$ARGUMENTS`。ハーネスが変数を注入している場合はそちらを使い、手動実行時は従来通り `$ARGUMENTS` から取得する。
+
+### 手動専用スキル
+
+`issue-create`、`issue-start` のようにワークフロー開始前のフェーズを担うスキルは、ハーネス駆動の対象外。verdict 出力は追加するが、入力は既存の `$ARGUMENTS` を維持する。
+
+### fix スキルの previous_verdict フォールバック
+
+`issue-fix-code`、`issue-fix-design` では、ハーネス経由なら `previous_verdict` からレビュー結果を取得し、手動実行時は Issue コメントから最新のレビュー結果を取得する。
+
+```markdown
+### レビュー結果の取得
+
+1. コンテキスト変数 `previous_verdict` が存在する場合はそれを確認（ハーネス経由）
+2. 存在しない場合は Issue コメントから最新のレビュー結果を取得（手動実行時）
+```
+
+### 品質チェックコマンドの汎用化
+
+スキル内で品質チェックコマンドを記述する場合、プロジェクト固有のパス（例: `bugfix_agent/`）をハードコードしない。代わりに CLAUDE.md を参照する形にする。
+
+```markdown
+**品質チェック（コミット前必須）**:
+
+CLAUDE.md の「Pre-Commit (REQUIRED)」セクションに記載されたコマンドを実行すること。
+```
+
 ## 関連ドキュメント
 
 - [ワークフロー定義マニュアル](workflow-authoring.md)

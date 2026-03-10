@@ -124,3 +124,23 @@ gh issue edit [issue-number] --body "$NEW_BODY"
 
 作業が完了したら `/issue-close [issue-number]` を実行してください。
 ```
+
+## Verdict 出力
+
+実行完了後、以下の形式で verdict を出力すること:
+
+---VERDICT---
+status: PASS
+reason: |
+  Worktree 構築成功
+evidence: |
+  worktree 作成済み
+suggestion: |
+---END_VERDICT---
+
+### status の選択基準
+
+| status | 条件 |
+|--------|------|
+| PASS | Worktree 構築成功 |
+| ABORT | 構築失敗 |
