@@ -267,7 +267,9 @@ steps:
 - ワークフロー YAML + 修正済みスキルで `dao run --step <step-id>` を単一ステップ実行し、verdict が正常に parse されるか
 
 ### スキップするサイズ
-- なし（全サイズ実装可能）
+- **Large**: 物理的に作成不可。理由は以下の2点:
+  1. `dao` CLI エントリポイントが未実装（`pyproject.toml` の `[project.scripts]` がコメントアウト状態）
+  2. 単一ステップ実行は `WorkflowRunner` → `execute_cli()` → `subprocess.Popen(["claude", ...])` の経路を辿り、実際の AI エージェントプロセスの起動が必須。CI 環境でエージェントバイナリ + API キーを前提とするテストは構成できない
 
 ## 影響ドキュメント
 
