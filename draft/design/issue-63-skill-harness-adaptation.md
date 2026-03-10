@@ -262,6 +262,9 @@ steps:
 - ワークフロー YAML のバリデーション（`dao_harness.workflow.validate_workflow` を通過するか）
 - サイクル定義の整合性（entry / loop ステップが正しく参照されているか）
 - 全ステップの `skill` がファイルシステム上に存在するか（`dao_harness.skill.validate_skill_exists`）
+- fix ステップに `resume` が設定されているか（`previous_verdict` 注入の前提条件）
+- 各スキルの SKILL.md verdict example がファイル読み込み → `parse_verdict()` で正常にパースできるか（ファイル I/O + verdict パーサー結合）
+- ワークフロー全ステップの遷移先が到達可能か（step 存在確認 + transition 整合性）
 
 ### Large テスト
 - ワークフロー YAML + 修正済みスキルで `dao run --step <step-id>` を単一ステップ実行し、verdict が正常に parse されるか
