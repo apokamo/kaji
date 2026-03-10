@@ -1,6 +1,6 @@
 ---
 description: イシュー完了時に使用。設計書アーカイブ・PRマージ・worktree削除・ブランチ削除を一括実行
-argument-hint: <issue-number>
+name: issue-close
 ---
 
 # Issue Close

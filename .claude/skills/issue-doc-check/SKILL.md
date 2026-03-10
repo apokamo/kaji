@@ -1,6 +1,6 @@
 ---
 description: PR前の品質ゲートとして、コード変更に伴うドキュメント影響を網羅チェックする
-argument-hint: <issue-number>
+name: issue-doc-check
 ---
 
 # Issue Doc Check

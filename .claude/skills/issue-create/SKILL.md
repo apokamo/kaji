@@ -1,6 +1,6 @@
 ---
 description: Issue作成とラベル付与を行う。開発ワークフローの起点。
-argument-hint: <title> [type] [description]
+name: issue-create
 ---
 
 # Issue Create

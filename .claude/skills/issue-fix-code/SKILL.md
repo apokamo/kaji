@@ -1,6 +1,6 @@
 ---
 description: レビュー指摘事項に対し、技術的妥当性を検討した上で修正対応（または反論）を行う
-argument-hint: <issue-number>
+name: issue-fix-code
 ---
 
 # Issue Fix Code
