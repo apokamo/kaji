@@ -30,7 +30,6 @@ dev = [
     "mypy>=1.10.0",
 ]
 
-# V5 is run directly: python bugfix_agent_orchestrator.py --issue <URL>
 # [project.scripts]
 
 [build-system]
@@ -39,7 +38,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["bugfix_agent*", "dao_harness*"]
+include = ["dao_harness*"]
 
 [tool.ruff]
 line-length = 100

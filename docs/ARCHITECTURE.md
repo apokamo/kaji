@@ -158,9 +158,7 @@ HarnessError
 
 ## V6 → V7 移行
 
-- `git tag v6.0` で旧実装（`bugfix_agent/`）を保存済み
-- `bugfix_agent/` は**参照用アーカイブ**。保守・機能追加の対象外
-- V7 安定後に `bugfix_agent/` を削除予定
+- V5/V6 ファイルは `legacy/` に移動済み（#59 で実施）
 
 ---
 
