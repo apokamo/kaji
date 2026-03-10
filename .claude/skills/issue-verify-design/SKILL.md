@@ -21,11 +21,34 @@ name: issue-verify-design
 
 **ワークフロー内の位置**: design → review-design → (fix → **verify**) → implement
 
-## 引数
+## 入力
+
+### ハーネス経由（コンテキスト変数）
+
+**常に注入される変数:**
+
+| 変数 | 型 | 説明 |
+|------|-----|------|
+| `issue_number` | int | GitHub Issue 番号 |
+| `step_id` | str | 現在のステップ ID |
+
+**条件付きで注入される変数:**
+
+| 変数 | 型 | 条件 | 説明 |
+|------|-----|------|------|
+| `cycle_count` | int | サイクル内ステップのみ | 現在のイテレーション番号 |
+| `max_iterations` | int | サイクル内ステップのみ | サイクルの上限回数 |
+
+### 手動実行（スラッシュコマンド）
 
 ```
 $ARGUMENTS = <issue-number>
 ```
+
+### 解決ルール
+
+コンテキスト変数 `issue_number` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
 
 ## verify と review の違い
 
@@ -140,3 +163,25 @@ EOF
 - Approve: `/issue-implement [issue-number]` で実装開始
 - Changes Requested: `/issue-fix-design [issue-number]` で再修正
 ```
+
+## Verdict 出力
+
+実行完了後、以下の形式で verdict を出力すること:
+
+---VERDICT---
+status: PASS | RETRY | ABORT
+reason: |
+  (判定理由)
+evidence: |
+  (具体的根拠)
+suggestion: |
+  (ABORT時は必須)
+---END_VERDICT---
+
+### status の選択基準
+
+| status | 条件 |
+|--------|------|
+| PASS | Approve |
+| RETRY | 修正不十分 |
+| ABORT | 重大な問題 |

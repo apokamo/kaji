@@ -17,11 +17,27 @@ name: issue-doc-check
 
 **ワークフロー内の位置**: implement → review-code → **doc-check** → pr → close
 
-## 引数
+## 入力
+
+### ハーネス経由（コンテキスト変数）
+
+**常に注入される変数:**
+
+| 変数 | 型 | 説明 |
+|------|-----|------|
+| `issue_number` | int | GitHub Issue 番号 |
+| `step_id` | str | 現在のステップ ID |
+
+### 手動実行（スラッシュコマンド）
 
 ```
 $ARGUMENTS = <issue-number>
 ```
+
+### 解決ルール
+
+コンテキスト変数 `issue_number` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
 
 ## 前提知識の読み込み
 
@@ -131,3 +147,23 @@ EOF
 
 `/issue-pr [issue-number]` でPRを作成してください。
 ```
+
+## Verdict 出力
+
+実行完了後、以下の形式で verdict を出力すること:
+
+---VERDICT---
+status: PASS
+reason: |
+  (判定理由)
+evidence: |
+  (具体的根拠)
+suggestion: |
+  (任意)
+---END_VERDICT---
+
+### status の選択基準
+
+| status | 条件 |
+|--------|------|
+| PASS | チェック完了 |

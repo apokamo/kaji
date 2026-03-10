@@ -16,13 +16,35 @@ name: issue-fix-design
 
 **ワークフロー内の位置**: design → review-design → (**fix** → verify) → implement
 
-## 引数
+## 入力
+
+### ハーネス経由（コンテキスト変数）
+
+**常に注入される変数:**
+
+| 変数 | 型 | 説明 |
+|------|-----|------|
+| `issue_number` | int | GitHub Issue 番号 |
+| `step_id` | str | 現在のステップ ID |
+
+**条件付きで注入される変数:**
+
+| 変数 | 型 | 条件 | 説明 |
+|------|-----|------|------|
+| `previous_verdict` | str | resume 指定ステップのみ | 前ステップの verdict |
+| `cycle_count` | int | サイクル内ステップのみ | 現在のイテレーション番号 |
+| `max_iterations` | int | サイクル内ステップのみ | サイクルの上限回数 |
+
+### 手動実行（スラッシュコマンド）
 
 ```
 $ARGUMENTS = <issue-number>
 ```
 
-- `issue-number` (必須): Issue番号
+### 解決ルール
+
+コンテキスト変数 `issue_number` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
 
 ## 前提知識の読み込み
 
@@ -41,7 +63,9 @@ $ARGUMENTS = <issue-number>
 
 1. [_shared/worktree-resolve.md](../_shared/worktree-resolve.md) の手順に従い、Worktree の絶対パスを取得。
 
-2. **レビュー内容の取得**:
+2. **レビュー結果の取得**:
+   1. コンテキスト変数 `previous_verdict` が存在する場合はそれを確認（ハーネス経由）
+   2. 存在しない場合は Issue コメントから最新のレビュー結果を取得（手動実行時）
    ```bash
    gh issue view [issue-number] --comments
    ```
@@ -124,3 +148,24 @@ EOF
 
 `/issue-verify-design [issue-number]` で修正確認を実施してください。
 ```
+
+## Verdict 出力
+
+実行完了後、以下の形式で verdict を出力すること:
+
+---VERDICT---
+status: PASS | ABORT
+reason: |
+  (判定理由)
+evidence: |
+  (具体的根拠)
+suggestion: |
+  (ABORT時は必須)
+---END_VERDICT---
+
+### status の選択基準
+
+| status | 条件 |
+|--------|------|
+| PASS | 修正完了 |
+| ABORT | 修正不可能 |
