@@ -22,7 +22,7 @@ Treat the user as an equal partner. Goal: clarity, traction, and progress.
 ## ⚠️ Pre-Commit (REQUIRED)
 ```bash
 source .venv/bin/activate
-ruff check bugfix_agent/ tests/ && ruff format bugfix_agent/ tests/ && mypy bugfix_agent/ && pytest
+ruff check dao_harness/ tests/ && ruff format dao_harness/ tests/ && mypy dao_harness/ && pytest
 ```
 
 ## Essential Commands
@@ -34,14 +34,15 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 
 # Quality checks (run before commit)
-ruff check bugfix_agent/ tests/       # Lint
-ruff format bugfix_agent/ tests/      # Format
-mypy bugfix_agent/                    # Type check
-pytest                                # Test
+ruff check dao_harness/ tests/       # Lint
+ruff format dao_harness/ tests/      # Format
+mypy dao_harness/                    # Type check
+pytest                               # Test
 
-# CLI
-dao list              # List workflows
-dao design --help     # Design workflow help
+# CLI harness
+dao run <workflow.yaml> <issue>                    # Run a workflow
+dao run <workflow.yaml> <issue> --from <step-id>   # Resume from a step
+dao run <workflow.yaml> <issue> --step <step-id>   # Run a single step
 ```
 
 ## Git & GitHub
@@ -79,9 +80,11 @@ dao design --help     # Design workflow help
 |-------|----------|
 | Architecture | docs/ARCHITECTURE.md |
 | ADR | docs/adr/ |
-| Guides | docs/cli-guides/ |
+| CLI Guides | docs/cli-guides/ |
 | Development Workflow | docs/dev/development_workflow.md |
 | Testing Convention | docs/dev/testing-convention.md |
+| Workflow Authoring | docs/dev/workflow-authoring.md |
+| Skill Authoring | docs/dev/skill-authoring.md |
 
 ## Development Skills
 
