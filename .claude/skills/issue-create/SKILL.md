@@ -85,3 +85,24 @@ gh issue create --title "[title]" --body "[body]" --label "[label]"
 
 作業を開始するには `/issue-start [issue-number]` を実行してください。
 ```
+
+## Verdict 出力
+
+実行完了後、以下の形式で verdict を出力すること:
+
+---VERDICT---
+status: PASS | ABORT
+reason: |
+  (判定理由)
+evidence: |
+  (具体的根拠)
+suggestion: |
+  (ABORT時は必須)
+---END_VERDICT---
+
+### status の選択基準
+
+| status | 条件 |
+|--------|------|
+| PASS | Issue 作成成功 |
+| ABORT | 作成失敗 |

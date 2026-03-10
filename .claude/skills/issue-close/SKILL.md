@@ -18,11 +18,27 @@ name: issue-close
 
 **ワークフロー内の位置**: implement → review-code → doc-check → pr → **close**
 
-## 引数
+## 入力
+
+### ハーネス経由（コンテキスト変数）
+
+**常に注入される変数:**
+
+| 変数 | 型 | 説明 |
+|------|-----|------|
+| `issue_number` | int | GitHub Issue 番号 |
+| `step_id` | str | 現在のステップ ID |
+
+### 手動実行（スラッシュコマンド）
 
 ```
 $ARGUMENTS = <issue-number>
 ```
+
+### 解決ルール
+
+コンテキスト変数 `issue_number` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
 
 ## 前提条件
 
@@ -145,3 +161,25 @@ git pull origin main
 | リモートブランチ | 削除済み (--delete-branch) |
 | main | 最新化済み |
 ```
+
+## Verdict 出力
+
+実行完了後、以下の形式で verdict を出力すること:
+
+---VERDICT---
+status: PASS | RETRY | ABORT
+reason: |
+  (判定理由)
+evidence: |
+  (具体的根拠)
+suggestion: |
+  (ABORT/RETRY時は必須)
+---END_VERDICT---
+
+### status の選択基準
+
+| status | 条件 |
+|--------|------|
+| PASS | クローズ完了 |
+| RETRY | マージ失敗等 |
+| ABORT | 重大な問題 |
