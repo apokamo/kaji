@@ -178,7 +178,24 @@ dao run workflows/feature-development.yaml 57 --from fix-code
 
 # 単発実行（1ステップのみ実行して終了）
 dao run workflows/feature-development.yaml 57 --step review-code
+
+# エージェント作業ディレクトリを指定
+dao run workflows/feature-development.yaml 57 --workdir ../dao-feat-57
+
+# エージェント出力のストリーミング表示を抑制
+dao run workflows/feature-development.yaml 57 --quiet
 ```
+
+**注意**: `--from` と `--step` は排他オプションです（同時指定不可）。
+
+### 終了コード
+
+| 終了コード | 意味 |
+|-----------|------|
+| 0 | 正常終了 |
+| 1 | ワークフロー ABORT または予期しないエラー |
+| 2 | 定義エラー（YAML不正、スキル未検出、引数エラー等） |
+| 3 | 実行時エラー（CLI実行失敗、タイムアウト、verdict解析失敗等） |
 
 ## 関連ドキュメント
 
