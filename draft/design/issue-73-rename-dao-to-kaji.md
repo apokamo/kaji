@@ -56,7 +56,7 @@ from kaji_harness.models import Workflow
 
 - **後方互換性は不要**: `dao` コマンドのエイリアス・互換レイヤーは設けない（ユーザーは作者のみ）
 - **legacy/ は対象外**: V5/V6 コードはすでに非サポート。参照先も存在しない
-- **draft/design/ の過去設計書**: リネーム対象に含める（アーカイブ時に整合性を保つため）
+- **draft/design/ の過去設計書**: リネーム対象外。`development_workflow.md` の定義通り、Close 時に Issue 本文へアーカイブされ worktree 削除で自然消滅する一時成果物であり、履歴文脈を壊すリスクのほうが大きい
 - **workflow YAML 変更済み**: `workflows/feature-development.yaml` の agent/model 調整は事前に完了済み（未コミット）。本 Issue のスコープに含めてコミットする
 - **`.dao/` ディレクトリ**: #70 で新設予定のため本 Issue では扱わない（まだ存在しない）
 
@@ -79,7 +79,7 @@ from kaji_harness.models import Workflow
 2. `README.md`: プロジェクト名・使用例
 3. `docs/` 配下: CLI コマンド例、パッケージ参照
 4. `.claude/skills/`: Worktree 命名規則 `dao-` → `kaji-`
-5. `draft/design/` 配下の過去設計書: `dao` 参照を `kaji` に更新
+5. `uv.lock`: `pyproject.toml` の name 変更に伴い `uv lock` で再生成（手動編集しない）
 
 ### フェーズ3: 品質検証
 
@@ -113,7 +113,7 @@ ruff check kaji_harness/ tests/ && ruff format kaji_harness/ tests/ && mypy kaji
 | README.md | 1 | プロジェクト名、CLI 例 |
 | docs/ | ~8 | CLI 例、パッケージ参照 |
 | .claude/skills/ | 3 | Worktree 命名規則 `dao-` → `kaji-` |
-| draft/design/ | 5 | `dao` 参照 → `kaji` |
+| uv.lock | 1 | `pyproject.toml` の name 変更に伴い `uv lock` で再生成 |
 
 ### 注意事項: 部分一致の回避
 
@@ -164,5 +164,6 @@ ruff check kaji_harness/ tests/ && ruff format kaji_harness/ tests/ && mypy kaji
 | Issue #73 本文 | `gh issue view 73` | リネームスコープ、作業手順、注意事項の定義元 |
 | pyproject.toml | `./pyproject.toml` | 現行の CLI エントリーポイント定義: `dao = "dao_harness.cli_main:main"` |
 | setuptools find_packages | https://setuptools.pypa.io/en/latest/userguide/package_discovery.html | `[tool.setuptools.packages.find]` の `include` パターンが `kaji_harness*` へ変更可能であることの根拠 |
-| gh repo rename | https://cli.github.com/manual/gh_repo_rename | `gh repo rename kaji` でリポジトリ名を変更。GitHub が自動リダイレクトを設定する |
+| gh repo rename | https://cli.github.com/manual/gh_repo_rename | `gh repo rename kaji` でリポジトリ名を変更するコマンド |
+| GitHub repo rename docs | https://docs.github.com/en/repositories/creating-and-managing-repositories/renaming-a-repository | リネーム後に旧 URL から新 URL への自動リダイレクトが設定される根拠。「GitHub will automatically redirect links to your repository to the new name.」 |
 | PyPI name availability | https://pypi.org/project/kaji/ | `kaji` が PyPI 上で未使用であることの確認（Issue 本文に記載） |
