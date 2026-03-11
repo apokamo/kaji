@@ -78,7 +78,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
         except WorkflowValidationError as e:
             _print_error(path, e.errors)
             failed += 1
-        except Exception as e:
+        except OSError as e:
             _print_error(path, [str(e)])
             failed += 1
 
