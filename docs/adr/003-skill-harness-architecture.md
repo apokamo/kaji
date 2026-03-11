@@ -16,7 +16,7 @@
 
 ## 決定
 
-V6 を廃止し、**CLI スキルハーネス（V7 = `kaji_harness/`）** へ移行する。
+V6 を廃止し、**CLI スキルハーネス（V7 = `dao_harness/`）** へ移行する。
 
 ### 設計方針
 
@@ -52,8 +52,8 @@ V6 を廃止し、**CLI スキルハーネス（V7 = `kaji_harness/`）** へ移
 
 ## 影響
 
-- `kaji_harness/` パッケージを新設（`pyproject.toml` に登録）
-- `CLAUDE.md` の品質チェックコマンドを `kaji_harness/` に更新
+- `dao_harness/` パッケージを新設（`pyproject.toml` に登録）
+- `CLAUDE.md` の品質チェックコマンドを `dao_harness/` に更新
 - `docs/dev/workflow-authoring.md`, `docs/dev/skill-authoring.md` を新設
 - `docs/ARCHITECTURE.md` を V7 ハーネスアーキテクチャに改訂
 
