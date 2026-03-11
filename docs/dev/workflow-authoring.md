@@ -188,6 +188,32 @@ dao run workflows/feature-development.yaml 57 --quiet
 
 **注意**: `--from` と `--step` は排他オプションです（同時指定不可）。
 
+### バリデーション
+
+ワークフロー YAML を実行前に検証できます:
+
+```bash
+# 単一ファイルのバリデーション
+dao validate workflows/feature-development.yaml
+
+# 複数ファイルの一括バリデーション
+dao validate workflows/*.yaml
+```
+
+**出力例**:
+
+```
+✓ workflows/feature-development.yaml
+✗ workflows/bad.yaml
+  - Step 'review' transitions to unknown step 'fix' on RETRY
+
+Validation failed: 1 of 2 files had errors.
+```
+
+- 成功: `✓ <filename>` が stdout に出力、exit 0
+- 失敗: `✗ <filename>` + エラー詳細が stderr に出力、exit 1
+- 引数なし: argparse エラー、exit 2
+
 ### 終了コード
 
 | 終了コード | 意味 |
