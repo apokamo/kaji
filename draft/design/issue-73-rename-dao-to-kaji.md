@@ -158,7 +158,8 @@ ruff check kaji_harness/ tests/ && ruff format kaji_harness/ tests/ && mypy kaji
 | docs/adr/ | あり | ADR 003 に `dao_harness` パッケージ参照あり |
 | docs/ARCHITECTURE.md | あり | `dao` CLI・パッケージへの参照あり |
 | docs/dev/ | あり | development_workflow.md の Worktree 命名規則、workflow-authoring.md の CLI 例 |
-| docs/cli-guides/ | 確認要 | 存在すれば `dao` CLI 参照を更新 |
+| docs/cli-guides/ | なし | 3ファイル存在するが `dao` / `dao_harness` / `dev-agent-orchestra` への参照なし（grep 確認済み） |
+| README.md | あり | プロジェクト名 `dev-agent-orchestra`、`dao_harness` パッケージ参照、`dao` CLI 使用例が残存 |
 | CLAUDE.md | あり | pre-commit コマンド、CLI 使用例 |
 
 ## 参照情報（Primary Sources）
@@ -170,4 +171,4 @@ ruff check kaji_harness/ tests/ && ruff format kaji_harness/ tests/ && mypy kaji
 | setuptools find_packages | https://setuptools.pypa.io/en/latest/userguide/package_discovery.html | `[tool.setuptools.packages.find]` の `include` パターンが `kaji_harness*` へ変更可能であることの根拠 |
 | gh repo rename | https://cli.github.com/manual/gh_repo_rename | `gh repo rename kaji` でリポジトリ名を変更するコマンド |
 | GitHub repo rename docs | https://docs.github.com/en/repositories/creating-and-managing-repositories/renaming-a-repository | リネーム後に旧 URL から新 URL への自動リダイレクトが設定される根拠。「GitHub will automatically redirect links to your repository to the new name.」 |
-| PyPI name availability | https://pypi.org/project/kaji/ | `kaji` が PyPI 上で未使用であることの確認（Issue 本文に記載） |
+| PyPI name availability | https://pypi.org/pypi/kaji/json | JSON API が 404 を返すことで `kaji` が PyPI 上で未使用であることを確認。`/project/kaji/` はブラウザ向け中間ページの影響で 200 を返す場合があるため、機械検証では JSON API を source-of-truth とする |
