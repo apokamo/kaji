@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from dao_harness.skill import validate_skill_exists
-from dao_harness.verdict import parse_verdict
-from dao_harness.workflow import load_workflow, validate_workflow
+from kaji_harness.skill import validate_skill_exists
+from kaji_harness.verdict import parse_verdict
+from kaji_harness.workflow import load_workflow, validate_workflow
 
 # ============================================================
 # Constants
@@ -196,11 +196,13 @@ class TestWorkflowResumeConfig:
         assert step is not None
         assert step.resume is not None, "fix-design must have resume configured"
 
-    def test_fix_code_has_resume(self) -> None:
+    def test_fix_code_has_no_resume(self) -> None:
+        """fix-code uses a separate agent (codex for review), so resume is removed
+        to avoid context bloat from long implement sessions."""
         workflow = load_workflow(WORKFLOW_YAML_PATH)
         step = workflow.find_step("fix-code")
         assert step is not None
-        assert step.resume is not None, "fix-code must have resume configured"
+        assert step.resume is None, "fix-code must not have resume (separate review agent)"
 
 
 @pytest.mark.medium
@@ -272,17 +274,17 @@ class TestWorkflowTransitions:
 
 @pytest.mark.large
 class TestSingleStepE2E:
-    """E2E test: `dao run --step <step-id>` single-step execution + verdict parse.
+    """E2E test: `kaji run --step <step-id>` single-step execution + verdict parse.
 
     Skipped: physically impossible to implement.
-    1. `dao` CLI entry point is not implemented (pyproject.toml [project.scripts] commented out)
+    1. `kaji` CLI entry point is not implemented (pyproject.toml [project.scripts] commented out)
     2. Single-step execution requires WorkflowRunner → execute_cli() →
        subprocess.Popen(["claude", ...]), which needs a live AI agent process + API key.
        This cannot be configured in CI.
     """
 
     @pytest.mark.skip(
-        reason="dao CLI entry point not implemented and agent subprocess requires live API key"
+        reason="kaji CLI entry point not implemented and agent subprocess requires live API key"
     )
     def test_single_step_verdict_parse(self) -> None:
-        """Run a single workflow step via `dao run --step` and verify verdict is parsed."""
+        """Run a single workflow step via `kaji run --step` and verify verdict is parsed."""

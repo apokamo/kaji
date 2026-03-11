@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import pytest
 
-from dao_harness.errors import MissingResumeSessionError
-from dao_harness.models import Step, Workflow
+from kaji_harness.errors import MissingResumeSessionError
+from kaji_harness.models import Step, Workflow
 
 # ============================================================
 # Helpers

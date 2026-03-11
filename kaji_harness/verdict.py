@@ -1,4 +1,4 @@
-"""Verdict parser for dao_harness.
+"""Verdict parser for kaji_harness.
 
 Extracts verdict blocks from CLI output using YAML parsing.
 """

@@ -8,12 +8,12 @@
    ```
 
 2. **Worktree の相対パスを抽出**:
-   - `> **Worktree**: \`../dao-[prefix]-[number]\`` の形式
+   - `> **Worktree**: \`../kaji-[prefix]-[number]\`` の形式
 
 3. **絶対パスに変換**:
    ```bash
    MAIN_REPO=$(git rev-parse --show-toplevel)
-   WORKTREE_PATH=$(realpath "$MAIN_REPO/../dao-[prefix]-[number]")
+   WORKTREE_PATH=$(realpath "$MAIN_REPO/../kaji-[prefix]-[number]")
    ```
 
 4. **存在確認**:

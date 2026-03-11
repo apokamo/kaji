@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import pytest
 
-from dao_harness.errors import WorkflowValidationError
-from dao_harness.models import CycleDefinition, Step, Workflow
-from dao_harness.workflow import validate_workflow
+from kaji_harness.errors import WorkflowValidationError
+from kaji_harness.models import CycleDefinition, Step, Workflow
+from kaji_harness.workflow import validate_workflow
 
 # ============================================================
 # Helpers for building test Workflow objects

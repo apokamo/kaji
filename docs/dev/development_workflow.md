@@ -55,7 +55,7 @@ flowchart TB
 │ /issue-start <issue-number> [prefix]                                │
 ├─────────────────────────────────────────────────────────────────────┤
 │ • prefix 未指定時は feat をデフォルト使用                           │
-│ • worktree作成: ../dao-[prefix]-[issue-number]                      │
+│ • worktree作成: ../kaji-[prefix]-[issue-number]                      │
 │ • .venv シンボリックリンク作成                                      │
 │ • Issue本文にWorktree情報を追記                                     │
 └─────────────────────────────────────────────────────────────────────┘
@@ -155,7 +155,7 @@ flowchart TB
 
 ```markdown
 > [!NOTE]
-> **Worktree**: `../dao-fix-123`
+> **Worktree**: `../kaji-fix-123`
 > **Branch**: `fix/123`
 
 (元のIssue本文)
@@ -165,7 +165,7 @@ PR作成後:
 
 ```markdown
 > [!NOTE]
-> **Worktree**: `../dao-fix-123`
+> **Worktree**: `../kaji-fix-123`
 > **Branch**: `fix/123`
 > **PR**: #456
 ```

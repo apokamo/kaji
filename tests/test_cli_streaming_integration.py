@@ -16,10 +16,10 @@ from unittest.mock import patch
 
 import pytest
 
-from dao_harness.adapters import ClaudeAdapter, CodexAdapter, GeminiAdapter
-from dao_harness.cli import execute_cli, stream_and_log
-from dao_harness.errors import CLIExecutionError, CLINotFoundError, StepTimeoutError
-from dao_harness.models import Step
+from kaji_harness.adapters import ClaudeAdapter, CodexAdapter, GeminiAdapter
+from kaji_harness.cli import execute_cli, stream_and_log
+from kaji_harness.errors import CLIExecutionError, CLINotFoundError, StepTimeoutError
+from kaji_harness.models import Step
 
 
 def _create_mock_cli_script(path: Path, jsonl_lines: list[str], exit_code: int = 0) -> Path:
@@ -211,7 +211,7 @@ class TestExecuteCLI:
         )
         # Use a guaranteed-nonexistent command
         with patch(
-            "dao_harness.cli.build_cli_args",
+            "kaji_harness.cli.build_cli_args",
             return_value=["__nonexistent_cli_cmd_42__", "-p", "test"],
         ):
             with pytest.raises(CLINotFoundError):
@@ -236,7 +236,7 @@ class TestExecuteCLI:
             on={"PASS": "end"},
         )
 
-        with patch("dao_harness.cli.build_cli_args", return_value=[str(script)]):
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
             with pytest.raises(CLIExecutionError) as exc_info:
                 execute_cli(
                     step=step,
@@ -264,7 +264,7 @@ class TestExecuteCLI:
             on={"PASS": "end"},
         )
 
-        with patch("dao_harness.cli.build_cli_args", return_value=[str(script)]):
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
             with pytest.raises(StepTimeoutError) as exc_info:
                 execute_cli(
                     step=step,
@@ -304,7 +304,7 @@ class TestExecuteCLISuccessFlow:
             on={"PASS": "end"},
         )
 
-        with patch("dao_harness.cli.build_cli_args", return_value=[str(script)]):
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
             result = execute_cli(
                 step=step,
                 prompt="test prompt",

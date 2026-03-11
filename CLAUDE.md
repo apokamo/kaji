@@ -14,7 +14,7 @@ Every response balances:
 Treat the user as an equal partner. Goal: clarity, traction, and progress.
 
 ## Project Overview
-**dev-agent-orchestra** - AI-driven software development workflow orchestrator
+**kaji** - AI-driven software development workflow orchestrator
 - **Purpose**: Coordinate AI agents (Claude, Codex, Gemini) for development tasks
 - **Philosophy**: TDD-first, Docs-as-Code
 - **Workflows**: design, implement, bugfix
@@ -22,7 +22,7 @@ Treat the user as an equal partner. Goal: clarity, traction, and progress.
 ## ⚠️ Pre-Commit (REQUIRED)
 ```bash
 source .venv/bin/activate
-ruff check dao_harness/ tests/ && ruff format dao_harness/ tests/ && mypy dao_harness/ && pytest
+ruff check kaji_harness/ tests/ && ruff format kaji_harness/ tests/ && mypy kaji_harness/ && pytest
 ```
 
 ## Essential Commands
@@ -34,19 +34,19 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 
 # Quality checks (run before commit)
-ruff check dao_harness/ tests/       # Lint
-ruff format dao_harness/ tests/      # Format
-mypy dao_harness/                    # Type check
+ruff check kaji_harness/ tests/       # Lint
+ruff format kaji_harness/ tests/      # Format
+mypy kaji_harness/                    # Type check
 pytest                               # Test
 
 # CLI harness
-dao run <workflow.yaml> <issue>                    # Run a workflow
-dao run <workflow.yaml> <issue> --from <step-id>   # Resume from a step
-dao run <workflow.yaml> <issue> --step <step-id>   # Run a single step
-dao run <workflow.yaml> <issue> --workdir <dir>    # Set agent working directory
-dao run <workflow.yaml> <issue> --quiet            # Suppress agent output
+kaji run <workflow.yaml> <issue>                    # Run a workflow
+kaji run <workflow.yaml> <issue> --from <step-id>   # Resume from a step
+kaji run <workflow.yaml> <issue> --step <step-id>   # Run a single step
+kaji run <workflow.yaml> <issue> --workdir <dir>    # Set agent working directory
+kaji run <workflow.yaml> <issue> --quiet            # Suppress agent output
 
-dao validate <workflow.yaml>...                    # Validate workflow YAML(s)
+kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
 ```
 
 ## Git & GitHub

@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import pytest
 
-from dao_harness.models import CycleDefinition, Verdict
-from dao_harness.state import SessionState
+from kaji_harness.models import CycleDefinition, Verdict
+from kaji_harness.state import SessionState
 
 # ============================================================
 # Helpers

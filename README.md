@@ -1,8 +1,8 @@
-# dev-agent-orchestra
+# kaji
 
 AI-driven software development workflow orchestrator. Claude Code / Codex / Gemini CLI のスキルをワークフロー YAML に従って実行する。
 
-> **V7 (dao_harness) が現在の正規エントリポイントです。** `legacy/` は V5/V6 の参照用アーカイブであり、サポート対象外です。
+> **V7 (kaji_harness) が現在の正規エントリポイントです。** `legacy/` は V5/V6 の参照用アーカイブであり、サポート対象外です。
 
 ## アーキテクチャ概要
 
@@ -10,7 +10,7 @@ AI-driven software development workflow orchestrator. Claude Code / Codex / Gemi
 
 ```
 ┌─────────────────────────────────────────────┐
-│  ハーネス (dao_harness/)                     │
+│  ハーネス (kaji_harness/)                     │
 │  ワークフロー YAML を解釈し CLI を順次呼出  │
 ├─────────────────────────────────────────────┤
 │  スキル (.claude/skills/, .agents/skills/)   │
@@ -45,13 +45,13 @@ Issue駆動のTDD開発フロー:
 
 ```bash
 # ワークフローを実行
-dao run workflows/feature-development.yaml 57
+kaji run workflows/feature-development.yaml 57
 
 # 途中から再開
-dao run workflows/feature-development.yaml 57 --from fix-code
+kaji run workflows/feature-development.yaml 57 --from fix-code
 
 # 単一ステップ実行
-dao run workflows/feature-development.yaml 57 --step review-code
+kaji run workflows/feature-development.yaml 57 --step review-code
 ```
 
 詳細: [docs/dev/workflow-authoring.md](docs/dev/workflow-authoring.md)
@@ -62,9 +62,9 @@ dao run workflows/feature-development.yaml 57 --step review-code
 
 ```bash
 source .venv/bin/activate
-ruff check dao_harness/ tests/       # Lint
-ruff format dao_harness/ tests/      # Format
-mypy dao_harness/                    # Type check
+ruff check kaji_harness/ tests/       # Lint
+ruff format kaji_harness/ tests/      # Format
+mypy kaji_harness/                    # Type check
 pytest                               # Test
 ```
 

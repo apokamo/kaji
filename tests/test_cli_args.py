@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from dao_harness.cli import build_cli_args
-from dao_harness.models import Step
+from kaji_harness.cli import build_cli_args
+from kaji_harness.models import Step
 
 
 @pytest.fixture

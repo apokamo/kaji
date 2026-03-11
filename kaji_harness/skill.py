@@ -1,4 +1,4 @@
-"""Skill validation for dao_harness."""
+"""Skill validation for kaji_harness."""
 
 from pathlib import Path
 
