@@ -8,19 +8,19 @@ Issue: #67
 
 ## 背景・目的
 
-ハーネスのコア機能（`WorkflowRunner`, `load_workflow`, `SessionState` 等）は実装・テスト済みだが、CLIフロントエンドが存在しないため `dao run <workflow.yaml> <issue>` として実行できない。#65 で CLI基盤（`cli_main.py` + argparse サブコマンド構造 + `pyproject.toml` の `[project.scripts]` 有効化）が作成される前提で、本イシューでは `run` サブコマンドを追加する。
+ハーネスのコア機能（`WorkflowRunner`, `load_workflow`, `SessionState` 等）は実装・テスト済みだが、CLIフロントエンドが存在しないため `dao run <workflow.yaml> <issue>` として実行できない。
 
-## 前提条件
+## 前提条件・スコープ
 
-- #65 (`dao validate`) がマージ済みであること
-- `cli_main.py` に argparse サブコマンドパーサーが存在すること
+本イシューで CLI 基盤（`cli_main.py` + argparse サブコマンドパーサー + `pyproject.toml` の `[project.scripts]` 有効化）と `run` サブコマンドの両方を実装する。
 
-### #65 依存の解消方針
+#65 (`dao validate`) は 2026-03-11 時点で OPEN であり、マージ待ちでブロックするのではなく、#67 側で CLI 基盤を構築する。#65 は後から `validate` サブコマンドを追加する形で進める（基盤の重複実装を回避）。
 
-#65 は 2026-03-11 時点で OPEN。以下の方針で対応する:
+### 本イシューの実装範囲
 
-1. **実装開始条件**: #65 のマージを待つ。#67 ブランチは `main` から作成済みのため、#65 マージ後に `git merge main` で基盤を取り込む
-2. **#65 が長期停滞した場合**: #67 のスコープを拡張し、CLI 基盤（`cli_main.py` + `[project.scripts]`）ごと本イシューで実装する。この場合 #65 は #67 に吸収される
+1. `dao_harness/cli_main.py` — argparse サブコマンドパーサー + `run` サブコマンド
+2. `pyproject.toml` — `[project.scripts]` のコメント解除 + `dao` エントリポイント追加
+3. テスト
 
 ## インターフェース
 
@@ -77,17 +77,30 @@ dao run workflows/design.yaml 67 --workdir ../dao-feat-67 --quiet
 
 | 対象 | 保存先 | `--workdir` の影響 |
 |------|--------|-------------------|
-| `SessionState` | `test-artifacts/<issue>/state.json`（プロセス cwd 基準） | なし |
+| `SessionState` | `test-artifacts/<issue>/session-state.json`（プロセス cwd 基準） | なし |
 | 実行ログ | `test-artifacts/<issue>/runs/<timestamp>/`（プロセス cwd 基準） | なし |
 | エージェント CLI の `cwd` | `--workdir` で指定されたディレクトリ | **あり** |
 
 この分離は `WorkflowRunner` の既存設計に従ったもの。`runner.py` で `run_dir` はプロセス cwd 基準、`execute_cli()` の `cwd=workdir` はエージェント実行先のみを指す。
 
+### `--workdir` 不正時のエラー契約
+
+`cmd_run` は `WorkflowRunner` を呼ぶ前に `--workdir` の事前検証を行う:
+
+```python
+workdir = args.workdir.resolve()
+if not workdir.is_dir():
+    print(f"Error: --workdir '{args.workdir}' is not a valid directory", file=sys.stderr)
+    return 2  # 定義エラー（実行前に検出可能）
+```
+
+**理由**: `cli.py` L54-59 では `subprocess.Popen(..., cwd=workdir)` の `FileNotFoundError` が `CLINotFoundError` に包まれるため、事前検証なしでは「作業ディレクトリ不正」が「CLI が見つからない」という誤った診断になる。事前検証により正確なエラーメッセージを返し、exit code 2（定義エラー）で終了する。
+
 ## 方針
 
-### 1. `cli_main.py` への `run` サブコマンド追加
+### 1. `cli_main.py` の作成と `run` サブコマンド追加
 
-#65 が作成する `cli_main.py` のサブコマンドパーサーに `run` を追加する。
+`cli_main.py` を新規作成し、argparse サブコマンドパーサーと `run` サブコマンドを実装する。サブコマンド構造は #65 (`validate`) が後から追加できる拡張性を持たせる。
 
 ```python
 # 疑似コード
@@ -151,6 +164,7 @@ except Exception as e:
 - 引数パース: 各オプションが正しく `WorkflowRunner` のパラメータにマッピングされること
 - exit code マッピング: 全 `HarnessError` サブクラス（`WorkflowValidationError`, `SkillNotFound`, `SecurityError`, `CLIExecutionError`, `CLINotFoundError`, `StepTimeoutError`, `MissingResumeSessionError`, `InvalidTransition`, `VerdictNotFound`, `VerdictParseError`, `InvalidVerdictValue`）が正しい exit code に変換されること
 - `HarnessError` 以外の予期しない例外 → exit 1
+- `--workdir` 事前検証: 存在しないパス → exit 2、ファイルパス（ディレクトリではない） → exit 2
 - サマリー出力のフォーマット
 
 ### Medium テスト
@@ -159,7 +173,7 @@ except Exception as e:
 - 不正なYAML → exit 2 + エラーメッセージが stderr に出力
 - `WorkflowRunner.run()` が `CLIExecutionError` → exit 3
 - `WorkflowRunner.run()` が ABORT verdict → exit 1
-- `--workdir` に存在しないディレクトリ → エラー
+- `--workdir` に存在しないディレクトリ → exit 2 + 正確なエラーメッセージ（`CLINotFoundError` ではなく）
 - `subprocess` 経由での `dao run --help` 出力検証
 
 ### Large テスト
@@ -171,7 +185,7 @@ except Exception as e:
 
 | ドキュメント | 影響の有無 | 理由 |
 |-------------|-----------|------|
-| docs/adr/ | なし | 新しい技術選定なし（argparse は #65 で選定済み） |
+| docs/adr/ | なし | argparse 選定は #65 で議論済み。本イシューは同方針を踏襲 |
 | docs/ARCHITECTURE.md | 軽微 | L108-113 で `dao run` の `--from` 再開を既に記述済み。新フラグ (`--workdir`, `--quiet`) の追記が必要な可能性 |
 | docs/dev/workflow-authoring.md | 更新 | L170-181 で `dao run` コマンド例を既に記述済み。新フラグの追記 + exit code の説明追加 |
 | docs/dev/skill-authoring.md | なし | コンテキスト変数の変更なし |
@@ -186,5 +200,6 @@ except Exception as e:
 |--------|----------|-------------------|
 | argparse 公式ドキュメント | https://docs.python.org/3/library/argparse.html | サブコマンドパーサー (`add_subparsers`) の仕様。#65 で選定済みの手法を踏襲 |
 | WorkflowRunner 実装 | `dao_harness/runner.py` | `run()` メソッドのシグネチャ: `workflow`, `issue_number`, `workdir`, `from_step`, `single_step`, `verbose` |
-| #65 設計 | GitHub Issue #65 | CLI基盤（`cli_main.py` + argparse + `[project.scripts]`）の設計。`run` サブコマンドは明示的にスコープ外 |
+| #65 設計 | https://github.com/apokamo/dev-agent-orchestra/issues/65 | CLI基盤（`cli_main.py` + argparse + `[project.scripts]`）の設計。`run` サブコマンドは明示的にスコープ外。#67 で基盤を先行実装する方針に変更 |
+| state.py | `dao_harness/state.py` L15-16 | `STATE_FILE = "session-state.json"`。状態ファイルの正式名称 |
 | errors.py | `dao_harness/errors.py` | 例外階層: `HarnessError` を基底とし、各エラーが明確に分類済み |
