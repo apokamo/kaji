@@ -440,10 +440,15 @@ class TestCLILarge:
     """Large: real subprocess execution of dao CLI."""
 
     @pytest.mark.large
-    def test_dao_run_help_available(self) -> None:
-        """After pip install, `dao run --help` should work."""
+    def test_dao_entrypoint_help(self) -> None:
+        """The `dao` console script entrypoint should be functional."""
+        import shutil
+
+        dao_path = shutil.which("dao")
+        if dao_path is None:
+            pytest.skip("dao entrypoint not installed (run pip install -e .)")
         result = subprocess.run(
-            [sys.executable, "-m", "dao_harness.cli_main", "run", "--help"],
+            ["dao", "run", "--help"],
             capture_output=True,
             text=True,
             timeout=30,
@@ -455,17 +460,29 @@ class TestCLILarge:
         assert "--quiet" in result.stdout
 
     @pytest.mark.large
-    def test_dao_run_with_valid_workflow_missing_agent(
-        self, workflow_file: Path, workdir: Path
+    def test_dao_run_with_valid_workflow_missing_agent_cli(
+        self,
+        tmp_path: Path,
     ) -> None:
-        """Running a valid workflow without agent CLI installed should fail with exit 3."""
+        """With a valid workflow and skill, missing agent CLI should yield exit 3."""
+        # Create workflow YAML referencing a skill
+        wf = tmp_path / "workflow.yaml"
+        wf.write_text(MINIMAL_WORKFLOW_YAML)
+
+        # Create minimal skill directory so skill validation passes
+        workdir = tmp_path / "project"
+        workdir.mkdir()
+        skill_dir = workdir / ".claude" / "skills" / "test-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("# Test Skill\n")
+
         result = subprocess.run(
             [
                 sys.executable,
                 "-m",
                 "dao_harness.cli_main",
                 "run",
-                str(workflow_file),
+                str(wf),
                 "999",
                 "--workdir",
                 str(workdir),
@@ -474,9 +491,10 @@ class TestCLILarge:
             text=True,
             timeout=30,
         )
-        # Should fail because the agent CLI (claude/codex/gemini) is not available,
-        # or skill validation fails. Either way, non-zero exit.
-        assert result.returncode != 0
+        # Should fail with exit 3 (runtime error) because the agent CLI
+        # (claude) is not installed in the test environment.
+        assert result.returncode == 3
+        assert "not found" in result.stderr.lower() or "cli" in result.stderr.lower()
 
 
 # ============================================================
