@@ -41,6 +41,21 @@ Issue駆動のTDD開発フロー:
 
 各フェーズにレビューサイクルあり。詳細: [docs/dev/development_workflow.md](docs/dev/development_workflow.md)
 
+## ワークフロー実行
+
+```bash
+# ワークフローを実行
+dao run workflows/feature-development.yaml 57
+
+# 途中から再開
+dao run workflows/feature-development.yaml 57 --from fix-code
+
+# 単一ステップ実行
+dao run workflows/feature-development.yaml 57 --step review-code
+```
+
+詳細: [docs/dev/workflow-authoring.md](docs/dev/workflow-authoring.md)
+
 ## 品質チェック
 
 コミット前に必ず実行:
