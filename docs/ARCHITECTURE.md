@@ -1,4 +1,4 @@
-# Architecture: dao_harness (V7)
+# Architecture: kaji_harness (V7)
 
 **Version**: 7.0.0
 **Last Updated**: 2026-03-09
@@ -8,11 +8,11 @@
 
 ## 概要
 
-**dao_harness** は、Claude Code / Codex / Gemini CLI のスキルをワークフロー YAML に従って実行する軽量ハーネス。
+**kaji_harness** は、Claude Code / Codex / Gemini CLI のスキルをワークフロー YAML に従って実行する軽量ハーネス。
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  ハーネス (dao_harness/)                         │
+│  ハーネス (kaji_harness/)                         │
 │  ワークフロー YAML を解釈し、CLI を順次呼び出す  │
 ├─────────────────────────────────────────────────┤
 │  スキル (.claude/skills/, .agents/skills/)       │
@@ -53,7 +53,7 @@
 ## パッケージ構成
 
 ```
-dao_harness/
+kaji_harness/
   __init__.py
   models.py       # データクラス: Workflow, Step, CycleDefinition, Verdict, CLIResult
   errors.py       # エラー階層 (12クラス)
@@ -107,7 +107,7 @@ WorkflowRunner.run()
 **再開コマンド**:
 
 ```bash
-dao run workflows/feature-development.yaml 57 --from fix-code
+kaji run workflows/feature-development.yaml 57 --from fix-code
 ```
 
 `--from` で指定したステップから再開し、`session-state.json` の `session_id` を使って CLI セッションを復元する。

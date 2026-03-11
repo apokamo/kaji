@@ -1,6 +1,6 @@
 # ワークフロー定義マニュアル
 
-dao_harness が読み込む YAML ワークフロー定義の書き方。
+kaji_harness が読み込む YAML ワークフロー定義の書き方。
 
 ## ファイル配置
 
@@ -171,19 +171,19 @@ steps:
 
 ```bash
 # 通常実行（最初のステップから）
-dao run workflows/feature-development.yaml 57
+kaji run workflows/feature-development.yaml 57
 
 # 途中から再開（--from で開始ステップ指定）
-dao run workflows/feature-development.yaml 57 --from fix-code
+kaji run workflows/feature-development.yaml 57 --from fix-code
 
 # 単発実行（1ステップのみ実行して終了）
-dao run workflows/feature-development.yaml 57 --step review-code
+kaji run workflows/feature-development.yaml 57 --step review-code
 
 # エージェント作業ディレクトリを指定
-dao run workflows/feature-development.yaml 57 --workdir ../dao-feat-57
+kaji run workflows/feature-development.yaml 57 --workdir ../kaji-feat-57
 
 # エージェント出力のストリーミング表示を抑制
-dao run workflows/feature-development.yaml 57 --quiet
+kaji run workflows/feature-development.yaml 57 --quiet
 ```
 
 **注意**: `--from` と `--step` は排他オプションです（同時指定不可）。
@@ -194,10 +194,10 @@ dao run workflows/feature-development.yaml 57 --quiet
 
 ```bash
 # 単一ファイルのバリデーション
-dao validate workflows/feature-development.yaml
+kaji validate workflows/feature-development.yaml
 
 # 複数ファイルの一括バリデーション
-dao validate workflows/*.yaml
+kaji validate workflows/*.yaml
 ```
 
 **出力例**:

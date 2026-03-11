@@ -1,4 +1,4 @@
-"""Session state management for dao_harness.
+"""Session state management for kaji_harness.
 
 Issue-scoped state that persists across workflow executions.
 """

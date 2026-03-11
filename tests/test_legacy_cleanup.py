@@ -22,11 +22,11 @@ VENV_PYTHON = sys.executable
 class TestLegacyIsolation:
     """Verify V5/V6 code is isolated from V7 codebase."""
 
-    def test_no_bugfix_agent_import_in_dao_harness(self) -> None:
-        """dao_harness/ must not import bugfix_agent."""
-        dao_dir = ROOT / "dao_harness"
+    def test_no_bugfix_agent_import_in_kaji_harness(self) -> None:
+        """kaji_harness/ must not import bugfix_agent."""
+        kaji_dir = ROOT / "kaji_harness"
         violations: list[str] = []
-        for py_file in dao_dir.rglob("*.py"):
+        for py_file in kaji_dir.rglob("*.py"):
             source = py_file.read_text()
             try:
                 tree = ast.parse(source)
@@ -40,7 +40,7 @@ class TestLegacyIsolation:
                 elif isinstance(node, ast.ImportFrom):
                     if node.module and node.module.startswith("bugfix_agent"):
                         violations.append(f"{py_file}:{node.lineno}")
-        assert violations == [], f"bugfix_agent imports found in dao_harness/: {violations}"
+        assert violations == [], f"bugfix_agent imports found in kaji_harness/: {violations}"
 
     def test_no_bugfix_agent_import_in_v7_tests(self) -> None:
         """tests/ (V7) must not import bugfix_agent."""
@@ -140,10 +140,10 @@ class TestPyprojectToml:
         content = (ROOT / "pyproject.toml").read_text()
         assert "bugfix_agent" not in content
 
-    def test_dao_harness_in_packages(self) -> None:
-        """pyproject.toml must include dao_harness in packages."""
+    def test_kaji_harness_in_packages(self) -> None:
+        """pyproject.toml must include kaji_harness in packages."""
         content = (ROOT / "pyproject.toml").read_text()
-        assert "dao_harness" in content
+        assert "kaji_harness" in content
 
 
 @pytest.mark.small
@@ -158,10 +158,10 @@ class TestDocumentation:
         # Should not say "削除予定" (planned for deletion) anymore
         assert "削除予定" not in content
 
-    def test_readme_mentions_dao_harness(self) -> None:
-        """README.md must describe dao_harness (V7)."""
+    def test_readme_mentions_kaji_harness(self) -> None:
+        """README.md must describe kaji_harness (V7)."""
         content = (ROOT / "README.md").read_text()
-        assert "dao_harness" in content
+        assert "kaji_harness" in content
 
     def test_readme_mentions_legacy(self) -> None:
         """README.md must mention legacy/ directory."""
@@ -184,7 +184,7 @@ class TestPackageDiscovery:
                 "-c",
                 (
                     "from setuptools import find_packages; "
-                    f"pkgs = find_packages(where='{ROOT}', include=['dao_harness*']); "
+                    f"pkgs = find_packages(where='{ROOT}', include=['kaji_harness*']); "
                     "ba = [p for p in pkgs if p.startswith('bugfix_agent')]; "
                     "assert ba == [], f'bugfix_agent packages found: {ba}'"
                 ),
@@ -194,17 +194,17 @@ class TestPackageDiscovery:
         )
         assert result.returncode == 0, f"Assertion failed: {result.stderr}"
 
-    def test_find_packages_includes_dao_harness(self) -> None:
-        """setuptools find_packages should find dao_harness."""
+    def test_find_packages_includes_kaji_harness(self) -> None:
+        """setuptools find_packages should find kaji_harness."""
         result = subprocess.run(
             [
                 VENV_PYTHON,
                 "-c",
                 (
                     "from setuptools import find_packages; "
-                    f"pkgs = find_packages(where='{ROOT}', include=['dao_harness*']); "
-                    "assert any(p.startswith('dao_harness') for p in pkgs), "
-                    "f'dao_harness not found in: {pkgs}'"
+                    f"pkgs = find_packages(where='{ROOT}', include=['kaji_harness*']); "
+                    "assert any(p.startswith('kaji_harness') for p in pkgs), "
+                    "f'kaji_harness not found in: {pkgs}'"
                 ),
             ],
             capture_output=True,

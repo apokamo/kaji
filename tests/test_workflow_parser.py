@@ -10,9 +10,9 @@ from textwrap import dedent
 
 import pytest
 
-from dao_harness.errors import WorkflowValidationError
-from dao_harness.models import CycleDefinition, Step, Workflow
-from dao_harness.workflow import load_workflow, load_workflow_from_str, validate_workflow
+from kaji_harness.errors import WorkflowValidationError
+from kaji_harness.models import CycleDefinition, Step, Workflow
+from kaji_harness.workflow import load_workflow, load_workflow_from_str, validate_workflow
 
 # ============================================================
 # Shared YAML fixtures (embedded strings)

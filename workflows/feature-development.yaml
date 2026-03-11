@@ -20,13 +20,17 @@ steps:
   - id: design
     skill: issue-design
     agent: claude
+    model: opus
+    effort: high
     on:
       PASS: review-design
       ABORT: end
 
   - id: review-design
     skill: issue-review-design
-    agent: claude
+    agent: codex
+    model: gpt-5.4
+    effort: high
     on:
       PASS: implement
       RETRY: fix-design
@@ -35,14 +39,17 @@ steps:
   - id: fix-design
     skill: issue-fix-design
     agent: claude
-    resume: review-design
+    model: opus
+    resume: design
     on:
       PASS: verify-design
       ABORT: end
 
   - id: verify-design
     skill: issue-verify-design
-    agent: claude
+    agent: codex
+    model: gpt-5.4
+    effort: high
     on:
       PASS: implement
       RETRY: fix-design
@@ -51,6 +58,7 @@ steps:
   - id: implement
     skill: issue-implement
     agent: claude
+    model: opus
     on:
       PASS: review-code
       RETRY: implement
@@ -59,7 +67,9 @@ steps:
 
   - id: review-code
     skill: issue-review-code
-    agent: claude
+    agent: codex
+    model: gpt-5.4
+    effort: high
     on:
       PASS: doc-check
       RETRY: fix-code
@@ -69,14 +79,16 @@ steps:
   - id: fix-code
     skill: issue-fix-code
     agent: claude
-    resume: review-code
+    model: opus
     on:
       PASS: verify-code
       ABORT: end
 
   - id: verify-code
     skill: issue-verify-code
-    agent: claude
+    agent: codex
+    model: gpt-5.4
+    effort: high
     on:
       PASS: doc-check
       RETRY: fix-code
@@ -85,12 +97,14 @@ steps:
   - id: doc-check
     skill: issue-doc-check
     agent: claude
+    model: opus
     on:
       PASS: pr
 
   - id: pr
     skill: issue-pr
     agent: claude
+    model: sonnet
     on:
       PASS: close
       RETRY: pr
@@ -99,6 +113,7 @@ steps:
   - id: close
     skill: issue-close
     agent: claude
+    model: sonnet
     on:
       PASS: end
       RETRY: close

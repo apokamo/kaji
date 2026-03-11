@@ -1,4 +1,4 @@
-"""CLI execution for dao_harness.
+"""CLI execution for kaji_harness.
 
 Handles subprocess management, streaming, and argument building.
 """

@@ -1,4 +1,4 @@
-"""Custom exceptions for dao_harness."""
+"""Custom exceptions for kaji_harness."""
 
 
 class HarnessError(Exception):

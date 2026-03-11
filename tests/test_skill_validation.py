@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from dao_harness.errors import SecurityError, SkillNotFound
-from dao_harness.skill import validate_skill_exists
+from kaji_harness.errors import SecurityError, SkillNotFound
+from kaji_harness.skill import validate_skill_exists
 
 # ============================================================
 # Helper: create skill directory structure in tmp_path

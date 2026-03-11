@@ -1,4 +1,4 @@
-"""Prompt builder for dao_harness.
+"""Prompt builder for kaji_harness.
 
 Builds prompts with context variables for CLI execution.
 """

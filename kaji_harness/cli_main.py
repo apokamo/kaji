@@ -1,6 +1,6 @@
-"""CLI entrypoint for dao_harness.
+"""CLI entrypoint for kaji_harness.
 
-Provides the `dao` command with subcommands (e.g., `dao run`).
+Provides the `kaji` command with subcommands (e.g., `kaji run`).
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ EXIT_RUNTIME_ERROR = 3
 def create_parser() -> argparse.ArgumentParser:
     """Create the top-level argument parser with subcommands."""
     parser = argparse.ArgumentParser(
-        prog="dao",
+        prog="kaji",
         description="AI-driven development workflow orchestrator",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
