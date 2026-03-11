@@ -1,4 +1,4 @@
-"""Workflow execution runner for dao_harness.
+"""Workflow execution runner for kaji_harness.
 
 Main loop that executes workflow steps sequentially,
 manages state transitions, and handles cycle limits.

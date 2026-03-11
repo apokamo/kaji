@@ -1,6 +1,6 @@
-"""Tests for dao validate subcommand.
+"""Tests for kaji validate subcommand.
 
-Covers S/M/L test sizes for the `dao validate <file>...` CLI subcommand.
+Covers S/M/L test sizes for the `kaji validate <file>...` CLI subcommand.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from dao_harness.cli_main import cmd_validate, create_parser, main
+from kaji_harness.cli_main import cmd_validate, create_parser, main
 
 # ============================================================
 # Shared fixtures
@@ -208,14 +208,14 @@ class TestCmdValidateMedium:
 
 
 class TestCLIValidateLarge:
-    """Large: real subprocess execution of `dao validate`."""
+    """Large: real subprocess execution of `kaji validate`."""
 
     @pytest.mark.large
-    def test_dao_validate_valid_yaml(self, tmp_path: Path) -> None:
+    def test_kaji_validate_valid_yaml(self, tmp_path: Path) -> None:
         f = tmp_path / "workflow.yaml"
         f.write_text(VALID_WORKFLOW_YAML)
         result = subprocess.run(
-            [sys.executable, "-m", "dao_harness.cli_main", "validate", str(f)],
+            [sys.executable, "-m", "kaji_harness.cli_main", "validate", str(f)],
             capture_output=True,
             text=True,
             timeout=30,
@@ -224,11 +224,11 @@ class TestCLIValidateLarge:
         assert "✓" in result.stdout
 
     @pytest.mark.large
-    def test_dao_validate_invalid_yaml(self, tmp_path: Path) -> None:
+    def test_kaji_validate_invalid_yaml(self, tmp_path: Path) -> None:
         f = tmp_path / "bad.yaml"
         f.write_text(INVALID_SCHEMA_YAML)
         result = subprocess.run(
-            [sys.executable, "-m", "dao_harness.cli_main", "validate", str(f)],
+            [sys.executable, "-m", "kaji_harness.cli_main", "validate", str(f)],
             capture_output=True,
             text=True,
             timeout=30,
@@ -237,9 +237,9 @@ class TestCLIValidateLarge:
         assert "✗" in result.stderr
 
     @pytest.mark.large
-    def test_dao_validate_no_args_exit_2(self) -> None:
+    def test_kaji_validate_no_args_exit_2(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "dao_harness.cli_main", "validate"],
+            [sys.executable, "-m", "kaji_harness.cli_main", "validate"],
             capture_output=True,
             text=True,
             timeout=30,
@@ -247,13 +247,13 @@ class TestCLIValidateLarge:
         assert result.returncode == 2
 
     @pytest.mark.large
-    def test_dao_validate_mixed_files(self, tmp_path: Path) -> None:
+    def test_kaji_validate_mixed_files(self, tmp_path: Path) -> None:
         good = tmp_path / "good.yaml"
         bad = tmp_path / "bad.yaml"
         good.write_text(VALID_WORKFLOW_YAML)
         bad.write_text(INVALID_SCHEMA_YAML)
         result = subprocess.run(
-            [sys.executable, "-m", "dao_harness.cli_main", "validate", str(good), str(bad)],
+            [sys.executable, "-m", "kaji_harness.cli_main", "validate", str(good), str(bad)],
             capture_output=True,
             text=True,
             timeout=30,

@@ -1,4 +1,4 @@
-"""Workflow YAML loader and validator for dao_harness."""
+"""Workflow YAML loader and validator for kaji_harness."""
 
 from __future__ import annotations
 

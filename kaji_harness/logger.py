@@ -1,4 +1,4 @@
-"""Run logger for dao_harness.
+"""Run logger for kaji_harness.
 
 JSONL format execution logger with immediate flush.
 """

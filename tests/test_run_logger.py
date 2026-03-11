@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from dao_harness.logger import RunLogger
-from dao_harness.models import CostInfo, Verdict
+from kaji_harness.logger import RunLogger
+from kaji_harness.models import CostInfo, Verdict
 
 # ============================================================
 # Helpers

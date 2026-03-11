@@ -1,4 +1,4 @@
-"""Tests for dao_harness.cli_main — dao run CLI entrypoint."""
+"""Tests for kaji_harness.cli_main — kaji run CLI entrypoint."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from dao_harness.cli_main import cmd_run, create_parser, main
-from dao_harness.errors import (
+from kaji_harness.cli_main import cmd_run, create_parser, main
+from kaji_harness.errors import (
     CLIExecutionError,
     CLINotFoundError,
     HarnessError,
@@ -24,7 +24,7 @@ from dao_harness.errors import (
     VerdictParseError,
     WorkflowValidationError,
 )
-from dao_harness.models import Verdict
+from kaji_harness.models import Verdict
 
 # ============================================================
 # Fixtures
@@ -134,7 +134,7 @@ class TestMutualExclusionSmall:
 
     @pytest.mark.small
     def test_from_alone_is_valid(self, workflow_file: Path, workdir: Path) -> None:
-        with patch("dao_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
             mock_runner.return_value.run.return_value = MagicMock(
                 last_transition_verdict=Verdict("PASS", "", "", "")
             )
@@ -150,7 +150,7 @@ class TestMutualExclusionSmall:
 
     @pytest.mark.small
     def test_step_alone_is_valid(self, workflow_file: Path, workdir: Path) -> None:
-        with patch("dao_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
             mock_runner.return_value.run.return_value = MagicMock(
                 last_transition_verdict=Verdict("PASS", "", "", "")
             )
@@ -239,7 +239,7 @@ class TestExitCodeMappingSmall:
         exception: HarnessError,
         expected_code: int,
     ) -> None:
-        with patch("dao_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
             mock_runner.return_value.run.side_effect = exception
             exit_code = cmd_run_with_args(
                 str(workflow_file),
@@ -251,7 +251,7 @@ class TestExitCodeMappingSmall:
 
     @pytest.mark.small
     def test_unexpected_exception_exit_code(self, workflow_file: Path, workdir: Path) -> None:
-        with patch("dao_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
             mock_runner.return_value.run.side_effect = RuntimeError("boom")
             exit_code = cmd_run_with_args(
                 str(workflow_file),
@@ -263,7 +263,7 @@ class TestExitCodeMappingSmall:
 
     @pytest.mark.small
     def test_abort_verdict_exit_code(self, workflow_file: Path, workdir: Path) -> None:
-        with patch("dao_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
             mock_runner.return_value.run.return_value = MagicMock(
                 last_transition_verdict=Verdict("ABORT", "reason", "ev", "sug")
             )
@@ -288,7 +288,7 @@ class TestCmdRunMedium:
     def test_successful_run(
         self, workflow_file: Path, workdir: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        with patch("dao_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
             mock_runner.return_value.run.return_value = MagicMock(
                 last_transition_verdict=Verdict("PASS", "done", "all good", "")
             )
@@ -336,7 +336,7 @@ class TestCmdRunMedium:
     def test_cli_execution_error_exit_3(
         self, workflow_file: Path, workdir: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        with patch("dao_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
             mock_runner.return_value.run.side_effect = CLIExecutionError("s1", 1, "fail")
             exit_code = cmd_run_with_args(
                 str(workflow_file),
@@ -352,7 +352,7 @@ class TestCmdRunMedium:
     def test_abort_verdict_exit_1(
         self, workflow_file: Path, workdir: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        with patch("dao_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
             mock_runner.return_value.run.return_value = MagicMock(
                 last_transition_verdict=Verdict("ABORT", "blocked", "ev", "sug")
             )
@@ -382,7 +382,7 @@ class TestCmdRunMedium:
 
     @pytest.mark.medium
     def test_quiet_flag_passed_to_runner(self, workflow_file: Path, workdir: Path) -> None:
-        with patch("dao_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
             mock_runner.return_value.run.return_value = MagicMock(
                 last_transition_verdict=Verdict("PASS", "", "", "")
             )
@@ -404,7 +404,7 @@ class TestMainMedium:
 
     @pytest.mark.medium
     def test_main_returns_exit_code(self, workflow_file: Path, workdir: Path) -> None:
-        with patch("dao_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
             mock_runner.return_value.run.return_value = MagicMock(
                 last_transition_verdict=Verdict("PASS", "", "", "")
             )
@@ -422,7 +422,7 @@ class TestMainMedium:
     @pytest.mark.medium
     def test_help_output(self) -> None:
         result = subprocess.run(
-            [sys.executable, "-m", "dao_harness.cli_main", "run", "--help"],
+            [sys.executable, "-m", "kaji_harness.cli_main", "run", "--help"],
             capture_output=True,
             text=True,
         )
@@ -437,18 +437,18 @@ class TestMainMedium:
 
 
 class TestCLILarge:
-    """Large: real subprocess execution of dao CLI."""
+    """Large: real subprocess execution of kaji CLI."""
 
     @pytest.mark.large
-    def test_dao_entrypoint_help(self) -> None:
-        """The `dao` console script entrypoint should be functional."""
+    def test_kaji_entrypoint_help(self) -> None:
+        """The `kaji` console script entrypoint should be functional."""
         import shutil
 
-        dao_path = shutil.which("dao")
-        if dao_path is None:
-            pytest.skip("dao entrypoint not installed (run pip install -e .)")
+        kaji_path = shutil.which("kaji")
+        if kaji_path is None:
+            pytest.skip("kaji entrypoint not installed (run pip install -e .)")
         result = subprocess.run(
-            ["dao", "run", "--help"],
+            ["kaji", "run", "--help"],
             capture_output=True,
             text=True,
             timeout=30,
@@ -460,7 +460,7 @@ class TestCLILarge:
         assert "--quiet" in result.stdout
 
     @pytest.mark.large
-    def test_dao_run_with_valid_workflow_missing_agent_cli(
+    def test_kaji_run_with_valid_workflow_missing_agent_cli(
         self,
         tmp_path: Path,
     ) -> None:
@@ -486,7 +486,7 @@ class TestCLILarge:
             [
                 sys.executable,
                 "-m",
-                "dao_harness.cli_main",
+                "kaji_harness.cli_main",
                 "run",
                 str(wf),
                 "999",

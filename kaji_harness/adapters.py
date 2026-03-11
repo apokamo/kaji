@@ -1,4 +1,4 @@
-"""CLI event adapters for dao_harness.
+"""CLI event adapters for kaji_harness.
 
 Each adapter extracts session_id, text, and cost from CLI-specific JSONL events.
 """

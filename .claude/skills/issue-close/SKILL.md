@@ -56,7 +56,7 @@ gh issue view [issue-number] --json body -q '.body'
 ```
 
 以下の情報を抽出:
-- `> **Worktree**: \`../dao-[prefix]-[number]\`` → worktree パス
+- `> **Worktree**: \`../kaji-[prefix]-[number]\`` → worktree パス
 - `> **Branch**: \`[prefix]/[number]\`` → ブランチ名
 
 ### Step 2: メインリポジトリのパスを特定
@@ -80,7 +80,7 @@ worktree 削除前に、設計書を Issue 本文に保存します。
 
 1. **`draft/design/` の存在確認**:
    ```bash
-   WORKTREE_PATH=$(realpath "$MAIN_REPO/../dao-[prefix]-[number]")
+   WORKTREE_PATH=$(realpath "$MAIN_REPO/../kaji-[prefix]-[number]")
    ls "$WORKTREE_PATH/draft/design/" 2>/dev/null
    ```
 
