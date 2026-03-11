@@ -476,6 +476,12 @@ class TestCLILarge:
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("# Test Skill\n")
 
+        # Restrict PATH to only the Python executable's directory so that
+        # agent CLIs (claude, codex, gemini) are guaranteed not to be found,
+        # regardless of the host environment.
+        python_dir = str(Path(sys.executable).parent)
+        env = {**__import__("os").environ, "PATH": python_dir}
+
         result = subprocess.run(
             [
                 sys.executable,
@@ -490,11 +496,12 @@ class TestCLILarge:
             capture_output=True,
             text=True,
             timeout=30,
+            env=env,
         )
         # Should fail with exit 3 (runtime error) because the agent CLI
-        # (claude) is not installed in the test environment.
+        # (claude) cannot be found on the restricted PATH.
         assert result.returncode == 3
-        assert "not found" in result.stderr.lower() or "cli" in result.stderr.lower()
+        assert "not found" in result.stderr.lower()
 
 
 # ============================================================
