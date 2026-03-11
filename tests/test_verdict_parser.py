@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import pytest
 
-from dao_harness.errors import InvalidVerdictValue, VerdictNotFound, VerdictParseError
-from dao_harness.models import Verdict
-from dao_harness.verdict import parse_verdict
+from kaji_harness.errors import InvalidVerdictValue, VerdictNotFound, VerdictParseError
+from kaji_harness.models import Verdict
+from kaji_harness.verdict import parse_verdict
 
 VALID_STATUSES = {"PASS", "RETRY", "BACK", "ABORT"}
 

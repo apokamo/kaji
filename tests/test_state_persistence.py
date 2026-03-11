@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from dao_harness.models import Verdict
-from dao_harness.state import SessionState, StepRecord
+from kaji_harness.models import Verdict
+from kaji_harness.state import SessionState, StepRecord
 
 
 @pytest.mark.medium
@@ -23,7 +23,7 @@ class TestStatePersistence:
 
     def test_save_and_load(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """State saved to disk can be loaded back."""
-        monkeypatch.setattr("dao_harness.state.STATE_DIR", tmp_path)
+        monkeypatch.setattr("kaji_harness.state.STATE_DIR", tmp_path)
 
         state = SessionState.load_or_create(42)
         state.save_session_id("design", "sess-design-001")
@@ -41,7 +41,7 @@ class TestStatePersistence:
 
     def test_step_record_rehydration(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """StepRecord objects are correctly deserialized from JSON."""
-        monkeypatch.setattr("dao_harness.state.STATE_DIR", tmp_path)
+        monkeypatch.setattr("kaji_harness.state.STATE_DIR", tmp_path)
 
         state = SessionState.load_or_create(100)
         verdict = Verdict(
@@ -66,7 +66,7 @@ class TestStatePersistence:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """last_transition_verdict is correctly deserialized as Verdict."""
-        monkeypatch.setattr("dao_harness.state.STATE_DIR", tmp_path)
+        monkeypatch.setattr("kaji_harness.state.STATE_DIR", tmp_path)
 
         state = SessionState.load_or_create(200)
         verdict = Verdict(
@@ -85,7 +85,7 @@ class TestStatePersistence:
 
     def test_cycle_counts_persisted(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Cycle iteration counts survive save/load."""
-        monkeypatch.setattr("dao_harness.state.STATE_DIR", tmp_path)
+        monkeypatch.setattr("kaji_harness.state.STATE_DIR", tmp_path)
 
         state = SessionState.load_or_create(300)
         state.increment_cycle("code-review")
@@ -98,7 +98,7 @@ class TestStatePersistence:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """save_session_id persists immediately without needing record_step."""
-        monkeypatch.setattr("dao_harness.state.STATE_DIR", tmp_path)
+        monkeypatch.setattr("kaji_harness.state.STATE_DIR", tmp_path)
 
         state = SessionState.load_or_create(301)
         state.save_session_id("design", "sess-abc-123")
@@ -111,7 +111,7 @@ class TestStatePersistence:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """increment_cycle persists immediately without needing record_step."""
-        monkeypatch.setattr("dao_harness.state.STATE_DIR", tmp_path)
+        monkeypatch.setattr("kaji_harness.state.STATE_DIR", tmp_path)
 
         state = SessionState.load_or_create(302)
         state.increment_cycle("code-review")
@@ -123,7 +123,7 @@ class TestStatePersistence:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Multiple step records are all persisted."""
-        monkeypatch.setattr("dao_harness.state.STATE_DIR", tmp_path)
+        monkeypatch.setattr("kaji_harness.state.STATE_DIR", tmp_path)
 
         state = SessionState.load_or_create(400)
         for step_id in ["design", "review", "implement"]:
@@ -142,7 +142,7 @@ class TestStatePersistence:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Loading non-existent state creates a fresh SessionState."""
-        monkeypatch.setattr("dao_harness.state.STATE_DIR", tmp_path)
+        monkeypatch.setattr("kaji_harness.state.STATE_DIR", tmp_path)
 
         state = SessionState.load_or_create(999)
         assert state.issue_number == 999
@@ -159,7 +159,7 @@ class TestProgressMd:
 
     def test_progress_md_created(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """progress.md is created when state is persisted."""
-        monkeypatch.setattr("dao_harness.state.STATE_DIR", tmp_path)
+        monkeypatch.setattr("kaji_harness.state.STATE_DIR", tmp_path)
 
         state = SessionState.load_or_create(500)
         verdict = Verdict(status="PASS", reason="done", evidence="ok", suggestion="")
@@ -175,7 +175,7 @@ class TestProgressMd:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """PASS steps get [x] checkmark in progress.md."""
-        monkeypatch.setattr("dao_harness.state.STATE_DIR", tmp_path)
+        monkeypatch.setattr("kaji_harness.state.STATE_DIR", tmp_path)
 
         state = SessionState.load_or_create(501)
         state.record_step(
@@ -189,7 +189,7 @@ class TestProgressMd:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Non-PASS steps get [ ] in progress.md."""
-        monkeypatch.setattr("dao_harness.state.STATE_DIR", tmp_path)
+        monkeypatch.setattr("kaji_harness.state.STATE_DIR", tmp_path)
 
         state = SessionState.load_or_create(502)
         state.record_step(
@@ -204,7 +204,7 @@ class TestProgressMd:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Cycle information appears in progress.md."""
-        monkeypatch.setattr("dao_harness.state.STATE_DIR", tmp_path)
+        monkeypatch.setattr("kaji_harness.state.STATE_DIR", tmp_path)
 
         state = SessionState.load_or_create(503)
         state.increment_cycle("code-review")
@@ -221,7 +221,7 @@ class TestStateJsonStructure:
 
     def test_json_structure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """session-state.json has expected structure."""
-        monkeypatch.setattr("dao_harness.state.STATE_DIR", tmp_path)
+        monkeypatch.setattr("kaji_harness.state.STATE_DIR", tmp_path)
 
         state = SessionState.load_or_create(600)
         state.save_session_id("design", "sess-123")

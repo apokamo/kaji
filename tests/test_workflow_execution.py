@@ -10,9 +10,9 @@ from unittest.mock import patch
 
 import pytest
 
-from dao_harness.errors import MissingResumeSessionError, WorkflowValidationError
-from dao_harness.models import CLIResult, CostInfo, CycleDefinition, Step, Workflow
-from dao_harness.runner import WorkflowRunner
+from kaji_harness.errors import MissingResumeSessionError, WorkflowValidationError
+from kaji_harness.models import CLIResult, CostInfo, CycleDefinition, Step, Workflow
+from kaji_harness.runner import WorkflowRunner
 
 
 def _make_verdict_output(status: str, reason: str = "ok", evidence: str = "test") -> str:
@@ -127,9 +127,9 @@ class TestWorkflowExecution:
             return r
 
         with (
-            patch("dao_harness.runner.execute_cli", side_effect=mock_execute_cli),
-            patch("dao_harness.runner.validate_skill_exists"),
-            patch("dao_harness.state.SessionState._persist"),
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.state.SessionState._persist"),
         ):
             runner = WorkflowRunner(
                 workflow=workflow,
@@ -151,9 +151,9 @@ class TestWorkflowExecution:
             return _make_cli_result("ABORT")
 
         with (
-            patch("dao_harness.runner.execute_cli", side_effect=mock_execute_cli),
-            patch("dao_harness.runner.validate_skill_exists"),
-            patch("dao_harness.state.SessionState._persist"),
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.state.SessionState._persist"),
         ):
             runner = WorkflowRunner(
                 workflow=workflow,
@@ -183,9 +183,9 @@ class TestWorkflowExecution:
             return r
 
         with (
-            patch("dao_harness.runner.execute_cli", side_effect=mock_execute_cli),
-            patch("dao_harness.runner.validate_skill_exists"),
-            patch("dao_harness.state.SessionState._persist"),
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.state.SessionState._persist"),
         ):
             runner = WorkflowRunner(
                 workflow=workflow,
@@ -205,9 +205,9 @@ class TestWorkflowExecution:
             return _make_cli_result("PASS", session_id="sess-review")
 
         with (
-            patch("dao_harness.runner.execute_cli", side_effect=mock_execute_cli),
-            patch("dao_harness.runner.validate_skill_exists"),
-            patch("dao_harness.state.SessionState._persist"),
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.state.SessionState._persist"),
         ):
             runner = WorkflowRunner(
                 workflow=workflow,
@@ -229,9 +229,9 @@ class TestWorkflowExecution:
             return _make_cli_result("PASS", session_id="sess-design")
 
         with (
-            patch("dao_harness.runner.execute_cli", side_effect=mock_execute_cli),
-            patch("dao_harness.runner.validate_skill_exists"),
-            patch("dao_harness.state.SessionState._persist"),
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.state.SessionState._persist"),
         ):
             runner = WorkflowRunner(
                 workflow=workflow,
@@ -249,8 +249,8 @@ class TestWorkflowExecution:
         workflow = _simple_workflow()
 
         with (
-            patch("dao_harness.runner.validate_skill_exists"),
-            patch("dao_harness.state.SessionState._persist"),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.state.SessionState._persist"),
         ):
             with pytest.raises(WorkflowValidationError):
                 runner = WorkflowRunner(
@@ -266,8 +266,8 @@ class TestWorkflowExecution:
         workflow = _simple_workflow()
 
         with (
-            patch("dao_harness.runner.validate_skill_exists"),
-            patch("dao_harness.state.SessionState._persist"),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.state.SessionState._persist"),
         ):
             with pytest.raises(WorkflowValidationError):
                 runner = WorkflowRunner(
@@ -295,9 +295,9 @@ class TestWorkflowExecution:
             return r
 
         with (
-            patch("dao_harness.runner.execute_cli", side_effect=mock_execute_cli),
-            patch("dao_harness.runner.validate_skill_exists"),
-            patch("dao_harness.state.SessionState._persist"),
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.state.SessionState._persist"),
         ):
             runner = WorkflowRunner(
                 workflow=workflow,
@@ -328,9 +328,9 @@ class TestWorkflowSessionManagement:
             return r
 
         with (
-            patch("dao_harness.runner.execute_cli", side_effect=mock_execute_cli),
-            patch("dao_harness.runner.validate_skill_exists"),
-            patch("dao_harness.state.SessionState._persist"),
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.state.SessionState._persist"),
         ):
             runner = WorkflowRunner(
                 workflow=workflow,
@@ -359,11 +359,11 @@ class TestWorkflowEndLogging:
             return _make_cli_result("ABORT")
 
         with (
-            patch("dao_harness.runner.execute_cli", side_effect=mock_execute_cli),
-            patch("dao_harness.runner.validate_skill_exists"),
-            patch("dao_harness.state.SessionState._persist"),
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.state.SessionState._persist"),
             patch(
-                "dao_harness.logger.RunLogger.log_workflow_end",
+                "kaji_harness.logger.RunLogger.log_workflow_end",
                 side_effect=capture_workflow_end,
             ),
         ):
@@ -398,11 +398,11 @@ class TestWorkflowEndLogging:
             return r
 
         with (
-            patch("dao_harness.runner.execute_cli", side_effect=mock_execute_cli),
-            patch("dao_harness.runner.validate_skill_exists"),
-            patch("dao_harness.state.SessionState._persist"),
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.state.SessionState._persist"),
             patch(
-                "dao_harness.logger.RunLogger.log_workflow_end",
+                "kaji_harness.logger.RunLogger.log_workflow_end",
                 side_effect=capture_workflow_end,
             ),
         ):
@@ -428,11 +428,11 @@ class TestWorkflowEndLogging:
             raise RuntimeError("test failure")
 
         with (
-            patch("dao_harness.runner.execute_cli", side_effect=mock_execute_cli),
-            patch("dao_harness.runner.validate_skill_exists"),
-            patch("dao_harness.state.SessionState._persist"),
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.state.SessionState._persist"),
             patch(
-                "dao_harness.logger.RunLogger.log_workflow_end",
+                "kaji_harness.logger.RunLogger.log_workflow_end",
                 side_effect=capture_workflow_end,
             ),
         ):

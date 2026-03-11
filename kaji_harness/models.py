@@ -1,4 +1,4 @@
-"""Data models for dao_harness."""
+"""Data models for kaji_harness."""
 
 from __future__ import annotations
 

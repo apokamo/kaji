@@ -30,7 +30,7 @@ $ARGUMENTS = <issue-number> [prefix]
 ## 命名規則
 
 - **ブランチ名**: `[prefix]/[issue-number]` (例: `fix/42`)
-- **ディレクトリ**: `../dao-[prefix]-[issue-number]` (例: `../dao-fix-42`)
+- **ディレクトリ**: `../kaji-[prefix]-[issue-number]` (例: `../kaji-fix-42`)
 
 ## 実行手順
 
@@ -45,7 +45,7 @@ $ARGUMENTS から issue-number と prefix を取得してください。
 
 ```bash
 MAIN_REPO=$(git rev-parse --show-toplevel)
-git worktree add -b [prefix]/[issue-number] "$MAIN_REPO/../dao-[prefix]-[issue-number]" main
+git worktree add -b [prefix]/[issue-number] "$MAIN_REPO/../kaji-[prefix]-[issue-number]" main
 ```
 
 ### Step 2: venv シンボリックリンク作成
@@ -54,7 +54,7 @@ main プロジェクトの `.venv` へのシンボリックリンクを作成:
 
 ```bash
 MAIN_REPO=$(git rev-parse --show-toplevel)
-ln -s "$MAIN_REPO/.venv" "$MAIN_REPO/../dao-[prefix]-[issue-number]/.venv"
+ln -s "$MAIN_REPO/.venv" "$MAIN_REPO/../kaji-[prefix]-[issue-number]/.venv"
 ```
 
 これにより `ruff`、`mypy`、`pytest` が即座に実行可能になります。
@@ -78,7 +78,7 @@ CURRENT_BODY=$(gh issue view [issue-number] --json body -q '.body')
 # メタ情報を先頭に追加した新しい本文を作成
 NEW_BODY=$(cat <<EOF
 > [!NOTE]
-> **Worktree**: \`../dao-[prefix]-[issue-number]\`
+> **Worktree**: \`../kaji-[prefix]-[issue-number]\`
 > **Branch**: \`[prefix]/[issue-number]\`
 
 $CURRENT_BODY
@@ -100,7 +100,7 @@ gh issue edit [issue-number] --body "$NEW_BODY"
 |------|-----|
 | Issue | #[issue-number] |
 | ブランチ | [prefix]/[issue-number] |
-| ディレクトリ | ../dao-[prefix]-[issue-number] |
+| ディレクトリ | ../kaji-[prefix]-[issue-number] |
 | 基点ブランチ | main |
 | .venv | シンボリックリンク作成済み |
 | メタ情報 | Issue本文に追記済み |
@@ -118,7 +118,7 @@ gh issue edit [issue-number] --body "$NEW_BODY"
 
 このタスクに関する今後のコマンドは、すべて以下のディレクトリ内で実行してください:
 
-../dao-[prefix]-[issue-number]
+../kaji-[prefix]-[issue-number]
 
 ### クリーンアップ（作業完了後）
 

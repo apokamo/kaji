@@ -1,5 +1,5 @@
 [project]
-name = "dev-agent-orchestra"
+name = "kaji"
 version = "0.2.0"
 description = "AI-driven software development workflow orchestrator"
 readme = "README.md"
@@ -31,7 +31,7 @@ dev = [
 ]
 
 [project.scripts]
-dao = "dao_harness.cli_main:main"
+kaji = "kaji_harness.cli_main:main"
 
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
@@ -39,7 +39,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["dao_harness*"]
+include = ["kaji_harness*"]
 
 [tool.ruff]
 line-length = 100

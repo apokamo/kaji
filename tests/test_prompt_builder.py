@@ -11,9 +11,9 @@ from unittest.mock import patch
 
 import pytest
 
-from dao_harness.models import CycleDefinition, Step, Verdict, Workflow
-from dao_harness.prompt import build_prompt
-from dao_harness.state import SessionState
+from kaji_harness.models import CycleDefinition, Step, Verdict, Workflow
+from kaji_harness.prompt import build_prompt
+from kaji_harness.state import SessionState
 
 # ============================================================
 # Helpers

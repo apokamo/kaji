@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 import pytest
 
-from dao_harness.models import Verdict
-from dao_harness.state import SessionState, StepRecord
+from kaji_harness.models import Verdict
+from kaji_harness.state import SessionState, StepRecord
 
 # ============================================================
 # Helper: create a fresh SessionState without filesystem side effects
@@ -43,7 +43,7 @@ class TestLoadOrCreateNew:
     """load_or_create returns a fresh empty state when no file exists."""
 
     def test_load_or_create_returns_new_state(self, tmp_path: Path) -> None:
-        with patch("dao_harness.state.STATE_DIR", tmp_path / "artifacts"):
+        with patch("kaji_harness.state.STATE_DIR", tmp_path / "artifacts"):
             state = SessionState.load_or_create(issue=99)
 
         assert state.issue_number == 99

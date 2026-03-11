@@ -12,7 +12,7 @@ import shutil
 
 import pytest
 
-from dao_harness.adapters import ClaudeAdapter, CodexAdapter, GeminiAdapter
+from kaji_harness.adapters import ClaudeAdapter, CodexAdapter, GeminiAdapter
 
 
 def _cli_available(name: str) -> bool:

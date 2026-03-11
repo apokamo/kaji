@@ -5,8 +5,8 @@ Each adapter extracts session_id, text, and cost from JSONL events.
 
 import pytest
 
-from dao_harness.adapters import ClaudeAdapter, CodexAdapter, GeminiAdapter
-from dao_harness.models import CostInfo
+from kaji_harness.adapters import ClaudeAdapter, CodexAdapter, GeminiAdapter
+from kaji_harness.models import CostInfo
 
 # ==========================================
 # Claude Adapter
