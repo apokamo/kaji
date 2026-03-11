@@ -16,10 +16,11 @@ from .errors import (
     WorkflowValidationError,
 )
 from .runner import WorkflowRunner
-from .workflow import load_workflow
+from .workflow import load_workflow, validate_workflow
 
 EXIT_OK = 0
 EXIT_ABORT = 1
+EXIT_VALIDATION_ERROR = 1
 EXIT_DEFINITION_ERROR = 2
 EXIT_RUNTIME_ERROR = 3
 
@@ -32,6 +33,7 @@ def create_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     _register_run(subparsers)
+    _register_validate(subparsers)
     return parser
 
 
@@ -49,6 +51,56 @@ def _register_run(subparsers: argparse._SubParsersAction[argparse.ArgumentParser
         help="Working directory for agent CLI (default: current directory)",
     )
     p.add_argument("--quiet", action="store_true", help="Suppress agent output streaming")
+
+
+def _register_validate(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    """Register the `validate` subcommand."""
+    p = subparsers.add_parser("validate", help="Validate workflow YAML files")
+    p.add_argument("files", nargs="+", type=Path, help="Workflow YAML file(s) to validate")
+
+
+def cmd_validate(args: argparse.Namespace) -> int:
+    """Execute the `validate` subcommand."""
+    failed = 0
+    total = len(args.files)
+
+    for path in args.files:
+        if not path.exists():
+            _print_error(path, ["File not found"])
+            failed += 1
+            continue
+        try:
+            wf = load_workflow(path)
+            validate_workflow(wf)
+            _print_success(path)
+        except WorkflowValidationError as e:
+            _print_error(path, e.errors)
+            failed += 1
+        except OSError as e:
+            _print_error(path, [str(e)])
+            failed += 1
+
+    if failed > 0 and total > 1:
+        print(
+            f"Validation failed: {failed} of {total} files had errors.",
+            file=sys.stderr,
+        )
+
+    return EXIT_VALIDATION_ERROR if failed > 0 else EXIT_OK
+
+
+def _print_success(path: Path) -> None:
+    """Print success message to stdout."""
+    print(f"✓ {path}")
+
+
+def _print_error(path: Path, errors: list[str]) -> None:
+    """Print error messages to stderr."""
+    print(f"✗ {path}", file=sys.stderr)
+    for error in errors:
+        print(f"  - {error}", file=sys.stderr)
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -126,6 +178,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "run":
         return cmd_run(args)
+    if args.command == "validate":
+        return cmd_validate(args)
 
     parser.print_help()
     return EXIT_ABORT

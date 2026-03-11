@@ -45,6 +45,8 @@ dao run <workflow.yaml> <issue> --from <step-id>   # Resume from a step
 dao run <workflow.yaml> <issue> --step <step-id>   # Run a single step
 dao run <workflow.yaml> <issue> --workdir <dir>    # Set agent working directory
 dao run <workflow.yaml> <issue> --quiet            # Suppress agent output
+
+dao validate <workflow.yaml>...                    # Validate workflow YAML(s)
 ```
 
 ## Git & GitHub
