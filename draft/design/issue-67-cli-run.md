@@ -136,10 +136,13 @@ def cmd_run(args) -> int:
 | ドキュメント | 影響の有無 | 理由 |
 |-------------|-----------|------|
 | docs/adr/ | なし | 新しい技術選定なし（argparse は #65 で選定済み） |
-| docs/ARCHITECTURE.md | なし | アーキテクチャ変更なし |
-| docs/dev/ | なし | ワークフロー手順変更なし |
-| docs/cli-guides/ | あり | `dao run` の使い方ガイドを追加または更新 |
-| CLAUDE.md | なし | `dao run` の使い方は既に記載済み |
+| docs/ARCHITECTURE.md | 軽微 | L108-113 で `dao run` の `--from` 再開を既に記述済み。新フラグ (`--workdir`, `--quiet`) の追記が必要な可能性 |
+| docs/dev/workflow-authoring.md | 更新 | L170-181 で `dao run` コマンド例を既に記述済み。新フラグの追記 + exit code の説明追加 |
+| docs/dev/skill-authoring.md | なし | コンテキスト変数の変更なし |
+| docs/dev/development_workflow.md | なし | スキルライフサイクルの記述であり CLI ハーネスは無関係 |
+| docs/cli-guides/ | なし | claude/codex/gemini 各 CLI のリファレンスであり `dao` CLI は対象外 |
+| README.md | 更新 | ワークフロー実行方法のセクションが未記載。`dao run` の基本的な使い方を追加 |
+| CLAUDE.md | 軽微 | `dao run` の基本3パターンは記載済み。`--workdir` / `--quiet` を追記する可能性 |
 
 ## 参照情報（Primary Sources）
 
