@@ -58,6 +58,7 @@ from kaji_harness.models import Workflow
 - **legacy/ は対象外**: V5/V6 コードはすでに非サポート。参照先も存在しない
 - **draft/design/ の過去設計書**: リネーム対象外。`development_workflow.md` の定義通り、Close 時に Issue 本文へアーカイブされ worktree 削除で自然消滅する一時成果物であり、履歴文脈を壊すリスクのほうが大きい
 - **workflow YAML 変更済み**: `workflows/feature-development.yaml` の agent/model 調整は事前に完了済み（未コミット）。本 Issue のスコープに含めてコミットする
+- **テスト期待値の追随が必要**: workflow 事前調整により `fix-code` の `resume` を削除済みのため、旧仕様を前提にしたテスト期待値も本 Issue 内で更新する
 - **`.dao/` ディレクトリ**: #70 で新設予定のため本 Issue では扱わない（まだ存在しない）
 
 ## 方針
@@ -80,6 +81,8 @@ from kaji_harness.models import Workflow
 3. `docs/` 配下: CLI コマンド例、パッケージ参照
 4. `.claude/skills/`: Worktree 命名規則 `dao-` → `kaji-`
 5. `uv.lock`: `pyproject.toml` の name 変更に伴い `uv lock` で再生成（手動編集しない）
+6. workflow 事前調整に追随するテスト期待値の修正
+   - 例: `tests/test_skill_harness_adaptation.py` の `fix-code` resume 必須前提を新仕様に合わせる
 
 ### フェーズ3: 品質検証
 
@@ -136,6 +139,7 @@ ruff check kaji_harness/ tests/ && ruff format kaji_harness/ tests/ && mypy kaji
 - **既存テストの通過確認**: 全 Medium テスト（`@pytest.mark.medium`）が新しいパッケージ名・CLI 名で動作すること
 - 対象: CLI 引数パース、ワークフロー実行、ロギング統合、セッション状態永続化等
 - 特に注意: CLI エントリーポイントが `kaji` コマンドとして動作すること
+- **workflow 事前調整との整合性確認**: `workflows/feature-development.yaml` の mixed-agent / resume 方針に対して、Medium テストの期待値が旧仕様に固定されていないこと
 
 ### Large テスト
 - **既存テストの通過確認**: 全 Large テスト（`@pytest.mark.large`）が E2E で動作すること
