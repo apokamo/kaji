@@ -15,6 +15,13 @@ Issue: #67
 - #65 (`dao validate`) がマージ済みであること
 - `cli_main.py` に argparse サブコマンドパーサーが存在すること
 
+### #65 依存の解消方針
+
+#65 は 2026-03-11 時点で OPEN。以下の方針で対応する:
+
+1. **実装開始条件**: #65 のマージを待つ。#67 ブランチは `main` から作成済みのため、#65 マージ後に `git merge main` で基盤を取り込む
+2. **#65 が長期停滞した場合**: #67 のスコープを拡張し、CLI 基盤（`cli_main.py` + `[project.scripts]`）ごと本イシューで実装する。この場合 #65 は #67 に吸収される
+
 ## インターフェース
 
 ### 入力
@@ -29,7 +36,7 @@ dao run <workflow> <issue> [options]
 | `issue` | positional (int) | ○ | GitHub Issue番号 |
 | `--from STEP_ID` | option (str) | × | 指定ステップから再開 |
 | `--step STEP_ID` | option (str) | × | 単一ステップのみ実行 |
-| `--workdir DIR` | option (str) | × | 作業ディレクトリ（デフォルト: カレントディレクトリ） |
+| `--workdir DIR` | option (str) | × | エージェント CLI の作業ディレクトリ（デフォルト: カレントディレクトリ）。状態ファイル・ログの保存先には影響しない（後述） |
 | `--quiet` | flag | × | エージェント出力のストリーミング表示を抑制 |
 
 `--from` と `--step` は排他（同時指定はエラー）。
@@ -64,6 +71,18 @@ dao run workflows/design.yaml 67 --workdir ../dao-feat-67 --quiet
 - エラーハンドリングは `HarnessError` 階層をそのまま活用
 - exit code は意味を持たせる（スクリプトからの呼び出しを想定）
 
+### `--workdir` と状態保存場所の関係
+
+`--workdir` はエージェント CLI の `cwd` のみを制御する。状態ファイルとログは `dao run` を実行したプロセスのカレントディレクトリ基準で保存される:
+
+| 対象 | 保存先 | `--workdir` の影響 |
+|------|--------|-------------------|
+| `SessionState` | `test-artifacts/<issue>/state.json`（プロセス cwd 基準） | なし |
+| 実行ログ | `test-artifacts/<issue>/runs/<timestamp>/`（プロセス cwd 基準） | なし |
+| エージェント CLI の `cwd` | `--workdir` で指定されたディレクトリ | **あり** |
+
+この分離は `WorkflowRunner` の既存設計に従ったもの。`runner.py` で `run_dir` はプロセス cwd 基準、`execute_cli()` の `cwd=workdir` はエージェント実行先のみを指す。
+
 ## 方針
 
 ### 1. `cli_main.py` への `run` サブコマンド追加
@@ -97,14 +116,30 @@ def cmd_run(args) -> int:
 
 ### 3. exit code マッピング
 
-| 例外 | exit code |
-|------|-----------|
-| 正常終了 | 0 |
-| ABORT verdict | 1 |
-| `WorkflowValidationError` | 2 |
-| `CLIExecutionError` / `CLINotFoundError` / `StepTimeoutError` | 3 |
-| `MissingResumeSessionError` / `InvalidTransition` | 3 |
-| その他の予期しない例外 | 1 |
+既知の `HarnessError` サブクラスを網羅的にマッピングする。`HarnessError` を基底で catch することで、将来追加されるサブクラスも「既知エラー」として扱う。
+
+| exit code | 意味 | 対応する例外 |
+|-----------|------|-------------|
+| 0 | 正常終了 | — |
+| 1 | ワークフロー ABORT | ABORT verdict で終了した場合 |
+| 2 | 定義エラー（実行前に検出） | `WorkflowValidationError`, `SkillNotFound`, `SecurityError` |
+| 3 | 実行時エラー（ステップ実行中に発生） | `CLIExecutionError`, `CLINotFoundError`, `StepTimeoutError`, `MissingResumeSessionError`, `InvalidTransition`, `VerdictNotFound`, `VerdictParseError`, `InvalidVerdictValue` |
+| 1 | 予期しないエラー | `HarnessError` の未知サブクラス、または `HarnessError` 以外の例外 |
+
+**実装方針**: 個別の例外クラスを列挙するのではなく、`HarnessError` の catch 内で分類する:
+
+```python
+try:
+    ...
+except WorkflowValidationError | SkillNotFound | SecurityError as e:
+    # 定義エラー → exit 2
+except HarnessError as e:
+    # その他の既知実行時エラー → exit 3
+except Exception as e:
+    # 予期しないエラー → exit 1
+```
+
+**ユーザー向けメッセージ**: 全ての `HarnessError` は `str(e)` で人間可読なメッセージを提供済み（`errors.py` の各 `__init__` で設定）。CLI は `stderr` にそのまま出力する。
 
 ## テスト戦略
 
@@ -114,7 +149,8 @@ def cmd_run(args) -> int:
 
 - `--from` と `--step` の排他バリデーション
 - 引数パース: 各オプションが正しく `WorkflowRunner` のパラメータにマッピングされること
-- exit code マッピング: 各例外クラスが正しい exit code に変換されること
+- exit code マッピング: 全 `HarnessError` サブクラス（`WorkflowValidationError`, `SkillNotFound`, `SecurityError`, `CLIExecutionError`, `CLINotFoundError`, `StepTimeoutError`, `MissingResumeSessionError`, `InvalidTransition`, `VerdictNotFound`, `VerdictParseError`, `InvalidVerdictValue`）が正しい exit code に変換されること
+- `HarnessError` 以外の予期しない例外 → exit 1
 - サマリー出力のフォーマット
 
 ### Medium テスト
