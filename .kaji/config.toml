@@ -1,0 +1,5 @@
+# kaji configuration for kaji's own repository.
+# See: draft/design/issue-70-colocated-model.md
+
+[paths]
+artifacts_dir = ".kaji-artifacts"

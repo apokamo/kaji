@@ -7,6 +7,7 @@ injection, and previous_verdict handling.
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -61,6 +62,7 @@ def _make_state(
     with patch.object(SessionState, "_persist"):
         state = SessionState(
             issue_number=issue,
+            artifacts_dir=Path("/tmp/fake-artifacts"),
             sessions={},
             step_history=[],
             cycle_counts={},

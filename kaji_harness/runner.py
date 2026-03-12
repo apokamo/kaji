@@ -32,7 +32,8 @@ class WorkflowRunner:
 
     workflow: Workflow
     issue_number: int
-    workdir: Path
+    project_root: Path
+    artifacts_dir: Path
     from_step: str | None = None
     single_step: str | None = None
     verbose: bool = True
@@ -52,17 +53,20 @@ class WorkflowRunner:
 
         # 0. 全ステップのスキル存在を事前検証
         for step in self.workflow.steps:
-            validate_skill_exists(step.skill, step.agent, self.workdir)
+            validate_skill_exists(step.skill, step.agent, self.project_root)
 
         # 1. ワークフロー定義のバリデーション
         validate_workflow(self.workflow)
 
         # 2. issue-scoped な状態をロード
-        state = SessionState.load_or_create(self.issue_number)
+        state = SessionState.load_or_create(self.issue_number, self.artifacts_dir)
 
         # 3. run ログディレクトリを作成
-        run_dir = Path(
-            f"test-artifacts/{self.issue_number}/runs/{datetime.now().strftime('%y%m%d%H%M')}"
+        run_dir = (
+            self.artifacts_dir
+            / str(self.issue_number)
+            / "runs"
+            / datetime.now().strftime("%y%m%d%H%M")
         )
         run_dir.mkdir(parents=True, exist_ok=True)
         logger = RunLogger(log_path=run_dir / "run.log")
@@ -128,7 +132,7 @@ class WorkflowRunner:
                     result = execute_cli(
                         step=current_step,
                         prompt=prompt,
-                        workdir=self.workdir,
+                        workdir=self.project_root,
                         session_id=session_id,
                         log_dir=step_log_dir,
                         execution_policy=execution_policy,
@@ -146,7 +150,7 @@ class WorkflowRunner:
                         agent=current_step.agent,
                         valid_statuses=valid,
                         model=current_step.model,
-                        workdir=self.workdir,
+                        workdir=self.project_root,
                     )
                     verdict = parse_verdict(
                         result.full_output,

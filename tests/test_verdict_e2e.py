@@ -404,9 +404,12 @@ def _setup_fake_agent_env(
             """)
         )
 
-    # Create skill directory so pre-flight validation passes
+    # Create project directory with config and skill
     workdir = tmp_path / "project"
     workdir.mkdir()
+    config_dir = workdir / ".kaji"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text("")
     skill_dir = workdir / ".claude" / "skills" / "test-skill"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("# Test Skill\n")

@@ -31,6 +31,14 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
+対象プロジェクトには `.kaji/config.toml` を配置する（コロケーテッドモデル）:
+
+```toml
+# .kaji/config.toml
+[paths]
+artifacts_dir = ".kaji-artifacts"   # 省略時のデフォルト値
+```
+
 ## 開発ワークフロー
 
 Issue駆動のTDD開発フロー:
