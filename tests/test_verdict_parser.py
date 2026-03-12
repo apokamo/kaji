@@ -592,7 +592,7 @@ class TestRelaxedPatternJapanese:
     """'ステータス: PASS' Japanese pattern."""
 
     def test_japanese_status(self) -> None:
-        output = "ステータス: PASS\nリーズン: OK\nエビデンス: テスト全通過\n"
+        output = "ステータス: PASS\n理由: OK\n根拠: テスト全通過\n"
         result = parse_verdict(output, VALID_STATUSES)
         assert result.status == "PASS"
 
@@ -750,7 +750,7 @@ class TestAIFormatterValidStatusesRestriction:
         from kaji_harness.verdict import FORMATTER_PROMPT
 
         # The prompt template should have placeholders for valid_statuses
-        assert "{valid_statuses_str}" in FORMATTER_PROMPT
+        assert "$valid_statuses_str" in FORMATTER_PROMPT.template
 
 
 # ============================================================
