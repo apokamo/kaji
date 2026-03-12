@@ -113,7 +113,7 @@ suggestion: |
 | `cycle_count` | int | 現在のサイクルイテレーション（サイクル内ステップのみ） |
 | `max_iterations` | int | サイクルの上限回数（サイクル内ステップのみ） |
 
-`previous_verdict` は `resume` 指定ステップ（文脈継続ステップ）にのみ注入される。`review-code` のように独立評価が必要なステップには注入されない。
+`previous_verdict` は `resume` 指定ステップまたは `inject_verdict: true` 指定ステップに注入される。`review-code` のように独立評価が必要なステップには注入されない。
 
 ## GitHub Issue の活用
 
