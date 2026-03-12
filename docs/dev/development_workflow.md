@@ -24,7 +24,7 @@ flowchart TB
     D4 --> D2
     D2 -->|Yes| DC
 
-    DC["/issue-doc-check"] --> E["/issue-pr"] --> F["/issue-close"]
+    DC["/issue-doc-check"] --> E["/issue-pr"] --> F["end"]
 ```
 
 ## フェーズ概要
@@ -36,7 +36,7 @@ flowchart TB
 | 3. 設計 | `/issue-design` | `draft/design/` に設計書 |
 | 4. 実装 | `/issue-implement` | コード + テスト |
 | 5. PR作成 | `/issue-pr` | PR作成 |
-| 6. 完了 | `/issue-close` | 設計書アーカイブ + PRマージ + worktree削除 |
+| 6. 完了 | `/issue-close` | 設計書アーカイブ + PRマージ + worktree削除（※手動実行） |
 
 ## 詳細フロー
 
@@ -116,10 +116,11 @@ flowchart TB
 │ • git absorb（コミット履歴の整理）                                  │
 │ • git push                                                          │
 │ • gh pr create                                                      │
+│ • ここでワークフロー自動実行は終了                                  │
 └─────────────────────────────────────────────────────────────────────┘
                                   ↓
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Phase 6: 完了                                                       │
+│ Phase 6: 完了（※ワークフロー外。手動で実行）                        │
 │ /issue-close <issue-number>                                         │
 ├─────────────────────────────────────────────────────────────────────┤
 │ • draft/design/ → Issue本文に設計書をアーカイブ（<details>タグ）    │
