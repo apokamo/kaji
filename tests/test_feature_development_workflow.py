@@ -6,8 +6,6 @@ Issue: #93
 
 from __future__ import annotations
 
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -70,21 +68,9 @@ class TestFeatureDevelopmentWorkflowMedium:
 
 
 # ============================================================
-# Large tests — subprocess execution
+# Large tests — /kaji-run-verify による実機検証
 # ============================================================
-
-
-class TestFeatureDevelopmentWorkflowLarge:
-    """Large: real subprocess execution of kaji validate."""
-
-    @pytest.mark.large
-    def test_kaji_validate_subprocess(self) -> None:
-        """kaji validate via subprocess should exit 0."""
-        result = subprocess.run(
-            [sys.executable, "-m", "kaji_harness.cli_main", "validate", str(WORKFLOW_PATH)],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        assert result.returncode == 0
-        assert "✓" in result.stdout
+# Large 検証は pytest ではなく /kaji-run-verify による手動実行で実施する。
+# 検証コマンド: /kaji-run-verify workflows/feature-development.yaml <issue>
+# 検証結果は Issue コメントとして記録される。
+# 設計書: draft/design/issue-93-workflow-stop-at-pr.md (Large テスト節)
