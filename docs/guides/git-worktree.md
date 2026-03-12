@@ -2,6 +2,8 @@
 
 Bare Repository + Worktree パターンによる並列開発環境の構築・運用ガイド。
 
+> **本ドキュメントの構成**: 前半は汎用的な Bare Repository パターン、後半（「[kaji プロジェクトでの運用](#kaji-プロジェクトでの運用)」）は kaji 固有の通常リポジトリ + worktree パターンを記載している。
+
 ## 概要
 
 Git Worktree を使用することで、1つのリポジトリで複数のブランチを同時に作業ディレクトリとして展開できる。これにより：
@@ -158,6 +160,8 @@ worktree のライフサイクルはスキルで管理される:
 ln -s /home/user/dev/kaji/.venv /home/user/dev/kaji-feat-42/.venv
 ```
 
+> **⚠️ 注意**: `.venv` を共有しているため、worktree 内での `pip install` はメインリポジトリの環境にも影響する。`pyproject.toml` の依存関係を変更する場合は、個別の venv を作成して検証すること。
+
 ## 運用ルール
 
 ### Do
@@ -169,7 +173,7 @@ ln -s /home/user/dev/kaji/.venv /home/user/dev/kaji-feat-42/.venv
 ### Don't
 
 - `git checkout` を使わない（ディレクトリ移動で対応）
-- プロジェクトルートで一般的なgitコマンドを実行しない
+- プロジェクトルートで一般的なgitコマンドを実行しない（Bare Repository パターンの場合。通常リポジトリでは問題ない）
 
 ## 参考資料
 
