@@ -10,7 +10,7 @@ Issue: #93
 
 - PR 作成後のマージ判断は人間が行うべき（レビュー確認、CI 結果確認、マージタイミング）
 - 自動マージ・close は意図しないマージ事故のリスクがある
-- `issue-close` は worktree 削除や `git pull origin main` を伴い、Codex 実行時の CWD / セッション継続挙動に依存する不安定要素がある（#70 の `kaji-run-verify` で観測済み）
+- `issue-close` は worktree 削除や `git pull origin main` を伴い、Codex 実行時の CWD / セッション継続挙動に依存する不安定要素がある（[#70 kaji-run-verify 実行結果](https://github.com/apokamo/kaji/issues/70#issuecomment-4047582273) で観測）
 - PR 作成を自然な「一時停止ポイント」とすることで、ワークフローの安全性を高める
 
 ## インターフェース
@@ -44,7 +44,7 @@ kaji run workflows/feature-development.yaml 99
 
 ## 方針
 
-3箇所の変更のみで完結する最小限の修正:
+YAML 変更 3 箇所 + ドキュメント更新 1 箇所:
 
 1. **`pr` ステップの `PASS` 遷移先を `close` → `end` に変更**
    ```yaml
@@ -68,6 +68,11 @@ kaji run workflows/feature-development.yaml 99
      Issue の設計から PR 作成までの開発ワークフロー。
    ```
 
+4. **`docs/dev/development_workflow.md` を更新**
+   - フロー図（mermaid）から `close` の自動遷移を削除し、`pr` → `end` に変更
+   - フェーズ概要テーブルの「6. 完了」行の説明を「手動実行（`/issue-close`）」に変更
+   - 詳細フロー（ASCII）の Phase 6 に「※ワークフロー外。手動で実行」の注記を追加
+
 ## テスト戦略
 
 > **CRITICAL**: S/M/L すべてのサイズのテスト方針を定義すること。
@@ -82,10 +87,8 @@ kaji run workflows/feature-development.yaml 99
 - `kaji validate workflows/feature-development.yaml` CLI コマンドが正常終了することを検証（ファイルI/O + バリデーション結合）
 
 ### Large テスト
-- `kaji run` で実際にワークフローを実行し、PR作成ステップで `end` に遷移して終了することを検証
-
-### スキップするサイズ（該当する場合のみ）
-- Large: ワークフロー実行には実際の GitHub Issue・エージェント接続が必要であり、テスト環境で物理的に再現不可能。変更は YAML の静的構造のみであるため、Small + Medium で十分にカバーされる。
+- 実装完了後、`/kaji-run-verify workflows/feature-development.yaml <issue>` で実機検証を行い、ワークフローが `pr` ステップ完了後に正常終了することを確認する
+- 検証結果は Issue コメントとして記録する（#70 での実績: [kaji-run-verify 実行結果](https://github.com/apokamo/kaji/issues/70#issuecomment-4047582273)）
 
 ## 影響ドキュメント
 
@@ -103,5 +106,5 @@ kaji run workflows/feature-development.yaml 99
 |--------|----------|-------------------|
 | 変更対象ファイル | `workflows/feature-development.yaml` | `pr` ステップの `on.PASS: close` と `close` ステップ定義（L105-L121） |
 | ワークフローバリデーション | `kaji_harness/workflow.py` L231-235 | `on` ターゲットが存在するステップID or `"end"` であることを検証。`close` 削除時に `pr.on.PASS` を `end` に変更しないとバリデーションエラー |
-| #70 の観測 | Issue #93 本文「補足観測」 | close verdict に手動 `cd` + `git pull` が必要だった事実。SKILL の前提と実行環境のずれが原因 |
+| #70 の観測 | [#70 kaji-run-verify 実行結果](https://github.com/apokamo/kaji/issues/70#issuecomment-4047582273) | close verdict に手動 `cd` + `git pull` が必要だった事実。SKILL の前提と実行環境のずれが原因 |
 | 開発ワークフロー | `docs/dev/development_workflow.md` | フロー図に `close` が自動ステップとして含まれており、ドキュメント更新が必要 |
