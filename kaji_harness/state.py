@@ -12,7 +12,6 @@ from pathlib import Path
 
 from .models import Verdict
 
-STATE_DIR = Path("test-artifacts")
 STATE_FILE = "session-state.json"
 
 
@@ -33,6 +32,7 @@ class SessionState:
     """Issue 単位のセッション状態。"""
 
     issue_number: int
+    artifacts_dir: Path
     sessions: dict[str, str] = field(default_factory=dict)
     step_history: list[StepRecord] = field(default_factory=list)
     cycle_counts: dict[str, int] = field(default_factory=dict)
@@ -40,21 +40,21 @@ class SessionState:
     last_transition_verdict: Verdict | None = None
 
     @classmethod
-    def load_or_create(cls, issue: int) -> SessionState:
+    def load_or_create(cls, issue: int, artifacts_dir: Path) -> SessionState:
         """状態をロードまたは新規作成する。"""
-        path = STATE_DIR / str(issue) / STATE_FILE
+        path = artifacts_dir / str(issue) / STATE_FILE
         if path.exists():
             data = json.loads(path.read_text(encoding="utf-8"))
             data["step_history"] = [StepRecord(**r) for r in data.get("step_history", [])]
             ltv = data.pop("last_transition_verdict", None)
             if ltv:
                 data["last_transition_verdict"] = Verdict(**ltv)
-            return cls(**data)
-        return cls(issue_number=issue)
+            return cls(artifacts_dir=artifacts_dir, **data)
+        return cls(issue_number=issue, artifacts_dir=artifacts_dir)
 
     @property
     def _state_dir(self) -> Path:
-        return STATE_DIR / str(self.issue_number)
+        return self.artifacts_dir / str(self.issue_number)
 
     def save_session_id(self, step_id: str, session_id: str) -> None:
         """ステップのセッション ID を保存し、即時永続化する。"""

@@ -9,7 +9,10 @@ import argparse
 import sys
 from pathlib import Path
 
+from .config import KajiConfig
 from .errors import (
+    ConfigLoadError,
+    ConfigNotFoundError,
     HarnessError,
     SecurityError,
     SkillNotFound,
@@ -23,6 +26,7 @@ EXIT_OK = 0
 EXIT_ABORT = 1
 EXIT_VALIDATION_ERROR = 1
 EXIT_DEFINITION_ERROR = 2
+EXIT_CONFIG_NOT_FOUND = 2
 EXIT_RUNTIME_ERROR = 3
 
 
@@ -49,7 +53,7 @@ def _register_run(subparsers: argparse._SubParsersAction[argparse.ArgumentParser
         "--workdir",
         type=Path,
         default=Path.cwd(),
-        help="Working directory for agent CLI (default: current directory)",
+        help="Starting directory for config discovery (default: current directory)",
     )
     p.add_argument("--quiet", action="store_true", help="Suppress agent output streaming")
 
@@ -64,20 +68,30 @@ def _register_validate(
         "--project-root",
         type=Path,
         default=None,
-        help="Project root for skill lookup (default: YAML file's parent directory)",
+        help="Project root for skill lookup (default: auto-detect from config or pyproject.toml)",
     )
 
 
-def _resolve_project_root(explicit_root: Path | None, yaml_path: Path) -> Path:
-    """Resolve project root for skill lookup.
+def _resolve_project_root_for_validate(explicit_root: Path | None, yaml_path: Path) -> Path:
+    """Resolve project root for validate command.
 
     Priority:
     1. Explicit --project-root if provided
-    2. Walk up from YAML file's directory looking for pyproject.toml
-    3. Fall back to YAML file's parent directory
+    2. .kaji/config.toml discovery from YAML file's directory
+    3. Walk up from YAML file's directory looking for pyproject.toml
+    4. Fall back to YAML file's parent directory
     """
     if explicit_root is not None:
         return explicit_root.resolve()
+    # Try .kaji/config.toml
+    try:
+        config = KajiConfig.discover(start_dir=yaml_path.resolve().parent)
+        return config.repo_root
+    except ConfigNotFoundError:
+        pass
+    except ConfigLoadError:
+        raise
+    # Fallback: pyproject.toml
     current = yaml_path.resolve().parent
     while True:
         if (current / "pyproject.toml").exists():
@@ -102,7 +116,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
         try:
             wf = load_workflow(path)
             validate_workflow(wf)
-            project_root = _resolve_project_root(args.project_root, path)
+            project_root = _resolve_project_root_for_validate(args.project_root, path)
             for step in wf.steps:
                 validate_skill_exists(step.skill, step.agent, project_root)
             _print_success(path)
@@ -110,6 +124,9 @@ def cmd_validate(args: argparse.Namespace) -> int:
             _print_error(path, e.errors)
             failed += 1
         except (SkillNotFound, SecurityError) as e:
+            _print_error(path, [str(e)])
+            failed += 1
+        except ConfigLoadError as e:
             _print_error(path, [str(e)])
             failed += 1
         except OSError as e:
@@ -147,14 +164,25 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         return EXIT_DEFINITION_ERROR
 
-    # Validate --workdir
-    workdir = args.workdir.resolve()
-    if not workdir.is_dir():
+    # Config discovery: --workdir overrides the start directory
+    start_dir = args.workdir.resolve()
+    if not start_dir.is_dir():
         print(
             f"Error: --workdir '{args.workdir}' is not a valid directory",
             file=sys.stderr,
         )
         return EXIT_DEFINITION_ERROR
+
+    try:
+        config = KajiConfig.discover(start_dir=start_dir)
+    except ConfigNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_CONFIG_NOT_FOUND
+    except ConfigLoadError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_CONFIG_NOT_FOUND
+
+    project_root = config.repo_root
 
     # Load and validate workflow
     workflow_path = args.workflow
@@ -176,7 +204,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         runner = WorkflowRunner(
             workflow=workflow,
             issue_number=args.issue,
-            workdir=workdir,
+            project_root=project_root,
+            artifacts_dir=config.artifacts_dir,
             from_step=args.from_step,
             single_step=args.single_step,
             verbose=not args.quiet,
