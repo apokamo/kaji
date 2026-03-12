@@ -14,13 +14,12 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
 import pytest
 
 from kaji_harness.config import KajiConfig, PathsConfig
-from kaji_harness.errors import ConfigNotFoundError
+from kaji_harness.errors import ConfigLoadError, ConfigNotFoundError
 
 # ============================================================
 # Small tests — TOML parsing and data model
@@ -87,7 +86,7 @@ class TestKajiConfigLoadValid:
 
 @pytest.mark.small
 class TestKajiConfigLoadInvalid:
-    """KajiConfig._load raises on invalid TOML."""
+    """KajiConfig._load raises ConfigLoadError on invalid input."""
 
     def test_invalid_toml_raises(self, tmp_path: Path) -> None:
         config_dir = tmp_path / ".kaji"
@@ -95,7 +94,43 @@ class TestKajiConfigLoadInvalid:
         config_file = config_dir / "config.toml"
         config_file.write_text("this is not valid toml [[[")
 
-        with pytest.raises(tomllib.TOMLDecodeError):
+        with pytest.raises(ConfigLoadError, match="invalid TOML"):
+            KajiConfig._load(config_file)
+
+    def test_absolute_artifacts_dir_rejected(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text('[paths]\nartifacts_dir = "/tmp/outside"\n')
+
+        with pytest.raises(ConfigLoadError, match="relative path"):
+            KajiConfig._load(config_file)
+
+    def test_dotdot_artifacts_dir_rejected(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text('[paths]\nartifacts_dir = "../escape"\n')
+
+        with pytest.raises(ConfigLoadError, match="escape repo root"):
+            KajiConfig._load(config_file)
+
+    def test_nested_dotdot_artifacts_dir_rejected(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text('[paths]\nartifacts_dir = "sub/../../escape"\n')
+
+        with pytest.raises(ConfigLoadError, match="escape repo root"):
+            KajiConfig._load(config_file)
+
+    def test_non_string_artifacts_dir_rejected(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text("[paths]\nartifacts_dir = 42\n")
+
+        with pytest.raises(ConfigLoadError, match="must be a string"):
             KajiConfig._load(config_file)
 
 
@@ -465,6 +500,80 @@ class TestCLIConfigIntegration:
 
         assert exit_code == 0
 
+    def test_cmd_run_broken_config_exits_2(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from kaji_harness.cli_main import cmd_run, create_parser
+
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text("this is broken [[[")
+
+        wf = tmp_path / "workflow.yaml"
+        wf.write_text(
+            "name: test\ndescription: test\n"
+            "steps:\n  - id: s1\n    skill: test-skill\n"
+            "    agent: claude\n    on:\n      PASS: end\n"
+        )
+
+        parser = create_parser()
+        args = parser.parse_args(["run", str(wf), "1", "--workdir", str(tmp_path)])
+        exit_code = cmd_run(args)
+
+        assert exit_code == 2
+        captured = capsys.readouterr()
+        assert "invalid TOML" in captured.err
+
+    def test_cmd_run_absolute_artifacts_dir_exits_2(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from kaji_harness.cli_main import cmd_run, create_parser
+
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text('[paths]\nartifacts_dir = "/tmp/bad"\n')
+
+        wf = tmp_path / "workflow.yaml"
+        wf.write_text(
+            "name: test\ndescription: test\n"
+            "steps:\n  - id: s1\n    skill: test-skill\n"
+            "    agent: claude\n    on:\n      PASS: end\n"
+        )
+
+        parser = create_parser()
+        args = parser.parse_args(["run", str(wf), "1", "--workdir", str(tmp_path)])
+        exit_code = cmd_run(args)
+
+        assert exit_code == 2
+        captured = capsys.readouterr()
+        assert "relative path" in captured.err
+
+    def test_validate_broken_config_reports_error(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from kaji_harness.cli_main import cmd_validate, create_parser
+
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text("broken [[[")
+
+        wf_dir = tmp_path / ".kaji" / "workflows"
+        wf_dir.mkdir()
+        wf = wf_dir / "test.yaml"
+        wf.write_text(
+            "name: test\ndescription: test\n"
+            "steps:\n  - id: s1\n    skill: test-skill\n"
+            "    agent: claude\n    on:\n      PASS: end\n"
+        )
+
+        parser = create_parser()
+        args = parser.parse_args(["validate", str(wf)])
+        exit_code = cmd_validate(args)
+
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "invalid TOML" in captured.err
+
     def test_validate_with_config_uses_config_root(self, tmp_path: Path) -> None:
         """kaji validate prefers .kaji/config.toml root over pyproject.toml."""
         from kaji_harness.cli_main import cmd_validate, create_parser
@@ -579,6 +688,40 @@ class TestConfigE2E:
 
         assert result.returncode == 2
         assert ".kaji/config.toml" in result.stderr
+
+    def test_kaji_run_broken_config_exits_2(self, tmp_path: Path) -> None:
+        """kaji run with broken .kaji/config.toml exits 2 with clean error."""
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text("this is broken [[[")
+
+        wf = tmp_path / "workflow.yaml"
+        wf.write_text(
+            "name: test\ndescription: test\n"
+            "steps:\n  - id: s1\n    skill: test-skill\n"
+            "    agent: claude\n    on:\n      PASS: end\n"
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "kaji_harness.cli_main",
+                "run",
+                str(wf),
+                "1",
+                "--workdir",
+                str(tmp_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert result.returncode == 2
+        assert "invalid TOML" in result.stderr
+        # No traceback should appear
+        assert "Traceback" not in result.stderr
 
     def test_kaji_validate_without_config_backward_compat(self, tmp_path: Path) -> None:
         """kaji validate still works without .kaji/config.toml."""
