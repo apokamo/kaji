@@ -71,8 +71,8 @@ print(config.artifacts_dir)     # /home/user/kamo2/.kaji-artifacts
 runner = WorkflowRunner(
     workflow=workflow,
     issue_number=42,
-    workdir=config.repo_root,
-    artifacts_dir=config.artifacts_dir,  # 新パラメータ
+    project_root=config.repo_root,       # スキル解決 + agent cwd
+    artifacts_dir=config.artifacts_dir,   # state + logs
 )
 ```
 
@@ -89,12 +89,17 @@ echo ".kaji-artifacts/" >> .gitignore
 cd /path/to/kamo2
 kaji run .kaji/workflows/feature-development.yaml 42
 
-# 3. サブディレクトリから実行（config 探索で repo root を自動検出）
+# 3. サブディレクトリから実行
+#    - workflow path は CWD 相対で解決
+#    - config 探索は CWD から walk-up して repo root を自動検出
+#    - agent CLI は検出された repo root で実行される
 cd /path/to/kamo2/src/deep/nested
 kaji run ../../../.kaji/workflows/feature-development.yaml 42
 
 # 4. --workdir 明示（config 探索の起点を上書き）
-kaji run ./workflow.yaml 42 --workdir /path/to/kamo2
+#    - workflow path は引き続き CWD 相対
+#    - config 探索は --workdir を起点にする
+kaji run /path/to/kamo2/.kaji/workflows/feature-development.yaml 42 --workdir /path/to/kamo2
 
 # 5. config が見つからない場合
 cd /tmp
@@ -112,7 +117,40 @@ kaji run workflow.yaml 42
 
 ## 方針
 
-### 1. Config 発見アルゴリズム
+### 1. `project_root` と `agent_workdir` の責務分離
+
+現行実装では `workdir` が以下の2つの役割を兼ねている:
+
+| 現行の `workdir` の用途 | 参照箇所 |
+|------------------------|---------|
+| スキル存在確認の基底パス | `runner.py:55` → `validate_skill_exists(step.skill, step.agent, self.workdir)` |
+| エージェント CLI の `cwd` | `cli.py:56` → `subprocess.Popen(cwd=workdir)` |
+| Codex の `-C` 引数 | `cli.py:187` → `-C str(workdir)` |
+| verdict formatter の `workdir` | `runner.py:149` → `create_verdict_formatter(workdir=self.workdir)` |
+
+同居型モデルでは、これらの役割を **`project_root`** として統一し、config から決定する:
+
+```
+project_root（config 由来）
+  ├─ スキル解決の基底パス    → project_root / .claude/skills/
+  ├─ エージェント CLI の cwd  → subprocess.Popen(cwd=project_root)
+  ├─ artifacts 基底パス      → project_root / artifacts_dir
+  └─ verdict formatter       → create_verdict_formatter(workdir=project_root)
+```
+
+**`--workdir` の役割変更**:
+
+| | 変更前 | 変更後 |
+|--|--------|--------|
+| 意味 | エージェント CLI の cwd + スキル解決の基底 | config 探索の起点 |
+| デフォルト | CWD | CWD |
+| 実効果 | そのまま `subprocess.Popen(cwd=)` に渡る | `discover(start_dir=)` の引数になる |
+
+config 発見後は `project_root = config.repo_root` が全パス解決の唯一の基準になる。`--workdir` の値自体は使われない。
+
+**判断理由**: エージェント CLI が `.claude/skills/` や `CLAUDE.md` を正しくロードするには、`cwd` が repo root でなければならない。`--workdir` をそのまま agent cwd に渡す現行の設計は、サブディレクトリ実行で skill 解決が破綻する。config から repo root を確定させ、全パス解決をそこに集約する方が安全。
+
+### 2. Config 発見アルゴリズム
 
 ```
 discover(start_dir=None):
@@ -123,22 +161,27 @@ discover(start_dir=None):
      stderr に探索範囲を含むエラーメッセージを出力し exit 2
 
 CLI との統合:
-  - `kaji run`: --workdir が指定されていれば --workdir を起点、
-    なければ CWD を起点として discover() を呼ぶ
-  - `kaji validate`: --project-root が指定されていればそれを repo root とし、
-    なければ YAML ファイルの親から pyproject.toml を探す現行動作を維持
-    （validate は config 必須にしない — kaji 自身のリポジトリでも使うため）
+  - `kaji run`:
+    1. --workdir が指定されていれば --workdir を起点、なければ CWD を起点
+    2. discover() で .kaji/config.toml を探索
+    3. config.repo_root を project_root とし、スキル解決・agent cwd・artifacts に使用
+  - `kaji validate`:
+    1. --project-root が指定されていればそれを repo root として使用
+    2. なければ YAML 親ディレクトリから .kaji/config.toml を探索
+    3. config が見つからなければ pyproject.toml を探索（後方互換）
+    4. いずれも見つからなければ YAML 親ディレクトリを root とする（現行動作）
 ```
 
-**判断理由**: `--workdir` は既に「エージェント CLI の作業ディレクトリ」として存在する。config 探索の起点としても自然に機能する。新しい CLI フラグを追加する必要がない。
+**`kaji validate` が config を必須にしない理由**: kaji 自身のリポジトリでも `kaji validate` を使用するため。ただし、対象 PJ で `.kaji/config.toml` が存在する場合はそれを優先することで、非 Python リポジトリでの skill 解決破綻（YAML 親 = `.kaji/workflows/` → `.kaji/workflows/.claude/skills/...` を探しに行く問題）を防ぐ。
 
-### 2. Repo root の定義
+### 3. Repo root の定義
 
 - **repo root = `.kaji/config.toml` を含むディレクトリ**
-- Workflows, artifacts, skills はすべて repo root 相対で解決する
-- `--workdir` が指定された場合、エージェント CLI の `cwd` は `--workdir` のままだが、artifacts / state のパス解決は repo root 基準
+- Artifacts, skills はすべて repo root 相対で解決する
+- Workflow パスは CWD 相対（後述の §5 参照）
+- エージェント CLI の `cwd` は `project_root`（repo root）に固定される
 
-### 3. Artifacts 統一
+### 4. Artifacts 統一
 
 現行の `test-artifacts/` を config ベースの `artifacts_dir` に置き換える。
 
@@ -156,24 +199,33 @@ CLI との統合:
 **影響範囲**:
 - `SessionState.__init__` に `artifacts_dir: Path` パラメータを追加
 - `STATE_DIR` モジュールレベル定数を削除
-- `WorkflowRunner` に `artifacts_dir: Path` パラメータを追加
+- `WorkflowRunner` に `artifacts_dir: Path` パラメータを追加。現行の `workdir` パラメータは廃止し、`project_root` に名称変更
 - `runner.py:64-65` のハードコードされたパスを `artifacts_dir` 経由に変更
 
-### 4. Workflow 解決契約
+### 5. Workflow パスの解決基準
 
-CLI 引数の `<workflow-path>` は引き続きファイルパスを受け取る。logical name による解決は行わない。
+`<workflow-path>` は **CWD 相対**で解決する。repo root 相対ではない。
 
 ```bash
-# 明示的パス指定（現行と同じ）
+# CWD = repo root の場合（最も一般的）
+cd /path/to/kamo2
 kaji run .kaji/workflows/feature-development.yaml 42
+#        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#        CWD からの相対パス → /path/to/kamo2/.kaji/workflows/feature-development.yaml
 
-# 相対パスも絶対パスも受け付ける
-kaji run /path/to/custom-workflow.yaml 42
+# CWD = サブディレクトリの場合
+cd /path/to/kamo2/src/deep
+kaji run ../../.kaji/workflows/feature-development.yaml 42
+#        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#        CWD からの相対パス → /path/to/kamo2/.kaji/workflows/feature-development.yaml
+
+# 絶対パスも可
+kaji run /path/to/kamo2/.kaji/workflows/feature-development.yaml 42
 ```
 
-**判断理由**: Workflow ファイルの logical name 解決を入れると、naming convention / 探索パス / エラーメッセージ設計が必要になる。現時点では明示パス指定で十分であり、YAGNI。
+**判断理由**: シェルの標準的なパス解決に従う。現行実装 (`cli_main.py:161` の `args.workflow.exists()`) も CWD 相対であり、動作変更なし。`<workflow-path>` だけ repo root 相対にすると、CLI 引数のセマンティクスが混在して直感に反する。
 
-### 5. `test-artifacts/` からの移行契約
+### 6. `test-artifacts/` からの移行契約
 
 **Clean break** を採用する。
 
@@ -184,7 +236,7 @@ kaji run /path/to/custom-workflow.yaml 42
 
 **判断理由**: `test-artifacts/` は kaji 自身の開発用ディレクトリ名であり、外部 PJ には存在しない。Fallback を入れると「config あり + 旧ディレクトリあり」の組み合わせテストが必要になり、複雑さに見合う利益がない。resume が壊れるケースは `--from` なしで最初から実行すれば回復可能。
 
-### 6. kaji 自体の導入方法
+### 7. kaji 自体の導入方法
 
 kaji_harness は対象 PJ の Python 環境に `pip install` する。
 
@@ -199,10 +251,10 @@ pip install "kaji @ git+ssh://git@github.com/apokamo/kaji.git@v0.2.0"
 | 項目 | 方針 |
 |------|------|
 | プロトコル | HTTPS と SSH の両方をサポート。ドキュメントに両方記載 |
-| バージョン固定 | **git tag 指定を必須**とする（`@v0.2.0`）。ref なしの `@main` は非推奨 |
+| バージョン固定 | **git ref 指定を必須**とする。tag（`@v0.2.0`）推奨、commit hash（`@79ceab8`）も可。ref なしの `@main` は非推奨。現時点では tag 未作成のため、初回導入時は commit hash を使用し、リリース運用確立後に tag に移行する |
 | PyPI | 現時点では未公開。安定後に移行可能（対象 PJ 側の変更は install コマンドのみ） |
 
-### 7. 対象 PJ の標準ディレクトリ構成
+### 8. 対象 PJ の標準ディレクトリ構成
 
 ```
 target-project/
@@ -232,7 +284,7 @@ target-project/
 └── (対象PJのソースコード)
 ```
 
-### 8. 実装方針（疑似コード）
+### 9. 実装方針（疑似コード）
 
 #### config.py（新規）
 
@@ -284,21 +336,73 @@ class KajiConfig:
 
 ```python
 def cmd_run(args):
-    workdir = args.workdir.resolve()
-    # config 探索: --workdir が指定されていればそこを起点
+    # config 探索: --workdir が指定されていればそこを起点、なければ CWD
+    start_dir = args.workdir.resolve() if args.workdir != Path.cwd() else None
     try:
-        config = KajiConfig.discover(start_dir=workdir)
+        config = KajiConfig.discover(start_dir=start_dir)
     except ConfigNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_CONFIG_NOT_FOUND  # exit 2
 
+    project_root = config.repo_root  # 全パス解決の基準
+
     runner = WorkflowRunner(
         workflow=workflow,
         issue_number=args.issue,
-        workdir=workdir,
-        artifacts_dir=config.artifacts_dir,  # 新パラメータ
+        project_root=project_root,     # スキル解決 + agent cwd
+        artifacts_dir=config.artifacts_dir,  # state + logs
         ...
     )
+```
+
+```python
+def _resolve_project_root_for_validate(explicit_root, yaml_path):
+    """validate 用の root 解決。run とは異なり config 必須にしない。"""
+    # 1. --project-root 明示
+    if explicit_root is not None:
+        return explicit_root.resolve()
+    # 2. .kaji/config.toml を探索
+    try:
+        config = KajiConfig.discover(start_dir=yaml_path.resolve().parent)
+        return config.repo_root
+    except ConfigNotFoundError:
+        pass
+    # 3. pyproject.toml を探索（後方互換）
+    current = yaml_path.resolve().parent
+    while True:
+        if (current / "pyproject.toml").exists():
+            return current
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    # 4. YAML 親ディレクトリ
+    return yaml_path.resolve().parent
+```
+
+#### runner.py の変更
+
+```python
+@dataclass
+class WorkflowRunner:
+    workflow: Workflow
+    issue_number: int
+    project_root: Path       # 旧 workdir を名称変更。スキル解決 + agent cwd
+    artifacts_dir: Path      # 新パラメータ。state + logs の基底
+
+    def run(self):
+        # スキル検証: project_root を基準
+        for step in self.workflow.steps:
+            validate_skill_exists(step.skill, step.agent, self.project_root)
+
+        # state: artifacts_dir を基準
+        state = SessionState.load_or_create(self.issue_number, self.artifacts_dir)
+
+        # run log: artifacts_dir を基準
+        run_dir = self.artifacts_dir / str(self.issue_number) / "runs" / timestamp
+
+        # CLI 実行: project_root を cwd に
+        result = execute_cli(step=..., workdir=self.project_root, ...)
 ```
 
 #### state.py の変更
@@ -317,7 +421,7 @@ class SessionState:
         ...
 ```
 
-### 9. kamo2 導入セットアップ
+### 10. kamo2 導入セットアップ
 
 対象プロジェクト kamo2 への導入手順:
 
@@ -407,4 +511,5 @@ kaji run .kaji/workflows/feature-development.yaml 1 --step design
 | kaji_harness/cli_main.py | `kaji_harness/cli_main.py:71-89` | `_resolve_project_root()` — 現行の project root 解決ロジック。config discovery に置き換え対象 |
 | kaji_harness/skill.py | `kaji_harness/skill.py:7-11` | `SKILL_DIRS` — Skills ディレクトリは agent CLI の慣習に固定。config からの変更は不可の根拠 |
 | TOML v1.0.0 仕様 | https://toml.io/en/v1.0.0 | TOML フォーマットの公式仕様。config.toml の書式根拠 |
-| Issue #70 設計レビュー | Issue #70 コメント (2026-03-11) | config 発見アルゴリズム、workflow 解決契約、移行契約、テスト戦略の must-fix 指摘 |
+| Issue #70 設計レビュー (1st) | Issue #70 コメント (2026-03-11) | config 発見アルゴリズム、workflow 解決契約、移行契約、テスト戦略の must-fix 指摘 |
+| Issue #70 設計レビュー (2nd) | previous_verdict (cycle 1) | project_root と agent_workdir の責務分離、validate の root 解決、workflow-path 相対基準の 3 件 |
