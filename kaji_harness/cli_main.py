@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .config import KajiConfig
 from .errors import (
+    ConfigLoadError,
     ConfigNotFoundError,
     HarnessError,
     SecurityError,
@@ -88,6 +89,8 @@ def _resolve_project_root_for_validate(explicit_root: Path | None, yaml_path: Pa
         return config.repo_root
     except ConfigNotFoundError:
         pass
+    except ConfigLoadError:
+        raise
     # Fallback: pyproject.toml
     current = yaml_path.resolve().parent
     while True:
@@ -121,6 +124,9 @@ def cmd_validate(args: argparse.Namespace) -> int:
             _print_error(path, e.errors)
             failed += 1
         except (SkillNotFound, SecurityError) as e:
+            _print_error(path, [str(e)])
+            failed += 1
+        except ConfigLoadError as e:
             _print_error(path, [str(e)])
             failed += 1
         except OSError as e:
@@ -170,6 +176,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     try:
         config = KajiConfig.discover(start_dir=start_dir)
     except ConfigNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_CONFIG_NOT_FOUND
+    except ConfigLoadError as e:
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_CONFIG_NOT_FOUND
 
