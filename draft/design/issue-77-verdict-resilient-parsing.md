@@ -88,9 +88,8 @@ verdict = parse_verdict(
 - V7 の verdict フォーマットは YAML ベース（`status:`, `reason:`, `evidence:`, `suggestion:`）を標準とする
 - V5/V6 の `Result:` / `Status:` パターンもフォールバックで対応する（エージェントが旧フォーマットで出力した場合への備え）
 - `InvalidVerdictValue` は全ステップで即座に raise（V5/V6 と同一方針）
-- AI formatter（Step 3）はオプショナル。提供されない場合は Step 2 までで判定終了
-- 既存の runner.py は `ai_formatter` を渡さないため、Step 1-2 のみで動作する（後方互換）
 - `valid_statuses` による検証ロジックは変更しない
+- runner.py は `create_verdict_formatter` で生成した AI formatter を `parse_verdict` に渡し、3 段階すべてを実運用経路で有効にする
 
 ## 方針
 
@@ -149,25 +148,31 @@ RELAXED_PATTERN = re.compile(
 
 **2b. Key-Value パターン抽出**
 
-YAML パースに失敗した場合、V5/V6 由来の正規表現パターンで `status` 値を探索:
+YAML パースに失敗した場合、V5/V6 由来の正規表現パターンで `status` 値を探索する。
+
+**V5/V6 の安全策を継承**: パターン自体を `valid_statuses` から動的に生成し、有効な verdict 値のみをマッチ対象にする。これにより `Status: 200` や `Result = success` のような無関係な文字列による false positive を構造的に排除する（`legacy/bugfix_agent/verdict.py:61-78` の設計方針）。
 
 ```python
-RELAXED_STATUS_PATTERNS = [
-    r"status:\s*(\w+)",
-    r"Status:\s*(\w+)",
-    r"Result:\s*(\w+)",
-    r"-\s*Result:\s*(\w+)",
-    r"-\s*Status:\s*(\w+)",
-    r"\*\*Status\*\*:\s*(\w+)",
-    r"ステータス:\s*(\w+)",
-    r"Status\s*=\s*(\w+)",
-    r"Result\s*=\s*(\w+)",
-]
+def _build_relaxed_status_patterns(valid_statuses: set[str]) -> list[re.Pattern[str]]:
+    """valid_statuses から relaxed パターンを動的に生成。"""
+    alt = "|".join(re.escape(s) for s in sorted(valid_statuses))
+    templates = [
+        rf"status:\s*({alt})",
+        rf"Status:\s*({alt})",
+        rf"Result:\s*({alt})",
+        rf"-\s*Result:\s*({alt})",
+        rf"-\s*Status:\s*({alt})",
+        rf"\*\*Status\*\*:\s*({alt})",
+        rf"ステータス:\s*({alt})",
+        rf"Status\s*=\s*({alt})",
+        rf"Result\s*=\s*({alt})",
+    ]
+    return [re.compile(t, re.IGNORECASE) for t in templates]
 ```
 
-status 以外のフィールド（reason, evidence, suggestion）も同様にパターンで探索する。見つからないフィールドは空文字ではなく `"(extracted by relaxed parser)"` を設定し、strict parse との区別を可能にする。ただし reason と evidence が全く抽出できない場合は VerdictParseError を raise する（Verdict の意味的完全性を維持）。
+パターンが有効値のみにマッチするため、relaxed parse で `InvalidVerdictValue` は発生しない（構造的に不可能）。
 
-**注意**: relaxed parse で status を抽出した後、`valid_statuses` に含まれない値は `InvalidVerdictValue` を即座に raise する（V5/V6 と同一方針）。
+status 以外のフィールド（reason, evidence, suggestion）も同様にパターンで探索する。**ただし、reason または evidence が抽出できなかった場合は Verdict を生成せず、Step 3（AI formatter）にフォールスルーする**。理由: V7 では `previous_verdict` として次ステップに伝搬されるため（`kaji_harness/prompt.py:35-40`）、合成文字列を含む不完全な Verdict を返すと、fix スキルが実在しない指摘を根拠に動作する危険がある。
 
 ### Step 3: AI Formatter Retry
 
@@ -185,31 +190,101 @@ AI_FORMATTER_MAX_INPUT_CHARS: int = 8000  # V5/V6 と同一
 
 ### モジュール構造
 
-変更対象は `kaji_harness/verdict.py` のみ。新ファイルは作成しない。
+変更対象は `kaji_harness/verdict.py` と `kaji_harness/runner.py`。
 
 ```python
 # verdict.py 内部構成
-_extract_block_strict(output) -> str        # Step 1: delimiter 厳密抽出
-_extract_block_relaxed(output) -> str       # Step 2a: delimiter 緩和抽出
-_parse_yaml_fields(block) -> Verdict        # YAML フィールド解析（既存の _parse_fields 改名）
-_parse_relaxed_fields(text) -> Verdict      # Step 2b: regex フィールド抽出
-_validate(verdict, valid_statuses) -> None  # 検証（既存のまま）
+_extract_block_strict(output) -> str                          # Step 1: delimiter 厳密抽出
+_extract_block_relaxed(output) -> str                         # Step 2a: delimiter 緩和抽出
+_parse_yaml_fields(block) -> Verdict                          # YAML フィールド解析（既存の _parse_fields 改名）
+_build_relaxed_status_patterns(valid_statuses) -> list[...]   # Step 2b: パターン動的生成
+_parse_relaxed_fields(text, valid_statuses) -> Verdict        # Step 2b: regex フィールド抽出
+_validate(verdict, valid_statuses) -> None                    # 検証（既存のまま）
 parse_verdict(output, valid_statuses, *, ai_formatter, max_retries) -> Verdict  # 公開 API
+
+FORMATTER_PROMPT: str                                         # Step 3 用プロンプト（V5/V6 由来、V7 YAML 形式に適合）
+create_verdict_formatter(agent, model, workdir) -> Callable   # ファクトリ関数
 ```
 
-### runner.py への影響
+### Step 3 の実運用統合: `create_verdict_formatter` と runner.py 変更
 
-`parse_verdict` のシグネチャは後方互換。既存の呼び出しは変更不要:
+V5/V6 では各ハンドラが `create_ai_formatter(ctx.reviewer, ...)` で formatter を生成し `parse_verdict` に渡していた（`legacy/bugfix_agent/handlers/init.py:38-40` 等）。V7 でも同じパターンを踏襲する。
+
+**`verdict.py` に追加する `create_verdict_formatter` ファクトリ関数**:
 
 ```python
-# 変更不要（ai_formatter=None がデフォルト）
+FORMATTER_PROMPT: str = """以下の出力から VERDICT を抽出し、正確な YAML フォーマットで出力してください。
+
+## 入力
+{raw_output}
+
+## 出力フォーマット（厳密に従ってください）
+---VERDICT---
+status: <PASS|RETRY|BACK|ABORT のいずれか1つ>
+reason: "判定理由"
+evidence: "判定根拠"
+suggestion: "次のアクション提案"
+---END_VERDICT---
+
+重要: status 行は必ず PASS/RETRY/BACK/ABORT のいずれかを出力してください。
+"""
+
+def create_verdict_formatter(
+    agent: str,
+    model: str | None = None,
+    workdir: Path | None = None,
+) -> Callable[[str], str]:
+    """AI verdict formatter を生成する。
+
+    軽量な CLI 呼び出しで出力を整形する。
+    ステップ実行の execute_cli とは独立した簡易プロセス。
+
+    Args:
+        agent: CLI エージェント名 ("claude" | "codex" | "gemini")
+        model: モデル指定（省略時はエージェントデフォルト）
+        workdir: 作業ディレクトリ（省略時はカレント）
+
+    Returns:
+        Callable[[str], str]: parse_verdict の ai_formatter 引数に渡す関数
+    """
+    def formatter(raw_output: str) -> str:
+        prompt = FORMATTER_PROMPT.format(raw_output=raw_output)
+        args = _build_formatter_cli_args(agent, model, prompt)
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=workdir,
+        )
+        return result.stdout
+
+    return formatter
+```
+
+`_build_formatter_cli_args` は `cli.py` の agent 別引数構築を簡略化したもの。streaming/logging 不要のため `-p` (print) モードで呼び出す。
+
+**`runner.py` の変更**:
+
+```python
+from .verdict import parse_verdict, create_verdict_formatter
+
+# メインループ内、CLI 実行後:
+formatter = create_verdict_formatter(
+    agent=current_step.agent,
+    model=current_step.model,
+    workdir=self.workdir,
+)
 verdict = parse_verdict(
     result.full_output,
     valid_statuses=set(current_step.on.keys()),
+    ai_formatter=formatter,
 )
 ```
 
-将来的に AI formatter を統合する場合のみ、runner.py 側でファクトリ関数を用意して渡す。
+これにより Step 1-2 で回復できなかった場合、Step 3 の AI formatter が自動的に呼び出される。V5/V6 と同等の 3 段階フォールバックが実運用経路で有効になる。
+
+`parse_verdict` のシグネチャ自体は後方互換を維持（`ai_formatter=None` がデフォルト）するため、テストコード等の既存呼び出しは変更不要。
 
 ## テスト戦略
 
@@ -246,7 +321,8 @@ verdict = parse_verdict(
 - `ステータス: PASS` 日本語
 - `Status = PASS` / `Result = PASS` 代入形式
 - reason / evidence / suggestion のパターン抽出
-- status のみ抽出可能で reason/evidence が欠落 → VerdictParseError
+- status のみ抽出可能で reason/evidence が欠落 → Step 3 へフォールスルー（ai_formatter なしなら VerdictParseError）
+- **false positive 排除**: `Status: 200`、`Result = success` 等の無関係文字列はパターンにマッチしないことを確認（valid_statuses 制限）
 
 **Step 3 (AI Formatter) — 新規**:
 - ai_formatter 成功ケース（整形結果が strict parse 可能）
@@ -257,7 +333,9 @@ verdict = parse_verdict(
 - max_retries < 1 で ValueError
 
 **横断テスト**:
-- InvalidVerdictValue は全ステップで即 raise（strict/relaxed/formatter それぞれで確認）
+- InvalidVerdictValue は Step 1 (strict) と Step 3 (formatter) で即 raise（strict は `_validate` 経由、formatter は整形結果の再パース時に `_validate` 経由）
+- Step 2b (relaxed pattern) では `InvalidVerdictValue` が構造的に発生しないことを確認（パターン自体が valid_statuses に制限されているため）
+- relaxed pattern の false positive 排除: `Status: 200`, `Result = success`, `status: running` 等がマッチしないことを確認
 - 入力テキストの truncation（8000 文字超のテキスト）
 - ノイズ混入（verdict ブロック前後にログ出力、思考トレース）
 - verdict が出力途中（非末尾）にあるケース + 末尾にノイズ
@@ -269,8 +347,13 @@ verdict = parse_verdict(
 - `runner.py` の `parse_verdict` 呼び出しとの結合テスト
   - 正常な verdict → ステップ遷移が正しく動作
   - relaxed parse で回復した verdict → ステップ遷移が正しく動作
+  - Step 3 (AI formatter) で回復した verdict → ステップ遷移が正しく動作
   - VerdictNotFound → runner が適切にエラーハンドリング
+- `create_verdict_formatter` のファクトリ結合テスト
+  - 各エージェント（claude/codex/gemini）用の CLI 引数が正しく構築されること
+  - subprocess 呼び出しをモックし、formatter が正しくプロンプトを構築・結果を返却すること
 - `state.py` への verdict 永続化（relaxed parse 結果を含む）
+- `previous_verdict` 伝搬テスト: relaxed parse 結果の reason/evidence が次ステップに渡されても正常に動作すること
 - `logger.py` への verdict ログ出力
 - 実際のスキル出力テンプレート（`.claude/skills/` のファイル）から抽出したサンプルでパース
 
@@ -306,6 +389,9 @@ verdict = parse_verdict(
 | テスト設計書 | `legacy/docs/TEST_DESIGN.md` | CodexTool JSON パース仕様（セクション 2.5）。「Step 1 (Strict Parse) → Step 2 (Relaxed Parse) → Step 3 (AI Formatter)」の下流処理フロー |
 | #73 実行ログ | Issue #77 コメント | `---END VERDICT---`（スペース区切り）による VerdictNotFound の実事例。「出力揺れで workflow が即死しない」ことが最重要要件 |
 | V7 現行実装 | `kaji_harness/verdict.py` | 厳密一致のみ（`VERDICT_PATTERN` 正規表現）。緩和パース・フォールバックなし |
+| V7 プロンプト伝搬 | `kaji_harness/prompt.py:35-40` | `previous_verdict` として reason/evidence/suggestion を次ステップにそのまま注入。合成文字列を含む verdict は下流ステップの判断を歪める根拠 |
+| V5/V6 ハンドラ統合パターン | `legacy/bugfix_agent/handlers/init.py:38-40`, `design.py:78-79`, `implement.py:90-91` | 各ハンドラで `create_ai_formatter(ctx.reviewer, ...)` を生成し `parse_verdict` に渡す統合パターンの実例。V7 runner.py での統合設計の根拠 |
+| V5/V6 relaxed pattern 制限 | `legacy/bugfix_agent/verdict.py:61-78`, `legacy/docs/ARCHITECTURE.ja.md` Section 10 | relaxed pattern は有効 verdict 値のみに制限（`PASS\|RETRY\|BACK_DESIGN\|ABORT`）。false positive 防止の設計方針 |
 
 > **重要**: 設計判断の根拠となる一次情報を必ず記載してください。
 > - URLだけでなく、**根拠（引用/要約）** も記載必須
