@@ -1,7 +1,13 @@
-"""Tests for issue #63: skill harness adaptation.
+"""Tests for skill harness adaptation.
 
-Validates that all skills have been properly adapted for dual-mode
-(manual + harness) operation, and that the workflow YAML is valid.
+Validates that:
+- All skills have proper SKILL.md structure (verdict blocks, dual-mode input)
+- Workflow engine correctly parses and validates fixture YAML
+- inject_verdict field is correctly parsed from YAML
+
+Engine logic tests use fixture YAML (tests/fixtures/test_workflow.yaml),
+NOT the production workflow. Production YAML validation is handled by
+`kaji validate`.
 """
 
 from __future__ import annotations
@@ -10,7 +16,6 @@ from pathlib import Path
 
 import pytest
 
-from kaji_harness.skill import validate_skill_exists
 from kaji_harness.verdict import parse_verdict
 from kaji_harness.workflow import load_workflow, validate_workflow
 
@@ -19,6 +24,8 @@ from kaji_harness.workflow import load_workflow, validate_workflow
 # ============================================================
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+FIXTURE_WORKFLOW_PATH = Path(__file__).resolve().parent / "fixtures" / "test_workflow.yaml"
 
 WORKFLOW_SKILLS = [
     "issue-design",
@@ -44,8 +51,6 @@ ALL_SKILLS = WORKFLOW_SKILLS + MANUAL_ONLY_SKILLS
 FIX_SKILLS = ["issue-fix-code", "issue-fix-design"]
 
 HARDCODE_PATH = "bugfix_agent/"
-
-WORKFLOW_YAML_PATH = PROJECT_ROOT / "workflows" / "feature-development.yaml"
 
 
 def _read_skill(skill_name: str) -> str:
@@ -122,96 +127,99 @@ class TestPreviousVerdictFallback:
         assert "previous_verdict" in content, f"{skill_name} missing previous_verdict reference"
 
 
-@pytest.mark.small
-class TestWorkflowYamlParseable:
-    """Workflow YAML must be parseable by load_workflow."""
+# ============================================================
+# Medium Tests: Workflow engine logic (using fixture YAML)
+# ============================================================
+
+
+@pytest.mark.medium
+class TestFixtureWorkflowParseable:
+    """Fixture workflow YAML must be parseable by load_workflow."""
 
     def test_yaml_loads_without_error(self) -> None:
-        assert WORKFLOW_YAML_PATH.exists(), f"Workflow YAML not found at {WORKFLOW_YAML_PATH}"
-        workflow = load_workflow(WORKFLOW_YAML_PATH)
+        assert FIXTURE_WORKFLOW_PATH.exists(), f"Fixture YAML not found at {FIXTURE_WORKFLOW_PATH}"
+        workflow = load_workflow(FIXTURE_WORKFLOW_PATH)
         assert workflow.name != ""
         assert len(workflow.steps) > 0
 
 
-# ============================================================
-# Medium Tests: Workflow validation and skill resolution
-# ============================================================
-
-
 @pytest.mark.medium
-class TestWorkflowValidation:
-    """Workflow YAML must pass validate_workflow."""
+class TestFixtureWorkflowValidation:
+    """Fixture workflow YAML must pass validate_workflow."""
 
     def test_workflow_validates(self) -> None:
-        workflow = load_workflow(WORKFLOW_YAML_PATH)
-        # Should not raise
+        workflow = load_workflow(FIXTURE_WORKFLOW_PATH)
         validate_workflow(workflow)
 
-    def test_workflow_has_design_review_cycle(self) -> None:
-        workflow = load_workflow(WORKFLOW_YAML_PATH)
+    def test_workflow_has_review_cycle(self) -> None:
+        workflow = load_workflow(FIXTURE_WORKFLOW_PATH)
         cycle_names = [c.name for c in workflow.cycles]
-        assert "design-review" in cycle_names
+        assert "review-cycle" in cycle_names
 
-    def test_workflow_has_code_review_cycle(self) -> None:
-        workflow = load_workflow(WORKFLOW_YAML_PATH)
-        cycle_names = [c.name for c in workflow.cycles]
-        assert "code-review" in cycle_names
-
-    def test_design_review_cycle_integrity(self) -> None:
-        workflow = load_workflow(WORKFLOW_YAML_PATH)
-        cycle = workflow.find_cycle_for_step("review-design")
+    def test_review_cycle_integrity(self) -> None:
+        workflow = load_workflow(FIXTURE_WORKFLOW_PATH)
+        cycle = workflow.find_cycle_for_step("review")
         assert cycle is not None
-        assert cycle.entry == "review-design"
-        assert "fix-design" in cycle.loop
-        assert "verify-design" in cycle.loop
-        assert cycle.max_iterations == 3
-
-    def test_code_review_cycle_integrity(self) -> None:
-        workflow = load_workflow(WORKFLOW_YAML_PATH)
-        cycle = workflow.find_cycle_for_step("review-code")
-        assert cycle is not None
-        assert cycle.entry == "review-code"
-        assert "fix-code" in cycle.loop
-        assert "verify-code" in cycle.loop
+        assert cycle.entry == "review"
+        assert "fix" in cycle.loop
+        assert "verify" in cycle.loop
         assert cycle.max_iterations == 3
 
 
 @pytest.mark.medium
-class TestWorkflowSkillsExist:
-    """All skills referenced in workflow YAML must exist on filesystem."""
+class TestFixtureWorkflowInjectVerdict:
+    """inject_verdict field must be correctly parsed from fixture YAML."""
 
-    def test_all_workflow_skills_exist(self) -> None:
-        workflow = load_workflow(WORKFLOW_YAML_PATH)
+    def test_fix_step_has_inject_verdict_true(self) -> None:
+        workflow = load_workflow(FIXTURE_WORKFLOW_PATH)
+        step = workflow.find_step("fix")
+        assert step is not None
+        assert step.inject_verdict is True, "fix step must have inject_verdict: true"
+
+    def test_design_step_has_inject_verdict_false_by_default(self) -> None:
+        workflow = load_workflow(FIXTURE_WORKFLOW_PATH)
+        step = workflow.find_step("design")
+        assert step is not None
+        assert step.inject_verdict is False, "design step should default inject_verdict to False"
+
+
+@pytest.mark.medium
+class TestFixtureWorkflowTransitions:
+    """Validate fixture workflow step transitions are reachable."""
+
+    def test_all_transitions_reachable(self) -> None:
+        workflow = load_workflow(FIXTURE_WORKFLOW_PATH)
+        validate_workflow(workflow)
+
+        step_ids = {s.id for s in workflow.steps} | {"end"}
         for step in workflow.steps:
-            validate_skill_exists(step.skill, step.agent, PROJECT_ROOT)
-
-
-@pytest.mark.medium
-class TestWorkflowResumeConfig:
-    """Fix steps must have resume configured for previous_verdict injection."""
-
-    def test_fix_design_has_resume(self) -> None:
-        workflow = load_workflow(WORKFLOW_YAML_PATH)
-        step = workflow.find_step("fix-design")
-        assert step is not None
-        assert step.resume is not None, "fix-design must have resume configured"
-
-    def test_fix_code_has_no_resume(self) -> None:
-        """fix-code uses a separate agent (codex for review), so resume is removed
-        to avoid context bloat from long implement sessions."""
-        workflow = load_workflow(WORKFLOW_YAML_PATH)
-        step = workflow.find_step("fix-code")
-        assert step is not None
-        assert step.resume is None, "fix-code must not have resume (separate review agent)"
+            for verdict, target in step.on.items():
+                assert target in step_ids, (
+                    f"Step '{step.id}' on {verdict} targets '{target}' which doesn't exist"
+                )
 
 
 @pytest.mark.medium
 class TestSkillVerdictParseable:
     """Read actual SKILL.md files and verify their verdict examples parse correctly.
 
-    Validates the chain: filesystem → skill content → verdict parser.
-    This is Medium (file I/O + internal service integration).
+    Uses a minimal step definition for valid_statuses instead of production YAML.
     """
+
+    # Mapping from skill name to valid statuses (derived from standard verdict values)
+    _SKILL_STATUSES: dict[str, set[str]] = {
+        "issue-design": {"PASS", "ABORT"},
+        "issue-review-design": {"PASS", "RETRY", "ABORT"},
+        "issue-fix-design": {"PASS", "ABORT"},
+        "issue-verify-design": {"PASS", "RETRY", "ABORT"},
+        "issue-implement": {"PASS", "RETRY", "BACK", "ABORT"},
+        "issue-review-code": {"PASS", "RETRY", "BACK", "ABORT"},
+        "issue-fix-code": {"PASS", "ABORT"},
+        "issue-verify-code": {"PASS", "RETRY", "ABORT"},
+        "issue-doc-check": {"PASS"},
+        "issue-pr": {"PASS", "RETRY", "ABORT"},
+        "issue-close": {"PASS", "RETRY", "ABORT"},
+    }
 
     @pytest.mark.parametrize("skill_name", WORKFLOW_SKILLS)
     def test_skill_verdict_example_is_parseable(self, skill_name: str) -> None:
@@ -228,43 +236,12 @@ class TestSkillVerdictParseable:
         assert match is not None, f"{skill_name} verdict example block not found in SKILL.md"
 
         verdict_text = f"---VERDICT---\n{match.group(1)}\n---END_VERDICT---"
-
-        workflow = load_workflow(WORKFLOW_YAML_PATH)
-        step = workflow.find_step(skill_name.replace("issue-", ""))
-        assert step is not None, f"Step for {skill_name} not found in workflow"
-
-        valid_statuses = set(step.on.keys())
+        valid_statuses = self._SKILL_STATUSES[skill_name]
 
         verdict = parse_verdict(verdict_text, valid_statuses)
         assert verdict.status in valid_statuses
         assert verdict.reason != ""
         assert verdict.evidence != ""
-
-
-@pytest.mark.medium
-class TestWorkflowTransitions:
-    """Validate all workflow step transitions are reachable."""
-
-    def test_all_transitions_reachable(self) -> None:
-        workflow = load_workflow(WORKFLOW_YAML_PATH)
-        validate_workflow(workflow)
-
-        for step in workflow.steps:
-            validate_skill_exists(step.skill, step.agent, PROJECT_ROOT)
-
-        assert workflow.steps[0].id == "design"
-
-        last_step = workflow.steps[-1]
-        assert "end" in last_step.on.values(), (
-            f"Last step '{last_step.id}' should transition to 'end'"
-        )
-
-        step_ids = {s.id for s in workflow.steps} | {"end"}
-        for step in workflow.steps:
-            for verdict, target in step.on.items():
-                assert target in step_ids, (
-                    f"Step '{step.id}' on {verdict} targets '{target}' which doesn't exist"
-                )
 
 
 # ============================================================
@@ -277,14 +254,11 @@ class TestSingleStepE2E:
     """E2E test: `kaji run --step <step-id>` single-step execution + verdict parse.
 
     Skipped: physically impossible to implement.
-    1. `kaji` CLI entry point is not implemented (pyproject.toml [project.scripts] commented out)
-    2. Single-step execution requires WorkflowRunner → execute_cli() →
-       subprocess.Popen(["claude", ...]), which needs a live AI agent process + API key.
-       This cannot be configured in CI.
+    Single-step execution requires WorkflowRunner -> execute_cli() ->
+    subprocess.Popen(["claude", ...]), which needs a live AI agent process + API key.
+    This cannot be configured in CI.
     """
 
-    @pytest.mark.skip(
-        reason="kaji CLI entry point not implemented and agent subprocess requires live API key"
-    )
+    @pytest.mark.skip(reason="Agent subprocess requires live API key — physically impossible in CI")
     def test_single_step_verdict_parse(self) -> None:
         """Run a single workflow step via `kaji run --step` and verify verdict is parsed."""
