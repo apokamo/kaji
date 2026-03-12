@@ -130,16 +130,21 @@ Step 3: テスト実装 (Red Phase)（既存、番号繰り下げなし）
 
 #### 1.3 Step 7 (品質チェック) の条件変更
 
-pre-commit チェック（`ruff check && ruff format && mypy && pytest`）の合否条件を明確化する。
+pre-commit チェックを 2 段階に分離する。`CLAUDE.md` の `&&` チェーンは baseline failure が残ると `pytest` の exit 非 0 でチェーン全体が失敗するため、`pytest` は個別実行にする。
 
 **変更後**:
 ```
-品質チェック:
-- ruff check / ruff format / mypy: 全パス必須（baseline failure の概念を適用しない）
-- pytest: Step 4 と同じ regression 判定基準を適用する
-  - baseline failure のみ残っている → OK（コミット可）
-  - 新規 FAILED/ERROR がある → NG（修正が必要）
+品質チェック（2 段階実行）:
+
+7a. ruff check / ruff format / mypy: && チェーンで実行。exit 0 必須（baseline failure の概念を適用しない）
+7b. pytest: 個別に実行し、以下の基準で合否判定する
+  - Baseline Check コメントなし: exit 0 必須（従来どおり）
+  - Baseline Check コメントあり: Step 4 と同じ regression 判定基準を適用
+    - baseline failure のみ残っている → OK（コミット可）
+    - 新規 FAILED/ERROR がある → NG（修正が必要）
 ```
+
+> **重要**: `pytest` を `&&` チェーンに含めない理由は、baseline failure が存在すると `pytest` が非 0 で終了し、チェーン全体が失敗するため。個別実行することで exit code に関わらず出力を確認し、baseline 照合による合否判定が可能になる。
 
 #### 1.4 Step 9 (Issue コメント) のテスト結果報告の変更
 
@@ -167,14 +172,20 @@ pre-commit チェック（`ruff check && ruff format && mypy && pytest`）の合
 ```
 1. Issue コメントから最新の `## Baseline Check 結果` を検索する
    - gh issue view [issue-number] --comments で取得済みのコメントから探す
-2. baseline failure コメントがない場合:
-   - 全コマンドが exit 0 でなければ Changes Requested（従来どおり）
-3. baseline failure コメントがある場合:
-   - ruff check / ruff format / mypy: exit 0 必須（変更なし）
-   - pytest: 実行後、FAILED/ERROR を baseline 一覧と照合する
-     - 比較キー (nodeid, kind, error_type) が baseline と完全一致 → 除外
-     - 不一致の新規 FAILED/ERROR → Changes Requested
-     - baseline failure のみ残っている → テスト合否は OK とする
+2. Lint / Format / 型チェック（exit 0 必須）:
+   - ruff check && ruff format --check && mypy を && チェーンで実行
+3. テスト実行（個別）:
+   - pytest を && チェーンに含めず個別に実行する
+   - 理由: baseline failure が残ると pytest が非 0 で終了し、チェーン全体が失敗するため
+4. 合否判定:
+   - baseline failure コメントがない場合:
+     - 全コマンドが exit 0 でなければ Changes Requested（従来どおり）
+   - baseline failure コメントがある場合:
+     - ruff check / ruff format / mypy: exit 0 必須（変更なし）
+     - pytest: FAILED/ERROR を baseline 一覧と照合する
+       - 比較キー (nodeid, kind, error_type) が baseline と完全一致 → 除外
+       - 不一致の新規 FAILED/ERROR → Changes Requested
+       - baseline failure のみ残っている → テスト合否は OK とする
 ```
 
 ### 3. `issue-verify-code` SKILL.md の変更
