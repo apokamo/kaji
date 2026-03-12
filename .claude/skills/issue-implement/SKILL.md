@@ -184,15 +184,30 @@ cat [worktree-absolute-path]/draft/design/issue-[number]-*.md
 
 ### Step 7: 品質チェック（コミット前必須）
 
-CLAUDE.md の「Pre-Commit (REQUIRED)」セクションに記載されたコマンドを実行すること。
+以下の 2 段階で実行すること。**すべての基準をクリアするまでコミットしてはならない**。
 
-**合否基準**:
-- **ruff check / ruff format / mypy**: 全パス必須（baseline failure の概念を適用しない）
-- **pytest**: Step 4 と同じ regression 判定基準を適用する
-  - Baseline Check コメントがない場合: 全テスト PASSED 必須
-  - Baseline Check コメントがある場合: baseline failure のみ残っている → OK（コミット可）、新規 FAILED/ERROR がある → NG（修正が必要）
+#### 7a. Lint / Format / 型チェック（exit 0 必須）
 
-**すべての基準をクリアするまでコミットしてはならない**。失敗した場合は原因を修正して再実行すること。
+```bash
+cd [worktree-absolute-path] && source .venv/bin/activate && ruff check kaji_harness/ tests/ && ruff format kaji_harness/ tests/ && mypy kaji_harness/
+```
+
+ruff / mypy は全パス必須。baseline failure の概念を適用しない。
+
+#### 7b. テスト実行
+
+```bash
+cd [worktree-absolute-path] && source .venv/bin/activate && pytest
+```
+
+**`pytest` は `&&` チェーンに含めず、必ず個別に実行する。** baseline failure が残っていると exit 非 0 になるが、以下の基準で合否を判定する:
+
+- **Baseline Check コメントがない場合**: 全テスト PASSED 必須（exit 0 でなければ NG）
+- **Baseline Check コメントがある場合**: Step 4 と同じ regression 判定基準を適用する
+  - FAILED/ERROR を baseline 一覧と照合し、比較キー `(nodeid, kind, error_type)` が全一致 → OK（コミット可）
+  - 比較キーが不一致の新規 FAILED/ERROR が 1 件でもある → NG（修正が必要）
+
+失敗した場合は原因を修正して再実行すること。
 
 ### Step 8: コミット
 
