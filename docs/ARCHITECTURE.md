@@ -58,7 +58,7 @@ kaji_harness/
   models.py       # データクラス: Workflow, Step, CycleDefinition, Verdict, CLIResult
   errors.py       # エラー階層 (12クラス)
   workflow.py     # YAML パーサ & バリデータ
-  verdict.py      # Verdict Protocol パーサ
+  verdict.py      # Verdict パーサ (3段階フォールバック)
   adapters.py     # CLI イベントアダプタ (Claude/Codex/Gemini)
   cli.py          # CLI 引数構築 & サブプロセス実行
   prompt.py       # プロンプトビルダー
@@ -86,12 +86,45 @@ WorkflowRunner.run()
        ├─ execute_cli(step, prompt)     # CLI をサブプロセスで実行
        │   └─ CLIEventAdapter           # stream-json → Verdict/session_id/cost に変換
        │
-       ├─ parse_verdict(output)         # ---VERDICT--- ブロックを抽出
+       ├─ parse_verdict(output)         # 3段階フォールバックで verdict を抽出
+       │   ├─ Step 1: Strict Parse     # 厳密な delimiter + YAML
+       │   ├─ Step 2: Relaxed Parse    # 揺れ許容 delimiter + KV パターン
+       │   └─ Step 3: AI Formatter     # エージェント再整形 → 再パース
        │
        ├─ state.record_step()           # 状態を永続化
        │
        └─ next_step = step.on[verdict]  # 遷移先を決定
 ```
+
+---
+
+## Verdict 判定機構
+
+エージェント出力から verdict を抽出する 3 段階フォールバック。V5/V6 で 100 回超の実運用テストから得た知見に基づく設計であり、V7 で復元（#77）。
+
+### フォールバック戦略
+
+| 段階 | 処理 | 回復対象 |
+|------|------|----------|
+| Step 1: Strict | `---VERDICT---` / `---END_VERDICT---` 厳密一致 + YAML パース | 正規フォーマット |
+| Step 2: Relaxed | 大文字小文字・空白・アンダースコア揺れを許容 + KV パターン抽出 | `---END VERDICT---`、`Result: PASS` 等の出力揺れ |
+| Step 3: AI Formatter | エージェント CLI で raw output を再整形 → Step 1-2 で再パース（最大 2 回） | 構造が大きく崩れたケース |
+
+### 失敗境界（フォールバック対象外）
+
+- **`InvalidVerdictValue`（未定義の status 値）**: 即失敗。フォーマット揺れではなく意味的な誤りであり、回復すべきでない
+- **`ABORT`/`BACK` verdict の suggestion 空欄**: 即失敗。次ステップへの情報が欠落しているため
+
+### なぜ strict parse だけでは不十分か
+
+実運用で確認された出力揺れの例:
+
+- `---END VERDICT---`（アンダースコア → スペース、#73 で発生）
+- `Result: PASS` / `Status: PASS`（delimiter なしの KV 形式）
+- verdict ブロック前後に思考トレース・ログが混入
+- Codex `mcp_tool_call` モードでの非 JSON テキスト混在
+
+これらは稀なエッジケースではなく通常運用で頻発する。strict parse のみでは workflow が不安定になる。
 
 ---
 
