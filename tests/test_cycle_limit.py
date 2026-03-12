@@ -6,6 +6,8 @@ and that the on_exhaust mechanism works when the limit is reached.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from kaji_harness.models import CycleDefinition, Verdict
@@ -20,6 +22,7 @@ def _make_state() -> SessionState:
     """Create a minimal SessionState with persistence disabled."""
     state = SessionState(
         issue_number=1,
+        artifacts_dir=Path("/tmp/fake-artifacts"),
         sessions={},
         step_history=[],
         cycle_counts={},

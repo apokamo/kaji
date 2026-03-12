@@ -53,9 +53,12 @@ def workflow_file(tmp_path: Path) -> Path:
 
 @pytest.fixture()
 def workdir(tmp_path: Path) -> Path:
-    """Create a temporary working directory."""
+    """Create a temporary working directory with .kaji/config.toml."""
     d = tmp_path / "workdir"
     d.mkdir()
+    config_dir = d / ".kaji"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text("")
     return d
 
 
@@ -398,6 +401,23 @@ class TestCmdRunMedium:
                 len(call_kwargs.args) > 0 and not call_kwargs.kwargs.get("verbose", True)
             )
 
+    @pytest.mark.medium
+    def test_config_not_found_exit_2(
+        self, workflow_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """cmd_run exits 2 when .kaji/config.toml is missing."""
+        no_config_dir = tmp_path / "no-config"
+        no_config_dir.mkdir()
+        exit_code = cmd_run_with_args(
+            str(workflow_file),
+            "1",
+            "--workdir",
+            str(no_config_dir),
+        )
+        assert exit_code == 2
+        captured = capsys.readouterr()
+        assert ".kaji/config.toml" in captured.err
+
 
 class TestMainMedium:
     """Medium: main() function integration."""
@@ -464,21 +484,23 @@ class TestCLILarge:
         self,
         tmp_path: Path,
     ) -> None:
-        """With a valid workflow and skill, missing agent CLI should yield exit 3."""
+        """With a valid workflow, skill, and config, missing agent CLI should yield exit 3."""
         # Create workflow YAML referencing a skill
         wf = tmp_path / "workflow.yaml"
         wf.write_text(MINIMAL_WORKFLOW_YAML)
 
-        # Create minimal skill directory so skill validation passes
+        # Create project dir with config and skill
         workdir = tmp_path / "project"
         workdir.mkdir()
+        config_dir = workdir / ".kaji"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text("")
         skill_dir = workdir / ".claude" / "skills" / "test-skill"
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("# Test Skill\n")
 
         # Restrict PATH to only the Python executable's directory so that
-        # agent CLIs (claude, codex, gemini) are guaranteed not to be found,
-        # regardless of the host environment.
+        # agent CLIs (claude, codex, gemini) are guaranteed not to be found.
         python_dir = str(Path(sys.executable).parent)
         env = {**__import__("os").environ, "PATH": python_dir}
 

@@ -19,11 +19,12 @@ from kaji_harness.state import SessionState, StepRecord
 # ============================================================
 
 
-def _make_state(issue: int = 42) -> SessionState:
+def _make_state(issue: int = 42, artifacts_dir: Path | None = None) -> SessionState:
     """Create a new SessionState with _persist mocked out."""
     with patch.object(SessionState, "_persist"):
         state = SessionState(
             issue_number=issue,
+            artifacts_dir=artifacts_dir or Path("/tmp/fake-artifacts"),
             sessions={},
             step_history=[],
             cycle_counts={},
@@ -43,8 +44,8 @@ class TestLoadOrCreateNew:
     """load_or_create returns a fresh empty state when no file exists."""
 
     def test_load_or_create_returns_new_state(self, tmp_path: Path) -> None:
-        with patch("kaji_harness.state.STATE_DIR", tmp_path / "artifacts"):
-            state = SessionState.load_or_create(issue=99)
+        arts_dir = tmp_path / "artifacts"
+        state = SessionState.load_or_create(issue=99, artifacts_dir=arts_dir)
 
         assert state.issue_number == 99
         assert state.sessions == {}

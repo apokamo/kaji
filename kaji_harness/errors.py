@@ -1,8 +1,30 @@
 """Custom exceptions for kaji_harness."""
 
+from __future__ import annotations
+
+from pathlib import Path
+
 
 class HarnessError(Exception):
     """ハーネスの基底例外。"""
+
+
+# --- 設定エラー ---
+class ConfigNotFoundError(HarnessError):
+    """.kaji/config.toml が見つからない。"""
+
+    def __init__(self, start_dir: Path):
+        self.start_dir = start_dir
+        super().__init__(f".kaji/config.toml not found. Searched from {self.start_dir} to /.")
+
+
+class ConfigLoadError(HarnessError):
+    """.kaji/config.toml の読み込み・検証エラー。"""
+
+    def __init__(self, path: Path, reason: str):
+        self.path = path
+        self.reason = reason
+        super().__init__(f"Error loading {path}: {reason}")
 
 
 # --- ワークフロー定義エラー（起動時に検出） ---

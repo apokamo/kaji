@@ -2,6 +2,16 @@
 
 kaji_harness が読み込む YAML ワークフロー定義の書き方。
 
+## 前提条件
+
+ワークフローを実行するプロジェクトには `.kaji/config.toml` が必要です。これがプロジェクトルートのマーカーになります。
+
+```toml
+# .kaji/config.toml（最小構成）
+[paths]
+artifacts_dir = ".kaji-artifacts"   # 省略時のデフォルト値
+```
+
 ## ファイル配置
 
 ```
@@ -203,7 +213,7 @@ kaji run workflows/feature-development.yaml 57 --from fix-code
 # 単発実行（1ステップのみ実行して終了）
 kaji run workflows/feature-development.yaml 57 --step review-code
 
-# エージェント作業ディレクトリを指定
+# config 探索の起点ディレクトリを指定
 kaji run workflows/feature-development.yaml 57 --workdir ../kaji-feat-57
 
 # エージェント出力のストリーミング表示を抑制
@@ -244,7 +254,7 @@ Validation failed: 1 of 2 files had errors.
 |-----------|------|
 | 0 | 正常終了 |
 | 1 | ワークフロー ABORT または予期しないエラー |
-| 2 | 定義エラー（YAML不正、スキル未検出、引数エラー等） |
+| 2 | 定義エラー（YAML不正、スキル未検出、引数エラー、`.kaji/config.toml` 未検出等） |
 | 3 | 実行時エラー（CLI実行失敗、タイムアウト、verdict解析失敗等） |
 
 ## 関連ドキュメント
