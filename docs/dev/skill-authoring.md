@@ -68,6 +68,10 @@ suggestion: |
 ---END_VERDICT---
 ```
 
+verdict ブロックは **stdout にそのまま出力** すること。ハーネスは CLI の標準出力から verdict を抽出するため、`gh issue comment --body` の引数や別コマンドの入力にだけ verdict を埋めても判定されない。
+
+Issue コメントや Issue 本文更新は別途行ってよいが、それは verdict 出力の代替ではない。コメント投稿を行う場合でも、最終的な verdict ブロックは stdout に残すこと。
+
 ### verdict の選択基準
 
 | verdict | 使用条件 |

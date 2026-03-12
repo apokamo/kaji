@@ -104,6 +104,10 @@ def stream_and_log(
                 stripped = line.strip()
                 if stripped:
                     texts.append(stripped)
+                    f_con.write(stripped + "\n")
+                    f_con.flush()
+                    if verbose:
+                        print(f"[{step_id}] {stripped}")
                 continue
 
             sid = adapter.extract_session_id(event)

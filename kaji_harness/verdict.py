@@ -9,10 +9,12 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
+from string import Template
 from typing import Any
 
 import yaml
@@ -35,35 +37,38 @@ RELAXED_PATTERN = re.compile(
 # Step 3: AI Formatter constants
 AI_FORMATTER_MAX_INPUT_CHARS: int = 8000
 
-FORMATTER_PROMPT: str = """以下の出力から VERDICT を抽出し、正確な YAML フォーマットで出力してください。
+FORMATTER_PROMPT = Template(
+    "以下の出力から VERDICT を抽出し、正確な YAML フォーマットで出力してください。\n"
+    "\n"
+    "## 入力\n"
+    "$raw_output\n"
+    "\n"
+    "## 出力フォーマット（厳密に従ってください）\n"
+    "---VERDICT---\n"
+    "status: <$valid_statuses_str のいずれか1つ>\n"
+    'reason: "判定理由"\n'
+    'evidence: "判定根拠"\n'
+    'suggestion: "次のアクション提案"\n'
+    "---END_VERDICT---\n"
+    "\n"
+    "重要: status 行は必ず $valid_statuses_str のいずれかを出力してください。それ以外の値は使用禁止です。\n"
+)
 
-## 入力
-{raw_output}
-
-## 出力フォーマット（厳密に従ってください）
----VERDICT---
-status: <{valid_statuses_str} のいずれか1つ>
-reason: "判定理由"
-evidence: "判定根拠"
-suggestion: "次のアクション提案"
----END_VERDICT---
-
-重要: status 行は必ず {valid_statuses_str} のいずれかを出力してください。それ以外の値は使用禁止です。
-"""
+logger = logging.getLogger(__name__)
 
 # Step 2b: Relaxed field extraction patterns
 _RELAXED_REASON_PATTERNS = [
     re.compile(r"Reason:\s*(.+)", re.IGNORECASE),
     re.compile(r"-\s*Reason:\s*(.+)", re.IGNORECASE),
     re.compile(r"\*\*Reason\*\*:\s*(.+)", re.IGNORECASE),
-    re.compile(r"リーズン:\s*(.+)"),
+    re.compile(r"理由:\s*(.+)"),
 ]
 
 _RELAXED_EVIDENCE_PATTERNS = [
     re.compile(r"Evidence:\s*(.+)", re.IGNORECASE),
     re.compile(r"-\s*Evidence:\s*(.+)", re.IGNORECASE),
     re.compile(r"\*\*Evidence\*\*:\s*(.+)", re.IGNORECASE),
-    re.compile(r"エビデンス:\s*(.+)"),
+    re.compile(r"根拠:\s*(.+)"),
 ]
 
 _RELAXED_SUGGESTION_PATTERNS = [
@@ -230,54 +235,62 @@ def parse_verdict(
         try:
             verdict = _parse_yaml_fields(block)
             _validate(verdict, valid_statuses)
+            logger.debug("Step 1 (strict) succeeded")
             return verdict
         except InvalidVerdictValue:
             raise
-        except (VerdictParseError, VerdictNotFound):
-            pass  # Fall through to Step 2
+        except (VerdictParseError, VerdictNotFound) as e:
+            logger.debug("Step 1 (strict) failed: %s", e)
 
     # Step 2a: Relaxed delimiter + YAML
-    block = _extract_block_relaxed(output)
-    if block is not None:
+    relaxed_block = _extract_block_relaxed(output)
+    if relaxed_block is not None:
         try:
-            verdict = _parse_yaml_fields(block)
+            verdict = _parse_yaml_fields(relaxed_block)
             _validate(verdict, valid_statuses)
+            logger.info("Step 2a (relaxed delimiter) succeeded — strict parse was insufficient")
             return verdict
         except InvalidVerdictValue:
             raise
-        except (VerdictParseError, VerdictNotFound):
-            pass  # Fall through to Step 2b
+        except (VerdictParseError, VerdictNotFound) as e:
+            logger.debug("Step 2a (relaxed delimiter) failed: %s", e)
 
     # Step 2b: Key-value pattern extraction
     try:
         verdict = _parse_relaxed_fields(output, valid_statuses)
         _validate(verdict, valid_statuses)
+        logger.info(
+            "Step 2b (key-value pattern) succeeded — delimiter-based parse was insufficient"
+        )
         return verdict
     except InvalidVerdictValue:
         raise
-    except VerdictParseError:
-        pass  # Fall through to Step 3
+    except VerdictParseError as e:
+        logger.debug("Step 2b (key-value pattern) failed: %s", e)
 
     # Step 3: AI Formatter Retry
     if ai_formatter is None:
-        # Determine the most appropriate error
-        if block is None and _extract_block_relaxed(output) is None:
+        if block is None and relaxed_block is None:
             raise VerdictNotFound(f"No verdict block found. Last 500 chars: {output[-500:]}")
         raise VerdictParseError(
             "All parse attempts failed (Step 1-2). Provide ai_formatter for Step 3 retry."
         )
 
+    logger.info("Step 3 (AI formatter) invoked — Steps 1-2 exhausted")
     truncated_text = _truncate_for_formatter(output)
 
     last_error: VerdictParseError | VerdictNotFound | None = None
-    for _attempt in range(max_retries):
+    for attempt in range(max_retries):
         try:
             formatted = ai_formatter(truncated_text)
             # Re-run Step 1 + 2 on formatted output
-            return _parse_formatted_output(formatted, valid_statuses)
+            verdict = _parse_formatted_output(formatted, valid_statuses)
+            logger.info("Step 3 succeeded on attempt %d/%d", attempt + 1, max_retries)
+            return verdict
         except InvalidVerdictValue:
             raise
         except (VerdictParseError, VerdictNotFound) as e:
+            logger.debug("Step 3 attempt %d/%d failed: %s", attempt + 1, max_retries, e)
             last_error = e
             continue
 
@@ -287,14 +300,19 @@ def parse_verdict(
 
 
 def _truncate_for_formatter(text: str) -> str:
-    """Truncate text for AI formatter using head+tail strategy."""
+    """Truncate text for AI formatter using head+tail strategy (tail-heavy).
+
+    Verdict blocks typically appear near the end of output, so we allocate
+    1/3 to head and 2/3 to tail to maximize the chance of preserving them.
+    """
     if len(text) <= AI_FORMATTER_MAX_INPUT_CHARS:
         return text
 
     truncate_delimiter = "\n...[truncated]...\n"
     usable_chars = AI_FORMATTER_MAX_INPUT_CHARS - len(truncate_delimiter)
-    half_limit = usable_chars // 2
-    return text[:half_limit] + truncate_delimiter + text[-half_limit:]
+    head_limit = usable_chars // 3
+    tail_limit = usable_chars - head_limit
+    return text[:head_limit] + truncate_delimiter + text[-tail_limit:]
 
 
 def _parse_formatted_output(formatted: str, valid_statuses: set[str]) -> Verdict:
@@ -337,6 +355,7 @@ def _build_formatter_cli_args(agent: str, model: str | None, prompt: str) -> lis
     """
     match agent:
         case "claude":
+            # Claude: -p is "print mode" (non-interactive), prompt is a positional arg.
             args = ["claude", "-p", "--output-format", "text"]
             if model:
                 args += ["--model", model]
@@ -350,6 +369,7 @@ def _build_formatter_cli_args(agent: str, model: str | None, prompt: str) -> lis
                 args += ["-m", model]
             args.append(prompt)
         case "gemini":
+            # Gemini: -p takes an argument (prompt string), unlike Claude's -p flag.
             args = ["gemini", "-p", prompt]
             if model:
                 args += ["-m", model]
@@ -382,18 +402,21 @@ def create_verdict_formatter(
     statuses_str = "|".join(sorted(valid_statuses))
 
     def formatter(raw_output: str) -> str:
-        prompt = FORMATTER_PROMPT.format(
+        prompt = FORMATTER_PROMPT.safe_substitute(
             raw_output=raw_output,
             valid_statuses_str=statuses_str,
         )
         args = _build_formatter_cli_args(agent, model, prompt)
-        result = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            cwd=workdir,
-        )
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=workdir,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise VerdictParseError(f"AI formatter timed out after 60s (agent={agent})") from e
         if result.returncode != 0:
             raise VerdictParseError(
                 f"AI formatter CLI exited with code {result.returncode}: {result.stderr[:300]}"

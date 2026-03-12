@@ -154,6 +154,45 @@ class TestCreateVerdictFormatterFactory:
         verdict = parse_verdict(result, {"PASS", "RETRY"})
         assert verdict.status == "PASS"
 
+    def test_formatter_handles_braces_in_raw_output(self) -> None:
+        """Formatter does not crash when raw_output contains { and } (e.g. JSON/code)."""
+        formatter = create_verdict_formatter(
+            agent="claude",
+            valid_statuses={"PASS", "ABORT"},
+        )
+
+        # Raw output containing braces that would crash str.format()
+        raw_output_with_braces = '{"key": "value"}\nfunction() { return {}; }\n'
+
+        with patch("kaji_harness.verdict.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="---VERDICT---\nstatus: PASS\nreason: ok\nevidence: ok\n---END_VERDICT---",
+                returncode=0,
+            )
+            # This must not raise KeyError/IndexError
+            formatter(raw_output_with_braces)
+
+        # Verify the braces made it into the prompt
+        call_args = mock_run.call_args
+        assert call_args is not None
+        cli_args = call_args.args[0]
+        prompt_text = cli_args[-1]
+        assert '{"key": "value"}' in prompt_text
+
+    def test_formatter_timeout_raises_verdict_parse_error(self) -> None:
+        """Formatter subprocess timeout raises VerdictParseError, not TimeoutExpired."""
+        from kaji_harness.errors import VerdictParseError
+
+        formatter = create_verdict_formatter(
+            agent="claude",
+            valid_statuses={"PASS"},
+        )
+
+        with patch("kaji_harness.verdict.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=60)
+            with pytest.raises(VerdictParseError, match="timed out"):
+                formatter("some text")
+
     def test_formatter_nonzero_exit_raises(self) -> None:
         """Formatter subprocess non-zero exit raises VerdictParseError."""
         from kaji_harness.errors import VerdictParseError
