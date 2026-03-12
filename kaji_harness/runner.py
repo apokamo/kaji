@@ -22,7 +22,7 @@ from .models import CostInfo, Verdict, Workflow
 from .prompt import build_prompt
 from .skill import validate_skill_exists
 from .state import SessionState
-from .verdict import parse_verdict
+from .verdict import create_verdict_formatter, parse_verdict
 from .workflow import validate_workflow
 
 
@@ -140,10 +140,18 @@ class WorkflowRunner:
                         state.save_session_id(current_step.id, result.session_id)
                     cost = result.cost
 
-                    # verdict をパース
+                    # verdict をパース (3-stage fallback: strict → relaxed → AI formatter)
+                    valid = set(current_step.on.keys())
+                    formatter = create_verdict_formatter(
+                        agent=current_step.agent,
+                        valid_statuses=valid,
+                        model=current_step.model,
+                        workdir=self.workdir,
+                    )
                     verdict = parse_verdict(
                         result.full_output,
-                        valid_statuses=set(current_step.on.keys()),
+                        valid_statuses=valid,
+                        ai_formatter=formatter,
                     )
 
                 # ログ記録 + 状態更新
