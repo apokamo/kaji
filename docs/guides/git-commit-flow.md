@@ -26,9 +26,9 @@ git absorb + `--no-ff` マージによるコミット履歴管理戦略。
 - **通常 merge のように詳細**: 機能・修正ごとのコミット単位が保持される
 - **`--no-ff` でブランチ構造も可視化**: いつ分岐し、いつ合流したかが明確
 
-## 必須ツール
+## 推奨ツール
 
-[git-absorb](https://github.com/tummychow/git-absorb) のインストールが必要：
+[git-absorb](https://github.com/tummychow/git-absorb) のインストールを推奨する（未インストールの場合、`/issue-pr` スキルでは absorb ステップがスキップされる）:
 
 ```bash
 # macOS
@@ -77,6 +77,24 @@ gh pr create --title "feat: 新機能" --body "..."
 ```
 
 ### 4. マージ（ブランチ可視化維持）
+
+#### kaji での運用（PR ベース）
+
+kaji では PR を作成し、GitHub 上で merge commit を用いてマージする:
+
+```bash
+# PR 作成（/issue-pr スキルで自動化）
+gh pr create --title "feat: 新機能" --body "..."
+
+# マージ（/issue-close スキルで自動化）
+gh pr merge --merge --delete-branch
+```
+
+`--merge` オプションにより merge commit が作成され、`--no-ff` と同等のブランチ構造が維持される。
+
+#### Git 一般論（ローカルマージ）
+
+PR を使わないプロジェクトでは、ローカルで `--no-ff` マージを行う:
 
 ```bash
 git switch main
@@ -192,3 +210,4 @@ git push --force-with-lease
 
 - [git-absorb GitHub](https://github.com/tummychow/git-absorb)
 - [Conventional Commits](https://www.conventionalcommits.org/)
+- [GitHub CLI `gh pr merge`](https://cli.github.com/manual/gh_pr_merge)

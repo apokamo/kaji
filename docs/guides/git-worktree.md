@@ -150,7 +150,15 @@ Issue ごとに worktree を作成し、並列開発を実現する。
 worktree のライフサイクルはスキルで管理される:
 
 - `/issue-start [issue-number]`: worktree 作成、`.venv` シンボリックリンク、Issue 本文にメタ情報追記
-- `/issue-close [issue-number]`: worktree 削除、ブランチ削除、PR マージ
+- `/issue-close [issue-number]`: `.venv` symlink 削除、worktree 削除、ブランチ削除、PR マージ
+
+手動で worktree を削除する場合は、`.venv` シンボリックリンクを先に削除する必要がある（untracked file があると `git worktree remove` が失敗する）:
+
+```bash
+rm ../kaji-feat-42/.venv
+git worktree remove ../kaji-feat-42
+git branch -d feat/42
+```
 
 ### .venv の共有
 
@@ -177,6 +185,7 @@ ln -s /home/user/dev/kaji/.venv /home/user/dev/kaji-feat-42/.venv
 
 ## 参考資料
 
+- [Git 公式 `git-worktree` マニュアル](https://git-scm.com/docs/git-worktree)
 - [How to use git worktree and in a clean way](https://morgan.cugerone.com/blog/how-to-use-git-worktree-and-in-a-clean-way/)
 - [Bare Git Worktrees AGENTS.md](https://gist.github.com/ben-vargas/fd99be9bbce6d485c70442dd939f1a3d)
 - [Git Worktree Best Practices and Tools](https://gist.github.com/ChristopherA/4643b2f5e024578606b9cd5d2e6815cc)
