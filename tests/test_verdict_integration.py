@@ -334,14 +334,9 @@ class TestCodexMcpToolCallIntegration:
 class TestRelaxedVerdictStatePersistence:
     """Relaxed-parsed verdicts persist correctly in SessionState."""
 
-    def test_relaxed_verdict_persists(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_relaxed_verdict_persists(self, tmp_path: Path) -> None:
         """Verdict recovered via relaxed parse saves in state correctly."""
-        from kaji_harness import state as state_mod
         from kaji_harness.state import SessionState
-
-        monkeypatch.setattr(state_mod, "STATE_DIR", tmp_path)
 
         # Relaxed-delimiter verdict
         output = (
@@ -353,7 +348,7 @@ class TestRelaxedVerdictStatePersistence:
         )
         verdict = parse_verdict(output, VALID_STATUSES)
 
-        state = SessionState.load_or_create(99999)
+        state = SessionState.load_or_create(99999, artifacts_dir=tmp_path)
         state.record_step("test-step", verdict)
 
         assert state.last_transition_verdict is not None
@@ -387,6 +382,7 @@ class TestPreviousVerdictPropagation:
 
         state = SessionState.__new__(SessionState)
         state.issue_number = 99999
+        state.artifacts_dir = Path("/tmp/fake")
         state._steps = {"fix": verdict}
         state._cycle_counts = {}
         state.last_transition_verdict = verdict

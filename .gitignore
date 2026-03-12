@@ -45,6 +45,7 @@ htmlcov/
 
 # Artifacts
 test-artifacts/
+.kaji-artifacts/
 *.log
 
 # Environment

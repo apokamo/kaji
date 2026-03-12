@@ -43,7 +43,7 @@ pytest                               # Test
 kaji run <workflow.yaml> <issue>                    # Run a workflow
 kaji run <workflow.yaml> <issue> --from <step-id>   # Resume from a step
 kaji run <workflow.yaml> <issue> --step <step-id>   # Run a single step
-kaji run <workflow.yaml> <issue> --workdir <dir>    # Set agent working directory
+kaji run <workflow.yaml> <issue> --workdir <dir>    # Config discovery start dir
 kaji run <workflow.yaml> <issue> --quiet            # Suppress agent output
 
 kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)

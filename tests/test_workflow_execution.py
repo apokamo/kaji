@@ -107,6 +107,22 @@ def _cycle_workflow() -> Workflow:
     )
 
 
+def _make_runner(
+    tmp_path: Path,
+    workflow: Workflow,
+    issue: int = 99,
+    **kwargs: object,
+) -> WorkflowRunner:
+    """Create a WorkflowRunner with project_root and artifacts_dir."""
+    return WorkflowRunner(
+        workflow=workflow,
+        issue_number=issue,
+        project_root=tmp_path,
+        artifacts_dir=tmp_path / ".kaji-artifacts",
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
 @pytest.mark.medium
 class TestWorkflowExecution:
     """Full workflow execution with mocked CLI."""
@@ -129,13 +145,8 @@ class TestWorkflowExecution:
         with (
             patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
             patch("kaji_harness.runner.validate_skill_exists"),
-            patch("kaji_harness.state.SessionState._persist"),
         ):
-            runner = WorkflowRunner(
-                workflow=workflow,
-                issue_number=99,
-                workdir=tmp_path,
-            )
+            runner = _make_runner(tmp_path, workflow)
             state = runner.run()
 
         assert state.last_completed_step == "review"
@@ -153,13 +164,8 @@ class TestWorkflowExecution:
         with (
             patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
             patch("kaji_harness.runner.validate_skill_exists"),
-            patch("kaji_harness.state.SessionState._persist"),
         ):
-            runner = WorkflowRunner(
-                workflow=workflow,
-                issue_number=99,
-                workdir=tmp_path,
-            )
+            runner = _make_runner(tmp_path, workflow)
             state = runner.run()
 
         assert state.last_completed_step == "design"
@@ -185,13 +191,8 @@ class TestWorkflowExecution:
         with (
             patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
             patch("kaji_harness.runner.validate_skill_exists"),
-            patch("kaji_harness.state.SessionState._persist"),
         ):
-            runner = WorkflowRunner(
-                workflow=workflow,
-                issue_number=99,
-                workdir=tmp_path,
-            )
+            runner = _make_runner(tmp_path, workflow)
             state = runner.run()
 
         assert state.last_completed_step == "verify"
@@ -207,14 +208,8 @@ class TestWorkflowExecution:
         with (
             patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
             patch("kaji_harness.runner.validate_skill_exists"),
-            patch("kaji_harness.state.SessionState._persist"),
         ):
-            runner = WorkflowRunner(
-                workflow=workflow,
-                issue_number=99,
-                workdir=tmp_path,
-                from_step="review",
-            )
+            runner = _make_runner(tmp_path, workflow, from_step="review")
             state = runner.run()
 
         # Only review was executed (design was skipped)
@@ -231,14 +226,8 @@ class TestWorkflowExecution:
         with (
             patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
             patch("kaji_harness.runner.validate_skill_exists"),
-            patch("kaji_harness.state.SessionState._persist"),
         ):
-            runner = WorkflowRunner(
-                workflow=workflow,
-                issue_number=99,
-                workdir=tmp_path,
-                single_step="design",
-            )
+            runner = _make_runner(tmp_path, workflow, single_step="design")
             state = runner.run()
 
         assert len(state.step_history) == 1
@@ -248,34 +237,18 @@ class TestWorkflowExecution:
         """--from with non-existent step raises WorkflowValidationError."""
         workflow = _simple_workflow()
 
-        with (
-            patch("kaji_harness.runner.validate_skill_exists"),
-            patch("kaji_harness.state.SessionState._persist"),
-        ):
+        with patch("kaji_harness.runner.validate_skill_exists"):
             with pytest.raises(WorkflowValidationError):
-                runner = WorkflowRunner(
-                    workflow=workflow,
-                    issue_number=99,
-                    workdir=tmp_path,
-                    from_step="nonexistent",
-                )
+                runner = _make_runner(tmp_path, workflow, from_step="nonexistent")
                 runner.run()
 
     def test_unknown_single_step_raises_error(self, tmp_path: Path) -> None:
         """--step with non-existent step raises WorkflowValidationError."""
         workflow = _simple_workflow()
 
-        with (
-            patch("kaji_harness.runner.validate_skill_exists"),
-            patch("kaji_harness.state.SessionState._persist"),
-        ):
+        with patch("kaji_harness.runner.validate_skill_exists"):
             with pytest.raises(WorkflowValidationError):
-                runner = WorkflowRunner(
-                    workflow=workflow,
-                    issue_number=99,
-                    workdir=tmp_path,
-                    single_step="nonexistent",
-                )
+                runner = _make_runner(tmp_path, workflow, single_step="nonexistent")
                 runner.run()
 
     def test_resume_without_session_id_raises_error(self, tmp_path: Path) -> None:
@@ -297,13 +270,8 @@ class TestWorkflowExecution:
         with (
             patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
             patch("kaji_harness.runner.validate_skill_exists"),
-            patch("kaji_harness.state.SessionState._persist"),
         ):
-            runner = WorkflowRunner(
-                workflow=workflow,
-                issue_number=99,
-                workdir=tmp_path,
-            )
+            runner = _make_runner(tmp_path, workflow)
             with pytest.raises(MissingResumeSessionError):
                 runner.run()
 
@@ -330,13 +298,8 @@ class TestWorkflowSessionManagement:
         with (
             patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
             patch("kaji_harness.runner.validate_skill_exists"),
-            patch("kaji_harness.state.SessionState._persist"),
         ):
-            runner = WorkflowRunner(
-                workflow=workflow,
-                issue_number=99,
-                workdir=tmp_path,
-            )
+            runner = _make_runner(tmp_path, workflow)
             state = runner.run()
 
         assert state.sessions.get("design") == "sess-1"
@@ -361,17 +324,12 @@ class TestWorkflowEndLogging:
         with (
             patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
             patch("kaji_harness.runner.validate_skill_exists"),
-            patch("kaji_harness.state.SessionState._persist"),
             patch(
                 "kaji_harness.logger.RunLogger.log_workflow_end",
                 side_effect=capture_workflow_end,
             ),
         ):
-            runner = WorkflowRunner(
-                workflow=workflow,
-                issue_number=99,
-                workdir=tmp_path,
-            )
+            runner = _make_runner(tmp_path, workflow)
             runner.run()
 
         assert len(logged_calls) == 1
@@ -400,17 +358,12 @@ class TestWorkflowEndLogging:
         with (
             patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
             patch("kaji_harness.runner.validate_skill_exists"),
-            patch("kaji_harness.state.SessionState._persist"),
             patch(
                 "kaji_harness.logger.RunLogger.log_workflow_end",
                 side_effect=capture_workflow_end,
             ),
         ):
-            runner = WorkflowRunner(
-                workflow=workflow,
-                issue_number=99,
-                workdir=tmp_path,
-            )
+            runner = _make_runner(tmp_path, workflow)
             runner.run()
 
         assert len(logged_calls) == 1
@@ -430,17 +383,12 @@ class TestWorkflowEndLogging:
         with (
             patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
             patch("kaji_harness.runner.validate_skill_exists"),
-            patch("kaji_harness.state.SessionState._persist"),
             patch(
                 "kaji_harness.logger.RunLogger.log_workflow_end",
                 side_effect=capture_workflow_end,
             ),
         ):
-            runner = WorkflowRunner(
-                workflow=workflow,
-                issue_number=99,
-                workdir=tmp_path,
-            )
+            runner = _make_runner(tmp_path, workflow)
             with pytest.raises(RuntimeError):
                 runner.run()
 
