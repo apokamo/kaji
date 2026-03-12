@@ -84,6 +84,7 @@ flowchart TB
 ├─────────────────────────────────────────────────────────────────────┤
 │ • Issue本文からWorktree情報を取得 → 作業                            │
 │ • draft/design/ を参照                                              │
+│ • Baseline Check: pytest 実行 → failure あれば Issue コメントに記録  │
 │ • TDD: テスト作成 (Red) → 実装 (Green) → リファクタ                 │
 │ • 品質チェック（コミット前必須）:                                   │
 │   source .venv/bin/activate                                         │
