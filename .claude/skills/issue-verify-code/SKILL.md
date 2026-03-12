@@ -75,7 +75,10 @@ $ARGUMENTS = <issue-number>
    ```
    「コードレビュー結果」と「レビュー指摘への対応報告」を確認。
 
-3. **修正差分を確認**:
+3. **Baseline Check コメントの確認**:
+   Issue コメントから最新の `## Baseline Check 結果` を検索する。存在する場合、テスト実行時の regression 判定に使用する（判定ロジックは `issue-review-code` Step 1.5 と同一）。
+
+4. **修正差分を確認**:
    ```bash
    cd [worktree-absolute-path] && git diff HEAD~1
    ```
