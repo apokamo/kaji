@@ -26,6 +26,7 @@ def _make_step(
     agent: str = "claude",
     on: dict[str, str] | None = None,
     resume: str | None = None,
+    inject_verdict: bool = False,
 ) -> Step:
     """Create a Step with sensible defaults."""
     return Step(
@@ -34,6 +35,7 @@ def _make_step(
         agent=agent,
         on=on or {"PASS": "review", "RETRY": "implement"},
         resume=resume,
+        inject_verdict=inject_verdict,
     )
 
 
@@ -286,3 +288,93 @@ class TestNoPreviousVerdictWhenStateEmpty:
         # Should not contain previous verdict markers
         # (The prompt should still be valid, just without previous verdict section)
         assert "previous_verdict" not in prompt.lower() or "none" in prompt.lower()
+
+
+# ============================================================
+# 11. previous_verdict injected when inject_verdict=True (no resume)
+# ============================================================
+
+
+@pytest.mark.small
+class TestPreviousVerdictInjectedViaInjectVerdict:
+    """build_prompt includes previous verdict when inject_verdict=True, even without resume."""
+
+    def test_inject_verdict_true_injects_previous_verdict(self) -> None:
+        prev_verdict = Verdict(
+            status="RETRY",
+            reason="Design issues found",
+            evidence="Missing error handling",
+            suggestion="Add validation",
+        )
+        step = _make_step(resume=None, inject_verdict=True)
+        workflow = _make_workflow(steps=[step])
+        state = _make_state(last_transition_verdict=prev_verdict)
+
+        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+
+        assert "Design issues found" in prompt
+        assert "Missing error handling" in prompt
+
+
+# ============================================================
+# 12. previous_verdict NOT injected when inject_verdict=False (no resume)
+# ============================================================
+
+
+@pytest.mark.small
+class TestNoPreviousVerdictWhenInjectVerdictFalse:
+    """build_prompt does not inject verdict when both resume=None and inject_verdict=False."""
+
+    def test_inject_verdict_false_no_verdict(self) -> None:
+        prev_verdict = Verdict(
+            status="RETRY",
+            reason="Design issues found",
+            evidence="Missing error handling",
+            suggestion="Add validation",
+        )
+        step = _make_step(resume=None, inject_verdict=False)
+        workflow = _make_workflow(steps=[step])
+        state = _make_state(last_transition_verdict=prev_verdict)
+
+        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+
+        assert "Design issues found" not in prompt
+
+
+# ============================================================
+# 13. resume with inject_verdict=False still injects verdict (backward compat)
+# ============================================================
+
+
+@pytest.mark.small
+class TestResumeStillInjectsVerdictRegardlessOfFlag:
+    """resume alone is sufficient for verdict injection (backward compatibility)."""
+
+    def test_resume_injects_verdict_even_if_inject_verdict_false(self) -> None:
+        prev_verdict = Verdict(
+            status="RETRY",
+            reason="Tests failed",
+            evidence="pytest: 3 failed",
+            suggestion="Fix import errors",
+        )
+        step = _make_step(resume="design", inject_verdict=False)
+        workflow = _make_workflow(steps=[step])
+        state = _make_state(last_transition_verdict=prev_verdict)
+
+        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+
+        assert "Tests failed" in prompt
+
+
+# ============================================================
+# 14. Step model defaults inject_verdict to False
+# ============================================================
+
+
+@pytest.mark.small
+class TestStepModelInjectVerdictDefault:
+    """Step.inject_verdict defaults to False."""
+
+    def test_default_is_false(self) -> None:
+        step = Step(id="test", skill="test-skill", agent="claude", on={"PASS": "end"})
+        assert step.inject_verdict is False

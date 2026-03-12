@@ -29,6 +29,31 @@ steps:
       ABORT: end
 """
 
+MISSING_SKILL_YAML = """\
+name: test
+description: test workflow
+steps:
+  - id: step1
+    skill: nonexistent-skill-xyz
+    agent: claude
+    on:
+      PASS: end
+      ABORT: end
+"""
+
+INVALID_INJECT_VERDICT_YAML = """\
+name: test
+description: test workflow
+steps:
+  - id: step1
+    skill: test-skill
+    agent: claude
+    inject_verdict: "yes"
+    on:
+      PASS: end
+      ABORT: end
+"""
+
 INVALID_SCHEMA_YAML = """\
 name: bad
 steps: not_a_list
@@ -42,12 +67,26 @@ steps:
 """
 
 
+def _create_skill(project_root: Path, skill_name: str, agent: str = "claude") -> None:
+    """Create a minimal SKILL.md for testing."""
+    agent_dirs = {"claude": ".claude/skills", "codex": ".agents/skills", "gemini": ".agents/skills"}
+    skill_dir = project_root / agent_dirs[agent] / skill_name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(f"# {skill_name}\nTest skill.\n")
+
+
+def _write_valid_yaml(project_root: Path, filename: str = "workflow.yaml") -> Path:
+    """Write valid YAML and create matching skill structure."""
+    p = project_root / filename
+    p.write_text(VALID_WORKFLOW_YAML)
+    _create_skill(project_root, "test-skill")
+    return p
+
+
 @pytest.fixture()
 def valid_yaml(tmp_path: Path) -> Path:
-    """Create a valid workflow YAML file."""
-    p = tmp_path / "valid.yaml"
-    p.write_text(VALID_WORKFLOW_YAML)
-    return p
+    """Create a valid workflow YAML file with matching skill."""
+    return _write_valid_yaml(tmp_path)
 
 
 @pytest.fixture()
@@ -113,6 +152,7 @@ class TestCmdValidateSmall:
     def test_multiple_valid_files_exit_0(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
+        _create_skill(tmp_path, "test-skill")
         f1 = tmp_path / "a.yaml"
         f2 = tmp_path / "b.yaml"
         f1.write_text(VALID_WORKFLOW_YAML)
@@ -134,6 +174,29 @@ class TestCmdValidateSmall:
         assert "Validation failed" in captured.err
 
     @pytest.mark.small
+    def test_invalid_inject_verdict_type_exit_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """inject_verdict with non-boolean value should fail validation."""
+        f = tmp_path / "bad_inject.yaml"
+        f.write_text(INVALID_INJECT_VERDICT_YAML)
+        exit_code = _cmd_validate_with_args(str(f))
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "✗" in captured.err
+        assert "inject_verdict" in captured.err
+
+    @pytest.mark.small
+    def test_missing_skill_exit_1(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """Workflow referencing a nonexistent skill should fail validation."""
+        f = tmp_path / "missing_skill.yaml"
+        f.write_text(MISSING_SKILL_YAML)
+        exit_code = _cmd_validate_with_args(str(f))
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "✗" in captured.err
+
+    @pytest.mark.small
     def test_no_args_exit_2(self) -> None:
         """argparse should exit 2 when no files are provided."""
         with pytest.raises(SystemExit) as exc_info:
@@ -152,8 +215,7 @@ class TestCmdValidateMedium:
     @pytest.mark.medium
     def test_real_file_pipeline(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         """End-to-end: write YAML to disk, validate via cmd_validate."""
-        f = tmp_path / "workflow.yaml"
-        f.write_text(VALID_WORKFLOW_YAML)
+        f = _write_valid_yaml(tmp_path)
         exit_code = _cmd_validate_with_args(str(f))
         assert exit_code == 0
         captured = capsys.readouterr()
@@ -164,14 +226,12 @@ class TestCmdValidateMedium:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """All files are processed even when some fail (no early abort)."""
-        good = tmp_path / "good.yaml"
+        good = _write_valid_yaml(tmp_path, "good.yaml")
         bad = tmp_path / "bad.yaml"
-        good.write_text(VALID_WORKFLOW_YAML)
         bad.write_text(INVALID_SCHEMA_YAML)
         exit_code = _cmd_validate_with_args(str(good), str(bad))
         assert exit_code == 1
         captured = capsys.readouterr()
-        # Both files should appear in output
         assert str(good) in captured.out
         assert str(bad) in captured.err
         assert "Validation failed: 1 of 2" in captured.err
@@ -179,8 +239,7 @@ class TestCmdValidateMedium:
     @pytest.mark.medium
     def test_permission_error(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         """Unreadable file should produce exit 1 with error message."""
-        f = tmp_path / "noperm.yaml"
-        f.write_text(VALID_WORKFLOW_YAML)
+        f = _write_valid_yaml(tmp_path, "noperm.yaml")
         f.chmod(0o000)
         try:
             exit_code = _cmd_validate_with_args(str(f))
@@ -201,6 +260,14 @@ class TestCmdValidateMedium:
         exit_code = main(["validate", str(invalid_schema_yaml)])
         assert exit_code == 1
 
+    @pytest.mark.medium
+    def test_missing_skill_via_main(self, tmp_path: Path) -> None:
+        """main(["validate", ...]) with missing skill returns exit 1."""
+        f = tmp_path / "missing_skill.yaml"
+        f.write_text(MISSING_SKILL_YAML)
+        exit_code = main(["validate", str(f)])
+        assert exit_code == 1
+
 
 # ============================================================
 # Large tests — real subprocess execution
@@ -212,8 +279,7 @@ class TestCLIValidateLarge:
 
     @pytest.mark.large
     def test_kaji_validate_valid_yaml(self, tmp_path: Path) -> None:
-        f = tmp_path / "workflow.yaml"
-        f.write_text(VALID_WORKFLOW_YAML)
+        f = _write_valid_yaml(tmp_path)
         result = subprocess.run(
             [sys.executable, "-m", "kaji_harness.cli_main", "validate", str(f)],
             capture_output=True,
@@ -247,10 +313,22 @@ class TestCLIValidateLarge:
         assert result.returncode == 2
 
     @pytest.mark.large
+    def test_kaji_validate_missing_skill(self, tmp_path: Path) -> None:
+        f = tmp_path / "missing_skill.yaml"
+        f.write_text(MISSING_SKILL_YAML)
+        result = subprocess.run(
+            [sys.executable, "-m", "kaji_harness.cli_main", "validate", str(f)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 1
+        assert "✗" in result.stderr
+
+    @pytest.mark.large
     def test_kaji_validate_mixed_files(self, tmp_path: Path) -> None:
-        good = tmp_path / "good.yaml"
+        good = _write_valid_yaml(tmp_path, "good.yaml")
         bad = tmp_path / "bad.yaml"
-        good.write_text(VALID_WORKFLOW_YAML)
         bad.write_text(INVALID_SCHEMA_YAML)
         result = subprocess.run(
             [sys.executable, "-m", "kaji_harness.cli_main", "validate", str(good), str(bad)],

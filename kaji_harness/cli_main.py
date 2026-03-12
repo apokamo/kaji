@@ -16,6 +16,7 @@ from .errors import (
     WorkflowValidationError,
 )
 from .runner import WorkflowRunner
+from .skill import validate_skill_exists
 from .workflow import load_workflow, validate_workflow
 
 EXIT_OK = 0
@@ -59,6 +60,12 @@ def _register_validate(
     """Register the `validate` subcommand."""
     p = subparsers.add_parser("validate", help="Validate workflow YAML files")
     p.add_argument("files", nargs="+", type=Path, help="Workflow YAML file(s) to validate")
+    p.add_argument(
+        "--project-root",
+        type=Path,
+        default=None,
+        help="Project root for skill lookup (default: YAML file's parent directory)",
+    )
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
@@ -74,9 +81,15 @@ def cmd_validate(args: argparse.Namespace) -> int:
         try:
             wf = load_workflow(path)
             validate_workflow(wf)
+            project_root = (args.project_root or path.parent).resolve()
+            for step in wf.steps:
+                validate_skill_exists(step.skill, step.agent, project_root)
             _print_success(path)
         except WorkflowValidationError as e:
             _print_error(path, e.errors)
+            failed += 1
+        except SkillNotFound as e:
+            _print_error(path, [str(e)])
             failed += 1
         except OSError as e:
             _print_error(path, [str(e)])

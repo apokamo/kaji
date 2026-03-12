@@ -47,6 +47,7 @@ class Step:
     max_turns: int | None = None
     timeout: int | None = None
     resume: str | None = None
+    inject_verdict: bool = False
     on: dict[str, str] = field(default_factory=dict)
 
 

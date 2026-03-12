@@ -32,8 +32,8 @@ def build_prompt(step: Step, issue: int, state: SessionState, workflow: Workflow
         variables["cycle_count"] = state.cycle_iterations(cycle.name) + 1
         variables["max_iterations"] = cycle.max_iterations
 
-    # 遷移元の verdict（resume 指定ステップのみ）
-    if step.resume and state.last_transition_verdict:
+    # 遷移元の verdict（resume または inject_verdict 指定ステップ）
+    if (step.resume or step.inject_verdict) and state.last_transition_verdict:
         v = state.last_transition_verdict
         variables["previous_verdict"] = (
             f"reason: {v.reason}\nevidence: {v.evidence}\nsuggestion: {v.suggestion}"

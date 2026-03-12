@@ -1,0 +1,49 @@
+name: test-workflow
+description: |
+  Minimal workflow for engine logic tests.
+  Not tied to any production workflow.
+
+cycles:
+  review-cycle:
+    entry: review
+    loop: [fix, verify]
+    max_iterations: 3
+    on_exhaust: ABORT
+
+steps:
+  - id: design
+    skill: test-design
+    agent: claude
+    on:
+      PASS: review
+      ABORT: end
+
+  - id: review
+    skill: test-review
+    agent: codex
+    on:
+      PASS: done
+      RETRY: fix
+      ABORT: end
+
+  - id: fix
+    skill: test-fix
+    agent: claude
+    inject_verdict: true
+    on:
+      PASS: verify
+      ABORT: end
+
+  - id: verify
+    skill: test-verify
+    agent: codex
+    on:
+      PASS: done
+      RETRY: fix
+      ABORT: end
+
+  - id: done
+    skill: test-done
+    agent: claude
+    on:
+      PASS: end

@@ -89,6 +89,12 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
             )
         if not raw_on:
             raise WorkflowValidationError(f"Step '{step_data['id']}' 'on' must not be empty")
+        raw_inject_verdict = step_data.get("inject_verdict", False)
+        if not isinstance(raw_inject_verdict, bool):
+            raise WorkflowValidationError(
+                f"Step '{step_data['id']}' 'inject_verdict' must be a boolean, "
+                f"got {type(raw_inject_verdict).__name__}"
+            )
         steps.append(
             Step(
                 id=step_data["id"],
@@ -100,6 +106,7 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                 max_turns=step_data.get("max_turns"),
                 timeout=step_data.get("timeout"),
                 resume=step_data.get("resume"),
+                inject_verdict=raw_inject_verdict,
                 on=raw_on,
             )
         )
