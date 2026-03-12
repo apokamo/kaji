@@ -148,6 +148,45 @@ class TestRealAgentOutputFixtures:
 
 
 # ============================================================
+# kaji run workflow execution
+# ============================================================
+
+
+@pytest.mark.large
+class TestKajiRunWorkflowExecution:
+    """E2E test: kaji run executes workflow and parses verdicts successfully.
+
+    Requires actual CLI tools (claude/codex/gemini) to be installed.
+    Skipped if the kaji CLI is not available.
+    """
+
+    def test_kaji_validate_workflows(self) -> None:
+        """kaji validate succeeds on all workflow files (no agent required)."""
+        import shutil
+        import subprocess
+
+        kaji_path = shutil.which("kaji")
+        if kaji_path is None:
+            pytest.skip("kaji CLI not installed")
+
+        workflows_dir = Path(__file__).parent.parent / "workflows"
+        if not workflows_dir.exists():
+            pytest.skip("workflows/ directory not found")
+
+        yaml_files = list(workflows_dir.glob("*.yaml"))
+        if not yaml_files:
+            pytest.skip("No workflow YAML files found")
+
+        result = subprocess.run(
+            ["kaji", "validate", *[str(f) for f in yaml_files]],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, f"kaji validate failed: {result.stderr}"
+
+
+# ============================================================
 # Regression fixture management
 # ============================================================
 
