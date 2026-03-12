@@ -176,10 +176,15 @@ git absorb --and-rebase
 既にプッシュ済み、または複数コミットを整理する場合。
 
 ```bash
+# まず対象コミットの位置を確認
+git log --oneline main..HEAD
+
 # インタラクティブrebaseで統合
+# ⚠️ '2s/pick/fixup/' の行番号は対象コミットの位置に合わせること
 GIT_SEQUENCE_EDITOR="sed -i '2s/pick/fixup/'" git rebase -i main
 
 # force push（プッシュ済みの場合）
+# ⚠️ 単独作業ブランチでのみ使用。共同作業中はレビュアーに通知すること
 git push --force-with-lease
 ```
 
