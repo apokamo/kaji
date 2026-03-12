@@ -86,10 +86,22 @@ $ARGUMENTS = <issue-number>
 レビュワー自身が独立した環境でテストを実行し、結果を確認する。
 実装者の報告だけに依存せず、テスト結果を独自に検証することが目的。
 
-CLAUDE.md の「Pre-Commit (REQUIRED)」セクションに記載されたコマンドを実行すること。
+1. **Baseline Check コメントの確認**:
+   Issue コメント（Step 1.3 で取得済み）から最新の `## Baseline Check 結果` を検索する。
 
-- 上記が exit 0 でなければ **Changes Requested**
-- テスト総数、passed/failed/errors/skipped を記録しておく
+2. CLAUDE.md の「Pre-Commit (REQUIRED)」セクションに記載されたコマンドを実行する。
+
+3. **合否判定**:
+   - **Baseline Check コメントがない場合**:
+     - 全コマンドが exit 0 でなければ **Changes Requested**（従来どおり）
+   - **Baseline Check コメントがある場合**:
+     - ruff check / ruff format / mypy: exit 0 必須（変更なし）
+     - pytest: 実行後、FAILED/ERROR を baseline 一覧と照合する
+       - 比較キー `(nodeid, kind, error_type)` が baseline と完全一致 → 除外
+       - 不一致の新規 FAILED/ERROR → **Changes Requested**
+       - baseline failure のみ残っている → テスト合否は OK とする
+
+4. テスト総数、passed/failed/errors/skipped を記録しておく
 
 ### Step 2: コードレビューの実施
 

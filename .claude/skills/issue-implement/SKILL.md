@@ -74,6 +74,59 @@ cat [worktree-absolute-path]/draft/design/issue-[number]-*.md
 - 「テスト戦略」: テストケースの元になる
 - 「影響ドキュメント」: 実装後に更新が必要なドキュメント
 
+### Step 2.5: Baseline Check
+
+実装開始前にテスト環境の状態を確認し、変更前から存在する失敗（baseline failure）を記録する。
+
+1. **pytest を実行する**:
+   ```bash
+   cd [worktree-absolute-path] && source .venv/bin/activate && pytest
+   ```
+
+2. **全パスの場合**: baseline は clean。コメント不要。Step 3 へ進む。
+
+3. **FAILED / ERROR がある場合**:
+   a. 各失敗テストの `(nodeid, kind, error_type)` を記録する
+   b. Issue コメントに以下のフォーマットで投稿する（commit hash を含める）:
+
+   ````bash
+   gh issue comment [issue-number] --body "$(cat <<'BASELINE_EOF'
+   ## Baseline Check 結果
+
+   ### 実行環境
+
+   - **Commit**: [commit-hash]
+   - **コマンド**: `pytest`
+
+   ### Baseline Failure 一覧
+
+   | nodeid | kind | error_type | 概要 |
+   |--------|------|------------|------|
+   | tests/test_foo.py::test_bar | FAILED | AssertionError | expected 1, got 2 |
+   | tests/test_baz.py::test_qux | ERROR | ImportError | No module named 'xxx' |
+
+   ### Regression 判定キー
+
+   上記テーブルの `(nodeid, kind, error_type)` の3タプルを比較キーとする。
+   以降の pytest 実行で:
+   - 比較キーが一致する失敗 → baseline failure（既知）として除外
+   - 比較キーが一致しない新規 FAILED/ERROR → regression
+
+   ### 判定
+
+   - **継続**: 上記は変更前から存在する失敗であり、本 Issue の対象外
+   - **停止**: (該当する場合のみ記載)
+   BASELINE_EOF
+   )"
+   ````
+
+   c. **停止基準**に該当するか判断する:
+      - baseline failure が本 Issue の実装対象と同一モジュール/機能に影響する場合
+      - 失敗数が多く、regression の切り分けが困難な場合（目安: 10 件超）
+   d. 継続する場合: 以降の regression 判定は baseline failure を除外して行う
+
+> **Baseline コメントの選択規則**: Issue に `## Baseline Check 結果` コメントが複数存在する場合（再実行時など）、**最新のコメントを正とする**。各コメントに commit hash を含めることで、どの時点のスナップショットかを識別できる。
+
 ### Step 3: テスト実装 (Red Phase)
 
 > **CRITICAL — AI のテスト省略傾向に対する警告**
@@ -112,6 +165,14 @@ cat [worktree-absolute-path]/draft/design/issue-[number]-*.md
    cd [worktree-absolute-path] && source .venv/bin/activate && pytest
    ```
 
+   pytest の合否判定基準:
+   - **Baseline Check コメントがない場合**: 全テスト PASSED を期待（従来どおり）
+   - **Baseline Check コメントがある場合**:
+     1. FAILED/ERROR のテストを baseline failure 一覧と照合する
+     2. 比較キー `(nodeid, kind, error_type)` が baseline と一致 → 既知（除外）
+     3. 比較キーが不一致の新規 FAILED/ERROR → regression（修正が必要）
+     4. baseline にあったが消えた（PASSED に変わった）→ 問題なし
+
 ### Step 5: リファクタリング
 
 - コードの可読性を高める修正を行う
@@ -123,9 +184,15 @@ cat [worktree-absolute-path]/draft/design/issue-[number]-*.md
 
 ### Step 7: 品質チェック（コミット前必須）
 
-以下を実行し、**すべてパスするまでコミットしてはならない**。失敗した場合は原因を修正して再実行すること。
-
 CLAUDE.md の「Pre-Commit (REQUIRED)」セクションに記載されたコマンドを実行すること。
+
+**合否基準**:
+- **ruff check / ruff format / mypy**: 全パス必須（baseline failure の概念を適用しない）
+- **pytest**: Step 4 と同じ regression 判定基準を適用する
+  - Baseline Check コメントがない場合: 全テスト PASSED 必須
+  - Baseline Check コメントがある場合: baseline failure のみ残っている → OK（コミット可）、新規 FAILED/ERROR がある → NG（修正が必要）
+
+**すべての基準をクリアするまでコミットしてはならない**。失敗した場合は原因を修正して再実行すること。
 
 ### Step 8: コミット
 
@@ -158,8 +225,8 @@ gh issue comment [issue-number] --body "$(cat <<'COMMENT_EOF'
 |------|------|
 | テスト総数 | XX |
 | passed | XX |
-| failed | 0 |
-| errors | 0 |
+| failed | XX (うち baseline: YY, regression: 0) |
+| errors | XX (うち baseline: YY, regression: 0) |
 | skipped | XX |
 
 ### 品質チェック結果
