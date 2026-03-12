@@ -54,6 +54,18 @@ steps:
       ABORT: end
 """
 
+PATH_TRAVERSAL_YAML = """\
+name: test
+description: test workflow
+steps:
+  - id: step1
+    skill: ../escape
+    agent: claude
+    on:
+      PASS: end
+      ABORT: end
+"""
+
 INVALID_SCHEMA_YAML = """\
 name: bad
 steps: not_a_list
@@ -197,6 +209,55 @@ class TestCmdValidateSmall:
         assert "✗" in captured.err
 
     @pytest.mark.small
+    def test_path_traversal_exit_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Workflow with path traversal in skill name should fail, not traceback."""
+        f = tmp_path / "traversal.yaml"
+        f.write_text(PATH_TRAVERSAL_YAML)
+        exit_code = _cmd_validate_with_args(str(f))
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "✗" in captured.err
+
+    @pytest.mark.small
+    def test_yaml_in_subdirectory_resolves_project_root(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """YAML in workflows/ subdirectory should resolve skills from project root."""
+        # Simulate repo layout: project_root/workflows/wf.yaml + project_root/.claude/skills/
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'test'\n")
+        workflows_dir = tmp_path / "workflows"
+        workflows_dir.mkdir()
+        f = workflows_dir / "wf.yaml"
+        f.write_text(VALID_WORKFLOW_YAML)
+        _create_skill(tmp_path, "test-skill")
+        exit_code = _cmd_validate_with_args(str(f))
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert "✓" in captured.out
+
+    @pytest.mark.small
+    def test_explicit_project_root_option(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--project-root should override automatic project root resolution."""
+        # YAML in one location, skills in another
+        yaml_dir = tmp_path / "yamls"
+        yaml_dir.mkdir()
+        f = yaml_dir / "wf.yaml"
+        f.write_text(VALID_WORKFLOW_YAML)
+
+        skills_root = tmp_path / "project"
+        skills_root.mkdir()
+        _create_skill(skills_root, "test-skill")
+
+        exit_code = _cmd_validate_with_args(str(f), "--project-root", str(skills_root))
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert "✓" in captured.out
+
+    @pytest.mark.small
     def test_no_args_exit_2(self) -> None:
         """argparse should exit 2 when no files are provided."""
         with pytest.raises(SystemExit) as exc_info:
@@ -258,6 +319,26 @@ class TestCmdValidateMedium:
     @pytest.mark.medium
     def test_main_validate_invalid_returns_1(self, invalid_schema_yaml: Path) -> None:
         exit_code = main(["validate", str(invalid_schema_yaml)])
+        assert exit_code == 1
+
+    @pytest.mark.medium
+    def test_yaml_in_subdirectory_via_main(self, tmp_path: Path) -> None:
+        """main(["validate", ...]) with YAML in workflows/ subdirectory passes."""
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'test'\n")
+        workflows_dir = tmp_path / "workflows"
+        workflows_dir.mkdir()
+        f = workflows_dir / "wf.yaml"
+        f.write_text(VALID_WORKFLOW_YAML)
+        _create_skill(tmp_path, "test-skill")
+        exit_code = main(["validate", str(f)])
+        assert exit_code == 0
+
+    @pytest.mark.medium
+    def test_path_traversal_via_main(self, tmp_path: Path) -> None:
+        """main(["validate", ...]) with path traversal returns exit 1 (no traceback)."""
+        f = tmp_path / "traversal.yaml"
+        f.write_text(PATH_TRAVERSAL_YAML)
+        exit_code = main(["validate", str(f)])
         assert exit_code == 1
 
     @pytest.mark.medium
@@ -324,6 +405,36 @@ class TestCLIValidateLarge:
         )
         assert result.returncode == 1
         assert "✗" in result.stderr
+
+    @pytest.mark.large
+    def test_kaji_validate_path_traversal(self, tmp_path: Path) -> None:
+        f = tmp_path / "traversal.yaml"
+        f.write_text(PATH_TRAVERSAL_YAML)
+        result = subprocess.run(
+            [sys.executable, "-m", "kaji_harness.cli_main", "validate", str(f)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 1
+        assert "✗" in result.stderr
+
+    @pytest.mark.large
+    def test_kaji_validate_subdirectory_layout(self, tmp_path: Path) -> None:
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'test'\n")
+        workflows_dir = tmp_path / "workflows"
+        workflows_dir.mkdir()
+        f = workflows_dir / "wf.yaml"
+        f.write_text(VALID_WORKFLOW_YAML)
+        _create_skill(tmp_path, "test-skill")
+        result = subprocess.run(
+            [sys.executable, "-m", "kaji_harness.cli_main", "validate", str(f)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0
+        assert "✓" in result.stdout
 
     @pytest.mark.large
     def test_kaji_validate_mixed_files(self, tmp_path: Path) -> None:

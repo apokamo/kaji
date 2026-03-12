@@ -68,6 +68,27 @@ def _register_validate(
     )
 
 
+def _resolve_project_root(explicit_root: Path | None, yaml_path: Path) -> Path:
+    """Resolve project root for skill lookup.
+
+    Priority:
+    1. Explicit --project-root if provided
+    2. Walk up from YAML file's directory looking for pyproject.toml
+    3. Fall back to YAML file's parent directory
+    """
+    if explicit_root is not None:
+        return explicit_root.resolve()
+    current = yaml_path.resolve().parent
+    while True:
+        if (current / "pyproject.toml").exists():
+            return current
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return yaml_path.resolve().parent
+
+
 def cmd_validate(args: argparse.Namespace) -> int:
     """Execute the `validate` subcommand."""
     failed = 0
@@ -81,14 +102,14 @@ def cmd_validate(args: argparse.Namespace) -> int:
         try:
             wf = load_workflow(path)
             validate_workflow(wf)
-            project_root = (args.project_root or path.parent).resolve()
+            project_root = _resolve_project_root(args.project_root, path)
             for step in wf.steps:
                 validate_skill_exists(step.skill, step.agent, project_root)
             _print_success(path)
         except WorkflowValidationError as e:
             _print_error(path, e.errors)
             failed += 1
-        except SkillNotFound as e:
+        except (SkillNotFound, SecurityError) as e:
             _print_error(path, [str(e)])
             failed += 1
         except OSError as e:
