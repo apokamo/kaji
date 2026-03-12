@@ -55,9 +55,16 @@ class CodexAdapter:
     def extract_text(self, event: dict[str, Any]) -> str | None:
         if event.get("type") == "item.completed":
             item = event.get("item", {})
-            if item.get("type") in ("agent_message", "reasoning"):
+            item_type = item.get("type")
+            if item_type in ("agent_message", "reasoning"):
                 text = item.get("text")
                 return text if text else None
+            if item_type == "mcp_tool_call":
+                # V5/V6 restoration: extract text from mcp_tool_call result.content
+                result = item.get("result", {})
+                contents = result.get("content", [])
+                extracted = [c["text"] for c in contents if c.get("type") == "text" and "text" in c]
+                return "\n".join(extracted) if extracted else None
         return None
 
     def extract_cost(self, event: dict[str, Any]) -> CostInfo | None:

@@ -99,6 +99,11 @@ def stream_and_log(
             try:
                 event: dict[str, Any] = json.loads(line)
             except json.JSONDecodeError:
+                # Collect non-JSON lines (VERDICT may appear as plain text,
+                # e.g. Codex mcp_tool_call mode). V5/V6 restoration.
+                stripped = line.strip()
+                if stripped:
+                    texts.append(stripped)
                 continue
 
             sid = adapter.extract_session_id(event)
