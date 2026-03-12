@@ -6,6 +6,9 @@ Verifies the full verdict parsing pipeline from raw output to Verdict.
 
 from __future__ import annotations
 
+import json
+import stat
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -156,8 +159,9 @@ class TestRealAgentOutputFixtures:
 class TestKajiRunWorkflowExecution:
     """E2E test: kaji run executes workflow and parses verdicts successfully.
 
-    Requires actual CLI tools (claude/codex/gemini) to be installed.
-    Skipped if the kaji CLI is not available.
+    Uses a fake agent CLI script that emits Claude-compatible JSONL events,
+    allowing the full pipeline (CLI → runner → adapter → verdict parser →
+    state transition) to be exercised without real API calls.
     """
 
     def test_kaji_validate_workflows(self) -> None:
@@ -184,6 +188,228 @@ class TestKajiRunWorkflowExecution:
             timeout=30,
         )
         assert result.returncode == 0, f"kaji validate failed: {result.stderr}"
+
+    def test_kaji_run_strict_verdict_single_step(self, tmp_path: Path) -> None:
+        """kaji run parses a strict VERDICT from a fake agent and exits 0."""
+        import os
+        import subprocess
+        import sys
+
+        _setup_fake_agent_env(tmp_path, verdict_style="strict")
+        workflow = tmp_path / "workflow.yaml"
+        workdir = tmp_path / "project"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "kaji_harness.cli_main",
+                "run",
+                str(workflow),
+                "9990",
+                "--step",
+                "step1",
+                "--workdir",
+                str(workdir),
+                "--quiet",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(workdir),
+            env={**os.environ, "PATH": str(tmp_path / "bin") + os.pathsep + os.environ["PATH"]},
+        )
+        assert result.returncode == 0, (
+            f"kaji run failed (exit {result.returncode}):\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+    def test_kaji_run_relaxed_verdict_single_step(self, tmp_path: Path) -> None:
+        """kaji run recovers a relaxed VERDICT (---END VERDICT---) via fallback.
+
+        Reproduces the #73 incident where the agent output used a space
+        instead of underscore in the end delimiter.
+        """
+        import os
+        import subprocess
+        import sys
+
+        _setup_fake_agent_env(tmp_path, verdict_style="relaxed")
+        workflow = tmp_path / "workflow.yaml"
+        workdir = tmp_path / "project"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "kaji_harness.cli_main",
+                "run",
+                str(workflow),
+                "9991",
+                "--step",
+                "step1",
+                "--workdir",
+                str(workdir),
+                "--quiet",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(workdir),
+            env={**os.environ, "PATH": str(tmp_path / "bin") + os.pathsep + os.environ["PATH"]},
+        )
+        assert result.returncode == 0, (
+            f"kaji run with relaxed verdict failed (exit {result.returncode}):\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+    def test_kaji_run_multi_step_workflow(self, tmp_path: Path) -> None:
+        """kaji run executes a 2-step workflow with verdict-driven transitions."""
+        import os
+        import subprocess
+        import sys
+
+        _setup_fake_agent_env(tmp_path, verdict_style="strict", multi_step=True)
+        workflow = tmp_path / "workflow.yaml"
+        workdir = tmp_path / "project"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "kaji_harness.cli_main",
+                "run",
+                str(workflow),
+                "9992",
+                "--workdir",
+                str(workdir),
+                "--quiet",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=str(workdir),
+            env={**os.environ, "PATH": str(tmp_path / "bin") + os.pathsep + os.environ["PATH"]},
+        )
+        assert result.returncode == 0, (
+            f"kaji run multi-step failed (exit {result.returncode}):\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+
+# ============================================================
+# Regression fixture management
+# ============================================================
+
+
+# ============================================================
+# Helpers for kaji run E2E tests
+# ============================================================
+
+
+def _setup_fake_agent_env(
+    tmp_path: Path,
+    *,
+    verdict_style: str = "strict",
+    multi_step: bool = False,
+) -> None:
+    """Create a fake ``claude`` CLI, workflow YAML, and skill directory.
+
+    The fake agent emits Claude-compatible JSONL events containing a
+    VERDICT block so that the full kaji pipeline can be exercised:
+    CLI → runner → subprocess → adapter → verdict parser → state.
+
+    Args:
+        tmp_path: Temporary directory (pytest fixture).
+        verdict_style: ``"strict"`` uses ``---END_VERDICT---``,
+            ``"relaxed"`` uses ``---END VERDICT---`` (the #73 case).
+        multi_step: If True, create a 2-step workflow with transitions.
+    """
+    if verdict_style == "strict":
+        end_delimiter = "---END_VERDICT---"
+    else:
+        end_delimiter = "---END VERDICT---"
+
+    verdict_text = (
+        "---VERDICT---\\n"
+        "status: PASS\\n"
+        "reason: |\\n"
+        "  Fake agent completed successfully\\n"
+        "evidence: |\\n"
+        "  All checks passed\\n"
+        "suggestion: |\\n"
+        f"{end_delimiter}\\n"
+    )
+
+    # Build JSONL events that ClaudeAdapter expects
+    init_event = json.dumps({"type": "system", "subtype": "init", "session_id": "fake-sess-001"})
+    text_event = json.dumps(
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": verdict_text.replace("\\n", "\n")}]},
+        }
+    )
+    result_event = json.dumps({"type": "result", "result": "done", "total_cost_usd": 0.0})
+
+    # Create fake claude script
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_claude = bin_dir / "claude"
+    fake_claude.write_text(
+        textwrap.dedent(f"""\
+        #!/usr/bin/env python3
+        import sys
+        print({init_event!r})
+        print({text_event!r})
+        print({result_event!r})
+        sys.exit(0)
+        """)
+    )
+    fake_claude.chmod(fake_claude.stat().st_mode | stat.S_IEXEC)
+
+    # Create workflow YAML
+    workflow = tmp_path / "workflow.yaml"
+    if multi_step:
+        workflow.write_text(
+            textwrap.dedent("""\
+            name: test-multi
+            description: Two-step test workflow
+            steps:
+              - id: step1
+                skill: test-skill
+                agent: claude
+                on:
+                  PASS: step2
+                  ABORT: end
+              - id: step2
+                skill: test-skill
+                agent: claude
+                on:
+                  PASS: end
+                  ABORT: end
+            """)
+        )
+    else:
+        workflow.write_text(
+            textwrap.dedent("""\
+            name: test-single
+            description: Single-step test workflow
+            steps:
+              - id: step1
+                skill: test-skill
+                agent: claude
+                on:
+                  PASS: end
+                  ABORT: end
+            """)
+        )
+
+    # Create skill directory so pre-flight validation passes
+    workdir = tmp_path / "project"
+    workdir.mkdir()
+    skill_dir = workdir / ".claude" / "skills" / "test-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# Test Skill\n")
 
 
 # ============================================================
