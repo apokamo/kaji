@@ -104,27 +104,67 @@ WorkflowRunner.run()
 
 ### フォールバック戦略
 
-| 段階 | 処理 | 回復対象 |
-|------|------|----------|
-| Step 1: Strict | `---VERDICT---` / `---END_VERDICT---` 厳密一致 + YAML パース | 正規フォーマット |
-| Step 2: Relaxed | 大文字小文字・空白・アンダースコア揺れを許容 + KV パターン抽出 | `---END VERDICT---`、`Result: PASS` 等の出力揺れ |
-| Step 3: AI Formatter | エージェント CLI で raw output を再整形 → Step 1-2 で再パース（最大 2 回） | 構造が大きく崩れたケース |
+```
+parse_verdict(output, valid_statuses, ai_formatter)
+  │
+  ├─ Step 1: Strict Parse
+  │   └─ ---VERDICT--- / ---END_VERDICT--- 厳密一致 + YAML パース
+  │
+  ├─ Step 2a: Relaxed Delimiter + YAML
+  │   └─ 大文字小文字・空白・アンダースコア揺れを許容した delimiter + YAML パース
+  │
+  ├─ Step 2b: Key-Value Pattern Extraction
+  │   └─ delimiter なしの KV 形式（Result: PASS, Status: PASS, ステータス: PASS 等）
+  │   └─ status は valid_statuses で動的に制約（誤検出防止）
+  │   └─ reason + evidence が両方取れない場合は Step 3 へ
+  │
+  └─ Step 3: AI Formatter Retry（ai_formatter 提供時のみ）
+      └─ raw output を 8000 文字に head+tail 切り詰め
+      └─ エージェント CLI で正規フォーマットへ再整形
+      └─ 再整形結果を Step 1 → 2a → 2b で再パース
+      └─ 最大 2 回リトライ（各リトライでエージェント API コスト発生）
+```
+
+runner は step ごとに `create_verdict_formatter(agent, valid_statuses, model, workdir)` で formatter を生成し、`parse_verdict()` に渡す。formatter は同じエージェント CLI を plain text モードで起動する。
+
+### Relaxed Parse の許容パターン
+
+Step 2 で回復対象とする出力揺れの一覧。V5/V6 で 100 回超の実運用テストから収集。
+
+**Delimiter 揺れ（Step 2a）:**
+
+| パターン | 例 |
+|----------|-----|
+| アンダースコア → スペース | `---END VERDICT---`（#73 で発生） |
+| 大文字小文字混在 | `---verdict---`, `---Verdict---` |
+| 前後の余分な空白 | `--- VERDICT ---` |
+
+**KV パターン揺れ（Step 2b）:**
+
+| パターン | 例 |
+|----------|-----|
+| `Result:` / `Status:` | `- Result: PASS` |
+| Markdown 太字 | `**Status**: PASS` |
+| 等号区切り | `Status = PASS`, `Result = ABORT` |
+| 日本語キー | `ステータス: PASS` |
 
 ### 失敗境界（フォールバック対象外）
 
-- **`InvalidVerdictValue`（未定義の status 値）**: 即失敗。フォーマット揺れではなく意味的な誤りであり、回復すべきでない
+以下はフォーマット揺れではなく意味的な誤りであり、フォールバックで回復すべきでない。
+
+- **`InvalidVerdictValue`（未定義の status 値）**: 即失敗。全段階で共通。`valid_statuses` 以外の値は prompt 違反
 - **`ABORT`/`BACK` verdict の suggestion 空欄**: 即失敗。次ステップへの情報が欠落しているため
 
 ### なぜ strict parse だけでは不十分か
 
-実運用で確認された出力揺れの例:
+以下は稀なエッジケースではなく通常運用で頻発する。strict parse のみでは workflow が不安定になる。
 
 - `---END VERDICT---`（アンダースコア → スペース、#73 で発生）
 - `Result: PASS` / `Status: PASS`（delimiter なしの KV 形式）
 - verdict ブロック前後に思考トレース・ログが混入
 - Codex `mcp_tool_call` モードでの非 JSON テキスト混在
 
-これらは稀なエッジケースではなく通常運用で頻発する。strict parse のみでは workflow が不安定になる。
+V6→V7 移行時にこの仕組みを strict parse のみに単純化した結果、#73 で workflow 全体が停止した。この経緯が復元の直接的な理由。
 
 ---
 
