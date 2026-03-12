@@ -16,6 +16,7 @@ from .errors import (
     WorkflowValidationError,
 )
 from .runner import WorkflowRunner
+from .skill import validate_skill_exists
 from .workflow import load_workflow, validate_workflow
 
 EXIT_OK = 0
@@ -59,6 +60,33 @@ def _register_validate(
     """Register the `validate` subcommand."""
     p = subparsers.add_parser("validate", help="Validate workflow YAML files")
     p.add_argument("files", nargs="+", type=Path, help="Workflow YAML file(s) to validate")
+    p.add_argument(
+        "--project-root",
+        type=Path,
+        default=None,
+        help="Project root for skill lookup (default: YAML file's parent directory)",
+    )
+
+
+def _resolve_project_root(explicit_root: Path | None, yaml_path: Path) -> Path:
+    """Resolve project root for skill lookup.
+
+    Priority:
+    1. Explicit --project-root if provided
+    2. Walk up from YAML file's directory looking for pyproject.toml
+    3. Fall back to YAML file's parent directory
+    """
+    if explicit_root is not None:
+        return explicit_root.resolve()
+    current = yaml_path.resolve().parent
+    while True:
+        if (current / "pyproject.toml").exists():
+            return current
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return yaml_path.resolve().parent
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
@@ -74,9 +102,15 @@ def cmd_validate(args: argparse.Namespace) -> int:
         try:
             wf = load_workflow(path)
             validate_workflow(wf)
+            project_root = _resolve_project_root(args.project_root, path)
+            for step in wf.steps:
+                validate_skill_exists(step.skill, step.agent, project_root)
             _print_success(path)
         except WorkflowValidationError as e:
             _print_error(path, e.errors)
+            failed += 1
+        except (SkillNotFound, SecurityError) as e:
+            _print_error(path, [str(e)])
             failed += 1
         except OSError as e:
             _print_error(path, [str(e)])

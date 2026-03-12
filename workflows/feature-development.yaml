@@ -80,6 +80,7 @@ steps:
     skill: issue-fix-code
     agent: claude
     model: opus
+    inject_verdict: true
     on:
       PASS: verify-code
       ABORT: end
