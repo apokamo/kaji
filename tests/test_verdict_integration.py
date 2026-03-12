@@ -78,7 +78,7 @@ class TestCreateVerdictFormatterFactory:
         )
 
         with patch("kaji_harness.verdict.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(stdout="formatted output")
+            mock_run.return_value = MagicMock(stdout="formatted output", returncode=0)
             result = formatter("raw input text")
 
         assert result == "formatted output"
@@ -97,7 +97,7 @@ class TestCreateVerdictFormatterFactory:
         )
 
         with patch("kaji_harness.verdict.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(stdout="")
+            mock_run.return_value = MagicMock(stdout="placeholder", returncode=0)
             formatter("some text")
 
         # Extract the prompt argument from the CLI args
@@ -109,6 +109,78 @@ class TestCreateVerdictFormatterFactory:
         assert "ABORT" in prompt_text
         assert "RETRY" not in prompt_text
         assert "BACK" not in prompt_text
+
+    def test_codex_formatter_no_json_flag(self) -> None:
+        """Codex formatter does NOT use --json (plain text output for reparsing)."""
+        formatter = create_verdict_formatter(
+            agent="codex",
+            valid_statuses={"PASS", "RETRY"},
+        )
+
+        with patch("kaji_harness.verdict.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout="---VERDICT---\nstatus: PASS\nreason: ok\nevidence: ok\n---END_VERDICT---",
+                returncode=0,
+            )
+            formatter("raw text")
+
+        call_args = mock_run.call_args
+        assert call_args is not None
+        cli_args = call_args.args[0]
+        assert "--json" not in cli_args
+
+    def test_codex_formatter_output_reparseable(self) -> None:
+        """Codex formatter output (plain text) can be reparsed by parse_verdict."""
+        # Simulate what a real Codex formatter would return in plain text mode
+        formatted_output = (
+            "---VERDICT---\n"
+            "status: PASS\n"
+            'reason: "AI formatted the verdict"\n'
+            'evidence: "All tests passed"\n'
+            'suggestion: ""\n'
+            "---END_VERDICT---\n"
+        )
+
+        formatter = create_verdict_formatter(
+            agent="codex",
+            valid_statuses={"PASS", "RETRY"},
+        )
+
+        with patch("kaji_harness.verdict.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout=formatted_output, returncode=0)
+            result = formatter("raw unparseable text")
+
+        # The formatter output should be directly parseable
+        verdict = parse_verdict(result, {"PASS", "RETRY"})
+        assert verdict.status == "PASS"
+
+    def test_formatter_nonzero_exit_raises(self) -> None:
+        """Formatter subprocess non-zero exit raises VerdictParseError."""
+        from kaji_harness.errors import VerdictParseError
+
+        formatter = create_verdict_formatter(
+            agent="claude",
+            valid_statuses={"PASS"},
+        )
+
+        with patch("kaji_harness.verdict.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="", stderr="CLI error", returncode=1)
+            with pytest.raises(VerdictParseError, match="exited with code 1"):
+                formatter("some text")
+
+    def test_formatter_empty_output_raises(self) -> None:
+        """Formatter returning empty output raises VerdictParseError."""
+        from kaji_harness.errors import VerdictParseError
+
+        formatter = create_verdict_formatter(
+            agent="claude",
+            valid_statuses={"PASS"},
+        )
+
+        with patch("kaji_harness.verdict.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="", returncode=0)
+            with pytest.raises(VerdictParseError, match="empty output"):
+                formatter("some text")
 
 
 # ============================================================

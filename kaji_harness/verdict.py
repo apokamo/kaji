@@ -330,7 +330,11 @@ def _parse_formatted_output(formatted: str, valid_statuses: set[str]) -> Verdict
 
 
 def _build_formatter_cli_args(agent: str, model: str | None, prompt: str) -> list[str]:
-    """Build CLI args for the formatter subprocess."""
+    """Build CLI args for the formatter subprocess.
+
+    Uses plain text output mode (no --json / no stream-json) since
+    we only need the formatted text, not structured events.
+    """
     match agent:
         case "claude":
             args = ["claude", "-p", "--output-format", "text"]
@@ -338,7 +342,10 @@ def _build_formatter_cli_args(agent: str, model: str | None, prompt: str) -> lis
                 args += ["--model", model]
             args.append(prompt)
         case "codex":
-            args = ["codex", "exec", "--json"]
+            # No --json: plain text output for formatter (not JSONL).
+            # With --json, Codex outputs JSONL events that would need
+            # CodexAdapter decoding, which the formatter path doesn't have.
+            args = ["codex", "exec"]
             if model:
                 args += ["-m", model]
             args.append(prompt)
@@ -387,6 +394,12 @@ def create_verdict_formatter(
             timeout=60,
             cwd=workdir,
         )
+        if result.returncode != 0:
+            raise VerdictParseError(
+                f"AI formatter CLI exited with code {result.returncode}: {result.stderr[:300]}"
+            )
+        if not result.stdout.strip():
+            raise VerdictParseError("AI formatter returned empty output")
         return result.stdout
 
     return formatter
