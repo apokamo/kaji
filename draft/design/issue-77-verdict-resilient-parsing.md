@@ -178,7 +178,7 @@ status 以外のフィールド（reason, evidence, suggestion）も同様にパ
 
 `ai_formatter` が提供された場合のみ実行。V5/V6 の設計を踏襲:
 
-1. 入力テキストを head + tail 戦略で truncate（verdict は末尾に出現しやすいため tail 重視）
+1. 入力テキストを head + tail 戦略で truncate（1/3 head + 2/3 tail。verdict は末尾に出現しやすいため tail 重視）
 2. `ai_formatter(truncated_text)` を呼び出し、整形されたテキストを取得
 3. 整形結果に対して Step 1 → Step 2 を再実行
 4. 失敗した場合 `max_retries` 回まで繰り返す
@@ -220,21 +220,22 @@ V5/V6 では各ハンドラが `create_ai_formatter(ctx.reviewer, ...)` で form
 **`verdict.py` に追加する `create_verdict_formatter` ファクトリ関数**:
 
 ```python
-FORMATTER_PROMPT: str = """以下の出力から VERDICT を抽出し、正確な YAML フォーマットで出力してください。
-
-## 入力
-{raw_output}
-
-## 出力フォーマット（厳密に従ってください）
----VERDICT---
-status: <{valid_statuses_str} のいずれか1つ>
-reason: "判定理由"
-evidence: "判定根拠"
-suggestion: "次のアクション提案"
----END_VERDICT---
-
-重要: status 行は必ず {valid_statuses_str} のいずれかを出力してください。それ以外の値は使用禁止です。
-"""
+FORMATTER_PROMPT = Template(
+    "以下の出力から VERDICT を抽出し、正確な YAML フォーマットで出力してください。\n"
+    "\n"
+    "## 入力\n"
+    "$raw_output\n"
+    "\n"
+    "## 出力フォーマット（厳密に従ってください）\n"
+    "---VERDICT---\n"
+    "status: <$valid_statuses_str のいずれか1つ>\n"
+    'reason: "判定理由"\n'
+    'evidence: "判定根拠"\n'
+    'suggestion: "次のアクション提案"\n'
+    "---END_VERDICT---\n"
+    "\n"
+    "重要: status 行は必ず $valid_statuses_str のいずれかを出力してください。それ以外の値は使用禁止です。\n"
+)
 
 def create_verdict_formatter(
     agent: str,
@@ -261,18 +262,27 @@ def create_verdict_formatter(
     statuses_str = "|".join(sorted(valid_statuses))
 
     def formatter(raw_output: str) -> str:
-        prompt = FORMATTER_PROMPT.format(
+        prompt = FORMATTER_PROMPT.safe_substitute(
             raw_output=raw_output,
             valid_statuses_str=statuses_str,
         )
         args = _build_formatter_cli_args(agent, model, prompt)
-        result = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            cwd=workdir,
-        )
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=workdir,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise VerdictParseError(f"Formatter timed out: {e}") from e
+        if result.returncode != 0:
+            raise VerdictParseError(
+                f"Formatter failed (exit {result.returncode}): {result.stderr[:300]}"
+            )
+        if not result.stdout.strip():
+            raise VerdictParseError("Formatter returned empty output")
         return result.stdout
 
     return formatter
@@ -329,10 +339,13 @@ except json.JSONDecodeError:
     stripped = line.strip()
     if stripped:
         texts.append(stripped)
+        # console.log にも書き出し（デバッグ時に full_output と同等の情報を確認可能にする）
+        if f_con:
+            f_con.write(stripped + "\n")
     continue
 ```
 
-これにより非 JSON 行が `full_output` に含まれ、downstream の `parse_verdict()` が VERDICT を検出可能になる。
+これにより非 JSON 行が `full_output` と `console.log` の両方に含まれ、downstream の `parse_verdict()` が VERDICT を検出可能になる。デバッグ時も `console.log` で非 JSON 行由来のテキストを確認できる。
 
 **問題 2: `CodexAdapter` が `agent_message` / `reasoning` 以外の item type を無視**
 
@@ -469,8 +482,8 @@ def extract_text(self, event: dict[str, Any]) -> str | None:
 | ドキュメント | 影響の有無 | 理由 |
 |-------------|-----------|------|
 | docs/adr/ | なし | 既存の判定機構の復元であり、新規技術選定ではない |
-| docs/ARCHITECTURE.md | なし | verdict モジュールの外部インターフェースは変更なし |
-| docs/dev/ | なし | ワークフロー・開発手順に変更なし |
+| docs/ARCHITECTURE.md | あり | Verdict 判定機構セクション新設（フォールバック戦略、出力収集層との依存、parser/runner 責務分離、Troubleshooting）、全体フロー図の CLIEventAdapter 説明修正 |
+| docs/dev/skill-authoring.md | あり | verdict ブロックの stdout 出力規約を追記（Issue コメントは verdict 出力の代替ではないことを明記） |
 | docs/cli-guides/ | なし | CLI 仕様変更なし |
 | CLAUDE.md | なし | 規約変更なし |
 
