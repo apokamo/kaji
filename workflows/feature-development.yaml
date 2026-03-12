@@ -1,6 +1,6 @@
 name: feature-development
 description: |
-  Issue の設計から PR クローズまでの開発ワークフロー。
+  Issue の設計から PR 作成までの開発ワークフロー。
   issue-create / issue-start は事前に手動実行済みであることが前提。
 execution_policy: auto
 
@@ -107,15 +107,6 @@ steps:
     agent: claude
     model: sonnet
     on:
-      PASS: close
-      RETRY: pr
-      ABORT: end
-
-  - id: close
-    skill: issue-close
-    agent: claude
-    model: sonnet
-    on:
       PASS: end
-      RETRY: close
+      RETRY: pr
       ABORT: end
