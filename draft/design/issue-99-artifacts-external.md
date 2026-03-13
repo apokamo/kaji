@@ -77,7 +77,7 @@ artifacts_dir = ".kaji-artifacts"
 ## 制約・前提条件
 
 - 既存の `.kaji-artifacts/` ディレクトリのマイグレーションは行わない（手動移行）
-- `~` 展開は Python の `Path.expanduser()` に依拠する
+- `~` 展開は Python の `Path.expanduser()` に依拠する。展開失敗時（`RuntimeError`）は `ConfigLoadError` に変換して報告する
 - `..` を含む相対パスは引き続き拒否する（repo_root エスケープ防止）
 - artifacts_dir 配下のディレクトリ構造（issue 番号 / runs / etc.）は変更しない
 
@@ -113,6 +113,7 @@ def artifacts_dir(self) -> Path:
 - `..` を含む → 拒否
 
 変更後:
+- `~` 展開時の `RuntimeError` を `ConfigLoadError` に変換
 - `~` 展開後に絶対パスかどうかを判定
 - 絶対パス → **許可**
 - 相対パスで `..` を含む → 拒否（従来通り）
@@ -120,7 +121,13 @@ def artifacts_dir(self) -> Path:
 ```python
 @staticmethod
 def _validate_artifacts_dir(config_path: Path, artifacts_dir: str) -> None:
-    expanded = Path(artifacts_dir).expanduser()
+    try:
+        expanded = Path(artifacts_dir).expanduser()
+    except RuntimeError as e:
+        raise ConfigLoadError(
+            config_path,
+            f"paths.artifacts_dir: failed to expand '~': {e}",
+        ) from e
     if expanded.is_absolute():
         return  # 絶対パスは無条件で許可
     # 相対パスの場合のみ .. チェック
@@ -128,6 +135,8 @@ def _validate_artifacts_dir(config_path: Path, artifacts_dir: str) -> None:
     if ".." in p.parts:
         raise ConfigLoadError(...)
 ```
+
+`expanduser()` 失敗時は `ConfigLoadError` に変換することで、`cli_main.py` の既存エラーハンドリング（`EXIT_CONFIG_NOT_FOUND`）に乗せる。`EXIT_ABORT`（想定外例外）ではなく、設定エラーとして明確に報告される。
 
 ### 4. テスト修正
 
@@ -149,6 +158,7 @@ def _validate_artifacts_dir(config_path: Path, artifacts_dir: str) -> None:
   - `~` 付きパス → エラーにならない
   - 相対パスで `..` → `ConfigLoadError`
   - 通常の相対パス → エラーにならない
+  - `expanduser()` が `RuntimeError` を送出 → `ConfigLoadError` に変換される
 
 ### Medium テスト
 
@@ -162,16 +172,19 @@ def _validate_artifacts_dir(config_path: Path, artifacts_dir: str) -> None:
 
 ### Large テスト
 
-- `kaji run` をサブプロセスで実行し、artifacts がデフォルトの `~/.kaji/artifacts/` 配下に生成されることを確認
+- `kaji run` をサブプロセスで実行し、artifacts が指定した絶対パス配下に生成されることを確認（テストでは `tmp_path` ベースの絶対パスを config に指定し、実ユーザーの `~/.kaji/` を汚さない）
 - `kaji run --workdir` 指定時に config discovery + artifacts パス解決が正しく動作することを確認
+- **worktree 削除後の残存確認（完了条件 (3)）**: `kaji run` 実行後に workdir（worktree 相当）を `shutil.rmtree` で削除し、artifacts_dir 配下の `run.log` / `session-state.json` が残存していることを検証する
+- **後処理の非依存性確認（完了条件 (4)）**: `kaji run` の実行後（`WorkflowRunner.run()` が返った後）に workdir を削除しても、ハーネスが artifacts_dir 内のファイルを正常に参照できること（＝ ENOENT が発生しないこと）を検証する
 
 ## 影響ドキュメント
 
 | ドキュメント | 影響の有無 | 理由 |
 |-------------|-----------|------|
+| README.md | あり | L34-40: `artifacts_dir = ".kaji-artifacts"` をデフォルト値の例として記載。新デフォルト `~/.kaji/artifacts` に更新が必要 |
+| docs/ARCHITECTURE.md | あり | L201-204: `artifacts_dir` のデフォルト値を `.kaji-artifacts` と明記。新デフォルトに更新が必要 |
+| docs/dev/workflow-authoring.md | あり | L9-13: `artifacts_dir = ".kaji-artifacts"` を最小構成例として記載。新デフォルトに更新が必要 |
 | docs/adr/ | なし | 新しい技術選定はない |
-| docs/ARCHITECTURE.md | なし | アーキテクチャ変更はない |
-| docs/dev/ | なし | ワークフロー・開発手順に変更はない |
 | docs/cli-guides/ | なし | CLI インターフェースの変更はない |
 | CLAUDE.md | なし | 規約変更はない |
 
@@ -184,5 +197,5 @@ def _validate_artifacts_dir(config_path: Path, artifacts_dir: str) -> None:
 | 現行 runner 実装 | `kaji_harness/runner.py:62-72` | `WorkflowRunner` が `artifacts_dir` を受け取り、`runs/{timestamp}` ディレクトリを作成してログを出力する構造を確認 |
 | 現行 CLI 実装 | `kaji_harness/cli_main.py:208` | `config.artifacts_dir` を `WorkflowRunner` に渡す箇所を確認 |
 | 既存テスト | `tests/test_config.py` | 絶対パス拒否テスト（L100-107）、デフォルト値テスト（L33-35, L156-164）が変更対象であることを確認 |
-| Python Path.expanduser | `pathlib` 標準ライブラリ | `~` を `$HOME` に展開する。`HOME` 環境変数が未設定の場合は `pwd` モジュールにフォールバック |
+| Python Path.expanduser | `pathlib` 標準ライブラリ (`/usr/lib/python3.12/pathlib.py:1400-1412`, `/usr/lib/python3.12/posixpath.py:247-285`) | `~` を `$HOME` に展開する。`HOME` 環境変数が未設定の場合は `pwd` モジュールにフォールバック。解決不能時は `RuntimeError` を送出する |
 | Issue #99 | GitHub Issue | 完了条件: (1) デフォルト出力先が `~/.kaji/artifacts/`、(2) 絶対パス指定可能、(3) worktree 削除でログが残る、(4) 後処理が壊れない |
