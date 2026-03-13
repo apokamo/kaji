@@ -305,6 +305,10 @@ class TestKajiRunTimestampLarge:
             env=env,
         )
 
+        assert result.returncode == 0, (
+            f"kaji run failed with returncode={result.returncode}\nstderr={result.stderr!r}"
+        )
+
         # kaji run の stdout は agent output 行（[timestamp] [step_id] text 形式）と
         # "Workflow '...' completed ..." のような summary 行が混在する。
         # ここでは step_id ブラケットを含む agent output 行のみを検証対象とする。
@@ -350,6 +354,10 @@ class TestKajiRunTimestampLarge:
             text=True,
             timeout=30,
             env=env,
+        )
+
+        assert result.returncode == 0, (
+            f"kaji run --quiet failed with returncode={result.returncode}\nstderr={result.stderr!r}"
         )
 
         timestamp_lines = [
