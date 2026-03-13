@@ -85,6 +85,6 @@ pytest  # test_legacy_cleanup.py のテストが含まれないこと
 
 | 情報源 | URL/パス | 根拠（引用/要約） |
 |--------|----------|-------------------|
-| 削除対象ファイル | `tests/test_legacy_cleanup.py` | 22テスト全件の内容を確認。全て V5/V6→V7 移行検証用であり、移行完了後は不要 |
-| Issue #87 | `gh issue view 87` | `TestPackageInstallation` が shared `.venv` の editable install パスを上書きする副作用が報告されている |
-| Issue #59 | テストファイル冒頭 docstring `"""Tests for #59: V5/V6 legacy file cleanup and V7 base clarification."""` | このテストファイルが #59 の移行作業のために作成されたことを示す |
+| 削除対象ファイル | `tests/test_legacy_cleanup.py` | 22テスト全件の内容を確認。全て V5/V6→V7 移行検証用であり、移行完了後は不要。冒頭 docstring: `"""Tests for #59: V5/V6 legacy file cleanup and V7 base clarification."""` |
+| Issue #87 (副作用報告) | https://github.com/apokamo/kaji/issues/87 | `TestPackageInstallation` が shared `.venv` の editable install パスを上書きする副作用が報告されている |
+| Issue #59 (移行元Issue) | https://github.com/apokamo/kaji/issues/59 | このテストファイルが作成された移行作業の元 Issue。移行完了により役割終了 |
