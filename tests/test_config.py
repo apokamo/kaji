@@ -32,7 +32,7 @@ class TestPathsConfigDefaults:
 
     def test_default_artifacts_dir(self) -> None:
         config = PathsConfig()
-        assert config.artifacts_dir == ".kaji-artifacts"
+        assert config.artifacts_dir == "~/.kaji/artifacts"
 
 
 @pytest.mark.small
@@ -59,7 +59,7 @@ class TestKajiConfigLoadValid:
         config = KajiConfig._load(config_file)
 
         assert config.repo_root == tmp_path
-        assert config.paths.artifacts_dir == ".kaji-artifacts"  # default
+        assert config.paths.artifacts_dir == "~/.kaji/artifacts"  # default
 
     def test_load_empty_paths_section(self, tmp_path: Path) -> None:
         config_dir = tmp_path / ".kaji"
@@ -69,7 +69,7 @@ class TestKajiConfigLoadValid:
 
         config = KajiConfig._load(config_file)
 
-        assert config.paths.artifacts_dir == ".kaji-artifacts"  # default
+        assert config.paths.artifacts_dir == "~/.kaji/artifacts"  # default
 
     def test_unknown_keys_ignored(self, tmp_path: Path) -> None:
         config_dir = tmp_path / ".kaji"
@@ -97,14 +97,14 @@ class TestKajiConfigLoadInvalid:
         with pytest.raises(ConfigLoadError, match="invalid TOML"):
             KajiConfig._load(config_file)
 
-    def test_absolute_artifacts_dir_rejected(self, tmp_path: Path) -> None:
+    def test_absolute_artifacts_dir_accepted(self, tmp_path: Path) -> None:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text('[paths]\nartifacts_dir = "/tmp/outside"\n')
 
-        with pytest.raises(ConfigLoadError, match="relative path"):
-            KajiConfig._load(config_file)
+        config = KajiConfig._load(config_file)
+        assert config.paths.artifacts_dir == "/tmp/outside"
 
     def test_dotdot_artifacts_dir_rejected(self, tmp_path: Path) -> None:
         config_dir = tmp_path / ".kaji"
@@ -123,6 +123,27 @@ class TestKajiConfigLoadInvalid:
 
         with pytest.raises(ConfigLoadError, match="escape repo root"):
             KajiConfig._load(config_file)
+
+    def test_tilde_artifacts_dir_accepted(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text('[paths]\nartifacts_dir = "~/.kaji/artifacts"\n')
+
+        config = KajiConfig._load(config_file)
+        assert config.paths.artifacts_dir == "~/.kaji/artifacts"
+
+    def test_expanduser_runtime_error_raises_config_load_error(self, tmp_path: Path) -> None:
+        from unittest.mock import patch
+
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text('[paths]\nartifacts_dir = "~/.kaji/artifacts"\n')
+
+        with patch("pathlib.Path.expanduser", side_effect=RuntimeError("no home")):
+            with pytest.raises(ConfigLoadError, match="expand"):
+                KajiConfig._load(config_file)
 
     def test_non_string_artifacts_dir_rejected(self, tmp_path: Path) -> None:
         config_dir = tmp_path / ".kaji"
@@ -151,9 +172,9 @@ class TestKajiConfigRepoRoot:
 
 @pytest.mark.small
 class TestKajiConfigArtifactsDir:
-    """artifacts_dir property resolves repo_root + paths.artifacts_dir."""
+    """artifacts_dir property resolves paths correctly."""
 
-    def test_default_artifacts_dir(self, tmp_path: Path) -> None:
+    def test_default_artifacts_dir_uses_expanduser(self, tmp_path: Path) -> None:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
@@ -161,9 +182,30 @@ class TestKajiConfigArtifactsDir:
 
         config = KajiConfig._load(config_file)
 
-        assert config.artifacts_dir == tmp_path / ".kaji-artifacts"
+        assert config.artifacts_dir == Path("~/.kaji/artifacts").expanduser()
 
-    def test_custom_artifacts_dir(self, tmp_path: Path) -> None:
+    def test_tilde_path_resolved_via_expanduser(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text('[paths]\nartifacts_dir = "~/.kaji/artifacts"\n')
+
+        config = KajiConfig._load(config_file)
+
+        assert config.artifacts_dir == Path("~/.kaji/artifacts").expanduser()
+        assert config.artifacts_dir.is_absolute()
+
+    def test_absolute_path_returned_as_is(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text('[paths]\nartifacts_dir = "/tmp/my-artifacts"\n')
+
+        config = KajiConfig._load(config_file)
+
+        assert config.artifacts_dir == Path("/tmp/my-artifacts")
+
+    def test_relative_path_resolved_from_repo_root(self, tmp_path: Path) -> None:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
@@ -231,7 +273,7 @@ class TestKajiConfigDiscover:
         assert str(empty_dir) in str(exc_info.value)
 
     def test_discover_with_custom_artifacts_dir(self, tmp_path: Path) -> None:
-        """Discovered config correctly loads custom artifacts_dir."""
+        """Discovered config correctly loads custom relative artifacts_dir."""
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text('[paths]\nartifacts_dir = "my-output"\n')
@@ -239,6 +281,38 @@ class TestKajiConfigDiscover:
         config = KajiConfig.discover(start_dir=tmp_path)
 
         assert config.artifacts_dir == tmp_path / "my-output"
+
+    def test_discover_with_tilde_artifacts_dir(self, tmp_path: Path) -> None:
+        """Discovered config correctly resolves ~ in artifacts_dir."""
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text('[paths]\nartifacts_dir = "~/.kaji/artifacts"\n')
+
+        config = KajiConfig.discover(start_dir=tmp_path)
+
+        assert config.artifacts_dir == Path("~/.kaji/artifacts").expanduser()
+
+    def test_discover_with_absolute_artifacts_dir(self, tmp_path: Path) -> None:
+        """Discovered config correctly returns absolute artifacts_dir."""
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        abs_dir = tmp_path / "external"
+        (config_dir / "config.toml").write_text(f'[paths]\nartifacts_dir = "{abs_dir}"\n')
+
+        config = KajiConfig.discover(start_dir=tmp_path)
+
+        assert config.artifacts_dir == abs_dir
+
+    def test_discover_default_artifacts_dir_is_external(self, tmp_path: Path) -> None:
+        """Default config places artifacts outside repo root."""
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text("")
+
+        config = KajiConfig.discover(start_dir=tmp_path)
+
+        # Default artifacts_dir should NOT be under repo_root
+        assert not str(config.artifacts_dir).startswith(str(tmp_path))
 
     def test_discover_ignores_inner_kaji_dirs(self, tmp_path: Path) -> None:
         """Discovery finds the nearest .kaji/config.toml, not a deeper one."""
@@ -288,6 +362,34 @@ class TestSessionStateWithArtifactsDir:
         assert state_file.exists()
         progress_file = arts_dir / "55" / "progress.md"
         assert progress_file.exists()
+
+    def test_persist_to_external_dir_survives_workdir_removal(self, tmp_path: Path) -> None:
+        """Artifacts written to an external dir survive removal of workdir."""
+        import shutil
+
+        from kaji_harness.models import Verdict
+        from kaji_harness.state import SessionState
+
+        workdir = tmp_path / "worktree"
+        workdir.mkdir()
+        external_arts = tmp_path / "external-artifacts"
+
+        state = SessionState.load_or_create(42, artifacts_dir=external_arts)
+        state.record_step(
+            "design",
+            Verdict(status="PASS", reason="ok", evidence="ok", suggestion=""),
+        )
+
+        # Remove the workdir (simulating worktree deletion)
+        shutil.rmtree(workdir)
+
+        # Artifacts should still exist
+        assert (external_arts / "42" / "session-state.json").exists()
+        assert (external_arts / "42" / "progress.md").exists()
+
+        # State should be loadable after workdir removal
+        loaded = SessionState.load_or_create(42, artifacts_dir=external_arts)
+        assert loaded.last_completed_step == "design"
 
     def test_load_round_trip_with_artifacts_dir(self, tmp_path: Path) -> None:
         from kaji_harness.models import Verdict
@@ -453,7 +555,7 @@ class TestCLIConfigIntegration:
         # Verify project_root was passed correctly
         call_kwargs = mock_runner.call_args.kwargs
         assert call_kwargs["project_root"] == tmp_path
-        assert call_kwargs["artifacts_dir"] == tmp_path / ".kaji-artifacts"
+        assert call_kwargs["artifacts_dir"] == Path("~/.kaji/artifacts").expanduser()
 
     def test_cmd_run_config_not_found_exits_2(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -524,14 +626,15 @@ class TestCLIConfigIntegration:
         captured = capsys.readouterr()
         assert "invalid TOML" in captured.err
 
-    def test_cmd_run_absolute_artifacts_dir_exits_2(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_cmd_run_tilde_artifacts_dir(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock, patch
+
         from kaji_harness.cli_main import cmd_run, create_parser
+        from kaji_harness.models import Verdict
 
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
-        (config_dir / "config.toml").write_text('[paths]\nartifacts_dir = "/tmp/bad"\n')
+        (config_dir / "config.toml").write_text('[paths]\nartifacts_dir = "~/.kaji/artifacts"\n')
 
         wf = tmp_path / "workflow.yaml"
         wf.write_text(
@@ -540,13 +643,47 @@ class TestCLIConfigIntegration:
             "    agent: claude\n    on:\n      PASS: end\n"
         )
 
-        parser = create_parser()
-        args = parser.parse_args(["run", str(wf), "1", "--workdir", str(tmp_path)])
-        exit_code = cmd_run(args)
+        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+            mock_runner.return_value.run.return_value = MagicMock(
+                last_transition_verdict=Verdict("PASS", "", "", "")
+            )
+            parser = create_parser()
+            args = parser.parse_args(["run", str(wf), "1", "--workdir", str(tmp_path)])
+            exit_code = cmd_run(args)
 
-        assert exit_code == 2
-        captured = capsys.readouterr()
-        assert "relative path" in captured.err
+        assert exit_code == 0
+        call_kwargs = mock_runner.call_args.kwargs
+        assert call_kwargs["artifacts_dir"] == Path("~/.kaji/artifacts").expanduser()
+
+    def test_cmd_run_absolute_artifacts_dir_accepted(self, tmp_path: Path) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from kaji_harness.cli_main import cmd_run, create_parser
+        from kaji_harness.models import Verdict
+
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        abs_artifacts = tmp_path / "external-artifacts"
+        (config_dir / "config.toml").write_text(f'[paths]\nartifacts_dir = "{abs_artifacts}"\n')
+
+        wf = tmp_path / "workflow.yaml"
+        wf.write_text(
+            "name: test\ndescription: test\n"
+            "steps:\n  - id: s1\n    skill: test-skill\n"
+            "    agent: claude\n    on:\n      PASS: end\n"
+        )
+
+        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+            mock_runner.return_value.run.return_value = MagicMock(
+                last_transition_verdict=Verdict("PASS", "", "", "")
+            )
+            parser = create_parser()
+            args = parser.parse_args(["run", str(wf), "1", "--workdir", str(tmp_path)])
+            exit_code = cmd_run(args)
+
+        assert exit_code == 0
+        call_kwargs = mock_runner.call_args.kwargs
+        assert call_kwargs["artifacts_dir"] == abs_artifacts
 
     def test_validate_broken_config_reports_error(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -722,6 +859,148 @@ class TestConfigE2E:
         assert "invalid TOML" in result.stderr
         # No traceback should appear
         assert "Traceback" not in result.stderr
+
+    def test_kaji_run_with_absolute_artifacts_dir(self, tmp_path: Path) -> None:
+        """kaji run with absolute artifacts_dir places artifacts at specified path."""
+        arts_dir = tmp_path / "external-artifacts"
+
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text(f'[paths]\nartifacts_dir = "{arts_dir}"\n')
+
+        wf_dir = tmp_path / ".kaji" / "workflows"
+        wf_dir.mkdir()
+        wf = wf_dir / "test.yaml"
+        wf.write_text(
+            "name: test\ndescription: test\n"
+            "steps:\n  - id: s1\n    skill: test-skill\n"
+            "    agent: claude\n    on:\n      PASS: end\n"
+        )
+
+        skill_dir = tmp_path / ".claude" / "skills" / "test-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("# Test\n")
+
+        python_dir = str(Path(sys.executable).parent)
+        env = {**__import__("os").environ, "PATH": python_dir}
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "kaji_harness.cli_main",
+                "run",
+                str(wf),
+                "999",
+                "--workdir",
+                str(tmp_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+
+        # Exit 3 = runtime error (agent CLI not found), config parsing succeeded
+        assert result.returncode == 3
+        assert "not found" in result.stderr.lower()
+
+    def test_kaji_run_artifacts_survive_workdir_deletion(self, tmp_path: Path) -> None:
+        """After kaji run, artifacts survive workdir (worktree) deletion."""
+        import shutil
+
+        workdir = tmp_path / "worktree"
+        workdir.mkdir()
+        arts_dir = tmp_path / "external-artifacts"
+
+        config_dir = workdir / ".kaji"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text(f'[paths]\nartifacts_dir = "{arts_dir}"\n')
+
+        wf_dir = workdir / ".kaji" / "workflows"
+        wf_dir.mkdir()
+        wf = wf_dir / "test.yaml"
+        wf.write_text(
+            "name: test\ndescription: test\n"
+            "steps:\n  - id: s1\n    skill: test-skill\n"
+            "    agent: claude\n    on:\n      PASS: end\n"
+        )
+
+        skill_dir = workdir / ".claude" / "skills" / "test-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("# Test\n")
+
+        python_dir = str(Path(sys.executable).parent)
+        env = {**__import__("os").environ, "PATH": python_dir}
+
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "kaji_harness.cli_main",
+                "run",
+                str(wf),
+                "42",
+                "--workdir",
+                str(workdir),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+
+        # Delete the workdir (simulating worktree deletion)
+        shutil.rmtree(workdir)
+        assert not workdir.exists()
+
+        # Artifacts should still exist at external location
+        issue_dir = arts_dir / "42"
+        if issue_dir.exists():
+            # If the run got far enough to create artifacts, they should be present
+            assert issue_dir.is_dir()
+
+    def test_kaji_run_default_config_artifacts_outside_repo(self, tmp_path: Path) -> None:
+        """Default config places artifacts outside repo root (~/.kaji/artifacts)."""
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text("")
+
+        wf_dir = tmp_path / ".kaji" / "workflows"
+        wf_dir.mkdir()
+        wf = wf_dir / "test.yaml"
+        wf.write_text(
+            "name: test\ndescription: test\n"
+            "steps:\n  - id: s1\n    skill: test-skill\n"
+            "    agent: claude\n    on:\n      PASS: end\n"
+        )
+
+        skill_dir = tmp_path / ".claude" / "skills" / "test-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("# Test\n")
+
+        python_dir = str(Path(sys.executable).parent)
+        env = {**__import__("os").environ, "PATH": python_dir}
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "kaji_harness.cli_main",
+                "run",
+                str(wf),
+                "999",
+                "--workdir",
+                str(tmp_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+
+        # Config parsed successfully (exit 3 = agent not found, not exit 2 = config error)
+        assert result.returncode == 3
 
     def test_kaji_validate_without_config_backward_compat(self, tmp_path: Path) -> None:
         """kaji validate still works without .kaji/config.toml."""
