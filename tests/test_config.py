@@ -973,9 +973,31 @@ class TestConfigE2E:
         run_log = run_dirs[0] / "run.log"
         assert run_log.exists(), f"run.log must exist at {run_log}"
 
-        # Read run.log content before deletion for post-deletion comparison
+        # The runner creates run.log before agent execution, but session-state.json
+        # is only persisted after a step completes (record_step). In this test env
+        # the agent binary is absent so execute_cli raises before record_step.
+        # Simulate what a real run does: persist session state via the public API.
+        from kaji_harness.models import Verdict
+        from kaji_harness.state import SessionState
+
+        state = SessionState.load_or_create(42, arts_dir)
+        state.record_step(
+            "s1",
+            Verdict(
+                status="PASS",
+                reason="test",
+                evidence="test",
+                suggestion="",
+            ),
+        )
+        session_state = issue_dir / "session-state.json"
+        assert session_state.exists(), f"session-state.json must exist at {session_state}"
+
+        # Read content before deletion for post-deletion comparison
         run_log_content = run_log.read_text(encoding="utf-8")
         assert len(run_log_content) > 0, "run.log must not be empty"
+        session_state_content = session_state.read_text(encoding="utf-8")
+        assert len(session_state_content) > 0, "session-state.json must not be empty"
 
         # Delete the workdir (simulating worktree deletion)
         shutil.rmtree(workdir)
@@ -984,8 +1006,10 @@ class TestConfigE2E:
         # Artifacts must survive workdir deletion
         assert issue_dir.exists(), "Artifacts directory must survive workdir deletion"
         assert run_log.exists(), "run.log must survive workdir deletion"
+        assert session_state.exists(), "session-state.json must survive workdir deletion"
         # Verify artifacts are still readable after workdir deletion (no ENOENT)
         assert run_log.read_text(encoding="utf-8") == run_log_content
+        assert session_state.read_text(encoding="utf-8") == session_state_content
 
     def test_kaji_run_default_config_artifacts_outside_repo(self, tmp_path: Path) -> None:
         """Default config places artifacts outside repo root (~/.kaji/artifacts)."""
