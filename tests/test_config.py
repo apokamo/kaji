@@ -905,6 +905,17 @@ class TestConfigE2E:
         assert result.returncode == 3
         assert "not found" in result.stderr.lower()
 
+        # Artifacts must be created at the specified external path, not under repo
+        issue_dir = arts_dir / "999"
+        runs_dirs = list((issue_dir / "runs").iterdir()) if (issue_dir / "runs").exists() else []
+        assert len(runs_dirs) >= 1, f"Expected run directory under {issue_dir / 'runs'}"
+        assert (runs_dirs[0] / "run.log").exists(), "run.log must exist at external artifacts path"
+
+        # Must NOT create .kaji-artifacts under repo root
+        assert not (tmp_path / ".kaji-artifacts").exists(), (
+            "Artifacts must not be created under repo root"
+        )
+
     def test_kaji_run_artifacts_survive_workdir_deletion(self, tmp_path: Path) -> None:
         """After kaji run, artifacts survive workdir (worktree) deletion."""
         import shutil
@@ -933,7 +944,7 @@ class TestConfigE2E:
         python_dir = str(Path(sys.executable).parent)
         env = {**__import__("os").environ, "PATH": python_dir}
 
-        subprocess.run(
+        result = subprocess.run(
             [
                 sys.executable,
                 "-m",
@@ -950,23 +961,45 @@ class TestConfigE2E:
             env=env,
         )
 
+        # Verify runner executed (exit 3 = agent not found, not config error)
+        assert result.returncode == 3
+
+        # Verify artifacts were created at external location before deletion
+        issue_dir = arts_dir / "42"
+        runs_dir = issue_dir / "runs"
+        assert runs_dir.exists(), f"runs directory must exist at {runs_dir}"
+        run_dirs = list(runs_dir.iterdir())
+        assert len(run_dirs) >= 1, "At least one run directory must exist"
+        run_log = run_dirs[0] / "run.log"
+        assert run_log.exists(), f"run.log must exist at {run_log}"
+
+        # Read run.log content before deletion for post-deletion comparison
+        run_log_content = run_log.read_text(encoding="utf-8")
+        assert len(run_log_content) > 0, "run.log must not be empty"
+
         # Delete the workdir (simulating worktree deletion)
         shutil.rmtree(workdir)
         assert not workdir.exists()
 
-        # Artifacts should still exist at external location
-        issue_dir = arts_dir / "42"
-        if issue_dir.exists():
-            # If the run got far enough to create artifacts, they should be present
-            assert issue_dir.is_dir()
+        # Artifacts must survive workdir deletion
+        assert issue_dir.exists(), "Artifacts directory must survive workdir deletion"
+        assert run_log.exists(), "run.log must survive workdir deletion"
+        # Verify artifacts are still readable after workdir deletion (no ENOENT)
+        assert run_log.read_text(encoding="utf-8") == run_log_content
 
     def test_kaji_run_default_config_artifacts_outside_repo(self, tmp_path: Path) -> None:
         """Default config places artifacts outside repo root (~/.kaji/artifacts)."""
-        config_dir = tmp_path / ".kaji"
+        fake_home = tmp_path / "fakehome"
+        fake_home.mkdir()
+
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+
+        config_dir = repo_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text("")
 
-        wf_dir = tmp_path / ".kaji" / "workflows"
+        wf_dir = repo_dir / ".kaji" / "workflows"
         wf_dir.mkdir()
         wf = wf_dir / "test.yaml"
         wf.write_text(
@@ -975,12 +1008,12 @@ class TestConfigE2E:
             "    agent: claude\n    on:\n      PASS: end\n"
         )
 
-        skill_dir = tmp_path / ".claude" / "skills" / "test-skill"
+        skill_dir = repo_dir / ".claude" / "skills" / "test-skill"
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("# Test\n")
 
         python_dir = str(Path(sys.executable).parent)
-        env = {**__import__("os").environ, "PATH": python_dir}
+        env = {**__import__("os").environ, "PATH": python_dir, "HOME": str(fake_home)}
 
         result = subprocess.run(
             [
@@ -991,7 +1024,7 @@ class TestConfigE2E:
                 str(wf),
                 "999",
                 "--workdir",
-                str(tmp_path),
+                str(repo_dir),
             ],
             capture_output=True,
             text=True,
@@ -1001,6 +1034,20 @@ class TestConfigE2E:
 
         # Config parsed successfully (exit 3 = agent not found, not exit 2 = config error)
         assert result.returncode == 3
+
+        # Artifacts must be created under fake HOME's ~/.kaji/artifacts
+        default_arts = fake_home / ".kaji" / "artifacts" / "999"
+        assert default_arts.exists(), f"Default artifacts must be at {default_arts}, not under repo"
+        runs_dir = default_arts / "runs"
+        assert runs_dir.exists(), f"runs directory must exist at {runs_dir}"
+        run_dirs = list(runs_dir.iterdir())
+        assert len(run_dirs) >= 1
+        assert (run_dirs[0] / "run.log").exists(), "run.log must exist at default artifacts path"
+
+        # Must NOT create .kaji-artifacts under repo root
+        assert not (repo_dir / ".kaji-artifacts").exists(), (
+            "Artifacts must not be created under repo root"
+        )
 
     def test_kaji_validate_without_config_backward_compat(self, tmp_path: Path) -> None:
         """kaji validate still works without .kaji/config.toml."""
