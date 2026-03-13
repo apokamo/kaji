@@ -9,7 +9,7 @@ kaji_harness が読み込む YAML ワークフロー定義の書き方。
 ```toml
 # .kaji/config.toml（最小構成）
 [paths]
-artifacts_dir = ".kaji-artifacts"   # 省略時のデフォルト値
+artifacts_dir = "~/.kaji/artifacts"   # 省略時のデフォルト値
 ```
 
 ## ファイル配置
