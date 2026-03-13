@@ -1,0 +1,131 @@
+# [設計] ライセンス選定と SPDX 移行
+
+Issue: #105
+
+## 概要
+
+Apache License 2.0 を正式採用し、`pyproject.toml` の `project.license` を PEP 639 準拠の SPDX 形式に移行する。合わせて `LICENSE` ファイルの新規追加と `README.md` のライセンス表記を更新する。
+
+## 背景・目的
+
+- オープンソース化に向けたライセンス正式選定が未了
+- 現状 `license = {text = "MIT"}` のテーブル形式は PEP 639 で非推奨（setuptools が 2027-02-18 に警告期限を設定）
+- リポジトリに `LICENSE` ファイルが存在せず、配布物にライセンス文書が含まれない
+- Apache 2.0 は特許条項（Patent Grant / Patent Retaliation）によるコントリビューター保護を提供し、kaji のツール層としての性質と合致する
+
+## インターフェース
+
+### 入力
+
+変更対象ファイル:
+
+| ファイル | 現状 | 変更内容 |
+|---------|------|---------|
+| `pyproject.toml` | `license = {text = "MIT"}` + MIT classifier + `setuptools>=68.0` | SPDX 文字列 + `license-files` 追加 + classifier 削除 + `setuptools>=77.0.0` に引き上げ |
+| `LICENSE` | 存在しない | Apache License 2.0 全文を新規作成 |
+| `README.md` | `## License` セクションに `MIT` | `Apache-2.0` に更新 |
+
+### 出力
+
+変更後の状態:
+
+```toml
+# pyproject.toml
+[project]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+# classifiers から "License :: OSI Approved :: MIT License" を削除（代替追加なし）
+
+[build-system]
+requires = ["setuptools>=77.0.0", "wheel"]
+```
+
+```
+# LICENSE（リポジトリルート）
+Apache License Version 2.0 全文（https://www.apache.org/licenses/LICENSE-2.0.txt から取得）
+```
+
+```markdown
+# README.md
+## License
+
+Apache-2.0
+```
+
+## 制約・前提条件
+
+- PEP 639 / Core Metadata 2.4 に準拠すること
+- `License ::` classifier は PEP 639 で deprecated のため削除する
+- `LICENSE` ファイルは Apache Software Foundation の公式テキストをそのまま使用する（改変不可）
+- setuptools >= 77.0.0 が必要（PEP 639 サポートは v77.0.0 で導入）。現在の `build-system.requires = ["setuptools>=68.0"]` を `["setuptools>=77.0.0"]` に引き上げる
+- `license-files` を明示指定し、配布物への LICENSE 同梱を保証する
+
+## 方針
+
+コード変更は発生しない。プロジェクトメタデータと文書ファイルのみの変更。
+
+1. **LICENSE ファイル作成**: Apache 公式サイトから取得した全文を配置
+2. **pyproject.toml 更新**:
+   - `license = {text = "MIT"}` → `license = "Apache-2.0"`
+   - `license-files = ["LICENSE"]` を追加
+   - `classifiers` から `"License :: OSI Approved :: MIT License"` を削除
+   - `build-system.requires` の `setuptools>=68.0` → `setuptools>=77.0.0` に引き上げ
+3. **README.md 更新**: License セクションを `Apache-2.0` に変更
+
+変更順序は上記の通り。LICENSE ファイルが先に存在することで、`license-files` の参照先が確定する。
+
+## テスト戦略
+
+> **CRITICAL**: S/M/L すべてのサイズのテスト方針を定義すること。
+> AI はテストを省略する傾向があるため、設計段階で明確に定義し、省略の余地を排除する。
+> 詳細は [テスト規約](../../../docs/dev/testing-convention.md) 参照。
+
+### スキップするサイズ
+
+- **Small / Medium / Large すべてスキップ**: この変更はプロジェクトメタデータと文書ファイルのみの修正であり、テスト対象となるコードロジックが物理的に存在しない。pyproject.toml のフィールド値や LICENSE ファイルの存在は、自動テストではなく PR レビューと以下の手動確認で検証する。
+
+### 手動確認手順
+
+実装完了後、以下を手動で確認する:
+
+```bash
+# 1. pip install が警告なしに成功すること
+pip install -e .
+
+# 2. メタデータの確認
+python -c "
+from importlib.metadata import metadata
+m = metadata('kaji')
+print(m['License-Expression'])  # Apache-2.0
+"
+
+# 3. LICENSE ファイルの存在と内容
+head -3 LICENSE
+# Apache License / Version 2.0 が含まれること
+```
+
+## 影響ドキュメント
+
+この変更により更新が必要になる可能性のあるドキュメントを列挙する。
+
+| ドキュメント | 影響の有無 | 理由 |
+|-------------|-----------|------|
+| docs/adr/ | なし | 技術選定ではなくライセンス選定。Issue 本文に決定根拠がアーカイブされる |
+| docs/ARCHITECTURE.md | なし | アーキテクチャ変更なし |
+| docs/dev/ | なし | 開発手順・ワークフロー変更なし |
+| docs/cli-guides/ | なし | CLI 仕様変更なし |
+| CLAUDE.md | なし | 規約変更なし |
+
+## 参照情報（Primary Sources）
+
+| 情報源 | URL/パス | 根拠（引用/要約） |
+|--------|----------|-------------------|
+| PEP 639 | https://peps.python.org/pep-0639/ | `license` フィールドは SPDX 文字列を使用。`License ::` classifier は deprecated。`license-files` でライセンス文書の配布物同梱を明示指定 |
+| Apache License 2.0 全文 | https://www.apache.org/licenses/LICENSE-2.0.txt | LICENSE ファイルに配置する正式テキスト |
+| SPDX License List | https://spdx.org/licenses/ | `Apache-2.0` が正式な SPDX 識別子であることの根拠 |
+| setuptools ドキュメント | https://setuptools.pypa.io/en/latest/userguide/pyproject_config.html | `project.license` の SPDX 形式サポートと移行ガイダンス |
+| setuptools v77.0.0 リリースノート | https://setuptools.pypa.io/en/latest/history.html | PEP 639 初期サポート導入。SPDX license expression、`license-files`、`licenses/` サブフォルダ格納、Core Metadata 2.4 対応 |
+
+> **重要**: 設計判断の根拠となる一次情報を必ず記載してください。
+> - URLだけでなく、**根拠（引用/要約）** も記載必須
+> - レビュー時に一次情報の記載がない場合、設計レビューは中断されます
