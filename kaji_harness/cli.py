@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import subprocess
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,11 @@ from .errors import CLIExecutionError, CLINotFoundError, StepTimeoutError
 from .models import CLIResult, CostInfo, Step
 
 DEFAULT_TIMEOUT = 1800  # 30 minutes
+
+
+def _now_stamp() -> str:
+    """現在時刻を ISO 8601 形式（秒精度、タイムゾーンなし）で返す。"""
+    return datetime.now().isoformat(timespec="seconds")
 
 
 def build_cli_args(
@@ -107,7 +113,7 @@ def stream_and_log(
                     f_con.write(stripped + "\n")
                     f_con.flush()
                     if verbose:
-                        print(f"[{step_id}] {stripped}")
+                        print(f"[{_now_stamp()}] [{step_id}] {stripped}")
                 continue
 
             sid = adapter.extract_session_id(event)
@@ -120,7 +126,7 @@ def stream_and_log(
                 f_con.write(text + "\n")
                 f_con.flush()
                 if verbose:
-                    print(f"[{step_id}] {text}")
+                    print(f"[{_now_stamp()}] [{step_id}] {text}")
 
             c = adapter.extract_cost(event)
             if c:
