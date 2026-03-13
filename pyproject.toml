@@ -26,6 +26,7 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
     "pytest-cov>=4.0.0",
+    "pytest-xdist>=3.0.0",
     "ruff>=0.4.0",
     "mypy>=1.10.0",
     "setuptools>=77.0.0",
@@ -59,7 +60,7 @@ warn_unused_ignores = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short -n auto"
 markers = [
     "small: Small tests - no external dependencies",
     "medium: Medium tests - file I/O, mock processes",
