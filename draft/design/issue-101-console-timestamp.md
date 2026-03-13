@@ -86,9 +86,9 @@ def _now_stamp() -> str:
 
 ### Large テスト
 
-### スキップするサイズ（該当する場合のみ）
-
-- Large: `kaji run` の E2E テストには実際の agent CLI（claude/codex/gemini）のインストールが必要であり、CI 環境にこれらを用意する手段が存在しない。Medium テストでサブプロセス結合まで検証するため、タイムスタンプ表示の検証としては十分。
+- `kaji run` を実サブプロセスとして実行し、stdout に `[YYYY-MM-DDTHH:MM:SS] [step_id]` 形式のタイムスタンプが出力されることを検証
+- 方式: `tests/test_cli_main.py::TestCLILarge` と同様のパターンで、有効な JSONL を出力するモック CLI スクリプトを `tmp_path` に作成し PATH 先頭に配置する。`kaji run` を `subprocess.run` で実行し、stdout を正規表現で検証する
+- `--quiet` フラグ使用時にはタイムスタンプが出力されないことも検証
 
 ## 影響ドキュメント
 
@@ -109,3 +109,4 @@ def _now_stamp() -> str:
 | Python datetime.isoformat | https://docs.python.org/3/library/datetime.html#datetime.datetime.isoformat | `timespec="seconds"` で `YYYY-MM-DDTHH:MM:SS` 形式を得る。Issue 要件の「ISO 8601、タイムゾーン表記なし」に合致 |
 | 対象コード | `kaji_harness/cli.py` L78-140 (`stream_and_log`) | `print(f"[{step_id}] {text}")` が L110, L123 の 2 箇所に存在。これらがタイムスタンプ追加の対象 |
 | Issue #101 | GitHub Issue #101 | フォーマット仕様: `[YYYY-MM-DDTHH:MM:SS] [step_id] テキスト` |
+| 既存 Large テストパターン | `tests/test_cli_main.py` L459-527 (`TestCLILarge`) | `kaji run` を `subprocess.run` で実行し、mock workflow + 制御された PATH で E2E 検証する手法。今回の Large テストでも同パターンを踏襲し、JSONL を出力する mock CLI スクリプトを PATH に配置する |
