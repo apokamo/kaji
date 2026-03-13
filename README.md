@@ -36,7 +36,7 @@ pip install -e ".[dev]"
 ```toml
 # .kaji/config.toml
 [paths]
-artifacts_dir = ".kaji-artifacts"   # 省略時のデフォルト値
+artifacts_dir = "~/.kaji/artifacts"   # 省略時のデフォルト値
 ```
 
 ## 開発ワークフロー
