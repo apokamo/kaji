@@ -124,7 +124,7 @@ python -m build && tar tzf dist/kaji-*.tar.gz | grep LICENSE
 #### wheel 検証
 - `.whl` 内の `.dist-info/licenses/LICENSE` にライセンスファイルが配置されていること（setuptools 77.0.0+ は `licenses/` サブフォルダに格納）
 - `.dist-info/METADATA` に `License-Expression: Apache-2.0` が記載されていること
-- `.dist-info/METADATA` に `License-File: licenses/LICENSE` が記載されていること
+- `.dist-info/METADATA` に `License-File: LICENSE` が記載されていること（setuptools は METADATA 内ではソースパスを記録する）
 - `.dist-info/METADATA` の `Metadata-Version` が `2.4` 以上であること
 
 ## 影響ドキュメント

@@ -4,6 +4,7 @@ Verifies Apache-2.0 license adoption, PEP 639 SPDX migration in pyproject.toml,
 LICENSE file presence, and README.md license reference.
 """
 
+import subprocess
 import tarfile
 import zipfile
 from pathlib import Path
@@ -101,7 +102,24 @@ class TestSmallLicenseSpdx:
 
 
 class TestMediumLicenseSpdx:
-    """Medium tests: verify installed package metadata."""
+    """Medium tests: verify installed package metadata via pip install."""
+
+    @pytest.fixture(autouse=True, scope="class")
+    def _install_package(self) -> None:
+        """Run ``pip install -e .`` and verify it succeeds without warnings."""
+        result = subprocess.run(
+            ["pip", "install", "-e", str(REPO_ROOT)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert result.returncode == 0, f"pip install -e . failed:\n{result.stderr}"
+        # Ensure no license-related warnings from setuptools / pip
+        for line in result.stderr.splitlines():
+            low = line.lower()
+            assert "license" not in low or "warning" not in low, (
+                f"License-related warning during pip install: {line}"
+            )
 
     @pytest.mark.medium
     def test_metadata_license_expression(self) -> None:
@@ -140,8 +158,6 @@ class TestLargeLicenseSpdx:
     @pytest.mark.large
     def test_sdist_contains_license(self, tmp_path: Path) -> None:
         """sdist must contain LICENSE and correct PKG-INFO metadata."""
-        import subprocess
-
         result = subprocess.run(
             ["python", "-m", "build", "--sdist", "--outdir", str(tmp_path)],
             cwd=str(REPO_ROOT),
@@ -186,8 +202,6 @@ class TestLargeLicenseSpdx:
     @pytest.mark.large
     def test_wheel_contains_license(self, tmp_path: Path) -> None:
         """wheel must contain license in dist-info and correct METADATA."""
-        import subprocess
-
         result = subprocess.run(
             ["python", "-m", "build", "--wheel", "--outdir", str(tmp_path)],
             cwd=str(REPO_ROOT),
