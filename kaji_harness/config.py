@@ -17,7 +17,7 @@ from .errors import ConfigLoadError, ConfigNotFoundError
 class PathsConfig:
     """Path-related configuration."""
 
-    artifacts_dir: str = ".kaji-artifacts"
+    artifacts_dir: str = "~/.kaji/artifacts"
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,9 @@ class KajiConfig:
     @property
     def artifacts_dir(self) -> Path:
         """Absolute path to artifacts directory."""
+        expanded = Path(self.paths.artifacts_dir).expanduser()
+        if expanded.is_absolute():
+            return expanded
         return self.repo_root / self.paths.artifacts_dir
 
     @classmethod
@@ -69,15 +72,20 @@ class KajiConfig:
 
     @staticmethod
     def _validate_artifacts_dir(config_path: Path, artifacts_dir: str) -> None:
-        """Validate artifacts_dir is a relative path within repo root."""
+        """Validate artifacts_dir path."""
         from pathlib import PurePosixPath
 
-        p = PurePosixPath(artifacts_dir)
-        if p.is_absolute():
+        try:
+            expanded = Path(artifacts_dir).expanduser()
+        except RuntimeError as e:
             raise ConfigLoadError(
                 config_path,
-                f"paths.artifacts_dir must be a relative path, got absolute: {artifacts_dir}",
-            )
+                f"paths.artifacts_dir: failed to expand '~': {e}",
+            ) from e
+        if expanded.is_absolute():
+            return  # absolute paths (including ~ expanded) are allowed
+        # relative paths: disallow '..' to prevent repo root escape
+        p = PurePosixPath(artifacts_dir)
         if ".." in p.parts:
             raise ConfigLoadError(
                 config_path,
