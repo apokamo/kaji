@@ -14,7 +14,7 @@ AI-driven software development workflow orchestrator. Claude Code / Codex / Gemi
 │  ワークフロー YAML を解釈し CLI を順次呼出  │
 ├─────────────────────────────────────────────┤
 │  スキル (.claude/skills/, .agents/skills/)   │
-│  各ステップの実作業プロンプト               │
+│  実体は .claude、.agents は symlink         │
 ├─────────────────────────────────────────────┤
 │  CLI (Claude Code / Codex / Gemini)          │
 │  スキルをロードし PJ コンテキストで実行     │
@@ -31,14 +31,6 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-対象プロジェクトには `.kaji/config.toml` を配置する（コロケーテッドモデル）:
-
-```toml
-# .kaji/config.toml
-[paths]
-artifacts_dir = "~/.kaji/artifacts"   # 省略時のデフォルト値
-```
-
 ## 開発ワークフロー
 
 Issue駆動のTDD開発フロー:
@@ -49,20 +41,92 @@ Issue駆動のTDD開発フロー:
 
 各フェーズにレビューサイクルあり。詳細: [docs/dev/development_workflow.md](docs/dev/development_workflow.md)
 
+## 最小導入
+
+対象プロジェクトには `.kaji/config.toml` を配置する（コロケーテッドモデル）:
+
+```toml
+# .kaji/config.toml
+[paths]
+artifacts_dir = "~/.kaji/artifacts"
+```
+
+skill の実体は `.claude/skills/` に置き、`.agents/skills/` はそれを参照する symlink として扱う。
+
+```text
+.claude/skills/
+  implement/
+    SKILL.md
+  review-code/
+    SKILL.md
+  fix-code/
+    SKILL.md
+  verify-code/
+    SKILL.md
+
+.agents/skills/
+  review-code -> ../../.claude/skills/review-code
+  verify-code -> ../../.claude/skills/verify-code
+```
+
+最小の workflow は次のようになる。
+
+```yaml
+name: minimal-code-review
+description: "最小のコードレビュー付きフロー"
+execution_policy: auto
+
+steps:
+  - id: implement
+    skill: implement
+    agent: claude
+    on:
+      PASS: review-code
+      ABORT: end
+
+  - id: review-code
+    skill: review-code
+    agent: codex
+    on:
+      PASS: end
+      RETRY: fix-code
+      ABORT: end
+
+  - id: fix-code
+    skill: fix-code
+    agent: claude
+    on:
+      PASS: verify-code
+      ABORT: end
+
+  - id: verify-code
+    skill: verify-code
+    agent: codex
+    resume: review-code
+    on:
+      PASS: end
+      RETRY: fix-code
+      ABORT: end
+```
+
+`resume` は、同じ agent の前段ステップのコンテキストを引き継いで続きから実行するための指定。
+
 ## ワークフロー実行
 
 ```bash
-# ワークフローを実行
-kaji run workflows/feature-development.yaml 57
+# 最小 workflow を実行
+kaji run workflows/minimal-code-review.yaml 57
 
 # 途中から再開
-kaji run workflows/feature-development.yaml 57 --from fix-code
+kaji run workflows/minimal-code-review.yaml 57 --from fix-code
 
 # 単一ステップ実行
-kaji run workflows/feature-development.yaml 57 --step review-code
+kaji run workflows/minimal-code-review.yaml 57 --step review-code
 ```
 
-詳細: [docs/dev/workflow-authoring.md](docs/dev/workflow-authoring.md)
+詳細:
+- [docs/dev/workflow-authoring.md](docs/dev/workflow-authoring.md)
+- [docs/dev/skill-authoring.md](docs/dev/skill-authoring.md)
 
 ## 品質チェック
 

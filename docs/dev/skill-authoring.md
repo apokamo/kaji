@@ -6,20 +6,20 @@ kaji_harness から呼び出されるスキルの書き方。
 
 スキルは「1ステップの実作業」を担うプロンプト資産。ハーネスは何をどの順で実行するかを制御し、スキル本体は agent（Claude Code / Codex / Gemini）がネイティブにロードして実行する。
 
-**ハーネスはスキルの中身を読まない**。スキルのロードは CLI に完全に委譲する。
+**ハーネスはスキルの中身を読まない**。スキルのロードは CLI に完全に委譲する。ただし、実行結果として出る `VERDICT` の出力契約には依存する。
 
 ## ファイル配置
 
-スキルは agent ごとに異なるディレクトリに配置する。ハーネスは step の `agent` フィールドと `skill` フィールドからパスを解決する。
+スキルの実体は `.claude/skills/` に置き、`.agents/skills/` はそれを参照する symlink として扱う。ハーネスは step の `agent` フィールドと `skill` フィールドからパスを解決する。
 
 ```
-.claude/skills/           # Claude Code 用
+.claude/skills/           # スキル実体
   issue-design            # ← skill: issue-design, agent: claude
   issue-implement
   issue-review-code
 
-.agents/skills/           # Codex / Gemini 用
-  issue-review-code       # ← skill: issue-review-code, agent: codex/gemini
+.agents/skills/           # Codex / Gemini 用 symlink
+  issue-review-code -> ../../.claude/skills/issue-review-code
 ```
 
 各スキルはディレクトリで、`SKILL.md` を含む。
@@ -113,11 +113,11 @@ suggestion: |
 |------|-----|------|
 | `issue_number` | int | GitHub Issue 番号 |
 | `step_id` | str | 現在のステップ ID |
-| `previous_verdict` | str | 前ステップの verdict（resume ステップのみ） |
+| `previous_verdict` | str | 前ステップの verdict 要約（resume ステップ等） |
 | `cycle_count` | int | 現在のサイクルイテレーション（サイクル内ステップのみ） |
 | `max_iterations` | int | サイクルの上限回数（サイクル内ステップのみ） |
 
-`previous_verdict` は `resume` 指定ステップまたは `inject_verdict: true` 指定ステップに注入される。`review-code` のように独立評価が必要なステップには注入されない。
+`previous_verdict` は `resume` 指定ステップに注入される。`review-code` のように独立評価が必要なステップには注入されない。修正系スキルでは、詳細なレビュー内容は Issue コメントを正とし、`previous_verdict` は補助的な要約として扱う。
 
 ## GitHub Issue の活用
 
@@ -187,15 +187,15 @@ $ARGUMENTS = <issue-number>
 
 `issue-create`、`issue-start` のようにワークフロー開始前のフェーズを担うスキルは、ハーネス駆動の対象外。verdict 出力は追加するが、入力は既存の `$ARGUMENTS` を維持する。
 
-### fix スキルの previous_verdict フォールバック
+### fix スキルのレビュー結果取得
 
-`issue-fix-code`、`issue-fix-design` では、ハーネス経由なら `previous_verdict` からレビュー結果を取得し、手動実行時は Issue コメントから最新のレビュー結果を取得する。
+`issue-fix-code`、`issue-fix-design` では、ハーネス経由でも手動実行でも、Issue コメントをレビュー結果の正として取得する。`previous_verdict` が存在する場合は補助情報として使ってよい。
 
 ```markdown
 ### レビュー結果の取得
 
-1. コンテキスト変数 `previous_verdict` が存在する場合はそれを確認（ハーネス経由）
-2. 存在しない場合は Issue コメントから最新のレビュー結果を取得（手動実行時）
+1. Issue コメントから最新のレビュー結果を取得する
+2. コンテキスト変数 `previous_verdict` が存在する場合は補助情報として確認する
 ```
 
 ### 品質チェックコマンドの汎用化
