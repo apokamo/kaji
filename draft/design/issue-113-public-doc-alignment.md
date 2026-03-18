@@ -11,7 +11,7 @@ Issue: #113
 現状、README と一部ドキュメントには次のズレがある。
 
 - skill 配置が `.claude/skills/` 実体 / `.agents/skills/` symlink という現行方針に揃っていない
-- `resume` と `inject_verdict` の見せ方が、現状の記事や想定運用とずれている
+- `resume` を中心にした見せ方が、現状の記事や想定運用とずれている
 - README に最小導入例がなく、初見ユーザーが最初の一歩で詰まりやすい
 
 公開状態でこのズレを残すと、記事・README・docs が別々のことを言っているように見え、導入判断やフィードバックの質を下げる。
@@ -44,7 +44,7 @@ kaji run workflows/minimal-code-review.yaml 57
 
 - `kaji` 本体の実装変更は必須ではなく、今回の主対象は README / docs の整合
 - skill 配置については `.claude/skills/` を実体、`.agents/skills/` を symlink とする設計方針を前提にする
-- `resume` / `inject_verdict` は機能として存在していても、公開向けの見せ方は現行運用に合わせて整理する
+- ワークフローの説明は `resume` を主軸にし、公開向け docs は現行運用に合わせて整理する
 - 記事で説明している内容と矛盾しないこと
 
 ## 方針
@@ -58,18 +58,18 @@ kaji run workflows/minimal-code-review.yaml 57
    - 「ハーネスは skill の中身を読まない」と「VERDICT 契約に依存する」の関係を誤解なく説明する
 3. `workflow-authoring.md` を公開向けに整理する
    - `resume` を主軸に説明する
-   - `inject_verdict` は存在を残しつつ、前面に出しすぎない
    - サンプル workflow を現行の review / verify 運用に合わせる
 
 ## テスト戦略
 
 > **CRITICAL**: S/M/L すべてのサイズのテスト方針を定義すること。
 
-今回の変更はドキュメント中心のため、コードテストは原則対象外とする。ただし、公開導線として破綻しないことは手動で確認する。
+今回の変更はドキュメント中心のため、コードテストは原則対象外とする。また、ドキュメント整合のための回帰自動テストは追加しない。README や docs の文言変更に対してテストを作り始めると、保守対象だけが増えて負債になりやすいため、今回は手動確認を正とする。
 
 ### Small テスト
 - README / docs のリンク切れがないことを確認する
 - サンプル YAML / skill 名の記述が互いに一致していることを確認する
+- ドキュメントの説明順や用語の使い方が公開記事と大きく矛盾しないことを確認する
 
 ### Medium テスト
 - なし
@@ -101,5 +101,5 @@ kaji run workflows/minimal-code-review.yaml 57
 |--------|----------|-------------------|
 | Issue #113 | https://github.com/apokamo/kaji/issues/113 | README / docs の前提ズレと対応範囲が整理されている |
 | README | `README.md` | 公開向け入口だが、最小導入例と現行 skill 配置前提が不足している |
-| Workflow 定義マニュアル | `docs/dev/workflow-authoring.md` | `resume` / `inject_verdict` の現状説明とサンプルの見直し対象 |
+| Workflow 定義マニュアル | `docs/dev/workflow-authoring.md` | `resume` の現状説明とサンプルの見直し対象 |
 | スキル作成マニュアル | `docs/dev/skill-authoring.md` | skill 配置説明が現行の symlink 方針とズレている |
