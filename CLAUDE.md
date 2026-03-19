@@ -85,7 +85,7 @@ kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
 | Architecture | docs/ARCHITECTURE.md |
 | ADR | docs/adr/ |
 | CLI Guides | docs/cli-guides/ |
-| Development Workflow | docs/dev/workflow_feature_development.md |
+| Workflow Guide | docs/dev/workflow_guide.md |
 | Testing Convention | docs/dev/testing-convention.md |
 | Workflow Authoring | docs/dev/workflow-authoring.md |
 | Skill Authoring | docs/dev/skill-authoring.md |
@@ -94,4 +94,4 @@ kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
 
 スキルは `.claude/skills/` に格納。`/issue-create` から `/issue-close` までのライフサイクルを管理。
 
-詳細: [Development Workflow](docs/dev/workflow_feature_development.md)
+詳細: [Workflow Guide](docs/dev/workflow_guide.md)

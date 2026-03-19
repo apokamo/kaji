@@ -273,7 +273,7 @@ HarnessError
 | [ワークフロー定義マニュアル](dev/workflow-authoring.md) | YAML 定義の書き方 |
 | [スキル作成マニュアル](dev/skill-authoring.md) | スキルの書き方・verdict 規約 |
 | [テスト規約](dev/testing-convention.md) | S/M/L テストサイズ定義 |
-| [開発ワークフロー](dev/workflow_feature_development.md) | issue → PR までのフロー |
+| [ワークフローガイド](dev/workflow_guide.md) | ワークフロー選択基準・概要 |
 | [Claude Code CLI ガイド](cli-guides/claude-code-cli-guide.md) | claude コマンド仕様 |
 | [Codex CLI ガイド](cli-guides/codex-cli-session-guide.md) | codex コマンド仕様 |
 | [Gemini CLI ガイド](cli-guides/gemini-cli-session-guide.md) | gemini コマンド仕様 |
