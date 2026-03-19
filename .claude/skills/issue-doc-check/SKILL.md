@@ -43,7 +43,7 @@ $ARGUMENTS = <issue-number>
 
 以下のドキュメントを Read ツールで読み込んでから作業を開始すること。
 
-1. **開発ワークフロー**: `docs/dev/development_workflow.md`
+1. **開発ワークフロー**: `docs/dev/workflow_feature_development.md`
 
 ## 共通ルール
 

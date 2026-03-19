@@ -5,17 +5,15 @@ name: issue-pr
 
 # Issue PR
 
-コードレビュー・ドキュメントチェック完了後、PRを作成します。
+workflow の前段ステップ完了後、PRを作成します。
 コミット履歴を整理してからPRを作成します。
 
 ## いつ使うか
 
 | タイミング | このスキルを使用 |
 |-----------|-----------------|
-| `/issue-doc-check` 完了後 | ✅ 必須 |
-| ドキュメントチェック未完了 | ❌ 待機 |
-
-**ワークフロー内の位置**: implement → review-code → doc-check → **pr** → close
+| workflow の pr ステップに到達した場合 | ✅ |
+| 前段ステップが未完了 | ❌ 待機 |
 
 ## 入力
 
@@ -39,17 +37,9 @@ $ARGUMENTS = <issue-number>
 コンテキスト変数 `issue_number` が存在すればそちらを使用。
 なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
 
-## 前提知識の読み込み
-
-以下のドキュメントを Read ツールで読み込んでから作業を開始すること。
-
-1. **開発ワークフロー**: `docs/dev/development_workflow.md`
-
 ## 前提条件
 
 - `/issue-start` が実行済みであること
-- 実装とコードレビューが完了していること
-- `/issue-doc-check` が実行済みであること
 - `git absorb` がインストール済みであること（任意）
 
 ## 共通ルール
@@ -100,11 +90,9 @@ Closes #[issue-number]
 
 - (主な変更点)
 
-## Test Plan
+## Verification
 
-- [x] 既存テストがパス
-- [ ] 新規テストを追加（該当する場合）
-- [ ] 手動検証: (必要な場合)
+- [ ] 必要な確認が完了している
 EOF
 )"
 ```

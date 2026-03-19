@@ -1,0 +1,62 @@
+name: docs-maintenance
+description: |
+  docs-only Issue のためのドキュメント修正ワークフロー。
+  コード変更やテスト追加は行わず、現行実装・CLI・運用方針との整合を確認しながら
+  docs を更新して PR を作成する。
+execution_policy: auto
+
+cycles:
+  doc-review:
+    entry: review-doc
+    loop: [fix-doc, verify-doc]
+    max_iterations: 3
+    on_exhaust: ABORT
+
+steps:
+  - id: update-doc
+    skill: i-doc-update
+    agent: claude
+    model: opus
+    effort: high
+    on:
+      PASS: review-doc
+      ABORT: end
+
+  - id: review-doc
+    skill: i-doc-review
+    agent: codex
+    model: gpt-5.4
+    effort: high
+    on:
+      PASS: pr
+      RETRY: fix-doc
+      ABORT: end
+
+  - id: fix-doc
+    skill: i-doc-fix
+    agent: claude
+    model: opus
+    resume: update-doc
+    on:
+      PASS: verify-doc
+      ABORT: end
+
+  - id: verify-doc
+    skill: i-doc-verify
+    agent: codex
+    model: gpt-5.4
+    effort: high
+    resume: review-doc
+    on:
+      PASS: pr
+      RETRY: fix-doc
+      ABORT: end
+
+  - id: pr
+    skill: issue-pr
+    agent: claude
+    model: sonnet
+    on:
+      PASS: end
+      RETRY: pr
+      ABORT: end

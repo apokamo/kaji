@@ -39,7 +39,7 @@ Issue駆動のTDD開発フロー:
 /issue-create → /issue-start → /issue-design → /issue-implement → /issue-pr → /issue-close
 ```
 
-各フェーズにレビューサイクルあり。詳細: [docs/dev/development_workflow.md](docs/dev/development_workflow.md)
+ワークフローガイド: [docs/dev/workflow_guide.md](docs/dev/workflow_guide.md)
 
 ## 最小導入
 
@@ -146,7 +146,7 @@ pytest                               # Test
 |-------------|------|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | V7 アーキテクチャ詳細 |
 | [docs/adr/](docs/adr/) | アーキテクチャ決定記録 |
-| [docs/dev/development_workflow.md](docs/dev/development_workflow.md) | 開発ワークフロー |
+| [docs/dev/workflow_guide.md](docs/dev/workflow_guide.md) | ワークフローガイド |
 | [docs/dev/testing-convention.md](docs/dev/testing-convention.md) | テスト規約 (S/M/L) |
 | [docs/dev/workflow-authoring.md](docs/dev/workflow-authoring.md) | ワークフロー YAML 定義 |
 | [docs/dev/skill-authoring.md](docs/dev/skill-authoring.md) | スキル作成ガイド |
