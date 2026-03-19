@@ -5,8 +5,8 @@ Checks that relative Markdown links resolve to existing files
 and that fragment identifiers reference existing headings.
 
 Usage:
-    python scripts/check_doc_links.py              # Check docs/ directory
-    python scripts/check_doc_links.py <path>...     # Check specific files/dirs
+    python3 scripts/check_doc_links.py              # Check docs/ directory
+    python3 scripts/check_doc_links.py <path>...     # Check specific files/dirs
 """
 
 from __future__ import annotations
@@ -119,6 +119,12 @@ def validate_link(
         resolved = repo_root / target.lstrip("/")
     else:
         resolved = (source.parent / target).resolve()
+
+    # Reject links that resolve outside the repo root
+    try:
+        resolved.relative_to(repo_root)
+    except ValueError:
+        return f"link resolves outside repository: {raw_target}"
 
     resolved = _resolve_path(resolved)
     if resolved is None:

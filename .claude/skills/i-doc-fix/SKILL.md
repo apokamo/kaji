@@ -44,7 +44,7 @@ $ARGUMENTS = <issue-number>
 4. 実装 / CLI / CLAUDE.md / 関連 docs との整合を再確認
 5. 修正対象ファイルに絞って以下を実行:
    ```bash
-   cd [worktree-absolute-path] && python scripts/check_doc_links.py [changed-markdown-files...]
+   cd [worktree-absolute-path] && python3 scripts/check_doc_links.py [changed-markdown-files...]
    ```
 6. docs のみコミット
 7. 対応内容を Issue にコメント

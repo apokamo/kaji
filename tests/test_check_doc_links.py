@@ -2,13 +2,34 @@
 
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "check_doc_links.py"
+
+# Repo root for Large tests
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _load_module() -> ModuleType:
+    """Import check_doc_links.py as a module without sys.path mutation."""
+    spec = importlib.util.spec_from_file_location("check_doc_links", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_mod = _load_module()
+_is_external = _mod._is_external
+_is_hidden = _mod._is_hidden
+_index_to_line = _mod._index_to_line
+_slugify = _mod._slugify
 
 
 def _run(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -26,12 +47,95 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content)
 
 
-# ---------------------------------------------------------------------------
-# Basic link resolution
-# ---------------------------------------------------------------------------
+@pytest.mark.small
+class TestSlugify:
+    """_slugify: heading text → GitHub-compatible anchor slug."""
+
+    def test_basic_heading(self) -> None:
+        counts: dict[str, int] = {}
+        assert _slugify("Hello World", counts) == "hello-world"
+
+    def test_punctuation_removed(self) -> None:
+        counts: dict[str, int] = {}
+        assert _slugify("What's New?", counts) == "whats-new"
+
+    def test_duplicate_headings_get_suffix(self) -> None:
+        counts: dict[str, int] = {}
+        assert _slugify("Section", counts) == "section"
+        assert _slugify("Section", counts) == "section-1"
+        assert _slugify("Section", counts) == "section-2"
+
+    def test_empty_after_strip_becomes_section(self) -> None:
+        counts: dict[str, int] = {}
+        assert _slugify("***", counts) == "section"
+
+    def test_japanese_heading(self) -> None:
+        counts: dict[str, int] = {}
+        result = _slugify("テスト戦略", counts)
+        assert result == "テスト戦略"
+
+    def test_mixed_case_lowered(self) -> None:
+        counts: dict[str, int] = {}
+        assert _slugify("CamelCase Title", counts) == "camelcase-title"
 
 
 @pytest.mark.small
+class TestIsExternal:
+    """_is_external: detect external URLs."""
+
+    def test_https(self) -> None:
+        assert _is_external("https://example.com") is True
+
+    def test_http(self) -> None:
+        assert _is_external("http://example.com") is True
+
+    def test_mailto(self) -> None:
+        assert _is_external("mailto:a@b.com") is True
+
+    def test_relative_path(self) -> None:
+        assert _is_external("../foo.md") is False
+
+    def test_absolute_path(self) -> None:
+        assert _is_external("/docs/foo.md") is False
+
+
+@pytest.mark.small
+class TestIsHidden:
+    """_is_hidden: detect paths with hidden directory components."""
+
+    def test_hidden_directory(self) -> None:
+        assert _is_hidden(Path(".git/config")) is True
+
+    def test_normal_path(self) -> None:
+        assert _is_hidden(Path("docs/guide.md")) is False
+
+    def test_hidden_file(self) -> None:
+        assert _is_hidden(Path("docs/.hidden.md")) is True
+
+
+@pytest.mark.small
+class TestIndexToLine:
+    """_index_to_line: character index → line number."""
+
+    def test_first_line(self) -> None:
+        lines = ["hello", "world"]
+        assert _index_to_line(0, lines) == 1
+
+    def test_second_line(self) -> None:
+        lines = ["hello", "world"]
+        assert _index_to_line(6, lines) == 2
+
+    def test_end_of_content(self) -> None:
+        lines = ["abc", "def", "ghi"]
+        assert _index_to_line(8, lines) == 3
+
+
+# ===========================================================================
+# Medium tests — file I/O via subprocess + tmp_path
+# ===========================================================================
+
+
+@pytest.mark.medium
 class TestValidLinks:
     """Valid relative links should pass."""
 
@@ -54,7 +158,7 @@ class TestValidLinks:
         assert result.returncode == 0
 
 
-@pytest.mark.small
+@pytest.mark.medium
 class TestBrokenLinks:
     """Broken relative links should fail."""
 
@@ -70,12 +174,24 @@ class TestBrokenLinks:
         assert result.returncode == 1
 
 
-# ---------------------------------------------------------------------------
-# Anchor (heading) validation
-# ---------------------------------------------------------------------------
+@pytest.mark.medium
+class TestRepoRootBoundary:
+    """Links resolving outside repo root should fail."""
+
+    def test_link_escaping_repo_root(self, tmp_path: Path) -> None:
+        _write(tmp_path / "docs" / "a.md", "[link](../../outside/secret.md)\n")
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 1
+        assert "outside repository" in result.stderr
+
+    def test_parent_within_repo_is_ok(self, tmp_path: Path) -> None:
+        _write(tmp_path / "docs" / "sub" / "a.md", "[link](../b.md)\n")
+        _write(tmp_path / "docs" / "b.md", "# B\n")
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0
 
 
-@pytest.mark.small
+@pytest.mark.medium
 class TestAnchors:
     """Fragment identifiers (#heading) should be validated."""
 
@@ -103,12 +219,7 @@ class TestAnchors:
         assert result.returncode == 1
 
 
-# ---------------------------------------------------------------------------
-# External links (should be skipped)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.small
+@pytest.mark.medium
 class TestExternalLinks:
     """External links should be skipped, not validated."""
 
@@ -123,17 +234,11 @@ class TestExternalLinks:
         assert result.returncode == 0
 
 
-# ---------------------------------------------------------------------------
-# CLI: directory and file arguments
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.small
+@pytest.mark.medium
 class TestCLIArguments:
     """CLI argument handling."""
 
     def test_no_args_checks_docs_dir(self, tmp_path: Path) -> None:
-        """With no args, should check docs/ directory."""
         _write(tmp_path / "docs" / "a.md", "[link](b.md)\n")
         _write(tmp_path / "docs" / "b.md", "# B\n")
         result = _run(tmp_path)
@@ -143,7 +248,6 @@ class TestCLIArguments:
         _write(tmp_path / "docs" / "good.md", "[link](other.md)\n")
         _write(tmp_path / "docs" / "other.md", "# Other\n")
         _write(tmp_path / "docs" / "bad.md", "[link](missing.md)\n")
-        # Only check good.md — should pass
         result = _run(tmp_path, "docs/good.md")
         assert result.returncode == 0
 
@@ -159,12 +263,7 @@ class TestCLIArguments:
         assert result.returncode == 0
 
 
-# ---------------------------------------------------------------------------
-# Error output format
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.small
+@pytest.mark.medium
 class TestErrorFormat:
     """Error output should include file path and line number."""
 
@@ -172,21 +271,14 @@ class TestErrorFormat:
         _write(tmp_path / "docs" / "a.md", "line one\n[link](missing.md)\n")
         result = _run(tmp_path, "docs")
         assert result.returncode == 1
-        # Should contain "file:line: message" format
         assert "a.md:2:" in result.stderr
 
 
-# ---------------------------------------------------------------------------
-# Edge cases
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.small
+@pytest.mark.medium
 class TestEdgeCases:
     """Edge cases."""
 
     def test_image_links_skipped(self, tmp_path: Path) -> None:
-        """Image links (![alt](path)) should not be validated as doc links."""
         _write(tmp_path / "docs" / "a.md", "![image](nonexistent.png)\n")
         result = _run(tmp_path, "docs")
         assert result.returncode == 0
@@ -200,3 +292,33 @@ class TestEdgeCases:
         _write(tmp_path / "docs" / "a.md", "Just text, no links.\n")
         result = _run(tmp_path, "docs")
         assert result.returncode == 0
+
+
+# ===========================================================================
+# Large tests — E2E against real repository docs
+# ===========================================================================
+
+
+@pytest.mark.large
+class TestRealRepo:
+    """Run link checker against the actual repository docs."""
+
+    def test_repo_docs_have_no_broken_links(self) -> None:
+        """E2E: check_doc_links.py against the real docs/ directory."""
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT)],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode == 0, f"Broken links found in repo docs:\n{result.stderr}"
+
+    def test_repo_readme_has_no_broken_links(self) -> None:
+        """E2E: check_doc_links.py against the real README.md."""
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "README.md"],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode == 0, f"Broken links found in README.md:\n{result.stderr}"

@@ -77,7 +77,7 @@ $ARGUMENTS = <issue-number>
 変更された Markdown ファイルに絞って以下を実行する。
 
 ```bash
-cd [worktree-absolute-path] && python scripts/check_doc_links.py [changed-markdown-files...]
+cd [worktree-absolute-path] && python3 scripts/check_doc_links.py [changed-markdown-files...]
 ```
 
 ### Step 4: 結果を Issue にコメント
