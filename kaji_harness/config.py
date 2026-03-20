@@ -18,6 +18,7 @@ class PathsConfig:
     """Path-related configuration."""
 
     artifacts_dir: str = "~/.kaji/artifacts"
+    skill_dir: str = ""  # Required. Empty string = not set.
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,14 @@ class KajiConfig:
                 path, f"paths.artifacts_dir must be a string, got {type(artifacts_raw).__name__}"
             )
         cls._validate_artifacts_dir(path, artifacts_raw)
+        skill_dir_raw = paths_data.get("skill_dir")
+        if skill_dir_raw is None:
+            raise ConfigLoadError(path, "paths.skill_dir is required")
+        if not isinstance(skill_dir_raw, str):
+            raise ConfigLoadError(
+                path, f"paths.skill_dir must be a string, got {type(skill_dir_raw).__name__}"
+            )
+        cls._validate_skill_dir(path, skill_dir_raw)
         paths = PathsConfig(
             **{k: v for k, v in paths_data.items() if k in PathsConfig.__dataclass_fields__}
         )
@@ -118,4 +127,21 @@ class KajiConfig:
             raise ConfigLoadError(
                 config_path,
                 f"paths.artifacts_dir must not escape repo root (contains '..'): {artifacts_dir}",
+            )
+
+    @staticmethod
+    def _validate_skill_dir(config_path: Path, skill_dir: str) -> None:
+        """Validate skill_dir path (relative only, no '..' or absolute)."""
+        from pathlib import PurePosixPath
+
+        if Path(skill_dir).is_absolute():
+            raise ConfigLoadError(
+                config_path,
+                f"paths.skill_dir must be a relative path, got absolute: {skill_dir}",
+            )
+        p = PurePosixPath(skill_dir)
+        if ".." in p.parts:
+            raise ConfigLoadError(
+                config_path,
+                f"paths.skill_dir must not contain '..': {skill_dir}",
             )

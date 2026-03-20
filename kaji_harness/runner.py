@@ -55,7 +55,7 @@ class WorkflowRunner:
 
         # 0. 全ステップのスキル存在を事前検証
         for step in self.workflow.steps:
-            validate_skill_exists(step.skill, step.agent, self.project_root)
+            validate_skill_exists(step.skill, self.project_root, self.config.paths.skill_dir)
 
         # 1. ワークフロー定義のバリデーション
         validate_workflow(self.workflow)

@@ -58,7 +58,9 @@ def workdir(tmp_path: Path) -> Path:
     d.mkdir()
     config_dir = d / ".kaji"
     config_dir.mkdir()
-    (config_dir / "config.toml").write_text("[execution]\ndefault_timeout = 1800\n")
+    (config_dir / "config.toml").write_text(
+        '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+    )
     return d
 
 
@@ -494,7 +496,9 @@ class TestCLILarge:
         workdir.mkdir()
         config_dir = workdir / ".kaji"
         config_dir.mkdir()
-        (config_dir / "config.toml").write_text("[execution]\ndefault_timeout = 1800\n")
+        (config_dir / "config.toml").write_text(
+            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+        )
         skill_dir = workdir / ".claude" / "skills" / "test-skill"
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("# Test Skill\n")

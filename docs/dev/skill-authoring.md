@@ -10,15 +10,21 @@ kaji_harness から呼び出されるスキルの書き方。
 
 ## ファイル配置
 
-スキルの実体は `.claude/skills/` に置き、`.agents/skills/` はそれを参照する symlink として扱う。ハーネスは step の `agent` フィールドと `skill` フィールドからパスを解決する。
+スキルの実体は `.kaji/config.toml` の `paths.skill_dir` で指定されたカノニカルディレクトリに置く。他エージェント用ディレクトリ（例: `.agents/skills/`）はカノニカルディレクトリへのシンボリックリンクとして構成する。ハーネスは `skill_dir` と `skill` フィールドからパスを解決する（`agent` フィールドはパス解決に使用しない）。
+
+```toml
+# .kaji/config.toml
+[paths]
+skill_dir = ".claude/skills"   # 必須。カノニカルディレクトリ
+```
 
 ```
-.claude/skills/           # スキル実体
-  issue-design            # ← skill: issue-design, agent: claude
+.claude/skills/           # カノニカルディレクトリ（skill_dir で指定）
+  issue-design
   issue-implement
   issue-review-code
 
-.agents/skills/           # Codex / Gemini 用 symlink
+.agents/skills/           # 他エージェント用 symlink
   issue-review-code -> ../../.claude/skills/issue-review-code
 ```
 

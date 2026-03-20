@@ -1,7 +1,7 @@
 """Tests for skill existence validation.
 
-Covers validate_skill_exists: agent-specific directory resolution,
-not-found error, and path traversal security checks.
+Covers validate_skill_exists: skill_dir-based directory resolution,
+not-found error, path traversal security checks, and symlink resolution.
 """
 
 from __future__ import annotations
@@ -26,52 +26,32 @@ def _create_skill(tmp_path: Path, skill_dir: str, skill_name: str) -> None:
 
 
 # ============================================================
-# 1. Skill exists for claude agent → no error
+# Small tests — skill_dir parameter-based resolution
 # ============================================================
 
 
 @pytest.mark.small
-class TestSkillExistsClaude:
-    """validate_skill_exists succeeds for claude when skill file is present."""
+class TestSkillDirResolution:
+    """validate_skill_exists resolves skills via skill_dir parameter."""
 
-    def test_claude_skill_found(self, tmp_path: Path) -> None:
+    def test_default_claude_skill_dir(self, tmp_path: Path) -> None:
         _create_skill(tmp_path, ".claude/skills", "my-skill")
 
-        validate_skill_exists("my-skill", "claude", tmp_path)
+        validate_skill_exists("my-skill", tmp_path, ".claude/skills")
 
+    def test_custom_skill_dir(self, tmp_path: Path) -> None:
+        _create_skill(tmp_path, "custom/skills", "my-skill")
 
-# ============================================================
-# 2. Skill exists for codex agent → no error
-# ============================================================
+        validate_skill_exists("my-skill", tmp_path, "custom/skills")
 
-
-@pytest.mark.small
-class TestSkillExistsCodex:
-    """validate_skill_exists succeeds for codex when skill file is present."""
-
-    def test_codex_skill_found(self, tmp_path: Path) -> None:
+    def test_agents_skill_dir(self, tmp_path: Path) -> None:
         _create_skill(tmp_path, ".agents/skills", "my-skill")
 
-        validate_skill_exists("my-skill", "codex", tmp_path)
+        validate_skill_exists("my-skill", tmp_path, ".agents/skills")
 
 
 # ============================================================
-# 3. Skill exists for gemini agent → no error
-# ============================================================
-
-
-@pytest.mark.small
-class TestSkillExistsGemini:
-    """validate_skill_exists succeeds for gemini when skill file is present."""
-
-    def test_gemini_skill_found(self, tmp_path: Path) -> None:
-        _create_skill(tmp_path, ".agents/skills", "my-skill")
-
-        validate_skill_exists("my-skill", "gemini", tmp_path)
-
-
-# ============================================================
-# 4. Skill not found → SkillNotFound
+# Small tests — SkillNotFound
 # ============================================================
 
 
@@ -81,11 +61,11 @@ class TestSkillNotFound:
 
     def test_missing_skill_raises(self, tmp_path: Path) -> None:
         with pytest.raises(SkillNotFound):
-            validate_skill_exists("nonexistent-skill", "claude", tmp_path)
+            validate_skill_exists("nonexistent-skill", tmp_path, ".claude/skills")
 
 
 # ============================================================
-# 5. Path traversal attempt → SecurityError
+# Small tests — Path traversal security
 # ============================================================
 
 
@@ -95,12 +75,7 @@ class TestPathTraversalPasswd:
 
     def test_path_traversal_raises(self, tmp_path: Path) -> None:
         with pytest.raises(SecurityError):
-            validate_skill_exists("../../etc/passwd", "claude", tmp_path)
-
-
-# ============================================================
-# 6. Path traversal with .. in skill name → SecurityError
-# ============================================================
+            validate_skill_exists("../../etc/passwd", tmp_path, ".claude/skills")
 
 
 @pytest.mark.small
@@ -109,4 +84,277 @@ class TestPathTraversalDotDot:
 
     def test_dotdot_in_skill_name_raises(self, tmp_path: Path) -> None:
         with pytest.raises(SecurityError):
-            validate_skill_exists("../secret-skill", "claude", tmp_path)
+            validate_skill_exists("../secret-skill", tmp_path, ".claude/skills")
+
+
+# ============================================================
+# Medium tests — Symlink resolution
+# ============================================================
+
+
+@pytest.mark.medium
+class TestSymlinkResolution:
+    """validate_skill_exists resolves skills through symlinks."""
+
+    def test_symlink_skill_dir_resolves(self, tmp_path: Path) -> None:
+        """skill_dir pointing to a symlinked directory resolves correctly."""
+        # Create actual skill in .claude/skills
+        _create_skill(tmp_path, ".claude/skills", "my-skill")
+
+        # Create .agents/skills as symlink to .claude/skills
+        agents_dir = tmp_path / ".agents"
+        agents_dir.mkdir()
+        (agents_dir / "skills").symlink_to(tmp_path / ".claude" / "skills")
+
+        # Validate via the symlink path
+        validate_skill_exists("my-skill", tmp_path, ".agents/skills")
+
+    def test_symlink_individual_skill_resolves(self, tmp_path: Path) -> None:
+        """Individual skill symlinks resolve correctly."""
+        # Create actual skill
+        _create_skill(tmp_path, ".claude/skills", "real-skill")
+
+        # Create skill_dir with a symlinked skill
+        custom_dir = tmp_path / "custom" / "skills" / "linked-skill"
+        custom_dir.mkdir(parents=True)
+        (custom_dir / "SKILL.md").symlink_to(
+            tmp_path / ".claude" / "skills" / "real-skill" / "SKILL.md"
+        )
+
+        validate_skill_exists("linked-skill", tmp_path, "custom/skills")
+
+
+# ============================================================
+# Medium tests — Runner integration (skill_dir from config)
+# ============================================================
+
+
+@pytest.mark.medium
+class TestRunnerSkillDirIntegration:
+    """WorkflowRunner passes config.paths.skill_dir to validate_skill_exists."""
+
+    def test_runner_validates_with_skill_dir(self, tmp_path: Path) -> None:
+        """Runner uses config.paths.skill_dir for skill validation."""
+        from unittest.mock import patch
+
+        from kaji_harness.config import KajiConfig
+        from kaji_harness.models import CLIResult, Step, Workflow
+
+        # Create skill in custom directory
+        _create_skill(tmp_path, "my-skills", "test-skill")
+
+        # Create config with custom skill_dir
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text(
+            '[paths]\nskill_dir = "my-skills"\n\n[execution]\ndefault_timeout = 1800\n'
+        )
+        config = KajiConfig._load(config_dir / "config.toml")
+
+        workflow = Workflow(
+            name="test",
+            description="test",
+            execution_policy="auto",
+            steps=[
+                Step(
+                    id="step1",
+                    skill="test-skill",
+                    agent="claude",
+                    on={"PASS": "end"},
+                ),
+            ],
+        )
+
+        artifacts_dir = tmp_path / "artifacts"
+        artifacts_dir.mkdir()
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            return CLIResult(
+                full_output='---VERDICT---\nstatus: PASS\nreason: "ok"\nevidence: "ok"\nsuggestion: ""\n---END_VERDICT---\n',
+                session_id="sess-1",
+            )
+
+        from kaji_harness.runner import WorkflowRunner
+
+        runner = WorkflowRunner(
+            workflow=workflow,
+            issue_number=999,
+            project_root=tmp_path,
+            artifacts_dir=artifacts_dir,
+            config=config,
+        )
+
+        with patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli):
+            state = runner.run()
+
+        assert state.last_completed_step == "step1"
+
+
+# ============================================================
+# Large tests — E2E kaji run with real config
+# ============================================================
+
+
+@pytest.mark.large
+class TestSkillDirE2E:
+    """E2E: kaji run with skill_dir config resolves skills correctly."""
+
+    def test_kaji_run_step_with_skill_dir(self, tmp_path: Path) -> None:
+        """kaji run --step uses config skill_dir for pre-flight validation."""
+        import os
+        import subprocess
+        import sys
+
+        # Set up project structure
+        kaji_dir = tmp_path / ".kaji"
+        kaji_dir.mkdir()
+        (kaji_dir / "config.toml").write_text(
+            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+        )
+
+        # Create skill
+        _create_skill(tmp_path, ".claude/skills", "issue-design")
+
+        # Create workflow
+        workflows_dir = tmp_path / "workflows"
+        workflows_dir.mkdir()
+        (workflows_dir / "test.yaml").write_text(
+            """name: test-workflow
+description: test
+execution_policy: auto
+steps:
+  - id: design
+    skill: issue-design
+    agent: claude
+    on:
+      PASS: end
+      ABORT: end
+"""
+        )
+
+        python_dir = str(Path(sys.executable).parent)
+        env = {**os.environ, "PATH": python_dir}
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "kaji_harness.cli_main",
+                "run",
+                str(workflows_dir / "test.yaml"),
+                "999",
+                "--step",
+                "design",
+                "--workdir",
+                str(tmp_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+
+        # Exit code 3 = CLIExecutionError/CLINotFoundError (past skill validation)
+        assert result.returncode == 3, f"Expected exit 3, got {result.returncode}: {result.stderr}"
+
+    def test_kaji_run_step_with_custom_skill_dir(self, tmp_path: Path) -> None:
+        """kaji run --step with non-default skill_dir resolves correctly."""
+        import os
+        import subprocess
+        import sys
+
+        kaji_dir = tmp_path / ".kaji"
+        kaji_dir.mkdir()
+        (kaji_dir / "config.toml").write_text(
+            '[paths]\nskill_dir = "custom/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+        )
+
+        _create_skill(tmp_path, "custom/skills", "my-skill")
+
+        workflows_dir = tmp_path / "workflows"
+        workflows_dir.mkdir()
+        (workflows_dir / "test.yaml").write_text(
+            """name: test-workflow
+description: test
+execution_policy: auto
+steps:
+  - id: step1
+    skill: my-skill
+    agent: claude
+    on:
+      PASS: end
+      ABORT: end
+"""
+        )
+
+        python_dir = str(Path(sys.executable).parent)
+        env = {**os.environ, "PATH": python_dir}
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "kaji_harness.cli_main",
+                "run",
+                str(workflows_dir / "test.yaml"),
+                "999",
+                "--step",
+                "step1",
+                "--workdir",
+                str(tmp_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+        )
+
+        # Exit 3 = past skill validation, failed at CLI execution
+        assert result.returncode == 3, f"Expected exit 3, got {result.returncode}: {result.stderr}"
+
+    def test_kaji_run_missing_skill_dir_in_config_fails(self, tmp_path: Path) -> None:
+        """kaji run fails when skill_dir is not set in config."""
+        import subprocess
+        import sys
+
+        kaji_dir = tmp_path / ".kaji"
+        kaji_dir.mkdir()
+        # No skill_dir in config
+        (kaji_dir / "config.toml").write_text("[execution]\ndefault_timeout = 1800\n")
+
+        workflows_dir = tmp_path / "workflows"
+        workflows_dir.mkdir()
+        (workflows_dir / "test.yaml").write_text(
+            """name: test-workflow
+description: test
+execution_policy: auto
+steps:
+  - id: step1
+    skill: my-skill
+    agent: claude
+    on:
+      PASS: end
+"""
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "kaji_harness.cli_main",
+                "run",
+                str(workflows_dir / "test.yaml"),
+                "999",
+                "--step",
+                "step1",
+                "--workdir",
+                str(tmp_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        # Should fail with config error (exit 2)
+        assert result.returncode == 2, f"Expected exit 2, got {result.returncode}: {result.stderr}"
+        assert "skill_dir" in result.stderr

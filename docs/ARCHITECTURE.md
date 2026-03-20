@@ -46,7 +46,7 @@
 
 ### Layer 3: スキル本体
 
-`.claude/skills/<name>/SKILL.md`（Claude Code 用）、`.agents/skills/<name>/SKILL.md`（Codex / Gemini 用）。CLI が `cwd=workdir` で実行する際にネイティブにロードされる。
+`.kaji/config.toml` の `paths.skill_dir` で設定されたカノニカルディレクトリ配下の `<name>/SKILL.md`。CLI が `cwd=workdir` で実行する際にネイティブにロードされる。他エージェント用ディレクトリ（例: `.agents/skills/`）はカノニカルディレクトリへのシンボリックリンクとして構成する。
 
 ---
 
@@ -63,7 +63,7 @@ kaji_harness/
   adapters.py     # CLI イベントアダプタ (Claude/Codex/Gemini)
   cli.py          # CLI 引数構築 & サブプロセス実行
   prompt.py       # プロンプトビルダー
-  skill.py        # スキル存在確認 & パストラバーサル防御
+  skill.py        # スキル存在確認 & パストラバーサル防御 (config.paths.skill_dir ベース)
   state.py        # セッション状態永続化 (artifacts_dir ベース)
   logger.py       # JSONL 構造化ログ
   runner.py       # WorkflowRunner (自動遷移・サイクル管理)
