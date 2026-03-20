@@ -57,11 +57,12 @@ timeout = resolve_timeout(step, workflow, config)
 ## 制約・前提条件
 
 - `config.toml` の `[execution] default_timeout` は必須。未設定時は `ConfigLoadError` を送出
-- タイムアウト値は正の整数（秒単位）。0以下はバリデーションエラー
-- 既存の `step.timeout` フィールドの型・動作は変更しない
-- `Workflow` データクラスに `default_timeout: int | None` フィールドを追加
+- すべての timeout 値（`config.execution.default_timeout`, `workflow.default_timeout`, `step.timeout`）は正の整数（秒単位）。0以下・非整数・bool 型はバリデーションエラー
+- `step.timeout` の型は `int | None` のまま変更しないが、`_parse_workflow()` と `validate_workflow()` の双方でバリデーションを追加する
+- `Workflow` データクラスに `default_timeout: int | None = None` フィールドを追加
 - `KajiConfig` に `ExecutionConfig` データクラスを追加
 - `execute_cli()` のシグネチャに `default_timeout: int` パラメータを追加
+- **timeout: 0 の扱い**: `step.timeout or default_timeout` のような truthy 判定は使用しない。`step.timeout is not None` で明示的に None チェックする（0 が silent fallback されることを防止）
 
 ## 方針
 
@@ -86,19 +87,24 @@ class KajiConfig:
 ### 2. `Workflow` モデルの拡張
 
 `models.py` の `Workflow` に `default_timeout: int | None = None` を追加。
-`workflow.py` の `_parse_workflow()` で `data.get("default_timeout")` をパースし、型と値を検証する。
+
+**パーサ (`_parse_workflow()`)**: `data.get("default_timeout")` をパースし、型（int かつ非 bool）と値（正の整数）を検証する。`step.timeout` についても同様のバリデーションを追加する。
+
+**バリデータ (`validate_workflow()`)**: パーサを経由せず直接構築された `Workflow(...)` / `Step(...)` にも同等のバリデーションを適用する。これは `validate_workflow()` が直接構築モデルも守る既存契約（`tests/test_workflow_validator.py` で確認済み）を維持するため。具体的には:
+- `workflow.default_timeout` が設定されている場合: 正の整数であること
+- 各 `step.timeout` が設定されている場合: 正の整数であること
 
 ### 3. `execute_cli()` の変更
 
 - `DEFAULT_TIMEOUT` 定数を削除
 - `execute_cli()` に `default_timeout: int` パラメータを追加
-- タイムアウト解決: `step.timeout or default_timeout`
+- タイムアウト解決: `step.timeout if step.timeout is not None else default_timeout`（truthy 判定ではなく明示的 None チェック）
 
 ### 4. `WorkflowRunner` の変更
 
 - `WorkflowRunner` に `config: KajiConfig` を持たせる（既に `artifacts_dir` 経由で config を使用しているため、config 自体を渡す形に変更）
 - `execute_cli()` 呼び出し時に `default_timeout` を算出して渡す:
-  `workflow.default_timeout or config.execution.default_timeout`
+  `workflow.default_timeout if workflow.default_timeout is not None else config.execution.default_timeout`
 
 ### 5. `cli_main.py` の変更
 
@@ -112,10 +118,13 @@ class KajiConfig:
 
 ### Small テスト
 
-- **ExecutionConfig のバリデーション**: `default_timeout` 未設定・型不正・0以下のケースで `ConfigLoadError`
-- **KajiConfig._load() の [execution] パース**: 正常値・欠損・不正値の各ケース
-- **Workflow.default_timeout パース**: `_parse_workflow()` で正常値・None・型不正・0以下のケース
-- **タイムアウト解決ロジック**: step.timeout あり/なし × workflow.default_timeout あり/なし の組み合わせ
+- **ExecutionConfig のバリデーション**: `default_timeout` 未設定・型不正（文字列, bool, float）・0以下のケースで `ConfigLoadError`
+- **KajiConfig._load() の [execution] パース**: 正常値・`[execution]` セクション欠損・`default_timeout` キー欠損・不正値の各ケース
+- **Workflow.default_timeout パース（`_parse_workflow()`）**: 正常値・None（省略）・型不正（文字列, bool）・0以下のケース
+- **step.timeout パース（`_parse_workflow()`）**: 型不正（文字列, bool, float）・0以下のケースでエラー
+- **validate_workflow() での timeout バリデーション**: 直接構築した `Workflow(default_timeout=0)` や `Step(timeout=-1)` が `WorkflowValidationError` になること
+- **タイムアウト解決ロジック**: `step.timeout is not None` の明示的 None チェック。step.timeout=0 がフォールバックされないこと（バリデーション通過後の安全性確認）
+- **フォールバック組み合わせ**: step.timeout あり/なし × workflow.default_timeout あり/なし の組み合わせ
 - **既存テストの修正**: `DEFAULT_TIMEOUT` を参照しているテストの更新
 
 ### Medium テスト
@@ -136,8 +145,9 @@ class KajiConfig:
 | ドキュメント | 影響の有無 | 理由 |
 |-------------|-----------|------|
 | docs/adr/ | なし | 新しい技術選定はない |
-| docs/ARCHITECTURE.md | なし | アーキテクチャ構造の変更はない |
+| docs/ARCHITECTURE.md | あり | `config.py` の説明（L58）に `ExecutionConfig` の追加を反映。エラー階層（L238-244）に config 関連エラーの更新が必要な場合あり |
 | docs/dev/workflow-authoring.md | あり | `timeout` フィールドのデフォルト値・フォールバック仕様・`default_timeout` ワークフローフィールドの追記が必要 |
+| README.md | あり | `.kaji/config.toml` の最小構成例（L46-52）に `[execution] default_timeout` が必須項目として追加されるため更新が必要 |
 | docs/cli-guides/ | なし | CLI インターフェースの変更はない |
 | CLAUDE.md | なし | 規約変更はない |
 
@@ -149,7 +159,10 @@ class KajiConfig:
 | 現行 config.py | `kaji_harness/config.py` | `KajiConfig` は `repo_root` + `PathsConfig` のみ。`[execution]` セクションは未定義 |
 | 現行 models.py | `kaji_harness/models.py:66-73` | `Workflow` に `default_timeout` フィールドなし |
 | 現行 workflow.py | `kaji_harness/workflow.py:166-172` | `_parse_workflow()` は `default_timeout` をパースしていない |
+| validate_workflow() 契約 | `kaji_harness/workflow.py:175-308`, `tests/test_workflow_validator.py` | `validate_workflow()` は直接構築の `Workflow(...)` / `Step(...)` にも適用される。テストで `Step(...)` を直接構築して検証している |
 | ワークフロー定義マニュアル | `docs/dev/workflow-authoring.md:58` | `timeout` フィールドは記載あるがデフォルト値の説明なし |
+| README.md | `README.md:46-52` | `.kaji/config.toml` 最小構成例に `[paths]` のみ記載。`[execution]` 必須化で更新が必要 |
+| docs/ARCHITECTURE.md | `docs/ARCHITECTURE.md:58,201-203` | `config.py` の説明と `artifacts_dir` の config.toml 参照あり |
 | Python tomllib | https://docs.python.org/3/library/tomllib.html | TOML パースに使用。kaji は Python 3.11+ で `tomllib` を標準使用 |
 | TOML 仕様 | https://toml.io/en/v1.0.0 | `[execution]` テーブルと `default_timeout` キーは TOML v1.0.0 準拠 |
 
