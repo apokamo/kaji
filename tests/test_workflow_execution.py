@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
+from kaji_harness.config import KajiConfig
 from kaji_harness.errors import MissingResumeSessionError, WorkflowValidationError
 from kaji_harness.models import CLIResult, CostInfo, CycleDefinition, Step, Workflow
 from kaji_harness.runner import WorkflowRunner
@@ -107,18 +108,32 @@ def _cycle_workflow() -> Workflow:
     )
 
 
+def _make_config(tmp_path: Path) -> KajiConfig:
+    """Create a minimal KajiConfig for use in tests."""
+    kaji_dir = tmp_path / ".kaji"
+    kaji_dir.mkdir(exist_ok=True)
+    config_file = kaji_dir / "config.toml"
+    if not config_file.exists():
+        config_file.write_text("[execution]\ndefault_timeout = 1800\n")
+    return KajiConfig._load(config_file)
+
+
 def _make_runner(
     tmp_path: Path,
     workflow: Workflow,
     issue: int = 99,
+    config: KajiConfig | None = None,
     **kwargs: object,
 ) -> WorkflowRunner:
     """Create a WorkflowRunner with project_root and artifacts_dir."""
+    if config is None:
+        config = _make_config(tmp_path)
     return WorkflowRunner(
         workflow=workflow,
         issue_number=issue,
         project_root=tmp_path,
         artifacts_dir=tmp_path / ".kaji-artifacts",
+        config=config,
         **kwargs,  # type: ignore[arg-type]
     )
 

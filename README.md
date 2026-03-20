@@ -49,6 +49,9 @@ Issue駆動のTDD開発フロー:
 # .kaji/config.toml
 [paths]
 artifacts_dir = "~/.kaji/artifacts"
+
+[execution]
+default_timeout = 1800  # 必須: タイムアウトのデフォルト値（秒）
 ```
 
 skill の実体は `.claude/skills/` に置き、`.agents/skills/` はそれを参照する symlink として扱う。

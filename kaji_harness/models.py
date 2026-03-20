@@ -71,6 +71,7 @@ class Workflow:
     execution_policy: str
     steps: list[Step]
     cycles: list[CycleDefinition] = field(default_factory=list)
+    default_timeout: int | None = None
 
     def find_step(self, step_id: str) -> Step | None:
         """ID でステップを検索。見つからなければ None。"""

@@ -95,6 +95,18 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                 f"Step '{step_data['id']}' 'inject_verdict' must be a boolean, "
                 f"got {type(raw_inject_verdict).__name__}"
             )
+        raw_timeout = step_data.get("timeout")
+        if raw_timeout is not None:
+            if not isinstance(raw_timeout, int) or isinstance(raw_timeout, bool):
+                raise WorkflowValidationError(
+                    f"Step '{step_data['id']}' 'timeout' must be an integer, "
+                    f"got {type(raw_timeout).__name__}"
+                )
+            if raw_timeout <= 0:
+                raise WorkflowValidationError(
+                    f"Step '{step_data['id']}' 'timeout' must be a positive integer, "
+                    f"got {raw_timeout}"
+                )
         steps.append(
             Step(
                 id=step_data["id"],
@@ -104,7 +116,7 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                 effort=step_data.get("effort"),
                 max_budget_usd=step_data.get("max_budget_usd"),
                 max_turns=step_data.get("max_turns"),
-                timeout=step_data.get("timeout"),
+                timeout=raw_timeout,
                 resume=step_data.get("resume"),
                 inject_verdict=raw_inject_verdict,
                 on=raw_on,
@@ -163,12 +175,24 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
             f"got '{execution_policy}'"
         )
 
+    raw_default_timeout = data.get("default_timeout")
+    if raw_default_timeout is not None:
+        if not isinstance(raw_default_timeout, int) or isinstance(raw_default_timeout, bool):
+            raise WorkflowValidationError(
+                f"'default_timeout' must be an integer, got {type(raw_default_timeout).__name__}"
+            )
+        if raw_default_timeout <= 0:
+            raise WorkflowValidationError(
+                f"'default_timeout' must be a positive integer, got {raw_default_timeout}"
+            )
+
     return Workflow(
         name=data.get("name", ""),
         description=data.get("description", ""),
         execution_policy=execution_policy,
         steps=steps,
         cycles=cycles,
+        default_timeout=raw_default_timeout,
     )
 
 
@@ -187,6 +211,17 @@ def validate_workflow(workflow: Workflow) -> None:
     invalid_on_step_ids: set[str] = set()
 
     # ---- スキーマレベルのバリデーション ----
+    # default_timeout の検証（_parse_workflow() を経由しない場合も担保）
+    if workflow.default_timeout is not None:
+        if (
+            not isinstance(workflow.default_timeout, int)
+            or isinstance(workflow.default_timeout, bool)
+            or workflow.default_timeout <= 0
+        ):
+            errors.append(
+                f"'default_timeout' must be a positive integer, got {workflow.default_timeout!r}"
+            )
+
     # execution_policy の enum 検証（_parse_workflow() を経由しない場合も担保）
     if workflow.execution_policy not in VALID_EXECUTION_POLICIES:
         errors.append(
@@ -200,6 +235,17 @@ def validate_workflow(workflow: Workflow) -> None:
 
     # ステップレベルの検証
     for step in workflow.steps:
+        # スキーマ: step.timeout の検証（_parse_workflow() を経由しない場合も担保）
+        if step.timeout is not None:
+            if (
+                not isinstance(step.timeout, int)
+                or isinstance(step.timeout, bool)
+                or step.timeout <= 0
+            ):
+                errors.append(
+                    f"Step '{step.id}' 'timeout' must be a positive integer, got {step.timeout!r}"
+                )
+
         # スキーマ: step.on は非空の dict であること
         if not isinstance(step.on, dict) or not step.on:
             errors.append(f"Step '{step.id}' 'on' must be a non-empty mapping")

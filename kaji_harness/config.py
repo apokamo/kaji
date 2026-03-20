@@ -21,11 +21,19 @@ class PathsConfig:
 
 
 @dataclass(frozen=True)
+class ExecutionConfig:
+    """Execution-related configuration."""
+
+    default_timeout: int  # Required. No default.
+
+
+@dataclass(frozen=True)
 class KajiConfig:
     """Top-level kaji configuration."""
 
     repo_root: Path
     paths: PathsConfig
+    execution: ExecutionConfig
 
     @property
     def artifacts_dir(self) -> Path:
@@ -68,7 +76,27 @@ class KajiConfig:
         paths = PathsConfig(
             **{k: v for k, v in paths_data.items() if k in PathsConfig.__dataclass_fields__}
         )
-        return cls(repo_root=path.parent.parent, paths=paths)
+
+        # Parse [execution] section (required)
+        execution_data = data.get("execution")
+        if execution_data is None or not isinstance(execution_data, dict):
+            raise ConfigLoadError(path, "[execution] section is required")
+        raw_timeout = execution_data.get("default_timeout")
+        if raw_timeout is None:
+            raise ConfigLoadError(path, "execution.default_timeout is required")
+        if not isinstance(raw_timeout, int) or isinstance(raw_timeout, bool):
+            raise ConfigLoadError(
+                path,
+                f"execution.default_timeout must be an integer, got {type(raw_timeout).__name__}",
+            )
+        if raw_timeout <= 0:
+            raise ConfigLoadError(
+                path,
+                f"execution.default_timeout must be a positive integer, got {raw_timeout}",
+            )
+        execution = ExecutionConfig(default_timeout=raw_timeout)
+
+        return cls(repo_root=path.parent.parent, paths=paths, execution=execution)
 
     @staticmethod
     def _validate_artifacts_dir(config_path: Path, artifacts_dir: str) -> None:

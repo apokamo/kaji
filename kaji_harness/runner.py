@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .cli import execute_cli
+from .config import KajiConfig
 from .errors import (
     InvalidTransition,
     MissingResumeSessionError,
@@ -34,6 +35,7 @@ class WorkflowRunner:
     issue_number: int
     project_root: Path
     artifacts_dir: Path
+    config: KajiConfig
     from_step: str | None = None
     single_step: str | None = None
     verbose: bool = True
@@ -128,6 +130,13 @@ class WorkflowRunner:
                         session_id,
                     )
 
+                    # タイムアウト解決: workflow.default_timeout → config.execution.default_timeout
+                    default_timeout = (
+                        self.workflow.default_timeout
+                        if self.workflow.default_timeout is not None
+                        else self.config.execution.default_timeout
+                    )
+
                     # CLI 実行
                     result = execute_cli(
                         step=current_step,
@@ -137,6 +146,7 @@ class WorkflowRunner:
                         log_dir=step_log_dir,
                         execution_policy=execution_policy,
                         verbose=self.verbose,
+                        default_timeout=default_timeout,
                     )
 
                     # セッション ID を保存
