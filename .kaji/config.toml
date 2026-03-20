@@ -3,6 +3,7 @@
 
 [paths]
 artifacts_dir = ".kaji-artifacts"
+skill_dir = ".claude/skills"
 
 [execution]
 default_timeout = 1800

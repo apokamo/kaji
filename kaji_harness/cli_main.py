@@ -103,6 +103,22 @@ def _resolve_project_root_for_validate(explicit_root: Path | None, yaml_path: Pa
     return yaml_path.resolve().parent
 
 
+_VALIDATE_FALLBACK_SKILL_DIR = ".claude/skills"
+
+
+def _resolve_skill_dir_for_validate(project_root: Path) -> str:
+    """Resolve skill_dir for validate command.
+
+    Uses config if available, falls back to '.claude/skills' for
+    backward compatibility (validate works without .kaji/config.toml).
+    """
+    try:
+        config = KajiConfig.discover(start_dir=project_root)
+        return config.paths.skill_dir
+    except (ConfigNotFoundError, ConfigLoadError):
+        return _VALIDATE_FALLBACK_SKILL_DIR
+
+
 def cmd_validate(args: argparse.Namespace) -> int:
     """Execute the `validate` subcommand."""
     failed = 0
@@ -117,8 +133,9 @@ def cmd_validate(args: argparse.Namespace) -> int:
             wf = load_workflow(path)
             validate_workflow(wf)
             project_root = _resolve_project_root_for_validate(args.project_root, path)
+            skill_dir = _resolve_skill_dir_for_validate(project_root)
             for step in wf.steps:
-                validate_skill_exists(step.skill, step.agent, project_root)
+                validate_skill_exists(step.skill, project_root, skill_dir)
             _print_success(path)
         except WorkflowValidationError as e:
             _print_error(path, e.errors)

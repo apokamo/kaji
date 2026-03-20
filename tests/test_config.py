@@ -44,7 +44,7 @@ class TestKajiConfigLoadValid:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nartifacts_dir = "custom-artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "custom-artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         config = KajiConfig._load(config_file)
@@ -52,22 +52,22 @@ class TestKajiConfigLoadValid:
         assert config.repo_root == tmp_path
         assert config.paths.artifacts_dir == "custom-artifacts"
 
-    def test_load_empty_file(self, tmp_path: Path) -> None:
+    def test_load_without_skill_dir_raises(self, tmp_path: Path) -> None:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text("[execution]\ndefault_timeout = 1800\n")
 
-        config = KajiConfig._load(config_file)
-
-        assert config.repo_root == tmp_path
-        assert config.paths.artifacts_dir == "~/.kaji/artifacts"  # default
+        with pytest.raises(ConfigLoadError, match="skill_dir is required"):
+            KajiConfig._load(config_file)
 
     def test_load_empty_paths_section(self, tmp_path: Path) -> None:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
-        config_file.write_text("[paths]\n\n[execution]\ndefault_timeout = 1800\n")
+        config_file.write_text(
+            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+        )
 
         config = KajiConfig._load(config_file)
 
@@ -78,7 +78,7 @@ class TestKajiConfigLoadValid:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nartifacts_dir = "out"\nunknown_key = "value"\n\n[unknown_section]\nfoo = 42\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "out"\nunknown_key = "value"\n\n[unknown_section]\nfoo = 42\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         config = KajiConfig._load(config_file)
@@ -104,7 +104,7 @@ class TestKajiConfigLoadInvalid:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nartifacts_dir = "/tmp/outside"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "/tmp/outside"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         config = KajiConfig._load(config_file)
@@ -115,7 +115,7 @@ class TestKajiConfigLoadInvalid:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nartifacts_dir = "../escape"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "../escape"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         with pytest.raises(ConfigLoadError, match="escape repo root"):
@@ -126,7 +126,7 @@ class TestKajiConfigLoadInvalid:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nartifacts_dir = "sub/../../escape"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "sub/../../escape"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         with pytest.raises(ConfigLoadError, match="escape repo root"):
@@ -137,7 +137,7 @@ class TestKajiConfigLoadInvalid:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         config = KajiConfig._load(config_file)
@@ -150,7 +150,7 @@ class TestKajiConfigLoadInvalid:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         with patch("pathlib.Path.expanduser", side_effect=RuntimeError("no home")):
@@ -162,7 +162,7 @@ class TestKajiConfigLoadInvalid:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            "[paths]\nartifacts_dir = 42\n\n[execution]\ndefault_timeout = 1800\n"
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = 42\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         with pytest.raises(ConfigLoadError, match="must be a string"):
@@ -177,7 +177,9 @@ class TestKajiConfigRepoRoot:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
-        config_file.write_text("[execution]\ndefault_timeout = 1800\n")
+        config_file.write_text(
+            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+        )
 
         config = KajiConfig._load(config_file)
 
@@ -192,7 +194,9 @@ class TestKajiConfigArtifactsDir:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
-        config_file.write_text("[execution]\ndefault_timeout = 1800\n")
+        config_file.write_text(
+            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+        )
 
         config = KajiConfig._load(config_file)
 
@@ -203,7 +207,7 @@ class TestKajiConfigArtifactsDir:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         config = KajiConfig._load(config_file)
@@ -216,7 +220,7 @@ class TestKajiConfigArtifactsDir:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nartifacts_dir = "/tmp/my-artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "/tmp/my-artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         config = KajiConfig._load(config_file)
@@ -228,7 +232,7 @@ class TestKajiConfigArtifactsDir:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nartifacts_dir = "build/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "build/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         config = KajiConfig._load(config_file)
@@ -263,7 +267,9 @@ class TestKajiConfigDiscover:
         """Discover config when start_dir contains .kaji/config.toml."""
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
-        (config_dir / "config.toml").write_text("[execution]\ndefault_timeout = 1800\n")
+        (config_dir / "config.toml").write_text(
+            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+        )
 
         config = KajiConfig.discover(start_dir=tmp_path)
 
@@ -273,7 +279,9 @@ class TestKajiConfigDiscover:
         """Discover config from a nested subdirectory (walk-up)."""
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
-        (config_dir / "config.toml").write_text("[execution]\ndefault_timeout = 1800\n")
+        (config_dir / "config.toml").write_text(
+            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+        )
 
         subdir = tmp_path / "src" / "deep" / "nested"
         subdir.mkdir(parents=True)
@@ -297,7 +305,7 @@ class TestKajiConfigDiscover:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nartifacts_dir = "my-output"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "my-output"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         config = KajiConfig.discover(start_dir=tmp_path)
@@ -309,7 +317,7 @@ class TestKajiConfigDiscover:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         config = KajiConfig.discover(start_dir=tmp_path)
@@ -322,7 +330,7 @@ class TestKajiConfigDiscover:
         config_dir.mkdir()
         abs_dir = tmp_path / "external"
         (config_dir / "config.toml").write_text(
-            f'[paths]\nartifacts_dir = "{abs_dir}"\n\n[execution]\ndefault_timeout = 1800\n'
+            f'[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "{abs_dir}"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         config = KajiConfig.discover(start_dir=tmp_path)
@@ -333,7 +341,9 @@ class TestKajiConfigDiscover:
         """Default config places artifacts outside repo root."""
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
-        (config_dir / "config.toml").write_text("[execution]\ndefault_timeout = 1800\n")
+        (config_dir / "config.toml").write_text(
+            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+        )
 
         config = KajiConfig.discover(start_dir=tmp_path)
 
@@ -346,7 +356,7 @@ class TestKajiConfigDiscover:
         root_config = tmp_path / ".kaji"
         root_config.mkdir()
         (root_config / "config.toml").write_text(
-            '[paths]\nartifacts_dir = "root-arts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "root-arts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         # Create a subdirectory with its own .kaji/config.toml
@@ -355,7 +365,7 @@ class TestKajiConfigDiscover:
         inner_config = inner / ".kaji"
         inner_config.mkdir()
         (inner_config / "config.toml").write_text(
-            '[paths]\nartifacts_dir = "inner-arts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "inner-arts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         # Discover from inner - should find inner's config
@@ -468,7 +478,9 @@ class TestRunnerWithConfig:
 
         kaji_dir = project_root / ".kaji"
         kaji_dir.mkdir()
-        (kaji_dir / "config.toml").write_text("[execution]\ndefault_timeout = 1800\n")
+        (kaji_dir / "config.toml").write_text(
+            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+        )
         config = KajiConfig._load(kaji_dir / "config.toml")
 
         def mock_execute_cli(**kwargs: object) -> CLIResult:
@@ -527,7 +539,9 @@ class TestRunnerWithConfig:
 
         kaji_dir = project_root / ".kaji"
         kaji_dir.mkdir()
-        (kaji_dir / "config.toml").write_text("[execution]\ndefault_timeout = 1800\n")
+        (kaji_dir / "config.toml").write_text(
+            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+        )
         config = KajiConfig._load(kaji_dir / "config.toml")
 
         captured_workdir: list[object] = []
@@ -575,7 +589,9 @@ class TestCLIConfigIntegration:
         # Create config
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
-        (config_dir / "config.toml").write_text("[execution]\ndefault_timeout = 1800\n")
+        (config_dir / "config.toml").write_text(
+            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+        )
 
         # Create workflow file
         wf = tmp_path / "workflow.yaml"
@@ -677,7 +693,7 @@ class TestCLIConfigIntegration:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         wf = tmp_path / "workflow.yaml"
@@ -709,7 +725,7 @@ class TestCLIConfigIntegration:
         config_dir.mkdir()
         abs_artifacts = tmp_path / "external-artifacts"
         (config_dir / "config.toml").write_text(
-            f'[paths]\nartifacts_dir = "{abs_artifacts}"\n\n[execution]\ndefault_timeout = 1800\n'
+            f'[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "{abs_artifacts}"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         wf = tmp_path / "workflow.yaml"
@@ -764,7 +780,9 @@ class TestCLIConfigIntegration:
         # Create config
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
-        (config_dir / "config.toml").write_text("[execution]\ndefault_timeout = 1800\n")
+        (config_dir / "config.toml").write_text(
+            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+        )
 
         # Create workflow inside .kaji/workflows/
         wf_dir = tmp_path / ".kaji" / "workflows"
@@ -802,7 +820,9 @@ class TestConfigE2E:
         # Create config
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
-        (config_dir / "config.toml").write_text("[execution]\ndefault_timeout = 1800\n")
+        (config_dir / "config.toml").write_text(
+            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+        )
 
         # Create workflow
         wf_dir = tmp_path / ".kaji" / "workflows"
@@ -913,7 +933,7 @@ class TestConfigE2E:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            f'[paths]\nartifacts_dir = "{arts_dir}"\n\n[execution]\ndefault_timeout = 1800\n'
+            f'[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "{arts_dir}"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         wf_dir = tmp_path / ".kaji" / "workflows"
@@ -975,7 +995,7 @@ class TestConfigE2E:
         config_dir = workdir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            f'[paths]\nartifacts_dir = "{arts_dir}"\n\n[execution]\ndefault_timeout = 1800\n'
+            f'[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "{arts_dir}"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         wf_dir = workdir / ".kaji" / "workflows"
@@ -1071,7 +1091,9 @@ class TestConfigE2E:
 
         config_dir = repo_dir / ".kaji"
         config_dir.mkdir()
-        (config_dir / "config.toml").write_text("[execution]\ndefault_timeout = 1800\n")
+        (config_dir / "config.toml").write_text(
+            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+        )
 
         wf_dir = repo_dir / ".kaji" / "workflows"
         wf_dir.mkdir()
