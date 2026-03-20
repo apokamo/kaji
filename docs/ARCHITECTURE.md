@@ -55,7 +55,7 @@
 ```
 kaji_harness/
   __init__.py
-  config.py       # .kaji/config.toml 探索・パース (KajiConfig, PathsConfig)
+  config.py       # .kaji/config.toml 探索・パース (KajiConfig, PathsConfig, ExecutionConfig)
   models.py       # データクラス: Workflow, Step, CycleDefinition, Verdict, CLIResult
   errors.py       # エラー階層 (13クラス、ConfigNotFoundError 含む)
   workflow.py     # YAML パーサ & バリデータ

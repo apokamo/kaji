@@ -3,3 +3,6 @@
 
 [paths]
 artifacts_dir = ".kaji-artifacts"
+
+[execution]
+default_timeout = 1800

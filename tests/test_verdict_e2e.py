@@ -409,7 +409,7 @@ def _setup_fake_agent_env(
     workdir.mkdir()
     config_dir = workdir / ".kaji"
     config_dir.mkdir()
-    (config_dir / "config.toml").write_text("")
+    (config_dir / "config.toml").write_text("[execution]\ndefault_timeout = 1800\n")
     skill_dir = workdir / ".claude" / "skills" / "test-skill"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("# Test Skill\n")

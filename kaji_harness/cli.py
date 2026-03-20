@@ -16,8 +16,6 @@ from .adapters import ADAPTERS, CLIEventAdapter
 from .errors import CLIExecutionError, CLINotFoundError, StepTimeoutError
 from .models import CLIResult, CostInfo, Step
 
-DEFAULT_TIMEOUT = 1800  # 30 minutes
-
 
 def _now_stamp() -> str:
     """現在時刻を ISO 8601 形式（秒精度、タイムゾーンなし）で返す。"""
@@ -51,11 +49,13 @@ def execute_cli(
     log_dir: Path,
     execution_policy: str,
     verbose: bool = True,
+    *,
+    default_timeout: int,
 ) -> CLIResult:
     """CLI を実行し、結果を返す。"""
     args = build_cli_args(step, prompt, workdir, session_id, execution_policy)
     adapter = ADAPTERS[step.agent]
-    timeout = step.timeout or DEFAULT_TIMEOUT
+    timeout = step.timeout if step.timeout is not None else default_timeout
 
     try:
         process = subprocess.Popen(

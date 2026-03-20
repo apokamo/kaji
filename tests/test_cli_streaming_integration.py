@@ -223,6 +223,7 @@ class TestExecuteCLI:
                     log_dir=tmp_path / "logs",
                     execution_policy="auto",
                     verbose=False,
+                    default_timeout=1800,
                 )
 
     def test_nonzero_exit_raises_cli_execution_error(self, tmp_path: Path) -> None:
@@ -246,6 +247,7 @@ class TestExecuteCLI:
                     log_dir=tmp_path / "logs",
                     execution_policy="auto",
                     verbose=False,
+                    default_timeout=1800,
                 )
             assert exc_info.value.step_id == "test"
             assert exc_info.value.returncode == 1
@@ -274,6 +276,7 @@ class TestExecuteCLI:
                     log_dir=tmp_path / "logs",
                     execution_policy="auto",
                     verbose=False,
+                    default_timeout=1800,
                 )
             assert exc_info.value.step_id == "slow-step"
             assert exc_info.value.timeout == 1
@@ -313,6 +316,7 @@ class TestExecuteCLISuccessFlow:
                 log_dir=tmp_path / "logs",
                 execution_policy="auto",
                 verbose=False,
+                default_timeout=1800,
             )
 
         assert result.session_id == "s-123"

@@ -206,6 +206,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             issue_number=args.issue,
             project_root=project_root,
             artifacts_dir=config.artifacts_dir,
+            config=config,
             from_step=args.from_step,
             single_step=args.single_step,
             verbose=not args.quiet,
