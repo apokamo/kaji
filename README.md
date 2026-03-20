@@ -1,4 +1,4 @@
-# kaji
+# kaji「舵」
 
 AI-driven software development workflow orchestrator. Claude Code / Codex / Gemini CLI のスキルをワークフロー YAML に従って実行する。
 
@@ -23,7 +23,7 @@ AI-driven software development workflow orchestrator. Claude Code / Codex / Gemi
 
 詳細: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
-## セットアップ
+## セットアップ（開発者向け）
 
 ```bash
 python -m venv .venv
