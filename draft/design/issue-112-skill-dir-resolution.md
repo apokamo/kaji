@@ -38,7 +38,9 @@ skill_dir = ".claude/skills"        # 追加。デフォルト値: ".claude/skil
 
 - `skill_dir`: スキルの実体が格納されるカノニカルディレクトリ（workdir からの相対パス）
 - 省略時は `".claude/skills"` をデフォルトとする（後方互換）
-- `artifacts_dir` と同じバリデーションルール適用（`..` 禁止、絶対パス許容）
+- **相対パス限定**（`..` 禁止、絶対パス不可）。`artifacts_dir` とはルールが異なる
+  - 理由: `validate_skill_exists` の `is_relative_to(workdir)` チェックにより、repo 外の絶対パスは必ず `SecurityError` になる。config で受理しても pre-flight で弾かれる矛盾を防ぐ
+  - `artifacts_dir` は repo 外（`~/.kaji/artifacts`）に置く正当なユースケースがあるため絶対パスを許容するが、スキルは repo 内に存在する前提のため相対パスのみ
 
 #### validate_skill_exists の変更
 
@@ -81,7 +83,7 @@ skill_dir = ".agents/skills"
 
 ## 制約・前提条件
 
-- **後方互換**: `skill_dir` 省略時は `".claude/skills"` がデフォルトとなるため、既存プロジェクトはコード変更なしで動作する
+- **後方互換とデフォルト値の根拠**: `skill_dir` 省略時は `".claude/skills"` をデフォルトとする。Issue 本文の「設定なし=エラー。暗黙のデフォルトは持たない」は agent→directory マッピングの問題（未知の agent に対して暗黙でパスを推測しない）を指しており、本設計はそのマッピング自体を廃止することで解決する。`skill_dir` のデフォルト値は agent マッピングとは別次元の設定であり、`execution.default_timeout`（必須・デフォルトなし）とは異なり、既存プロジェクトの破壊的変更を避けるためデフォルト値を持たせる
 - **config.toml 必須**: `KajiConfig.discover()` が既に必須であるため、新たな依存は追加しない
 - **CLI ごとのスキルロードパスは変更しない**: ハーネスはカノニカルディレクトリで存在確認するのみ。各 CLI がどのパスからスキルをロードするかはファイルシステム（シンボリックリンク）で解決する
 - **パストラバーサル防御を維持**: 現行の `..` チェックと `resolve()` + `is_relative_to()` チェックをそのまま残す
@@ -91,7 +93,7 @@ skill_dir = ".agents/skills"
 ### 1. config.py への skill_dir 追加
 
 `PathsConfig` に `skill_dir: str` フィールドを追加。デフォルト値 `".claude/skills"`。
-`_load()` でのバリデーションは `artifacts_dir` と同パターン（`..` 禁止、型チェック）。
+`_load()` でのバリデーションは `_validate_skill_dir` として新設（`..` 禁止、絶対パス不可、型チェック）。`artifacts_dir` は絶対パスを許容するため、同一バリデータは使わない。
 
 ### 2. skill.py の簡素化
 
@@ -127,7 +129,7 @@ validate_skill_exists(step.skill, self.project_root, self.config.paths.skill_dir
 
 - `docs/dev/skill-authoring.md`: 「ファイル配置」セクション — カノニカルディレクトリと設定方法の説明に改訂
 - `docs/ARCHITECTURE.md`: Layer 3 の説明 — 単一カノニカルディレクトリ + symlink 構成に改訂
-- `docs/adr/003-skill-harness-architecture.md`: 歴史的記録のため変更不要（V6→V7 の決定記録であり、V7 内の改善は対象外）
+- `docs/adr/003-skill-harness-architecture.md`: Layer 3 の `.claude/skills/, .agents/skills/` 併記を、カノニカルディレクトリ（`paths.skill_dir` で設定）+ symlink 構成に改訂。Issue #112 完了条件で更新が明記されているため対象に含める
 
 ## テスト戦略
 
@@ -149,13 +151,14 @@ validate_skill_exists(step.skill, self.project_root, self.config.paths.skill_dir
 
 ### Large テスト
 
-- **実リポジトリ構成での検証**: 実際の `.kaji/config.toml` + `.claude/skills/` + `.agents/skills/` シンボリックリンク構成で `kaji validate` が成功すること（`kaji validate workflows/feature-development.yaml` をサブプロセスで実行）
+- **E2E スキルロード検証**: 実際の `.kaji/config.toml` + `.claude/skills/` + `.agents/skills/` シンボリックリンク構成で `kaji run <workflow> <issue> --step <step-id>` を実行し、CLI がスキルをネイティブにロードして実行開始するところまで検証する（pre-flight 検証だけでなく、CLI のスキルロードパス経由の実行を含む E2E）
+- **カスタム skill_dir での E2E**: `config.toml` の `skill_dir` を非デフォルト値に変更した状態で `kaji run --step` が正常に動作すること
 
 ## 影響ドキュメント
 
 | ドキュメント | 影響の有無 | 理由 |
 |-------------|-----------|------|
-| docs/adr/ | なし | ADR 003 は V6→V7 の決定記録。V7 内の改善は対象外 |
+| docs/adr/ | あり | ADR 003 の Layer 3 テーブルを更新（`.claude/skills/, .agents/skills/` 併記 → `paths.skill_dir` で設定するカノニカルディレクトリ） |
 | docs/ARCHITECTURE.md | あり | Layer 3 とパッケージ構成の skill.py 説明を更新 |
 | docs/dev/ | あり | skill-authoring.md のファイル配置セクションを更新 |
 | docs/cli-guides/ | なし | CLI 側のスキルロード機構は変更しない |
