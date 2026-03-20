@@ -636,11 +636,11 @@ class TestCLIConfigIntegration:
         captured = capsys.readouterr()
         assert ".kaji/config.toml" in captured.err
 
-    def test_validate_without_config_still_works(self, tmp_path: Path) -> None:
-        """kaji validate works without .kaji/config.toml (backward compat)."""
+    def test_validate_without_config_fails(self, tmp_path: Path) -> None:
+        """kaji validate fails without .kaji/config.toml (config is required)."""
         from kaji_harness.cli_main import cmd_validate, create_parser
 
-        # Create a valid workflow with matching skill
+        # Create a valid workflow with matching skill but NO config
         wf = tmp_path / "workflow.yaml"
         wf.write_text(
             "name: test\ndescription: test\n"
@@ -648,7 +648,6 @@ class TestCLIConfigIntegration:
             "    agent: claude\n    on:\n      PASS: end\n"
         )
 
-        # Create skill directory relative to tmp_path (pyproject.toml marker)
         (tmp_path / "pyproject.toml").write_text("")
         skill_dir = tmp_path / ".claude" / "skills" / "test-skill"
         skill_dir.mkdir(parents=True)
@@ -658,7 +657,7 @@ class TestCLIConfigIntegration:
         args = parser.parse_args(["validate", str(wf), "--project-root", str(tmp_path)])
         exit_code = cmd_validate(args)
 
-        assert exit_code == 0
+        assert exit_code == 1
 
     def test_cmd_run_broken_config_exits_2(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -1145,9 +1144,8 @@ class TestConfigE2E:
             "Artifacts must not be created under repo root"
         )
 
-    def test_kaji_validate_without_config_backward_compat(self, tmp_path: Path) -> None:
-        """kaji validate still works without .kaji/config.toml."""
-        # Create workflow with a skill and pyproject.toml marker
+    def test_kaji_validate_without_config_fails(self, tmp_path: Path) -> None:
+        """kaji validate fails without .kaji/config.toml (config is required)."""
         (tmp_path / "pyproject.toml").write_text("")
         wf = tmp_path / "workflow.yaml"
         wf.write_text(
@@ -1174,4 +1172,4 @@ class TestConfigE2E:
             timeout=30,
         )
 
-        assert result.returncode == 0
+        assert result.returncode == 1

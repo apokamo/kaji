@@ -79,6 +79,15 @@ steps:
 """
 
 
+def _create_config(project_root: Path, skill_dir: str = ".claude/skills") -> None:
+    """Create a minimal .kaji/config.toml for testing."""
+    config_dir = project_root / ".kaji"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "config.toml").write_text(
+        f'[paths]\nskill_dir = "{skill_dir}"\n\n[execution]\ndefault_timeout = 1800\n'
+    )
+
+
 def _create_skill(project_root: Path, skill_name: str, agent: str = "claude") -> None:
     """Create a minimal SKILL.md for testing."""
     agent_dirs = {"claude": ".claude/skills", "codex": ".agents/skills", "gemini": ".agents/skills"}
@@ -88,10 +97,11 @@ def _create_skill(project_root: Path, skill_name: str, agent: str = "claude") ->
 
 
 def _write_valid_yaml(project_root: Path, filename: str = "workflow.yaml") -> Path:
-    """Write valid YAML and create matching skill structure."""
+    """Write valid YAML and create matching skill + config structure."""
     p = project_root / filename
     p.write_text(VALID_WORKFLOW_YAML)
     _create_skill(project_root, "test-skill")
+    _create_config(project_root)
     return p
 
 
@@ -165,6 +175,7 @@ class TestCmdValidateSmall:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         _create_skill(tmp_path, "test-skill")
+        _create_config(tmp_path)
         f1 = tmp_path / "a.yaml"
         f2 = tmp_path / "b.yaml"
         f1.write_text(VALID_WORKFLOW_YAML)
@@ -232,6 +243,7 @@ class TestCmdValidateSmall:
         f = workflows_dir / "wf.yaml"
         f.write_text(VALID_WORKFLOW_YAML)
         _create_skill(tmp_path, "test-skill")
+        _create_config(tmp_path)
         exit_code = _cmd_validate_with_args(str(f))
         assert exit_code == 0
         captured = capsys.readouterr()
@@ -251,11 +263,42 @@ class TestCmdValidateSmall:
         skills_root = tmp_path / "project"
         skills_root.mkdir()
         _create_skill(skills_root, "test-skill")
+        _create_config(skills_root)
 
         exit_code = _cmd_validate_with_args(str(f), "--project-root", str(skills_root))
         assert exit_code == 0
         captured = capsys.readouterr()
         assert "✓" in captured.out
+
+    @pytest.mark.small
+    def test_broken_config_not_silenced(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """validate --project-root must fail when config is broken (missing skill_dir)."""
+        f = tmp_path / "workflow.yaml"
+        f.write_text(VALID_WORKFLOW_YAML)
+        _create_skill(tmp_path, "test-skill")
+        # Create broken config: missing paths.skill_dir
+        kaji_dir = tmp_path / ".kaji"
+        kaji_dir.mkdir(parents=True, exist_ok=True)
+        (kaji_dir / "config.toml").write_text("[execution]\ndefault_timeout = 1800\n")
+        exit_code = _cmd_validate_with_args(str(f), "--project-root", str(tmp_path))
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "✗" in captured.err
+        assert "skill_dir" in captured.err.lower() or "paths" in captured.err.lower()
+
+    @pytest.mark.small
+    def test_missing_config_fails(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """validate must fail when no .kaji/config.toml exists."""
+        f = tmp_path / "workflow.yaml"
+        f.write_text(VALID_WORKFLOW_YAML)
+        _create_skill(tmp_path, "test-skill")
+        # No config at all
+        exit_code = _cmd_validate_with_args(str(f), "--project-root", str(tmp_path))
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "✗" in captured.err
 
     @pytest.mark.small
     def test_no_args_exit_2(self) -> None:
@@ -330,6 +373,7 @@ class TestCmdValidateMedium:
         f = workflows_dir / "wf.yaml"
         f.write_text(VALID_WORKFLOW_YAML)
         _create_skill(tmp_path, "test-skill")
+        _create_config(tmp_path)
         exit_code = main(["validate", str(f)])
         assert exit_code == 0
 
@@ -427,6 +471,7 @@ class TestCLIValidateLarge:
         f = workflows_dir / "wf.yaml"
         f.write_text(VALID_WORKFLOW_YAML)
         _create_skill(tmp_path, "test-skill")
+        _create_config(tmp_path)
         result = subprocess.run(
             [sys.executable, "-m", "kaji_harness.cli_main", "validate", str(f)],
             capture_output=True,
