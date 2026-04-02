@@ -137,11 +137,17 @@ kaji run workflows/minimal-code-review.yaml 57 --step review-code
 
 ```bash
 source .venv/bin/activate
-ruff check kaji_harness/ tests/       # Lint
-ruff format kaji_harness/ tests/      # Format
-mypy kaji_harness/                    # Type check
-pytest                               # Test
+make check                            # lint → format → typecheck → test
 ```
+
+変更タイプに応じた追加検証:
+
+```bash
+make verify-docs                      # docs-only: リンク・参照整合チェック
+make verify-packaging                 # packaging/metadata: 隔離環境で pip install + metadata 確認
+```
+
+個別ターゲット: `make lint` / `make format` / `make typecheck` / `make test`
 
 ## ドキュメント
 
