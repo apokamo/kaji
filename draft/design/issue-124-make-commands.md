@@ -73,12 +73,24 @@ make test-medium
 
 | ターゲット | 実行内容 | 責務 |
 |-----------|---------|------|
-| `make verify-docs` | `python3 scripts/check_doc_links.py` | docs 変更のリンク・参照整合 |
+| `make verify-docs` | `python3 scripts/check_doc_links.py` に全対象パスを明示引数で渡す（後述） | docs 変更のリンク・参照整合 |
 | `make verify-packaging` | 一時 venv で `pip install -e .` → entry point・metadata 確認 → venv 破棄 | packaging 変更の配布物検証 |
 
 これらは `make check` に**追加して**実行するもの。`make check` の代替ではない。
 
-`metadata-only` の独立ターゲットは初期スコープでは設けない。metadata 変更の検証は多くの場合 `verify-packaging` でカバーされるため、需要が出た時点で追加する。
+#### metadata-only 変更の標準運用
+
+metadata-only 変更（`pyproject.toml` のフィールド値変更、classifiers 追加等）では `make check` + `make verify-packaging` を標準とする。理由:
+
+- metadata 変更の主な不具合パターンは「配布物に反映されない」「entry point が壊れる」であり、`verify-packaging` の隔離 install + metadata 確認でカバーできる
+- metadata 固有の独立ターゲット（`make verify-metadata`）は設けない。`verify-packaging` が metadata 確認を内包しており、ターゲットを分離しても検証内容が重複するだけで情報が増えない
+
+| 変更タイプ | 標準運用 |
+|-----------|---------|
+| 実行時コード変更 | `make check` |
+| docs-only | `make check` + `make verify-docs` |
+| metadata-only | `make check` + `make verify-packaging` |
+| packaging-only | `make check` + `make verify-packaging` |
 
 #### Tier 3: 便利ターゲット
 
@@ -88,6 +100,31 @@ make test-medium
 | `make test-medium` | `pytest -m medium` | Medium テストのみ |
 | `make test-large` | `pytest -m large` | Large テストのみ |
 | `make setup` | `pip install -e ".[dev]"` | 開発環境構築 |
+
+### `make verify-docs` の対象範囲
+
+`scripts/check_doc_links.py` は引数なしだと `docs/` 配下のみを検査する。しかし docs 変更は `README.md`、`CLAUDE.md`、`.claude/skills/**/*.md` にも及ぶため、`make verify-docs` ではこれらを明示引数で渡す:
+
+```makefile
+verify-docs:
+	python3 scripts/check_doc_links.py docs/ README.md CLAUDE.md .claude/skills/
+```
+
+スクリプト側は既に引数でファイル・ディレクトリを受け付ける実装になっている（`collect_from_args`）ため、変更不要。
+
+### `make check` の適用文脈と例外
+
+`make check` は**日常開発のプリコミットゲート**として設計する。ただし、以下の文脈では raw command の個別実行を維持する:
+
+| 文脈 | `make check` 使用 | 理由 |
+|------|-------------------|------|
+| 開発者の手動コミット前 | 使用する | 4 コマンドの一括実行が便利 |
+| `/issue-implement` スキル | **使用しない** | baseline failure 判定のため `pytest` を lint/typecheck と分離実行する必要がある（`pytest` の exit code を個別に評価し、baseline との差分で合否判定する）|
+| `/issue-review-code` スキル | **使用しない** | 同上。baseline failure との照合ロジックが `pytest` 単独実行を前提としている |
+
+スキルが raw command を維持する理由は、`make check` が 4 コマンドを `&&` チェーンで結合するのに対し、baseline failure がある環境では `pytest` が非ゼロ終了しても「既知の failure のみなら OK」という判定が必要なため。この判定は `make check` の責務外であり、スキル側のロジックに委ねる。
+
+したがって、`make check` 導入後もスキルのコマンド記載は変更しない。ドキュメント更新の対象は CLAUDE.md / README.md / testing-convention.md に限定する。
 
 ### `make verify-packaging` の隔離設計
 
@@ -148,7 +185,7 @@ test-large:
 	pytest -m large
 
 verify-docs:
-	python3 scripts/check_doc_links.py
+	python3 scripts/check_doc_links.py docs/ README.md CLAUDE.md .claude/skills/
 
 verify-packaging:
 	@scripts/verify-packaging.sh
@@ -195,7 +232,7 @@ setup:
 | docs/adr/ | なし | 新しい技術選定ではなく、既存ツール群のラッパー整備 |
 | docs/ARCHITECTURE.md | なし | アーキテクチャ変更なし |
 | docs/dev/testing-convention.md | あり | 変更固有検証の実行方法として `make verify-*` を追記 |
-| docs/dev/ (その他) | なし | ワークフロー・スキル手順は変更不要 |
+| docs/dev/workflow_feature_development.md | あり | Phase 4 の品質チェック手順に `src/` 対象の古い記載あり（`kaji_harness/` に修正）。ただし `make check` への置き換えは行わない（スキルの baseline failure 判定との整合のため） |
 | docs/cli-guides/ | なし | CLI 仕様変更なし |
 | CLAUDE.md | あり | Pre-Commit セクションに `make check` を追記、Essential Commands に make ターゲット一覧を追加 |
 | README.md | あり | 品質チェックセクションに `make check` を追記 |
