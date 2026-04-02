@@ -124,7 +124,20 @@ verify-docs:
 
 スキルが raw command を維持する理由は、`make check` が 4 コマンドを `&&` チェーンで結合するのに対し、baseline failure がある環境では `pytest` が非ゼロ終了しても「既知の failure のみなら OK」という判定が必要なため。この判定は `make check` の責務外であり、スキル側のロジックに委ねる。
 
-したがって、`make check` 導入後もスキルのコマンド記載は変更しない。ドキュメント更新の対象は CLAUDE.md / README.md / testing-convention.md に限定する。
+したがって、`make check` 導入後もスキルのコマンド記載は変更しない。
+
+### ドキュメント更新方針
+
+本 Issue で更新するドキュメントと更新内容を以下に整理する:
+
+| ドキュメント | 更新内容 | `make check` 導入 |
+|-------------|---------|-------------------|
+| CLAUDE.md | Pre-Commit に `make check` 追記、Essential Commands に make ターゲット一覧追加 | する |
+| README.md | 品質チェックセクションに `make check` 追記 | する |
+| docs/dev/testing-convention.md | 変更固有検証の実行方法として `make verify-*` を追記 | する |
+| docs/dev/workflow_feature_development.md | Phase 4 の `src/` を `kaji_harness/` に修正 | **しない**（スキルの baseline failure 判定が raw command 前提のため） |
+
+`workflow_feature_development.md` は `make check` への置き換えは行わないが、`src/` → `kaji_harness/` の古い記載は本 Issue で併せて修正する（実態と合っていない記載の是正）。
 
 ### `make verify-packaging` の隔離設計
 
@@ -232,7 +245,7 @@ setup:
 | docs/adr/ | なし | 新しい技術選定ではなく、既存ツール群のラッパー整備 |
 | docs/ARCHITECTURE.md | なし | アーキテクチャ変更なし |
 | docs/dev/testing-convention.md | あり | 変更固有検証の実行方法として `make verify-*` を追記 |
-| docs/dev/workflow_feature_development.md | あり | Phase 4 の品質チェック手順に `src/` 対象の古い記載あり（`kaji_harness/` に修正）。ただし `make check` への置き換えは行わない（スキルの baseline failure 判定との整合のため） |
+| docs/dev/workflow_feature_development.md | あり | Phase 4 の品質チェック手順で `src/` を `kaji_harness/` に修正する（実態との乖離是正）。`make check` への置き換えは行わない（上記「ドキュメント更新方針」参照） |
 | docs/cli-guides/ | なし | CLI 仕様変更なし |
 | CLAUDE.md | あり | Pre-Commit セクションに `make check` を追記、Essential Commands に make ターゲット一覧を追加 |
 | README.md | あり | 品質チェックセクションに `make check` を追記 |
