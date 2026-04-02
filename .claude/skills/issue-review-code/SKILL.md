@@ -130,12 +130,12 @@ $ARGUMENTS = <issue-number>
 4. **テスト**:
    - 追加された機能に対するテストは十分か？
    - 設計書の「テスト戦略」と実装テストが対応しているか？
-   - **S/M/L 網羅性チェック（必須）**:
-     - [ ] Small テストが実装・PASSED か
-     - [ ] Medium テストが実装・PASSED か
-     - [ ] Large テストが実装・PASSED か
+   - **変更タイプに応じた検証チェック（必須）**:
+     - [ ] 実行時コード変更なら、設計書で定義した Small / Medium / Large が実装・PASSED か
+     - [ ] docs-only / metadata-only / packaging-only 変更なら、設計書で定義した変更固有検証が実施済みか
+     - [ ] 恒久テストを追加しない理由が `docs/dev/testing-convention.md` と矛盾していないか
      - [ ] pytest 出力が Issue コメントに含まれているか
-   - テスト未実装の場合: 設計レビューで省略が承認済みでない限り **Changes Requested**
+   - テスト / 検証未実施の場合: 設計レビューで承認済みでない限り **Changes Requested**
    - pytest 出力がない場合は **Changes Requested**
 
 ### Step 3: レビュー結果のコメント投稿

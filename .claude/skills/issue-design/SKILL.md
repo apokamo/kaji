@@ -138,21 +138,33 @@ Issue: #[issue-number]
 
 ## テスト戦略
 
-> **CRITICAL**: S/M/L すべてのサイズのテスト方針を定義すること。
-> AI はテストを省略する傾向があるため、設計段階で明確に定義し、省略の余地を排除する。
+> **CRITICAL**: 変更タイプに応じて妥当な検証方針を定義すること。
+> 実行時コード変更では Small / Medium / Large の観点を定義し、
+> docs-only / metadata-only / packaging-only 変更では変更固有検証と
+> 恒久テストを追加しない理由を明記する。
 > 詳細は [テスト規約](../../../docs/dev/testing-convention.md) 参照。
 
-### Small テスト
+### 変更タイプ
+- (実行時コード変更 / docs-only / metadata-only / packaging-only)
+
+### 実行時コード変更の場合
+
+#### Small テスト
 - (検証対象を列挙: 単体ロジック、バリデーション、マッピング等)
 
-### Medium テスト
+#### Medium テスト
 - (検証対象を列挙: DB連携、内部サービス結合等)
 
-### Large テスト
+#### Large テスト
 - (検証対象を列挙: 実API疎通、E2Eデータフロー等)
 
-### スキップするサイズ（該当する場合のみ）
-- サイズ: (物理的に作成不可な理由を明記。「実行時間」「環境依存」は不正当な理由)
+### docs-only / metadata-only / packaging-only の場合
+
+#### 変更固有検証
+- (例: link check、隔離環境での `pip install -e .`、`importlib.metadata` 確認)
+
+#### 恒久テストを追加しない理由
+- (テスト規約の 4 条件に沿って記載)
 
 ## 影響ドキュメント
 
