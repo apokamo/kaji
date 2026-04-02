@@ -151,7 +151,9 @@ cat [worktree-absolute-path]/draft/design/issue-[number]-*.md
    - 実行時コード変更: 設計書の「テスト戦略」をカバーするテストケースを書く
    - docs-only / metadata-only / packaging-only: 設計書に記載した変更固有検証を実施する
 
-3. **失敗の確認**:
+3. **失敗 / 回帰の確認**:
+   - 実行時コード変更: Red Phase として失敗を確認する
+   - docs-only / metadata-only / packaging-only: 新規テストを追加しない場合、既存テストに回帰がないかを確認するステップとして扱う
    ```bash
    cd [worktree-absolute-path] && source .venv/bin/activate && pytest
    ```
