@@ -32,9 +32,11 @@ def main() -> int:
     repo_root = Path.cwd()
 
     if args:
-        md_files = collect_from_args(args, repo_root)
+        md_files, breakdown = collect_from_args(args, repo_root)
     else:
-        md_files = collect_from_directory(repo_root / DEFAULT_TARGET)
+        default_files = collect_from_directory(repo_root / DEFAULT_TARGET)
+        md_files = default_files
+        breakdown = {DEFAULT_TARGET: len(default_files)}
 
     if not md_files:
         print("No Markdown files to check.", file=sys.stderr)
@@ -47,27 +49,37 @@ def main() -> int:
             print(err, file=sys.stderr)
         return 1
 
-    print(f"All Markdown links valid ({len(md_files)} file(s) checked).")
+    detail = ", ".join(f"{arg}: {count}" for arg, count in breakdown.items())
+    print(f"All Markdown links valid ({len(md_files)} file(s) checked: {detail}).")
     return 0
 
 
-def collect_from_args(args: list[str], repo_root: Path) -> list[Path]:
+def collect_from_args(
+    args: list[str], repo_root: Path
+) -> tuple[list[Path], dict[str, int]]:
     files: list[Path] = []
+    breakdown: dict[str, int] = {}
     for arg in args:
         p = Path(arg)
         if not p.is_absolute():
             p = repo_root / p
+        before = len(files)
         if p.is_dir():
             files.extend(collect_from_directory(p))
         elif p.is_file() and p.suffix == MARKDOWN_EXT:
             files.append(p)
-    return files
+        breakdown[arg] = len(files) - before
+    return files, breakdown
 
 
 def collect_from_directory(directory: Path) -> list[Path]:
     if not directory.exists():
         return []
-    return sorted(p for p in directory.rglob(f"*{MARKDOWN_EXT}") if not _is_hidden(p))
+    return sorted(
+        p
+        for p in directory.rglob(f"*{MARKDOWN_EXT}")
+        if not _is_hidden(p.relative_to(directory))
+    )
 
 
 def _is_hidden(path: Path) -> bool:

@@ -22,8 +22,10 @@ Treat the user as an equal partner. Goal: clarity, traction, and progress.
 ## ⚠️ Pre-Commit (REQUIRED)
 ```bash
 source .venv/bin/activate
-ruff check kaji_harness/ tests/ && ruff format kaji_harness/ tests/ && mypy kaji_harness/ && pytest
+make check
 ```
+
+等価な個別コマンド: `ruff check kaji_harness/ tests/ && ruff format kaji_harness/ tests/ && mypy kaji_harness/ && pytest`
 
 ## Essential Commands
 
@@ -31,13 +33,21 @@ ruff check kaji_harness/ tests/ && ruff format kaji_harness/ tests/ && mypy kaji
 # Setup
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+make setup                            # pip install -e ".[dev]"
 
 # Quality checks (run before commit)
-ruff check kaji_harness/ tests/       # Lint
-ruff format kaji_harness/ tests/      # Format
-mypy kaji_harness/                    # Type check
-pytest                               # Test
+make check                            # lint → format → typecheck → test
+make lint                             # ruff check kaji_harness/ tests/
+make format                           # ruff format kaji_harness/ tests/
+make typecheck                        # mypy kaji_harness/
+make test                             # pytest
+make test-small                       # pytest -m small
+make test-medium                      # pytest -m medium
+make test-large                       # pytest -m large
+
+# Change-type specific verification
+make verify-docs                      # Doc link checker
+make verify-packaging                 # Isolated pip install + metadata check
 
 # CLI harness
 kaji run <workflow.yaml> <issue>                    # Run a workflow

@@ -88,8 +88,8 @@ flowchart TB
 │ • TDD: テスト作成 (Red) → 実装 (Green) → リファクタ                 │
 │ • 品質チェック（コミット前必須）:                                   │
 │   source .venv/bin/activate                                         │
-│   ruff check src/ tests/ && ruff format src/ tests/                 │
-│   mypy src/ && pytest                                               │
+│   ruff check kaji_harness/ tests/ && ruff format kaji_harness/ tests/ │
+│   mypy kaji_harness/ && pytest                                      │
 │ • Issueに実装完了コメント（pytest出力を含む）                       │
 │                                                                     │
 │ ┌─────────────────────────────────────────────────────────────────┐ │

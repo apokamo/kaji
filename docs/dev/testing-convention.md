@@ -75,8 +75,8 @@ repo にコミットし、今後も継続実行するテスト。以下を満た
 
 今回の変更の妥当性確認に必要だが、repo に恒久化する価値は低い検証。例:
 
-- `python3 scripts/check_doc_links.py`
-- `pip install -e .` による配布メタデータ確認
+- `make verify-docs` — docs のリンク・参照整合チェック
+- `make verify-packaging` — 隔離 venv で `pip install -e .` → entry point・metadata 確認
 - `python -m build` や `importlib.metadata` を用いた一時確認
 
 この種の検証は、設計書や実装報告に「なぜ必要か」「なぜ恒久テストにしないか」を記録する。
