@@ -264,6 +264,34 @@ class TestCLIArguments:
 
 
 @pytest.mark.medium
+class TestHiddenDirectoryArgument:
+    """Explicitly-passed hidden directories should be traversed."""
+
+    def test_hidden_dir_argument_collects_files(self, tmp_path: Path) -> None:
+        """Files under an explicitly-passed dot-prefixed directory are checked."""
+        _write(tmp_path / ".claude" / "skills" / "a.md", "# Skill A\n")
+        _write(tmp_path / ".claude" / "skills" / "b.md", "# Skill B\n")
+        result = _run(tmp_path, ".claude/skills/")
+        assert result.returncode == 0
+        assert "2 file(s) checked" in result.stdout
+
+    def test_hidden_dir_detects_broken_links(self, tmp_path: Path) -> None:
+        """Broken links inside hidden directory arguments are reported."""
+        _write(tmp_path / ".claude" / "skills" / "a.md", "[link](missing.md)\n")
+        result = _run(tmp_path, ".claude/skills/")
+        assert result.returncode == 1
+        assert "missing.md" in result.stderr
+
+    def test_hidden_subdir_inside_hidden_dir_excluded(self, tmp_path: Path) -> None:
+        """Hidden subdirectories within the traversal are still excluded."""
+        _write(tmp_path / ".claude" / "skills" / "a.md", "# OK\n")
+        _write(tmp_path / ".claude" / "skills" / ".draft" / "b.md", "# Hidden\n")
+        result = _run(tmp_path, ".claude/skills/")
+        assert result.returncode == 0
+        assert "1 file(s) checked" in result.stdout
+
+
+@pytest.mark.medium
 class TestErrorFormat:
     """Error output should include file path and line number."""
 
