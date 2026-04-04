@@ -6,8 +6,10 @@ Handles subprocess management, streaming, and argument building.
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -15,6 +17,19 @@ from typing import Any
 from .adapters import ADAPTERS, CLIEventAdapter
 from .errors import CLIExecutionError, CLINotFoundError, StepTimeoutError
 from .models import CLIResult, CostInfo, Step
+
+logger = logging.getLogger(__name__)
+
+# Retry constants for transient CLI errors (Bug 4)
+_MAX_RETRIES = 3
+_BASE_DELAY = 30.0
+_TRANSIENT_PATTERNS = ["at capacity", "rate limit", "overloaded", "try again"]
+
+
+def _is_transient(error: CLIExecutionError) -> bool:
+    """Return True if the error is likely transient and worth retrying."""
+    msg = str(error).lower()
+    return any(p in msg for p in _TRANSIENT_PATTERNS)
 
 
 def _now_stamp() -> str:
@@ -52,7 +67,48 @@ def execute_cli(
     *,
     default_timeout: int,
 ) -> CLIResult:
-    """CLI を実行し、結果を返す。"""
+    """CLI を実行し、結果を返す。一時的エラー時はバックオフ付きリトライする。"""
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            return _execute_cli_once(
+                step,
+                prompt,
+                workdir,
+                session_id,
+                log_dir,
+                execution_policy,
+                verbose,
+                default_timeout=default_timeout,
+            )
+        except CLIExecutionError as e:
+            if attempt == _MAX_RETRIES or not _is_transient(e):
+                raise
+            delay = _BASE_DELAY * (2**attempt)
+            logger.warning(
+                "Step '%s' transient error (attempt %d/%d): %s. Retrying in %.0fs...",
+                step.id,
+                attempt + 1,
+                _MAX_RETRIES + 1,
+                e,
+                delay,
+            )
+            time.sleep(delay)
+    # unreachable, satisfies type checker
+    raise RuntimeError("unreachable")  # pragma: no cover
+
+
+def _execute_cli_once(
+    step: Step,
+    prompt: str,
+    workdir: Path,
+    session_id: str | None,
+    log_dir: Path,
+    execution_policy: str,
+    verbose: bool,
+    *,
+    default_timeout: int,
+) -> CLIResult:
+    """CLI を 1 回実行する（リトライなし）。"""
     args = build_cli_args(step, prompt, workdir, session_id, execution_policy)
     adapter = ADAPTERS[step.agent]
     timeout = step.timeout if step.timeout is not None else default_timeout
@@ -77,7 +133,8 @@ def execute_cli(
     if timed_out.is_set():
         raise StepTimeoutError(step.id, timeout)
     if process.returncode != 0:
-        raise CLIExecutionError(step.id, process.returncode, result.stderr)
+        detail = result.stderr or "\n".join(result.error_messages[-3:])
+        raise CLIExecutionError(step.id, process.returncode, detail)
     return result
 
 
@@ -92,6 +149,7 @@ def stream_and_log(
     session_id: str | None = None
     cost: CostInfo | None = None
     texts: list[str] = []
+    error_messages: list[str] = []
 
     with (
         open(log_dir / "stdout.log", "a", encoding="utf-8") as f_raw,
@@ -132,6 +190,17 @@ def stream_and_log(
             if c:
                 cost = c
 
+            # Collect error event messages for Bug 3: better CLIExecutionError messages
+            event_type = event.get("type")
+            if event_type == "error":
+                msg = event.get("message", "")
+                if msg:
+                    error_messages.append(msg)
+            elif event_type == "turn.failed":
+                msg = (event.get("error") or {}).get("message", "")
+                if msg:
+                    error_messages.append(msg)
+
     stderr = ""
     if process.stderr:
         stderr = process.stderr.read()
@@ -143,6 +212,7 @@ def stream_and_log(
         session_id=session_id,
         cost=cost,
         stderr=stderr,
+        error_messages=error_messages,
     )
 
 
