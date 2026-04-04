@@ -61,7 +61,10 @@ class CodexAdapter:
                 return text if text else None
             if item_type == "mcp_tool_call":
                 # V5/V6 restoration: extract text from mcp_tool_call result.content
-                result = item.get("result", {})
+                # result may be None when the tool call failed (result: null in JSONL)
+                result = item.get("result")
+                if not result:
+                    return None
                 contents = result.get("content", [])
                 extracted = [c["text"] for c in contents if c.get("type") == "text" and "text" in c]
                 return "\n".join(extracted) if extracted else None

@@ -32,6 +32,7 @@ class CLIResult:
     session_id: str | None = None
     cost: CostInfo | None = None
     stderr: str = ""
+    error_messages: list[str] = field(default_factory=list)
 
 
 @dataclass
