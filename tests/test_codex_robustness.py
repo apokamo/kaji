@@ -328,17 +328,18 @@ class TestStreamAndLogErrorMessages:
         step = Step(id="review-design", skill="test-skill", agent="codex", on={"PASS": "end"})
 
         with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
-            with pytest.raises(CLIExecutionError) as exc_info:
-                execute_cli(
-                    step=step,
-                    prompt="test",
-                    workdir=tmp_path,
-                    session_id=None,
-                    log_dir=tmp_path / "logs",
-                    execution_policy="auto",
-                    verbose=False,
-                    default_timeout=1800,
-                )
+            with patch("kaji_harness.cli.time.sleep"):  # don't actually sleep
+                with pytest.raises(CLIExecutionError) as exc_info:
+                    execute_cli(
+                        step=step,
+                        prompt="test",
+                        workdir=tmp_path,
+                        session_id=None,
+                        log_dir=tmp_path / "logs",
+                        execution_policy="auto",
+                        verbose=False,
+                        default_timeout=1800,
+                    )
         assert "at capacity" in str(exc_info.value).lower()
 
 
