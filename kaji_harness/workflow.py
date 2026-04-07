@@ -95,6 +95,30 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                 f"Step '{step_data['id']}' 'inject_verdict' must be a boolean, "
                 f"got {type(raw_inject_verdict).__name__}"
             )
+        raw_step_workdir = step_data.get("workdir")
+        if raw_step_workdir is not None:
+            if not isinstance(raw_step_workdir, str):
+                raise WorkflowValidationError(
+                    f"Step '{step_data['id']}' 'workdir' must be a string, "
+                    f"got {type(raw_step_workdir).__name__}"
+                )
+            if not raw_step_workdir:
+                raise WorkflowValidationError(
+                    f"Step '{step_data['id']}' 'workdir' must not be empty"
+                )
+            try:
+                expanded_step_workdir = Path(raw_step_workdir).expanduser()
+            except RuntimeError as e:
+                raise WorkflowValidationError(
+                    f"Step '{step_data['id']}' 'workdir' expansion failed: {e}"
+                ) from e
+            if not expanded_step_workdir.is_absolute():
+                raise WorkflowValidationError(
+                    f"Step '{step_data['id']}' 'workdir' must be an absolute path, "
+                    f"got '{raw_step_workdir}'"
+                )
+            raw_step_workdir = str(expanded_step_workdir)
+
         raw_timeout = step_data.get("timeout")
         if raw_timeout is not None:
             if not isinstance(raw_timeout, int) or isinstance(raw_timeout, bool):
@@ -117,6 +141,7 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                 max_budget_usd=step_data.get("max_budget_usd"),
                 max_turns=step_data.get("max_turns"),
                 timeout=raw_timeout,
+                workdir=raw_step_workdir,
                 resume=step_data.get("resume"),
                 inject_verdict=raw_inject_verdict,
                 on=raw_on,
@@ -186,6 +211,24 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                 f"'default_timeout' must be a positive integer, got {raw_default_timeout}"
             )
 
+    raw_workdir = data.get("workdir")
+    if raw_workdir is not None:
+        if not isinstance(raw_workdir, str):
+            raise WorkflowValidationError(
+                f"'workdir' must be a string, got {type(raw_workdir).__name__}"
+            )
+        if not raw_workdir:
+            raise WorkflowValidationError("'workdir' must not be empty")
+        try:
+            expanded_workdir = Path(raw_workdir).expanduser()
+        except RuntimeError as e:
+            raise WorkflowValidationError(f"'workdir' expansion failed: {e}") from e
+        if not expanded_workdir.is_absolute():
+            raise WorkflowValidationError(
+                f"'workdir' must be an absolute path, got '{raw_workdir}'"
+            )
+        raw_workdir = str(expanded_workdir)
+
     return Workflow(
         name=data.get("name", ""),
         description=data.get("description", ""),
@@ -193,6 +236,7 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
         steps=steps,
         cycles=cycles,
         default_timeout=raw_default_timeout,
+        workdir=raw_workdir,
     )
 
 
@@ -229,6 +273,13 @@ def validate_workflow(workflow: Workflow) -> None:
             f"got '{workflow.execution_policy}'"
         )
 
+    # workdir の検証（_parse_workflow() を経由しない場合も担保）
+    if workflow.workdir is not None:
+        if not isinstance(workflow.workdir, str) or not workflow.workdir:
+            errors.append(f"'workdir' must be a non-empty string, got {workflow.workdir!r}")
+        elif not Path(workflow.workdir).is_absolute():
+            errors.append(f"'workdir' must be an absolute path, got '{workflow.workdir}'")
+
     # ワークフローレベルの検証
     if not workflow.steps:
         errors.append("Workflow must have at least one step")
@@ -244,6 +295,17 @@ def validate_workflow(workflow: Workflow) -> None:
             ):
                 errors.append(
                     f"Step '{step.id}' 'timeout' must be a positive integer, got {step.timeout!r}"
+                )
+
+        # スキーマ: step.workdir の検証（_parse_workflow() を経由しない場合も担保）
+        if step.workdir is not None:
+            if not isinstance(step.workdir, str) or not step.workdir:
+                errors.append(
+                    f"Step '{step.id}' 'workdir' must be a non-empty string, got {step.workdir!r}"
+                )
+            elif not Path(step.workdir).is_absolute():
+                errors.append(
+                    f"Step '{step.id}' 'workdir' must be an absolute path, got '{step.workdir}'"
                 )
 
         # スキーマ: step.on は非空の dict であること

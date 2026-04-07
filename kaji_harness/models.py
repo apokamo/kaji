@@ -47,6 +47,7 @@ class Step:
     max_budget_usd: float | None = None
     max_turns: int | None = None
     timeout: int | None = None
+    workdir: str | None = None
     resume: str | None = None
     inject_verdict: bool = False
     on: dict[str, str] = field(default_factory=dict)
@@ -73,6 +74,7 @@ class Workflow:
     steps: list[Step]
     cycles: list[CycleDefinition] = field(default_factory=list)
     default_timeout: int | None = None
+    workdir: str | None = None
 
     def find_step(self, step_id: str) -> Step | None:
         """ID でステップを検索。見つからなければ None。"""

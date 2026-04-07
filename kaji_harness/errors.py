@@ -74,6 +74,15 @@ class StepTimeoutError(HarnessError):
         super().__init__(f"Step '{step_id}' timed out after {timeout}s")
 
 
+class WorkdirNotFoundError(HarnessError):
+    """ステップ実行時に指定された workdir が存在しない。"""
+
+    def __init__(self, step_id: str, workdir: Path):
+        self.step_id = step_id
+        self.workdir = workdir
+        super().__init__(f"Step '{step_id}' workdir does not exist: {workdir}")
+
+
 class MissingResumeSessionError(HarnessError):
     """resume 指定ステップで継続元のセッション ID が見つからない。"""
 

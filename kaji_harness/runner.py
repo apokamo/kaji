@@ -16,6 +16,7 @@ from .config import KajiConfig
 from .errors import (
     InvalidTransition,
     MissingResumeSessionError,
+    WorkdirNotFoundError,
     WorkflowValidationError,
 )
 from .logger import RunLogger
@@ -137,11 +138,17 @@ class WorkflowRunner:
                         else self.config.execution.default_timeout
                     )
 
+                    # workdir 解決: step.workdir → workflow.workdir → project_root
+                    raw_workdir = current_step.workdir or self.workflow.workdir
+                    effective_workdir = Path(raw_workdir) if raw_workdir else self.project_root
+                    if not effective_workdir.is_dir():
+                        raise WorkdirNotFoundError(current_step.id, effective_workdir)
+
                     # CLI 実行
                     result = execute_cli(
                         step=current_step,
                         prompt=prompt,
-                        workdir=self.project_root,
+                        workdir=effective_workdir,
                         session_id=session_id,
                         log_dir=step_log_dir,
                         execution_policy=execution_policy,
