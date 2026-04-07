@@ -26,9 +26,8 @@ AI-driven software development workflow orchestrator. Claude Code / Codex / Gemi
 ## セットアップ（開発者向け）
 
 ```bash
-python -m venv .venv
+uv sync
 source .venv/bin/activate
-pip install -e ".[dev]"
 ```
 
 ## 開発ワークフロー
@@ -144,7 +143,7 @@ make check                            # lint → format → typecheck → test
 
 ```bash
 make verify-docs                      # docs-only: リンク・参照整合チェック
-make verify-packaging                 # packaging/metadata: 隔離環境で pip install + metadata 確認
+make verify-packaging                 # packaging/metadata: 隔離環境で uv install + metadata 確認
 ```
 
 個別ターゲット: `make lint` / `make format` / `make typecheck` / `make test`

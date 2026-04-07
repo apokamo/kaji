@@ -139,7 +139,7 @@ cat [worktree-absolute-path]/draft/design/issue-[number]-*.md
 > - ❌ 実行時コード変更なのに「実行時間が長い」を理由に M/L を省略する
 > - ❌ 実行時コード変更なのに「Small で十分」と決め打ちする
 > - ❌ docs-only / metadata-only / packaging-only 変更に無理やり S/M/L テストを新設する
-> - ❌ `pip install -e .` など副作用のある検証を shared 環境へ常設する
+> - ❌ `uv pip install -e .` など副作用のある検証を shared 環境へ常設する
 
 設計書の「テスト戦略」セクションに基づき、変更タイプに応じた検証を実施する。
 

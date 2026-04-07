@@ -5,10 +5,10 @@ TMPDIR_PKG=$(mktemp -d)
 trap 'rm -rf "$TMPDIR_PKG"' EXIT
 
 echo "==> Creating temporary venv in $TMPDIR_PKG/venv ..."
-python3 -m venv "$TMPDIR_PKG/venv"
+uv venv "$TMPDIR_PKG/venv"
 
 echo "==> Installing package in editable mode ..."
-"$TMPDIR_PKG/venv/bin/pip" install -e . --quiet
+uv pip install -e . --python "$TMPDIR_PKG/venv/bin/python" --quiet
 
 echo "==> Checking entry point (kaji --help) ..."
 "$TMPDIR_PKG/venv/bin/kaji" --help > /dev/null

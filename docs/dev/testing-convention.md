@@ -76,14 +76,14 @@ repo にコミットし、今後も継続実行するテスト。以下を満た
 今回の変更の妥当性確認に必要だが、repo に恒久化する価値は低い検証。例:
 
 - `make verify-docs` — docs のリンク・参照整合チェック
-- `make verify-packaging` — 隔離 venv で `pip install -e .` → entry point・metadata 確認
+- `make verify-packaging` — 隔離 venv で `uv pip install -e .` → entry point・metadata 確認
 - `python -m build` や `importlib.metadata` を用いた一時確認
 
 この種の検証は、設計書や実装報告に「なぜ必要か」「なぜ恒久テストにしないか」を記録する。
 
-## `pip install -e .` の扱い
+## `uv pip install -e .` の扱い
 
-`pip install -e .` は packaging / metadata 変更で有効な検証手段になりうるが、shared 環境を汚染
+`uv pip install -e .` は packaging / metadata 変更で有効な検証手段になりうるが、shared 環境を汚染
 しやすい。以下を原則とする:
 
 - shared `.venv` を前提にした常設の恒久テストにはしない
@@ -92,9 +92,9 @@ repo にコミットし、今後も継続実行するテスト。以下を満た
 
 推奨される隔離手段:
 
-- 一時ディレクトリに作成した専用 virtualenv
+- 一時ディレクトリに作成した専用 virtualenv (`uv venv`)
 - CI のジョブごとに破棄される環境
-- `uv venv` / `python -m venv` 等で作る disposable 環境
+- `uv venv` 等で作る disposable 環境
 
 ## 省略してよい理由 / 省略してはいけない理由
 
