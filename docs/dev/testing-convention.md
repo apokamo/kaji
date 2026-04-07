@@ -146,7 +146,7 @@ repo にコミットし、今後も継続実行するテスト。以下を満た
 ### docs-only / metadata-only / packaging-only の場合
 
 #### 変更固有検証
-- (例: link check、`importlib.metadata` 確認、隔離環境での `pip install -e .`)
+- (例: link check、`importlib.metadata` 確認、隔離環境での `uv pip install -e .`)
 
 #### 恒久テストを追加しない理由
 - (上記 4 条件に沿って記載)
@@ -158,7 +158,7 @@ repo にコミットし、今後も継続実行するテスト。以下を満た
 - [ ] 変更タイプ（実行時コード変更 / docs-only / metadata-only / packaging-only）が明示されているか
 - [ ] 実行時コード変更なら Small / Medium / Large の検証観点が定義されているか
 - [ ] 恒久テストを追加しない場合、その理由が 4 条件に沿って説明されているか
-- [ ] `pip install -e .` など副作用のある検証を行う場合、隔離方針が定義されているか
+- [ ] `uv pip install -e .` など副作用のある検証を行う場合、隔離方針が定義されているか
 ```
 
 ## 既存テストの棚卸し基準
