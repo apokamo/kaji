@@ -108,10 +108,10 @@ gh issue edit [issue-number] --body "$NEW_BODY"
 ### 注意事項
 
 ⚠️ `.venv` は main のシンボリックリンクです:
-- `pip install` は main に影響します
+- `uv pip install` は main に影響します
 - pyproject.toml を変更する場合は個別 venv を作成してください:
   ```bash
-  rm .venv && python -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"
+  rm .venv && uv venv .venv && uv sync
   ```
 
 ### 次のステップ

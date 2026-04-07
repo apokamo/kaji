@@ -33,4 +33,4 @@ verify-packaging:
 	@scripts/verify-packaging.sh
 
 setup:
-	pip install -e ".[dev]"
+	uv sync

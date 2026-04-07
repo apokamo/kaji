@@ -31,9 +31,8 @@ make check
 
 ```bash
 # Setup
-python -m venv .venv
+uv sync                               # Install dependencies + create .venv
 source .venv/bin/activate
-make setup                            # pip install -e ".[dev]"
 
 # Quality checks (run before commit)
 make check                            # lint → format → typecheck → test
@@ -47,7 +46,7 @@ make test-large                       # pytest -m large
 
 # Change-type specific verification
 make verify-docs                      # Doc link checker
-make verify-packaging                 # Isolated pip install + metadata check
+make verify-packaging                 # Isolated uv install + metadata check
 
 # CLI harness
 kaji run <workflow.yaml> <issue>                    # Run a workflow

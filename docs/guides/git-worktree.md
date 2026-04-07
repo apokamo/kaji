@@ -168,7 +168,7 @@ git branch -d feat/42
 ln -s /home/user/dev/kaji/.venv /home/user/dev/kaji-feat-42/.venv
 ```
 
-> **⚠️ 注意**: `.venv` を共有しているため、worktree 内での `pip install` はメインリポジトリの環境にも影響する。`pyproject.toml` の依存関係を変更する場合は、個別の venv を作成して検証すること。
+> **⚠️ 注意**: `.venv` を共有しているため、worktree 内での `uv pip install` はメインリポジトリの環境にも影響する。`pyproject.toml` の依存関係を変更する場合は、個別の venv を作成して検証すること。
 
 ## 運用ルール
 
