@@ -37,14 +37,23 @@ steps:
 
 `execute_cli()` に渡される `workdir` 引数が、指定があれば上書きされる。`subprocess.Popen(cwd=workdir)` でプロセスが起動される。
 
-### フォールバック階層
+### workdir の役割分離
+
+| パラメータ | 役割 | 決定タイミング | 影響先 |
+|-----------|------|---------------|--------|
+| CLI `--workdir` | config discovery の起点 | CLI 起動時 | `.kaji/config.toml` の探索開始ディレクトリ |
+| YAML `workflow.workdir` | ステップ実行 cwd のデフォルト | YAML パース時 | `subprocess.Popen(cwd=...)` |
+| YAML `step.workdir` | ステップ実行 cwd の個別指定 | YAML パース時 | `subprocess.Popen(cwd=...)` |
+| `project_root` | config discovery の結果 | config 読み込み時 | YAML workdir 未指定時のフォールバック |
+
+CLI `--workdir` と YAML `workdir` は異なるフェーズで異なるものを決定する。CLI `--workdir` は「どの config を使うか」、YAML `workdir` は「どのディレクトリでエージェントを動かすか」を制御する。
+
+### 実行 cwd のフォールバック階層
 
 ```
-CLI --workdir(config discovery) → step.workdir → workflow.workdir → project_root
-  (config discoveryのみ)          (最優先)        (中間)            (最終)
+step.workdir → workflow.workdir → project_root
+  (最優先)        (中間)            (最終・config discovery結果)
 ```
-
-**注意**: CLI `--workdir` は config discovery の起点であり、YAML workdir とは役割が異なる。CLI `--workdir` で発見された `project_root` がフォールバックの最終値となる。
 
 ### 使用例
 
@@ -93,23 +102,83 @@ class Workflow:
     workdir: str | None = None
 ```
 
-### 2. パーサー変更（workflow.py）
+### 2. パーサー変更（workflow.py `_parse_workflow()`）
 
-`_parse_workflow()` で workdir を読み取り、型バリデーション（文字列であること、空でないこと）を行う。ステップレベル・ワークフローレベル両方。
+workdir を読み取り、以下のバリデーションを行う（ステップレベル・ワークフローレベル共通）:
 
-### 3. ランナー変更（runner.py）
+1. **型チェック**: 文字列であること（非文字列は `WorkflowValidationError`）
+2. **空文字列拒否**: 空文字列は `WorkflowValidationError`
+3. **`~` 展開**: `Path(workdir).expanduser()` で正規化
+4. **絶対パス判定**: 展開後のパスが絶対パスであること（相対パスは `WorkflowValidationError`）
+5. **正規化結果の格納**: 展開・検証後の絶対パス文字列をモデルに格納
 
-`execute_cli()` 呼び出し時に workdir を解決する。
+```python
+# 疑似コード (_parse_workflow 内)
+raw_workdir = step_data.get("workdir")
+if raw_workdir is not None:
+    if not isinstance(raw_workdir, str):
+        raise WorkflowValidationError(...)
+    if not raw_workdir:
+        raise WorkflowValidationError(...)
+    try:
+        expanded = Path(raw_workdir).expanduser()
+    except RuntimeError as e:
+        raise WorkflowValidationError(...) from e
+    if not expanded.is_absolute():
+        raise WorkflowValidationError(...)
+    raw_workdir = str(expanded)
+```
+
+`expanduser()` は `config.py:116-121` と同じパターン。パース段階で正規化することで、以降の処理は常に絶対パスを前提にできる。
+
+### 3. バリデーター変更（workflow.py `validate_workflow()`）
+
+直接構築された `Workflow` / `Step` に対しても workdir の不正値を検出する。`timeout` の `validate_workflow()` 契約（`tests/test_timeout_config.py:396-438`）と同一パターン:
+
+- 非文字列型の workdir → エラー
+- 空文字列の workdir → エラー
+- 相対パスの workdir → エラー
+
+```python
+# 疑似コード (validate_workflow 内)
+# ワークフローレベル
+if workflow.workdir is not None:
+    if not isinstance(workflow.workdir, str) or not workflow.workdir:
+        errors.append(...)
+    elif not Path(workflow.workdir).is_absolute():
+        errors.append(...)
+
+# ステップレベル（既存の step ループ内）
+if step.workdir is not None:
+    if not isinstance(step.workdir, str) or not step.workdir:
+        errors.append(...)
+    elif not Path(step.workdir).is_absolute():
+        errors.append(...)
+```
+
+**注意**: `validate_workflow()` では `expanduser()` は行わない。`_parse_workflow()` 経由の値は既に展開済みだが、直接構築の場合は呼び出し元の責務。`validate_workflow()` は「絶対パスであること」だけを検証する。
+
+### 4. ランナー変更（runner.py）
+
+`execute_cli()` 呼び出し時に workdir を解決する。パース段階で `~` 展開済みなので、ここでは フォールバック解決 + 存在確認のみ。
 
 ```python
 # 疑似コード
-step_workdir = current_step.workdir or self.workflow.workdir
-effective_workdir = Path(step_workdir) if step_workdir else self.project_root
+raw_workdir = current_step.workdir or self.workflow.workdir
+effective_workdir = Path(raw_workdir) if raw_workdir else self.project_root
+if not effective_workdir.is_dir():
+    raise WorkdirNotFoundError(current_step.id, effective_workdir)
 ```
 
-実行時にディレクトリ存在確認を行い、存在しなければ明確なエラーメッセージで失敗させる。
+### 5. 責務の分担まとめ
 
-### 4. 影響範囲
+| レイヤー | 責務 |
+|---------|------|
+| `_parse_workflow()` | 型チェック、空文字列拒否、`~` 展開、絶対パス判定、正規化後格納 |
+| `validate_workflow()` | 直接構築モデルの不正値検出（非文字列、空文字列、相対パス） |
+| `runner.py` | フォールバック解決（step > workflow > project_root）、実行時ディレクトリ存在確認 |
+
+### 6. 影響範囲
 
 - `cli.py`: 変更不要。`execute_cli(workdir=...)` の引数が変わるだけ
 - 各アダプタの `_build_*_args()`: 変更不要。`workdir` パラメータは既に受け取っており、Codex は `-C` フラグにも使用している
@@ -128,9 +197,16 @@ effective_workdir = Path(step_workdir) if step_workdir else self.project_root
 
 ### Small テスト
 
-- **workdir フィールドのパース**: ワークフローレベル・ステップレベルの workdir が正しくパースされること
-- **バリデーション**: 空文字列、非文字列型、相対パスでエラーになること
-- **workdir 未指定時**: None としてパースされること（後方互換）
+- **workdir フィールドのパース（`_parse_workflow()`）**:
+  - ワークフローレベル・ステップレベルの workdir が正しくパースされること
+  - `~` 付きパスが `expanduser()` で展開された絶対パスとして格納されること
+  - 空文字列、非文字列型、相対パスでバリデーションエラーになること
+  - workdir 未指定時は None としてパースされること（後方互換）
+- **直接構築モデルのバリデーション（`validate_workflow()`）**:
+  - 非文字列型の workdir → エラー（workflow レベル・step レベル）
+  - 空文字列の workdir → エラー
+  - 相対パスの workdir → エラー
+  - None / 有効な絶対パス → エラーなし
 - **フォールバック解決**: step.workdir > workflow.workdir > project_root の優先順位が正しいこと
 
 ### Medium テスト
@@ -163,4 +239,6 @@ effective_workdir = Path(step_workdir) if step_workdir else self.project_root
 | 現行 cli.py の subprocess 起動 | `kaji_harness/cli.py:117-119` | `subprocess.Popen(..., cwd=workdir)` で workdir を cwd として設定 |
 | 現行 CLI --workdir オプション | `kaji_harness/cli_main.py:52-57` | config discovery の起点として使用。`start_dir = args.workdir.resolve()` |
 | Issue #127 調査結果 | GitHub Issue #127 本文 | 3アダプタの workdir 扱い調査。全アダプタが `cwd=workdir` で動作し、Codex は追加で `-C` フラグも使用 |
-| timeout 設計（同パターンの先行実装） | `draft/design/issue-116-timeout-config.md` | ワークフローレベル → ステップレベルのフォールバック階層設計パターン |
+| config.py の `~` 展開パターン | `kaji_harness/config.py:116-123` | `Path(value).expanduser()` → `is_absolute()` の順序で正規化。`RuntimeError` を捕捉して `ConfigLoadError` に変換 |
+| validate_workflow() の timeout 契約 | `tests/test_timeout_config.py:396-438` | 直接構築した `Workflow`/`Step` の不正値を `validate_workflow()` で弾く契約がテストで保持されている |
+| timeout 設計（同パターンの先行実装） | `draft/design/issue-116-timeout-config.md` | ワークフローレベル → ステップレベルのフォールバック階層設計パターン。`_parse_workflow()` と `validate_workflow()` の両方を設計対象に含む |
