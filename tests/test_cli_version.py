@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -57,3 +59,18 @@ class TestVersionOptionSmall:
 
         expected_version = version("kaji")
         assert expected_version in captured.out
+
+    @pytest.mark.small
+    def test_version_via_cli_entrypoint(self) -> None:
+        """python -m kaji_harness.cli_main --version outputs correct format."""
+        result = subprocess.run(
+            [sys.executable, "-m", "kaji_harness.cli_main", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0
+        assert result.stdout.startswith("kaji ")
+        from importlib.metadata import version
+
+        assert version("kaji") in result.stdout
