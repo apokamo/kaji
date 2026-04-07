@@ -41,9 +41,61 @@ source .venv/bin/activate
 - CI/CD の変更なし（現時点で GitHub Actions なし）
 - `draft/` 配下の過去設計書アーカイブは修正スコープ外
 
+## dev 依存の扱い: optional-dependencies → dependency-groups 移行
+
+### 問題
+
+現行 `pyproject.toml` では開発依存が `[project.optional-dependencies].dev` に定義されている（25-34 行）。
+plain `uv sync` は optional-dependencies（extras）をデフォルトでインストールしない。
+このため、`uv sync` 単体では `pip install -e ".[dev]"` 相当にならない。
+
+### 選択肢
+
+| 選択肢 | コマンド | pyproject.toml 変更 | 評価 |
+|--------|---------|---------------------|------|
+| A: `--extra` フラグ | `uv sync --extra dev` | 不要 | Issue の「`uv sync` で完結」に反する |
+| B: dependency-groups 移行 | `uv sync` | `[project.optional-dependencies].dev` → `[dependency-groups].dev` | uv の推奨パターン。`uv sync` で dev グループが自動同期される |
+
+### 採用: B（dependency-groups 移行）
+
+**理由**:
+
+1. uv は `[dependency-groups].dev` をデフォルトで同期する（`--no-default-groups` で除外可能）
+2. 開発依存（pytest, ruff, mypy 等）は「ローカル開発専用の非公開依存」であり、
+   公開メタデータとして配布される optional-dependencies より dependency-groups が意味的に正確
+3. Issue の完了条件「`uv sync` でセットアップが完結する」を満たす
+4. build-backend（setuptools）は変更しない。`[dependency-groups]` は PEP 735 で定義された
+   ビルドシステム非依存の仕様であり、`[build-system]` には影響しない
+
+### pyproject.toml の変更内容
+
+```python
+# 削除
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    ...
+]
+
+# 追加
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    ...
+]
+```
+
+依存パッケージの一覧自体は変更しない。セクション名のみ移行する。
+
 ## 方針
 
 全修正をファイル種別で 4 カテゴリに分類し、順に対応する。
+
+### 0. pyproject.toml の依存定義移行
+
+| ファイル | 現状 | 修正後 |
+|---------|------|--------|
+| `pyproject.toml` | `[project.optional-dependencies].dev` | `[dependency-groups].dev` |
 
 ### 1. 実行に影響する修正
 
@@ -92,23 +144,47 @@ source .venv/bin/activate
 
 ### 変更タイプ
 
-- **実行に影響するコード変更**: `Makefile` の setup ターゲット、`scripts/verify-packaging.sh`
-- **docs-only**: その他全ファイル
+- **packaging-only**: `pyproject.toml`（dependency-groups 移行）、`Makefile`（setup ターゲット）、`scripts/verify-packaging.sh`
+- **docs-only**: その他全ファイル（CLAUDE.md, README.md, docs/*, スキルファイル, Serena 設定）
 
-実行に影響する変更は 2 ファイルのみで、いずれもシェルコマンドの置換であり、新規ロジックの追加ではない。
+`Makefile` の setup ターゲットと `scripts/verify-packaging.sh` はビルド・セットアップ基盤であり、
+kaji アプリケーションの実行時ロジック（`kaji_harness/` 配下の Python コード）には変更を加えない。
+シェルコマンドの pip → uv 置換のみであり、新規の Python ロジック追加は一切ない。
+
+### Small / Medium / Large の検証観点
+
+本変更は packaging-only + docs-only であり、`kaji_harness/` 配下の実行時コードに変更はない。
+各サイズの恒久テストを追加しない理由をサイズ別に記載する。
+
+#### Small テスト（恒久テスト追加なし）
+
+- 変更対象はシェルスクリプト・Makefile・ドキュメントのみ。pytest で検証可能な Python ロジックの追加・変更がない
+- 既存の Small テストは kaji_harness の単体ロジックを検証しており、本変更の回帰は検出対象外
+
+#### Medium テスト（恒久テスト追加なし）
+
+- ファイル I/O・DB・内部サービス結合に関わる変更がない
+- `scripts/verify-packaging.sh` は隔離環境でのパッケージインストールを行うが、
+  これ自体が packaging 検証ツールであり、テスト対象ではなく検証手段である
+
+#### Large テスト（恒久テスト追加なし）
+
+- 実 API 疎通・E2E データフローに関わる変更がない
+- `uv sync` → `make check` の実行が E2E 検証に相当するが、
+  これは CI/開発フローで常時実行されるゲートであり、専用の Large テストを新設する価値がない
 
 ### 変更固有検証
 
-- `uv sync` を実行し、`.venv` にパッケージがインストールされることを確認
+- `uv sync` を実行し、`.venv` に dev 依存（pytest, ruff, mypy 等）がインストールされることを確認
 - `make check` が通ることを確認（lint → format → typecheck → test）
 - `make verify-packaging` が uv ベースで動作することを確認
 - `make verify-docs` でドキュメントのリンク整合を確認
 
-### 恒久テストを追加しない理由
+### 恒久テストを追加しない理由（4 条件）
 
-1. **独自ロジックの追加・変更をほぼ含まない**: シェルコマンドの置換のみ
-2. **想定される不具合パターンが既存テストまたは既存品質ゲートで捕捉済み**: `make check` と `make verify-packaging` が既存ゲートとして機能
-3. **新規テストを追加しても回帰検出情報がほとんど増えない**: pip → uv の置換は一度完了すれば回帰しない性質
+1. **独自ロジックの追加・変更をほぼ含まない**: シェルコマンドの置換と pyproject.toml セクション名の変更のみ
+2. **想定される不具合パターンが既存テストまたは既存品質ゲートで捕捉済み**: `make check`（既存テスト全量実行）と `make verify-packaging`（隔離インストール検証）が既存ゲートとして機能
+3. **新規テストを追加しても回帰検出情報がほとんど増えない**: pip → uv の置換は一度完了すれば回帰しない性質。dependency-groups 移行も同様
 4. **テスト未追加の理由をレビュー可能な形で説明できる**: 上記の通り
 
 ## 影響ドキュメント
@@ -127,6 +203,7 @@ source .venv/bin/activate
 
 | 情報源 | URL/パス | 根拠（引用/要約） |
 |--------|----------|-------------------|
+| uv 公式ドキュメント: Dependencies | https://docs.astral.sh/uv/concepts/projects/dependencies/ | `uv sync` は `[dependency-groups].dev` をデフォルトで同期する。optional-dependencies はデフォルト同期されない。`tool.uv.default-groups` で制御可能 |
 | uv 公式ドキュメント: Getting Started | https://docs.astral.sh/uv/getting-started/features/ | `uv sync` は pyproject.toml と uv.lock に基づき依存を解決・インストールし、.venv を自動作成する |
 | uv 公式ドキュメント: pip interface | https://docs.astral.sh/uv/pip/ | `uv pip install` は pip 互換のインターフェースを提供し、隔離環境での検証に使用可能 |
 | uv 公式ドキュメント: uv venv | https://docs.astral.sh/uv/pip/environments/ | `uv venv` は `python -m venv` の代替として高速に仮想環境を作成する |
