@@ -531,6 +531,52 @@ class TestWorkdirRunnerIntegration:
             call_kwargs = mock_exec.call_args.kwargs
             assert call_kwargs["workdir"] == tmp_path
 
+    def test_runner_passes_workdir_to_verdict_formatter(self, tmp_path: Path) -> None:
+        """WorkflowRunner passes effective_workdir (not project_root) to verdict formatter."""
+        from kaji_harness.config import KajiConfig
+        from kaji_harness.models import CLIResult, CostInfo
+        from kaji_harness.runner import WorkflowRunner
+
+        self._write_config(tmp_path)
+        config = KajiConfig._load(tmp_path / ".kaji" / "config.toml")
+
+        step_dir = tmp_path / "step-dir"
+        step_dir.mkdir()
+
+        wf = _workflow(
+            steps=[_step(workdir=str(step_dir))],
+            workdir=str(tmp_path),
+        )
+
+        cli_result = CLIResult(
+            full_output=(
+                "output\n---VERDICT---\nstatus: PASS\nreason: ok\n"
+                'evidence: "test"\nsuggestion: ""\n---END_VERDICT---\n'
+            ),
+            session_id="s-1",
+            cost=CostInfo(usd=0.01),
+            stderr="",
+        )
+
+        with (
+            patch("kaji_harness.runner.execute_cli", return_value=cli_result),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.runner.create_verdict_formatter") as mock_formatter,
+        ):
+            mock_formatter.return_value = lambda raw: raw
+            runner = WorkflowRunner(
+                workflow=wf,
+                issue_number=1,
+                project_root=tmp_path,
+                artifacts_dir=tmp_path / ".kaji-artifacts",
+                config=config,
+            )
+            runner.run()
+
+            fmt_kwargs = mock_formatter.call_args.kwargs
+            assert fmt_kwargs["workdir"] == step_dir
+            assert fmt_kwargs["workdir"] != tmp_path  # must not be project_root
+
     def test_runner_raises_on_nonexistent_workdir(self, tmp_path: Path) -> None:
         """WorkflowRunner raises error when workdir directory does not exist."""
         from kaji_harness.config import KajiConfig

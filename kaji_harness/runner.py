@@ -167,7 +167,7 @@ class WorkflowRunner:
                         agent=current_step.agent,
                         valid_statuses=valid,
                         model=current_step.model,
-                        workdir=self.project_root,
+                        workdir=effective_workdir,
                     )
                     verdict = parse_verdict(
                         result.full_output,
