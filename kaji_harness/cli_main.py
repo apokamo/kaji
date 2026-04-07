@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from .config import KajiConfig
@@ -30,12 +31,21 @@ EXIT_CONFIG_NOT_FOUND = 2
 EXIT_RUNTIME_ERROR = 3
 
 
+def _get_version() -> str:
+    """Return the installed package version, or 'unknown' if not found."""
+    try:
+        return version("kaji")
+    except PackageNotFoundError:
+        return "unknown"
+
+
 def create_parser() -> argparse.ArgumentParser:
     """Create the top-level argument parser with subcommands."""
     parser = argparse.ArgumentParser(
         prog="kaji",
         description="AI-driven development workflow orchestrator",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {_get_version()}")
     subparsers = parser.add_subparsers(dest="command", required=True)
     _register_run(subparsers)
     _register_validate(subparsers)
