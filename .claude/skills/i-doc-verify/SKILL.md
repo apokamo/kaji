@@ -16,7 +16,7 @@ docs 修正後の確認を行う。
 |-----------|-----------------|
 | `i-doc-fix` 後の確認 | ✅ 必須 |
 
-**ワークフロー内の位置**: review-doc → fix-doc → **verify-doc** → pr
+**ワークフロー内の位置**: review-doc → fix-doc → **verify-doc** → i-doc-final-check → i-pr
 
 ## 入力
 
