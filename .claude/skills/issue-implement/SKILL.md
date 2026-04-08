@@ -15,7 +15,7 @@ name: issue-implement
 | 設計レビュー完了・承認後 | ✅ 必須 |
 | 設計レビュー未完了 | ❌ 待機 |
 
-**ワークフロー内の位置**: design → review-design → **implement** → review-code → doc-check → pr → close
+**ワークフロー内の位置**: design → review-design → **implement** → review-code → doc-check → i-dev-final-check → i-pr → close
 
 ## 入力
 
