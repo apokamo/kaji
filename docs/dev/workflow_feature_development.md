@@ -189,14 +189,14 @@ PR作成後:
 ```mermaid
 flowchart LR
     A["draft/design/<br/>issue-XXX-*.md"] -->|作業中| B["worktree内に存在"]
-    B -->|Close時| C["Issue本文に<br/>アーカイブ"]
+    B -->|最終チェック時| C["Issue本文に<br/>アーカイブ"]
     B -->|worktree削除| D["(自然消滅)"]
 ```
 
 | フェーズ | 場所 | 説明 |
 |----------|------|------|
 | 作業中 | `draft/design/issue-XXX-*.md` | worktree内、コミット対象 |
-| Close時 | Issue本文にアーカイブ | `<details>` タグで折りたたみ |
+| 最終チェック時 | Issue本文にアーカイブ | `/i-dev-final-check` で `<details>` タグに折りたたみ |
 | アーキテクチャ決定 | `docs/adr/` | ADRとして永続化（従来通り） |
 
 ## コマンド一覧
@@ -208,8 +208,9 @@ flowchart LR
 | `/issue-create` | Issue作成 + ラベル付与 |
 | `/issue-start` | worktree構築 + Issue本文にメタ情報追記 |
 | `/issue-doc-check` | PR前のドキュメント影響チェック |
-| `/issue-pr` | コミット整理 + PR作成 |
-| `/issue-close` | 設計書アーカイブ + PRマージ + worktree削除 |
+| `/i-dev-final-check` | エビデンス集約 + 品質チェック + 設計書アーカイブ |
+| `/i-pr` | コミット整理 + PR作成 |
+| `/issue-close` | PRマージ + ブランチ安全削除 + worktree削除（※手動実行） |
 
 ### 設計フェーズ
 
