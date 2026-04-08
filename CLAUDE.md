@@ -91,13 +91,22 @@ kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
 
 | Topic | Location |
 |-------|----------|
+| Document Index | docs/README.md |
 | Architecture | docs/ARCHITECTURE.md |
 | ADR | docs/adr/ |
 | CLI Guides | docs/cli-guides/ |
+| Workflow Overview | docs/dev/workflow_overview.md |
 | Workflow Guide | docs/dev/workflow_guide.md |
+| Completion Criteria | docs/dev/workflow_completion_criteria.md |
 | Testing Convention | docs/dev/testing-convention.md |
+| Testing Size Guide | docs/reference/testing-size-guide.md |
+| Doc Update Criteria | docs/dev/documentation_update_criteria.md |
+| Shared Skill Rules | docs/dev/shared_skill_rules.md |
 | Workflow Authoring | docs/dev/workflow-authoring.md |
 | Skill Authoring | docs/dev/skill-authoring.md |
+| AI Strategy | docs/concepts/ai-driven-strategy.md |
+| AI Docs Management | docs/concepts/ai-docs-management.md |
+| Label Standardization | docs/rfc/github-labels-standardization.md |
 
 ## Development Skills
 
