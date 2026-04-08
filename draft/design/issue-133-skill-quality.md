@@ -49,7 +49,7 @@ Issue: #133
 - kaji_harness/ 配下のコード変更はなし（スコープ外）
 - テスト追加なし（スコープ外）
 - 既存 Issue の再ラベルは行わない（新規 Issue のみ対象）
-- 移植元スキルは別プロジェクトにあり直接参照不可 → Issue 本文の仕様記述を正本とする
+- 移植元スキルは別プロジェクトにあり直接参照不可 → Issue #133 本文の改善一覧・責務境界テーブル・コミット戦略を「何を作るか」の正本とする。一方、kaji 固有の適合判断（既存スキルとの差分、kaji に不要な機能の除外、既存 workflow docs との整合）は現行 kaji リポジトリの一次情報で確定する
 - Scope 概念（backend/frontend/fullstack）は kaji では不要（Python 単体）
 - secrets シンボリックリンクは kaji では不要
 
@@ -95,6 +95,7 @@ Issue: #133
 
 #### `issue-design`
 - 完了条件の段階確認（Step 2.5）を追加: テンプレート各セクションの記載有無を段階的に検証
+- 冒頭説明の更新: 「Issue Close 時に Issue 本文へアーカイブ」→「`i-dev-final-check` 時に Issue 本文へアーカイブ」に修正（責務移譲の反映）
 
 #### `issue-pr`
 - `i-pr` への委譲ラッパー化（既存インターフェースは維持）
@@ -129,6 +130,8 @@ Issue: #133
 
 | ドキュメント | 更新内容 |
 |-------------|----------|
+| `docs/dev/workflow_feature_development.md` | `/issue-close` の責務記述を「PRマージ + worktree削除」に縮小（設計書アーカイブ責務を削除）。フロー図に `/i-dev-final-check` を追加。設計書保存場所の `Close時` → `i-dev-final-check時` に更新 |
+| `docs/dev/workflow_docs_maintenance.md` | フロー概要に `/i-doc-final-check` ステップを追加（`i-doc-verify` → `i-doc-final-check` → `i-pr`） |
 | `docs/dev/testing-convention.md` | テスト実行マトリクス（いつ何を実行するか）セクション追加 |
 | `docs/dev/workflow_guide.md` | `workflow_overview.md` との役割分担整理 |
 | `CLAUDE.md` | ドキュメント参照テーブルに新規ドキュメント追加 |
@@ -137,13 +140,13 @@ Issue: #133
 
 Issue 本文のコミット戦略に従い、論理単位で分割:
 
-1. `issue-implement` ベースラインチェック追加
+1. `issue-implement` テスト判断の禁止事項明記 + lint/test ステップ分離（ベースラインチェックは既存のため対象外）
 2. `issue-close` ブランチ削除安全化 + 設計書アーカイブ責務削除
 3. `i-dev-final-check` / `i-doc-final-check` 新規追加
 4. `_shared/promote-design.md` 新規追加
 5. `i-pr` 新規追加 + `issue-pr` ラッパー化
 6. その他スキル改善（issue-create, issue-design, i-doc-review, i-doc-verify）
-7. 参照ドキュメント新規作成・更新
+7. 参照ドキュメント新規作成・更新（`docs/dev/workflow_feature_development.md`, `docs/dev/workflow_docs_maintenance.md` の正本更新を含む）
 8. コンセプト・運用ドキュメント新規作成
 
 ## テスト戦略
@@ -173,7 +176,7 @@ Issue 本文のコミット戦略に従い、論理単位で分割:
 |-------------|-----------|------|
 | docs/adr/ | なし | 新しい技術選定はない |
 | docs/ARCHITECTURE.md | なし | アーキテクチャ変更なし |
-| docs/dev/ | あり | workflow_overview.md 等の新規作成、既存ドキュメント更新 |
+| docs/dev/ | あり | workflow_overview.md 等の新規作成、workflow_feature_development.md・workflow_docs_maintenance.md の正本更新、既存ドキュメント更新 |
 | docs/cli-guides/ | なし | CLI 仕様変更なし |
 | CLAUDE.md | あり | ドキュメント参照テーブルに新規ドキュメント追加 |
 
@@ -188,6 +191,7 @@ Issue 本文のコミット戦略に従い、論理単位で分割:
 | 現行 issue-design | `.claude/skills/issue-design/SKILL.md` | テスト戦略セクションと影響ドキュメントテーブルは存在するが、完了条件の段階確認ステップは未実装 |
 | 現行 issue-pr | `.claude/skills/issue-pr/SKILL.md` | git absorb → push → PR 作成の責務。i-pr への委譲前の現状 |
 | 現行 i-doc-review / i-doc-verify | `.claude/skills/i-doc-review/SKILL.md`, `.claude/skills/i-doc-verify/SKILL.md` | ワークフロー位置に `i-doc-final-check` が未記載 |
-| 開発ワークフロー | `docs/dev/workflow_feature_development.md` | スキルのワークフロー位置記述の正本 |
+| 開発ワークフロー | `docs/dev/workflow_feature_development.md` | スキルのワークフロー位置記述の正本。`/issue-close` の責務・設計書保存場所の記述を更新対象 |
+| docs メンテナンスワークフロー | `docs/dev/workflow_docs_maintenance.md` | docs-only workflow の正本。フロー概要に `i-doc-final-check` を追加対象 |
 | テスト規約 | `docs/dev/testing-convention.md` | テスト実行マトリクス追加先。恒久テスト不要の 4 条件を参照 |
 | ワークフローガイド | `docs/dev/workflow_guide.md` | `workflow_overview.md` との役割分担整理対象 |
