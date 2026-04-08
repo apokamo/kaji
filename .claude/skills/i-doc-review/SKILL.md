@@ -17,7 +17,7 @@ docs-only の変更をレビューする。新規指摘を行ってよい。
 |-----------|-----------------|
 | `i-doc-update` 完了後 | ✅ 必須 |
 
-**ワークフロー内の位置**: update-doc → **review-doc** → (fix-doc → verify-doc) → pr
+**ワークフロー内の位置**: update-doc → **review-doc** → (fix-doc → verify-doc) → i-doc-final-check → i-pr
 
 ## 入力
 
@@ -102,6 +102,6 @@ suggestion: |
 
 | status | 条件 |
 |--------|------|
-| PASS | 修正不要で PR へ進める |
+| PASS | 修正不要で i-doc-final-check へ進める |
 | RETRY | docs 修正で解決可能 |
 | ABORT | docs-only の範囲を超える重大な問題 |

@@ -6,7 +6,7 @@ name: issue-design
 # Issue Design
 
 指定されたIssueに基づき、設計書（Markdown）を作成します。
-設計書は `draft/design/` に作成され、Issue Close 時に Issue 本文へアーカイブされます。
+設計書は `draft/design/` に作成され、`i-dev-final-check` 時に Issue 本文へアーカイブされます。
 
 ## いつ使うか
 
@@ -15,7 +15,7 @@ name: issue-design
 | Issue着手後、実装前 | ✅ 必須 |
 | worktreeが存在しない | ❌ 先に `/issue-start` を実行 |
 
-**ワークフロー内の位置**: create → start → **design** → review-design → implement → review-code → doc-check → pr → close
+**ワークフロー内の位置**: create → start → **design** → review-design → implement → review-code → doc-check → i-dev-final-check → i-pr → close
 
 ## 入力
 
@@ -188,6 +188,27 @@ Issue: #[issue-number]
 > - URLだけでなく、**根拠（引用/要約）** も記載必須
 > - レビュー時に一次情報の記載がない場合、設計レビューは中断されます
 ```
+
+### Step 2.5: 完了条件の段階確認
+
+設計書の各セクションが記載されているか段階的に確認する:
+
+1. **必須セクションの存在確認**:
+   - [ ] 概要
+   - [ ] 背景・目的
+   - [ ] インターフェース（入力・出力）
+   - [ ] 制約・前提条件
+   - [ ] 方針
+   - [ ] テスト戦略（変更タイプに応じたセクション）
+   - [ ] 影響ドキュメント
+   - [ ] 参照情報（Primary Sources）
+
+2. **内容の妥当性確認**:
+   - テスト戦略が変更タイプに対して妥当か
+   - Primary Sources に根拠が記載されているか
+   - 影響ドキュメントが網羅的か
+
+不足がある場合は設計書を補完してからコミットする。
 
 ### Step 3: コミット
 

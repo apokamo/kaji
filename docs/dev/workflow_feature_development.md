@@ -24,7 +24,8 @@ flowchart TB
     D4 --> D2
     D2 -->|Yes| DC
 
-    DC["/issue-doc-check"] --> E["/issue-pr"] --> F["end"]
+    DC["/issue-doc-check"] --> FC["/i-dev-final-check"]
+    FC --> E["/i-pr"] --> F["end"]
 ```
 
 ## フェーズ概要
@@ -35,8 +36,9 @@ flowchart TB
 | 2. 着手 | `/issue-start` | worktree + Issue本文にメタ情報 |
 | 3. 設計 | `/issue-design` | `draft/design/` に設計書 |
 | 4. 実装 | `/issue-implement` | コード + テスト |
-| 5. PR作成 | `/issue-pr` | PR作成 |
-| 6. 完了 | `/issue-close` | 設計書アーカイブ + PRマージ + worktree削除（※手動実行） |
+| 5. 最終チェック | `/i-dev-final-check` | エビデンス集約 + 品質チェック + 設計書アーカイブ |
+| 6. PR作成 | `/i-pr` | PR作成 |
+| 7. 完了 | `/issue-close` | PRマージ + ブランチ安全削除 + worktree削除（※手動実行） |
 
 ## 詳細フロー
 
@@ -109,8 +111,17 @@ flowchart TB
 └─────────────────────────────────────────────────────────────────────┘
                                   ↓
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Phase 5: PR作成                                                     │
-│ /issue-pr <issue-number>                                            │
+│ Phase 5: 最終チェック                                               │
+│ /i-dev-final-check <issue-number>                                   │
+├─────────────────────────────────────────────────────────────────────┤
+│ • 全フェーズのエビデンス集約・確認                                  │
+│ • 品質チェック: ruff check + ruff format --check + mypy + pytest    │
+│ • 設計書を Issue 本文にアーカイブ（<details>タグ）                  │
+└─────────────────────────────────────────────────────────────────────┘
+                                  ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│ Phase 6: PR作成                                                     │
+│ /i-pr <issue-number>                                                │
 ├─────────────────────────────────────────────────────────────────────┤
 │ • Issue本文からWorktree情報を取得                                   │
 │ • git absorb（コミット履歴の整理）                                  │
@@ -120,13 +131,14 @@ flowchart TB
 └─────────────────────────────────────────────────────────────────────┘
                                   ↓
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Phase 6: 完了（※ワークフロー外。手動で実行）                        │
+│ Phase 7: 完了（※ワークフロー外。手動で実行）                        │
 │ /issue-close <issue-number>                                         │
 ├─────────────────────────────────────────────────────────────────────┤
-│ • draft/design/ → Issue本文に設計書をアーカイブ（<details>タグ）    │
-│ • gh pr merge --merge --delete-branch                               │
+│ • gh pr merge --merge                                               │
+│ • ブランチ安全削除（merge-base 確認後）                             │
 │ • .venv シンボリックリンク削除                                      │
 │ • git worktree remove                                               │
+│ • stale ref クリーンアップ                                          │
 │ • 完了報告                                                          │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -177,14 +189,14 @@ PR作成後:
 ```mermaid
 flowchart LR
     A["draft/design/<br/>issue-XXX-*.md"] -->|作業中| B["worktree内に存在"]
-    B -->|Close時| C["Issue本文に<br/>アーカイブ"]
+    B -->|最終チェック時| C["Issue本文に<br/>アーカイブ"]
     B -->|worktree削除| D["(自然消滅)"]
 ```
 
 | フェーズ | 場所 | 説明 |
 |----------|------|------|
 | 作業中 | `draft/design/issue-XXX-*.md` | worktree内、コミット対象 |
-| Close時 | Issue本文にアーカイブ | `<details>` タグで折りたたみ |
+| 最終チェック時 | Issue本文にアーカイブ | `/i-dev-final-check` で `<details>` タグに折りたたみ |
 | アーキテクチャ決定 | `docs/adr/` | ADRとして永続化（従来通り） |
 
 ## コマンド一覧
@@ -196,8 +208,9 @@ flowchart LR
 | `/issue-create` | Issue作成 + ラベル付与 |
 | `/issue-start` | worktree構築 + Issue本文にメタ情報追記 |
 | `/issue-doc-check` | PR前のドキュメント影響チェック |
-| `/issue-pr` | コミット整理 + PR作成 |
-| `/issue-close` | 設計書アーカイブ + PRマージ + worktree削除 |
+| `/i-dev-final-check` | エビデンス集約 + 品質チェック + 設計書アーカイブ |
+| `/i-pr` | コミット整理 + PR作成 |
+| `/issue-close` | PRマージ + ブランチ安全削除 + worktree削除（※手動実行） |
 
 ### 設計フェーズ
 

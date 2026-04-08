@@ -110,7 +110,7 @@ gh issue comment [issue-number] --body "$(cat <<'EOF'
 
 ### 次のステップ
 
-`/issue-pr [issue-number]` でPRを作成してください。
+`/i-dev-final-check [issue-number]` で最終チェックを実施してください。
 EOF
 )"
 ```
@@ -127,7 +127,7 @@ gh issue comment [issue-number] --body "$(cat <<'EOF'
 
 ### 次のステップ
 
-`/issue-pr [issue-number]` でPRを作成してください。
+`/i-dev-final-check [issue-number]` で最終チェックを実施してください。
 EOF
 )"
 ```
@@ -145,7 +145,7 @@ EOF
 
 ### 次のステップ
 
-`/issue-pr [issue-number]` でPRを作成してください。
+`/i-dev-final-check [issue-number]` で最終チェックを実施してください。
 ```
 
 ## Verdict 出力

@@ -21,17 +21,25 @@ $ARGUMENTS = <title> [type] [description]
 ```
 
 - `title` (必須): Issueタイトル
-- `type` (任意): `feat` / `fix` / `refactor` / `docs` / `test` / `chore` / `perf` (デフォルト: feat)
+- `type` (任意): `feat` / `fix` / `refactor` / `docs` / `test` / `chore` / `perf` / `security` (デフォルト: feat)
 - `description` (任意): 詳細説明。省略時は対話で収集。
 
 ## type → ラベル マッピング
 
 | type | ラベル | 用途 |
 |------|--------|------|
-| `feat` | `enhancement` | 新機能追加 |
-| `fix` | `bug` | バグ修正 |
-| `refactor` | `refactoring` | リファクタリング |
-| `docs` | `documentation` | ドキュメント |
+| `feat` | `type:feature` | 新機能追加 |
+| `fix` | `type:bug` | バグ修正 |
+| `refactor` | `type:refactor` | リファクタリング |
+| `docs` | `type:docs` | ドキュメント |
+| `test` | `type:test` | テスト追加・改善 |
+| `chore` | `type:chore` | 雑務 |
+| `perf` | `type:perf` | パフォーマンス改善 |
+| `security` | `type:security` | セキュリティ修正 |
+
+> **既存ラベルとの共存**: 既存の `enhancement`, `bug`, `documentation` 等のラベルは削除しない。
+> 新規 Issue には `type:` プレフィックス付きラベルを使用する。
+> 詳細は `docs/rfc/github-labels-standardization.md` を参照。
 
 ## 実行手順
 
@@ -42,7 +50,15 @@ $ARGUMENTS = <title> [type] [description]
 - `type` が未指定の場合は `feat` をデフォルトとする
 - `description` が未指定の場合は、ユーザーに詳細を確認する
 
-### Step 2: Issue本文の作成
+### Step 2: ラベルの存在確認と作成
+
+指定された `type:` ラベルが存在しない場合は作成する:
+
+```bash
+gh label create "type:[type]" --description "[用途]" 2>/dev/null || echo "Label already exists"
+```
+
+### Step 3: Issue本文の作成
 
 以下の構成でIssue本文を作成します:
 
@@ -60,13 +76,13 @@ $ARGUMENTS = <title> [type] [description]
 - [ ] (達成すべき条件)
 ```
 
-### Step 3: Issue作成とラベル付与
+### Step 4: Issue作成とラベル付与
 
 ```bash
-gh issue create --title "[title]" --body "[body]" --label "[label]"
+gh issue create --title "[title]" --body "[body]" --label "type:[type]"
 ```
 
-### Step 4: 完了報告
+### Step 5: 完了報告
 
 以下の形式で報告してください:
 
@@ -78,7 +94,7 @@ gh issue create --title "[title]" --body "[body]" --label "[label]"
 | Issue | #[issue-number] |
 | タイトル | [title] |
 | Type | [type] |
-| ラベル | [label] |
+| ラベル | type:[type] |
 | URL | [issue-url] |
 
 ### 次のステップ
