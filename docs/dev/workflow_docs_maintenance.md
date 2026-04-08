@@ -4,7 +4,7 @@ docs-only Issue のためのドキュメント修正ワークフロー。
 
 ## フロー概要
 
-issue-start → i-doc-update → i-doc-review → (i-doc-fix → i-doc-verify) → issue-pr
+issue-start → i-doc-update → i-doc-review → (i-doc-fix → i-doc-verify) → i-doc-final-check → i-pr
 
 ## 実行制約
 

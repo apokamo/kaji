@@ -172,3 +172,21 @@ repo にコミットし、今後も継続実行するテスト。以下を満た
 
 棚卸しが広範囲になり、複数ファイルの削除・再分類・ワークフロー変更を伴う場合は、
 この Issue で抱え込まず派生 Issue を切って追跡する。
+
+## テスト実行マトリクス
+
+いつ、何を実行するかの基準。
+
+| タイミング | 実行するもの | 根拠 |
+|-----------|-------------|------|
+| 実装中（Red/Green サイクル） | `pytest`（対象テストまたは全体） | 開発中の動作確認 |
+| コミット前 | `ruff check` + `ruff format` + `mypy` + `pytest` | 品質ゲート（`make check` 相当） |
+| PR 前（`/i-dev-final-check`） | `make check` | 最終品質確認 |
+| docs-only PR 前（`/i-doc-final-check`） | `make verify-docs` | リンク整合性確認 |
+| CI | `make check` + `make verify-docs` | 自動品質検証 |
+
+### 実行の原則
+
+- **実行時コード変更**: `pytest` は必ず全テスト実行（`-m` フィルタなし）。特定テストのみの実行は開発中の補助に留める
+- **docs-only 変更**: `make verify-docs` で十分。`pytest` は回帰確認として実行するが、新規テスト追加は不要
+- **baseline failure がある場合**: regression 判定基準に従い、新規の FAILED/ERROR のみを対象とする（詳細は `issue-implement` スキルの Step 2.5 参照）
