@@ -69,7 +69,7 @@ class KajiConfig:
         if not isinstance(paths_data, dict):
             raise ConfigLoadError(path, "[paths] must be a table")
         artifacts_raw = paths_data.get("artifacts_dir")
-        if artifacts_raw is None:
+        if artifacts_raw is None or (isinstance(artifacts_raw, str) and not artifacts_raw.strip()):
             raise ConfigLoadError(path, "paths.artifacts_dir is required")
         if not isinstance(artifacts_raw, str):
             raise ConfigLoadError(

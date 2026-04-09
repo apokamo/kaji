@@ -75,6 +75,28 @@ class TestKajiConfigLoadValid:
         with pytest.raises(ConfigLoadError, match="artifacts_dir is required"):
             KajiConfig._load(config_file)
 
+    def test_load_with_empty_artifacts_dir_raises(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text(
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ""\n\n[execution]\ndefault_timeout = 1800\n'
+        )
+
+        with pytest.raises(ConfigLoadError, match="artifacts_dir is required"):
+            KajiConfig._load(config_file)
+
+    def test_load_with_whitespace_only_artifacts_dir_raises(self, tmp_path: Path) -> None:
+        config_dir = tmp_path / ".kaji"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text(
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "   "\n\n[execution]\ndefault_timeout = 1800\n'
+        )
+
+        with pytest.raises(ConfigLoadError, match="artifacts_dir is required"):
+            KajiConfig._load(config_file)
+
     def test_unknown_keys_ignored(self, tmp_path: Path) -> None:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
