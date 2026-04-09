@@ -147,7 +147,7 @@ class TestRunnerSkillDirIntegration:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = "my-skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = "my-skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
         config = KajiConfig._load(config_dir / "config.toml")
 
@@ -209,7 +209,7 @@ class TestSkillDirE2E:
         kaji_dir = tmp_path / ".kaji"
         kaji_dir.mkdir()
         (kaji_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         # Create skill
@@ -266,7 +266,7 @@ steps:
         kaji_dir = tmp_path / ".kaji"
         kaji_dir.mkdir()
         (kaji_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = "custom/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = "custom/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         _create_skill(tmp_path, "custom/skills", "my-skill")
@@ -319,8 +319,10 @@ steps:
 
         kaji_dir = tmp_path / ".kaji"
         kaji_dir.mkdir()
-        # No skill_dir in config
-        (kaji_dir / "config.toml").write_text("[execution]\ndefault_timeout = 1800\n")
+        # No skill_dir in config (but artifacts_dir is present to isolate the error)
+        (kaji_dir / "config.toml").write_text(
+            '[paths]\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+        )
 
         workflows_dir = tmp_path / "workflows"
         workflows_dir.mkdir()

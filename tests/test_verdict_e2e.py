@@ -374,6 +374,7 @@ def _setup_fake_agent_env(
             textwrap.dedent("""\
             name: test-multi
             description: Two-step test workflow
+            execution_policy: auto
             steps:
               - id: step1
                 skill: test-skill
@@ -394,6 +395,7 @@ def _setup_fake_agent_env(
             textwrap.dedent("""\
             name: test-single
             description: Single-step test workflow
+            execution_policy: auto
             steps:
               - id: step1
                 skill: test-skill
@@ -410,7 +412,7 @@ def _setup_fake_agent_env(
     config_dir = workdir / ".kaji"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
-        '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+        '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
     )
     skill_dir = workdir / ".claude" / "skills" / "test-skill"
     skill_dir.mkdir(parents=True)

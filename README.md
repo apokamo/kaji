@@ -47,7 +47,8 @@ Issue駆動のTDD開発フロー:
 ```toml
 # .kaji/config.toml
 [paths]
-artifacts_dir = "~/.kaji/artifacts"
+artifacts_dir = ".kaji/artifacts"    # 必須: アーティファクト保存先
+skill_dir = ".claude/skills"         # 必須: スキルディレクトリ
 
 [execution]
 default_timeout = 1800  # 必須: タイムアウトのデフォルト値（秒）

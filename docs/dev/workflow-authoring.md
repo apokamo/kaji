@@ -9,7 +9,8 @@ kaji_harness が読み込む YAML ワークフロー定義の書き方。
 ```toml
 # .kaji/config.toml（最小構成）
 [paths]
-artifacts_dir = "~/.kaji/artifacts"   # 省略時のデフォルト値
+artifacts_dir = ".kaji/artifacts"     # 必須: アーティファクト保存先
+skill_dir = ".claude/skills"          # 必須: スキルディレクトリ
 
 [execution]
 default_timeout = 1800               # 必須: タイムアウトのデフォルト値（秒）
@@ -96,11 +97,21 @@ cycles:
 
 ## execution_policy
 
+**必須フィールド**（未設定時はバリデーションエラー）。
+
 | 値 | 動作 |
 |----|------|
 | `auto` | 全 agent で承認・sandbox をバイパス（完全自動） |
 | `sandbox` | sandbox 内で自動実行（ファイル書き込みを制限） |
 | `interactive` | 承認フロー有効（人手確認あり） |
+
+### エージェント別 CLI フラグ
+
+| policy | Claude | Codex | Gemini |
+|--------|--------|-------|--------|
+| `auto` | `--permission-mode bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox` | `--approval-mode yolo` |
+| `sandbox` | （フラグなし） | `-s workspace-write` | `-s` |
+| `interactive` | （フラグなし） | （フラグなし） | （フラグなし） |
 
 ## resume（セッション継続）
 

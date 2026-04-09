@@ -17,7 +17,7 @@ from .errors import ConfigLoadError, ConfigNotFoundError
 class PathsConfig:
     """Path-related configuration."""
 
-    artifacts_dir: str = "~/.kaji/artifacts"
+    artifacts_dir: str = ""  # Required. Empty string = not set.
     skill_dir: str = ""  # Required. Empty string = not set.
 
 
@@ -68,7 +68,9 @@ class KajiConfig:
         paths_data = data.get("paths", {})
         if not isinstance(paths_data, dict):
             raise ConfigLoadError(path, "[paths] must be a table")
-        artifacts_raw = paths_data.get("artifacts_dir", PathsConfig.artifacts_dir)
+        artifacts_raw = paths_data.get("artifacts_dir")
+        if artifacts_raw is None or (isinstance(artifacts_raw, str) and not artifacts_raw.strip()):
+            raise ConfigLoadError(path, "paths.artifacts_dir is required")
         if not isinstance(artifacts_raw, str):
             raise ConfigLoadError(
                 path, f"paths.artifacts_dir must be a string, got {type(artifacts_raw).__name__}"
