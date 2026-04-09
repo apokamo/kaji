@@ -21,6 +21,7 @@ from kaji_harness.workflow import load_workflow, load_workflow_from_str, validat
 MINIMAL_WORKFLOW_YAML = dedent("""\
     name: minimal-wf
     description: A minimal two-step workflow
+    execution_policy: auto
     steps:
       - id: step_a
         skill: analyse
@@ -128,11 +129,20 @@ class TestWorkflowParsing:
         assert impl.on == {"PASS": "review", "ABORT": "end"}
 
     @pytest.mark.small
-    def test_execution_policy_defaults_to_auto(self) -> None:
-        """execution_policy defaults to 'auto' when omitted from YAML."""
-        wf = load_workflow_from_str(MINIMAL_WORKFLOW_YAML)
+    def test_missing_execution_policy_raises_validation_error(self) -> None:
+        """Missing execution_policy raises WorkflowValidationError."""
+        yaml_str = dedent("""\
+            name: test
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+                on:
+                  PASS: end
+        """)
 
-        assert wf.execution_policy == "auto"
+        with pytest.raises(WorkflowValidationError, match="'execution_policy' is required"):
+            load_workflow_from_str(yaml_str)
 
     @pytest.mark.small
     def test_optional_step_fields_default_to_none(self) -> None:
@@ -160,6 +170,7 @@ class TestWorkflowParsing:
         """YAML 1.1 interprets bare 'on' as True; parser handles this fallback."""
         yaml_str = dedent("""\
             name: test
+            execution_policy: auto
             steps:
               - id: step1
                 skill: s
@@ -598,7 +609,7 @@ class TestValidationErrors:
     @pytest.mark.small
     def test_empty_steps_raises_validation_error(self) -> None:
         """Workflow with steps: [] raises WorkflowValidationError on validation."""
-        yaml_str = "name: test\nsteps: []"
+        yaml_str = "name: test\nexecution_policy: auto\nsteps: []"
         wf = load_workflow_from_str(yaml_str)
 
         with pytest.raises(WorkflowValidationError, match="at least one step"):
@@ -609,6 +620,7 @@ class TestValidationErrors:
         """Cycle with loop: [] raises WorkflowValidationError on validation."""
         yaml_str = dedent("""\
             name: test
+            execution_policy: auto
             steps:
               - id: step1
                 skill: s

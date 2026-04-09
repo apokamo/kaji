@@ -74,6 +74,7 @@ class TestWorkflowWorkdirParsing:
         yaml_str = dedent("""\
             name: test
             description: test
+            execution_policy: auto
             workdir: /home/user/project
             steps:
               - id: s1
@@ -90,6 +91,7 @@ class TestWorkflowWorkdirParsing:
         yaml_str = dedent("""\
             name: test
             description: test
+            execution_policy: auto
             steps:
               - id: s1
                 skill: sk
@@ -105,6 +107,7 @@ class TestWorkflowWorkdirParsing:
         yaml_str = dedent("""\
             name: test
             description: test
+            execution_policy: auto
             workdir: ~/project
             steps:
               - id: s1
@@ -122,6 +125,7 @@ class TestWorkflowWorkdirParsing:
         yaml_str = dedent("""\
             name: test
             description: test
+            execution_policy: auto
             workdir: ""
             steps:
               - id: s1
@@ -138,6 +142,7 @@ class TestWorkflowWorkdirParsing:
         yaml_str = dedent("""\
             name: test
             description: test
+            execution_policy: auto
             workdir: 123
             steps:
               - id: s1
@@ -154,6 +159,7 @@ class TestWorkflowWorkdirParsing:
         yaml_str = dedent("""\
             name: test
             description: test
+            execution_policy: auto
             workdir: relative/path
             steps:
               - id: s1
@@ -175,6 +181,7 @@ class TestStepWorkdirParsing:
         yaml_str = dedent("""\
             name: test
             description: test
+            execution_policy: auto
             steps:
               - id: s1
                 skill: sk
@@ -191,6 +198,7 @@ class TestStepWorkdirParsing:
         yaml_str = dedent("""\
             name: test
             description: test
+            execution_policy: auto
             steps:
               - id: s1
                 skill: sk
@@ -206,6 +214,7 @@ class TestStepWorkdirParsing:
         yaml_str = dedent("""\
             name: test
             description: test
+            execution_policy: auto
             steps:
               - id: s1
                 skill: sk
@@ -271,6 +280,7 @@ class TestStepWorkdirParsing:
         yaml_str = dedent("""\
             name: test
             description: test
+            execution_policy: auto
             workdir: /home/user/project
             steps:
               - id: s1
@@ -401,7 +411,7 @@ class TestWorkdirRunnerIntegration:
         config_dir.mkdir(exist_ok=True)
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
         return config_file
 
@@ -617,7 +627,7 @@ class TestWorkdirConfigE2E:
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         skills_dir = project_dir / ".claude" / "skills" / "test-skill"
@@ -629,6 +639,7 @@ class TestWorkdirConfigE2E:
             dedent("""\
             name: test-workdir
             description: Test workflow with workdir
+            execution_policy: auto
             workdir: /tmp
             steps:
               - id: step1
@@ -663,7 +674,7 @@ class TestWorkdirConfigE2E:
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         wf_path = tmp_path / "workflow.yaml"
@@ -671,6 +682,7 @@ class TestWorkdirConfigE2E:
             dedent("""\
             name: test-bad-workdir
             description: Test workflow with bad workdir
+            execution_policy: auto
             workdir: relative/path
             steps:
               - id: step1

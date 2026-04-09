@@ -33,6 +33,7 @@ from kaji_harness.models import Verdict
 MINIMAL_WORKFLOW_YAML = """\
 name: test
 description: test workflow
+execution_policy: auto
 steps:
   - id: step1
     skill: test-skill
@@ -59,7 +60,7 @@ def workdir(tmp_path: Path) -> Path:
     config_dir = d / ".kaji"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
-        '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+        '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
     )
     return d
 
@@ -497,7 +498,7 @@ class TestCLILarge:
         config_dir = workdir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
         skill_dir = workdir / ".claude" / "skills" / "test-skill"
         skill_dir.mkdir(parents=True)

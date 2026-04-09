@@ -89,7 +89,7 @@ class TestExecutionConfigValidation:
         """Valid positive integer default_timeout is accepted."""
         _write_config(
             tmp_path,
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n',
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n',
         )
         config = KajiConfig._load(tmp_path / ".kaji" / "config.toml")
         assert config.execution.default_timeout == 1800
@@ -104,7 +104,10 @@ class TestExecutionConfigValidation:
 
     def test_missing_default_timeout_key_raises(self, tmp_path: Path) -> None:
         """[execution] without default_timeout raises ConfigLoadError."""
-        _write_config(tmp_path, '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\n')
+        _write_config(
+            tmp_path,
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\n',
+        )
         with pytest.raises(ConfigLoadError, match="default_timeout"):
             KajiConfig._load(tmp_path / ".kaji" / "config.toml")
 
@@ -112,7 +115,7 @@ class TestExecutionConfigValidation:
         """String value for default_timeout raises ConfigLoadError."""
         _write_config(
             tmp_path,
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = "fast"\n',
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = "fast"\n',
         )
         with pytest.raises(ConfigLoadError, match="default_timeout"):
             KajiConfig._load(tmp_path / ".kaji" / "config.toml")
@@ -121,7 +124,7 @@ class TestExecutionConfigValidation:
         """Boolean value for default_timeout raises ConfigLoadError."""
         _write_config(
             tmp_path,
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = true\n',
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = true\n',
         )
         with pytest.raises(ConfigLoadError, match="default_timeout"):
             KajiConfig._load(tmp_path / ".kaji" / "config.toml")
@@ -130,7 +133,7 @@ class TestExecutionConfigValidation:
         """Float value for default_timeout raises ConfigLoadError."""
         _write_config(
             tmp_path,
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 18.5\n',
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 18.5\n',
         )
         with pytest.raises(ConfigLoadError, match="default_timeout"):
             KajiConfig._load(tmp_path / ".kaji" / "config.toml")
@@ -138,7 +141,8 @@ class TestExecutionConfigValidation:
     def test_zero_default_timeout_raises(self, tmp_path: Path) -> None:
         """Zero default_timeout raises ConfigLoadError."""
         _write_config(
-            tmp_path, '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 0\n'
+            tmp_path,
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 0\n',
         )
         with pytest.raises(ConfigLoadError, match="default_timeout"):
             KajiConfig._load(tmp_path / ".kaji" / "config.toml")
@@ -147,7 +151,7 @@ class TestExecutionConfigValidation:
         """Negative default_timeout raises ConfigLoadError."""
         _write_config(
             tmp_path,
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = -100\n',
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = -100\n',
         )
         with pytest.raises(ConfigLoadError, match="default_timeout"):
             KajiConfig._load(tmp_path / ".kaji" / "config.toml")
@@ -155,15 +159,16 @@ class TestExecutionConfigValidation:
     def test_execution_not_a_table_raises(self, tmp_path: Path) -> None:
         """[execution] as non-table raises ConfigLoadError."""
         _write_config(
-            tmp_path, '[paths]\nskill_dir = ".claude/skills"\n\nexecution = "not a table"\n'
+            tmp_path,
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\nexecution = "not a table"\n',
         )
         with pytest.raises(ConfigLoadError, match=r"\[execution\]"):
             KajiConfig._load(tmp_path / ".kaji" / "config.toml")
 
     def test_empty_config_raises(self, tmp_path: Path) -> None:
-        """Empty config.toml raises ConfigLoadError (missing skill_dir)."""
+        """Empty config.toml raises ConfigLoadError (missing artifacts_dir)."""
         _write_config(tmp_path, "")
-        with pytest.raises(ConfigLoadError, match="skill_dir"):
+        with pytest.raises(ConfigLoadError, match="artifacts_dir is required"):
             KajiConfig._load(tmp_path / ".kaji" / "config.toml")
 
     def test_valid_with_paths_section(self, tmp_path: Path) -> None:
@@ -191,6 +196,7 @@ class TestWorkflowDefaultTimeoutParsing:
         yaml_str = dedent("""\
             name: test
             description: test
+            execution_policy: auto
             default_timeout: 600
             steps:
               - id: s1
@@ -207,6 +213,7 @@ class TestWorkflowDefaultTimeoutParsing:
         yaml_str = dedent("""\
             name: test
             description: test
+            execution_policy: auto
             steps:
               - id: s1
                 skill: sk
@@ -222,6 +229,7 @@ class TestWorkflowDefaultTimeoutParsing:
         yaml_str = dedent("""\
             name: test
             description: test
+            execution_policy: auto
             default_timeout: "fast"
             steps:
               - id: s1
@@ -238,6 +246,7 @@ class TestWorkflowDefaultTimeoutParsing:
         yaml_str = dedent("""\
             name: test
             description: test
+            execution_policy: auto
             default_timeout: true
             steps:
               - id: s1
@@ -254,6 +263,7 @@ class TestWorkflowDefaultTimeoutParsing:
         yaml_str = dedent("""\
             name: test
             description: test
+            execution_policy: auto
             default_timeout: 0
             steps:
               - id: s1
@@ -270,6 +280,7 @@ class TestWorkflowDefaultTimeoutParsing:
         yaml_str = dedent("""\
             name: test
             description: test
+            execution_policy: auto
             default_timeout: -10
             steps:
               - id: s1
@@ -376,6 +387,7 @@ class TestStepTimeoutParsing:
         yaml_str = dedent("""\
             name: test
             description: test
+            execution_policy: auto
             steps:
               - id: s1
                 skill: sk
@@ -604,7 +616,7 @@ class TestTimeoutFallbackIntegration:
         """Config default_timeout is used when workflow and step omit timeout."""
         _write_config(
             tmp_path,
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n',
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n',
         )
         config = KajiConfig._load(tmp_path / ".kaji" / "config.toml")
 
@@ -622,7 +634,7 @@ class TestTimeoutFallbackIntegration:
         """Workflow default_timeout overrides config default_timeout."""
         _write_config(
             tmp_path,
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n',
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n',
         )
         config = KajiConfig._load(tmp_path / ".kaji" / "config.toml")
 
@@ -647,7 +659,7 @@ class TestWorkflowRunnerWithConfig:
 
         _write_config(
             tmp_path,
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 900\n',
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 900\n',
         )
         config = KajiConfig._load(tmp_path / ".kaji" / "config.toml")
 
@@ -687,7 +699,7 @@ class TestWorkflowRunnerWithConfig:
 
         _write_config(
             tmp_path,
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n',
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n',
         )
         config = KajiConfig._load(tmp_path / ".kaji" / "config.toml")
 
@@ -740,6 +752,7 @@ class TestConfigMissingExecutionErrorPath:
             dedent("""\
             name: test
             description: test
+            execution_policy: auto
             steps:
               - id: s1
                 skill: test-skill
@@ -773,7 +786,7 @@ class TestTimeoutConfigE2E:
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         # Create skills directory structure for validation
@@ -787,6 +800,7 @@ class TestTimeoutConfigE2E:
             dedent("""\
             name: test-timeout
             description: Test workflow with default_timeout
+            execution_policy: auto
             default_timeout: 600
             steps:
               - id: step1
@@ -821,7 +835,7 @@ class TestTimeoutConfigE2E:
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         skills_dir = project_dir / ".claude" / "skills" / "test-skill"
@@ -833,6 +847,7 @@ class TestTimeoutConfigE2E:
             dedent("""\
             name: test-no-timeout
             description: Test workflow without default_timeout
+            execution_policy: auto
             steps:
               - id: step1
                 skill: test-skill
@@ -870,7 +885,7 @@ class TestTimeoutConfigE2E:
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         skills_dir = project_dir / ".claude" / "skills" / "test-skill"
@@ -882,6 +897,7 @@ class TestTimeoutConfigE2E:
             dedent("""\
             name: test-run
             description: Test
+            execution_policy: auto
             default_timeout: 600
             steps:
               - id: step1

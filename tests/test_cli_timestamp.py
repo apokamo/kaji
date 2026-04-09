@@ -30,6 +30,7 @@ CONSOLE_LINE_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\] \[.+\] .
 MINIMAL_WORKFLOW_YAML = """\
 name: test
 description: test workflow
+execution_policy: auto
 steps:
   - id: step1
     skill: test-skill
@@ -238,7 +239,7 @@ def _build_e2e_env(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     config_dir = workdir / ".kaji"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
-        '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+        '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
     )
     skill_dir = workdir / ".claude" / "skills" / "test-skill"
     skill_dir.mkdir(parents=True)

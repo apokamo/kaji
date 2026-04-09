@@ -20,6 +20,7 @@ from kaji_harness.cli_main import cmd_validate, create_parser, main
 VALID_WORKFLOW_YAML = """\
 name: test
 description: test workflow
+execution_policy: auto
 steps:
   - id: step1
     skill: test-skill
@@ -32,6 +33,7 @@ steps:
 MISSING_SKILL_YAML = """\
 name: test
 description: test workflow
+execution_policy: auto
 steps:
   - id: step1
     skill: nonexistent-skill-xyz
@@ -44,6 +46,7 @@ steps:
 INVALID_INJECT_VERDICT_YAML = """\
 name: test
 description: test workflow
+execution_policy: auto
 steps:
   - id: step1
     skill: test-skill
@@ -57,6 +60,7 @@ steps:
 PATH_TRAVERSAL_YAML = """\
 name: test
 description: test workflow
+execution_policy: auto
 steps:
   - id: step1
     skill: ../escape
@@ -84,7 +88,7 @@ def _create_config(project_root: Path, skill_dir: str = ".claude/skills") -> Non
     config_dir = project_root / ".kaji"
     config_dir.mkdir(parents=True, exist_ok=True)
     (config_dir / "config.toml").write_text(
-        f'[paths]\nskill_dir = "{skill_dir}"\n\n[execution]\ndefault_timeout = 1800\n'
+        f'[paths]\nskill_dir = "{skill_dir}"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
     )
 
 

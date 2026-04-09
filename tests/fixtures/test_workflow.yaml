@@ -3,6 +3,8 @@ description: |
   Minimal workflow for engine logic tests.
   Not tied to any production workflow.
 
+execution_policy: auto
+
 cycles:
   review-cycle:
     entry: review

@@ -52,7 +52,7 @@ class WorkflowRunner:
             MissingResumeSessionError: resume 先のセッション ID が見つからない
             InvalidTransition: verdict に対応する遷移先がない
         """
-        execution_policy = self.workflow.execution_policy or "auto"
+        execution_policy = self.workflow.execution_policy
 
         # 0. 全ステップのスキル存在を事前検証
         for step in self.workflow.steps:

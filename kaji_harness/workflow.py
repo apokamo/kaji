@@ -193,7 +193,9 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
             )
         )
 
-    execution_policy = data.get("execution_policy", "auto")
+    execution_policy = data.get("execution_policy")
+    if execution_policy is None:
+        raise WorkflowValidationError("'execution_policy' is required")
     if execution_policy not in VALID_EXECUTION_POLICIES:
         raise WorkflowValidationError(
             f"execution_policy must be one of {sorted(VALID_EXECUTION_POLICIES)}, "

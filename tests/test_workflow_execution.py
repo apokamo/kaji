@@ -115,7 +115,7 @@ def _make_config(tmp_path: Path) -> KajiConfig:
     config_file = kaji_dir / "config.toml"
     if not config_file.exists():
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
     return KajiConfig._load(config_file)
 

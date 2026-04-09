@@ -30,9 +30,10 @@ from kaji_harness.errors import ConfigLoadError, ConfigNotFoundError
 class TestPathsConfigDefaults:
     """PathsConfig provides correct default values."""
 
-    def test_default_artifacts_dir(self) -> None:
+    def test_default_artifacts_dir_is_empty_sentinel(self) -> None:
+        """PathsConfig.artifacts_dir defaults to empty string (not-set sentinel)."""
         config = PathsConfig()
-        assert config.artifacts_dir == "~/.kaji/artifacts"
+        assert config.artifacts_dir == ""
 
 
 @pytest.mark.small
@@ -56,12 +57,14 @@ class TestKajiConfigLoadValid:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
-        config_file.write_text("[execution]\ndefault_timeout = 1800\n")
+        config_file.write_text(
+            '[paths]\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+        )
 
         with pytest.raises(ConfigLoadError, match="skill_dir is required"):
             KajiConfig._load(config_file)
 
-    def test_load_empty_paths_section(self, tmp_path: Path) -> None:
+    def test_load_without_artifacts_dir_raises(self, tmp_path: Path) -> None:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
@@ -69,9 +72,8 @@ class TestKajiConfigLoadValid:
             '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
-        config = KajiConfig._load(config_file)
-
-        assert config.paths.artifacts_dir == "~/.kaji/artifacts"  # default
+        with pytest.raises(ConfigLoadError, match="artifacts_dir is required"):
+            KajiConfig._load(config_file)
 
     def test_unknown_keys_ignored(self, tmp_path: Path) -> None:
         config_dir = tmp_path / ".kaji"
@@ -178,7 +180,7 @@ class TestKajiConfigRepoRoot:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         config = KajiConfig._load(config_file)
@@ -190,7 +192,7 @@ class TestKajiConfigRepoRoot:
 class TestKajiConfigArtifactsDir:
     """artifacts_dir property resolves paths correctly."""
 
-    def test_default_artifacts_dir_uses_expanduser(self, tmp_path: Path) -> None:
+    def test_missing_artifacts_dir_raises(self, tmp_path: Path) -> None:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
@@ -198,9 +200,8 @@ class TestKajiConfigArtifactsDir:
             '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
-        config = KajiConfig._load(config_file)
-
-        assert config.artifacts_dir == Path("~/.kaji/artifacts").expanduser()
+        with pytest.raises(ConfigLoadError, match="artifacts_dir is required"):
+            KajiConfig._load(config_file)
 
     def test_tilde_path_resolved_via_expanduser(self, tmp_path: Path) -> None:
         config_dir = tmp_path / ".kaji"
@@ -268,7 +269,7 @@ class TestKajiConfigDiscover:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         config = KajiConfig.discover(start_dir=tmp_path)
@@ -280,7 +281,7 @@ class TestKajiConfigDiscover:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         subdir = tmp_path / "src" / "deep" / "nested"
@@ -337,18 +338,16 @@ class TestKajiConfigDiscover:
 
         assert config.artifacts_dir == abs_dir
 
-    def test_discover_default_artifacts_dir_is_external(self, tmp_path: Path) -> None:
-        """Default config places artifacts outside repo root."""
+    def test_discover_without_artifacts_dir_raises(self, tmp_path: Path) -> None:
+        """Config without artifacts_dir raises ConfigLoadError."""
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
             '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
-        config = KajiConfig.discover(start_dir=tmp_path)
-
-        # Default artifacts_dir should NOT be under repo_root
-        assert not str(config.artifacts_dir).startswith(str(tmp_path))
+        with pytest.raises(ConfigLoadError, match="artifacts_dir is required"):
+            KajiConfig.discover(start_dir=tmp_path)
 
     def test_discover_ignores_inner_kaji_dirs(self, tmp_path: Path) -> None:
         """Discovery finds the nearest .kaji/config.toml, not a deeper one."""
@@ -479,7 +478,7 @@ class TestRunnerWithConfig:
         kaji_dir = project_root / ".kaji"
         kaji_dir.mkdir()
         (kaji_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
         config = KajiConfig._load(kaji_dir / "config.toml")
 
@@ -540,7 +539,7 @@ class TestRunnerWithConfig:
         kaji_dir = project_root / ".kaji"
         kaji_dir.mkdir()
         (kaji_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
         config = KajiConfig._load(kaji_dir / "config.toml")
 
@@ -590,13 +589,13 @@ class TestCLIConfigIntegration:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         # Create workflow file
         wf = tmp_path / "workflow.yaml"
         wf.write_text(
-            "name: test\ndescription: test\n"
+            "name: test\ndescription: test\nexecution_policy: auto\n"
             "steps:\n  - id: s1\n    skill: test-skill\n"
             "    agent: claude\n    on:\n      PASS: end\n"
         )
@@ -613,7 +612,7 @@ class TestCLIConfigIntegration:
         # Verify project_root was passed correctly
         call_kwargs = mock_runner.call_args.kwargs
         assert call_kwargs["project_root"] == tmp_path
-        assert call_kwargs["artifacts_dir"] == Path("~/.kaji/artifacts").expanduser()
+        assert call_kwargs["artifacts_dir"] == tmp_path / ".kaji/artifacts"
 
     def test_cmd_run_config_not_found_exits_2(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -623,7 +622,7 @@ class TestCLIConfigIntegration:
         # No .kaji/config.toml exists
         wf = tmp_path / "workflow.yaml"
         wf.write_text(
-            "name: test\ndescription: test\n"
+            "name: test\ndescription: test\nexecution_policy: auto\n"
             "steps:\n  - id: s1\n    skill: test-skill\n"
             "    agent: claude\n    on:\n      PASS: end\n"
         )
@@ -643,7 +642,7 @@ class TestCLIConfigIntegration:
         # Create a valid workflow with matching skill but NO config
         wf = tmp_path / "workflow.yaml"
         wf.write_text(
-            "name: test\ndescription: test\n"
+            "name: test\ndescription: test\nexecution_policy: auto\n"
             "steps:\n  - id: s1\n    skill: test-skill\n"
             "    agent: claude\n    on:\n      PASS: end\n"
         )
@@ -670,7 +669,7 @@ class TestCLIConfigIntegration:
 
         wf = tmp_path / "workflow.yaml"
         wf.write_text(
-            "name: test\ndescription: test\n"
+            "name: test\ndescription: test\nexecution_policy: auto\n"
             "steps:\n  - id: s1\n    skill: test-skill\n"
             "    agent: claude\n    on:\n      PASS: end\n"
         )
@@ -697,7 +696,7 @@ class TestCLIConfigIntegration:
 
         wf = tmp_path / "workflow.yaml"
         wf.write_text(
-            "name: test\ndescription: test\n"
+            "name: test\ndescription: test\nexecution_policy: auto\n"
             "steps:\n  - id: s1\n    skill: test-skill\n"
             "    agent: claude\n    on:\n      PASS: end\n"
         )
@@ -729,7 +728,7 @@ class TestCLIConfigIntegration:
 
         wf = tmp_path / "workflow.yaml"
         wf.write_text(
-            "name: test\ndescription: test\n"
+            "name: test\ndescription: test\nexecution_policy: auto\n"
             "steps:\n  - id: s1\n    skill: test-skill\n"
             "    agent: claude\n    on:\n      PASS: end\n"
         )
@@ -759,7 +758,7 @@ class TestCLIConfigIntegration:
         wf_dir.mkdir()
         wf = wf_dir / "test.yaml"
         wf.write_text(
-            "name: test\ndescription: test\n"
+            "name: test\ndescription: test\nexecution_policy: auto\n"
             "steps:\n  - id: s1\n    skill: test-skill\n"
             "    agent: claude\n    on:\n      PASS: end\n"
         )
@@ -780,7 +779,7 @@ class TestCLIConfigIntegration:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         # Create workflow inside .kaji/workflows/
@@ -788,7 +787,7 @@ class TestCLIConfigIntegration:
         wf_dir.mkdir()
         wf = wf_dir / "test.yaml"
         wf.write_text(
-            "name: test\ndescription: test\n"
+            "name: test\ndescription: test\nexecution_policy: auto\n"
             "steps:\n  - id: s1\n    skill: test-skill\n"
             "    agent: claude\n    on:\n      PASS: end\n"
         )
@@ -820,7 +819,7 @@ class TestConfigE2E:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         # Create workflow
@@ -828,7 +827,7 @@ class TestConfigE2E:
         wf_dir.mkdir()
         wf = wf_dir / "test.yaml"
         wf.write_text(
-            "name: test\ndescription: test\n"
+            "name: test\ndescription: test\nexecution_policy: auto\n"
             "steps:\n  - id: s1\n    skill: test-skill\n"
             "    agent: claude\n    on:\n      PASS: end\n"
         )
@@ -867,7 +866,7 @@ class TestConfigE2E:
         """kaji run without .kaji/config.toml exits with code 2."""
         wf = tmp_path / "workflow.yaml"
         wf.write_text(
-            "name: test\ndescription: test\n"
+            "name: test\ndescription: test\nexecution_policy: auto\n"
             "steps:\n  - id: s1\n    skill: test-skill\n"
             "    agent: claude\n    on:\n      PASS: end\n"
         )
@@ -899,7 +898,7 @@ class TestConfigE2E:
 
         wf = tmp_path / "workflow.yaml"
         wf.write_text(
-            "name: test\ndescription: test\n"
+            "name: test\ndescription: test\nexecution_policy: auto\n"
             "steps:\n  - id: s1\n    skill: test-skill\n"
             "    agent: claude\n    on:\n      PASS: end\n"
         )
@@ -939,7 +938,7 @@ class TestConfigE2E:
         wf_dir.mkdir()
         wf = wf_dir / "test.yaml"
         wf.write_text(
-            "name: test\ndescription: test\n"
+            "name: test\ndescription: test\nexecution_policy: auto\n"
             "steps:\n  - id: s1\n    skill: test-skill\n"
             "    agent: claude\n    on:\n      PASS: end\n"
         )
@@ -1001,7 +1000,7 @@ class TestConfigE2E:
         wf_dir.mkdir()
         wf = wf_dir / "test.yaml"
         wf.write_text(
-            "name: test\ndescription: test\n"
+            "name: test\ndescription: test\nexecution_policy: auto\n"
             "steps:\n  - id: s1\n    skill: test-skill\n"
             "    agent: claude\n    on:\n      PASS: end\n"
         )
@@ -1080,8 +1079,8 @@ class TestConfigE2E:
         assert run_log.read_text(encoding="utf-8") == run_log_content
         assert session_state.read_text(encoding="utf-8") == session_state_content
 
-    def test_kaji_run_default_config_artifacts_outside_repo(self, tmp_path: Path) -> None:
-        """Default config places artifacts outside repo root (~/.kaji/artifacts)."""
+    def test_kaji_run_tilde_artifacts_dir_outside_repo(self, tmp_path: Path) -> None:
+        """Tilde artifacts_dir places artifacts outside repo root (~/.kaji/artifacts)."""
         fake_home = tmp_path / "fakehome"
         fake_home.mkdir()
 
@@ -1091,14 +1090,14 @@ class TestConfigE2E:
         config_dir = repo_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
         )
 
         wf_dir = repo_dir / ".kaji" / "workflows"
         wf_dir.mkdir()
         wf = wf_dir / "test.yaml"
         wf.write_text(
-            "name: test\ndescription: test\n"
+            "name: test\ndescription: test\nexecution_policy: auto\n"
             "steps:\n  - id: s1\n    skill: test-skill\n"
             "    agent: claude\n    on:\n      PASS: end\n"
         )
@@ -1149,7 +1148,7 @@ class TestConfigE2E:
         (tmp_path / "pyproject.toml").write_text("")
         wf = tmp_path / "workflow.yaml"
         wf.write_text(
-            "name: test\ndescription: test\n"
+            "name: test\ndescription: test\nexecution_policy: auto\n"
             "steps:\n  - id: s1\n    skill: test-skill\n"
             "    agent: claude\n    on:\n      PASS: end\n"
         )
