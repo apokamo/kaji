@@ -34,7 +34,7 @@ execution_policy: auto   # 必須（デフォルト値なし）
 ### 出力
 
 - `artifacts_dir` 未設定時: `ConfigLoadError("paths.artifacts_dir is required")`
-- `execution_policy` 未設定時: `WorkflowValidationError("execution_policy is required")`
+- `execution_policy` 未設定時: `WorkflowValidationError("'execution_policy' is required")`
 
 ### 使用例
 
@@ -47,7 +47,7 @@ config = KajiConfig.discover()
 
 # execution_policy 未設定の workflow YAML → エラー
 workflow = load_workflow(Path("workflow.yaml"), config)
-# => WorkflowValidationError: execution_policy is required
+# => WorkflowValidationError: 'execution_policy' is required
 ```
 
 ## 制約・前提条件
@@ -94,7 +94,7 @@ execution_policy = data.get("execution_policy", "auto")
 # 変更後
 execution_policy = data.get("execution_policy")
 if execution_policy is None:
-    raise WorkflowValidationError("execution_policy is required")
+    raise WorkflowValidationError("'execution_policy' is required")
 ```
 
 ### 3. ドキュメント更新（workflow-authoring.md）
@@ -113,6 +113,21 @@ if execution_policy is None:
 
 - `runner.py:55` の `self.workflow.execution_policy or "auto"` → `self.workflow.execution_policy` に変更（workflow パース時点で必須保証済みのため）
 
+### 5. テスト fixture の更新
+
+- `tests/fixtures/test_workflow.yaml` に `execution_policy: auto` を追加する
+- これは既存テストが workflow パース時のバリデーション強化で失敗しないようにするための最小変更
+- `execution_policy` 未設定エラーの検証は、専用の fixture（インラインまたは別ファイル）で行う
+
+### 6. README.md の最小導入例更新
+
+- `README.md:47-53` の最小導入例に `skill_dir` を追加
+- `artifacts_dir` のコメントから旧デフォルト値の示唆を削除し「必須」に変更
+
+### 7. docs/ARCHITECTURE.md の記載更新
+
+- `docs/ARCHITECTURE.md:203` の「デフォルト: `~/.kaji/artifacts`」を「必須設定項目」に修正
+
 ## テスト戦略
 
 > **CRITICAL**: 変更タイプに応じて妥当な検証方針を定義すること。
@@ -122,10 +137,10 @@ if execution_policy is None:
 
 ### Small テスト
 - `artifacts_dir` 未設定時に `ConfigLoadError` が送出されること
-- `artifacts_dir` 設定時に従来通りパースされること（既存テストの修正）
+- `artifacts_dir` 設定時に従来通りパースされること（既存テストの修正: fixture に `artifacts_dir` を明示追加）
 - `execution_policy` 未設定時に `WorkflowValidationError` が送出されること
-- `execution_policy` 設定時に従来通りパースされること（既存テストの修正）
-- `PathsConfig.artifacts_dir` のデフォルト値が空文字列であること
+- `execution_policy` 設定時に従来通りパースされること（既存テスト fixture `tests/fixtures/test_workflow.yaml` に `execution_policy: auto` を追加）
+- `PathsConfig.artifacts_dir` のデフォルト値が空文字列であること（直接構築時の未設定 sentinel としてのテスト。`_load()` で必須化するため実運用では到達しないが、dataclass の直接構築時にデフォルト空文字列 = 未設定を表現する sentinel として機能することを検証）
 
 ### Medium テスト
 - 実ファイルシステム上で `config.toml` に `artifacts_dir` 未記載の場合にエラーになること
@@ -138,9 +153,10 @@ if execution_policy is None:
 
 | ドキュメント | 影響の有無 | 理由 |
 |-------------|-----------|------|
-| docs/adr/ | なし | 新しい技術選定なし |
-| docs/ARCHITECTURE.md | なし | アーキテクチャ変更なし |
+| README.md | あり | `README.md:47-53` の最小導入例に `skill_dir` が欠落し、`artifacts_dir = "~/.kaji/artifacts"` が旧デフォルト値のまま記載されている。必須化に伴い `skill_dir` 追加 + `artifacts_dir` コメント修正が必要 |
+| docs/ARCHITECTURE.md | あり | `docs/ARCHITECTURE.md:203` に「デフォルト: `~/.kaji/artifacts`」と明記されている。デフォルト廃止に伴い「必須」に修正が必要 |
 | docs/dev/workflow-authoring.md | あり | 最小構成例の修正 + execution_policy 動作詳細追記 |
+| docs/adr/ | なし | 新しい技術選定なし |
 | docs/cli-guides/ | なし | CLI 仕様変更なし |
 | CLAUDE.md | なし | 規約変更なし |
 
@@ -154,4 +170,7 @@ if execution_policy is None:
 | workflow-authoring.md | `docs/dev/workflow-authoring.md:9-16` | 最小構成例に `skill_dir` 欠落 |
 | workflow-authoring.md | `docs/dev/workflow-authoring.md:97-103` | `execution_policy` の動作説明にエージェント別フラグの記載なし |
 | cli.py | `kaji_harness/cli.py:247-294` | 各エージェントの `execution_policy` → CLI フラグ変換ロジック。設計書の動作表はこのコードから導出 |
+| README.md | `README.md:47-53` | 最小導入例に `skill_dir` がなく、`artifacts_dir = "~/.kaji/artifacts"` が旧デフォルト相当で残っている |
+| ARCHITECTURE.md | `docs/ARCHITECTURE.md:203` | 「デフォルト: `~/.kaji/artifacts`」と明記されており、必須化後は不整合 |
+| test_workflow.yaml | `tests/fixtures/test_workflow.yaml:1-49` | `execution_policy` 未記載。必須化後に既存テストが `WorkflowValidationError` で失敗する |
 | Issue #135 本文 | GitHub Issue #135 | 発見経緯: `bypassPermissions` モードで `.claude/skills/` への書き込みがブロックされた事象から `execution_policy` フォールバック問題を発見 |
