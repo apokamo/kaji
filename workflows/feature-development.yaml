@@ -71,7 +71,7 @@ steps:
     model: gpt-5.4
     effort: medium
     on:
-      PASS: doc-check
+      PASS: final-check
       RETRY: fix-code
       BACK: design
       ABORT: end
@@ -91,16 +91,9 @@ steps:
     model: gpt-5.4
     effort: medium
     on:
-      PASS: doc-check
+      PASS: final-check
       RETRY: fix-code
       ABORT: end
-
-  - id: doc-check
-    skill: issue-doc-check
-    agent: claude
-    model: opus
-    on:
-      PASS: final-check
 
   - id: final-check
     skill: i-dev-final-check
