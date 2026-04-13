@@ -17,7 +17,7 @@ steps:
     skill: i-doc-update
     agent: claude
     model: opus
-    effort: high
+    effort: medium
     on:
       PASS: review-doc
       ABORT: end
@@ -26,9 +26,9 @@ steps:
     skill: i-doc-review
     agent: codex
     model: gpt-5.4
-    effort: high
+    effort: medium
     on:
-      PASS: pr
+      PASS: final-check
       RETRY: fix-doc
       ABORT: end
 
@@ -45,15 +45,24 @@ steps:
     skill: i-doc-verify
     agent: codex
     model: gpt-5.4
-    effort: high
+    effort: medium
     resume: review-doc
     on:
-      PASS: pr
+      PASS: final-check
       RETRY: fix-doc
       ABORT: end
 
+  - id: final-check
+    skill: i-doc-final-check
+    agent: claude
+    model: opus
+    on:
+      PASS: pr
+      RETRY: final-check
+      ABORT: end
+
   - id: pr
-    skill: issue-pr
+    skill: i-pr
     agent: claude
     model: sonnet
     on:

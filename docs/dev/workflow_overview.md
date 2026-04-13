@@ -16,7 +16,7 @@ Issue の種類を確認
 
 ```
 /issue-create → /issue-start → /issue-design → /issue-review-design
-→ /issue-implement → /issue-review-code → /issue-doc-check
+→ /issue-implement → /issue-review-code
 → /i-dev-final-check → /i-pr → /issue-close
 ```
 

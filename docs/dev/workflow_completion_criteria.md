@@ -12,8 +12,7 @@
 | 設計レビュー | `/issue-review-design` | レビューで PASS 判定 | Issue コメント「設計レビュー結果」 |
 | 実装 | `/issue-implement` | テスト・実装が完了し品質チェック通過 | Issue コメント「実装完了報告」 |
 | コードレビュー | `/issue-review-code` | レビューで PASS 判定 | Issue コメント「コードレビュー結果」 |
-| ドキュメントチェック | `/issue-doc-check` | 影響ドキュメントの更新完了 | Issue コメント |
-| 最終チェック | `/i-dev-final-check` | 全エビデンス確認・品質チェック全パス | Issue コメント「Final Check 結果」 |
+| 最終チェック | `/i-dev-final-check` | 全エビデンス確認・品質チェック全パス・ドキュメント影響確定 | Issue コメント「Final Check 結果」 |
 
 ### 品質チェック基準
 

@@ -21,7 +21,7 @@ steps:
     skill: issue-design
     agent: claude
     model: opus
-    effort: high
+    effort: medium
     on:
       PASS: review-design
       ABORT: end
@@ -30,7 +30,7 @@ steps:
     skill: issue-review-design
     agent: codex
     model: gpt-5.4
-    effort: high
+    effort: medium
     on:
       PASS: implement
       RETRY: fix-design
@@ -49,7 +49,7 @@ steps:
     skill: issue-verify-design
     agent: codex
     model: gpt-5.4
-    effort: high
+    effort: medium
     on:
       PASS: implement
       RETRY: fix-design
@@ -69,9 +69,9 @@ steps:
     skill: issue-review-code
     agent: codex
     model: gpt-5.4
-    effort: high
+    effort: medium
     on:
-      PASS: doc-check
+      PASS: final-check
       RETRY: fix-code
       BACK: design
       ABORT: end
@@ -89,21 +89,23 @@ steps:
     skill: issue-verify-code
     agent: codex
     model: gpt-5.4
-    effort: high
+    effort: medium
     on:
-      PASS: doc-check
+      PASS: final-check
       RETRY: fix-code
       ABORT: end
 
-  - id: doc-check
-    skill: issue-doc-check
+  - id: final-check
+    skill: i-dev-final-check
     agent: claude
     model: opus
     on:
       PASS: pr
+      RETRY: final-check
+      ABORT: end
 
   - id: pr
-    skill: issue-pr
+    skill: i-pr
     agent: claude
     model: sonnet
     on:

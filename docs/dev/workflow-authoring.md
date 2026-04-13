@@ -156,7 +156,7 @@ steps:
     skill: issue-design
     agent: claude
     model: claude-sonnet-4-6
-    effort: high
+    effort: medium
     on:
       PASS: implement
       ABORT: end
@@ -173,7 +173,7 @@ steps:
     skill: issue-review-code
     agent: codex
     on:
-      PASS: end
+      PASS: final-check
       RETRY: fix-code
       ABORT: end
 
@@ -189,8 +189,25 @@ steps:
     agent: codex
     resume: review-code
     on:
-      PASS: end
+      PASS: final-check
       RETRY: fix-code
+      ABORT: end
+
+  - id: final-check
+    skill: i-dev-final-check
+    agent: claude
+    on:
+      PASS: pr
+      RETRY: final-check
+      ABORT: end
+
+  - id: pr
+    skill: i-pr
+    agent: claude
+    model: sonnet
+    on:
+      PASS: end
+      RETRY: pr
       ABORT: end
 ```
 
