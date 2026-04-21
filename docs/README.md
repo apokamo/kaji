@@ -32,6 +32,17 @@ kaji のドキュメント一覧。[Diataxis フレームワーク](https://diat
 | [テストサイズ判断ガイド](reference/testing-size-guide.md) | S/M/L の境界ケース判断基準 |
 | [CLI ガイド](cli-guides/) | CLI 操作リファレンス |
 
+### Python 品質規約
+
+| ドキュメント | 概要 |
+|-------------|------|
+| [Python スタイル規約](reference/python/python-style.md) | フォーマット・インポート・クラス設計の規約 |
+| [命名規則](reference/python/naming-conventions.md) | 変数・関数・kaji 固有語の命名パターン |
+| [型ヒント](reference/python/type-hints.md) | 型アノテーション・dataclass の書き方 |
+| [docstring スタイル](reference/python/docstring-style.md) | Google style docstring の記述規約 |
+| [エラーハンドリング](reference/python/error-handling.md) | HarnessError 階層と例外処理パターン |
+| [ロギング](reference/python/logging.md) | RunLogger JSONL 契約とイベント仕様 |
+
 ## Explanation（コンセプト）
 
 | ドキュメント | 概要 |
