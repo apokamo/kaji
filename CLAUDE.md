@@ -107,6 +107,12 @@ kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
 | AI Strategy | docs/concepts/ai-driven-strategy.md |
 | AI Docs Management | docs/concepts/ai-docs-management.md |
 | Label Standardization | docs/rfc/github-labels-standardization.md |
+| Python Style | docs/reference/python/python-style.md |
+| Naming Conventions | docs/reference/python/naming-conventions.md |
+| Type Hints | docs/reference/python/type-hints.md |
+| Docstring Style | docs/reference/python/docstring-style.md |
+| Error Handling | docs/reference/python/error-handling.md |
+| Logging (RunLogger) | docs/reference/python/logging.md |
 
 ## Development Skills
 
