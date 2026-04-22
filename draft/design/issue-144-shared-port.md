@@ -75,8 +75,12 @@ type ラベルに応じ [_shared/design-by-type/feat.md](../_shared/design-by-ty
   Python 単一に畳み、品質ゲートは `make check` に統一。
 - **参照先再マップ**: kamo2 の `docs/reference/backend/testing-convention.md` →
   kaji の `docs/dev/testing-convention.md` および `docs/reference/python/*` に置き換える。
-- **promote-design 昇格先**: kamo2 は `docs/product/features/` 昇格だが、kaji では
-  `docs/adr/` 昇格のみ（現行仕様維持）。kamo2 の feature-key 解決フローは採用しない。
+- **promote-design 昇格先**: kamo2 の `docs/product/features/` 昇格フローは採用しない。
+  kaji 現行の `promote-design.md` が規定する **`docs/adr/` または `docs/dev/` への昇格**
+  の 2 経路を維持する。kaji には `docs/product/features/` ディレクトリが存在せず、
+  既存の 2 経路を狭める正当化は現時点でないため、kamo2 固有の feature-key 解決フロー
+  （front-matter / related_issues 付与）のみ不採用とし、既存の「いつ昇格するか」表の
+  昇格先区分は維持する。
 
 ## 方針
 
@@ -86,10 +90,14 @@ type ラベルに応じ [_shared/design-by-type/feat.md](../_shared/design-by-ty
    （diff 確認済み）のため、置換不要。現状維持。
 2. **`worktree-resolve.md`**: kamo2 版を置換元としつつ、プレフィックス `kamo2-` →
    `kaji-` に変換する（実質的に kaji 現行と同一になる。diff 確認済み）。
-3. **`promote-design.md`**: kaji 現行を baseline にしつつ、kamo2 の構造（手順段階化）を
-   参考に書き直す。**昇格先は `docs/adr/` のみ**（kamo2 の features/ 昇格フローは不採用）。
-   - 節構成: 「いつ昇格するか」「昇格手順（1〜5 ステップ）」「注意事項」
-   - kamo2 の feature-key / front-matter 節は採用しない（kaji に対応ディレクトリがない）。
+3. **`promote-design.md`**: kaji 現行を baseline にしつつ、kamo2 の構造（手順の段階化）を
+   参考に書き直す。**昇格先は kaji 現行と同じ `docs/adr/` または `docs/dev/` の 2 経路を
+   維持**（kamo2 の `docs/product/features/` 昇格フローは kaji にディレクトリがないため
+   不採用）。
+   - 節構成: 「いつ昇格するか」（現行 kaji の 2 経路表を踏襲）、「昇格手順（kamo2 の
+     5 ステップ構成を `docs/adr/` / `docs/dev/` 用に書き換え）」、「注意事項」
+   - kamo2 の feature-key 解決ルール・front-matter テンプレート節は採用しない
+     （kaji に `docs/product/features/` がないため）。
 4. **`design-by-type/{feat,bug,refactor}.md` 新設**: kamo2 版をベースに以下の変換ルールを
    機械適用する：
    - Scope 宣言節を「Python 単一スタック」に置換（backend/frontend 分岐削除）
@@ -107,15 +115,20 @@ type ラベルに応じ [_shared/design-by-type/feat.md](../_shared/design-by-ty
 
 1. `git mv docs/dev/workflow_feature_development.md docs/dev/development_workflow.md`
 2. `git mv docs/dev/workflow_docs_maintenance.md   docs/dev/docs_maintenance_workflow.md`
-3. 参照元を `grep -rln` で全抽出（`*.md` / `*.yaml` / `*.py` / `CLAUDE.md`）し、
-   一斉置換（`sed -i` or 個別 Edit）：
+3. 参照元を `rg -l` で全抽出し、一斉置換（`sed -i` or 個別 Edit）：
+   ```
+   rg -l 'workflow_feature_development|workflow_docs_maintenance' \
+     .claude/skills/ docs/ CLAUDE.md README.md
+   ```
    - `workflow_feature_development` → `development_workflow`
    - `workflow_docs_maintenance` → `docs_maintenance_workflow`
-4. 現時点で判明している参照元（事前調査済）:
+4. 現時点で判明している参照元（上記 rg コマンドによる事前調査結果・**網羅**）:
    - `docs/README.md`, `docs/dev/workflow_guide.md`, `docs/dev/workflow_overview.md`
    - `.claude/skills/{issue-fix-code, issue-review-design, issue-design, issue-fix-design,
      i-doc-update, issue-review-code, issue-doc-check, issue-implement}/SKILL.md`
-   - `draft/design/issue-133-skill-quality.md` 等の過去設計書（参照維持のためリネーム対象）
+5. **`draft/design/` 配下の過去設計書は置換対象外**（履歴文書の変更は行わない）。
+   旧名称参照は履歴として残る。下記「テスト戦略」の旧名称 grep はこの履歴を除外した
+   範囲で評価する。
 
 ### フェーズ 3: 検証
 
@@ -151,8 +164,13 @@ type ラベルに応じ [_shared/design-by-type/feat.md](../_shared/design-by-ty
   # 各 md ファイルから相対パス参照を抽出し、存在確認
   rg -o '\(\.\./\.\./\.\./[^)]+\)' .claude/skills/_shared/ | ...
   ```
-- **旧名称参照ゼロ**: `rg 'workflow_feature_development|workflow_docs_maintenance' .`
-  がリネーム後に空
+- **旧名称参照ゼロ（現行参照範囲）**: リネーム後に下記コマンドが空であること：
+  ```
+  rg -n 'workflow_feature_development|workflow_docs_maintenance' \
+    .claude/skills/ docs/ CLAUDE.md README.md
+  ```
+  **`draft/design/` は除外**（本設計書自身と過去設計書が旧名称を含むのは履歴文書として
+  正当。これらは動作上の参照解決には関与しないため grep 対象外とする）。
 
 ### 恒久テストを追加しない理由
 
@@ -182,7 +200,7 @@ type ラベルに応じ [_shared/design-by-type/feat.md](../_shared/design-by-ty
 | docs/cli-guides/ | なし | CLI 仕様変更なし |
 | CLAUDE.md | なし | 規約変更なし（参照 URL は現行でも `docs/dev/` 粒度のみ記載） |
 | .claude/skills/*/SKILL.md | あり（参照のみ） | 旧名参照の置換のみ。スキル本体ロジックは未変更 |
-| draft/design/ 過去分 | あり（参照のみ） | 過去設計書内の旧名参照も置換（履歴整合性のため） |
+| draft/design/ 過去分 | **なし** | 履歴文書のため置換対象外。旧名称は履歴として残す |
 
 ## 参照情報（Primary Sources）
 
@@ -193,5 +211,5 @@ type ラベルに応じ [_shared/design-by-type/feat.md](../_shared/design-by-ty
 | kamo2 移植元 `_shared/` | `/home/aki/dev/kamo2/.claude/skills/_shared/` | `design-by-type/{feat,bug,refactor}.md`, `implement-by-type/{feat,bug,refactor}.md`, `promote-design.md`, `worktree-resolve.md`, `report-unrelated-issues.md` の現物（置換元） |
 | kamo2 移植元 `docs/dev/` | `/home/aki/dev/kamo2/docs/dev/` | `development_workflow.md`, `docs_maintenance_workflow.md` の命名慣習の出典 |
 | kaji テスト規約 | [docs/dev/testing-convention.md](../../docs/dev/testing-convention.md) | docs-only 変更で恒久テストを省略できる 4 条件 |
-| kaji 現行 `promote-design.md` | [.claude/skills/_shared/promote-design.md](../../.claude/skills/_shared/promote-design.md) | kaji では昇格先は `docs/adr/` のみ。`docs/product/features/` ディレクトリは存在しないことの根拠 |
+| kaji 現行 `promote-design.md` | [.claude/skills/_shared/promote-design.md](../../.claude/skills/_shared/promote-design.md) | 現行契約は「`docs/adr/` に ADR として」または「`docs/dev/` にガイドとして」の 2 経路。本設計ではこの 2 経路を維持し、kamo2 の `docs/product/features/` 昇格フローのみ不採用とする根拠 |
 | kaji 現行 `worktree-resolve.md` | [.claude/skills/_shared/worktree-resolve.md](../../.claude/skills/_shared/worktree-resolve.md) | prefix がすでに `kaji-` である根拠（kamo2 版との差分は prefix のみ） |
