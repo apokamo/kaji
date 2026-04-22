@@ -20,7 +20,7 @@ Issue の種類を確認
 → /i-dev-final-check → /i-pr → /issue-close
 ```
 
-詳細: [workflow_feature_development.md](workflow_feature_development.md)
+詳細: [development_workflow.md](development_workflow.md)
 
 ## docs-maintenance ワークフロー
 
@@ -31,7 +31,7 @@ Issue の種類を確認
 → /i-doc-final-check → /i-pr → /issue-close
 ```
 
-詳細: [workflow_docs_maintenance.md](workflow_docs_maintenance.md)
+詳細: [docs_maintenance_workflow.md](docs_maintenance_workflow.md)
 
 ## 判断に迷うケース
 

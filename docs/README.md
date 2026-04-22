@@ -7,8 +7,8 @@ kaji のドキュメント一覧。[Diataxis フレームワーク](https://diat
 | ドキュメント | 概要 |
 |-------------|------|
 | [ワークフロー概要](dev/workflow_overview.md) | ワークフロー選択のエントリポイント |
-| [feature-development](dev/workflow_feature_development.md) | コード変更を伴う開発ワークフロー |
-| [docs-maintenance](dev/workflow_docs_maintenance.md) | ドキュメント修正ワークフロー |
+| [feature-development](dev/development_workflow.md) | コード変更を伴う開発ワークフロー |
+| [docs-maintenance](dev/docs_maintenance_workflow.md) | ドキュメント修正ワークフロー |
 | [ワークフローガイド](dev/workflow_guide.md) | ワークフロー選択基準 |
 | [完了条件](dev/workflow_completion_criteria.md) | フェーズ別完了条件チェックリスト |
 | [テスト規約](dev/testing-convention.md) | テストサイズ定義・テスト戦略の原則 |
