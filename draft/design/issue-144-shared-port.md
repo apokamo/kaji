@@ -34,7 +34,7 @@ SKILL.md 本体は一切変更しない。後続子 Issue (#2〜#6) が SKILL.md
 .claude/skills/_shared/
 ├── report-unrelated-issues.md              (変更なし: kamo2 と同一内容)
 ├── worktree-resolve.md                     (変更なし: kaji 現行は既に kaji- prefix 済)
-├── promote-design.md                       (kaji 版書き下ろし: docs/adr/ 昇格のみ)
+├── promote-design.md                       (kaji 版書き下ろし: docs/adr/ + docs/dev/ の 2 経路維持、kamo2 の features/ 経路のみ不採用)
 ├── design-by-type/
 │   ├── feat.md                             (新設)
 │   ├── bug.md                              (新設)
