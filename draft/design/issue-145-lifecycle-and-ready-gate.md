@@ -88,10 +88,18 @@ Python 実行時 IF は存在しない。論理的 IF は以下。
 - **本 PR 内の参照整合は完結させる**: 本 PR で追加される `/issue-create` → `/issue-review-ready`、
   `/issue-review-ready` → `/issue-fix-ready`、`/pr-fix` ↔ `/pr-verify` の内部誘導は
   すべて同 PR 内の 7 スキルディレクトリ配置で解決する。
-- **Python 単一スタック化**: kamo2 の `backend / frontend / fullstack` Scope 分岐は
-  Python 単一に畳み、品質ゲートは `make check` に統一する。ただし `issue-review-ready`
-  の Scope 推定観点は「feat / bug / refactor の 3 軸」に縮約して温存する
-  （review-ready 7 観点の #7「作業スコープの推定可能性」に対応）。
+- **Python 単一スタック化**: kamo2 の `backend / frontend / fullstack` のスタック分岐は
+  Python 単一に畳み、品質ゲートは `make check` に統一する。これは `issue-review-ready`
+  の観点 #7「作業スコープの推定可能性」の **dev workflow 側評価材料**に対応する変更
+  （kamo2 では「backend / frontend / fullstack の推定が可能」を判断材料として要求する
+  が、kaji では「対象モジュール / ディレクトリ / ファイルパスの言及」に置き換える）。
+  docs-only workflow 側の観点 #7 判断材料（docs パス / 文書カテゴリの言及）は kamo2
+  と同一で温存する。
+- **type 軸は 4 canonical 維持**: `issue-review-ready` の type 別追加観点は kamo2 と
+  同じ **4 canonical (`type:feature` / `type:bug` / `type:refactor` / `type:docs`)**
+  を維持する。canonical 外 (`type:test` / `type:chore` / `type:perf` / `type:security`)
+  は feat フォールバック。`issue-create` の type → テンプレート dispatch も同じ
+  4 テンプレ (`issue-{feat,bug,refactor,docs}.md`) で揃える。
 - **kamo2 固有要素の完全除去**: 対象 6 スキルディレクトリおよび `templates/` 配下に、
   以下のパターンが残ってはならない：
   - `apps/api`, `apps/web`, `apps/*`
@@ -110,8 +118,10 @@ Python 実行時 IF は存在しない。論理的 IF は以下。
   - `docs/reference/frontend/*` 参照は**削除**（kaji に対応物なし）
 - **参照が消える項目の扱い**: `docs/reference/frontend/*`, `docs/product/features/*`,
   `docs/howto/backend/*` への参照は削除する（対応物を kaji に持たないため）。削除した
-  チェック項目が review-ready 7 観点を毀損しないことを確認する（該当項目は Scope
-  推定観点の一部に過ぎず、feat/bug/refactor 3 軸に縮約しても観点 #7 は成立する）。
+  項目が review-ready 7 観点を毀損しないことを確認する（該当項目は観点 #7 の
+  **dev workflow 側判断材料**の一部に過ぎず、Python 単一スタック化で「対象モジュール
+  / ディレクトリ / ファイルパスの言及」に置き換えても #7 は成立する。type 軸は
+  上記の通り 4 canonical を維持する）。
 - **Codex 併用 symlink 仕様**: `.agents/skills/<name>` は `../../.claude/skills/<name>`
   への相対 symlink（既存 `.agents/skills/*` と同形式）。Codex がスキルをロード時に
   `failed to load skill` 警告が出ないこと。
@@ -158,8 +168,14 @@ Python 実行時 IF は存在しない。論理的 IF は以下。
 
 1. `issue-review-ready/SKILL.md`: kamo2 版をベースに以下を適応
    - docs 参照再マップ（上記「制約」の再マップ規則を機械適用）
-   - Scope 推定観点（#7）は「feat / bug / refactor / docs 4 軸」に縮約
-     （`type:test/chore/perf/security` は feat にフォールバック＝ kamo2 と同規則を維持）
+   - type 軸は **4 canonical 維持** (`type:feature` / `type:bug` / `type:refactor` /
+     `type:docs`)。canonical 外 (`type:test` / `type:chore` / `type:perf` /
+     `type:security`) は feat にフォールバック（kamo2 と同規則）
+   - 観点 #7「作業スコープの推定可能性」は 2-workflow 構造（dev / docs-only）を
+     温存しつつ、dev workflow 側の判断材料を kamo2 の「backend / frontend /
+     fullstack の推定が可能」から「対象モジュール / ディレクトリ / ファイルパスの
+     言及」に置き換える。docs-only workflow 側は kamo2 と同一（docs パス / 文書
+     カテゴリの言及）
    - kamo2 固有 Issue 番号除去
    - 誘導先: RETRY 時 `/issue-fix-ready`、APPROVE 時 `/issue-start`
 2. `issue-fix-ready/SKILL.md`: kamo2 版をベースに docs 参照再マップと Issue 番号除去
@@ -183,7 +199,37 @@ ln -s ../../.claude/skills/pr-verify          pr-verify
 既存 `.agents/skills/*` も `../../.claude/skills/<name>` 形式の相対 symlink なので
 同形式で揃える。
 
-### フェーズ 5: 検証
+### フェーズ 5: workflow docs の最小更新（ready gate 導入反映）
+
+`issue-review-ready` は「全 workflow 共通」ゲートであり、導入後の運用文書導線と
+食い違わないよう、本 Issue の責務として 3 ファイルを最小差分で更新する。
+
+1. **`docs/dev/development_workflow.md`**:
+   - Mermaid flow の先頭を `A["/issue-create"] --> B["/issue-start"]` から
+     `A["/issue-create"] --> RR["/issue-review-ready"] --> B["/issue-start"]` に変更
+   - RETRY 時のループ `/issue-fix-ready → /issue-review-ready` を追記
+   - Phase 概要テーブルに「1.5 レディネスレビュー」行を追加
+2. **`docs/dev/workflow_overview.md`**:
+   - feature-development フロー (18-20 行) を
+     `/issue-create → /issue-review-ready → /issue-start → ...` に変更
+   - docs-maintenance フロー (30-31 行) を
+     `/issue-review-ready → /issue-start → /i-doc-update → ...` に変更
+     （docs-maintenance でも `/issue-create` が前提だが、kamo2 `workflow_overview.md`
+     line 10 の記法を踏襲する）
+3. **`docs/dev/docs_maintenance_workflow.md`**:
+   - 「フロー概要」(7 行) を
+     `issue-review-ready → issue-start → i-doc-update → ...` に変更
+   - kamo2 `docs_maintenance_workflow.md` line 17 の形式と揃える
+
+**更新時の約束**:
+- design/implement/review/final-check 系スキル名・誘導文言は触らない
+  （後続子 Issue #3〜#6 の責務）
+- `pr-fix` / `pr-verify` の記述は追加しない（PR レビュー後の手動実行サイクルであり
+  main workflow flow の一部ではない）
+- 旧名称参照（例: 既に `development_workflow.md` へのリネームが #144 で完了して
+  いる前提）のみを追加・修正する
+
+### フェーズ 6: 検証
 
 1. `make check` 通過
 2. `make verify-docs` 通過（docs 参照リンク切れなし）
@@ -202,9 +248,15 @@ ln -s ../../.claude/skills/pr-verify          pr-verify
      .claude/skills/{issue-create,issue-start,issue-close,issue-review-ready,issue-fix-ready,pr-fix,pr-verify}/
    ```
    上記がいずれも空であること。
-5. **Codex 併用確認**: kaji harness または Codex 経由でスキルロード時に
+5. **workflow docs 整合**: `/issue-review-ready` の出現を以下で確認：
+   ```
+   rg '/issue-review-ready' docs/dev/development_workflow.md docs/dev/workflow_overview.md docs/dev/docs_maintenance_workflow.md
+   ```
+   3 ファイルすべてで出現し、`/issue-create` と `/issue-start` の間、または
+   docs-maintenance のフロー先頭に位置することを目視確認。
+6. **Codex 併用確認**: kaji harness または Codex 経由でスキルロード時に
    `failed to load skill` 警告が出ないこと（4 symlink が正しく解決する）。
-6. **手動試行**: 既存 open Issue に対して `/issue-review-ready` を実行し、
+7. **手動試行**: 既存 open Issue に対して `/issue-review-ready` を実行し、
    レビューコメントが Issue に投稿されるまで完走する。
 
 ## テスト戦略
@@ -222,11 +274,14 @@ ln -s ../../.claude/skills/pr-verify          pr-verify
   確認
 - **`make verify-docs`**: スキル内の docs 参照 (`docs/dev/*`, `docs/reference/python/*`,
   `docs/rfc/*` 等) がリンク切れしていないことを保証
-- **kamo2 残骸 grep（2 種）**: 上記「フェーズ 5」の 2 本の rg コマンドが空
+- **kamo2 残骸 grep（2 種）**: 上記「フェーズ 6」の 2 本の rg コマンドが空
 - **ダングリング参照検証**: 本 PR 内で新規に追加された `/issue-*` / `/pr-*` 参照に
   対応する `.claude/skills/<name>/` が全て実在
 - **symlink 解決確認**: `ls -L .agents/skills/{issue-review-ready,issue-fix-ready,pr-fix,pr-verify}`
   が `SKILL.md` を含む実体を返す
+- **workflow docs 整合**: `docs/dev/{development_workflow,workflow_overview,docs_maintenance_workflow}.md`
+  の 3 ファイルすべてに `/issue-review-ready` が `/issue-create` と `/issue-start`
+  の間（または docs-maintenance のフロー先頭）に出現していること
 - **手動試行**: 既存 open Issue で `/issue-review-ready` を実行し、レビューコメント
   投稿まで到達する（振る舞いの end-to-end 確認。恒久化はしない）
 
@@ -248,20 +303,40 @@ ln -s ../../.claude/skills/pr-verify          pr-verify
 
 ## 影響ドキュメント
 
-| ドキュメント | 影響の有無 | 理由 |
+`issue-review-ready` は kamo2 一次情報 (`/home/aki/dev/kamo2/.claude/skills/issue-review-ready/SKILL.md`
+8 行目) で「**全 workflow 共通**」のゲートであり、dev / docs-only の両 workflow で
+`create → review-ready → start` が要求される。kaji 現行 workflow docs はいずれも
+この gate を含まない導線を記載しているため、merge 時点で導入 gate と運用文書の
+導線を一致させる責務を本 Issue で負う。更新対象を「本 Issue で更新する」「後続
+Issue に明示的に委譲する」の 2 区分に明示する。
+
+| ドキュメント | 影響の有無 | 理由・更新内容 |
 |-------------|-----------|------|
 | docs/adr/ | なし | アーキテクチャ決定なし（#143 方針に沿う分割実装のみ） |
 | docs/ARCHITECTURE.md | なし | アーキテクチャ変更なし |
-| docs/dev/development_workflow.md | **あり（軽微）** | ライフサイクル図に `/issue-review-ready` `/issue-fix-ready` `/pr-fix` `/pr-verify` を追記する必要がある可能性。ただし後続子 Issue で design/implement/review 系も含めて一括更新する方が整合しやすいため、本 Issue では最小限（「ready ゲートと PR サイクル導入」の追記に留める）か、後続子 Issue に委譲するかをレビューで相談 |
-| docs/dev/workflow_guide.md | あり（軽微） | 同上 |
-| docs/dev/workflow_overview.md | あり（軽微） | 同上 |
-| docs/dev/shared_skill_rules.md | なし | `_shared/` は #144 で整備済み |
+| **docs/dev/development_workflow.md** | **あり（本 Issue で更新）** | dev workflow の mermaid flow および Phase 概要に `/issue-review-ready` を `/issue-create` と `/issue-start` の間に追加。ready gate RETRY 時の `/issue-fix-ready` → `/issue-review-ready` 再ループも併記。kamo2 同ファイル (line 18) の形式に揃える |
+| **docs/dev/workflow_overview.md** | **あり（本 Issue で更新）** | feature-development / docs-maintenance 両 workflow のフロー記述（18-20 行, 30-31 行）に `/issue-review-ready` を `/issue-start` の前に追加。kamo2 同ファイル (line 9-10) と同形式 |
+| **docs/dev/docs_maintenance_workflow.md** | **あり（本 Issue で更新）** | フロー概要 (7 行) 冒頭に `/issue-review-ready` を追加し、ready gate が docs-only にも適用される旨を明記。kamo2 同ファイル (line 17) と同形式 |
+| docs/dev/workflow_guide.md | **なし（後続 Issue に委譲）** | 本ファイルは各スキルの責務・実行順の詳細解説であり、design/implement/review 系スキルの差し替え（子 Issue #3〜#6）と同時更新する方が記述の一貫性を保てる。本 Issue では触らず、最終子 Issue (#6) の責務とする |
+| docs/dev/shared_skill_rules.md | なし | `_shared/` は #144 で整備済み。ready gate 追加で共通規約は変わらない |
 | docs/dev/skill-authoring.md | なし | スキル記述規約変更なし |
+| docs/dev/workflow_completion_criteria.md | **なし（後続 Issue に委譲）** | 完了条件ドキュメントは各スキル差し替え完了後に一括更新する方が整合しやすい。最終子 Issue (#6) の責務 |
+| docs/dev/documentation_update_criteria.md | なし | docs 更新基準は変わらない |
 | docs/cli-guides/ | なし | CLI 仕様変更なし |
 | docs/rfc/github-labels-standardization.md | なし | ラベル体系変更なし（`issue-create` の type→ラベル表は既存体系を継承） |
 | CLAUDE.md | なし | 規約変更なし |
 | workflows/*.yaml | なし | ワークフロー YAML は `/issue-design`〜`/i-pr` のみを呼び出しており、本 Issue で追加する `/issue-review-ready` 等は手動実行前提（kamo2 の運用と同じ） |
-| .claude/skills/issue-design 以下の既存スキル | **なし（意図的）** | 本 Issue のスコープ外。後続子 Issue #3〜#6 の責務。旧来の誘導文言は許容 |
+| .claude/skills/issue-design 以下の既存スキル | **なし（意図的、後続 Issue に委譲）** | 本 Issue のスコープ外。後続子 Issue #3〜#6 の責務。旧来の誘導文言（`/issue-start` 直後に `/issue-design` を案内など）は許容 |
+
+### 更新粒度の注意
+
+- `docs/dev/development_workflow.md` / `docs_maintenance_workflow.md` / `workflow_overview.md`
+  の更新は **ready gate 導入に直接必要な最小差分のみ**。既存の design/implement/
+  review/final-check 系スキル誘導文言は触らない。
+- `pr-fix` / `pr-verify` は PR レビュー後の手動実行サイクルであり、main workflow flow
+  の一部ではない。workflow docs への追記は行わず、各スキル SKILL.md 内の誘導
+  （`pr-fix` ↔ `pr-verify`）でのみ参照整合を保つ。workflow docs への反映は、必要に
+  応じて後続 Issue でまとめて検討する。
 
 ## 参照情報（Primary Sources）
 
