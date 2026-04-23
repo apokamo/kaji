@@ -17,13 +17,13 @@
 
 コード変更を伴う Issue のワークフロー。設計 → 実装 → コードレビュー → ドキュメントチェック → 最終チェック → PR。
 
-詳細: [workflow_feature_development.md](workflow_feature_development.md)
+詳細: [development_workflow.md](development_workflow.md)
 
 ## docs-maintenance
 
 ドキュメント修正のみの Issue のワークフロー。コード・設定・テストは変更せず、現行実装との整合性を監査しながら docs を更新する。
 
-詳細: [workflow_docs_maintenance.md](workflow_docs_maintenance.md)
+詳細: [docs_maintenance_workflow.md](docs_maintenance_workflow.md)
 
 ## 関連ドキュメント
 
