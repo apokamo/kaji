@@ -115,6 +115,15 @@ kamo2 固有の「backend / frontend / fullstack」スタック分岐を Python 
     `docs/dev/development_workflow.md` が正規名）
 - **一次情報アクセス**: 移植元 kamo2 はローカルパス `/home/aki/dev/kamo2/` で
   レビュワー（agent）がアクセス可能。
+- **canonical `type:*` ラベル整備は本 Issue のスコープ外**: `gh label list`
+  で確認した結果、kaji リポジトリには canonical `type:docs` のみ存在し、
+  `type:feature` / `type:bug` / `type:refactor` 等はラベル自体が未作成。
+  これは #145 で `issue-create` の type→ラベル dispatch（type→`type:*`）が
+  導入された際の残課題であり、本 Issue では label 整備自体は行わない。
+  `/issue-create` 実行時に該当ラベルが未作成だった場合の挙動は `issue-create`
+  スキル側の責務であり、本 Issue の scope では扱わない。手動試行セットアップで
+  必要になった場合は、`gh label create --force` で冪等作成する（フェーズ 5.6
+  参照）。
 - **kaji 現行 issue-design の docs-only / metadata-only / packaging-only 対応は
   温存**: kaji 現行テンプレートは変更タイプ（実行時コード変更 / docs-only /
   metadata-only / packaging-only）分岐を持つ（`docs/dev/testing-convention.md` 準拠）。
@@ -227,8 +236,63 @@ kamo2 固有の「backend / frontend / fullstack」スタック分岐を Python 
    dispatch 表が指す `feat.md` / `bug.md` / `refactor.md` が
    `.claude/skills/_shared/design-by-type/` 下に存在することを確認
    （#144 で整備済）。
-6. **手動試行**: 既存 open Issue で `/issue-design` → `/issue-review-design` を
-   完走（feat / bug / refactor 各 1 件）。
+6. **手動試行**（セットアップ付き end-to-end 確認）:
+
+   **前提**: canonical `type:feature` / `type:bug` / `type:refactor` ラベルが
+   GitHub リポジトリに存在し、各 type のテスト対象 Issue が 1 件以上存在すること。
+
+   **現状（2026-04-24 時点の確認結果）**: `gh label list --limit 100` の結果、
+   kaji リポジトリの canonical `type:*` ラベルは `type:docs` のみ。
+   `type:feature` / `type:bug` / `type:refactor` はラベル自体が未作成。open
+   Issue の canonical type 付与も `#149 type:docs` のみで、`type:feature` /
+   `type:bug` / `type:refactor` 付き open Issue は 0 件
+   （`gh issue list --state open --limit 100 --json number,labels` で確認）。
+   従って手動試行は以下の **セットアップ**（実装フェーズ内で実施）を経ずに
+   成立しない。
+
+   **セットアップ手順**:
+
+   ```bash
+   # (A) canonical type:* ラベルを冪等作成（--force で既存時上書き）
+   gh label create type:feature --description "新機能追加"        --color 0e8a16 --force
+   gh label create type:bug     --description "バグ修正"          --color d93f0b --force
+   gh label create type:refactor --description "リファクタリング" --color fbca04 --force
+
+   # (B) 検証用 scratch Issue を 3 件作成
+   # or 既存の bug / refactoring ラベル付き open Issue（#137, #139, #147, #148 等）に
+   #    一時的に canonical ラベルを attach する
+   #    （例: gh issue edit 139 --add-label type:bug）
+   ```
+
+   **実行**:
+
+   - feat 経路: `type:feature` 付き Issue に対し `/issue-design` を実行し、Step 1.5
+     が `_shared/design-by-type/feat.md` を Read することを確認
+   - bug 経路: `type:bug` 付き Issue で同様に実行し、`bug.md` Read を確認
+   - refactor 経路: `type:refactor` 付き Issue で同様に実行し、`refactor.md`
+     Read を確認
+   - 各経路とも `/issue-review-design` を連続実行し、type 別重み付け表
+     （feat: 使用例観点強調 / bug: OB/EB 観点強調 / refactor: 測定指標観点強調）が
+     review コメントに反映されることを目視確認
+
+   **クリーンアップ**:
+
+   - scratch Issue 方式: `gh issue close <n>` で全てクローズ（scratch と分かる
+     タイトル・本文にすること）
+   - 既存 Issue への一時付与方式: `gh issue edit <n> --remove-label type:<...>`
+     で一時ラベルを除去
+
+   **手動試行を省略する場合の代替根拠**:
+
+   フェーズ 5.1〜5.5 の静的検証（`make check` / `make verify-docs` / kamo2 残骸
+   grep / ダングリング参照検証 / dispatch 先ファイル実在）が全通過し、かつ
+   `issue-design` SKILL.md 内の dispatch 表と `_shared/design-by-type/` の
+   ファイル群の対応が目視で一致していれば、dispatch の正当性は保証される。
+   手動試行は追加の end-to-end 信頼性確認であり、セットアップ労力（ラベル作成 +
+   scratch issue 準備 + クリーンアップ）は本 Issue のスコープ外要素
+   （canonical `type:*` ラベル運用の整備）に依存する。手動試行を省略する場合は、
+   設計書／PR コメントに代替根拠（静的検証の通過と dispatch 表の目視確認結果）
+   を明記する。
 
 ## テスト戦略
 
@@ -252,9 +316,14 @@ kamo2 固有の「backend / frontend / fullstack」スタック分岐を Python 
 - **`_shared/design-by-type/` 整合**: `issue-design` Step 1.5 の dispatch 先
   (`feat.md` / `bug.md` / `refactor.md`) が `.claude/skills/_shared/design-by-type/`
   下に実在することを `ls` で確認
-- **手動試行**: 既存 open Issue で `/issue-design` → `/issue-review-design` を
-  feat / bug / refactor 各 1 件完走させ、Issue コメント投稿まで到達する（振る舞い
-  の end-to-end 確認。恒久化はしない）
+- **手動試行（条件付き・省略可）**: canonical `type:*` ラベルが GitHub リポジトリ
+  に整備されている前提で、`/issue-design` → `/issue-review-design` を feat / bug /
+  refactor 各 1 件完走させる。現状 `type:feature` / `type:bug` / `type:refactor`
+  はラベル自体が未作成のため、フェーズ 5.6 のセットアップ手順（ラベル冪等作成 +
+  scratch Issue 準備 or 既存 Issue への一時付与）を経て実行する。セットアップ
+  労力が不釣合いな場合は、静的検証（上記 5 項目）通過と dispatch 表の目視確認
+  をもって代替根拠とする（フェーズ 5.6 の「手動試行を省略する場合の代替根拠」
+  に従う）
 
 ### 恒久テストを追加しない理由
 
