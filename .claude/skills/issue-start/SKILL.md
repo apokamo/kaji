@@ -23,14 +23,14 @@ name: issue-start
 $ARGUMENTS = <issue-number> [prefix]
 ```
 
-- `issue-number` (必須): Issue番号 (例: 42)
+- `issue-number` (必須): Issue番号 (例: 247)
 - `prefix` (任意): ブランチプレフィックス (デフォルト: feat)
   - 例: docs, fix, feat, refactor, test
 
 ## 命名規則
 
-- **ブランチ名**: `[prefix]/[issue-number]` (例: `fix/42`)
-- **ディレクトリ**: `../kaji-[prefix]-[issue-number]` (例: `../kaji-fix-42`)
+- **ブランチ名**: `[prefix]/[issue-number]` (例: `docs/247`)
+- **ディレクトリ**: `../kaji-[prefix]-[issue-number]` (例: `../kaji-docs-247`)
 
 ## 実行手順
 
@@ -48,7 +48,7 @@ MAIN_REPO=$(git rev-parse --show-toplevel)
 git worktree add -b [prefix]/[issue-number] "$MAIN_REPO/../kaji-[prefix]-[issue-number]" main
 ```
 
-### Step 2: venv シンボリックリンク作成
+### Step 1.5: venv シンボリックリンク作成
 
 main プロジェクトの `.venv` へのシンボリックリンクを作成:
 
@@ -57,9 +57,9 @@ MAIN_REPO=$(git rev-parse --show-toplevel)
 ln -s "$MAIN_REPO/.venv" "$MAIN_REPO/../kaji-[prefix]-[issue-number]/.venv"
 ```
 
-これにより `ruff`、`mypy`、`pytest` が即座に実行可能になります。
+これにより `make check` が即座に実行可能になります。
 
-### Step 3: Worktreeの確認
+### Step 2: Worktreeの確認
 
 ```bash
 git worktree list
@@ -67,7 +67,7 @@ git worktree list
 
 ワークツリーが正しく作成されたことを確認してください。
 
-### Step 4: Issue本文にメタ情報を追記
+### Step 3: Issue本文にメタ情報を追記
 
 Issue本文の先頭にWorktree情報を追記します:
 
@@ -89,7 +89,7 @@ EOF
 gh issue edit [issue-number] --body "$NEW_BODY"
 ```
 
-### Step 5: セットアップ完了報告
+### Step 4: セットアップ完了報告
 
 以下の形式で報告してください:
 
@@ -102,23 +102,14 @@ gh issue edit [issue-number] --body "$NEW_BODY"
 | ブランチ | [prefix]/[issue-number] |
 | ディレクトリ | ../kaji-[prefix]-[issue-number] |
 | 基点ブランチ | main |
-| .venv | シンボリックリンク作成済み |
+| venv | シンボリックリンク作成済み |
 | メタ情報 | Issue本文に追記済み |
-
-### 注意事項
-
-⚠️ `.venv` は main のシンボリックリンクです:
-- `uv pip install` は main に影響します
-- pyproject.toml を変更する場合は個別 venv を作成してください:
-  ```bash
-  rm .venv && uv venv .venv && uv sync
-  ```
 
 ### 次のステップ
 
 このタスクに関する今後のコマンドは、すべて以下のディレクトリ内で実行してください:
 
-../kaji-[prefix]-[issue-number]
+cd ../kaji-[prefix]-[issue-number]
 
 ### クリーンアップ（作業完了後）
 
@@ -129,14 +120,18 @@ gh issue edit [issue-number] --body "$NEW_BODY"
 
 実行完了後、以下の形式で verdict を出力すること:
 
+```
 ---VERDICT---
 status: PASS
 reason: |
   Worktree 構築成功
 evidence: |
-  worktree 作成済み
+  worktree 作成、venv symlink 済み
 suggestion: |
 ---END_VERDICT---
+```
+
+**重要**: verdict は **stdout にそのまま出力** すること。Issue コメントや Issue 本文更新とは別に、最終的な verdict ブロックは stdout に残す。
 
 ### status の選択基準
 
