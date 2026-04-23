@@ -4,7 +4,10 @@ docs-only Issue のためのドキュメント修正ワークフロー。
 
 ## フロー概要
 
-issue-start → i-doc-update → i-doc-review → (i-doc-fix → i-doc-verify) → i-doc-final-check → i-pr
+issue-review-ready → issue-start → i-doc-update → i-doc-review → (i-doc-fix → i-doc-verify) → i-doc-final-check → i-pr
+
+> **ready gate**: `issue-review-ready` は dev / docs-only 両 workflow に適用される共通ゲート。
+> `issue-create` 後、`issue-start` の前に必ず実行する。RETRY 時は `/issue-fix-ready → /issue-review-ready` を繰り返す。
 
 ## 実行制約
 

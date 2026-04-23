@@ -15,7 +15,7 @@ Issue の種類を確認
 コード変更を伴う Issue（機能追加・バグ修正・リファクタ・スキル改善等）のワークフロー。
 
 ```
-/issue-create → /issue-start → /issue-design → /issue-review-design
+/issue-create → /issue-review-ready → /issue-start → /issue-design → /issue-review-design
 → /issue-implement → /issue-review-code
 → /i-dev-final-check → /i-pr → /issue-close
 ```
@@ -27,7 +27,7 @@ Issue の種類を確認
 ドキュメント修正のみの Issue のワークフロー。コード・設定・テストは変更しない。
 
 ```
-/issue-start → /i-doc-update → /i-doc-review → (/i-doc-fix → /i-doc-verify)
+/issue-create → /issue-review-ready → /issue-start → /i-doc-update → /i-doc-review → (/i-doc-fix → /i-doc-verify)
 → /i-doc-final-check → /i-pr → /issue-close
 ```
 
