@@ -42,7 +42,7 @@ flowchart TB
 | 4. 実装 | `/issue-implement` | コード + テスト |
 | 5. 最終チェック | `/i-dev-final-check` | エビデンス集約 + 品質チェック + 設計書アーカイブ |
 | 6. PR作成 | `/i-pr` | PR作成 |
-| 7. 完了 | `/issue-close` | PRマージ + ブランチ安全削除 + worktree削除（※手動実行） |
+| 7. 完了 | `/issue-close` | PRマージ + worktree削除 + ブランチ安全削除 + Issueクローズ（※手動実行） |
 
 ## 詳細フロー
 
@@ -142,10 +142,10 @@ flowchart TB
 │ /issue-close <issue-number>                                         │
 ├─────────────────────────────────────────────────────────────────────┤
 │ • gh pr merge --merge                                               │
-│ • ブランチ安全削除（merge-base 確認後）                             │
-│ • .venv シンボリックリンク削除                                      │
 │ • git worktree remove                                               │
-│ • stale ref クリーンアップ                                          │
+│ • ブランチ安全削除（merge-base 確認後、stale ref prune 込み）       │
+│ • git pull origin main                                              │
+│ • gh issue close --reason completed                                 │
 │ • 完了報告                                                          │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -160,15 +160,20 @@ flowchart TB
 | API仕様 | 公式リンク参照（コピペ禁止） |
 | Test Strategy | ID羅列ではなく検証観点を言語化 |
 
-## ラベル・type マッピング
+## type → ラベル マッピング
 
-| ラベル | type | 用途 |
-|--------|------|------|
-| `enhancement` | feat | 新機能追加 |
-| `bug` | fix | バグ修正 |
-| `refactoring` | refactor | リファクタリング |
-| `documentation` | docs | ドキュメント |
-| `good first issue` | test | テスト追加・改善 |
+> **参照**: [docs/rfc/github-labels-standardization.md](../rfc/github-labels-standardization.md)（GitHub Labels 標準化）
+
+| type | ラベル | 用途 |
+|------|--------|------|
+| `feat` | `type:feature` | 新機能追加 |
+| `fix` | `type:bug` | バグ修正 |
+| `refactor` | `type:refactor` | リファクタリング |
+| `docs` | `type:docs` | ドキュメント |
+| `test` | `type:test` | テスト追加・改善 |
+| `chore` | `type:chore` | 雑務・依存の掃除 |
+| `perf` | `type:perf` | パフォーマンス改善 |
+| `security` | `type:security` | セキュリティ対応 |
 
 ## Issue本文の構造
 
@@ -218,7 +223,7 @@ flowchart LR
 | `/issue-start` | worktree構築 + Issue本文にメタ情報追記 |
 | `/i-dev-final-check` | エビデンス集約 + 品質チェック + ドキュメント影響確定 + 設計書アーカイブ |
 | `/i-pr` | コミット整理 + PR作成 |
-| `/issue-close` | PRマージ + ブランチ安全削除 + worktree削除（※手動実行） |
+| `/issue-close` | PRマージ + worktree削除 + ブランチ安全削除 + Issueクローズ（※手動実行） |
 
 ### 設計フェーズ
 
