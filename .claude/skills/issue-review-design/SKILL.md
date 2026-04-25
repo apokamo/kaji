@@ -156,17 +156,22 @@ EOF
 
 #### type の取得と観点の重み付け
 
-Issue ラベルから type を取得し（未付与を空文字として保持）、共通観点の重み付けを調整する:
+Issue ラベルから `type:*` ラベルを **配列として** 取得し、共通観点の重み付けを調整する:
 
 ```bash
-gh issue view [issue-number] --json labels --jq '[.labels[].name] | map(select(startswith("type:"))) | .[0] // ""'
+gh issue view [issue-number] --json labels --jq '[.labels[].name] | map(select(startswith("type:")))'
 ```
 
-**判定の優先順**:
+**cardinality チェック（先に判定）**:
 
-1. **出力が空文字** → type ラベル未付与。設計レビューに入らず、`/issue-review-ready` への差し戻しを Must Fix として投稿する（observation: type ラベル未付与）
-2. **canonical（`type:feature` / `type:bug` / `type:refactor` / `type:docs`）** → 対応する重み付けを適用
-3. **canonical 外（`type:test` / `type:chore` / `type:perf` / `type:security` など）** → `type:feature` と同等に扱う（フォールバック規則）
+- **配列要素数が 2 以上** → 複数 type ラベルが付与されている。設計レビューに入らず、`/issue-review-ready` への差し戻しを Must Fix として投稿する（observation: 複数 type ラベル付与）。Changes Requested で停止する
+- **配列が空** → type ラベル未付与。設計レビューに入らず、`/issue-review-ready` への差し戻しを Must Fix として投稿する（observation: type ラベル未付与）
+- **配列要素数が 1** → その要素を採用し、以下の判定に進む
+
+**type 値による分岐**:
+
+1. **canonical（`type:feature` / `type:bug` / `type:refactor` / `type:docs`）** → 対応する重み付けを適用
+2. **canonical 外（`type:test` / `type:chore` / `type:perf` / `type:security` など）** → `type:feature` と同等に扱う（フォールバック規則）
 
 **type 別重み付け（共通観点 1〜5 に対する強調度）**:
 
