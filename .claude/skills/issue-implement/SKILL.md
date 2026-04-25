@@ -15,7 +15,7 @@ name: issue-implement
 | 設計レビュー完了・承認後 | ✅ 必須 |
 | 設計レビュー未完了 | ❌ 待機 |
 
-**ワークフロー内の位置**: design → review-design → **implement** → review-code → doc-check → i-dev-final-check → i-pr → close
+**ワークフロー内の位置**: design → review-design → **implement** → review-code → i-dev-final-check → i-pr → close
 
 ## 入力
 
@@ -44,7 +44,10 @@ $ARGUMENTS = <issue-number>
 以下のドキュメントを Read ツールで読み込んでから作業を開始すること。
 
 1. **開発ワークフロー**: `docs/dev/development_workflow.md`
-2. **テスト規約**: `docs/dev/testing-convention.md`
+2. **完了条件対応**: `docs/dev/workflow_completion_criteria.md`
+3. **docs 更新判断**: `docs/dev/documentation_update_criteria.md`
+4. **テスト規約**: `docs/dev/testing-convention.md`
+5. **Python スタイル**: `docs/reference/python/python-style.md`（必要に応じて他の `docs/reference/python/*.md` も追加読込）
 
 ## 前提条件
 
@@ -70,7 +73,7 @@ cat [worktree-absolute-path]/draft/design/issue-[number]-*.md
 ```
 
 **特に注目するセクション**:
-- 「インターフェース」: 実装すべきAPI
+- 「インターフェース」: 実装すべき API
 - 「テスト戦略」: テストケースの元になる
 - 「影響ドキュメント」: 実装後に更新が必要なドキュメント
 
@@ -83,7 +86,7 @@ cat [worktree-absolute-path]/draft/design/issue-[number]-*.md
    cd [worktree-absolute-path] && source .venv/bin/activate && pytest
    ```
 
-2. **全パスの場合**: baseline は clean。コメント不要。Step 3 へ進む。
+2. **全パスの場合**: baseline は clean。コメント不要。Step 2.6 へ進む。
 
 3. **FAILED / ERROR がある場合**:
    a. 各失敗テストの `(nodeid, kind, error_type)` を記録する
@@ -127,6 +130,35 @@ cat [worktree-absolute-path]/draft/design/issue-[number]-*.md
 
 > **Baseline コメントの選択規則**: Issue に `## Baseline Check 結果` コメントが複数存在する場合（再実行時など）、**最新のコメントを正とする**。各コメントに commit hash を含めることで、どの時点のスナップショットかを識別できる。
 
+### Step 2.6: type の判定と type 別手順ガイドの読み込み
+
+Issue ラベルから type を取得する（複数 type ラベルを許容しないため、配列として取得して cardinality をチェックする）:
+
+```bash
+gh issue view [issue-number] --json labels --jq '[.labels[].name] | map(select(startswith("type:")))'
+```
+
+**判定の優先順**:
+
+1. **配列要素数 ≥ 2** → 複数 type ラベル付与。実装フェーズに入らず処理を停止し、`/issue-review-ready` への差し戻しを案内する（ABORT）。type ラベルは Issue ごとに 1 つに限定する責務。
+2. **配列が空** → type ラベル未付与。実装フェーズに入らず処理を停止し、`/issue-review-ready` への差し戻しを案内する（ABORT）。前段レディネスで type ラベル付与を確保する責務。
+3. **配列要素数 1**: その要素を採用し、以下の判定を行う:
+   - **`type:docs`** → **本スキル対象外**。`/i-doc-update` を使用すること。処理を停止し、ユーザーに誘導する（ABORT）
+   - **canonical（`type:feature` / `type:bug` / `type:refactor`）** → 対応するファイルを Read
+   - **canonical 外（`type:test` / `type:chore` / `type:perf` / `type:security` など）** → `feat.md` を Read（フォールバック規則）
+
+| type | 読み込むファイル | 手順の特徴 |
+|------|------------------|-----------|
+| `type:feature` | `.claude/skills/_shared/implement-by-type/feat.md` | 標準 TDD（Red → Green → Refactor）。IF 定義とユースケースを契約として実装 |
+| `type:bug` | `.claude/skills/_shared/implement-by-type/bug.md` | 再現テスト先行。Red = 再現テストが OB を再現 / Green = EB に合致 |
+| `type:refactor` | `.claude/skills/_shared/implement-by-type/refactor.md` | ベースライン計測 → safety net → 改修 → 再計測。振る舞い非変更が絶対要件 |
+| canonical 外 | `.claude/skills/_shared/implement-by-type/feat.md`（フォールバック） | 標準 TDD を適用 |
+
+**type 別手順と Step 3〜5 の関係**:
+- 読み込んだガイドは Step 3（Red）〜 Step 5（Refactor）の**具体的な進め方**を定義する
+- 下記 Step 3〜5 の汎用的な記述は、type 別ガイドで上書きされる箇所がある（例: bug の Step B1 は下記 Step 3 の「Red Phase」を「再現テスト先行」に具体化する）
+- ガイドの手順に従って作業し、下記 Step 3〜5 は**枠組み**として参照する
+
 ### Step 3: テスト実装 (Red Phase)
 
 > **CRITICAL — 変更タイプに応じて妥当な検証を選ぶこと**
@@ -136,19 +168,24 @@ cat [worktree-absolute-path]/draft/design/issue-[number]-*.md
 > 価値の低い恒久テストを機械的に追加してはならない。
 >
 > **禁止事項**:
+> - ❌ 設計書で「作成する」と定義されたテストを省略する
+> - ❌ 設計書で「不要」と判断されたテストを独自判断で追加する
 > - ❌ 実行時コード変更なのに「実行時間が長い」を理由に M/L を省略する
 > - ❌ 実行時コード変更なのに「Small で十分」と決め打ちする
 > - ❌ docs-only / metadata-only / packaging-only 変更に無理やり S/M/L テストを新設する
 > - ❌ `uv pip install -e .` など副作用のある検証を shared 環境へ常設する
+> - ❌ 「API キーがない」「DB が起動していない」などの環境不備を理由にテストをスキップする（環境不備はスキップ理由ではなく修正対象）
 
-設計書の「テスト戦略」セクションに基づき、変更タイプに応じた検証を実施する。
+設計書の「テスト戦略」セクションに基づき、変更タイプに応じた検証を実施する。テストサイズ判定は
+`docs/dev/testing-convention.md` のリソース制約（外部 API / DB / ファイル I/O の有無）に従う。
 
 1. **テストファイルの特定/作成**:
    - 実行時コード変更: `tests/` 配下の適切な場所にテストファイルを作成または特定
    - docs-only / metadata-only / packaging-only: 変更固有検証のみで十分なら、新規テストは作成しない
+   - 各テストには `@pytest.mark.small` / `@pytest.mark.medium` / `@pytest.mark.large` のマーカーを付与
 
 2. **テストコード記述**:
-   - 実行時コード変更: 設計書の「テスト戦略」をカバーするテストケースを書く
+   - 実行時コード変更: 設計書の「テスト戦略」をカバーするテストケースを書く（不要と判断されたサイズは設計書側のエビデンスを維持）
    - docs-only / metadata-only / packaging-only: 設計書に記載した変更固有検証を実施する
 
 3. **失敗 / 回帰の確認**:
@@ -161,7 +198,7 @@ cat [worktree-absolute-path]/draft/design/issue-[number]-*.md
 ### Step 4: 機能実装 (Green Phase)
 
 1. **実装ファイルの編集**:
-   - 設計書の「インターフェース定義」に従い、`src/` 配下のコードを実装
+   - 設計書の「インターフェース定義」に従い、`kaji_harness/` 配下のコードを実装
 
 2. **テスト通過確認**:
    ```bash
@@ -189,6 +226,10 @@ cat [worktree-absolute-path]/draft/design/issue-[number]-*.md
 
 以下の 2 段階で実行すること。**すべての基準をクリアするまでコミットしてはならない**。
 
+> CLAUDE.md の「Pre-Commit (REQUIRED)」セクションに記載されたコマンドと等価。`make check` を
+> 一括で叩く方法もあるが、kaji では baseline failure 判定のため `pytest` を `&&` チェーンから
+> 切り離す必要がある。下記 7a / 7b の分離はそのための運用。
+
 #### 7a. Lint / Format / 型チェック（exit 0 必須）
 
 ```bash
@@ -212,6 +253,17 @@ cd [worktree-absolute-path] && source .venv/bin/activate && pytest
 
 失敗した場合は原因を修正して再実行すること。
 
+### Step 7.5: 完了条件の段階確認
+
+Issue 本文に `## 完了条件` セクションがある場合、実装段階で確認可能な条件を確認する。
+
+確認対象の例:
+- 実装が完了条件で求められている機能を網羅しているか
+- テストが完了条件で求められているカバレッジを満たしているか
+- docs 更新が完了条件で求められている範囲に対応しているか
+
+確認結果は Step 9 の Issue コメントに含めて後段への証跡とする。
+
 ### Step 8: コミット
 
 ```bash
@@ -231,7 +283,7 @@ gh issue comment [issue-number] --body "$(cat <<'COMMENT_EOF'
 ### 実施内容
 
 - **テスト / 検証**: `tests/test_xxx.py` に XX 件のケースを追加、または変更固有検証を実施
-- **実装**: `src/xxx.py` に機能を実装
+- **実装**: `kaji_harness/xxx.py` に機能を実装
 
 ### テスト結果
 
@@ -246,6 +298,9 @@ gh issue comment [issue-number] --body "$(cat <<'COMMENT_EOF'
 | failed | XX (うち baseline: YY, regression: 0) |
 | errors | XX (うち baseline: YY, regression: 0) |
 | skipped | XX |
+| Small テスト | XX passed |
+| Medium テスト | XX passed |
+| Large テスト | XX passed |
 
 ### 品質チェック結果
 
@@ -255,8 +310,16 @@ gh issue comment [issue-number] --body "$(cat <<'COMMENT_EOF'
 
 ### 変更ファイル
 
-- `src/xxx.py`: (変更内容)
+- `kaji_harness/xxx.py`: (変更内容)
 - `tests/test_xxx.py`: (変更内容)
+
+### 完了条件の段階確認
+
+この段階で確認可能な完了条件:
+
+- [ ] (確認した条件1): ✅ 実装で対応済み
+- [ ] (確認した条件2): ✅ テスト通過で確認
+- (未確認の条件があれば): final-check で確認予定
 
 ### 次のステップ
 
@@ -294,6 +357,8 @@ evidence: |
 suggestion: |
 ---END_VERDICT---
 
+**重要**: verdict は **stdout にそのまま出力** すること。Issue コメントや Issue 本文更新とは別に、最終的な verdict ブロックは stdout に残す。
+
 ### status の選択基準
 
 | status | 条件 |
@@ -301,4 +366,4 @@ suggestion: |
 | PASS | 実装・テスト・品質チェック全パス |
 | RETRY | テスト失敗等 |
 | BACK | 設計に問題 |
-| ABORT | 重大な問題 |
+| ABORT | 重大な問題（type ラベル未付与・複数付与・`type:docs` 等） |

@@ -15,7 +15,7 @@ name: issue-fix-code
 | `/issue-review-code` で Changes Requested 後 | ✅ 必須 |
 | 人間からのレビューコメントへの対応 | ✅ 使用可 |
 
-**ワークフロー内の位置**: implement → review-code → (**fix** → verify) → doc-check → pr → close
+**ワークフロー内の位置**: implement → review-code → (**fix** → verify) → i-dev-final-check → i-pr → close
 
 ## 入力
 
@@ -32,7 +32,7 @@ name: issue-fix-code
 
 | 変数 | 型 | 条件 | 説明 |
 |------|-----|------|------|
-| `previous_verdict` | str | resume 指定ステップのみ | 前ステップの verdict |
+| `previous_verdict` | str | `resume` または `inject_verdict: true` 指定ステップ | 前ステップの verdict |
 | `cycle_count` | int | サイクル内ステップのみ | 現在のイテレーション番号 |
 | `max_iterations` | int | サイクル内ステップのみ | サイクルの上限回数 |
 
@@ -53,6 +53,7 @@ $ARGUMENTS = <issue-number>
 
 1. **開発ワークフロー**: `docs/dev/development_workflow.md`
 2. **テスト規約**: `docs/dev/testing-convention.md`
+3. **Python スタイル**: `docs/reference/python/python-style.md`（必要に応じて他の `docs/reference/python/*.md` も追加読込）
 
 ## 共通ルール
 
@@ -83,7 +84,9 @@ $ARGUMENTS = <issue-number>
 
 - **A: 対応する (Agree)**
   - 指摘が正しく、修正により品質・安全性が向上する場合。
-  - 改善提案 (Should Fix) の場合: メリットが明確なら積極的に採用
+  - **改善提案 (Should Fix) の場合**:
+    - メリットが明確な場合は積極的に採用
+    - 大規模なリファクタリングを伴う場合や高リスクな場合は見送り可
 
 - **B: 対応しない/反論する (Disagree/Discuss)**
   - 指摘が誤解に基づいている場合
@@ -93,13 +96,29 @@ $ARGUMENTS = <issue-number>
 
 ### Step 3: 修正の実行
 
-1. **コード修正**: 採用した指摘事項に基づきコードを修正
+1. **コード修正**:
+   採用した指摘事項に基づきコードを修正
 
 2. **品質チェック（コミット前必須）**:
 
-   以下を実行し、**すべてパスするまでコミットしてはならない**。失敗した場合は原因を修正して再実行すること。
+   以下を実行し、**すべての基準をクリアするまでコミットしてはならない**。失敗した場合は原因を修正して再実行すること。
+   CLAUDE.md の「Pre-Commit (REQUIRED)」セクションに記載されたコマンドと等価。kaji では baseline failure
+   判定のため `pytest` を `&&` チェーンから切り離す必要がある。
 
-   CLAUDE.md の「Pre-Commit (REQUIRED)」セクションに記載されたコマンドを実行すること。
+   #### 3.1 Lint / Format / 型チェック（exit 0 必須）
+
+   ```bash
+   cd [worktree-absolute-path] && source .venv/bin/activate && ruff check kaji_harness/ tests/ && ruff format kaji_harness/ tests/ && mypy kaji_harness/
+   ```
+
+   #### 3.2 テスト実行
+
+   ```bash
+   cd [worktree-absolute-path] && source .venv/bin/activate && pytest
+   ```
+
+   **`pytest` は `&&` チェーンに含めず、必ず個別に実行する。** 合否判定は `issue-implement` Step 7b と
+   同一の基準（Baseline Check コメントの有無で分岐）を適用する。
 
 ### Step 4: コミット
 
@@ -108,6 +127,8 @@ cd [worktree-absolute-path] && git add . && git commit -m "fix: address review f
 ```
 
 ### Step 5: 結果報告
+
+Issueにコメントします:
 
 ```bash
 gh issue comment [issue-number] --body "$(cat <<'EOF'
@@ -124,6 +145,12 @@ gh issue comment [issue-number] --body "$(cat <<'EOF'
 
 - **(指摘内容の要約)**
   - 理由: (なぜ対応しなかったか。根拠となるロジック)
+
+## 品質チェック結果
+
+```
+(ruff check + ruff format + mypy + pytest の出力をそのまま貼り付け)
+```
 
 ## 次のステップ
 
@@ -160,6 +187,8 @@ evidence: |
   全指摘事項に対応済み
 suggestion: |
 ---END_VERDICT---
+
+**重要**: verdict は **stdout にそのまま出力** すること。Issue コメントや Issue 本文更新とは別に、最終的な verdict ブロックは stdout に残す。
 
 ### status の選択基準
 
