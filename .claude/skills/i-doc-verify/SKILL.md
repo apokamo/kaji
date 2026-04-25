@@ -41,12 +41,20 @@ $ARGUMENTS = <issue-number>
 コンテキスト変数 `issue_number` が存在すればそちらを使用。
 なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
 
+## 前提知識の読み込み
+
+1. [docs/dev/documentation_update_criteria.md](../../../docs/dev/documentation_update_criteria.md)
+2. [docs/dev/shared_skill_rules.md](../../../docs/dev/shared_skill_rules.md)
+
 ## 実行手順
 
 1. 前回の `i-doc-review` / `i-doc-fix` コメントを確認
 2. 指摘事項ごとに OK / NG を判定
 3. 必要最小限で根拠となる実装 / docs / workflow / CLAUDE.md を再確認
-4. 変更ファイルに絞ったリンクチェック結果を確認
+4. 変更ファイルに絞ったリンクチェック結果を確認:
+   ```bash
+   cd [worktree-absolute-path] && python3 scripts/check_doc_links.py [changed-markdown-files...]
+   ```
 5. 新規発見事項があっても今回の判定には含めない
 6. 結果を Issue にコメント
 

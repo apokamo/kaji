@@ -1,142 +1,85 @@
 ---
-description: docs-only ワークフローの PR 前最終チェック。リンク整合性・完了条件の検証
+description: docs-only workflow 向けの最終チェック。docs 整合と Issue 状態を確認し、PR に進めるか判定する。
 name: i-doc-final-check
 ---
 
 # I Doc Final Check
 
-docs-only ワークフローの PR 作成前最終チェック。リンク整合性と完了条件を検証する。
+docs-only workflow の PR 前最終ゲート。
+現行実装、CLI、運用方針、workflow 定義との整合を確認し、docs-only として PR に進めるかを判定する。
 
 ## いつ使うか
 
 | タイミング | このスキルを使用 |
 |-----------|-----------------|
-| docs レビュー承認後、PR 作成前 | ✅ 必須 |
-| docs レビュー未完了 | ❌ 待機 |
+| `/i-doc-review` または `/i-doc-verify` で Approve 後 | ✅ 必須 |
 
-**ワークフロー内の位置**: i-doc-update → i-doc-review → (i-doc-fix → i-doc-verify) → **i-doc-final-check** → i-pr
+**ワークフロー内の位置**: i-doc-update → i-doc-review → **i-doc-final-check** → i-pr → close
 
-## 入力
+## 前提知識の読み込み
 
-### ハーネス経由（コンテキスト変数）
+1. [docs/dev/docs_maintenance_workflow.md](../../../docs/dev/docs_maintenance_workflow.md)
+2. [docs/dev/workflow_completion_criteria.md](../../../docs/dev/workflow_completion_criteria.md)
+3. [docs/dev/documentation_update_criteria.md](../../../docs/dev/documentation_update_criteria.md)
+4. [docs/dev/shared_skill_rules.md](../../../docs/dev/shared_skill_rules.md)
+5. `docs/README.md`
 
-| 変数 | 型 | 説明 |
-|------|-----|------|
-| `issue_number` | int | GitHub Issue 番号 |
-| `step_id` | str | 現在のステップ ID |
+## 実施内容
 
-### 手動実行（スラッシュコマンド）
+1. worktree と branch を解決する
+2. docs / workflow / skill 参照の整合を確認する
+3. links、コマンド例、導線の整合を確認する（`make verify-docs`）
+4. Issue 本文の完了条件を照合し、充足状態を更新する
+5. Issue に最終チェック結果をコメントする
 
-```
-$ARGUMENTS = <issue-number>
-```
-
-### 解決ルール
-
-コンテキスト変数 `issue_number` が存在すればそちらを使用。
-なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
-
-## 前提条件
-
-- docs レビューが完了・承認されていること
-- worktree が存在すること
-
-## 共通ルール
-
-- [_shared/report-unrelated-issues.md](../_shared/report-unrelated-issues.md) — 作業中に発見した無関係な問題の報告ルール
-
-## 実行手順
-
-### Step 1: Worktree 情報の取得
-
-[_shared/worktree-resolve.md](../_shared/worktree-resolve.md) の手順に従い、
-Worktree の絶対パスを取得すること。
-
-### Step 2: エビデンス確認
-
-Issue コメントから以下を確認する:
-
-| フェーズ | 確認事項 |
-|----------|----------|
-| docs 更新 | `i-doc-update` 完了コメントが存在すること |
-| docs レビュー | `i-doc-review` で PASS 判定が出ていること |
-
-いずれかが欠けている場合は BACK verdict を出す。
-
-### Step 3: リンク整合性チェック
+## Step 3 詳細: リンク整合性
 
 ```bash
 cd [worktree-absolute-path] && source .venv/bin/activate && make verify-docs
 ```
 
-リンク切れがある場合は RETRY verdict を出す。
+exit 0 必須。
 
-### Step 4: 完了条件の確認
+## Step 4 詳細: Issue 本文の完了条件更新
 
-Issue 本文の完了条件（チェックリスト）を確認し、docs 関連の条件がすべて満たされているか検証する。
+Issue 本文に `## 完了条件` セクション（チェックボックス形式）がある場合:
 
-### Step 5: 結果を Issue にコメント
+### PASS の場合
+
+チェックボックスを `[x]` に更新する。
 
 ```bash
-gh issue comment [issue-number] --body "$(cat <<'COMMENT_EOF'
-## Doc Final Check 結果
-
-### エビデンス確認
-
-| フェーズ | 状態 |
-|----------|------|
-| docs 更新 | ✅ / ❌ |
-| docs レビュー | ✅ / ❌ |
-
-### リンクチェック結果
-
-```
-(make verify-docs の出力)
+gh issue view [issue-number] --json body -q '.body' > /tmp/issue-body.md
+# 確認済み条件を [x] に変更
+gh issue edit [issue-number] --body-file /tmp/issue-body.md
 ```
 
-### 完了条件
+### BACK の場合
 
-- [x] / [ ] (各条件の状態)
+チェックボックスは `[ ]` のまま残す。コメントで未充足条件と戻し先を明示する。
 
-### 判定
+### RETRY の場合
 
-PASS / RETRY / BACK
-COMMENT_EOF
-)"
-```
-
-### Step 6: 完了報告
-
-```
-## Doc Final Check 完了
-
-| 項目 | 値 |
-|------|-----|
-| Issue | #[issue-number] |
-| エビデンス | 全フェーズ確認済み |
-| リンクチェック | パス |
-
-### 次のステップ
-
-`/i-pr [issue-number]` で PR を作成してください。
-```
+本文更新は行わない（軽微修正後に再実行するため）。
 
 ## Verdict 出力
 
+```text
 ---VERDICT---
 status: PASS
 reason: |
-  エビデンス確認・リンクチェック全パス
+  docs-only workflow の最終チェックを完了し、PR に進める状態を確認した
 evidence: |
-  make verify-docs パス、完了条件すべて達成
+  make verify-docs 通過、完了条件充足、Issue 本文更新済み
 suggestion: |
 ---END_VERDICT---
+```
 
 ### status の選択基準
 
 | status | 条件 |
 |--------|------|
-| PASS | エビデンス確認・リンクチェック全パス |
-| RETRY | リンク切れ等（修正可能） |
-| BACK | エビデンス不足（前フェーズに差し戻し） |
-| ABORT | 重大な問題 |
+| PASS | PR に進める（全完了条件が充足、本文更新済み） |
+| RETRY | final-check 文脈で閉じる軽微修正後に再実行する |
+| BACK | docs 更新フェーズに戻す（未充足条件と戻し先を明示） |
+| ABORT | docs だけでは解決できない |

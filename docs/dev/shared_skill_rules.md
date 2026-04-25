@@ -1,46 +1,43 @@
-# スキル横断ルール
+# Shared Skill Rules
 
-スキル間の責務境界と共通ルールを定義する。
+workflow 横断で使うスキルの責務境界を定義する。
 
-## 責務境界
+## `/i-pr` の責務
 
-### PR 作成関連
+- worktree / branch 解決
+- 未コミット変更の確認
+- push
+- `gh pr create`
 
-| 責務 | 担当スキル | やらないスキル |
-|------|-----------|---------------|
-| 品質チェック実行 | `i-dev-final-check` / `i-doc-final-check` | `i-pr` |
-| 設計書アーカイブ | `i-dev-final-check` | `issue-close`, `i-pr` |
-| エビデンス集約 | `i-dev-final-check` / `i-doc-final-check` | `i-pr` |
-| コミット整理・プッシュ・PR 作成 | `i-pr` | `i-dev-final-check` |
-| PR マージ | `issue-close` | `i-pr` |
-| ブランチ削除 | `issue-close` | `i-pr` |
-| worktree 削除 | `issue-close` | `i-pr` |
+## `/i-pr` が持たない責務
 
-### レビュー関連
+- workflow 固有の完了条件判定
+- dev / docs-only の個別ルール判定
+- docs 昇格や docs 同梱の妥当性判定
+- final-check 実行済みかの代行判断
+
+workflow 固有の最終判定は `i-dev-final-check` または `i-doc-final-check` が持つ。
+
+## レビューサイクルの責務境界
 
 | 責務 | 担当スキル |
 |------|-----------|
 | 新規指摘 | `issue-review-design`, `issue-review-code`, `i-doc-review` |
 | 修正確認のみ（新規指摘不可） | `issue-verify-design`, `issue-verify-code`, `i-doc-verify` |
 
-## ワークフロー位置の統一表記
-
-### feature-development
-
-```
-create → start → design → review-design → implement → review-code → doc-check → i-dev-final-check → i-pr → close
-```
-
-### docs-maintenance
-
-```
-start → i-doc-update → i-doc-review → (i-doc-fix → i-doc-verify) → i-doc-final-check → i-pr → close
-```
+`fix/verify` 系（`issue-fix-*` / `issue-verify-*` / `pr-fix` / `pr-verify` / `i-doc-fix` / `i-doc-verify`）はレビューサイクルの収束保証のため、新規指摘を行わない原則を共有する。
 
 ## 共通参照ドキュメント
 
 | 共通ルール | パス | 用途 |
 |-----------|------|------|
-| worktree パス解決 | `_shared/worktree-resolve.md` | Issue 本文から worktree パスを取得 |
-| 無関係な問題の報告 | `_shared/report-unrelated-issues.md` | 作業中に発見した無関係な問題の報告手順 |
-| 設計書の昇格 | `_shared/promote-design.md` | draft 設計書から恒久ドキュメントへの昇格手順 |
+| worktree パス解決 | `.claude/skills/_shared/worktree-resolve.md` | Issue 本文 NOTE ブロックから worktree パスを取得 |
+| 無関係な問題の報告 | `.claude/skills/_shared/report-unrelated-issues.md` | 作業中に発見した無関係な問題の報告手順 |
+| 設計書の昇格 | `.claude/skills/_shared/promote-design.md` | draft 設計書から恒久ドキュメントへの昇格手順 |
+
+## スキル実体
+
+- 実体: `.claude/skills/`
+- 互換導線: `.agents/skills/` の symlink
+
+新規スキル追加や改名時は `.claude/skills/` を先に更新し、必要なら `.agents/skills/` に symlink を追加する。

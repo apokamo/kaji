@@ -36,6 +36,11 @@ $ARGUMENTS = <issue-number>
 コンテキスト変数 `issue_number` が存在すればそちらを使用。
 なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
 
+## 前提知識の読み込み
+
+1. [docs/dev/documentation_update_criteria.md](../../../docs/dev/documentation_update_criteria.md)
+2. [docs/dev/shared_skill_rules.md](../../../docs/dev/shared_skill_rules.md)
+
 ## 実行手順
 
 1. `previous_verdict` または Issue コメントから最新レビュー結果を取得

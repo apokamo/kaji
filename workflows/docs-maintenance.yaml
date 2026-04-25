@@ -59,6 +59,7 @@ steps:
     on:
       PASS: pr
       RETRY: final-check
+      BACK: update-doc
       ABORT: end
 
   - id: pr
