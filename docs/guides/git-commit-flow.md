@@ -92,6 +92,28 @@ gh pr merge --merge --delete-branch
 
 `--merge` オプションにより merge commit が作成され、`--no-ff` と同等のブランチ構造が維持される。
 
+#### PR レビュー指摘対応（pr-fix の流れ）
+
+PR 作成後にレビュー指摘が付いた場合は、`/pr-fix` スキルが次の流れを担う（`/issue-pr` 内の `git absorb --and-rebase` とは異なり、レビュー対応は **追加の fix コミット** として積む）:
+
+```bash
+# 1. 指摘に対応してファイルを修正
+vim src/auth.py
+
+# 2. make check が通ることを確認
+make check
+
+# 3. 全変更をまとめて fix コミット
+git add . && git commit -m "fix: address PR review feedback for #<issue-number>"
+
+# 4. リモートブランチへ通常 push（履歴改変なし）
+git push
+```
+
+`/issue-pr` 段階で履歴は既にレビュアーへ共有されているため、`/pr-fix` では履歴を書き換えず追加コミットを積む方針を取る。これにより `--force-with-lease` を要する場面が発生せず、レビュアーが PR 上で diff を追跡しやすい。
+
+修正後は `/pr-verify` でレビュー指摘の収束を確認する。`pr-verify` は新規指摘を行わない契約のため、サイクルは有限で閉じる。
+
 #### Git 一般論（ローカルマージ）
 
 PR を使わないプロジェクトでは、ローカルで `--no-ff` マージを行う:

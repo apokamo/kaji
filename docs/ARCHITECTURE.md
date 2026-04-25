@@ -33,6 +33,15 @@
 
 `workflows/*.yaml` に宣言的に記述。ステップ・遷移条件・サイクル・execution policy を定義する。
 
+実例: `workflows/feature-development.yaml` の step 列は次のとおり（design / code 双方が review → fix → verify の cycle を持ち、`max_iterations` 超過で ABORT）。
+
+```
+design → review-design → (fix-design → verify-design) → implement
+       → review-code → (fix-code → verify-code) → final-check → pr → end
+```
+
+PR 作成後の `pr-fix` / `pr-verify` は workflow YAML の自動 step ではなく、PR レビューが付いた後に手動起動するレビュー収束サイクルとして位置付ける（`/issue-pr → [PR review] → /pr-fix → /pr-verify → /issue-close`）。
+
 参考: [ワークフロー定義マニュアル](dev/workflow-authoring.md)
 
 ### Layer 2: スキル入出力契約
@@ -47,6 +56,20 @@
 ### Layer 3: スキル本体
 
 `.kaji/config.toml` の `paths.skill_dir` で設定されたカノニカルディレクトリ配下の `<name>/SKILL.md`。CLI が `cwd=workdir` で実行する際にネイティブにロードされる。他エージェント用ディレクトリ（例: `.agents/skills/`）はカノニカルディレクトリへのシンボリックリンクとして構成する。
+
+kaji 標準スキルセット（`.claude/skills/` 実体、計 25 種）はライフサイクル順に次の category に整理される。
+
+| Category | スキル |
+|----------|--------|
+| Lifecycle | `issue-create`, `issue-start`, `issue-close` |
+| Ready gate（全 workflow 共通） | `issue-review-ready`, `issue-fix-ready` |
+| Design cycle | `issue-design`, `issue-review-design`, `issue-fix-design`, `issue-verify-design` |
+| Implement cycle | `issue-implement`, `issue-review-code`, `issue-fix-code`, `issue-verify-code` |
+| Docs cycle | `i-doc-update`, `i-doc-review`, `i-doc-fix`, `i-doc-verify` |
+| Final check | `i-dev-final-check`, `i-doc-final-check` |
+| PR | `issue-pr`（`i-pr` への委譲ラッパー）, `i-pr` |
+| PR レビュー後サイクル | `pr-fix`, `pr-verify` |
+| その他 | `issue-doc-check`, `kaji-run-verify` |
 
 ---
 

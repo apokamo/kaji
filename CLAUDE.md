@@ -97,6 +97,8 @@ kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
 | CLI Guides | docs/cli-guides/ |
 | Workflow Overview | docs/dev/workflow_overview.md |
 | Workflow Guide | docs/dev/workflow_guide.md |
+| Development Workflow | docs/dev/development_workflow.md |
+| Docs Maintenance Workflow | docs/dev/docs_maintenance_workflow.md |
 | Completion Criteria | docs/dev/workflow_completion_criteria.md |
 | Testing Convention | docs/dev/testing-convention.md |
 | Testing Size Guide | docs/reference/testing-size-guide.md |
@@ -116,6 +118,19 @@ kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
 
 ## Development Skills
 
-スキルは `.claude/skills/` に格納。`/issue-create` から `/issue-close` までのライフサイクルを管理。
+スキルは `.claude/skills/` に格納。`/issue-create` から `/issue-close` までのライフサイクルと、PR 作成後のレビュー収束サイクルを管理する。
 
-詳細: [Workflow Guide](docs/dev/workflow_guide.md)
+| フェーズ | スキル | 役割 |
+|---------|--------|------|
+| 起票 | `/issue-create` | Issue 作成 + ラベル付与 |
+| 着手前ゲート | **`/issue-review-ready`** / **`/issue-fix-ready`** | Issue 本文の品質ゲート（全 workflow 共通） |
+| 着手 | `/issue-start` | worktree 作成 + Issue にメタ情報追記 |
+| 設計 | `/issue-design` → `/issue-review-design` → (`/issue-fix-design` → `/issue-verify-design`) | 設計書作成と設計レビューサイクル |
+| 実装 | `/issue-implement` → `/issue-review-code` → (`/issue-fix-code` → `/issue-verify-code`) | TDD 実装とコードレビューサイクル |
+| docs-only | `/i-doc-update` → `/i-doc-review` → (`/i-doc-fix` → `/i-doc-verify`) | ドキュメント修正と整合性レビューサイクル |
+| 最終チェック | `/i-dev-final-check` / `/i-doc-final-check` | エビデンス集約 + 品質チェック |
+| PR 作成 | `/issue-pr`（`/i-pr` 経由） | コミット整理 + プッシュ + PR 作成 |
+| PR レビュー後 | **`/pr-fix`** / **`/pr-verify`** | PR レビュー指摘対応とレビュー収束 |
+| 完了 | `/issue-close` | PR マージ + worktree 削除 + ブランチ削除 |
+
+詳細: [Workflow Guide](docs/dev/workflow_guide.md) / [Development Workflow](docs/dev/development_workflow.md) / [Docs Maintenance Workflow](docs/dev/docs_maintenance_workflow.md)
