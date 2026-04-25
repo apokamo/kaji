@@ -1,21 +1,20 @@
 ---
-description: PR前の品質ゲートとして、コード変更に伴うドキュメント影響を網羅チェックする
+description: 互換用エイリアス。新しい正本は i-dev-final-check
 name: issue-doc-check
 ---
 
 # Issue Doc Check
 
-コードレビュー Approve 後、PR 作成前に実行する品質ゲート。
-コード変更に伴うドキュメントの影響を網羅的にチェックし、必要に応じて更新します。
+`issue-doc-check` は互換用の旧名称です。新しい正本は `i-dev-final-check` とし、dev workflow の最終ゲート全体を担当します。
 
 ## いつ使うか
 
 | タイミング | このスキルを使用 |
 |-----------|-----------------|
-| `/issue-review-code` または `/issue-verify-code` で Approve 後 | ✅ 必須 |
-| PR作成前の最終確認として | ✅ 推奨 |
+| `/issue-review-code` または `/issue-verify-code` で Approve 後 | ✅ 互換利用可 |
+| PR作成前の最終確認として | ✅ 互換利用可 |
 
-**ワークフロー内の位置**: implement → review-code → **doc-check** → pr → close
+**ワークフロー内の位置**: implement → review-code → **i-dev-final-check** → i-pr → close
 
 ## 入力
 
@@ -41,9 +40,11 @@ $ARGUMENTS = <issue-number>
 
 ## 前提知識の読み込み
 
-以下のドキュメントを Read ツールで読み込んでから作業を開始すること。
-
-1. **開発ワークフロー**: `docs/dev/development_workflow.md`
+1. [docs/dev/development_workflow.md](../../../docs/dev/development_workflow.md)
+2. [docs/dev/workflow_completion_criteria.md](../../../docs/dev/workflow_completion_criteria.md)
+3. [docs/dev/documentation_update_criteria.md](../../../docs/dev/documentation_update_criteria.md)
+4. [docs/dev/shared_skill_rules.md](../../../docs/dev/shared_skill_rules.md)
+5. `.claude/skills/_shared/promote-design.md`
 
 ## 共通ルール
 
@@ -54,85 +55,13 @@ $ARGUMENTS = <issue-number>
 ### Step 1: Worktree 情報の取得
 
 [_shared/worktree-resolve.md](../_shared/worktree-resolve.md) の手順に従い、
-Worktree の絶対パスを取得すること。
+Worktree の絶対パスを取得すること。以降のステップではこのパスを使用する。
 
-### Step 2: 影響ドキュメントの確認
+詳細手順は [../i-dev-final-check/SKILL.md](../i-dev-final-check/SKILL.md) を参照。
 
-1. **設計書の「影響ドキュメント」セクションを確認**:
-   ```bash
-   cat [worktree-absolute-path]/draft/design/issue-[number]-*.md
-   ```
+### Step 2: 完了報告
 
-2. **変更ファイルの確認**:
-   ```bash
-   cd [worktree-absolute-path] && git diff main...HEAD --name-only
-   ```
-
-### Step 3: チェックリストの実行
-
-| 確認項目 | 判定基準 |
-|----------|---------|
-| ADR が必要か | 新しい技術選定・アーキテクチャ変更の有無 |
-| ARCHITECTURE.md の更新 | システム構成・コンポーネント構造の変更 |
-| docs/dev/ の更新 | ワークフロー・開発手順・テスト規約の変更 |
-| docs/cli-guides/ の更新 | CLI仕様・コマンドの変更 |
-| CLAUDE.md の更新 | 新しいコマンド・規約・禁止事項の追加 |
-
-### Step 4: ドキュメント更新の実施
-
-更新が必要なドキュメントがあれば修正・コミット：
-
-```bash
-cd [worktree-absolute-path] && git add docs/ CLAUDE.md && git commit -m "docs: update documentation for #[issue-number]"
-```
-
-### Step 5: スキップ条件
-
-以下の場合、ドキュメント更新は不要：
-
-- **バグ修正**: 既存の動作を修正するだけで設計変更なし
-- **軽微なリファクタ**: 内部実装の改善で外部仕様・構造に影響なし
-- **テスト追加**: テストコードのみの変更
-
-### Step 6: Issue にコメント
-
-**更新を行った場合:**
-
-```bash
-gh issue comment [issue-number] --body "$(cat <<'EOF'
-## ドキュメントチェック完了
-
-チェックリストに基づき、以下のドキュメントを更新しました。
-
-### 更新内容
-
-- `docs/xxx`: (更新内容の概要)
-
-### 次のステップ
-
-`/i-dev-final-check [issue-number]` で最終チェックを実施してください。
-EOF
-)"
-```
-
-**更新不要の場合:**
-
-```bash
-gh issue comment [issue-number] --body "$(cat <<'EOF'
-## ドキュメントチェック完了
-
-チェックリストを確認した結果、関連ドキュメントの更新は不要でした。
-
-**理由**: (バグ修正のみ / 内部実装の改善のみ / 等)
-
-### 次のステップ
-
-`/i-dev-final-check [issue-number]` で最終チェックを実施してください。
-EOF
-)"
-```
-
-### Step 7: 完了報告
+以下の形式で報告してください:
 
 ```
 ## ドキュメントチェック完了
@@ -140,29 +69,35 @@ EOF
 | 項目 | 値 |
 |------|-----|
 | Issue | #[issue-number] |
-| 更新 | あり / なし |
+| 設計書昇格 | 昇格済み (`docs/...` 配下) / 既存メンテ / なし |
+| ドキュメント更新 | あり / なし |
 | 対象 | (更新したドキュメント / -) |
 
 ### 次のステップ
 
-`/i-dev-final-check [issue-number]` で最終チェックを実施してください。
+`/i-pr [issue-number]` でPRを作成してください。
 ```
 
 ## Verdict 出力
 
-実行完了後、以下の形式で verdict を出力すること:
+正本 `i-dev-final-check` と同一の verdict セマンティクスを返す。
 
+```text
 ---VERDICT---
 status: PASS
 reason: |
-  ドキュメントチェック完了
+  dev workflow の最終チェックを完了し、PR に進める状態を確認した
 evidence: |
-  影響ドキュメントの確認・更新済み
+  前段証跡を集約し、全完了条件の充足を確認した。Issue 本文のチェックボックスを更新済み
 suggestion: |
 ---END_VERDICT---
+```
 
 ### status の選択基準
 
 | status | 条件 |
 |--------|------|
-| PASS | チェック完了 |
+| PASS | 全完了条件が充足し、Issue 本文更新済み |
+| RETRY | final-check 文脈で閉じる軽微修正が必要 |
+| BACK | 前段ステップへ戻す必要がある |
+| ABORT | 重大な前提不整合 |

@@ -41,11 +41,10 @@ $ARGUMENTS = <issue-number>
 コンテキスト変数 `issue_number` が存在すればそちらを使用。
 なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
 
-## ドキュメント品質の原則
+## 前提知識の読み込み
 
-- 段階的開示の方針を取る。ドキュメントは小さく保つ。大きくなるなら構造化して分割する
-- 追加より削除が難しい。追加時に本当に必要か判断する。不要な情報は削除、スリム化を検討する
-- コードから推論できる情報は書かない。具体的なコードもドキュメントに書かない。必要な場合は実コードへのポインターを記載する
+1. [docs/dev/documentation_update_criteria.md](../../../docs/dev/documentation_update_criteria.md)
+2. [docs/dev/shared_skill_rules.md](../../../docs/dev/shared_skill_rules.md)
 
 ## 実行手順
 
@@ -53,7 +52,7 @@ $ARGUMENTS = <issue-number>
 
 1. [_shared/worktree-resolve.md](../_shared/worktree-resolve.md) の手順に従い、Worktree の絶対パスを取得
 2. Issue コメントから直近の docs-only 更新報告を確認
-3. 設計書があれば確認:
+3. 設計書を確認:
    ```bash
    cat [worktree-absolute-path]/draft/design/issue-[number]-*.md
    ```
@@ -64,7 +63,8 @@ $ARGUMENTS = <issue-number>
 
 ### Step 2: レビュー
 
-以下の観点で厳格にレビューする。
+[docs/dev/documentation_update_criteria.md](../../../docs/dev/documentation_update_criteria.md)
+の 3 観点（事実整合性・実装整合性・運用整合性）で厳格にレビューする。
 
 1. 現行実装と一致しているか
 2. CLI コマンド例が現行仕様と一致するか
@@ -102,6 +102,6 @@ suggestion: |
 
 | status | 条件 |
 |--------|------|
-| PASS | 修正不要で i-doc-final-check へ進める |
+| PASS | 修正不要で PR へ進める |
 | RETRY | docs 修正で解決可能 |
 | ABORT | docs-only の範囲を超える重大な問題 |
