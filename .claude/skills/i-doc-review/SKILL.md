@@ -102,6 +102,6 @@ suggestion: |
 
 | status | 条件 |
 |--------|------|
-| PASS | 修正不要で PR へ進める |
+| PASS | 修正不要で `i-doc-final-check` へ進める |
 | RETRY | docs 修正で解決可能 |
 | ABORT | docs-only の範囲を超える重大な問題 |

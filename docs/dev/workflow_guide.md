@@ -15,7 +15,7 @@
 
 ## feature-development
 
-コード変更を伴う Issue のワークフロー。設計 → 実装 → コードレビュー → ドキュメントチェック → 最終チェック → PR。
+コード変更を伴う Issue のワークフロー。設計 → 設計レビュー → 実装 → コードレビュー → 最終チェック → PR。
 
 詳細: [development_workflow.md](development_workflow.md)
 
