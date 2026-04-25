@@ -43,8 +43,14 @@ $ARGUMENTS = <issue-number>
 
 以下のドキュメントを Read ツールで読み込んでから作業を開始すること。
 
+### 共通（常に読み込む）
+
 1. **開発ワークフロー**: `docs/dev/development_workflow.md`
 2. **テスト規約**: `docs/dev/testing-convention.md`
+3. **コーディング規約**: `docs/reference/python/python-style.md`
+   - 必要に応じて `docs/reference/python/naming-conventions.md` /
+     `type-hints.md` / `docstring-style.md` / `error-handling.md` /
+     `logging.md` を追加読込
 
 ## 前提条件
 
@@ -83,6 +89,35 @@ $ARGUMENTS = <issue-number>
 
 [_shared/worktree-resolve.md](../_shared/worktree-resolve.md) の手順に従い、
 Worktree の絶対パスを取得すること。以降のステップではこのパスを使用する。
+
+### Step 1.5: type の判定と type 別ガイドの読み込み
+
+Issue ラベルから `type:*` ラベルを **配列として** 取得する:
+
+```bash
+gh issue view [issue-number] --json labels --jq '[.labels[].name] | map(select(startswith("type:")))'
+```
+
+**cardinality チェック（先に判定）**:
+
+- **配列要素数が 2 以上** → 複数 type ラベルが付与されている。設計フェーズに入らず処理を停止し、`/issue-review-ready` への差し戻しを案内する（ABORT）。type ラベルは Issue ごとに 1 つに限定する責務
+- **配列が空** → type ラベル未付与。設計フェーズに入らず処理を停止し、`/issue-review-ready` への差し戻しを案内する（ABORT）。前段レディネスで type ラベル付与を確保する責務
+- **配列要素数が 1** → その要素を採用し、以下の判定に進む
+
+**type 値による分岐**:
+
+1. **`type:docs`** → **本スキル対象外**。`/i-doc-update` を使用すること。処理を停止し、ユーザーに誘導する（ABORT）
+2. **canonical（`type:feature` / `type:bug` / `type:refactor`）** → 対応するファイルを Read
+3. **canonical 外（`type:test` / `type:chore` / `type:perf` / `type:security` など）** → `feat.md` を Read（フォールバック規則）
+
+| type | 読み込むファイル |
+|------|------------------|
+| `type:feature` | `.claude/skills/_shared/design-by-type/feat.md` |
+| `type:bug` | `.claude/skills/_shared/design-by-type/bug.md` |
+| `type:refactor` | `.claude/skills/_shared/design-by-type/refactor.md` |
+| canonical 外 | `.claude/skills/_shared/design-by-type/feat.md`（フォールバック） |
+
+読み込んだ type 別ガイドは、Step 2 の設計書セクション構成・必須項目・テスト戦略の判断基準として使う。
 
 ### Step 2: 設計書の作成
 
@@ -151,20 +186,23 @@ Issue: #[issue-number]
 
 #### Small テスト
 - (検証対象を列挙: 単体ロジック、バリデーション、マッピング等)
+- (不要な場合: 不要理由と `docs/dev/testing-convention.md` の 4 条件の充足根拠)
 
 #### Medium テスト
 - (検証対象を列挙: DB連携、内部サービス結合等)
+- (不要な場合: 不要理由と `docs/dev/testing-convention.md` の 4 条件の充足根拠)
 
 #### Large テスト
 - (検証対象を列挙: 実API疎通、E2Eデータフロー等)
+- (不要な場合: 不要理由と `docs/dev/testing-convention.md` の 4 条件の充足根拠)
 
 ### docs-only / metadata-only / packaging-only の場合
 
 #### 変更固有検証
-- (例: link check、隔離環境での `pip install -e .`、`importlib.metadata` 確認)
+- (例: `make verify-docs`、隔離環境での `uv pip install -e .`、`importlib.metadata` 確認)
 
 #### 恒久テストを追加しない理由
-- (テスト規約の 4 条件に沿って記載)
+- (`docs/dev/testing-convention.md` の 4 条件に沿って記載)
 
 ## 影響ドキュメント
 
@@ -175,6 +213,7 @@ Issue: #[issue-number]
 | docs/adr/ | あり/なし | (新しい技術選定がある場合) |
 | docs/ARCHITECTURE.md | あり/なし | (アーキテクチャ変更がある場合) |
 | docs/dev/ | あり/なし | (ワークフロー・開発手順変更がある場合) |
+| docs/reference/ | あり/なし | (API仕様・規約変更がある場合) |
 | docs/cli-guides/ | あり/なし | (CLI仕様変更がある場合) |
 | CLAUDE.md | あり/なし | (規約変更がある場合) |
 
@@ -191,7 +230,7 @@ Issue: #[issue-number]
 
 ### Step 2.5: 完了条件の段階確認
 
-設計書の各セクションが記載されているか段階的に確認する:
+設計書の品質と Issue 完了条件の充足を段階的に確認する。
 
 1. **必須セクションの存在確認**:
    - [ ] 概要
@@ -208,7 +247,12 @@ Issue: #[issue-number]
    - Primary Sources に根拠が記載されているか
    - 影響ドキュメントが網羅的か
 
-不足がある場合は設計書を補完してからコミットする。
+3. **Issue 完了条件の段階確認**:
+   Issue 本文に `## 完了条件` セクションがある場合、設計段階で確認可能な条件を確認する。
+   - 設計書に必要なセクションが完了条件の要求を満たしているか
+   - 技術制約や前提条件が設計書に反映されているか
+
+不足がある場合は設計書を補完してからコミットする。この段階で確認した条件は、Step 4 の Issue コメントに含めて後段への証跡とする。
 
 ### Step 3: コミット
 
@@ -240,6 +284,14 @@ gh issue comment [issue-number] --body-file - <<'EOF'
 
 - (主要な検証ポイント)
 
+### 完了条件の段階確認
+
+この段階で確認可能な完了条件:
+
+- [ ] (確認した条件1): ✅ 設計書の○○セクションで対応
+- [ ] (確認した条件2): ✅ 設計書の△△セクションで対応
+- (未確認の条件があれば): 実装段階以降で確認予定
+
 ### 次のステップ
 
 `/issue-review-design [issue-number]` でレビューをお願いします。
@@ -268,6 +320,7 @@ EOF
 
 実行完了後、以下の形式で verdict を出力すること:
 
+```
 ---VERDICT---
 status: PASS
 reason: |
@@ -276,6 +329,9 @@ evidence: |
   draft/design/issue-XX-*.md を作成
 suggestion: |
 ---END_VERDICT---
+```
+
+**重要**: verdict は **stdout にそのまま出力** すること。Issue コメントや Issue 本文更新とは別に、最終的な verdict ブロックは stdout に残す。
 
 ### status の選択基準
 
