@@ -25,7 +25,7 @@ steps:
   - id: review-doc
     skill: i-doc-review
     agent: codex
-    model: gpt-5.4
+    model: gpt-5.5
     effort: medium
     on:
       PASS: final-check

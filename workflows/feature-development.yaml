@@ -29,7 +29,7 @@ steps:
   - id: review-design
     skill: issue-review-design
     agent: codex
-    model: gpt-5.4
+    model: gpt-5.5
     effort: medium
     on:
       PASS: implement
@@ -68,7 +68,7 @@ steps:
   - id: review-code
     skill: issue-review-code
     agent: codex
-    model: gpt-5.4
+    model: gpt-5.5
     effort: medium
     on:
       PASS: final-check
