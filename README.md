@@ -32,10 +32,11 @@ source .venv/bin/activate
 
 ## 開発ワークフロー
 
-Issue駆動のTDD開発フロー:
+Issue 駆動の TDD 開発フロー。`/issue-review-ready` を着手前ゲートとして全 workflow 共通で適用し、PR 作成後は `/pr-verify` / `/pr-fix` のレビュー収束サイクルを経て `/issue-close` に到達する:
 
 ```
-/issue-create → /issue-start → /issue-design → /issue-implement → /issue-pr → /issue-close
+/issue-create → /issue-review-ready → /issue-start → /issue-design → /issue-implement
+              → /issue-pr → /pr-verify → /pr-fix → /issue-close
 ```
 
 ワークフローガイド: [docs/dev/workflow_guide.md](docs/dev/workflow_guide.md)
@@ -155,10 +156,16 @@ make verify-packaging                 # packaging/metadata: 隔離環境で uv i
 |-------------|------|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | V7 アーキテクチャ詳細 |
 | [docs/adr/](docs/adr/) | アーキテクチャ決定記録 |
-| [docs/dev/workflow_guide.md](docs/dev/workflow_guide.md) | ワークフローガイド |
+| [docs/dev/workflow_overview.md](docs/dev/workflow_overview.md) | ワークフロー選択のエントリポイント |
+| [docs/dev/workflow_guide.md](docs/dev/workflow_guide.md) | ワークフロー選択基準 |
+| [docs/dev/workflow_completion_criteria.md](docs/dev/workflow_completion_criteria.md) | フェーズ別完了条件チェックリスト |
+| [docs/dev/documentation_update_criteria.md](docs/dev/documentation_update_criteria.md) | ドキュメント更新要否の判断フレームワーク |
+| [docs/dev/shared_skill_rules.md](docs/dev/shared_skill_rules.md) | スキル横断の責務境界ルール |
 | [docs/dev/testing-convention.md](docs/dev/testing-convention.md) | テスト規約 (S/M/L) |
 | [docs/dev/workflow-authoring.md](docs/dev/workflow-authoring.md) | ワークフロー YAML 定義 |
 | [docs/dev/skill-authoring.md](docs/dev/skill-authoring.md) | スキル作成ガイド |
+| [docs/concepts/ai-driven-strategy.md](docs/concepts/ai-driven-strategy.md) | 95% AI / 5% 人間の開発モデル |
+| [docs/concepts/ai-docs-management.md](docs/concepts/ai-docs-management.md) | Docs-as-Code 運用ルール |
 | [docs/cli-guides/](docs/cli-guides/) | CLI ツールガイド (Claude/Codex/Gemini) |
 
 ## `legacy/` ディレクトリ

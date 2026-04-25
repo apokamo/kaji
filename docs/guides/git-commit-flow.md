@@ -28,7 +28,7 @@ git absorb + `--no-ff` マージによるコミット履歴管理戦略。
 
 ## 推奨ツール
 
-[git-absorb](https://github.com/tummychow/git-absorb) のインストールを推奨する（未インストールの場合、`/issue-pr` スキルでは absorb ステップがスキップされる）:
+[git-absorb](https://github.com/tummychow/git-absorb) のインストールを推奨する（未インストールの場合、`/issue-pr` および `/pr-fix` スキルでは absorb ステップがスキップされる）:
 
 ```bash
 # macOS
@@ -91,6 +91,28 @@ gh pr merge --merge --delete-branch
 ```
 
 `--merge` オプションにより merge commit が作成され、`--no-ff` と同等のブランチ構造が維持される。
+
+#### PR レビュー指摘対応（pr-fix の流れ）
+
+PR 作成後にレビュー指摘が付いた場合は、`/pr-fix` スキルが次の流れを担う:
+
+```bash
+# 1. 指摘に対応してファイルを修正（コミットしない）
+vim src/auth.py
+
+# 2. 修正をステージのみ
+git add src/auth.py
+
+# 3. 適切な過去コミットへ自動吸収 + リベース
+git absorb --and-rebase
+
+# 4. リモートブランチに force push（履歴改変したため）
+git push --force-with-lease
+```
+
+`--force-with-lease` は **無印の `--force` とは異なり**、ローカルが認識している remote tip と実際の remote tip が一致するときだけ push を許可する。レビュアーが追加コミットを push した状態で誤って `--force` すると相手の作業が消えるが、`--force-with-lease` ならその状況を検出して失敗する。共有ブランチでの履歴改変を伴う運用ではデフォルト選択。
+
+吸収後は `/pr-verify` でレビュー指摘の収束を確認する。`pr-verify` は新規指摘を行わない契約のため、サイクルは有限で閉じる。
 
 #### Git 一般論（ローカルマージ）
 
