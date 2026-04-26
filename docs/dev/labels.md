@@ -8,7 +8,9 @@ kaji の GitHub Issue / PR ラベルは [`.github/labels.yml`](../../.github/lab
 
 ### type:* (11) — Conventional Commits 準拠
 
-Issue / PR の主分類。原則 1 つだが、`docs+test` のような重複は許可（後述）。
+Issue / PR の主分類。**1 Issue / PR に 1 ラベルのみ（single-select）**。dev workflow / `issue-create` / `issue-review-ready` / `issue-review-code` の各スキルが single-select を前提に分岐するため、複数付与は禁止する。
+
+**`type:release` / `type:build` / `type:ci` の運用上の扱い**: ラベルとしては定義するが、`/issue-create` の type 引数や [development_workflow.md](./development_workflow.md) のスキル分岐表には現時点で含まれていない。これらの type に該当する Issue を起票する場合は、`issue-create` では canonical 外（feat 相当のフォールバック）として `type:chore` 等で起票し、起票後に手動で `type:release` / `type:build` / `type:ci` へ付け替える。スキル側への正式組み込みは別 Issue で扱う。
 
 | ラベル | Conventional Commits | 用途 |
 |--------|----------------------|------|
@@ -111,10 +113,12 @@ updates:
 
 ## 複数 `type:*` 付与ポリシー
 
-許可する。ただし主たる 1 つを推奨。例:
+**禁止**（single-select）。1 Issue / PR には 1 つの `type:*` のみを付与する。dev workflow と各スキル（`issue-create` / `issue-review-ready` / `issue-review-code`）は single-select 前提で分岐するため、複数付与はスキル動作の前提を崩す。
 
-- `docs+test` 同時更新 → 主が docs なら `type:docs`、テストの整備が主目的なら `type:test`
-- `feature` で `breaking-change` を伴う場合 → `type:feature` + `breaking-change`（meta の併用）
+迷う場合の判断指針:
+
+- `docs+test` 同時更新 → 主目的で 1 つ選ぶ。docs 中心なら `type:docs`、テストの整備が主目的なら `type:test`
+- `feature` で破壊的変更を伴う場合 → `type:feature` を選び、直交 meta の `breaking-change` を併用する（`type:*` 同士の併用ではない）
 
 ## `type:security` の embargo 運用
 

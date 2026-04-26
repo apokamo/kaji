@@ -114,17 +114,29 @@ jobs:
           "
 
       - name: Backup Existing Labels
+        id: backup
         if: github.event.inputs.dry_run != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p backup
+          backup_file="backup/labels-backup-$(date +%Y%m%d-%H%M%S).json"
           gh label list \
             --repo ${{ github.repository }} \
             --limit 1000 \
             --json name,description,color \
-            > backup/labels-backup-$(date +%Y%m%d-%H%M%S).json
-          echo "📦 Backed up existing labels to backup/"
+            > "$backup_file"
+          echo "backup_file=$backup_file" >> "$GITHUB_OUTPUT"
+          echo "📦 Backed up existing labels to $backup_file"
+
+      - name: Upload Backup Artifact
+        if: github.event.inputs.dry_run != 'true' && steps.backup.outputs.backup_file != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: labels-backup-${{ github.run_id }}
+          path: backup/
+          retention-days: 90
+          if-no-files-found: error
 
       - name: Sync Labels
         env:
