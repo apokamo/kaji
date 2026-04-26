@@ -60,6 +60,11 @@ def _register_run(subparsers: argparse._SubParsersAction[argparse.ArgumentParser
     p.add_argument("--from", dest="from_step", help="Resume from a specific step")
     p.add_argument("--step", dest="single_step", help="Run a single step only")
     p.add_argument(
+        "--before",
+        dest="before_step",
+        help="Stop just before dispatching <step> (exclusive barrier).",
+    )
+    p.add_argument(
         "--workdir",
         type=Path,
         default=Path.cwd(),
@@ -176,6 +181,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         return EXIT_DEFINITION_ERROR
 
+    # Mutual exclusion: --step and --before
+    if args.single_step and args.before_step:
+        print(
+            "Error: --step and --before are mutually exclusive",
+            file=sys.stderr,
+        )
+        return EXIT_DEFINITION_ERROR
+
     # Config discovery: --workdir overrides the start directory
     start_dir = args.workdir.resolve()
     if not start_dir.is_dir():
@@ -221,6 +234,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             config=config,
             from_step=args.from_step,
             single_step=args.single_step,
+            before_step=args.before_step,
             verbose=not args.quiet,
         )
         state = runner.run()

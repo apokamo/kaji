@@ -223,6 +223,12 @@ kaji run workflows/feature-development.yaml 57 --from fix-code
 # 単発実行（1ステップのみ実行して終了）
 kaji run workflows/feature-development.yaml 57 --step review-code
 
+# 指定ステップを dispatch する直前で停止（exclusive barrier。指定ステップは実行されない）
+kaji run workflows/feature-development.yaml 57 --before implement
+
+# `--from` と組み合わせ: 修正ループだけ回す（A から B の手前まで）
+kaji run workflows/feature-development.yaml 57 --from fix-design --before implement
+
 # config 探索の起点ディレクトリを指定（YAML workdir とは別物）
 kaji run workflows/feature-development.yaml 57 --workdir ../kaji-feat-57
 
@@ -230,7 +236,25 @@ kaji run workflows/feature-development.yaml 57 --workdir ../kaji-feat-57
 kaji run workflows/feature-development.yaml 57 --quiet
 ```
 
-**注意**: `--from` と `--step` は排他オプションです（同時指定不可）。
+**注意**: `--from` と `--step` は排他オプションです（同時指定不可）。`--step` と `--before` も排他です。
+
+### `--from` / `--step` / `--before` の使い分け
+
+| フラグ | 意味 | 指定 step は実行される？ | ループ動作 |
+|--------|------|--------------------------|-----------|
+| `--from <step>` | 開始点を指定（指定 step から実行） | ✅ 実行される | 通常通り |
+| `--step <step>` | 単発実行（1 step だけ実行して終了） | ✅ 実行される | しない |
+| `--before <step>` | 停止点を指定（dispatch 直前で停止） | ❌ 実行されない | barrier に到達するまで通常通り |
+
+**`--before` の意味論**:
+
+- 「次に dispatch しようとしている step ID」が `--before` 値と一致した瞬間に停止する exclusive barrier。
+- ループ（`verify ⇄ fix` 等）は PASS が出るまで何周でも回り、PASS 後の遷移先が barrier 値と一致したら停止する。
+- 分岐により barrier に到達せず workflow が自然完了した場合は WARN ログ（`stop point '<X>' was never reached; workflow completed naturally`）を stderr に出力し、終了コード 0 で終わる。
+- `--before end` は許容（デフォルト動作と等価）。
+- workflow に存在しない step ID を指定すると起動時に定義エラー（exit 2）。
+
+**`resume:` と組み合わせる際の注意**: `resume:` を持つ step を barrier の直後に配置している workflow で、`--before` で止めた後に `--from` で再開すると、前段 agent の context が `SessionState` 経由で引き継がれるため、barrier を挟むタイミング次第で context 整合が崩れるケースがあります。barrier は「人間レビュー用の停止点」として、context 継続を要さない位置に置いてください。
 
 ### バリデーション
 

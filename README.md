@@ -126,6 +126,12 @@ kaji run workflows/minimal-code-review.yaml 57 --from fix-code
 
 # 単一ステップ実行
 kaji run workflows/minimal-code-review.yaml 57 --step review-code
+
+# 指定ステップの直前で停止（exclusive barrier。指定ステップは実行されない）
+kaji run workflows/feature-development.yaml 57 --before implement
+
+# `--from` と組み合わせ: A から B の手前まで
+kaji run workflows/feature-development.yaml 57 --from fix-design --before implement
 ```
 
 詳細:
