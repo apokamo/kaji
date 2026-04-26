@@ -463,3 +463,47 @@ class TestRunnerBarrier:
             runner = _make_runner(tmp_path, workflow, before_step="nonexistent")
             with pytest.raises(WorkflowValidationError):
                 runner.run()
+
+    def test_pre_dispatch_barrier_clears_stale_abort_verdict(self, tmp_path: Path) -> None:
+        """Pre-dispatch barrier に当たる場合、前 run の stale ABORT verdict は抑止される。"""
+        from kaji_harness.state import SessionState
+
+        workflow = _three_step_linear_workflow()
+        # 既存セッション state に ABORT verdict を仕込む（前回 run の遺物を再現）
+        artifacts_dir = tmp_path / ".kaji-artifacts"
+        prior = SessionState.load_or_create(99, artifacts_dir)
+        prior.record_step(
+            "A",
+            Verdict(status="ABORT", reason="prior failure", evidence="ev", suggestion="sg"),
+        )
+        assert prior.last_transition_verdict is not None
+
+        with patch("kaji_harness.runner.validate_skill_exists"):
+            runner = _make_runner(tmp_path, workflow, from_step="B", before_step="B")
+            state = runner.run()
+
+        # pre-dispatch barrier 経由で stop した場合、stale verdict はクリアされる
+        assert state.last_transition_verdict is None
+        # ディスク永続化も確認
+        reloaded = SessionState.load_or_create(99, artifacts_dir)
+        assert reloaded.last_transition_verdict is None
+
+    def test_barrier_missed_warning_suppressed_on_abort(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """workflow が ABORT で終了した場合、barrier 未到達 WARN は出ない。"""
+        # A ABORT → end（C には到達しない）
+        workflow = _three_step_linear_workflow()
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            return _make_cli_result("ABORT")
+
+        with (
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+        ):
+            runner = _make_runner(tmp_path, workflow, before_step="C")
+            runner.run()
+
+        captured = capsys.readouterr()
+        assert "stop point 'C' was never reached" not in captured.err

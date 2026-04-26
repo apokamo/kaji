@@ -100,6 +100,7 @@ class WorkflowRunner:
         end_error: str | None = None
         last_verdict: Verdict | None = None
         barrier_hit = False
+        step_dispatched = False
 
         # 5. メインループ
         try:
@@ -194,6 +195,7 @@ class WorkflowRunner:
                 logger.log_step_end(current_step.id, verdict, duration_ms, cost)
                 state.record_step(current_step.id, verdict)
                 last_verdict = verdict
+                step_dispatched = True
 
                 if cost and cost.usd:
                     total_cost += cost.usd
@@ -223,8 +225,20 @@ class WorkflowRunner:
 
                 current_step = self.workflow.find_step(next_step_id)
 
-            # --before 未到達検知（"end" は WARN 対象外）
-            if self.before_step and not barrier_hit and self.before_step != "end":
+            # pre-dispatch barrier で停止した場合、前回 run の stale verdict を抑止する
+            # （cmd_run が誤って ABORT 報告するのを防ぐ）
+            if barrier_hit and not step_dispatched and state.last_transition_verdict is not None:
+                state.last_transition_verdict = None
+                state._persist()
+
+            # --before 未到達検知（"end" は WARN 対象外、ABORT 終了も自然完了ではないので対象外）
+            naturally_completed = last_verdict is None or last_verdict.status != "ABORT"
+            if (
+                self.before_step
+                and not barrier_hit
+                and self.before_step != "end"
+                and naturally_completed
+            ):
                 logger.log_barrier_missed(self.before_step)
                 print(
                     f"WARN: stop point '{self.before_step}' was never reached; "
