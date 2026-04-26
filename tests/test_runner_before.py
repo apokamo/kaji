@@ -415,6 +415,46 @@ class TestRunnerBarrier:
 
         assert called == ["B"]
 
+    def test_before_start_step_stops_before_dispatch(self, tmp_path: Path) -> None:
+        """--before で start step を指定 → そのステップは実行されず即停止。"""
+        workflow = _three_step_linear_workflow()
+        called: list[str] = []
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            step = kwargs["step"]
+            called.append(step.id)  # type: ignore[union-attr]
+            return _make_cli_result("PASS")
+
+        with (
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+        ):
+            runner = _make_runner(tmp_path, workflow, before_step="A")
+            state = runner.run()
+
+        assert called == []
+        assert len(state.step_history) == 0
+
+    def test_before_equals_from_step_stops_before_dispatch(self, tmp_path: Path) -> None:
+        """--from B --before B → B は実行されず即停止（barrier が --from の開始 step も止める）。"""
+        workflow = _three_step_linear_workflow()
+        called: list[str] = []
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            step = kwargs["step"]
+            called.append(step.id)  # type: ignore[union-attr]
+            return _make_cli_result("PASS")
+
+        with (
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+        ):
+            runner = _make_runner(tmp_path, workflow, from_step="B", before_step="B")
+            state = runner.run()
+
+        assert called == []
+        assert len(state.step_history) == 0
+
     def test_before_nonexistent_raises_validation_error(self, tmp_path: Path) -> None:
         """--before with unknown step → WorkflowValidationError at startup."""
         workflow = _three_step_linear_workflow()

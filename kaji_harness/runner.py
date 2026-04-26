@@ -104,6 +104,12 @@ class WorkflowRunner:
         # 5. メインループ
         try:
             while current_step and current_step.id != "end":
+                # --before barrier: dispatch 直前で停止（開始 step / --from 開始 step も含む）
+                if self.before_step and current_step.id == self.before_step:
+                    logger.log_barrier_hit(self.before_step)
+                    barrier_hit = True
+                    break
+
                 start_time = time.monotonic()
                 cycle = self.workflow.find_cycle_for_step(current_step.id)
 
