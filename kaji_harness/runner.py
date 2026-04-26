@@ -6,6 +6,7 @@ manages state transitions, and handles cycle limits.
 
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -39,6 +40,7 @@ class WorkflowRunner:
     config: KajiConfig
     from_step: str | None = None
     single_step: str | None = None
+    before_step: str | None = None
     verbose: bool = True
 
     def run(self) -> SessionState:
@@ -60,6 +62,11 @@ class WorkflowRunner:
 
         # 1. ワークフロー定義のバリデーション
         validate_workflow(self.workflow)
+
+        # 1.5. --before 指定 step の存在検証（"end" は許容）
+        if self.before_step and self.before_step != "end":
+            if not self.workflow.find_step(self.before_step):
+                raise WorkflowValidationError(f"Step '{self.before_step}' not found (--before)")
 
         # 2. issue-scoped な状態をロード
         state = SessionState.load_or_create(self.issue_number, self.artifacts_dir)
@@ -92,6 +99,7 @@ class WorkflowRunner:
         end_status = "COMPLETE"
         end_error: str | None = None
         last_verdict: Verdict | None = None
+        barrier_hit = False
 
         # 5. メインループ
         try:
@@ -200,7 +208,23 @@ class WorkflowRunner:
                 next_step_id = current_step.on.get(verdict.status)
                 if next_step_id is None:
                     raise InvalidTransition(current_step.id, verdict.status)
+
+                # --before barrier: dispatch 直前で停止
+                if self.before_step and next_step_id == self.before_step:
+                    logger.log_barrier_hit(self.before_step)
+                    barrier_hit = True
+                    break
+
                 current_step = self.workflow.find_step(next_step_id)
+
+            # --before 未到達検知（"end" は WARN 対象外）
+            if self.before_step and not barrier_hit and self.before_step != "end":
+                logger.log_barrier_missed(self.before_step)
+                print(
+                    f"WARN: stop point '{self.before_step}' was never reached; "
+                    "workflow completed naturally",
+                    file=sys.stderr,
+                )
 
             # 正常終了時のステータス判定
             if last_verdict and last_verdict.status == "ABORT":

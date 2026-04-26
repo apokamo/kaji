@@ -81,6 +81,14 @@ class RunLogger:
             max_iterations=max_iter,
         )
 
+    def log_barrier_hit(self, before_step: str) -> None:
+        """`--before` barrier ヒット（指定 step を dispatch する直前で停止）を記録。"""
+        self._write("barrier_hit", before_step=before_step)
+
+    def log_barrier_missed(self, before_step: str) -> None:
+        """`--before` barrier 未到達（workflow が自然完了）を記録。"""
+        self._write("barrier_missed", before_step=before_step)
+
     def log_workflow_end(
         self,
         status: str,
