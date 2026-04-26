@@ -1,0 +1,263 @@
+# ============================================================
+# GitHub Issue ラベル同期ワークフロー
+#
+# 目的: .github/labels.yml に定義されたラベルを GitHub repo と同期する
+# 設計: docs/rfc/github-labels-standardization.md / docs/dev/labels.md
+#
+# 機能:
+# - ラベルの自動作成・更新（追加と更新のみ。削除は手作業）
+# - 既存ラベルのバックアップ（dry-run 以外）
+# - ドライラン（テスト実行）モード
+#
+# 注: 移植元 (kamo2) の `validate-label-usage` ジョブは kaji では PR テンプレート
+#     で誘導するため除外。Issue #13 ハードコード通知も kaji 側非該当のため除外。
+# ============================================================
+
+name: Sync GitHub Labels
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (no changes will be made)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/labels.yml'
+
+  schedule:
+    # UTC 0:00 = JST 9:00 月曜（drift 検知）
+    - cron: '0 0 * * 1'
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  sync-labels:
+    name: Sync Labels
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install Dependencies
+        run: |
+          npm install js-yaml @octokit/rest
+
+      - name: Validate Label Configuration
+        run: |
+          node -e "
+          const yaml = require('js-yaml');
+          const fs = require('fs');
+
+          try {
+            const config = yaml.load(fs.readFileSync('.github/labels.yml', 'utf8'));
+
+            if (!config.labels || !Array.isArray(config.labels)) {
+              throw new Error('labels must be an array');
+            }
+
+            const names = new Set();
+
+            config.labels.forEach((label, index) => {
+              if (!label.name) {
+                throw new Error(\`Label at index \${index} missing name\`);
+              }
+              if (!label.color) {
+                throw new Error(\`Label '\${label.name}' missing color\`);
+              }
+              if (!label.description) {
+                throw new Error(\`Label '\${label.name}' missing description\`);
+              }
+
+              if (names.has(label.name)) {
+                throw new Error(\`Duplicate label name: '\${label.name}'\`);
+              }
+              names.add(label.name);
+
+              if (!/^[0-9a-f]{6}$/i.test(label.color)) {
+                throw new Error(\`Invalid color for label '\${label.name}': \${label.color}\`);
+              }
+            });
+
+            console.log(\`✅ Validated \${config.labels.length} labels\`);
+
+            const categories = {};
+            config.labels.forEach(label => {
+              const category = label.name.includes(':') ? label.name.split(':')[0] : 'meta';
+              categories[category] = (categories[category] || 0) + 1;
+            });
+
+            Object.entries(categories).forEach(([cat, count]) => {
+              console.log(\`  - \${cat}: \${count} labels\`);
+            });
+
+          } catch (error) {
+            console.error('❌ Validation failed:', error.message);
+            process.exit(1);
+          }
+          "
+
+      - name: Backup Existing Labels
+        id: backup
+        if: github.event.inputs.dry_run != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p backup
+          backup_file="backup/labels-backup-$(date +%Y%m%d-%H%M%S).json"
+          gh label list \
+            --repo ${{ github.repository }} \
+            --limit 1000 \
+            --json name,description,color \
+            > "$backup_file"
+          echo "backup_file=$backup_file" >> "$GITHUB_OUTPUT"
+          echo "📦 Backed up existing labels to $backup_file"
+
+      - name: Upload Backup Artifact
+        if: github.event.inputs.dry_run != 'true' && steps.backup.outputs.backup_file != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: labels-backup-${{ github.run_id }}
+          path: backup/
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Sync Labels
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          node -e "
+          const yaml = require('js-yaml');
+          const fs = require('fs');
+          const { Octokit } = require('@octokit/rest');
+
+          const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+          const [owner, repo] = '${{ github.repository }}'.split('/');
+          const dryRun = process.env.DRY_RUN === 'true';
+
+          async function syncLabels() {
+            try {
+              const config = yaml.load(fs.readFileSync('.github/labels.yml', 'utf8'));
+
+              const existingLabels = await octokit.paginate(
+                octokit.issues.listLabelsForRepo,
+                { owner, repo, per_page: 100 }
+              );
+
+              const existingMap = new Map(
+                existingLabels.map(label => [label.name, label])
+              );
+
+              console.log(\`📋 Found \${existingLabels.length} existing labels\`);
+              console.log(\`📝 Processing \${config.labels.length} labels from configuration\`);
+
+              if (dryRun) {
+                console.log('🔍 DRY RUN MODE - No changes will be made');
+              }
+
+              let created = 0;
+              let updated = 0;
+              let skipped = 0;
+
+              for (const label of config.labels) {
+                const existing = existingMap.get(label.name);
+
+                if (existing) {
+                  if (existing.color !== label.color ||
+                      existing.description !== label.description) {
+
+                    if (!dryRun) {
+                      await octokit.issues.updateLabel({
+                        owner,
+                        repo,
+                        name: label.name,
+                        color: label.color,
+                        description: label.description
+                      });
+                    }
+                    console.log(\`📝 Updated: \${label.name}\`);
+                    updated++;
+                  } else {
+                    console.log(\`✓ Unchanged: \${label.name}\`);
+                    skipped++;
+                  }
+
+                  existingMap.delete(label.name);
+
+                } else {
+                  if (!dryRun) {
+                    await octokit.issues.createLabel({
+                      owner,
+                      repo,
+                      name: label.name,
+                      color: label.color,
+                      description: label.description
+                    });
+                  }
+                  console.log(\`✨ Created: \${label.name}\`);
+                  created++;
+                }
+              }
+
+              if (existingMap.size > 0) {
+                console.log(\`\\n⚠️  Found \${existingMap.size} labels not in configuration (削除候補。手作業で gh label delete を実施):\`);
+                for (const [name] of existingMap) {
+                  console.log(\`  - \${name}\`);
+                }
+              }
+
+              console.log('\\n📊 Summary:');
+              console.log(\`  ✨ Created: \${created}\`);
+              console.log(\`  📝 Updated: \${updated}\`);
+              console.log(\`  ✓ Unchanged: \${skipped}\`);
+
+              if (dryRun) {
+                console.log('\\n🔍 This was a DRY RUN - no actual changes were made');
+              }
+
+            } catch (error) {
+              console.error('❌ Error syncing labels:', error.message);
+              process.exit(1);
+            }
+          }
+
+          syncLabels();
+          "
+
+      - name: Create Summary
+        if: always()
+        run: |
+          echo "## 🏷️ Label Sync Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ github.event.inputs.dry_run }}" == "true" ]; then
+            echo "🔍 **Mode**: Dry Run (no changes made)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ **Mode**: Live Sync" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📅 **Date**: $(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "🏗️ **Triggered by**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "👤 **Actor**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          if [ -d backup ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 📦 Backup" >> $GITHUB_STEP_SUMMARY
+            echo "Existing labels backed up to:" >> $GITHUB_STEP_SUMMARY
+            ls -la backup/ | tail -n +2 | awk '{print "- `" $9 "`"}' >> $GITHUB_STEP_SUMMARY
+          fi

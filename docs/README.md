@@ -14,6 +14,7 @@ kaji のドキュメント一覧。[Diataxis フレームワーク](https://diat
 | [テスト規約](dev/testing-convention.md) | S/M/L サイズ別テスト戦略と Given-When-Then 原則 |
 | [ドキュメント更新基準](dev/documentation_update_criteria.md) | コード変更ごとに docs 更新要否を判断するフレームワーク |
 | [スキル横断ルール](dev/shared_skill_rules.md) | review / fix / verify サイクルの責務分離と新規指摘禁止ルール |
+| [GitHub ラベル運用](dev/labels.md) | `.github/labels.yml` 管理・追加削除手順・bot 所有ラベルとの境界 |
 | [ワークフロー作成](dev/workflow-authoring.md) | workflows/*.yaml の step / cycle / verdict 遷移の書き方 |
 | [スキル作成](dev/skill-authoring.md) | `.claude/skills/` 配下スキルファイルの構造と verdict 規約 |
 
