@@ -1,0 +1,93 @@
+# GitHub Issue / PR Labels Configuration for kaji
+# 設計: docs/rfc/github-labels-standardization.md（実装済み）
+# 配色: Catppuccin Mocha パレット（https://catppuccin.com/palette）
+# 同期: .github/workflows/labels-sync.yml が main への push / 手動 / 週次 cron で実行
+#
+# 管理対象は type:* (11) + meta (8) = 合計 19 ラベルのみ。
+# release-please が自動生成する `autorelease:*` / `release-please:*` は bot 所有で
+# 管理対象外（運用ガイド: docs/dev/labels.md を参照）。
+
+labels:
+  # ============================================================
+  # type:* (11) — Conventional Commits 準拠の Issue/PR 分類
+  # ============================================================
+
+  - name: "type:feature"
+    color: "a6e3a1"
+    description: "新機能の追加"
+
+  - name: "type:bug"
+    color: "f38ba8"
+    description: "不具合・回帰の修正"
+
+  - name: "type:refactor"
+    color: "89b4fa"
+    description: "内部実装の改善（仕様変更なし）"
+
+  - name: "type:docs"
+    color: "b4befe"
+    description: "ドキュメントの追加・更新"
+
+  - name: "type:test"
+    color: "94e2d5"
+    description: "テストの追加・改善"
+
+  - name: "type:chore"
+    color: "fab387"
+    description: "雑務・依存の掃除など"
+
+  - name: "type:perf"
+    color: "f9e2af"
+    description: "パフォーマンス改善"
+
+  - name: "type:security"
+    color: "eba0ac"
+    description: "脆弱性対応・セキュリティ強化（公開済 CVE のみ。embargo 中は付与しない）"
+
+  - name: "type:release"
+    color: "cba6f7"
+    description: "リリース作業（changelog 微修正・リリーススクリプト等。release-please 自動 PR には付けない）"
+
+  - name: "type:build"
+    color: "f5e0dc"
+    description: "ビルドシステム・パッケージング（pyproject.toml ビルド設定、uv.lock 等）"
+
+  - name: "type:ci"
+    color: "74c7ec"
+    description: "CI/CD・GitHub Actions 関連"
+
+  # ============================================================
+  # meta (8) — type:* と直交する補助ラベル
+  # ============================================================
+
+  - name: "breaking-change"
+    color: "f2cdcd"
+    description: "破壊的変更を含む（SemVer major bump 対象）"
+
+  - name: "dependencies"
+    color: "9399b2"
+    description: "依存関係の更新（Dependabot 互換）"
+
+  - name: "good first issue"
+    color: "89dceb"
+    description: "初学者向けの小さなタスク"
+
+  - name: "help wanted"
+    color: "f5c2e7"
+    description: "支援歓迎（外部コントリビューション可）"
+
+  - name: "question"
+    color: "cdd6f4"
+    description: "質問・サポート依頼"
+
+  - name: "duplicate"
+    color: "6c7086"
+    description: "重複 Issue / PR"
+
+  - name: "invalid"
+    color: "585b70"
+    description: "無効な Issue / PR"
+
+  - name: "wontfix"
+    color: "45475a"
+    description: "対応しない"

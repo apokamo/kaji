@@ -104,6 +104,8 @@ kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
 | Testing Size Guide | docs/reference/testing-size-guide.md |
 | Doc Update Criteria | docs/dev/documentation_update_criteria.md |
 | Shared Skill Rules | docs/dev/shared_skill_rules.md |
+| GitHub Labels | docs/dev/labels.md |
+| Label Definitions (declarative) | .github/labels.yml |
 | Workflow Authoring | docs/dev/workflow-authoring.md |
 | Skill Authoring | docs/dev/skill-authoring.md |
 | AI Strategy | docs/concepts/ai-driven-strategy.md |
