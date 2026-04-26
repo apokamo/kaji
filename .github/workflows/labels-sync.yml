@@ -156,11 +156,10 @@ jobs:
             try {
               const config = yaml.load(fs.readFileSync('.github/labels.yml', 'utf8'));
 
-              const { data: existingLabels } = await octokit.issues.listLabelsForRepo({
-                owner,
-                repo,
-                per_page: 100
-              });
+              const existingLabels = await octokit.paginate(
+                octokit.issues.listLabelsForRepo,
+                { owner, repo, per_page: 100 }
+              );
 
               const existingMap = new Map(
                 existingLabels.map(label => [label.name, label])
