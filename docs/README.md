@@ -44,6 +44,13 @@ kaji のドキュメント一覧。[Diataxis フレームワーク](https://diat
 | [エラーハンドリング](reference/python/error-handling.md) | HarnessError 階層と例外処理パターン |
 | [ロギング](reference/python/logging.md) | RunLogger JSONL 契約とイベント仕様 |
 
+## Operations（運用）
+
+| ドキュメント | 概要 |
+|-------------|------|
+| [Release-Please Admin 設定](operations/release/admin-setup.md) | GitHub App / secret / Actions permissions 初期設定と dry-run 手順 |
+| [Release Runbook](operations/release/runbook.md) | 通常リリース運用（Release PR の merge）と緊急時 fallback |
+
 ## Explanation（コンセプト）
 
 | ドキュメント | 概要 |
