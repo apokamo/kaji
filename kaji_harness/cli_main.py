@@ -11,6 +11,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from .config import KajiConfig
+from .epic import EpicValidationError, load_epic
 from .errors import (
     ConfigLoadError,
     ConfigNotFoundError,
@@ -49,6 +50,7 @@ def create_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     _register_run(subparsers)
     _register_validate(subparsers)
+    _register_validate_epic(subparsers)
     return parser
 
 
@@ -85,6 +87,41 @@ def _register_validate(
         default=None,
         help="Project root for skill lookup (default: auto-detect from config or pyproject.toml)",
     )
+
+
+def _register_validate_epic(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    """Register the `validate-epic` subcommand."""
+    p = subparsers.add_parser("validate-epic", help="Validate EPIC YAML files")
+    p.add_argument("files", nargs="+", type=Path, help="EPIC YAML file(s) to validate")
+
+
+def cmd_validate_epic(args: argparse.Namespace) -> int:
+    """Execute the `validate-epic` subcommand."""
+    failed = 0
+    total = len(args.files)
+    for path in args.files:
+        if not path.exists():
+            _print_error(path, ["File not found"])
+            failed += 1
+            continue
+        try:
+            load_epic(path)
+            _print_success(path)
+        except EpicValidationError as e:
+            _print_error(path, e.errors)
+            failed += 1
+        except OSError as e:
+            _print_error(path, [str(e)])
+            failed += 1
+
+    if failed > 0 and total > 1:
+        print(
+            f"Validation failed: {failed} of {total} files had errors.",
+            file=sys.stderr,
+        )
+    return EXIT_VALIDATION_ERROR if failed > 0 else EXIT_OK
 
 
 def _resolve_project_root_for_validate(explicit_root: Path | None, yaml_path: Path) -> Path:
@@ -270,6 +307,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_run(args)
     if args.command == "validate":
         return cmd_validate(args)
+    if args.command == "validate-epic":
+        return cmd_validate_epic(args)
 
     parser.print_help()
     return EXIT_ABORT
