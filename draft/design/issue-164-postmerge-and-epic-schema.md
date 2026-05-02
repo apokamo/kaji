@@ -76,21 +76,43 @@ Issue: #164
   - 必要に応じて `git diff <base>..<merge_commit>` を生成し codex に渡す
   - レビュー結果を Issue にコメント投稿
 
-#### 1.4 ワークフロー `workflows/feature-with-postmerge.yaml`
+#### 1.4 スキル `post-merge-close`
+
+既存 `issue-close` の「Step 3: PR マージ」は、`wait-merge` 成功時点で PR が既に merged 状態のため前提と矛盾する（review 指摘 1）。
+したがって post-merge ワークフロー専用に**マージを行わない close スキル**を新規追加する。
+
+- **入力（コンテキスト変数）**:
+  - `issue_number: int`
+  - `step_id: str`
+- **出力（verdict）**:
+  - `PASS`: クリーンアップ完了
+  - `ABORT`: `gh issue close` 失敗、または worktree / branch 削除で復旧不能なエラー
+- **手順（既存 `issue-close` の Step 4 以降のみを実施）**:
+  1. PR が merged 状態であることを検証（`gh pr view --json state` が `MERGED`）。merged でなければ ABORT
+  2. worktree 削除（既存 `issue-close` Step 4 と同一）
+  3. ローカル / リモートブランチ削除（既存 Step 4.5 と同一）
+  4. `git pull origin main`（既存 Step 5 と同一）
+  5. `gh issue close --reason completed`（既存 Step 5.5 と同一）
+- **既存 `issue-close` には手を入れない**（feature-development.yaml ユーザーへの後方互換を担保）
+
+> **代替案検討**: 既存 `issue-close` を「PR が既に merged ならマージ手順をスキップ」と冪等化する案も検討したが、既存スキルの挙動を変えると `feature-development.yaml` 側の意味が変わるため不採用。新規スキルとして責務を分離する。
+
+#### 1.5 ワークフロー `workflows/feature-with-postmerge.yaml`
 
 `feature-development.yaml` の steps を全て複製し、末尾の `pr` ステップの遷移先を `wait-merge` に変更し、以下を追加:
 
 ```
-pr → wait-merge → verify-main-green → post-merge-review → close (issue-close)
+pr → wait-merge → verify-main-green → post-merge-review → post-merge-close → end
 ```
 
-- **PASS 経路**: `wait-merge:PASS → verify-main-green:PASS → post-merge-review:PASS → close → end`
+- **PASS 経路**: `wait-merge:PASS → verify-main-green:PASS → post-merge-review:PASS → post-merge-close:PASS → end`
 - **RETRY 経路**:
   - `wait-merge:RETRY → end`（マージ待ちタイムアウトは workflow を停止し、再実行は手動）
   - `verify-main-green:RETRY → verify-main-green`（CI が in_progress の場合は同一ステップを再走）
   - `post-merge-review:RETRY → end`（PAUSE 相当。RETRY 後の自動修復ループは本 Issue の non-goal）
 - **ABORT 経路**: 全て `end`
 - **既存 `feature-development.yaml` は変更しない**
+- **`issue-close` は呼び出さない**（merge 前提が衝突するため `post-merge-close` で代替）
 
 ### 2. EPIC 設定スキーマ
 
@@ -117,9 +139,13 @@ class EpicConfig(BaseModel):
   - `depends_on` の参照先が `members` に含まれる
   - DAG 循環検出（`networkx` ではなく自前の DFS / topological sort で実装。標準ライブラリのみで足りる）
   - `merge_order` を持つ Issue 群の値は重複禁止（ソート可能性を保証）
+  - **DAG 整合制約（review 指摘 2）**:
+    - **`parallel_group` 整合**: 直接または推移的な `depends_on` 関係がある 2 Issue が同一 `parallel_group` に属するのを禁止する。理由: 並列グループは「同時実行可能」を意味するため、依存関係がある Issue を同居させると意味が破綻する
+    - **`merge_order` 整合**: ある Issue A が B に `depends_on` する場合、両者が `merge_order` を明示しているなら `merge_order(A) < merge_order(B)` を強制する。明示順序が DAG を破る設定はバリデーションエラー
+    - これらのチェックは循環検出後（DAG が確定した後）に実施
 - **派生プロパティ（メソッド）**:
-  - `topological_order() -> list[list[int]]`: 並列グループを段階別に推定（`parallel_group` の明示指定があればそちらを優先、なければ DAG の階層から推定）
-  - `sorted_merge_order() -> list[int]`: `merge_order` 明示の Issue は値順、未指定は topological order の末尾に追加
+  - `topological_order() -> list[list[int]]`: 並列グループを段階別に推定（`parallel_group` の明示指定があればそちらを優先、なければ DAG の階層から推定）。**前提**: 上記 `parallel_group` 整合制約をパスしているため、明示優先しても DAG を破らない
+  - `sorted_merge_order() -> list[int]`: `merge_order` 明示の Issue は値順、未指定は topological order の末尾に追加。**前提**: 上記 `merge_order` 整合制約をパスしているため、明示順は依存関係を満たす
 
 #### 2.2 CLI: `kaji validate-epic`
 
@@ -189,9 +215,12 @@ $ kaji validate-epic broken.yaml
 | `.claude/skills/wait-merge/SKILL.md` | 新規 | なし |
 | `.claude/skills/verify-main-green/SKILL.md` | 新規 | なし |
 | `.claude/skills/post-merge-review/SKILL.md` | 新規 | なし |
+| `.claude/skills/post-merge-close/SKILL.md` | 新規 | なし（既存 `issue-close` は変更しない） |
 | `workflows/feature-with-postmerge.yaml` | 新規 | なし（既存 `feature-development.yaml` は touch しない） |
+| `kaji_harness/postmerge.py` | 新規モジュール（gh / git 出力パースと判定の純粋関数群） | なし。SKILL.md から `python -m kaji_harness.postmerge ...` 等で呼び出し |
 | `kaji_harness/epic.py` | 新規モジュール（モデル + ローダ + バリデータ） | なし |
 | `kaji_harness/cli_main.py` | `validate-epic` subcommand 追加 | 既存 `run` / `validate` には影響なし |
+| `tests/test_postmerge.py` | 新規（スモール） | なし |
 | `tests/test_epic.py` | 新規（スモール） | なし |
 | `tests/test_workflow_postmerge.yaml`（フィクスチャ） | 新規 | なし |
 | `docs/dev/workflow_overview.md` | post-merge ワークフローの存在を追記 | 微修正のみ |
@@ -202,11 +231,17 @@ $ kaji validate-epic broken.yaml
 ### post-merge 系スキル
 
 1. 各スキルは既存スキル（例: `pr-fix`）と同じ SKILL.md 構造（前提知識読込 / 実行手順 / Verdict 出力）を踏襲
-2. polling 実装は SKILL.md 上の Bash 手順として記述（python コードは書かない）。ハーネス側の改修は不要
-3. `wait-merge`: `for` ループ + `gh pr view --json state` + `sleep <interval>`
-4. `verify-main-green`: `gh run list --branch main --commit <sha>` + jq で `conclusion` 抽出
-5. `post-merge-review`: `git log` でコミット範囲確定 → codex を spawn してレビュー結果を verdict 形式で受け取る
-6. ワークフロー YAML は既存の `feature-development.yaml` を雛形として複製。差分は末尾 4 ステップ追加のみ
+2. polling / 外部コマンド呼び出しは SKILL.md 上の Bash 手順として記述。ただし**判定ロジック（merge 状態の解釈、CI conclusion の解釈、コミット範囲の確定、codex 出力からの verdict 抽出）は `kaji_harness/postmerge.py` の純粋関数として切り出し**、SKILL.md からはモジュール呼び出しで参照する（review 指摘 3 への対応）
+3. `kaji_harness/postmerge.py` に置く関数（純粋関数 / 副作用なし）:
+   - `parse_pr_state(pr_view_json: str) -> Literal["MERGED", "OPEN", "CLOSED_NOT_MERGED"]`
+   - `judge_main_ci(run_list_json: str) -> Literal["GREEN", "IN_PROGRESS", "FAILED", "NOT_FOUND"]`
+   - `select_review_range(merge_commit: str, parent_count: int) -> tuple[str, str]`（base..head の確定）
+   - `parse_codex_review_output(output: str) -> Literal["PASS", "RETRY", "ABORT"]`
+4. `wait-merge`: `for` ループ + `gh pr view --json state,mergedAt,mergeCommit` + `sleep <interval>` → `parse_pr_state` で判定
+5. `verify-main-green`: `gh run list --branch main --commit <sha> --json status,conclusion,name` → `judge_main_ci` で判定
+6. `post-merge-review`: `git log` でコミット範囲確定（`select_review_range` 使用）→ codex を spawn → `parse_codex_review_output` で verdict 抽出
+7. `post-merge-close`: 既存 `issue-close` の Step 4 以降のみを実行（Step 1.4 参照）。判定ロジックは `parse_pr_state` 1 関数のみ流用
+8. ワークフロー YAML は既存の `feature-development.yaml` を雛形として複製。差分は末尾の 4 ステップ追加（`pr` の遷移先変更含む）のみ
 
 ### EPIC スキーマ
 
@@ -251,29 +286,58 @@ $ kaji validate-epic broken.yaml
   1. 独自ロジック追加なし → ❌（追加あり）。よって Small / Medium で担保すべきで Large は不要
   2-4. 該当なし。Large 不要の根拠は「外部依存なし」で十分
 
-### post-merge 系スキル + ワークフロー YAML（宣言定義の追加）
+### post-merge 系スキル + ワークフロー YAML
+
+post-merge 系は判定ロジックを `kaji_harness/postmerge.py` に切り出すため、ロジック層は通常の Python コード変更として扱う。
+これにより Issue 完了条件「各スキルにユニットテスト（mock 可）が存在する」と整合する（review 指摘 3 への対応）。
 
 #### Small テスト
-- `workflows/feature-with-postmerge.yaml` を `validate_workflow()` で検証する pytest（既存テストパターンを踏襲）
-  - 全ステップが skill discoverable
+
+`tests/test_postmerge.py` で `kaji_harness/postmerge.py` の純粋関数を検証する。
+各関数のテストはそれぞれ対応するスキルの判定ロジックを担保する:
+
+- **`parse_pr_state`** (`wait-merge` / `post-merge-close` のロジック):
+  - `state=MERGED` の JSON → `"MERGED"`
+  - `state=OPEN` → `"OPEN"`
+  - `state=CLOSED && mergedAt=null` → `"CLOSED_NOT_MERGED"`
+  - 不正 JSON / フィールド欠落の例外
+- **`judge_main_ci`** (`verify-main-green` のロジック):
+  - 全 run が `conclusion=success` → `"GREEN"`
+  - いずれかが `status=in_progress` または `queued` → `"IN_PROGRESS"`
+  - いずれかが `conclusion=failure / cancelled / timed_out` → `"FAILED"`
+  - run 0 件 → `"NOT_FOUND"`
+  - **複数 run が混在する境界**: in_progress と failure が同時に存在する場合は `"FAILED"` を優先（早期 ABORT）
+- **`select_review_range`** (`post-merge-review` のロジック):
+  - 通常 merge commit (parent=2) → `(parent1, merge_commit)`
+  - squash merge (parent=1) → `(merge_commit~1, merge_commit)`
+- **`parse_codex_review_output`** (`post-merge-review` のロジック):
+  - `---VERDICT---\nstatus: PASS ...` → `"PASS"`
+  - `status: RETRY` → `"RETRY"`
+  - verdict ブロック欠落 / 不明 status → `"ABORT"`
+
+これらは「各スキルの判定ロジックに対する mock 不要のユニットテスト」として完了条件を満たす。
+
+加えて、ワークフロー YAML 自体の整合性検証として:
+
+- `workflows/feature-with-postmerge.yaml` を `validate_workflow()` + `validate_skill_exists()` で検証する pytest を追加
+  - 全ステップが skill discoverable（4 つの新規スキル含む）
   - 全 verdict 遷移先が valid
-  - サイクル / barrier に関する整合
-- これは既存の workflow 検証ロジックの恒久回帰テスト追加であり、新規ロジックを生まない
+  - 既存ワークフロー検証テストパターンを踏襲
 
 #### Medium テスト
-- 不要。post-merge スキル本体は SKILL.md（手順書）であり、Python コードを伴わない。SKILL.md の整合性は `validate_skill_exists` 経由で workflow validate テストが間接的に検証
-- 4 条件:
-  1. 独自ロジック追加なし（SKILL.md は宣言）✅
-  2. 既存ゲート（`validate_workflow` + `validate_skill_exists`）で skill 存在 / verdict 整合は捕捉済み ✅
-  3. SKILL.md の bash 手順を恒久ユニットテスト化しても、`gh` / `git` / `codex` の subprocess を全モックすることになり、回帰検出の情報量は乏しい ✅
+- 不要。post-merge 系は (a) 純粋関数 (Small で網羅) と (b) bash 手順による外部コマンド呼び出し (gh / git / codex) のみで構成される
+- 外部コマンド呼び出し部分のテストは subprocess 全モックとなり、`docs/dev/testing-convention.md` 4 条件のうち以下を満たす:
+  1. 独自ロジックは Small に切り出し済み ✅
+  2. 既存ゲート（`validate_workflow` + Small の純粋関数テスト）で判定ロジックは捕捉済み ✅
+  3. 全モック Medium は回帰検出の情報量が乏しい ✅
   4. 本理由を本セクションに記載 ✅
 
 #### Large テスト
 - 不要。post-merge ワークフローの実走には実 PR / 実マージ / 実 CI green が必要で、CI で再現するには専用の sandbox repo が必要となり投資対効果が見合わない
-- 4 条件適用: 上と同じく「物理的に作成不可（CI 上で実 PR をマージするサンドボックスは未提供）」が `docs/dev/testing-convention.md` の正当化理由に該当
+- 4 条件適用: 「物理的に作成不可（CI 上で実 PR をマージするサンドボックスは未提供）」が `docs/dev/testing-convention.md` の正当化理由に該当
 
 #### 変更固有検証（恒久テストにしないもの）
-- 開発時に手動で `kaji run workflows/feature-with-postmerge.yaml <issue> --before close` を 1 回実走し、各ステップが想定通り遷移することを目視確認
+- 開発時に手動で `kaji run workflows/feature-with-postmerge.yaml <issue> --before post-merge-close` を 1 回実走し、各ステップが想定通り遷移することを目視確認
 - この実走結果は Issue にコメントで残し、`/i-dev-final-check` で確認する
 
 ## 影響ドキュメント
