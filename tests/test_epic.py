@@ -128,19 +128,31 @@ class TestTopologicalOrderSmall:
         assert levels == [[1], [2, 3], [4]]
 
     @pytest.mark.small
-    def test_explicit_parallel_group_splits_level(self) -> None:
+    def test_explicit_parallel_group_kept_in_same_stage(self) -> None:
         epic = _epic(
             {"issue": 1},
             {"issue": 2, "depends_on": [1], "parallel_group": "frontend"},
             {"issue": 3, "depends_on": [1], "parallel_group": "backend"},
         )
         levels = epic.topological_order()
-        # level 0 only has 1; level 1 splits into two groups
-        assert levels[0] == [1]
-        flattened = [i for lv in levels[1:] for i in lv]
-        assert sorted(flattened) == [2, 3]
-        # the two groups should be in separate levels (not co-located)
-        assert all(len(lv) == 1 for lv in levels[1:])
+        # level 0 only has 1; level 1 contains both 2 and 3 (parallel-eligible).
+        # parallel_group labels do NOT fragment a stage.
+        assert levels == [[1], [2, 3]]
+
+    @pytest.mark.small
+    def test_topological_groups_exposes_group_breakdown(self) -> None:
+        epic = _epic(
+            {"issue": 1},
+            {"issue": 2, "depends_on": [1], "parallel_group": "frontend"},
+            {"issue": 3, "depends_on": [1], "parallel_group": "backend"},
+            {"issue": 4, "depends_on": [1]},
+        )
+        groups = epic.topological_groups()
+        # stage 0: just [1] as a singleton
+        assert groups[0] == [[1]]
+        # stage 1: backend group [3], frontend group [2], singleton [4]
+        # labeled groups are sorted by label name; singletons follow
+        assert groups[1] == [[3], [2], [4]]
 
 
 class TestSortedMergeOrderSmall:

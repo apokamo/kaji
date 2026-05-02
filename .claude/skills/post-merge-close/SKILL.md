@@ -28,9 +28,24 @@ name: post-merge-close
 - `wait-merge` / `verify-main-green` / `post-merge-review` が PASS で完了していること
 - PR が既に merged 状態であること（本スキルでも検証する）
 
+> **重要**: workflow の各 step は別プロセス実行であり、前ステップで解決した
+> `$PR_NUMBER` 等のシェル変数は引き継がれない。本スキル実行のたびに Issue 本文の
+> Branch メタ情報から PR 番号を再解決すること。
+
 ## 実行手順
 
-### Step 0: PR が merged であることの検証
+### Step 0a: PR 番号の再解決
+
+```bash
+BRANCH=$(gh issue view [issue-number] --json body -q '.body' | grep -oP '> \*\*Branch\*\*: `\K[^`]+')
+PR_NUMBER=$(gh pr list --head "$BRANCH" --state all --json number -q '.[0].number')
+if [ -z "$PR_NUMBER" ]; then
+    echo "ERROR: failed to resolve PR number for branch $BRANCH" >&2
+    # → ABORT
+fi
+```
+
+### Step 0b: PR が merged であることの検証
 
 ```bash
 PR_JSON=$(gh pr view "$PR_NUMBER" --json state,mergedAt,mergeCommit)

@@ -58,34 +58,60 @@ class EpicConfig:
             raise EpicValidationError(errors)
 
     def topological_order(self) -> list[list[int]]:
-        """並列グループを段階別に推定する。
+        """Kahn のアルゴリズムによる stage 列を返す。
 
-        `parallel_group` の明示があればその値で grouping し、依存関係に従って
-        グループ単位で topological レベルを構築する。明示がない Issue は
-        Kahn のアルゴリズムで level 単位に分割し、同 level を 1 グループとする。
+        各 stage は同時に実行可能な Issue 群（in-degree が 0 になった集合）。
+        `parallel_group` 明示は stage を分割しない（同 stage 内の Issue は
+        ラベルの有無に関わらず並列実行可能）。group ごとの内訳が必要なら
+        `topological_groups()` を参照する。
         """
-        adjacency, indegree = _build_graph(self.members)
-        explicit = {m.issue: m.parallel_group for m in self.members if m.parallel_group}
-
         levels: list[list[int]] = []
-        ready: deque[int] = deque(i for i, deg in indegree.items() if deg == 0)
+        for stage in self._kahn_stages():
+            levels.append(sorted(stage))
+        return levels
+
+    def topological_groups(self) -> list[list[list[int]]]:
+        """stage → 並列グループ → Issue の 3 階層で返す。
+
+        各 stage 内では複数の `parallel_group` が並列に存在しうる。
+        `parallel_group` 未指定の Issue は単独 group として扱う。
+        group の順序は label 名の昇順、`None`（未指定）は末尾に並べ、
+        各 group の中身は Issue 番号の昇順。
+        """
+        label_for = {m.issue: m.parallel_group for m in self.members}
+        result: list[list[list[int]]] = []
+        for stage in self._kahn_stages():
+            labeled: dict[str, list[int]] = {}
+            singletons: list[int] = []
+            for issue in stage:
+                label = label_for.get(issue)
+                if label is None:
+                    singletons.append(issue)
+                else:
+                    labeled.setdefault(label, []).append(issue)
+            stage_groups: list[list[int]] = [sorted(labeled[k]) for k in sorted(labeled)] + [
+                [i] for i in sorted(singletons)
+            ]
+            result.append(stage_groups)
+        return result
+
+    def _kahn_stages(self) -> list[list[int]]:
+        """in-degree 0 の集合を 1 stage として順次取り出す（並びは Issue 番号昇順）。"""
+        adjacency, indegree = _build_graph(self.members)
+        stages: list[list[int]] = []
+        ready: deque[int] = deque(sorted(i for i, deg in indegree.items() if deg == 0))
         while ready:
-            current_level = list(ready)
+            current = list(ready)
             ready.clear()
-            if explicit:
-                grouped: dict[str | None, list[int]] = {}
-                for issue in current_level:
-                    grouped.setdefault(explicit.get(issue), []).append(issue)
-                for members in grouped.values():
-                    levels.append(sorted(members))
-            else:
-                levels.append(sorted(current_level))
-            for issue in current_level:
+            stages.append(current)
+            next_ready: list[int] = []
+            for issue in current:
                 for nxt in adjacency.get(issue, []):
                     indegree[nxt] -= 1
                     if indegree[nxt] == 0:
-                        ready.append(nxt)
-        return levels
+                        next_ready.append(nxt)
+            ready.extend(sorted(next_ready))
+        return stages
 
     def sorted_merge_order(self) -> list[int]:
         """`merge_order` 明示の Issue を昇順に並べ、未指定は topological 順末尾に追加する。

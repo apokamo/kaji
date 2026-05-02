@@ -17,7 +17,24 @@ name: verify-main-green
 
 `wait-merge` 段階で確定した merge commit oid を、Issue コメントまたは `gh pr view` から再取得する。
 
+> **重要**: workflow の各 step は別プロセス実行であり、`wait-merge` で解決した
+> `$PR_NUMBER` 等のシェル変数は引き継がれない。本スキル実行のたびに Issue 本文の
+> Worktree / Branch メタ情報から PR 番号を再解決すること。
+
 ## 実行手順
+
+### Step 0: PR 番号の再解決
+
+```bash
+# Issue 本文から Branch メタ情報を取得
+BRANCH=$(gh issue view [issue-number] --json body -q '.body' | grep -oP '> \*\*Branch\*\*: `\K[^`]+')
+# Branch から PR 番号を解決（state=all で merged 後も取得可能）
+PR_NUMBER=$(gh pr list --head "$BRANCH" --state all --json number -q '.[0].number')
+if [ -z "$PR_NUMBER" ]; then
+    echo "ERROR: failed to resolve PR number for branch $BRANCH" >&2
+    # → ABORT
+fi
+```
 
 ### Step 1: merge commit oid の取得
 
