@@ -56,6 +56,7 @@ kaji run <workflow.yaml> <issue> --workdir <dir>    # Config discovery start dir
 kaji run <workflow.yaml> <issue> --quiet            # Suppress agent output
 
 kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
+kaji validate-epic <epic.yaml>...                    # Validate EPIC YAML(s)
 ```
 
 ## Git & GitHub
