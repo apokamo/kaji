@@ -141,7 +141,7 @@ class EpicConfig(BaseModel):
   - `merge_order` を持つ Issue 群の値は重複禁止（ソート可能性を保証）
   - **DAG 整合制約（review 指摘 2）**:
     - **`parallel_group` 整合**: 直接または推移的な `depends_on` 関係がある 2 Issue が同一 `parallel_group` に属するのを禁止する。理由: 並列グループは「同時実行可能」を意味するため、依存関係がある Issue を同居させると意味が破綻する
-    - **`merge_order` 整合**: ある Issue A が B に `depends_on` する場合、両者が `merge_order` を明示しているなら `merge_order(A) < merge_order(B)` を強制する。明示順序が DAG を破る設定はバリデーションエラー
+    - **`merge_order` 整合**: ある Issue A が B に `depends_on` する場合（= B が依存先 / 先にマージされるべき側）、両者が `merge_order` を明示しているなら `merge_order(B) < merge_order(A)` を強制する。`sorted_merge_order()` は値の昇順で並べるため、依存先 B が依存元 A より先に並ぶ必要がある。逆向きの設定（依存元 A の方が小さい値）は依存関係を破るためバリデーションエラー
     - これらのチェックは循環検出後（DAG が確定した後）に実施
 - **派生プロパティ（メソッド）**:
   - `topological_order() -> list[list[int]]`: 並列グループを段階別に推定（`parallel_group` の明示指定があればそちらを優先、なければ DAG の階層から推定）。**前提**: 上記 `parallel_group` 整合制約をパスしているため、明示優先しても DAG を破らない
@@ -163,15 +163,21 @@ name: "Release v1.2 EPIC"
 description: "Issues required for v1.2 release"
 members:
   - issue: 200
+    merge_order: 1
   - issue: 201
     depends_on: [200]
+    merge_order: 2
   - issue: 202
     depends_on: [200]
     parallel_group: "frontend"
+    merge_order: 3
   - issue: 203
     depends_on: [201, 202]
-    merge_order: 1
+    merge_order: 4
 ```
+
+`merge_order` は依存先（先にマージすべき側）が小さく、依存元（後にマージすべき側）が大きくなるよう昇順で並べる。
+上記例では 200 → 201/202 → 203 という依存関係に対して、merge_order 1 → 2/3 → 4 と整合している。
 
 ```bash
 $ kaji validate-epic epic-example.yaml
@@ -181,6 +187,7 @@ $ kaji validate-epic broken.yaml
 ✗ broken.yaml
   - cyclic dependency detected: 201 → 202 → 201
   - issue 999 referenced in depends_on but not in members
+  - merge_order order conflicts with depends_on: 203 depends on 201 but merge_order(203)=1 < merge_order(201)=2
 ```
 
 ### エラー一覧（共通）
@@ -265,13 +272,21 @@ $ kaji validate-epic broken.yaml
 
 #### Small テスト
 - `EpicConfig` バリデーション
-  - 正常系: 単純 DAG / 並列グループ明示 / `merge_order` 明示
-  - 異常系: 循環依存（自己ループ含む）、未定義 Issue への `depends_on`、Issue 重複、`merge_order` 重複、`members` 空
+  - 正常系: 単純 DAG / 並列グループ明示 / `merge_order` 明示（依存先 < 依存元の昇順）
+  - 異常系:
+    - 循環依存（自己ループ含む）
+    - 未定義 Issue への `depends_on`
+    - Issue 重複
+    - `merge_order` 重複
+    - `members` 空
+    - **`parallel_group` 整合違反**: 直接依存 / 推移的依存にある 2 Issue が同一 `parallel_group` に属するケース
+    - **`merge_order` 整合違反（依存方向の逆順）**: A が B に `depends_on` する場合に `merge_order(A) < merge_order(B)` となっているケース（依存先 B が依存元 A より後ろに並ぶ設定）。エラーメッセージで「どの depends_on と merge_order の組が衝突したか」を明示することも検証する
 - `topological_order()` の境界:
   - `parallel_group` 明示優先
   - 明示なし時の Kahn による level 推定
 - `sorted_merge_order()` の境界:
-  - 明示順序が topological 順序と一致しないケースで明示優先
+  - `merge_order` 明示の Issue は値の昇順（依存先 → 依存元の向き）
+  - 一部のみ明示、残りが未指定のケースで topological order の末尾に追加される動作
 - `load_epic()` の YAML パースエラーハンドリング
 
 #### Medium テスト
