@@ -1,0 +1,50 @@
+name: release-please
+
+# Release-Please を用いたリリース自動化 (Issue #153)
+#
+# - main への push で release-please-action@v4 を起動し、Release PR を自動生成・更新する。
+# - token は built-in GITHUB_TOKEN ではなく GitHub App (RELEASE_PLEASE_APP_ID /
+#   RELEASE_PLEASE_APP_PRIVATE_KEY) から発行した installation token を使用する。
+#   これにより Release PR 上の後続 workflow (release-please-lock.yml 等) が発火する。
+#
+# 起動方式:
+# - 通常運用: `on: push(main)` で自動起動 (`target-branch` は `github.ref_name` = `main`)
+# - pre-merge dry-run: 本 workflow は default branch 要件により `workflow_dispatch` を
+#   使えないため、専用 branch (chore/release-please-dryrun) への push トリガーで実施する。
+#   詳細は docs/operations/release/admin-setup.md §Step 4 を参照。
+# - `workflow_dispatch` は本 PR merge 後の ad-hoc 再実行向け（main 上で workflow が
+#   存在する状態でのみ利用可能）。target-branch input は post-merge の検証 branch 指定等に使う。
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      target-branch:
+        description: "Release 対象の branch 名 (post-merge 時の ad-hoc 実行用。pre-merge dry-run は使えない)"
+        required: false
+        default: main
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+
+      - uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          config-file: .github/release-please-config.json
+          manifest-file: .release-please-manifest.json
+          target-branch: ${{ github.event.inputs.target-branch || github.ref_name }}

@@ -117,6 +117,8 @@ kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
 | Docstring Style | docs/reference/python/docstring-style.md |
 | Error Handling | docs/reference/python/error-handling.md |
 | Logging (RunLogger) | docs/reference/python/logging.md |
+| Release Admin Setup | docs/operations/release/admin-setup.md |
+| Release Runbook | docs/operations/release/runbook.md |
 
 ## Development Skills
 
