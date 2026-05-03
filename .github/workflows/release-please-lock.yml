@@ -75,15 +75,18 @@ jobs:
         if: steps.verify.outputs.in_sync != 'true'
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          BOT_USER_ID: ${{ steps.bot-user.outputs.id }}
         run: |
           if git diff --quiet uv.lock; then
             echo "No lockfile changes after uv lock"
             exit 0
           fi
-          BOT_SLUG="${{ steps.app-token.outputs.app-slug }}[bot]"
-          BOT_EMAIL="${{ steps.bot-user.outputs.id }}+${BOT_SLUG}@users.noreply.github.com"
+          BOT_SLUG="${APP_SLUG}[bot]"
+          BOT_EMAIL="${BOT_USER_ID}+${BOT_SLUG}@users.noreply.github.com"
           git config user.name "${BOT_SLUG}"
           git config user.email "${BOT_EMAIL}"
           git add uv.lock
           git commit -m "chore: sync uv.lock with pyproject.toml"
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          git push origin "HEAD:${HEAD_REF}"

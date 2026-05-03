@@ -11,8 +11,10 @@
 1. `RELEASE_PLEASE_TOKEN` の発行（GitHub App 推奨 / fine-grained PAT は暫定）
 2. repo secret への登録
 3. Actions permissions の有効化（"Allow Actions to create and approve PRs" + "Read and write"）
-4. dry-run の実施と証跡取得
+4. **(post-merge / 初回リリース前)** dry-run の実施と証跡取得
 5. cleanup（検証成果物の整理）
+
+> **重要**: 本 Issue (#153) の PR merge 前に Step 1-3 が完了している必要は**ない**。Step 1-3 は admin 権限を要するため AI フェーズ完了条件には含めず、Step 4 (dry-run) と合わせて **post-merge から初回リリース前までに完了**させる運用とする。理由は [`docs/dev/workflow_completion_criteria.md`](../../dev/workflow_completion_criteria.md) §「admin 権限を要する検証の扱い」を参照。
 
 ## Step 1: `RELEASE_PLEASE_TOKEN` の発行
 
@@ -92,88 +94,83 @@ GitHub UI から設定する（`gh` CLI 未対応）:
 
 両方とも release-please-action が Release PR を作成するために必須（[release-please-action README](https://github.com/googleapis/release-please-action#github-credentials)）。
 
-## Step 4: Dry-run の実施（本 PR merge 前）
+## Step 4: Dry-run の実施（post-merge / 初回リリース前）
 
-実機検証を main に影響を与えずに行う。専用 branch (`chore/release-please-dryrun`) への **push トリガー**で workflow を起動する。
+実機検証を本番 Release PR 生成より前に、main を汚さずに行う。**本 Issue (#153) の PR merge 後に main 上で workflow が利用可能になっていることを前提**とし、専用 branch (`chore/release-please-dryrun`) を target にして `workflow_dispatch` で起動する。
 
-> **起動方式の選択理由**: `workflow_dispatch` は **workflow ファイルが default branch (main) に存在する場合のみ**利用可能（[GitHub Docs: Manually run a workflow](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)）。本 PR merge 前は main に workflow が存在しないため、pre-merge dry-run では使えない。代わりに dryrun branch へ workflow を配置し、`on: push: branches` に dryrun branch を一時追加した状態で push して起動する。
+> **起動方式の選択理由（post-merge）**: 本 Issue merge 後は main に `release-please.yml` が存在するため、`workflow_dispatch` で `target-branch` input を `chore/release-please-dryrun` に指定して起動できる（[GitHub Docs: Manually run a workflow](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)）。pre-merge dry-run は本 Issue 完了条件外（admin 権限 / secret 登録が前提のため）であり、AI フェーズの完了条件は静的検証（JSON schema validation + actionlint + 移植元 diff レビュー）で代替済み（[`docs/dev/workflow_completion_criteria.md`](../../dev/workflow_completion_criteria.md) §「admin 権限を要する検証の扱い」）。
 
-### 4-1. 検証用 branch の準備（feat branch を merge して workflow 配置）
+> **タイミング**: Step 1-3 完了後、初回 Release PR を merge する**前**までに実施する。dry-run なしで初回 Release PR を merge する場合は、[`runbook.md`](./runbook.md) §「初回リリース前チェックリスト」を参照して同等の確認を Release PR 上で行う。
+
+### 4-1. 検証用 branch の準備
 
 ```bash
-# 検証用 branch を main から切る
+# main を最新化
 git fetch origin main
-git checkout -b chore/release-please-dryrun origin/main
+git checkout main && git pull --ff-only origin main
 
-# feat branch を merge して release-please.yml / release-please-lock.yml / config / manifest を配置
-git merge feat/153 --no-ff -m "chore: merge feat branch into dryrun branch for workflow verification"
-
-# release-please.yml の push trigger に dryrun branch を一時追加
-# (on: push: branches: [main, chore/release-please-dryrun] に書き換え)
-# この commit は dryrun branch 限定。main 用の本番 PR には絶対に含めない。
-# 編集後に commit
-git add .github/workflows/release-please.yml
-git commit -m "chore: enable workflow on dryrun branch (verification only, do not merge to main)"
-
-# push → on: push(chore/release-please-dryrun) で workflow が自動起動
+# 検証用 branch を main から切る（main には #153 の workflow / config 一式が既に存在）
+git checkout -b chore/release-please-dryrun
 git push -u origin chore/release-please-dryrun
 ```
 
-### 4-2. Workflow 起動の確認
-
-push と同時に release-please workflow が起動する。target-branch は `github.ref_name` フォールバックで `chore/release-please-dryrun` に解決される。
+### 4-2. Workflow を target-branch 指定で起動
 
 ```bash
-# workflow run を確認
-gh run list -R apokamo/kaji -w release-please.yml -b chore/release-please-dryrun --limit 3
+# main 上の release-please.yml を、chore/release-please-dryrun を target として起動
+gh workflow run release-please.yml -R apokamo/kaji \
+  -f target-branch=chore/release-please-dryrun
+
+# 起動した run を確認
+gh run list -R apokamo/kaji -w release-please.yml --limit 3
 gh run watch <run-id> -R apokamo/kaji --exit-status
 ```
 
-### 4-3. 期待結果（全て Issue コメントに証跡として貼る）
+### 4-3. 期待結果（全て Issue / リリース準備記録に証跡として残す）
 
 | 確認項目 | 期待値 | 取得方法 |
 |---------|--------|---------|
 | Release PR 生成 | `release-please--branches--chore-release-please-dryrun--components--kaji` 等の前方一致 branch で PR が作成 | `gh pr list -R apokamo/kaji --head 'release-please--branches--chore-release-please-dryrun'` URL |
-| 提案 version | feat 起因の minor bump で **0.10.0** が提案される | Release PR タイトル / 更新後の `pyproject.toml` |
+| 提案 version | feat 起因の minor bump で **0.10.0** が提案される（v0.9.1 manifest 起点） | Release PR タイトル / 更新後の `pyproject.toml` |
 | CHANGELOG.md 生成 | `v0.9.1..HEAD` の commits が `changelog-sections` で定義した section（✨ Features / 🐛 Bug Fixes / 📝 Documentation 等）に分類されて表示（commit 数は dryrun 時点の `git rev-list --count v0.9.1..HEAD` 実測値に従う） | Release PR の Files changed タブ diff 抜粋 |
 | `uv.lock` 追従 | `release-please-lock.yml` run が起動し、`uv sync --locked` 検証 → 必要時のみ `uv lock` の追加 commit を push、または `in_sync=true` でスキップ | `gh run list -R apokamo/kaji -w release-please-lock.yml` run log link |
 
 > **Note**: kaji リポジトリには現状 `verify-backend` 等の CI workflow が存在しないため、Release PR 上の追加 CI green 確認は対象外。dry-run の責務は「release-please mechanism の動作確認」までとする。
 
-証跡が 1 件でも欠けた場合は fix-code に戻り修正 → 再 dry-run。
+証跡が 1 件でも欠けた場合は、原因（secret 未登録 / Actions permissions 不足 / workflow 設定不備）を特定して修正 → 再 dry-run。workflow / config 自体の不備が見つかった場合は別 Issue を起票して対応する（本 Issue は merge 済みのため）。
 
 ## Step 5: Cleanup
 
-dry-run 完了後、**必ず以下を実施**（放置すると Release PR が merge される危険 / branch ゴミが残る）:
+dry-run 完了後、**必ず以下を実施**（放置すると Release PR が誤って merge される危険 / branch ゴミが残る）:
 
 ```bash
 # 5-1. 検証用 Release PR を close のみ（merge 厳禁 — tag が打たれてしまう）
 PR_NUMBER=$(gh pr list -R apokamo/kaji --head 'release-please--branches--chore-release-please-dryrun' --json number -q '.[0].number')
-gh pr close "$PR_NUMBER" -R apokamo/kaji -c "dry-run 検証完了。#153 i-dev-final-check 経由で close"
+gh pr close "$PR_NUMBER" -R apokamo/kaji -c "dry-run 検証完了。#153 admin-setup.md §Step 5 に従い close"
 
 # 5-2. Release-Please が生成した branch を削除
 RELEASE_BRANCH=$(gh pr view "$PR_NUMBER" -R apokamo/kaji --json headRefName -q .headRefName)
 gh api -X DELETE "repos/apokamo/kaji/git/refs/heads/${RELEASE_BRANCH}"
 
-# 5-3. 検証用 branch を削除（この branch 削除で、push-trigger に一時追加した dryrun ブランチ指定も消える）
+# 5-3. 検証用 branch を削除
 git push origin --delete chore/release-please-dryrun
 
 # 5-4. ローカル branch もクリーン
 git branch -D chore/release-please-dryrun
 ```
 
-> **保持するもの**: push トリガーで起動した release-please run と release-please-lock run（Actions history）は削除しない。Issue コメントの証跡として参照し続ける。
+> **保持するもの**: dry-run で起動した release-please run と release-please-lock run（Actions history）は削除しない。後日のリリース運用 / 監査の参照資料として残す。
 
 ## Step 6: 完了報告
 
-本 Issue (#153) に以下を含むコメントを投稿:
+dry-run まで含む admin セットアップが完了したら、リリース準備完了として記録する（運用記録 / 引き継ぎ用）:
 
 - Step 2 の `gh secret list` 出力（token 名のみ）
 - Step 3 の Actions permissions 確認文
-- Step 4-3 の証跡一式（URL / log link）
+- Step 4-3 の証跡一式（Release PR URL / 提案 version / CHANGELOG / lock workflow run URL）
 - Step 5 の cleanup 完了確認
 
-完了後、`/i-dev-final-check 153` に進む。
+これらは Issue #153 が既に close 済みでも構わないが、初回リリース前のチェックリスト（[`runbook.md`](./runbook.md) §「初回リリース前チェックリスト」）と突き合わせて欠落がないことを確認する。
 
 ## トラブルシューティング
 

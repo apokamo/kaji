@@ -23,6 +23,36 @@
 - `RETRY` は final-check 文脈で閉じる軽微修正に限定する（自己ループ）
 - `BACK` は原因に応じて design / implement / docs の前段に戻す
 
+## admin 権限を要する検証の扱い
+
+### 原則
+
+**AI 単独で達成不能な検証は完了条件に含めない。** 手順を docs に残し、user 側の運用タスクとして位置付ける。
+
+具体的には以下のいずれかに該当する検証は、Issue の完了条件（PR merge を阻害する条件）に含めず、merge 後 / 初回リリース前 / 初回利用前までに user が実施する運用タスクとして整理する:
+
+- **admin 権限が必要な検証**: GitHub Repository Settings 変更、organization 設定変更、Branch Protection 変更などを伴う動作確認
+- **外部 secret / credential が必要な検証**: GitHub App secret、外部 SaaS の API token、本番相当の認証情報が事前登録されていなければ動作しない検証
+- **物理デバイス / 専用環境が必要な検証**: 特定の OS / GPU / モバイル端末 / 本番ネットワーク等を伴う検証
+
+### AI フェーズで担保する代替検証
+
+上記理由で動作検証を後回しにする場合、AI フェーズでは以下の **静的検証** で品質を担保する:
+
+- 設定ファイルの schema validation（公式 JSON schema 等）
+- workflow / 設定ファイルの lint（`actionlint`、`yamllint` など）
+- 移植元 / 既存実装との diff レビュー
+- 構文 / 値の妥当性確認（`python -c "import json; ..."` 等）
+
+### docs への反映義務
+
+- 動作検証を user に委ねる場合、**手順を docs に残すことを必須とする**（admin 向け setup 手順 + 初回利用前のチェックリスト等）
+- Issue 本文の「前提作業（user 実施 / 本 PR 外）」セクションに対応タスクを明記し、merge 阻害条件ではないことを明示する
+
+### 適用例
+
+- Issue #153（release-please 導入）: dry-run は GitHub App secret 登録（admin 権限要）が前提。AI フェーズでは JSON schema validation + actionlint + kamo2 移植元との diff レビューで代替し、dry-run は `docs/operations/release/admin-setup.md` および `docs/operations/release/runbook.md` の「初回リリース前チェックリスト」に従い user が post-merge / 初回リリース前に実施する。
+
 ## 各ステップの証跡責務
 
 各ステップは、自分の段階で確認可能な Issue 完了条件を確認し、後段が追跡可能な形で証跡を残す。

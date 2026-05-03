@@ -63,11 +63,49 @@ gh workflow run release-please.yml -R apokamo/kaji -f target-branch=main
 
 admin が token 登録・Actions permissions 設定・dry-run 実施・cleanup を行う。詳細は [`admin-setup.md`](./admin-setup.md) §Step 4 / §Step 5 を参照。
 
-概要:
-1. `chore/release-please-dryrun` branch を main から切り、feat branch を merge して workflow ファイルを配置
-2. `release-please.yml` の `on: push: branches` に `chore/release-please-dryrun` を一時追加して push → **push トリガー**で workflow 起動（`workflow_dispatch` は pre-merge では使えない。詳細は admin-setup.md §Step 4 の起動方式選択 note 参照）
+概要（**post-merge / 初回リリース前**に実施）:
+1. `chore/release-please-dryrun` branch を main（既に release-please workflow が存在）から切って push
+2. `gh workflow run release-please.yml -f target-branch=chore/release-please-dryrun` で `workflow_dispatch` 起動
 3. Release PR 生成・version 提案・CHANGELOG 更新・`uv.lock` 追従を確認
 4. Release PR は **close のみ**（merge すると tag が打たれる）、検証 branch と自動生成 branch を削除
+
+## 初回リリース前チェックリスト
+
+本 Issue (#153) merge 後、初回 Release PR を merge する**前**に必ず以下を確認する。dry-run（`admin-setup.md` §Step 4）を未実施で初回 Release PR に進む場合は、以下を Release PR 上で同等に確認すること（dry-run を実施済みの場合も、本番 Release PR に対してはもう一度突き合わせる）。
+
+### A. 前提作業（admin / user 実施）
+
+- [ ] **GitHub App `kaji-release-please`** を作成し、`apokamo/kaji` に install 済み（[`admin-setup.md`](./admin-setup.md) §Step 1 Option A）
+- [ ] **repo secret** に `RELEASE_PLEASE_APP_ID` / `RELEASE_PLEASE_APP_PRIVATE_KEY` が登録済み（`gh secret list -R apokamo/kaji` で確認）
+- [ ] **Actions permissions**: 「Read and write」+「Allow GitHub Actions to create and approve pull requests」が ON（`apokamo/kaji` Settings → Actions → General）
+- [ ] **dry-run の実施 or 同等確認の完了**: `admin-setup.md` §Step 4 を実施済み、または初回 Release PR で B / C / D を確認する旨を意識している
+
+### B. Release PR の構造確認
+
+- [ ] Release PR の **head branch** が `release-please--branches--main--components--kaji`（または target-branch に応じた前方一致）になっている
+- [ ] **提案 version** が期待どおり（初回は `0.10.0` 想定。manifest `0.9.1` + feat 起因の minor bump）
+- [ ] **CHANGELOG.md** が新規生成され、`v0.9.1..main` の commits が `changelog-sections`（✨ Features / 🐛 Bug Fixes / 📝 Documentation など）で section 別に分類されている
+- [ ] `pyproject.toml` の `version` が提案 version に書き換わっている
+- [ ] `.release-please-manifest.json` が提案 version に書き換わっている
+
+### C. lock 追従 workflow の動作確認
+
+- [ ] `release-please-lock.yml` run が Release PR の opened / synchronize に応じて起動している（`gh run list -R apokamo/kaji -w release-please-lock.yml`）
+- [ ] `uv sync --locked` 結果が `in_sync=true`、または `uv lock` による自動 commit が Release PR に追加されている
+- [ ] Release PR head に GitHub App bot 名義の commit のみが追加されている（人手 push が混入していない）
+
+### D. version SoT / CLI 動作確認
+
+- [ ] `kaji_harness/__init__.py` に `__version__` が**ない**（Issue #153 で削除済み。`importlib.metadata.version("kaji")` 経由に統一）
+- [ ] Release PR を base に隔離環境で `uv pip install -e .` → `kaji --version` が提案 version を返す（任意 / 不安なときの追加確認）
+
+### E. Release PR merge 後の事後確認（参考）
+
+- [ ] tag `v0.10.0`（または採番された値）が自動付与されている（`gh release list -R apokamo/kaji`）
+- [ ] GitHub Release が公開され、CHANGELOG の該当セクションが Release notes として転記されている
+- [ ] 次回以降、main への conventional commits の merge ごとに Release PR が自動更新されることを最初の数本で目視確認する
+
+> **未充足が見つかった場合**: 原因が config / workflow 側にあれば別 Issue を起票して修正 PR を出す（本 Issue は merge 済み）。secret / permissions 起因であれば admin が `admin-setup.md` の該当 Step を再確認する。
 
 ## 緊急時の手動バンプ（fallback）
 
