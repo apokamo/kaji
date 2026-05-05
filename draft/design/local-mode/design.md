@@ -889,10 +889,12 @@ Phase 2 の Skill 改修で以下の context 変数体系へ移行する：
 | `[branch-name]` | `branch_name` | `str` | `feat/153` (github) / `feat/local-pc1-1` (local) |
 | （新規）| `worktree_dir` | `str` | `kaji-feat-153` / `kaji-feat-local-pc1-1`（worktree dir 名、`/` を `-` に） |
 | 設計書パス（暗黙） | `design_path` | `str` | `draft/design/issue-153-<slug>.md` (github) / `draft/design/local-pc1-1-<slug>.md` (local)。issue 番号空間と独立した命名 |
+| `[pr-number]` | `pr_id` | `str` | 正規化済み PR ID。`"42"` (github) / local では PR 概念が無いため未注入（Phase 4 で `pr-fix`/`pr-verify` 自体を bare provider エラー化する） |
+| （表示用）| `pr_ref` | `str` | 人間可読 PR 参照。`"#42"` (github) のみ。`issue_ref` と同様 `prompt.py` 側で provider 別整形 |
 
 #### Phase 2 で更新される全 Skill 範囲
 
-`grep -rl "issue-number\|issue_number\|<issue\|\[issue-number\]" .claude/skills/*/SKILL.md` で検出される全 Skill が対象。**Phase 2 では 7 変数体系のうち `issue_id` / `issue_ref` の 2 変数のみを完成させ、`issue_input` / `branch_prefix` / `branch_name` / `worktree_dir` / `design_path` の 5 変数は Phase 3 以降に延期する**（詳細は `phase2-design.md` § 概要 / out-of-scope）。理由は現行 Workflow / Step モデルに prefix / slug 供給経路が無く、`prompt.py` で 7 変数すべてを生成すると default 値の hard-code（`feat` 等）が `docs/247` / `fix/123` 等の既存 worktree 解決と矛盾するため。
+`grep -rl "issue-number\|issue_number\|<issue\|\[issue-number\]" .claude/skills/*/SKILL.md` で検出される全 Skill が対象。**Phase 2 では 9 変数体系のうち `issue_id` / `issue_ref` の 2 変数のみを完成させ、`issue_input` / `branch_prefix` / `branch_name` / `worktree_dir` / `design_path` / `pr_id` / `pr_ref` の 7 変数は Phase 3 以降に延期する**（詳細は `phase2-design.md` § 概要 / out-of-scope と `phase2b-implementation-report.md` § 4.4）。理由は現行 Workflow / Step モデルに prefix / slug 供給経路が無く、`prompt.py` で 7 変数すべてを生成すると default 値の hard-code（`feat` 等）が `docs/247` / `fix/123` 等の既存 worktree 解決と矛盾するため。`pr_id` / `pr_ref` は PR 取得経路（`kaji pr list --search` の Issue→PR 解決）と一体で Phase 3-4 に整理する。
 
 具体的には以下の更新を Phase 2 で実施する（チェックリスト化）：
 
@@ -901,8 +903,17 @@ Phase 2 の Skill 改修で以下の context 変数体系へ移行する：
 3. **表示文言**: `Issue #[issue-number]` → `Issue [issue_ref]`（`#` の有無は provider で異なる）
 4. **設計書ファイル名（限定的）**: `draft/design/issue-[number]-*.md` 中の `[number]` を `[issue_id]` に純粋リネーム。**provider 別の `[design_path]` 変数化は Phase 3 以降**
 5. **branch / worktree 名（Phase 3 以降）**: `[prefix]/[issue-number]` の `[issue-number]` を `[issue_id]` にリネームするのみ。`[prefix]` / `[branch-name]` / `[worktree-absolute-path]` は Skill 自前計算を温存し、`<branch_name>` / `<worktree_dir>` 変数化は Phase 3 以降
+6. **PR 識別子（Phase 3 以降）**: `[pr-number]` placeholder（`pr-fix` / `pr-verify` で 13 件以上）は Phase 2 では touch しない。Phase 3-4 で `pr_id` / `pr_ref` の 2 変数化と、`provider=local` 時の bare provider エラー化を一体で実施する
 
 これらは `gh` → `kaji` の単純置換とは独立した改修で、Phase 2 のスコープに含めて見積に追加する（後述「工数見積」更新）。
+
+#### Phase 2-B 実装で確定した追加スコープ
+
+`phase2b-implementation-report.md` § 9 のレビューサイクルで以下が Phase 2 のスコープに含まれることが確定した（設計初稿には未記載だったが、`issue_ref` 契約の完全性を担保するために必要）:
+
+- **入力表での `issue_ref` 宣言**: `issue_id` のみを宣言する Skill 入力表は不完全契約。本文で `[issue_ref]` を使う以上、ハーネス経由の自動注入と手動実行時の `issue_id` からの導出ルール（GitHub→`#<issue_id>` / local→bare ID）を入力表 + 解決ルールで明示する
+- **走査範囲の再帰化**: Skill markdown の静的検証 grep / Medium テストは `.claude/skills/**/*.md` を再帰走査する。`*/SKILL.md` + `_shared/*.md` の限定列挙だと `_shared/design-by-type/` / `_shared/implement-by-type/` / `issue-create/templates/` を取りこぼす
+- **`<number>` 山括弧形式の検出**: 旧表記の山括弧版（`issue-<number>-<slug>` 等の path template 表現）も legacy placeholder として禁止。`<issue-number>` だけ見ていると path template 内の `<number>` を取りこぼす
 
 `issue_id` / `issue_ref` の決定ロジックは `kaji_harness/prompt.py` で `ResolvedId` から導出し、Skill には文字列で展開して渡す（Skill markdown 自体は provider を意識しない）。残り 5 変数の供給経路（workflow YAML 拡張 / Issue NOTE 読み出し / Skill 内計算正本化）は Phase 3 開始時に決定する。
 
@@ -1470,13 +1481,13 @@ machine_id = "pc1"
 |-------|------|------|
 | 1 | `kaji issue/pr` CLI 追加（中身は gh 呼び出し）+ `kaji run` の issue 型 str 化（state.py / prompt.py / logger.py 含む） | 1.5 日 |
 | 2 | 20 Skill の `gh` → `kaji` 置換 + **`issue_id` / `issue_ref` の 2 変数移行**（`[issue-number]`→`[issue_id]`、`Issue #N` → `Issue [issue_ref]` 化、`Closes #` → `Closes [issue_ref]`）。`gh pr merge --merge` の `--merge` 同時除去を含む。**`branch_name` / `worktree_dir` / `design_path` / `issue_input` / `branch_prefix` の 5 変数は Phase 3+ に延期**（phase2-design.md § スコープ参照） | 3 日 |
-| 3 | `LocalProvider` 実装 + 単体テスト + ID resolve / glob 解決 + **`.gitignore` に `.kaji/config.local.toml` 追加**（現行 `.gitignore:49` には未掲載のため必須） | 2 日 |
-| 4 | `pr-*` Skill の provider 対応 + 新規 `feature-development-local.yaml` 追加 + ドキュメント | 1 日 |
+| 3 | `LocalProvider` 実装 + 単体テスト + ID resolve / glob 解決 + **`.gitignore` に `.kaji/config.local.toml` 追加**（現行 `.gitignore:49` には未掲載のため必須）+ **残り 5 変数（`issue_input` / `branch_prefix` / `branch_name` / `worktree_dir` / `design_path`）の正本化方針決定**（workflow YAML 拡張 / Issue NOTE 読み出し / Skill 内計算継続のいずれか）| 2 日 |
+| 4 | `pr-*` Skill の provider 対応（`provider=local` で bare provider エラー）+ **`[pr-number]` → `pr_id` / `pr_ref` リネーム** + 新規 `feature-development-local.yaml` 追加 + ドキュメント | 1 日 |
 | 5 | `kaji sync` 実装（from-github / status / local-to-github-plan） + BCP runbook（コード同期戦略章を含む） | 2 日 |
 | 予備 | バグ修正・統合テスト | 0.5 日 |
 | **合計** | | **10 日** |
 
-GitHub 復旧が 5 営業日以内に来た場合、Phase 1 + Phase 2 + Phase 5（snapshot だけ）まで先行実装し、Phase 3-4 は復旧後に別 Issue として進めることもできる。Phase 5 単独でも「停止時に焦らない」効果は得られるため、優先度を上げる選択肢もある。
+本設計は **GitHub 復旧を待たない buildout** を前提とする（§ 検証戦略の前提）。Phase 1 / 2-A / 2-B は完了済（main へ merge 済）、Phase 3 以降も復旧の有無を gate にせず順次着手する。Phase 5（`kaji sync` 系）は GitHub アクセスが回復した時点で初めて実用価値が出るため最後に置くが、設計・実装自体は他 Phase と並行して着手可能。
 
 ## オープンな論点
 
