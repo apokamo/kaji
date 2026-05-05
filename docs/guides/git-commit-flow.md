@@ -28,7 +28,7 @@ git absorb + `--no-ff` マージによるコミット履歴管理戦略。
 
 ## 推奨ツール
 
-[git-absorb](https://github.com/tummychow/git-absorb) のインストールを推奨する（未インストールの場合、`/issue-pr` スキルでは absorb ステップがスキップされる）:
+[git-absorb](https://github.com/tummychow/git-absorb) のインストールを推奨する（未インストールの場合、`/i-pr` スキルでは absorb ステップがスキップされる）:
 
 ```bash
 # macOS
@@ -83,7 +83,7 @@ gh pr create --title "feat: 新機能" --body "..."
 kaji では PR を作成し、GitHub 上で merge commit を用いてマージする:
 
 ```bash
-# PR 作成（/issue-pr スキルで自動化）
+# PR 作成（/i-pr スキルで自動化）
 gh pr create --title "feat: 新機能" --body "..."
 
 # マージ（/issue-close スキルで自動化）
@@ -94,7 +94,7 @@ gh pr merge --merge --delete-branch
 
 #### PR レビュー指摘対応（pr-fix の流れ）
 
-PR 作成後にレビュー指摘が付いた場合は、`/pr-fix` スキルが次の流れを担う（`/issue-pr` 内の `git absorb --and-rebase` とは異なり、レビュー対応は **追加の fix コミット** として積む）:
+PR 作成後にレビュー指摘が付いた場合は、`/pr-fix` スキルが次の流れを担う（`/i-pr` 内の `git absorb --and-rebase` とは異なり、レビュー対応は **追加の fix コミット** として積む）:
 
 ```bash
 # 1. 指摘に対応してファイルを修正
@@ -110,7 +110,7 @@ git add . && git commit -m "fix: address PR review feedback for #<issue-number>"
 git push
 ```
 
-`/issue-pr` 段階で履歴は既にレビュアーへ共有されているため、`/pr-fix` では履歴を書き換えず追加コミットを積む方針を取る。これにより `--force-with-lease` を要する場面が発生せず、レビュアーが PR 上で diff を追跡しやすい。
+`/i-pr` 段階で履歴は既にレビュアーへ共有されているため、`/pr-fix` では履歴を書き換えず追加コミットを積む方針を取る。これにより `--force-with-lease` を要する場面が発生せず、レビュアーが PR 上で diff を追跡しやすい。
 
 修正後は `/pr-verify` でレビュー指摘の収束を確認する。`pr-verify` は新規指摘を行わない契約のため、サイクルは有限で閉じる。
 

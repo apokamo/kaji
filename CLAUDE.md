@@ -133,7 +133,7 @@ kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
 | 実装 | `/issue-implement` → `/issue-review-code` → (`/issue-fix-code` → `/issue-verify-code`) | TDD 実装とコードレビューサイクル |
 | docs-only | `/i-doc-update` → `/i-doc-review` → (`/i-doc-fix` → `/i-doc-verify`) | ドキュメント修正と整合性レビューサイクル |
 | 最終チェック | `/i-dev-final-check` / `/i-doc-final-check` | エビデンス集約 + 品質チェック |
-| PR 作成 | `/issue-pr`（`/i-pr` 経由） | コミット整理 + プッシュ + PR 作成 |
+| PR 作成 | `/i-pr` | コミット整理 + プッシュ + PR 作成 |
 | PR レビュー後 | **`/pr-fix`** / **`/pr-verify`** | PR レビュー指摘対応とレビュー収束 |
 | 完了 | `/issue-close` | PR マージ + worktree 削除 + ブランチ削除 |
 
