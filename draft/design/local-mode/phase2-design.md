@@ -10,10 +10,11 @@
 
 | カテゴリ | パス / コマンド | 参照目的 |
 |---------|----------------|---------|
-| 親設計 | `draft/design/local-mode/design.md`「Skill の改修」章（行 803-841）| 置換マッピング正本 |
-| 親設計 | 同「provider 中立コンテキスト変数」章（行 855-883）| 変数体系の正本 |
-| 親設計 | 同「Phase 2 で更新される全 Skill 範囲」章（行 871-881）| 更新箇所のチェックリスト化 |
-| 親設計 | 同「Phase 1-2 の暫定動作」章（行 275-283）| Phase 2 段階で provider 抽象を導入しない根拠 |
+| 親設計 | `draft/design/local-mode/design.md`「Skill の改修」章（行 825-863）| 置換マッピング正本 |
+| 親設計 | 同「provider 中立コンテキスト変数」章（行 877-905）| 変数体系の正本 |
+| 親設計 | 同「Phase 2 で更新される全 Skill 範囲」章（行 893-903）| 更新箇所のチェックリスト化 |
+| 親設計 | 同「Phase 1-2 の暫定動作」章（行 297-305）| Phase 2 段階で provider 抽象を導入しない根拠 |
+| 親設計 | 同「検証戦略の前提（buildout 期間中の temporal inversion）」章（行 41-66）| GitHub 検証を gate にしない原則と Large-local / Large-forge 分割の正本 |
 | Phase 1 報告 | `phase1-implementation-report.md` 5.1 / 6 章 | `__post_init__` の int→str 正規化、`issue_number` alias の維持と Phase 2 完了時撤去方針 |
 | 既存 Skill 全件 | `.claude/skills/*/SKILL.md`（23 ファイル）| 置換対象。`grep -hE "^\s*gh " .claude/skills/*/SKILL.md` で 20 ファイルが `gh` を呼び、3 ファイル（`i-doc-verify` / `i-doc-review` / `i-doc-fix`）は呼ばない |
 | 既存 Skill 規約 | `.claude/skills/issue-start/SKILL.md:32-33` | branch 命名 `<prefix>/<gh-number>` および worktree dir `kaji-<prefix>-<id>` の正本 |
@@ -31,7 +32,7 @@
 
 Phase 2 では、`.claude/skills/*/SKILL.md` 内に存在する **GitHub CLI 直接呼び出し（`gh issue` / `gh pr` / `gh api`）を `kaji` ラッパー経由に置換**し、同時に **placeholder 表記の表記ゆれ（`[issue-number]` / `[number]` / `#[issue-number]` / `issue_number:` / `issue-[number]-*.md` など）を `[issue_id]` / `[issue_ref]` の 2 変数に正規化**する。
 
-**親設計（design.md 行 861-869）が想定する 7 変数移行（`issue_id` / `issue_ref` / `issue_input` / `branch_prefix` / `branch_name` / `worktree_dir` / `design_path`）のうち、Phase 2 では `issue_id` / `issue_ref` の 2 変数のみを完成させ、残り 5 変数は Phase 3 以降に延期する。** 理由は親設計が前提する Workflow / Step モデルへの prefix / slug 供給経路がまだ存在せず、Phase 2 段階で 7 変数すべてを生成すると default 値の hard-code（`feat` 等）が `docs/247` / `fix/123` 等の既存 worktree 解決と矛盾するため。詳細はスコープ章および out-of-scope 章を参照。
+**親設計（design.md 行 883-891）が想定する 7 変数移行（`issue_id` / `issue_ref` / `issue_input` / `branch_prefix` / `branch_name` / `worktree_dir` / `design_path`）のうち、Phase 2 では `issue_id` / `issue_ref` の 2 変数のみを完成させ、残り 5 変数は Phase 3 以降に延期する。** 理由は親設計が前提する Workflow / Step モデルへの prefix / slug 供給経路がまだ存在せず、Phase 2 段階で 7 変数すべてを生成すると default 値の hard-code（`feat` 等）が `docs/247` / `fix/123` 等の既存 worktree 解決と矛盾するため。詳細はスコープ章および out-of-scope 章を参照。
 
 > **親設計の Phase 2 約束との差分**: 親設計は「Phase 2 で 7 変数移行」と書かれているが、本 Phase 2 設計書では実装可能性に基づき **「Phase 2 = `issue_id` / `issue_ref` への移行 + Skill が `[prefix]` 等を自前計算する経路の温存」** に縮小する。Phase 3 開始時に親設計を更新し、残り 5 変数の供給経路（workflow YAML 拡張 / Issue NOTE 読み出し / Skill 内計算正本化）の決定とともに整理する。
 
@@ -133,7 +134,7 @@ Phase 1 実装報告（5.1）にあるとおり `WorkflowRunner` / `SessionState
 | `gh api repos/{o}/{r}/pulls/N/reviews --jq E` | `kaji pr reviews PR --jq E` | 同上 |
 | `gh api repos/{o}/{r}/pulls/N/comments/CID/replies` (POST 経由) | `kaji pr reply-to-comment PR --to CID --body B` | `pr-fix` のレビュー返信処理 |
 
-**重要**: 親設計（design.md 行 113-118）では `kaji pr review-comments` / `kaji pr reviews` / `kaji pr reply-to-comment` を **CLI 仕様として定義済**。Phase 2 ではこれら 3 サブコマンドを `_forward_to_gh` 経由で実装する必要がある（Phase 1 wrapper には未実装）。
+**重要**: 親設計（design.md 行 135-140）では `kaji pr review-comments` / `kaji pr reviews` / `kaji pr reply-to-comment` を **CLI 仕様として定義済**。Phase 2 ではこれら 3 サブコマンドを `_forward_to_gh` 経由で実装する必要がある（Phase 1 wrapper には未実装）。
 
 ##### `kaji pr review-comments` / `reviews` / `reply-to-comment` の CLI 契約
 
@@ -306,7 +307,7 @@ def _dispatch_pr_builtin(sub: str, rest: list[str]) -> int:
 
 ### Phase 2 で扱う prompt 注入変数（限定版）
 
-親設計（design.md 行 861-869）の 7 変数（`issue_id` / `issue_ref` / `issue_input` / `branch_prefix` / `branch_name` / `worktree_dir` / `design_path`）のうち、**Phase 2 では `issue_id` / `issue_ref` の 2 変数だけを正式変数として扱う**。残り 5 変数は Phase 3 以降に延期する（前述「out-of-scope」参照）。
+親設計（design.md 行 883-891）の 7 変数（`issue_id` / `issue_ref` / `issue_input` / `branch_prefix` / `branch_name` / `worktree_dir` / `design_path`）のうち、**Phase 2 では `issue_id` / `issue_ref` の 2 変数だけを正式変数として扱う**。残り 5 変数は Phase 3 以降に延期する（前述「out-of-scope」参照）。
 
 | 変数名 | 型 | 内容 | 例（github）| 例（local）| Phase |
 |--------|----|----|------------|------------|------|

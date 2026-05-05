@@ -38,6 +38,28 @@ PR の扱いは provider によって異なる：
 
 複数 PC（4 台想定）からの並行運用に対応するため、Issue ID には **machine prefix** を含める (`local-pc1-1`, `local-pc2-1`)。これにより各 PC は独立した番号空間を持ち、ID 採番の衝突は構造的に発生しない。同一 Issue を異なる PC で同時に編集した場合は git の通常の merge conflict として扱う。
 
+## 検証戦略の前提（buildout 期間中の temporal inversion）
+
+本設計は「通常時は github = SoT、停止時は local = BCP」という運用モデルだが、**本機能を実装している期間中は github 検証そのものが不能**という時間反転がある。GitHub アカウント停止が本機能着手の直接の動機であり、復旧見込みも不明（2026-05-05 時点）。したがって：
+
+| 通常時の前提 | buildout 期間中の実態 |
+|------------|---------------------|
+| github = SoT、local = BCP | local-mode 整備の実証手段が github 経由で取れない |
+| Large テスト = 実 github 通信を含む | 実 github 通信は誰も走らせられない（無期限） |
+| Phase 完了 gate に「`provider=github` で完走」を含める | gate にすると buildout 自体がブロックされる |
+
+### buildout 期間中の verification 原則
+
+1. **GitHub 通信を Phase 完了 gate に据えない**。代替として CliRunner + subprocess mock による pass-through 検証 / `libjq` 直呼びによる bit-exact 検証 / `grep` ベース静的検証で wrapper 契約と Skill 改修を担保する
+2. **`provider=local` 経路を end-to-end 検証の正本に据える**。Phase 3 で LocalProvider が完成した時点が、本機能で取れる最初の真の end-to-end smoke タイミング
+3. **github 復旧後の追跡項目を明示分離**する。受け入れ条件で「buildout 中の代替検証」と「復旧後の追跡項目」を別立てし、復旧後に追跡項目を消化することで完全な検証スイートに到達する
+
+### この原則が変える設計上の判断
+
+- Large テスト分類を **Large-local（subprocess + 外部通信なし）** と **Large-forge（実 gh / GitHub API 通信を含む、復旧後に追跡）** に分割（後述「テスト戦略 § Large」）
+- `provider=github` での完走を要求する受け入れ条件は、buildout 中は mock 検証に置き換え、復旧後の追跡項目として残す
+- Phase 3 完了時点が「local-mode 機能として end-to-end 動作する」初の検証点になり、それまでの Phase 1-2 は「github 経由で動作するための wrapper / Skill 整備」に留まる
+
 ## 運用前提
 
 | 構成 | 必要なもの |
@@ -1310,14 +1332,16 @@ machine_id = "pc1"
 
 ## 受け入れ条件
 
-- [ ] `kaji issue` / `kaji pr` CLI が `kaji --help` で確認できる
-- [ ] `provider: github` で全 Skill が従来通り動作する（既存 workflow が通る）
-- [ ] `provider: local` で、`/issue-create` → `/issue-start`（事前手動実行）→ `kaji run feature-development-local.yaml local-pc1-1` で `issue-design` 〜 `/issue-close` までが完走する
-- [ ] `pr-fix` / `pr-verify` は `provider: local` で明示的にエラー停止し、代替手順をガイドする
-- [ ] `IssueProvider` Protocol の単体テストが `LocalProvider` / `GitHubProvider` 両方で通る（GitHubProvider はモック）
-- [ ] `kaji sync from-github` で全 Issue が `.kaji/cache/` に保存され、`kaji sync status` で件数・最終同期時刻が確認できる
-- [ ] cache が存在する状態で `provider: local` に切替えると、cache 由来 Issue は read 可能、新規は `local-<machine>-<n>` で作成される
-- [ ] `provider: local` 時に `kaji issue view gh:<gh-number>` が cache から読み出して `provider: github` 時と同形式の整形出力を返す（prefix なしの数値入力は local 空間として解釈される）。`gh:` prefix は shell-safe で quote 不要
+> **buildout 期間中の運用**: 「§ 検証戦略の前提」で述べた temporal inversion により、本受け入れ条件は **buildout 中の代替検証**（mock / libjq / grep ベース）と **GitHub 復旧後の追跡項目**（実 `gh` 経由の検証）に分離する。各項目に依存タグ ``[buildout-ok]`` / ``[forge-required]`` を付し、Phase 完了 gate には ``[buildout-ok]`` のみを使う。``[forge-required]`` は復旧後 `make test-large-forge` で消化する追跡項目とする。
+
+- [ ] ``[buildout-ok]`` `kaji issue` / `kaji pr` CLI が `kaji --help` で確認できる
+- [ ] ``[buildout-ok]`` `provider: github` 経路で Skill が従来通り動作することを **CliRunner + subprocess mock の pass-through テストで担保**する（wrapper の引数組み立て / stdout-stdin 透過 / exit code 伝播の各契約）。実 `gh` での `feature-development.yaml` 完走確認は ``[forge-required]`` として復旧後追跡
+- [ ] ``[buildout-ok]`` `provider: local` で、`/issue-create` → `/issue-start`（事前手動実行）→ `kaji run feature-development-local.yaml local-pc1-1` で `issue-design` 〜 `/issue-close` までが完走する（**Phase 3 完了時点が初の検証点**）
+- [ ] ``[buildout-ok]`` `pr-fix` / `pr-verify` は `provider: local` で明示的にエラー停止し、代替手順をガイドする
+- [ ] ``[buildout-ok]`` `IssueProvider` Protocol の単体テストが `LocalProvider` / `GitHubProvider` 両方で通る（GitHubProvider はモック）
+- [ ] ``[forge-required]`` `kaji sync from-github` で全 Issue が `.kaji/cache/` に保存され、`kaji sync status` で件数・最終同期時刻が確認できる（buildout 中は subprocess mock + 録画レスポンスでの logic 検証のみ可能、実通信検証は復旧後）
+- [ ] ``[buildout-ok]`` cache が存在する状態で `provider: local` に切替えると、cache 由来 Issue は read 可能、新規は `local-<machine>-<n>` で作成される（cache を tmp_path で擬似再現する Medium テストで担保）
+- [ ] ``[buildout-ok]`` `provider: local` 時に `kaji issue view gh:<gh-number>` が cache から読み出して `provider: github` 時と同形式の整形出力を返す（prefix なしの数値入力は local 空間として解釈される）。`gh:` prefix は shell-safe で quote 不要
 - [ ] `provider: local` 時に `kaji issue list` が local Issue と cache 由来 Issue を統合表示し、ユーザーは ID 形式で出自を判別できる
 - [ ] 4 PC 並行運用シナリオで、各 PC が独立した番号空間 (`local-pc1-*` / `local-pc2-*` / ...) で Issue を作成し、ID 衝突が発生しないことが integration test で確認できる
 - [ ] `.gitignore` に `.kaji/config.local.toml` のエントリが追加され（現行 `.gitignore:49` には未掲載）、新規 clone でも machine_id 設定ファイルが tracked されない
@@ -1336,15 +1360,15 @@ machine_id = "pc1"
 - [ ] `next_local_id()` がカウンタファイル不在時（fresh clone / `make clean` 後）も既存 `.kaji/issues/local-<machine>-*` dir の最大値を見て採番衝突を起こさない
 - [ ] `kaji issue edit --add-frontmatter` で reserved key（`id` / `state` / `labels` / `assignees` / `created_at` / `updated_at` / `closed_at` / `close_reason` / `closed_by` / `created_by` / `title`）を上書きしようとするとエラー停止し、適切な専用 CLI が案内される
 - [ ] `--add-frontmatter` の KEY が `[a-z][a-z0-9_]{0,31}` 文法に違反する入力（大文字・記号・長さ超過）はエラー停止する
-- [ ] `kaji issue view ID --jq '.body'` の出力が `gh issue view ID --jq '.body'` と bit-exact に一致する（scalar string の quote 除去、改行・escape 文字の保持）。特に `CURRENT_BODY=$(kaji issue view ID -q '.body')` → `kaji issue edit ID --body "$CURRENT_BODY"` のラウンドトリップで本文が壊れない
-- [ ] `kaji issue edit gh:<gh-number>` を `provider: local` 時に呼ぶと `is_readonly()` 経由で編集不可エラーが返る
-- [ ] `kaji sync local-to-github-plan` が停止期間中の `local-<machine>-<n>` を全 PC 横断で一覧表示する
+- [ ] ``[buildout-ok]`` `kaji issue view ID --jq '.body'` の `--jq` 評価が `gh issue view ID --jq '.body'` と bit-exact に一致する（scalar string の quote 除去、改行・escape 文字の保持）。**buildout 中は Python `jq` library の直呼びで bit-exact 検証**（Small テスト、§ Small 1371 行）+ subprocess mock pass-through で `CURRENT_BODY=$(...)` ラウンドトリップを担保。実 `gh` 出力との bit-exact 比較は ``[forge-required]`` として復旧後追跡
+- [ ] ``[buildout-ok]`` `kaji issue edit gh:<gh-number>` を `provider: local` 時に呼ぶと `is_readonly()` 経由で編集不可エラーが返る
+- [ ] ``[buildout-ok]`` `kaji sync local-to-github-plan` が停止期間中の `local-<machine>-<n>` を全 PC 横断で一覧表示する（filesystem の状態のみ参照するため github 通信不要）
 - [ ] 既存の `make check` が通る
 - [ ] `docs/cli-guides/` に `kaji issue` / `kaji pr` / `kaji sync` のリファレンスを追加
 - [ ] `docs/dev/workflow_guide.md` に provider 切り替え + BCP フローの記述を追加
 - [ ] `docs/operations/` に GitHub 停止時の運用 runbook を追加
 - [ ] runbook 内に「コード同期戦略」セクションがあり、cloud mirror / self-host / bundle の 3 案と選定基準が記述されている
-- [ ] 「テスト戦略」セクション記載の Small / Medium / Large テストが各 Phase 完了時点で緑になっている
+- [ ] 「テスト戦略」セクション記載の Small / Medium / **Large-local** テストが各 Phase 完了時点で緑になっている。**Large-forge** は復旧後追跡（``[forge-required]``）
 - [ ] `kaji run` の `issue` パラメータが str 受理に変更され、既存テスト（`tests/test_cli_main.py` 等）が更新後 緑になっている
 - [ ] `.kaji/issues/` が directory-per-issue 構造（`<id>-<slug>/issue.md` + `comments/`）で実装されている
 - [ ] `provider: local` 時の `/issue-close` が「local mode における /issue-close の手順」記載のステップ通りに動作する（preflight check 失敗 / merge 衝突 / push 失敗 が ABORT または警告で正しく扱われる）
@@ -1392,15 +1416,33 @@ machine_id = "pc1"
 | provider 切替ロジック（CliRunner） | `CliRunner` で github（gh は mock）→ local → github の往復を invoke し、cache 由来 Issue read / local Issue 作成の両立を確認 |
 | LocalProvider 単体の filesystem 操作 | tmp_path を使った Issue dir 作成・close・list（subprocess なし） |
 
-### Large（実 CLI subprocess、外部サービスへの実通信）
+### Large（実 CLI subprocess）
 
-`docs/reference/testing-size-guide.md:28` の規約に従い、**subprocess で実 CLI を起動するものは Large**。本機能では以下が該当する：
+`docs/reference/testing-size-guide.md:28` の規約に従い、**subprocess で実 CLI を起動するものは Large**。本機能では Large を **Large-local**（外部通信なし、buildout 中も実行可能）と **Large-forge**（実 GitHub 通信あり、復旧後追跡）に分割する。
+
+#### Large-local（buildout 中も実行可能）
 
 | 対象 | 例 |
 |------|------|
 | provider=local での E2E workflow | `/issue-create` → `/issue-design` → `/issue-implement` → `/issue-close` を **kaji CLI 実プロセスで起動**して完走確認 |
 | マルチ PC simulation | 2 worktree を立て、それぞれ別 machine_id で `kaji issue create` を **subprocess 起動** → git merge での同期 |
-| 実 GitHub API での sync | テスト用 GitHub repo に対する `kaji sync from-github` 実通信（CI で apokamo 環境のみ実行） |
+
+これらは subprocess 起動という意味で Large だが、`provider=local` で動くため外部通信を含まない。**Phase 3 完了時点（LocalProvider 実装完了）が本機能で取れる初の end-to-end 検証タイミング**であり、Phase 2 までの Skill 改修 / wrapper 契約の正当性も最終的にここで証明される。
+
+#### Large-forge（復旧後追跡項目）
+
+| 対象 | 例 |
+|------|------|
+| `provider=github` E2E workflow 完走 | `feature-development.yaml` を実 `gh` で完走させ、Skill 改修によるレグレッションが無いことを確認 |
+| `kaji issue/pr` の実 `gh` ラウンドトリップ | `kaji issue view N -q '.body'` の出力と `gh issue view N -q '.body'` の bit-exact 一致を実 GitHub Issue で確認 |
+| 実 GitHub API での sync | テスト用 GitHub repo に対する `kaji sync from-github` 実通信 |
+| `kaji pr review-comments` 等の実 PR 疎通 | 実 PR レビューコメントを取得し、合成 jq の式が gh api 上で意図通り評価される |
+
+**buildout 期間中の扱い**: GitHub アカウント復旧まで実行不能のため Phase 完了 gate に含めない。代替として：
+- `gh` ラウンドトリップ → `libjq` 直呼びによる bit-exact 検証（Small テスト、§ Small 1371 行）+ subprocess mock pass-through 検証（Medium）
+- `provider=github` E2E → mock pass-through テストで wrapper 契約のみ担保
+
+復旧後、`make test-large-forge` を新設して上記項目を一括実行し、消化する。
 
 **注**: 前回 review 対応で「外部実通信が無いから Medium」とした E2E / multi-PC simulation は誤り。`testing-size-guide.md:28` は subprocess 起動自体を Large の根拠としている（プロセス境界を越える結合テスト）。CLI ロジックを Medium で検証したい場合は CliRunner で代替する。
 
@@ -1416,7 +1458,8 @@ machine_id = "pc1"
 
 - `make test-small` / `make test-medium` / `make test-large` の既存ターゲットに追加
 - Phase 1 から各 Phase 完了時点で対応する Small / Medium テストが緑であることを必須条件とする
-- Large テストは Phase 3 完了以降で運用開始
+- **Large-local**（subprocess あり、外部通信なし）は Phase 3 完了以降で運用開始
+- **Large-forge**（実 GitHub 通信あり）は GitHub アカウント復旧後に `make test-large-forge` ターゲットを新設して一括消化（buildout 期間中は Phase 完了 gate に含めない、§ 検証戦略の前提 参照）
 
 ## 工数見積
 
