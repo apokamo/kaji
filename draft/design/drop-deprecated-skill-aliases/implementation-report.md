@@ -63,7 +63,8 @@
 
 別途検討した変更の見送り:
 - `tests/test_verdict_e2e.py:43` にコメント「approximate output structure from the #73 issue-pr step」がある。これは過去の Issue #73 の文脈を示す **歴史的参照** であり、削除すると過去経緯が読み取れなくなる。設計の grep 対象 (`.claude .agents .kaji docs CLAUDE.md README.md`) にも `tests/` は含まれないため、修正対象外と判断
-- `WORKFLOW_SKILLS` に `i-pr` / `i-dev-final-check` を追加しない（**スコープ外**）。これらの新正本が parametrize に未掲載なのは旧来からの test 側の負債で、本リファクタ起因ではない
+
+当初「`WORKFLOW_SKILLS` に正本 3 件を追加しない」と本セクションに記載していたが、レビュー指摘 #2 を受けて方針転換し、追加実施した（コミット `d345810`）。詳細は本レポート末尾の「レビュー指摘対応」セクション参照。
 
 ### 検証結果
 
@@ -139,14 +140,15 @@ issue-close
 |---|-----|------|------|
 | 1 | `7bf10c2` | `refactor!:` | drop deprecated skill aliases (issue-pr, issue-doc-check)。`BREAKING CHANGE:` フッタ含む |
 | 2 | `c21bcad` | `docs:` | rename work-report.md to implementation-report.md |
-| 3 | （次の予定） | `refactor:` | レビュー指摘対応（.agents 正本 symlink 追加 / WORKFLOW_SKILLS coverage 補填 / 本レポート同期更新） |
+| 3 | `d345810` | `refactor:` | レビュー指摘 1st round 対応（.agents 正本 symlink 追加 / WORKFLOW_SKILLS coverage 補填 / 正本 SKILL.md の `## 入力` 追記 / 本レポート同期更新） |
+| 4 | `<this commit>` | `docs:` | レビュー指摘 2nd round 対応（本レポート内の自己矛盾箇所を解消） |
 
-設計書では「1 PR にまとめる」推奨だったが、実装過程で 2 コミットに分かれた。理由:
+設計書では「1 PR にまとめる」推奨だったが、実装過程およびレビューサイクルで複数コミットに分かれた。理由:
 
 - コミット 1: 設計書通りの実装本体
-- コミット 2: 実装後に気づいたレポート命名の改善（汎用名 `work-report.md` → 役割明示の `implementation-report.md`）。**設計書の射程外で発生した命名揺れ**であり、本体コミットに amend する余地もあったが「Never amend, always new commit」原則に従い分離
-
-レビュー指摘への対応コミットは 3 番目として積む。`refactor!:` ではなく `refactor:` にする理由は、コミット 1 で既に BREAKING CHANGE は宣言済みであり、本コミットは破壊的変更を伴わない補強（symlink 追加 / test 強化 / 文書同期）に閉じるため。
+- コミット 2: レポート命名の改善（汎用名 `work-report.md` → 役割明示の `implementation-report.md`）
+- コミット 3: 1st round レビュー指摘への対応（`refactor!:` でなく `refactor:` にしたのは、コミット 1 で既に BREAKING CHANGE 宣言済みであり、本コミットは破壊的変更を伴わない補強に閉じるため）
+- コミット 4: 2nd round レビュー指摘への対応。レポート内の旧記述（「追加しない」「次の予定」「commit 承認待ち」）が実状と矛盾している点を修正
 
 ## 完了条件チェック（設計書より）
 
@@ -210,7 +212,7 @@ _SKILL_STATUSES = {
 
 ## 次のアクション
 
-1. ユーザーが本報告を確認
-2. 問題なければ commit を承認 → `refactor!: drop deprecated skill aliases (issue-pr, issue-doc-check)` で 1 コミット
-3. GitHub 復旧後、本ブランチを push して PR 化（または local-mode 移行後は kaji local provider で merge）
-4. オープン論点 1（KPI 計測手法）と 2（test parametrize 抜け）は別タスクとして起票
+1. レビュー指摘 2nd round の収束確認
+2. GitHub 復旧後、本ブランチを push して PR 化（または local-mode 移行後は kaji local provider で merge）
+3. オープン論点 1（KPI 計測手法）は別タスクとして起票（local-mode design Phase 2 着手前に解決必須）
+4. なお、当初オープン論点 2 として挙げていた「test parametrize 抜け」は本リファクタ内（コミット `d345810`）で対応済みのため遺留事項から除外
