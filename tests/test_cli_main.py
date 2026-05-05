@@ -78,7 +78,7 @@ class TestParserSmall:
         parser = create_parser()
         args = parser.parse_args(["run", "workflow.yaml", "42"])
         assert args.workflow == Path("workflow.yaml")
-        assert args.issue == 42
+        assert args.issue == "42"
         assert args.from_step is None
         assert args.single_step is None
         assert args.quiet is False
@@ -529,6 +529,57 @@ class TestCLILarge:
         # (claude) cannot be found on the restricted PATH.
         assert result.returncode == 3
         assert "not found" in result.stderr.lower()
+
+
+# ============================================================
+# Phase 1: kaji issue / kaji pr passthrough wrappers
+# ============================================================
+
+
+@pytest.mark.small
+class TestIssuePrPassthrough:
+    """`kaji issue` / `kaji pr` は `gh` に引数を転送する Phase 1 wrapper。"""
+
+    def test_run_issue_accepts_local_id(self) -> None:
+        parser = create_parser()
+        args = parser.parse_args(["run", "wf.yaml", "local-pc1-1"])
+        assert args.issue == "local-pc1-1"
+
+    def test_issue_subcommand_forwards_to_gh(self) -> None:
+        parser = create_parser()
+        args = parser.parse_args(["issue", "view", "153", "--json", "title"])
+        assert args.command == "issue"
+        # REMAINDER は先頭の `--` を除き、user 入力をそのまま保つ
+        assert args.args == ["view", "153", "--json", "title"]
+
+    def test_pr_subcommand_forwards_to_gh(self) -> None:
+        parser = create_parser()
+        args = parser.parse_args(["pr", "create", "--base", "main", "--title", "x"])
+        assert args.command == "pr"
+        assert args.args == ["create", "--base", "main", "--title", "x"]
+
+    def test_pr_merge_strips_method_flags_and_forces_no_ff(self) -> None:
+        """`pr merge` は --merge / --squash / --rebase を露出せず、内部で --merge 固定。"""
+        from kaji_harness.cli_main import _forward_to_gh
+
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            _forward_to_gh("pr", ["merge", "feat/153", "--squash"])
+            cmd = mock_run.call_args[0][0]
+            assert cmd[:3] == ["gh", "pr", "merge"]
+            assert "--squash" not in cmd
+            assert cmd.count("--merge") == 1
+            assert cmd[-1] == "--merge"
+
+    def test_forward_returns_error_when_gh_missing(self) -> None:
+        from kaji_harness.cli_main import _forward_to_gh
+
+        with patch("kaji_harness.cli_main.shutil.which", return_value=None):
+            rc = _forward_to_gh("issue", ["view", "1"])
+            assert rc != 0
 
 
 # ============================================================

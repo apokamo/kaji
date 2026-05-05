@@ -405,7 +405,7 @@ class TestSessionStateWithArtifactsDir:
         arts_dir = tmp_path / "custom-artifacts"
         state = SessionState.load_or_create(42, artifacts_dir=arts_dir)
 
-        assert state.issue_number == 42
+        assert state.issue_number == "42"
 
     def test_persist_writes_to_artifacts_dir(self, tmp_path: Path) -> None:
         from kaji_harness.models import Verdict

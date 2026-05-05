@@ -55,7 +55,7 @@ def _make_workflow(
 
 
 def _make_state(
-    issue: int = 42,
+    issue: int | str = 42,
     last_transition_verdict: Verdict | None = None,
 ) -> SessionState:
     """Create a SessionState without filesystem side effects."""
@@ -108,6 +108,34 @@ class TestPromptContainsIssueNumber:
         prompt = build_prompt(step, issue=123, state=state, workflow=workflow)
 
         assert "123" in prompt
+
+    def test_prompt_emits_both_issue_number_alias_and_issue_id(self) -> None:
+        """Phase 1: 既存 Skill が参照する issue_number と新 issue_id を両方注入する。
+
+        Phase 2 で全 Skill を provider 中立変数 (issue_id / issue_ref) に移行する
+        までの後方互換契約。両方の行が存在することを明示的に検証する。
+        """
+        step = _make_step()
+        workflow = _make_workflow(steps=[step])
+        state = _make_state(issue=123)
+
+        prompt = build_prompt(step, issue=123, state=state, workflow=workflow)
+
+        assert "- issue_number: 123" in prompt
+        assert "- issue_id: 123" in prompt
+        assert "- issue_ref: #123" in prompt
+
+    def test_prompt_local_id_uses_bare_ref_without_hash(self) -> None:
+        """local-<machine>-<n> 形式は #-prefix を付けず生 ID を ref として出す。"""
+        step = _make_step()
+        workflow = _make_workflow(steps=[step])
+        state = _make_state(issue="local-pc1-1")
+
+        prompt = build_prompt(step, issue="local-pc1-1", state=state, workflow=workflow)
+
+        assert "- issue_id: local-pc1-1" in prompt
+        assert "- issue_ref: local-pc1-1" in prompt
+        assert "- issue_ref: #local-pc1-1" not in prompt
 
 
 # ============================================================
