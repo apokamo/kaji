@@ -34,7 +34,7 @@ class RunLogger:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
             f.flush()
 
-    def log_workflow_start(self, issue: int, workflow: str) -> None:
+    def log_workflow_start(self, issue: str, workflow: str) -> None:
         """ワークフロー開始イベントを記録。"""
         self._write("workflow_start", issue=issue, workflow=workflow)
 

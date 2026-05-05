@@ -6,23 +6,30 @@ Builds prompts with context variables for CLI execution.
 from __future__ import annotations
 
 from .models import Step, Workflow
-from .state import SessionState
+from .state import SessionState, _format_issue_ref
 
 
-def build_prompt(step: Step, issue: int, state: SessionState, workflow: Workflow) -> str:
+def build_prompt(step: Step, issue: str, state: SessionState, workflow: Workflow) -> str:
     """ステップ実行用のプロンプトを構築する。
 
     Args:
         step: 実行するステップ
-        issue: GitHub Issue 番号
+        issue: Issue ID（GitHub の数値、または ``local-<machine>-<n>`` 形式）
         state: 現在のセッション状態
         workflow: ワークフロー定義
 
     Returns:
         CLI に渡すプロンプト文字列
     """
+    issue_id = str(issue)
+    issue_ref = _format_issue_ref(issue_id)
     variables: dict[str, object] = {
-        "issue_number": issue,
+        # Phase 1 後方互換 alias: 既存 Skill (.claude/skills/*/SKILL.md) は
+        # issue_number を「常に注入される変数」として参照しているため、
+        # provider 中立変数への移行が完了する Phase 2 まで残す。
+        "issue_number": issue_id,
+        "issue_id": issue_id,
+        "issue_ref": issue_ref,
         "step_id": step.id,
     }
 
@@ -45,7 +52,7 @@ def build_prompt(step: Step, issue: int, state: SessionState, workflow: Workflow
     return f"""スキル `{step.skill}` を実行してください。
 
 ## セッション開始プロトコル
-1. GitHub Issue #{issue} を読み、現在の進捗を把握する
+1. Issue {issue_ref} を読み、現在の進捗を把握する
 2. git log --oneline -10 で最近の変更を確認する
 3. 以下のコンテキスト変数を確認する
 4. 上記を踏まえて、スキルの指示に従って作業を実行する

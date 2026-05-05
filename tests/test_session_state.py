@@ -47,7 +47,7 @@ class TestLoadOrCreateNew:
         arts_dir = tmp_path / "artifacts"
         state = SessionState.load_or_create(issue=99, artifacts_dir=arts_dir)
 
-        assert state.issue_number == 99
+        assert state.issue_number == "99"
         assert state.sessions == {}
         assert state.step_history == []
         assert state.cycle_counts == {}

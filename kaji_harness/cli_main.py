@@ -6,6 +6,8 @@ Provides the `kaji` command with subcommands (e.g., `kaji run`).
 from __future__ import annotations
 
 import argparse
+import shutil
+import subprocess
 import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -21,6 +23,7 @@ from .errors import (
 )
 from .runner import WorkflowRunner
 from .skill import validate_skill_exists
+from .state import _format_issue_ref
 from .workflow import load_workflow, validate_workflow
 
 EXIT_OK = 0
@@ -49,6 +52,8 @@ def create_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     _register_run(subparsers)
     _register_validate(subparsers)
+    _register_issue(subparsers)
+    _register_pr(subparsers)
     return parser
 
 
@@ -56,7 +61,11 @@ def _register_run(subparsers: argparse._SubParsersAction[argparse.ArgumentParser
     """Register the `run` subcommand."""
     p = subparsers.add_parser("run", help="Run a workflow")
     p.add_argument("workflow", type=Path, help="Path to workflow YAML file")
-    p.add_argument("issue", type=int, help="GitHub Issue number")
+    p.add_argument(
+        "issue",
+        type=str,
+        help="Issue ID (GitHub number like '153' or local form like 'local-pc1-1')",
+    )
     p.add_argument("--from", dest="from_step", help="Resume from a specific step")
     p.add_argument("--step", dest="single_step", help="Run a single step only")
     p.add_argument(
@@ -71,6 +80,36 @@ def _register_run(subparsers: argparse._SubParsersAction[argparse.ArgumentParser
         help="Starting directory for config discovery (default: current directory)",
     )
     p.add_argument("--quiet", action="store_true", help="Suppress agent output streaming")
+
+
+def _register_issue(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Register the `issue` subcommand (gh issue passthrough wrapper).
+
+    Phase 1: provider 抽象が未導入のため、すべての引数を `gh issue` に転送する。
+    Phase 3 で LocalProvider 導入時に dispatch ロジックへ差し替える。
+    """
+    p = subparsers.add_parser(
+        "issue",
+        help="Issue operations (Phase 1: gh issue passthrough)",
+        add_help=False,
+    )
+    p.add_argument("args", nargs=argparse.REMAINDER, help="Arguments forwarded to 'gh issue'")
+
+
+def _register_pr(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Register the `pr` subcommand (gh pr passthrough wrapper).
+
+    Phase 1: すべての引数を `gh pr` に転送する。例外として `pr merge` は
+    method flag (``--merge`` / ``--squash`` / ``--rebase``) を露出せず、
+    内部で常に ``--merge`` (= ``--no-ff`` 相当) 固定で gh に渡す
+    (`docs/guides/git-commit-flow.md` の merge 規約に従う)。
+    """
+    p = subparsers.add_parser(
+        "pr",
+        help="Pull request operations (Phase 1: gh pr passthrough)",
+        add_help=False,
+    )
+    p.add_argument("args", nargs=argparse.REMAINDER, help="Arguments forwarded to 'gh pr'")
 
 
 def _register_validate(
@@ -257,8 +296,48 @@ def cmd_run(args: argparse.Namespace) -> int:
         return EXIT_ABORT
 
     # Success summary
-    print(f"Workflow '{workflow.name}' completed for issue #{args.issue}")
+    print(f"Workflow '{workflow.name}' completed for issue {_format_issue_ref(args.issue)}")
     return EXIT_OK
+
+
+_FORGE_METHOD_FLAGS = {"--merge", "--squash", "--rebase"}
+
+
+def _forward_to_gh(group: str, raw_args: list[str]) -> int:
+    """`gh <group> ...` に引数を転送する Phase 1 用 wrapper。
+
+    `pr merge` の method flag は露出せず常に `--merge` (= no-ff) 固定で渡す。
+    詳細: ``docs/guides/git-commit-flow.md``。
+
+    `argparse.REMAINDER` は先頭の `--` を残したり残さなかったりするため、
+    user 入力の意味を変えないよう先頭の単独 `--` のみを除去する。
+    """
+    if not shutil.which("gh"):
+        print(
+            "Error: 'gh' CLI not found in PATH. "
+            "Install GitHub CLI to use 'kaji issue' / 'kaji pr' (Phase 1).",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME_ERROR
+
+    args = list(raw_args)
+    if args and args[0] == "--":
+        args = args[1:]
+
+    if group == "pr" and args and args[0] == "merge":
+        # method flag を除去し、常に --merge (= no-ff 相当) を強制する
+        # ``docs/guides/git-commit-flow.md`` の merge 規約に従う
+        head = [args[0]]
+        rest = [a for a in args[1:] if a not in _FORGE_METHOD_FLAGS]
+        args = head + rest + ["--merge"]
+
+    cmd = ["gh", group, *args]
+    try:
+        result = subprocess.run(cmd, check=False)
+    except OSError as exc:
+        print(f"Error: failed to invoke 'gh': {exc}", file=sys.stderr)
+        return EXIT_RUNTIME_ERROR
+    return result.returncode
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -270,6 +349,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_run(args)
     if args.command == "validate":
         return cmd_validate(args)
+    if args.command == "issue":
+        return _forward_to_gh("issue", args.args)
+    if args.command == "pr":
+        return _forward_to_gh("pr", args.args)
 
     parser.print_help()
     return EXIT_ABORT

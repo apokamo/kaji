@@ -30,7 +30,7 @@ class TestStatePersistence:
 
         # Load from disk
         loaded = SessionState.load_or_create(42, artifacts_dir=tmp_path)
-        assert loaded.issue_number == 42
+        assert loaded.issue_number == "42"
         assert loaded.sessions["design"] == "sess-design-001"
         assert len(loaded.step_history) == 1
         assert loaded.step_history[0].step_id == "design"
@@ -119,7 +119,7 @@ class TestStatePersistence:
     def test_load_nonexistent_creates_fresh(self, tmp_path: Path) -> None:
         """Loading non-existent state creates a fresh SessionState."""
         state = SessionState.load_or_create(999, artifacts_dir=tmp_path)
-        assert state.issue_number == 999
+        assert state.issue_number == "999"
         assert state.sessions == {}
         assert state.step_history == []
         assert state.cycle_counts == {}
@@ -192,7 +192,7 @@ class TestStateJsonStructure:
         assert json_path.exists()
         data = json.loads(json_path.read_text())
 
-        assert data["issue_number"] == 600
+        assert data["issue_number"] == "600"
         assert "design" in data["sessions"]
         assert len(data["step_history"]) == 1
         assert data["last_completed_step"] == "design"

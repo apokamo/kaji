@@ -34,7 +34,7 @@ class WorkflowRunner:
     """ワークフロー実行エンジン。"""
 
     workflow: Workflow
-    issue_number: int
+    issue_number: str
     project_root: Path
     artifacts_dir: Path
     config: KajiConfig
@@ -42,6 +42,10 @@ class WorkflowRunner:
     single_step: str | None = None
     before_step: str | None = None
     verbose: bool = True
+
+    def __post_init__(self) -> None:
+        # int / その他から str へ正規化（既存呼び出し互換のため）
+        self.issue_number = str(self.issue_number)
 
     def run(self) -> SessionState:
         """ワークフローを実行し、最終状態を返す。
@@ -73,10 +77,7 @@ class WorkflowRunner:
 
         # 3. run ログディレクトリを作成
         run_dir = (
-            self.artifacts_dir
-            / str(self.issue_number)
-            / "runs"
-            / datetime.now().strftime("%y%m%d%H%M")
+            self.artifacts_dir / self.issue_number / "runs" / datetime.now().strftime("%y%m%d%H%M")
         )
         run_dir.mkdir(parents=True, exist_ok=True)
         logger = RunLogger(log_path=run_dir / "run.log")

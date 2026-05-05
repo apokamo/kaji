@@ -15,6 +15,19 @@ from .models import Verdict
 STATE_FILE = "session-state.json"
 
 
+def _format_issue_ref(issue: str | int) -> str:
+    """Issue ID を人間可読な参照形式に整形する。
+
+    数値のみ（GitHub Issue 番号）→ ``#153``。
+    それ以外（local-pc1-1 等）→ そのまま返す。
+
+    Phase 1 では provider 抽象が未導入のため、形式から判別する。
+    int も受け付ける（既存呼び出し互換のための境界正規化）。
+    """
+    s = str(issue)
+    return f"#{s}" if s.isdigit() else s
+
+
 @dataclass
 class StepRecord:
     """ステップ実行記録。"""
@@ -31,7 +44,7 @@ class StepRecord:
 class SessionState:
     """Issue 単位のセッション状態。"""
 
-    issue_number: int
+    issue_number: str
     artifacts_dir: Path
     sessions: dict[str, str] = field(default_factory=dict)
     step_history: list[StepRecord] = field(default_factory=list)
@@ -39,8 +52,12 @@ class SessionState:
     last_completed_step: str | None = None
     last_transition_verdict: Verdict | None = None
 
+    def __post_init__(self) -> None:
+        # 既存呼び出しが int を渡してきても受理する（境界で str に正規化）
+        self.issue_number = str(self.issue_number)
+
     @classmethod
-    def load_or_create(cls, issue: int, artifacts_dir: Path) -> SessionState:
+    def load_or_create(cls, issue: str, artifacts_dir: Path) -> SessionState:
         """状態をロードまたは新規作成する。"""
         path = artifacts_dir / str(issue) / STATE_FILE
         if path.exists():
@@ -49,12 +66,15 @@ class SessionState:
             ltv = data.pop("last_transition_verdict", None)
             if ltv:
                 data["last_transition_verdict"] = Verdict(**ltv)
+            # 旧 cache 互換: issue_number が int で保存されていた場合も str 化して読み込む
+            if "issue_number" in data and not isinstance(data["issue_number"], str):
+                data["issue_number"] = str(data["issue_number"])
             return cls(artifacts_dir=artifacts_dir, **data)
-        return cls(issue_number=issue, artifacts_dir=artifacts_dir)
+        return cls(issue_number=str(issue), artifacts_dir=artifacts_dir)
 
     @property
     def _state_dir(self) -> Path:
-        return self.artifacts_dir / str(self.issue_number)
+        return self.artifacts_dir / self.issue_number
 
     def save_session_id(self, step_id: str, session_id: str) -> None:
         """ステップのセッション ID を保存し、即時永続化する。"""
@@ -111,7 +131,7 @@ class SessionState:
 
     def _write_progress_md(self) -> None:
         """人間可読な進捗ファイルを更新する。"""
-        lines = [f"# Progress: Issue #{self.issue_number}\n"]
+        lines = [f"# Progress: Issue {_format_issue_ref(self.issue_number)}\n"]
         for record in self.step_history:
             mark = "x" if record.verdict_status == "PASS" else " "
             lines.append(
