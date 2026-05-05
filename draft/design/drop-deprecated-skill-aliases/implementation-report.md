@@ -114,19 +114,11 @@
 
 `draft/design/local-mode/design.md` には「Phase 2 着手前に計測手法を見直し真値を確定」を本リファクタ完了時点で注記として追記済み。**local-mode 着手前に別タスクとして棚卸しが必要**。
 
-### 2. `tests/test_skill_harness_adaptation.py` の `WORKFLOW_SKILLS` の coverage 抜け
+### 2. （解消済み）`tests/test_skill_harness_adaptation.py` の `WORKFLOW_SKILLS` の coverage 抜け
 
-本リファクタで alias を削除した結果、`WORKFLOW_SKILLS` 配列には現状以下のみが含まれる:
-```
-issue-design, issue-review-design, issue-fix-design, issue-verify-design,
-issue-implement, issue-review-code, issue-fix-code, issue-verify-code,
-issue-close
-```
+**ステータス: コミット `d345810` で対応完了。遺留事項ではない。**
 
-しかし実 workflow YAML (`.kaji/wf/*.yaml`) からは `i-pr`, `i-dev-final-check` も呼ばれている。これらは **parametrize に未掲載で SKILL.md 形式テストの対象外**。
-
-- これは旧来からの test 側の負債で、本リファクタの起因ではない
-- 別 Issue として扱う（本リファクタのスコープ外、報告書のオープン論点として記録）
+当初は本リファクタのスコープ外として遺留事項に記載していたが、レビュー指摘 1st round（Must Fix #2）を受けて方針転換し、`WORKFLOW_SKILLS` および `_SKILL_STATUSES` に正本 3 件 (`i-pr`, `i-dev-final-check`, `i-doc-final-check`) を追加した。詳細は本レポート末尾の「レビュー指摘対応」セクション参照。
 
 ### 3. `tests/test_verdict_e2e.py:43` の歴史的コメント
 
