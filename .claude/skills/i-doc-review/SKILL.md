@@ -25,7 +25,8 @@ docs-only の変更をレビューする。新規指摘を行ってよい。
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_number` | int | GitHub Issue 番号 |
+| `issue_id` | str | 正規化済み Issue ID（GitHub 数値または local ID） |
+| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID） |
 | `step_id` | str | 現在のステップ ID |
 | `cycle_count` | int | 現在のイテレーション |
 | `max_iterations` | int | サイクルの上限回数 |
@@ -33,13 +34,15 @@ docs-only の変更をレビューする。新規指摘を行ってよい。
 ### 手動実行（スラッシュコマンド）
 
 ```
-$ARGUMENTS = <issue-number>
+$ARGUMENTS = <issue_id>
 ```
 
 ### 解決ルール
 
-コンテキスト変数 `issue_number` が存在すればそちらを使用。
-なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
+コンテキスト変数 `issue_id` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
+
+`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
 
 ## 前提知識の読み込み
 
@@ -54,7 +57,7 @@ $ARGUMENTS = <issue-number>
 2. Issue コメントから直近の docs-only 更新報告を確認
 3. 設計書を確認:
    ```bash
-   cat [worktree-absolute-path]/draft/design/issue-[number]-*.md
+   cat [worktree-absolute-path]/draft/design/issue-[issue_id]-*.md
    ```
 4. 差分を確認:
    ```bash

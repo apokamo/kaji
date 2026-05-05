@@ -74,7 +74,7 @@ suggestion: |
 ---END_VERDICT---
 ```
 
-verdict ブロックは **stdout にそのまま出力** すること。ハーネスは CLI の標準出力から verdict を抽出するため、`gh issue comment --body` の引数や別コマンドの入力にだけ verdict を埋めても判定されない。
+verdict ブロックは **stdout にそのまま出力** すること。ハーネスは CLI の標準出力から verdict を抽出するため、`kaji issue comment --body` の引数や別コマンドの入力にだけ verdict を埋めても判定されない。
 
 Issue コメントや Issue 本文更新は別途行ってよいが、それは verdict 出力の代替ではない。コメント投稿を行う場合でも、最終的な verdict ブロックは stdout に残すこと。
 
@@ -117,7 +117,8 @@ suggestion: |
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_number` | int | GitHub Issue 番号 |
+| `issue_id` | str | 正規化済み Issue ID（GitHub 数値または local ID。例: `"153"` / `"local-pc1-1"`） |
+| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID。例: `"#153"` / `"local-pc1-1"`） |
 | `step_id` | str | 現在のステップ ID |
 | `previous_verdict` | str | 前ステップの verdict 要約（resume ステップ等） |
 | `cycle_count` | int | 現在のサイクルイテレーション（サイクル内ステップのみ） |
@@ -131,10 +132,10 @@ suggestion: |
 
 ```bash
 # 作業結果を Issue にコメント
-gh issue comment <issue_number> --body "..."
+kaji issue comment <issue_id> --body "..."
 
 # Issue 本文を更新（状態の記録）
-gh issue edit <issue_number> --body "..."
+kaji issue edit <issue_id> --body "..."
 ```
 
 **ルール**: レビュー系スキル（review-\*, verify-\*）は Issue にコメントで結果を記録する。実装系スキルは完了報告をコメントする。
@@ -174,17 +175,20 @@ git add <files> && git commit -m "test: add tests for X"
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_number` | int | GitHub Issue 番号 |
+| `issue_id` | str | 正規化済み Issue ID（GitHub 数値または local ID） |
+| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID） |
 | `step_id` | str | 現在のステップ ID |
 
 ### 手動実行（スラッシュコマンド）
 
-$ARGUMENTS = <issue-number>
+$ARGUMENTS = <issue_id>
 
 ### 解決ルール
 
-コンテキスト変数 `issue_number` が存在すればそちらを使用。
-なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
+コンテキスト変数 `issue_id` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
+
+`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
 ```
 
 **優先順位**: コンテキスト変数 > `$ARGUMENTS`。ハーネスが変数を注入している場合はそちらを使い、手動実行時は従来通り `$ARGUMENTS` から取得する。

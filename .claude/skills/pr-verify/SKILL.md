@@ -25,15 +25,17 @@ PR レビュー修正後の確認を行う。
 ## 引数
 
 ```
-$ARGUMENTS = <issue-number>
+$ARGUMENTS = <issue_id>
 ```
 
 - Issue 番号を受け付ける（関連 PR を自動解決する）
 
 ### 解決ルール
 
-コンテキスト変数 `issue_number` が存在すればそちらを使用。
-なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
+コンテキスト変数 `issue_id` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
+
+`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
 
 ## 前提知識の読み込み
 
@@ -63,11 +65,11 @@ $ARGUMENTS = <issue-number>
 1. **PR の特定**:
    Issue 番号から関連 PR を解決する。
    ```bash
-   gh pr list --search "[issue-number]" --json number,title,headRefName --jq '.'
+   kaji pr list --search "[issue_id]" --json number,title,headRefName --jq '.'
    ```
    見つからない場合は Issue 本文の `> **Branch**:` 行からブランチ名を取得し:
    ```bash
-   gh pr list --head "[branch-name]" --json number,title --jq '.'
+   kaji pr list --head "[branch-name]" --json number,title --jq '.'
    ```
 
 2. **Worktree パスの解決**:
@@ -75,9 +77,9 @@ $ARGUMENTS = <issue-number>
 
 3. **前回の指摘と対応報告の取得**:
    ```bash
-   gh pr view [pr-number] --comments
-   gh api repos/{owner}/{repo}/pulls/[pr-number]/reviews --jq '.[] | {user: .user.login, state: .state, body: .body}'
-   gh api repos/{owner}/{repo}/pulls/[pr-number]/comments --jq '.[] | {path: .path, line: .line, body: .body, user: .user.login}'
+   kaji pr view [pr-number] --comments
+   kaji pr reviews [pr-number] --jq '.[] | {user: .user.login, state: .state, body: .body}'
+   kaji pr review-comments [pr-number] --jq '.[] | {path: .path, line: .line, body: .body, user: .user.login}'
    ```
    「レビュー指摘への対応報告」コメントを確認する。
 
@@ -139,7 +141,7 @@ cd [worktree-absolute-path] && source .venv/bin/activate && make check
 #### Approve の場合
 
 ```bash
-gh pr review [pr-number] --approve --body-file - <<'EOF'
+kaji pr review [pr-number] --approve --body-file - <<'EOF'
 ## PR レビュー修正確認結果
 
 ### 修正項目の確認
@@ -171,7 +173,7 @@ EOF
 #### Changes Requested の場合
 
 ```bash
-gh pr review [pr-number] --request-changes --body-file - <<'EOF'
+kaji pr review [pr-number] --request-changes --body-file - <<'EOF'
 ## PR レビュー修正確認結果
 
 ### 修正項目の確認
@@ -204,13 +206,13 @@ EOF
 | 項目 | 値 |
 |------|-----|
 | PR | #[pr-number] |
-| Issue | #[issue-number] |
+| Issue | [issue_ref] |
 | 判定 | Approve / Changes Requested |
 
 ### 次のステップ
 
-- Approve: `/issue-close [issue-number]` で PR マージ & クリーンアップ
-- Changes Requested: `/pr-fix [issue-number]` で再修正
+- Approve: `/issue-close [issue_id]` で PR マージ & クリーンアップ
+- Changes Requested: `/pr-fix [issue_id]` で再修正
 ```
 
 ## Verdict 出力

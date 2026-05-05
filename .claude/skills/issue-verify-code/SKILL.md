@@ -30,7 +30,8 @@ name: issue-verify-code
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_number` | int | GitHub Issue 番号 |
+| `issue_id` | str | 正規化済み Issue ID（GitHub 数値または local ID） |
+| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID） |
 | `step_id` | str | 現在のステップ ID |
 
 **条件付きで注入される変数:**
@@ -43,13 +44,15 @@ name: issue-verify-code
 ### 手動実行（スラッシュコマンド）
 
 ```
-$ARGUMENTS = <issue-number>
+$ARGUMENTS = <issue_id>
 ```
 
 ### 解決ルール
 
-コンテキスト変数 `issue_number` が存在すればそちらを使用。
-なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
+コンテキスト変数 `issue_id` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
+
+`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
 
 ## 前提知識の読み込み
 
@@ -80,7 +83,7 @@ $ARGUMENTS = <issue-number>
 
 2. **前回の指摘内容を取得**:
    ```bash
-   gh issue view [issue-number] --comments
+   kaji issue view [issue_id] --comments
    ```
    「コードレビュー結果」と「レビュー指摘への対応報告」を確認。
 
@@ -136,7 +139,7 @@ $ARGUMENTS = <issue-number>
 ### Step 3: 確認結果のコメント
 
 ```bash
-gh issue comment [issue-number] --body-file - <<'EOF'
+kaji issue comment [issue_id] --body-file - <<'EOF'
 # コード修正確認結果
 
 ## 修正項目の確認
@@ -174,10 +177,10 @@ gh issue comment [issue-number] --body-file - <<'EOF'
 ## 次のステップ
 
 (Approve の場合)
-`/i-dev-final-check [issue-number]` で最終チェックを実施してください。
+`/i-dev-final-check [issue_id]` で最終チェックを実施してください。
 
 (Changes Requested の場合)
-`/issue-fix-code [issue-number]` で再度修正してください。
+`/issue-fix-code [issue_id]` で再度修正してください。
 EOF
 ```
 
@@ -188,13 +191,13 @@ EOF
 
 | 項目 | 値 |
 |------|-----|
-| Issue | #[issue-number] |
+| Issue | [issue_ref] |
 | 判定 | Approve / Changes Requested |
 
 ### 次のステップ
 
-- Approve: `/i-dev-final-check [issue-number]` で最終チェック
-- Changes Requested: `/issue-fix-code [issue-number]` で再修正
+- Approve: `/i-dev-final-check [issue_id]` で最終チェック
+- Changes Requested: `/issue-fix-code [issue_id]` で再修正
 ```
 
 ## Verdict 出力

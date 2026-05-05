@@ -23,7 +23,7 @@ class TestRunLogIntegration:
         logger = RunLogger(log_path=log_path)
 
         # Simulate a workflow
-        logger.log_workflow_start(issue=42, workflow="feature-dev")
+        logger.log_workflow_start(issue="42", workflow="feature-dev")
         logger.log_step_start(
             step_id="design",
             agent="claude",
@@ -51,7 +51,7 @@ class TestRunLogIntegration:
 
         events = [json.loads(line) for line in lines]
         assert events[0]["event"] == "workflow_start"
-        assert events[0]["issue"] == 42
+        assert events[0]["issue"] == "42"
         assert events[1]["event"] == "step_start"
         assert events[1]["step_id"] == "design"
         assert events[2]["event"] == "step_end"
@@ -83,8 +83,8 @@ class TestRunLogIntegration:
         log_path = tmp_path / "run.log"
         logger = RunLogger(log_path=log_path)
 
-        logger.log_workflow_start(issue=1, workflow="test")
-        logger.log_workflow_start(issue=2, workflow="test2")
+        logger.log_workflow_start(issue="1", workflow="test")
+        logger.log_workflow_start(issue="2", workflow="test2")
 
         lines = log_path.read_text().strip().split("\n")
         assert len(lines) == 2
@@ -94,6 +94,6 @@ class TestRunLogIntegration:
         log_path = tmp_path / "deep" / "nested" / "run.log"
         logger = RunLogger(log_path=log_path)
 
-        logger.log_workflow_start(issue=1, workflow="test")
+        logger.log_workflow_start(issue="1", workflow="test")
 
         assert log_path.exists()

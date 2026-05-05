@@ -83,7 +83,7 @@ class TestInputSectionDualMode:
     @pytest.mark.parametrize("skill_name", WORKFLOW_SKILLS)
     def test_workflow_skill_has_context_variables(self, skill_name: str) -> None:
         content = _read_skill(skill_name)
-        assert "issue_number" in content, f"{skill_name} missing issue_number context variable"
+        assert "issue_id" in content, f"{skill_name} missing issue_id context variable"
 
     @pytest.mark.parametrize("skill_name", WORKFLOW_SKILLS)
     def test_workflow_skill_has_arguments(self, skill_name: str) -> None:

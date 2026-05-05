@@ -5,7 +5,7 @@
 
 ## 前提
 
-- `draft/design/issue-[number]-*.md` が存在すること
+- `draft/design/issue-[issue_id]-*.md` が存在すること
 - 設計書の内容が後述「いつ昇格するか」に該当すること
 
 ## いつ昇格するか
@@ -33,7 +33,7 @@
 
 ### 3. 内容の変換
 
-`draft/design/issue-[number]-*.md` をそのままコピーせず、恒久ドキュメントとして独立した文書に書き直す:
+`draft/design/issue-[issue_id]-*.md` をそのままコピーせず、恒久ドキュメントとして独立した文書に書き直す:
 
 - Issue 固有の文脈（Issue 番号への直接参照、worktree パス、`draft/design/` からの相対リンク等）を除去する
 - 「背景」「OB/EB」等、設計時点の一時的な議論は要約し、決定事項のみ残す
@@ -41,7 +41,7 @@
 
 ### 4. 設計書からの参照
 
-元の `draft/design/issue-[number]-*.md` の冒頭（概要セクション直後）に、昇格先ドキュメントへのリンクを追記する。これにより `i-dev-final-check` が Issue 本文へアーカイブした際にも、読み手が恒久版の所在を辿れる。
+元の `draft/design/issue-[issue_id]-*.md` の冒頭（概要セクション直後）に、昇格先ドキュメントへのリンクを追記する。これにより `i-dev-final-check` が Issue 本文へアーカイブした際にも、読み手が恒久版の所在を辿れる。
 
 例:
 ```markdown
@@ -53,15 +53,15 @@
 昇格先ドキュメントと設計書の更新を 1 つのコミットにまとめる:
 
 ```bash
-git add docs/adr/NNNN-title.md draft/design/issue-[number]-*.md
-git commit -m "docs: promote design to docs/adr/NNNN-title for #[number]"
+git add docs/adr/NNNN-title.md draft/design/issue-[issue_id]-*.md
+git commit -m "docs: promote design to docs/adr/NNNN-title for [issue_ref]"
 ```
 
-`docs/dev/` に昇格する場合も同様に `docs: promote design to docs/dev/xxx for #[number]` とする。
+`docs/dev/` に昇格する場合も同様に `docs: promote design to docs/dev/xxx for [issue_ref]` とする。
 
 ## 注意事項
 
 - 昇格先ドキュメントは draft 設計書のコピーではなく、**恒久ドキュメントとして独立した内容**にする
 - Issue 番号や worktree パス等の一時的な情報は昇格先に含めない
-- `draft/design/issue-[number]-*.md` はそのまま残す（worktree 削除時に自然消滅する）
+- `draft/design/issue-[issue_id]-*.md` はそのまま残す（worktree 削除時に自然消滅する）
 - ADR の番号衝突を避けるため、`ls docs/adr/` で既存の最大番号を確認してから採番する

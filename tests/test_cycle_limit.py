@@ -21,7 +21,7 @@ from kaji_harness.state import SessionState
 def _make_state() -> SessionState:
     """Create a minimal SessionState with persistence disabled."""
     state = SessionState(
-        issue_number=1,
+        issue_number="1",
         artifacts_dir=Path("/tmp/fake-artifacts"),
         sessions={},
         step_history=[],

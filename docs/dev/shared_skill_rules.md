@@ -7,7 +7,7 @@ workflow 横断で使うスキルの責務境界を定義する。
 - worktree / branch 解決
 - 未コミット変更の確認
 - push
-- `gh pr create`
+- `kaji pr create`（Phase 2 以降は `gh pr create` 直接呼び出しを禁止し、`kaji` ラッパーを経由する。Skill markdown 内 placeholder は `[issue_id]` / `[issue_ref]` を使用）
 
 ## `/i-pr` が持たない責務
 

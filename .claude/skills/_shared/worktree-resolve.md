@@ -4,20 +4,20 @@
 
 1. **Issue 本文から Worktree 情報を取得**:
    ```bash
-   gh issue view [issue-number] --json body -q '.body'
+   kaji issue view [issue_id] --json body -q '.body'
    ```
 
 2. **Worktree の相対パスを抽出**:
-   - `> **Worktree**: \`../kaji-[prefix]-[number]\`` の形式
+   - `> **Worktree**: \`../kaji-[prefix]-[issue_id]\`` の形式
 
 3. **絶対パスに変換**:
    ```bash
    MAIN_REPO=$(git rev-parse --show-toplevel)
-   WORKTREE_PATH=$(realpath "$MAIN_REPO/../kaji-[prefix]-[number]")
+   WORKTREE_PATH=$(realpath "$MAIN_REPO/../kaji-[prefix]-[issue_id]")
    ```
 
 4. **存在確認**:
-   - 存在しない場合は `/issue-start [issue-number]` を案内して終了
+   - 存在しない場合は `/issue-start [issue_id]` を案内して終了
 
 ## 注意事項
 

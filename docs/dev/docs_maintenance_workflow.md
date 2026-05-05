@@ -47,7 +47,7 @@ flowchart TB
 | docs 修正 | `/i-doc-fix` | レビュー指摘への対応（新規指摘なし） |
 | docs 再確認 | `/i-doc-verify` | 修正確認（新規指摘不可） |
 | 最終チェック | `/i-doc-final-check` | docs-only として PR に進めるか最終判定（`make verify-docs`） |
-| PR 作成 | `/i-pr` | push、`gh pr create`（`--no-ff` merge 前提） |
+| PR 作成 | `/i-pr` | push、`kaji pr create`（`--no-ff` merge 前提） |
 | 完了 | `/issue-close` | PR merge、worktree cleanup、Issue close（※手動実行） |
 
 ## 実行制約

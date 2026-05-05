@@ -178,7 +178,7 @@ class TestRunnerSkillDirIntegration:
 
         runner = WorkflowRunner(
             workflow=workflow,
-            issue_number=999,
+            issue_number="999",
             project_root=tmp_path,
             artifacts_dir=artifacts_dir,
             config=config,

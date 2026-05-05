@@ -55,7 +55,7 @@ def _make_workflow(
 
 
 def _make_state(
-    issue: int | str = 42,
+    issue: str = "42",
     last_transition_verdict: Verdict | None = None,
 ) -> SessionState:
     """Create a SessionState without filesystem side effects."""
@@ -86,7 +86,7 @@ class TestPromptContainsSkillName:
         workflow = _make_workflow(steps=[step])
         state = _make_state()
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(step, issue="42", state=state, workflow=workflow)
 
         assert "design-skill" in prompt
 
@@ -103,27 +103,27 @@ class TestPromptContainsIssueNumber:
     def test_prompt_contains_issue(self) -> None:
         step = _make_step()
         workflow = _make_workflow(steps=[step])
-        state = _make_state(issue=123)
+        state = _make_state(issue="123")
 
-        prompt = build_prompt(step, issue=123, state=state, workflow=workflow)
+        prompt = build_prompt(step, issue="123", state=state, workflow=workflow)
 
         assert "123" in prompt
 
-    def test_prompt_emits_both_issue_number_alias_and_issue_id(self) -> None:
-        """Phase 1: 既存 Skill が参照する issue_number と新 issue_id を両方注入する。
+    def test_prompt_emits_only_issue_id_and_issue_ref(self) -> None:
+        """Phase 2: provider 中立変数 issue_id / issue_ref のみを注入する。
 
-        Phase 2 で全 Skill を provider 中立変数 (issue_id / issue_ref) に移行する
-        までの後方互換契約。両方の行が存在することを明示的に検証する。
+        Phase 1 で過渡的に併存していた issue_number alias は撤去済みのため、
+        注入辞書に残っていないことを明示的に検証する。
         """
         step = _make_step()
         workflow = _make_workflow(steps=[step])
-        state = _make_state(issue=123)
+        state = _make_state(issue="123")
 
-        prompt = build_prompt(step, issue=123, state=state, workflow=workflow)
+        prompt = build_prompt(step, issue="123", state=state, workflow=workflow)
 
-        assert "- issue_number: 123" in prompt
         assert "- issue_id: 123" in prompt
         assert "- issue_ref: #123" in prompt
+        assert "issue_number" not in prompt
 
     def test_prompt_local_id_uses_bare_ref_without_hash(self) -> None:
         """local-<machine>-<n> 形式は #-prefix を付けず生 ID を ref として出す。"""
@@ -152,7 +152,7 @@ class TestPromptContainsStepId:
         workflow = _make_workflow(steps=[step])
         state = _make_state()
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(step, issue="42", state=state, workflow=workflow)
 
         assert "review-step" in prompt
 
@@ -171,7 +171,7 @@ class TestPromptContainsValidStatuses:
         workflow = _make_workflow(steps=[step])
         state = _make_state()
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(step, issue="42", state=state, workflow=workflow)
 
         assert "PASS" in prompt
         assert "RETRY" in prompt
@@ -192,7 +192,7 @@ class TestPromptContainsVerdictFormat:
         workflow = _make_workflow(steps=[step])
         state = _make_state()
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(step, issue="42", state=state, workflow=workflow)
 
         assert "---VERDICT---" in prompt
         assert "---END_VERDICT---" in prompt
@@ -220,7 +220,7 @@ class TestCycleVariablesInjected:
         state = _make_state()
         state.cycle_counts["impl-loop"] = 1
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(step, issue="42", state=state, workflow=workflow)
 
         # Should contain the current iteration count and max
         assert "1" in prompt
@@ -241,7 +241,7 @@ class TestNoCycleVariablesWhenNotInCycle:
         workflow = _make_workflow(steps=[step], cycles=[])
         state = _make_state()
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(step, issue="42", state=state, workflow=workflow)
 
         assert "max_iterations" not in prompt.lower()
         assert "cycle_count" not in prompt.lower()
@@ -267,7 +267,7 @@ class TestPreviousVerdictInjected:
         workflow = _make_workflow(steps=[step])
         state = _make_state(last_transition_verdict=prev_verdict)
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(step, issue="42", state=state, workflow=workflow)
 
         assert "RETRY" in prompt
         assert "Tests failed" in prompt
@@ -293,7 +293,7 @@ class TestNoPreviousVerdictWithoutResume:
         workflow = _make_workflow(steps=[step])
         state = _make_state(last_transition_verdict=prev_verdict)
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(step, issue="42", state=state, workflow=workflow)
 
         # The previous verdict's specific reason should NOT appear
         assert "Tests failed" not in prompt
@@ -313,7 +313,7 @@ class TestNoPreviousVerdictWhenStateEmpty:
         workflow = _make_workflow(steps=[step])
         state = _make_state(last_transition_verdict=None)
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(step, issue="42", state=state, workflow=workflow)
 
         # Should not contain previous verdict markers
         # (The prompt should still be valid, just without previous verdict section)
@@ -340,7 +340,7 @@ class TestPreviousVerdictInjectedViaInjectVerdict:
         workflow = _make_workflow(steps=[step])
         state = _make_state(last_transition_verdict=prev_verdict)
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(step, issue="42", state=state, workflow=workflow)
 
         assert "Design issues found" in prompt
         assert "Missing error handling" in prompt
@@ -366,7 +366,7 @@ class TestNoPreviousVerdictWhenInjectVerdictFalse:
         workflow = _make_workflow(steps=[step])
         state = _make_state(last_transition_verdict=prev_verdict)
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(step, issue="42", state=state, workflow=workflow)
 
         assert "Design issues found" not in prompt
 
@@ -391,7 +391,7 @@ class TestResumeStillInjectsVerdictRegardlessOfFlag:
         workflow = _make_workflow(steps=[step])
         state = _make_state(last_transition_verdict=prev_verdict)
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(step, issue="42", state=state, workflow=workflow)
 
         assert "Tests failed" in prompt
 

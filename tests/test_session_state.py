@@ -45,7 +45,7 @@ class TestLoadOrCreateNew:
 
     def test_load_or_create_returns_new_state(self, tmp_path: Path) -> None:
         arts_dir = tmp_path / "artifacts"
-        state = SessionState.load_or_create(issue=99, artifacts_dir=arts_dir)
+        state = SessionState.load_or_create(issue="99", artifacts_dir=arts_dir)
 
         assert state.issue_number == "99"
         assert state.sessions == {}

@@ -523,7 +523,7 @@ class TestRunnerWithConfig:
         ):
             runner = WorkflowRunner(
                 workflow=workflow,
-                issue_number=99,
+                issue_number="99",
                 project_root=project_root,
                 artifacts_dir=artifacts_dir,
                 config=config,
@@ -587,7 +587,7 @@ class TestRunnerWithConfig:
         ):
             runner = WorkflowRunner(
                 workflow=workflow,
-                issue_number=99,
+                issue_number="99",
                 project_root=project_root,
                 artifacts_dir=artifacts_dir,
                 config=config,
