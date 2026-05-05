@@ -70,6 +70,19 @@ class TestFrontmatter:
         assert meta == {}
         assert body == "just body\n"
 
+    def test_round_trip_title_with_double_quotes(self) -> None:
+        """``"`` を含む title が round-trip で破損しない（Finding 1）。"""
+        meta = {"title": 'Add "foo" support'}
+        text = f"---\n{_serialize_frontmatter(meta)}---\nbody\n"
+        parsed_meta, _ = _parse_frontmatter(text)
+        assert parsed_meta["title"] == 'Add "foo" support'
+
+    def test_round_trip_value_with_colon_and_quotes(self) -> None:
+        meta = {"title": 'A: "tricky" value'}
+        text = f"---\n{_serialize_frontmatter(meta)}---\nbody\n"
+        parsed_meta, _ = _parse_frontmatter(text)
+        assert parsed_meta["title"] == 'A: "tricky" value'
+
 
 class TestAtomicWrite:
     def test_writes_and_no_tmp_left(self, tmp_path: Path) -> None:
@@ -147,6 +160,30 @@ class TestCRUD:
         closed = provider.close_issue("local-pc1-1")
         assert closed.state == "closed"
 
+    def test_close_persists_reason_and_closed_by(self, provider: LocalProvider) -> None:
+        """Finding 3: close 時に reason / closed_by を frontmatter に残す。"""
+        provider.create_issue(title="t", body="b", slug="x")
+        provider.close_issue("local-pc1-1", reason="merged into main")
+        # frontmatter 直接読みで永続化を確認
+        from kaji_harness.providers.local import _parse_frontmatter
+
+        issue_dir = provider._resolve_issue_dir("local-pc1-1")
+        meta, _ = _parse_frontmatter((issue_dir / "issue.md").read_text())
+        assert meta["state"] == "closed"
+        assert meta["close_reason"] == "merged into main"
+        assert meta["closed_by"] == "pc1"
+        assert isinstance(meta.get("closed_at"), str) and meta["closed_at"]
+
+    def test_close_without_reason_persists_empty(self, provider: LocalProvider) -> None:
+        provider.create_issue(title="t", body="b", slug="x")
+        provider.close_issue("local-pc1-1")
+        from kaji_harness.providers.local import _parse_frontmatter
+
+        issue_dir = provider._resolve_issue_dir("local-pc1-1")
+        meta, _ = _parse_frontmatter((issue_dir / "issue.md").read_text())
+        assert meta["close_reason"] == ""
+        assert meta["closed_by"] == "pc1"
+
     def test_list_filters_state_and_labels(self, provider: LocalProvider) -> None:
         provider.create_issue(title="a", body="", slug="a", labels=["type:feature"])
         provider.create_issue(title="b", body="", slug="b", labels=["type:bug"])
@@ -164,6 +201,27 @@ class TestCRUD:
     def test_view_missing_issue_raises(self, provider: LocalProvider) -> None:
         with pytest.raises(IssueNotFoundError):
             provider.view_issue("local-pc1-99")
+
+    def test_counter_is_per_machine(self, tmp_path: Path) -> None:
+        """Finding 2: machine_id が違えば counter は独立。"""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".kaji").mkdir()
+
+        # pc1 が n=3 まで作成
+        pc1 = LocalProvider(repo_root=repo, machine_id="pc1")
+        for i in range(3):
+            pc1.create_issue(title="x", body="", slug=f"slug-{i}")
+
+        # 同じ repo を pc2 で開く（pc1 の commit を pull した状況を模す）
+        pc2 = LocalProvider(repo_root=repo, machine_id="pc2")
+        first = pc2.create_issue(title="y", body="", slug="y")
+        # pc2 の最初の Issue は 1 でなければならない（pc1 の counter に引きずられない）
+        assert first.id == "local-pc2-1"
+
+        # counter file は machine ごとに分離
+        assert (repo / ".kaji" / "counters" / "pc1.txt").exists()
+        assert (repo / ".kaji" / "counters" / "pc2.txt").exists()
 
 
 class TestResolveIssueDir:

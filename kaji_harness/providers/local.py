@@ -29,7 +29,8 @@ from .context import (
 from .models import Comment, Issue, IssueContext, Label
 
 _MACHINE_ID_RE = re.compile(r"^[a-z0-9]{1,16}$")
-_LOCAL_ID_RE = re.compile(r"^local-([a-z0-9]{1,16})-(\d+)$")
+_LOCAL_ID_RE = re.compile(r"^local-([a-z0-9]{1,16})-([1-9]\d*)$")
+_POS_INT_RE = re.compile(r"^[1-9]\d*$")
 _FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n(.*)\Z", re.DOTALL)
 _SUPPRESS_WIN_WARNING_ENV = "KAJI_SUPPRESS_WIN_WARNING"
 _WIN_WARNING_EMITTED = False
@@ -230,7 +231,10 @@ def _parse_frontmatter(raw: str) -> tuple[dict[str, object], str]:
 
 def _scalar(s: str) -> object:
     """frontmatter scalar の最小限の型推定。"""
-    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+    if s.startswith('"') and s.endswith('"') and len(s) >= 2:
+        # serializer の `\"` → `"` を逆変換
+        return s[1:-1].replace('\\"', '"')
+    if s.startswith("'") and s.endswith("'") and len(s) >= 2:
         return s[1:-1]
     if s == "true":
         return True
@@ -278,7 +282,10 @@ class LocalProvider:
 
     @property
     def _counter_path(self) -> Path:
-        return self.repo_root / ".kaji" / "id-counter.txt"
+        # machine_id ごとに分離する。共有 counter にすると、pc1 commit を
+        # pc2 が pull した直後に pc2 の最初の Issue 番号が pc1 の max+1 へ
+        # 引きずられ、machine_id 番号空間の独立性が壊れる。
+        return self.repo_root / ".kaji" / "counters" / f"{self.machine_id}.txt"
 
     @property
     def _cache_dir(self) -> Path:
@@ -506,12 +513,13 @@ class LocalProvider:
         )
 
     def close_issue(self, issue_id: str, reason: str | None = None) -> Issue:
-        del reason
         issue_dir = self._resolve_issue_dir(issue_id)
         issue_path = issue_dir / "issue.md"
         meta, current_body = _parse_frontmatter(issue_path.read_text(encoding="utf-8"))
         meta["state"] = "closed"
         meta["closed_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        meta["closed_by"] = self.machine_id
+        meta["close_reason"] = reason or ""
         _atomic_write(issue_path, self._build_issue_md(meta, current_body))
         return self._read_issue(issue_dir)
 
@@ -600,8 +608,10 @@ class LocalProvider:
         Phase 5 の `kaji sync from-github` 未実装のため、buildout 中は user
         が手動で JSON を投入する運用前提。
         """
-        if not number.isdigit():
-            raise ValueError(f"cached issue number must be numeric: {number!r}")
+        if not _POS_INT_RE.match(number):
+            raise ValueError(
+                f"cached issue number must be a positive integer (no leading zero): {number!r}"
+            )
         path = self._cache_dir / f"{number}.json"
         if not path.is_file():
             raise IssueNotFoundError(

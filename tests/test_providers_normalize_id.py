@@ -72,3 +72,31 @@ class TestErrors:
     def test_uppercase_machine_segment_rejected(self) -> None:
         with pytest.raises(ValueError, match="invalid issue id"):
             normalize_id("PC1-3", provider_name="local", machine_id="pc1")
+
+
+class TestPositiveIntGrammar:
+    """Issue 番号は 1 始まり整数のみ。0 / leading zero / gh:0 を拒否する。"""
+
+    def test_zero_rejected_github(self) -> None:
+        with pytest.raises(ValueError, match="invalid issue id"):
+            normalize_id("0", provider_name="github", machine_id=None)
+
+    def test_gh_zero_rejected(self) -> None:
+        with pytest.raises(ValueError, match="invalid issue id"):
+            normalize_id("gh:0", provider_name="local", machine_id="pc1")
+
+    def test_leading_zero_rejected(self) -> None:
+        with pytest.raises(ValueError, match="invalid issue id"):
+            normalize_id("007", provider_name="github", machine_id=None)
+
+    def test_gh_leading_zero_rejected(self) -> None:
+        with pytest.raises(ValueError, match="invalid issue id"):
+            normalize_id("gh:01", provider_name="local", machine_id="pc1")
+
+    def test_local_zero_rejected(self) -> None:
+        with pytest.raises(ValueError, match="invalid issue id"):
+            normalize_id("local-pc1-0", provider_name="local", machine_id="pc1")
+
+    def test_local_leading_zero_rejected(self) -> None:
+        with pytest.raises(ValueError, match="invalid issue id"):
+            normalize_id("local-pc1-007", provider_name="local", machine_id="pc1")

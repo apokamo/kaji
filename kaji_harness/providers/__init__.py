@@ -50,10 +50,12 @@ class ResolvedId:
     raw: str
 
 
-_GH_PREFIX_RE = re.compile(r"^gh:(\d+)$")
-_LOCAL_FULL_RE = re.compile(r"^local-([a-z0-9]{1,16})-(\d+)$")
-_LOCAL_SHORT_RE = re.compile(r"^([a-z0-9]{1,16})-(\d+)$")
-_NUMERIC_RE = re.compile(r"^\d+$")
+# Issue 番号は 1 始まり整数。leading zero（``007``）や ``0`` は拒否する。
+_POS_INT = r"[1-9]\d*"
+_GH_PREFIX_RE = re.compile(rf"^gh:({_POS_INT})$")
+_LOCAL_FULL_RE = re.compile(rf"^local-([a-z0-9]{{1,16}})-({_POS_INT})$")
+_LOCAL_SHORT_RE = re.compile(rf"^([a-z0-9]{{1,16}})-({_POS_INT})$")
+_NUMERIC_RE = re.compile(rf"^{_POS_INT}$")
 _MACHINE_ID_RE = re.compile(r"^[a-z0-9]{1,16}$")
 
 
