@@ -1172,39 +1172,40 @@ For local mode, use the design / code review skills directly:
 
 Phase 4 で `pr-*` Skill の provider 対応に加え、**新規 `feature-development-local.yaml` を追加**し、E2E テストで完走を確認する。
 
-### `kaji run` の issue パラメータ型変更
+### `kaji run` の issue パラメータ型（Phase 1 で str 化済）
 
-既存の `kaji run workflow.yaml <issue>` の **CLI 上のインターフェースは互換**だが、内部の型は変更する：
+既存の `kaji run workflow.yaml <issue>` の **CLI 上のインターフェースは互換**を保ったまま、Phase 1 で内部型を `int` → `str` に変更済み（commit `2a446d0`、報告書 `phase1-implementation-report.md` 5.1）。本セクションは現状の baseline を記録し、Phase 2 で残る作業を明示する。
 
-| 観点 | 変更前 | 変更後 |
-|------|-------|-------|
-| `cli_main.py:59` の type hint | `issue: int` | `issue: str`（新型 alias `IssueId = str`） |
-| `runner.py` の `SessionState.issue` | `int` | `str` |
-| 受理する CLI 入力 | `153` のみ | `153` / `local-pc1-1` / `pc1-1` / `1`（normalize_id で正規化） |
-| artifact path 生成 | `f"{issue}/"`（既存）| 不変。文字列でも動く |
-| 表示文言 | `Issue #{issue}` | provider 別に整形 (`#153` または `local-pc1-1`) |
+| 観点 | 現状（Phase 1 完了後）|
+|------|-------|
+| `cli_main.py:66` の type hint | `issue: str`（`type=str` で argparse 受理）|
+| `state.py:43` の `SessionState.issue_number` | `str`。`__post_init__` で int 受理時は `str(...)` 境界正規化（後方互換）|
+| `runner.py` / `state.py` の `WorkflowRunner.__post_init__` | int / str 両方を受理し str に正規化（Phase 1 報告 5.1 採用案 (B)）|
+| 受理する CLI 入力 | `153` / `local-pc1-1` 等の任意 str。`normalize_id` 自体は Phase 3 で導入予定（Phase 2 までは provider 抽象なし）|
+| artifact path 生成 | `f"{issue_number}/"` のまま str で動作（Phase 1 で確認済）|
+| 表示文言（`prompt.py`）| `issue_id` / `issue_ref` の 2 変数を注入。`issue_number` は **Phase 1 で後方互換 alias として継続注入**（Phase 2 完了時に撤去予定）|
 
-**後方互換**: 既存の `kaji run wf.yaml 153` 呼び出しはそのまま動作する（`"153"` として受理 → provider=github 解決 → `#153` として処理）。
+**後方互換**: 既存の `kaji run wf.yaml 153` 呼び出しはそのまま動作する（`"153"` として受理 → provider 抽象未導入のため Phase 1-2 段階では Skill が直接 `gh` / `kaji` 経由で処理）。
 
-**影響を受ける実装ファイル**（一次情報で確認済み）:
+**Phase 2 で残る作業**（Phase 1 では未着手）:
 
-| ファイル | 行 | 変更内容 |
+| 対象 | 作業 |
+|------|------|
+| `kaji_harness/prompt.py` | 注入辞書から `issue_number` キーの注入を削除（`issue_id` / `issue_ref` の 2 変数のみに集約）|
+| `tests/test_cli_main.py` 等の fixture | 既存の `issue=42`（int）を `issue="42"`（str）に書き換え。Phase 1 では `__post_init__` の境界正規化で int も通っていたため未着手 |
+| `tests/test_prompt_builder.py::test_prompt_emits_both_issue_number_alias_and_issue_id` | `test_prompt_emits_only_issue_id_and_issue_ref` に rename + 内容書き換え（alias 不在の検証へ）|
+
+**Phase 1 で完了済みの実装ファイル**（baseline、再変更不要）:
+
+| ファイル | 行 | Phase 1 での変更内容 |
 |---------|----|---------|
-| `kaji_harness/cli_main.py` | 59 | `issue: int` の type hint → `str` (新型 alias `IssueId = str`) |
-| `kaji_harness/state.py` | 34 | `SessionState.issue_number: int` → `str` |
-| `kaji_harness/state.py` | `_persist` 内の dict serialize（おおむね 100 行前後）、`_write_progress_md` 内の `f"# Progress: Issue #{self.issue_number}"` 表示 | dict serialize は str のまま保存。progress 表示は provider 別整形に変更 |
-| `kaji_harness/prompt.py` | 17（docstring）, 25（prompt 引数辞書）, 48（`f"GitHub Issue #{issue}"`）| 表示文言と引数辞書を provider 別整形に変更（github: `#153`、local: `local-pc1-1`） |
-| `kaji_harness/logger.py` | `issue` フィールドの型 | log フィールド `int` → `str` |
-| `kaji_harness/runner.py` | 全般 | SessionState 経由で issue を扱う箇所の型追従 |
+| `kaji_harness/cli_main.py` | 66 | `issue` 引数を `type=str` で受理 |
+| `kaji_harness/state.py` | 43 + `__post_init__` | `SessionState.issue_number: str`、int → str 境界正規化 |
+| `kaji_harness/runner.py` | `WorkflowRunner.__post_init__` | 同様の境界正規化 |
+| `kaji_harness/prompt.py` | 全般 | `issue_id` / `issue_ref` を新規注入。`issue_number` を後方互換 alias として併存 |
+| `kaji_harness/logger.py` | `issue` フィールド | str 化済 |
 
-**影響を受ける既存テスト**:
-
-- `tests/test_cli_main.py` 内で `issue` を int として渡している箇所を str に修正
-- `tests/test_state.py` の `SessionState` fixture（`issue_number`）を str 化
-- `tests/test_runner.py` の workflow 入力 mock を str 化
-- `tests/test_prompt.py` / `tests/test_logger.py` の表示・ログ整形テストを provider 別出力で更新
-
-これらの修正は **Phase 1（CLI 追加）と Phase 2（Skill 置換）の境界で集中的に実施**する。`SessionState` の型変更は破壊的なので、Phase 1 で完了させる方針。
+**実テストファイル名の備考**: `tests/test_runner.py` は存在せず、実体は `tests/test_runner_before.py`（Phase 1 報告 5.1）。Phase 2 の fixture 修正対象は `test_runner_before.py` / `test_state_persistence.py` / `test_prompt_builder.py` / `test_cli_main.py` 等。
 
 ### Workflow YAML との関係
 
