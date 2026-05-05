@@ -26,7 +26,7 @@ $ARGUMENTS = <workflow-path> <issue_id> [kaji run options...]
 ```
 
 - `workflow-path` (必須): 例 `workflows/feature-development.yaml`
-- `issue-number` (必須): GitHub Issue 番号
+- `issue_id` (必須): GitHub Issue 番号
 - `kaji run options...` (任意): `--from` / `--step` / `--workdir` / `--quiet` などをそのまま後続に渡す
 
 ### 例
@@ -144,7 +144,7 @@ git worktree list
 ### Step 6: Issue コメント
 
 成功・失敗のどちらでも、Issue に必ずコメントする。
-`gh issue comment --body-file - <<'EOF'` を使い、以下のテンプレートをベースに記録すること。
+`kaji issue comment --body-file - <<'EOF'` を使い、以下のテンプレートをベースに記録すること。
 
 #### 成功テンプレート
 

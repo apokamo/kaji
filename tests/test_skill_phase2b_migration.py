@@ -32,15 +32,19 @@ def _scan(pattern: str) -> list[str]:
 
 
 @pytest.mark.medium
-class TestSkillNoGhDirectCalls:
-    """Skill markdown must not call `gh issue`/`gh pr`/`gh api` directly."""
+class TestSkillNoGhMentions:
+    """Skill markdown must not mention `gh issue`/`gh pr`/`gh api` anywhere.
 
-    def test_no_gh_direct_calls(self) -> None:
-        # word-boundary regex matching start-of-line OR shell-context chars
-        # (= $ ( { ; | & whitespace [ ]) before `gh `.
-        pattern = r"(^|[\]\[=\$\({;\|&\s])gh (issue|pr|api)\b"
+    検査範囲はコマンド呼び出しだけでなく prose（説明文・失敗条件・description
+    frontmatter 等）も含む。Phase 2-B の本旨は「Skill が `gh` を意識しない」
+    状態にすることなので、command-context だけ見ていると `gh issue edit` で
+    失敗した場合 のような prose 残存を見逃す（PR review 指摘）。
+    """
+
+    def test_no_gh_mentions_anywhere(self) -> None:
+        pattern = r"\bgh (issue|pr|api)\b"
         hits = _scan(pattern)
-        assert hits == [], "gh direct calls remain:\n" + "\n".join(hits)
+        assert hits == [], "gh mentions remain (command or prose):\n" + "\n".join(hits)
 
 
 @pytest.mark.medium
@@ -56,11 +60,35 @@ class TestSkillNoLegacyPlaceholders:
             r"kaji-\[prefix\]-\[number\]",
             r"\[number\]",
             r"^\s*issue_number:",
+            # `<issue-number>` メタ変数（$ARGUMENTS = <issue-number> 等）も
+            # 旧表記。`<issue_id>` に統一する。
+            r"<issue-number>",
+            # backtick `issue-number` や bare prose `issue-number` も検出。
+            # 角括弧形式 `[issue-number]` だけ見ていると `- \`issue-number\` (必須)`
+            # のような説明文を見逃す（PR review 指摘）。`pr-number` は
+            # provider-neutral PR 識別子の議論が Phase 3 で別途行われるため
+            # 本 Phase の検査対象外（語境界に `pr-` を含めない正規表現）。
+            r"(?<![\w-])issue-number(?![\w])",
         ]
         hits: list[str] = []
         for pat in patterns:
             hits.extend(_scan(pat))
         assert hits == [], "legacy placeholders remain:\n" + "\n".join(hits)
+
+
+@pytest.mark.medium
+class TestSkillNoHashIssueIdHardcode:
+    """`#[issue_id]` は禁止（local mode で `#local-pc1-1` を生成し ref 契約を壊す）。
+
+    `#` の hard-code は `[issue_ref]` に集約する。`prompt.py` 側で github なら
+    `#153`、local なら bare ID にフォーマットされるため、Skill 側は `[issue_ref]`
+    を使うのが正解。`promote-design.md` の `git commit` 例で `#[issue_id]` が
+    残っていた事案（PR review 指摘）の回帰防止。
+    """
+
+    def test_no_hash_issue_id_hardcode(self) -> None:
+        hits = _scan(r"#\[issue_id\]")
+        assert hits == [], "#[issue_id] hard-codes remain (use [issue_ref]):\n" + "\n".join(hits)
 
 
 @pytest.mark.medium

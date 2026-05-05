@@ -157,7 +157,7 @@ kaji issue close [issue_id] --reason completed
 
 > **結果を記録**: `close_result` = 「クローズ済み」/「クローズ失敗（要手動対応）」。この値は Step 6 で使用する。
 >
-> **重要**: `gh issue close` が失敗した場合は verdict を **ABORT** にすること。Issue が未クローズのまま残ることは許容しない。
+> **重要**: `kaji issue close` が失敗した場合は verdict を **ABORT** にすること。Issue が未クローズのまま残ることは許容しない。
 
 ### Step 6: 完了報告
 
@@ -225,4 +225,4 @@ suggestion: |
 | status | 条件 |
 |--------|------|
 | PASS | クローズ完了 |
-| ABORT | クローズ失敗（`gh issue close` 失敗を含む） |
+| ABORT | クローズ失敗（`kaji issue close` 失敗を含む） |

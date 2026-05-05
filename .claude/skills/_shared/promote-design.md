@@ -54,10 +54,10 @@
 
 ```bash
 git add docs/adr/NNNN-title.md draft/design/issue-[issue_id]-*.md
-git commit -m "docs: promote design to docs/adr/NNNN-title for #[issue_id]"
+git commit -m "docs: promote design to docs/adr/NNNN-title for [issue_ref]"
 ```
 
-`docs/dev/` に昇格する場合も同様に `docs: promote design to docs/dev/xxx for #[issue_id]` とする。
+`docs/dev/` に昇格する場合も同様に `docs: promote design to docs/dev/xxx for [issue_ref]` とする。
 
 ## 注意事項
 

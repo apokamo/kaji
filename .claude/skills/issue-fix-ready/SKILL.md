@@ -65,7 +65,7 @@ $ARGUMENTS = <issue_id>
 
 ### Step 3: Issue 本文の修正
 
-`gh issue edit` で Issue 本文を更新する。
+`kaji issue edit` で Issue 本文を更新する。
 
 ```bash
 kaji issue edit [issue_id] --body "[updated-body]"

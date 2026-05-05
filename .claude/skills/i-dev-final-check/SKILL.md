@@ -226,7 +226,7 @@ kaji issue edit [issue_id] --body-file /tmp/issue-body-updated.md
 
 ### 7.5-6. フォールバック
 
-本文サイズ上限超過等で `gh issue edit` に失敗した場合:
+本文サイズ上限超過等で `kaji issue edit` に失敗した場合:
 
 1. Issue **コメント**に設計書全文を投稿する
 2. 本文には `## 設計書` セクションとコメントへのリンクのみを追記する

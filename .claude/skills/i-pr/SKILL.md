@@ -1,5 +1,5 @@
 ---
-description: workflow 共通の PR 作成スキル。worktree 解決、未コミット確認、push、gh pr create のみを担当する。
+description: workflow 共通の PR 作成スキル。worktree 解決、未コミット確認、push、kaji pr create のみを担当する。
 name: i-pr
 ---
 

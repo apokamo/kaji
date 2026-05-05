@@ -23,7 +23,7 @@ name: issue-start
 $ARGUMENTS = <issue_id> [prefix]
 ```
 
-- `issue-number` (必須): Issue番号 (例: 247)
+- `issue_id` (必須): Issue番号 (例: 247)
 - `prefix` (任意): ブランチプレフィックス (デフォルト: feat)
   - 例: docs, fix, feat, refactor, test
 
@@ -36,7 +36,7 @@ $ARGUMENTS = <issue_id> [prefix]
 
 ### Step 0: 引数の解析
 
-$ARGUMENTS から issue-number と prefix を取得してください。
+$ARGUMENTS から issue_id と prefix を取得してください。
 - prefix が指定されていない場合は `feat` をデフォルトとする
 
 ### Step 1: ブランチとWorktreeの作成
