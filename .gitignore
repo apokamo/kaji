@@ -49,6 +49,10 @@ test-artifacts/
 .kaji-artifacts/
 *.log
 
+# kaji local mode — per-machine counter（commit すると pc1 の counter を
+# pc2 が pull した際に番号空間が汚染される）。LocalProvider が書き込む。
+.kaji/counters/
+
 # Environment
 .env
 .env.local
