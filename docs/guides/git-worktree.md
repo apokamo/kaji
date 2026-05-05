@@ -166,7 +166,7 @@ git branch -d feat/42
 
 PR 作成は worktree のゴールではなく中間チェックポイントである。`/issue-close` を実行するまでは worktree を残し、PR レビュー指摘対応も同一 worktree 上で完結させる。
 
-- **PR 作成後も worktree は残す**: `/issue-pr` 完了時点では worktree を削除しない。`/issue-close` の実行までが worktree のスコープである
+- **PR 作成後も worktree は残す**: `/i-pr` 完了時点では worktree を削除しない。`/issue-close` の実行までが worktree のスコープである
 - **PR レビュー指摘対応は同じ worktree で実施**: 別 worktree や `main` ブランチに切り替えず、`/pr-fix` を **同じ worktree 内で** 実行する。これにより branch / venv / artifacts の整合が崩れない
 - **`/issue-close` を経由してから削除**: `gh pr merge` を直接叩くのではなく `/issue-close` を経由することで、`.venv` symlink 削除 → worktree 削除 → ブランチ安全削除の順序が保証される
 
