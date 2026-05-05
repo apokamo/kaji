@@ -343,6 +343,17 @@ def _forward_to_gh(group: str, raw_args: list[str]) -> int:
 
 _PR_BUILTIN_SUBCOMMANDS = {"review-comments", "reviews", "reply-to-comment"}
 
+
+def _is_ascii_decimal(s: str) -> bool:
+    """True iff ``s`` is a non-empty ASCII decimal string.
+
+    ``str.isdigit()`` accepts Unicode digit characters (e.g. ``"１２３"``),
+    which would silently produce a malformed REST API path. GitHub
+    PR / comment IDs are always ASCII decimals, so reject anything else.
+    """
+    return bool(s) and s.isascii() and s.isdigit()
+
+
 _GH_MISSING_GUIDANCE = (
     "Error: 'gh' CLI not found in PATH. "
     "Install GitHub CLI to use 'kaji pr review-comments' / 'reviews' / "
@@ -420,8 +431,8 @@ def _forward_pr_api_list(
     json_fields: list[str] | None,
     jq_expr: str | None,
 ) -> int:
-    if not pr_id.isdigit():
-        sys.stderr.write(f"Error: PR_ID must be numeric, got: {pr_id}\n")
+    if not _is_ascii_decimal(pr_id):
+        sys.stderr.write(f"Error: PR_ID must be ASCII decimal, got: {pr_id}\n")
         return EXIT_INVALID_INPUT
     if shutil.which("gh") is None:
         sys.stderr.write(_GH_MISSING_GUIDANCE)
@@ -446,11 +457,11 @@ def _forward_pr_api_list(
 
 def _forward_pr_reply_to_comment(pr_id: str, *, comment_id: str, body: str) -> int:
     """POST a reply to a PR review comment."""
-    if not pr_id.isdigit():
-        sys.stderr.write(f"Error: PR_ID must be numeric, got: {pr_id}\n")
+    if not _is_ascii_decimal(pr_id):
+        sys.stderr.write(f"Error: PR_ID must be ASCII decimal, got: {pr_id}\n")
         return EXIT_INVALID_INPUT
-    if not comment_id.isdigit():
-        sys.stderr.write(f"Error: --to COMMENT_ID must be numeric, got: {comment_id}\n")
+    if not _is_ascii_decimal(comment_id):
+        sys.stderr.write(f"Error: --to COMMENT_ID must be ASCII decimal, got: {comment_id}\n")
         return EXIT_INVALID_INPUT
     if shutil.which("gh") is None:
         sys.stderr.write(_GH_MISSING_GUIDANCE)
@@ -504,11 +515,19 @@ def _dispatch_pr_builtin(sub: str, rest: list[str]) -> int:
         p.add_argument("--to", dest="comment_id", required=True, type=str, help="Review comment ID")
         p.add_argument("--body", required=True, type=str, help="Reply body")
     ns = p.parse_args(rest)
-    fields = (
-        [f.strip() for f in ns.json_fields.split(",") if f.strip()]
-        if getattr(ns, "json_fields", None)
-        else None
-    )
+    raw_json = getattr(ns, "json_fields", None)
+    fields: list[str] | None
+    if raw_json is None:
+        fields = None
+    else:
+        parts = [f.strip() for f in raw_json.split(",")]
+        if not parts or any(not p_ for p_ in parts):
+            sys.stderr.write(
+                f"Error: --json must be a non-empty comma-separated list of "
+                f"fields, got: {raw_json!r}\n"
+            )
+            return EXIT_INVALID_INPUT
+        fields = parts
     if sub == "review-comments":
         return _forward_pr_review_comments(ns.pr_id, json_fields=fields, jq_expr=ns.jq_expr)
     if sub == "reviews":

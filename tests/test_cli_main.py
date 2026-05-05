@@ -655,6 +655,41 @@ class TestPrReviewCommentsBuiltin:
         rc = _handle_pr(["review-comments", "abc"])
         assert rc == EXIT_INVALID_INPUT
 
+    def test_unicode_digit_pr_id_rejected(self) -> None:
+        """Unicode 全角数字 ``１２３`` は str.isdigit() を通すが ASCII でないため拒否。"""
+        from kaji_harness.cli_main import EXIT_INVALID_INPUT, _handle_pr
+
+        rc = _handle_pr(["review-comments", "１２３"])
+        assert rc == EXIT_INVALID_INPUT
+
+    def test_empty_json_field_rejected(self) -> None:
+        """``--json id,,body`` のような typo は silently strip せず拒否。"""
+        from kaji_harness.cli_main import EXIT_INVALID_INPUT, _handle_pr
+
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.cli_main._detect_repo", return_value="o/r"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            rc = _handle_pr(["review-comments", "153", "--json", "id,,body"])
+            assert rc == EXIT_INVALID_INPUT
+            mock_run.assert_not_called()
+
+    def test_only_comma_json_rejected(self) -> None:
+        """``--json ,`` は full response への silent fallback にせず拒否。"""
+        from kaji_harness.cli_main import EXIT_INVALID_INPUT, _handle_pr
+
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.cli_main._detect_repo", return_value="o/r"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            rc = _handle_pr(["review-comments", "153", "--json", ","])
+            assert rc == EXIT_INVALID_INPUT
+            mock_run.assert_not_called()
+
     def test_missing_gh_returns_runtime_error(self) -> None:
         from kaji_harness.cli_main import EXIT_RUNTIME_ERROR, _handle_pr
 
@@ -717,6 +752,12 @@ class TestPrReplyToCommentBuiltin:
         ):
             rc = _handle_pr(["reply-to-comment", "10", "--to", "abc", "--body", "x"])
             assert rc == EXIT_INVALID_INPUT
+
+    def test_unicode_digit_comment_id_rejected(self) -> None:
+        from kaji_harness.cli_main import EXIT_INVALID_INPUT, _handle_pr
+
+        rc = _handle_pr(["reply-to-comment", "10", "--to", "９９９", "--body", "x"])
+        assert rc == EXIT_INVALID_INPUT
 
 
 @pytest.mark.small
