@@ -31,6 +31,7 @@ EXIT_ABORT = 1
 EXIT_VALIDATION_ERROR = 1
 EXIT_DEFINITION_ERROR = 2
 EXIT_CONFIG_NOT_FOUND = 2
+EXIT_INVALID_INPUT = 2
 EXIT_RUNTIME_ERROR = 3
 
 
@@ -340,6 +341,195 @@ def _forward_to_gh(group: str, raw_args: list[str]) -> int:
     return result.returncode
 
 
+_PR_BUILTIN_SUBCOMMANDS = {"review-comments", "reviews", "reply-to-comment"}
+
+_GH_MISSING_GUIDANCE = (
+    "Error: 'gh' CLI not found in PATH. "
+    "Install GitHub CLI to use 'kaji pr review-comments' / 'reviews' / "
+    "'reply-to-comment' (Phase 2).\n"
+)
+
+
+def _detect_repo() -> str | None:
+    """Return current repository in `owner/name` form, or None on failure.
+
+    Calls ``gh repo view --json nameWithOwner -q .nameWithOwner``.
+    """
+    try:
+        result = subprocess.run(
+            ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    repo = result.stdout.strip()
+    return repo or None
+
+
+def _compose_json_and_jq(fields: list[str] | None, jq: str | None) -> str | None:
+    """Compose ``--json FIELDS`` and ``--jq EXPR`` into a single ``gh api --jq`` expression.
+
+    `gh api` does not accept ``--json`` (only ``--jq``), so kaji turns
+    ``--json`` into a jq projection and chains it before the user expression.
+
+    - fields only          -> ``[.[] | {f1: .f1, f2: .f2}]``
+    - jq only              -> ``<jq>``
+    - both                 -> ``[.[] | {f1: .f1, ...}] | <jq>``
+    - neither              -> None (do not pass ``--jq`` to gh)
+    """
+    if fields is None and jq is None:
+        return None
+    field_proj = "[.[] | {" + ", ".join(f"{f}: .{f}" for f in fields) + "}]" if fields else None
+    if field_proj and jq:
+        return f"{field_proj} | {jq}"
+    return field_proj or jq
+
+
+def _forward_pr_review_comments(
+    pr_id: str,
+    *,
+    json_fields: list[str] | None,
+    jq_expr: str | None,
+) -> int:
+    """Forward to ``gh api repos/<repo>/pulls/<N>/comments``."""
+    return _forward_pr_api_list(
+        pr_id, path_suffix="comments", json_fields=json_fields, jq_expr=jq_expr
+    )
+
+
+def _forward_pr_reviews(
+    pr_id: str,
+    *,
+    json_fields: list[str] | None,
+    jq_expr: str | None,
+) -> int:
+    """Forward to ``gh api repos/<repo>/pulls/<N>/reviews``."""
+    return _forward_pr_api_list(
+        pr_id, path_suffix="reviews", json_fields=json_fields, jq_expr=jq_expr
+    )
+
+
+def _forward_pr_api_list(
+    pr_id: str,
+    *,
+    path_suffix: str,
+    json_fields: list[str] | None,
+    jq_expr: str | None,
+) -> int:
+    if not pr_id.isdigit():
+        sys.stderr.write(f"Error: PR_ID must be numeric, got: {pr_id}\n")
+        return EXIT_INVALID_INPUT
+    if shutil.which("gh") is None:
+        sys.stderr.write(_GH_MISSING_GUIDANCE)
+        return EXIT_RUNTIME_ERROR
+    repo = _detect_repo()
+    if repo is None:
+        sys.stderr.write(
+            "Error: failed to detect current repository.\n"
+            "Run 'gh repo view --json nameWithOwner' in a checked-out repo first.\n"
+        )
+        return EXIT_RUNTIME_ERROR
+    cmd = ["gh", "api", f"repos/{repo}/pulls/{pr_id}/{path_suffix}"]
+    effective_jq = _compose_json_and_jq(json_fields, jq_expr)
+    if effective_jq is not None:
+        cmd.extend(["--jq", effective_jq])
+    try:
+        return subprocess.run(cmd, check=False).returncode
+    except OSError as exc:
+        sys.stderr.write(f"Error: failed to invoke 'gh': {exc}\n")
+        return EXIT_RUNTIME_ERROR
+
+
+def _forward_pr_reply_to_comment(pr_id: str, *, comment_id: str, body: str) -> int:
+    """POST a reply to a PR review comment."""
+    if not pr_id.isdigit():
+        sys.stderr.write(f"Error: PR_ID must be numeric, got: {pr_id}\n")
+        return EXIT_INVALID_INPUT
+    if not comment_id.isdigit():
+        sys.stderr.write(f"Error: --to COMMENT_ID must be numeric, got: {comment_id}\n")
+        return EXIT_INVALID_INPUT
+    if shutil.which("gh") is None:
+        sys.stderr.write(_GH_MISSING_GUIDANCE)
+        return EXIT_RUNTIME_ERROR
+    repo = _detect_repo()
+    if repo is None:
+        sys.stderr.write(
+            "Error: failed to detect current repository.\n"
+            "Run 'gh repo view --json nameWithOwner' in a checked-out repo first.\n"
+        )
+        return EXIT_RUNTIME_ERROR
+    cmd = [
+        "gh",
+        "api",
+        "--method",
+        "POST",
+        f"repos/{repo}/pulls/{pr_id}/comments/{comment_id}/replies",
+        "-f",
+        f"body={body}",
+    ]
+    try:
+        return subprocess.run(cmd, check=False).returncode
+    except OSError as exc:
+        sys.stderr.write(f"Error: failed to invoke 'gh': {exc}\n")
+        return EXIT_RUNTIME_ERROR
+
+
+def _dispatch_pr_builtin(sub: str, rest: list[str]) -> int:
+    """Parse ``rest`` with a sub-specific argparse and dispatch to the handler.
+
+    ``--help`` / ``-h`` prints sub-specific usage. argparse's default exit
+    code on invalid args is 2, matching ``EXIT_INVALID_INPUT``.
+    """
+    p = argparse.ArgumentParser(prog=f"kaji pr {sub}", add_help=True)
+    p.add_argument("pr_id", type=str, help="PR number")
+    if sub in {"review-comments", "reviews"}:
+        p.add_argument(
+            "--json",
+            dest="json_fields",
+            default=None,
+            help="Comma-separated field list (composed into gh api --jq projection)",
+        )
+        p.add_argument(
+            "--jq",
+            "-q",
+            dest="jq_expr",
+            default=None,
+            help="jq expression applied after --json projection",
+        )
+    elif sub == "reply-to-comment":
+        p.add_argument("--to", dest="comment_id", required=True, type=str, help="Review comment ID")
+        p.add_argument("--body", required=True, type=str, help="Reply body")
+    ns = p.parse_args(rest)
+    fields = (
+        [f.strip() for f in ns.json_fields.split(",") if f.strip()]
+        if getattr(ns, "json_fields", None)
+        else None
+    )
+    if sub == "review-comments":
+        return _forward_pr_review_comments(ns.pr_id, json_fields=fields, jq_expr=ns.jq_expr)
+    if sub == "reviews":
+        return _forward_pr_reviews(ns.pr_id, json_fields=fields, jq_expr=ns.jq_expr)
+    return _forward_pr_reply_to_comment(ns.pr_id, comment_id=ns.comment_id, body=ns.body)
+
+
+def _handle_pr(raw_args: list[str]) -> int:
+    """Two-stage dispatch for ``kaji pr``.
+
+    builtin sub (``review-comments`` / ``reviews`` / ``reply-to-comment``) →
+    dedicated handler; otherwise fall back to Phase 1 ``gh pr`` passthrough.
+    """
+    args = list(raw_args)
+    if args and args[0] == "--":
+        args = args[1:]
+    if args and args[0] in _PR_BUILTIN_SUBCOMMANDS:
+        return _dispatch_pr_builtin(args[0], args[1:])
+    return _forward_to_gh("pr", raw_args)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Main entrypoint."""
     parser = create_parser()
@@ -352,7 +542,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "issue":
         return _forward_to_gh("issue", args.args)
     if args.command == "pr":
-        return _forward_to_gh("pr", args.args)
+        return _handle_pr(args.args)
 
     parser.print_help()
     return EXIT_ABORT

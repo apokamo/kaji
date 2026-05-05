@@ -583,6 +583,177 @@ class TestIssuePrPassthrough:
 
 
 # ============================================================
+# Phase 2-A: kaji pr review-comments / reviews / reply-to-comment
+# ============================================================
+
+
+@pytest.mark.small
+class TestComposeJsonAndJq:
+    """`_compose_json_and_jq` — `--json FIELDS` + `--jq EXPR` の合成。"""
+
+    def test_fields_only_produces_projection(self) -> None:
+        from kaji_harness.cli_main import _compose_json_and_jq
+
+        assert (
+            _compose_json_and_jq(["title", "body"], None) == "[.[] | {title: .title, body: .body}]"
+        )
+
+    def test_jq_only_passes_through(self) -> None:
+        from kaji_harness.cli_main import _compose_json_and_jq
+
+        assert _compose_json_and_jq(None, ".[]") == ".[]"
+
+    def test_both_chains_projection_then_user_jq(self) -> None:
+        from kaji_harness.cli_main import _compose_json_and_jq
+
+        assert _compose_json_and_jq(["id", "body"], ".[]") == "[.[] | {id: .id, body: .body}] | .[]"
+
+    def test_neither_returns_none(self) -> None:
+        from kaji_harness.cli_main import _compose_json_and_jq
+
+        assert _compose_json_and_jq(None, None) is None
+
+
+@pytest.mark.small
+class TestPrReviewCommentsBuiltin:
+    """`kaji pr review-comments` の argv 組み立てと異常系。"""
+
+    def _patches(self, repo: str | None = "owner/repo"):
+        which = patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh")
+        detect = patch("kaji_harness.cli_main._detect_repo", return_value=repo)
+        run = patch("kaji_harness.cli_main.subprocess.run")
+        return which, detect, run
+
+    def test_argv_contains_repo_path_and_composed_jq(self) -> None:
+        from kaji_harness.cli_main import _handle_pr
+
+        which, detect, run = self._patches()
+        with which, detect, run as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            rc = _handle_pr(["review-comments", "153", "--json", "id,body", "--jq", ".[]"])
+            assert rc == 0
+            cmd = mock_run.call_args[0][0]
+            assert cmd[:2] == ["gh", "api"]
+            assert cmd[2] == "repos/owner/repo/pulls/153/comments"
+            assert "--jq" in cmd
+            assert cmd[cmd.index("--jq") + 1] == "[.[] | {id: .id, body: .body}] | .[]"
+
+    def test_argv_omits_jq_when_neither_flag(self) -> None:
+        from kaji_harness.cli_main import _handle_pr
+
+        which, detect, run = self._patches()
+        with which, detect, run as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            _handle_pr(["review-comments", "153"])
+            cmd = mock_run.call_args[0][0]
+            assert "--jq" not in cmd
+            assert cmd[-1] == "repos/owner/repo/pulls/153/comments"
+
+    def test_non_numeric_pr_id_returns_invalid_input(self) -> None:
+        from kaji_harness.cli_main import EXIT_INVALID_INPUT, _handle_pr
+
+        rc = _handle_pr(["review-comments", "abc"])
+        assert rc == EXIT_INVALID_INPUT
+
+    def test_missing_gh_returns_runtime_error(self) -> None:
+        from kaji_harness.cli_main import EXIT_RUNTIME_ERROR, _handle_pr
+
+        with patch("kaji_harness.cli_main.shutil.which", return_value=None):
+            rc = _handle_pr(["review-comments", "153"])
+            assert rc == EXIT_RUNTIME_ERROR
+
+    def test_repo_detect_failure_returns_runtime_error(self) -> None:
+        from kaji_harness.cli_main import EXIT_RUNTIME_ERROR, _handle_pr
+
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.cli_main._detect_repo", return_value=None),
+        ):
+            rc = _handle_pr(["review-comments", "153"])
+            assert rc == EXIT_RUNTIME_ERROR
+
+
+@pytest.mark.small
+class TestPrReviewsBuiltin:
+    def test_argv_uses_reviews_path(self) -> None:
+        from kaji_harness.cli_main import _handle_pr
+
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.cli_main._detect_repo", return_value="o/r"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            _handle_pr(["reviews", "42", "-q", ".[].state"])
+            cmd = mock_run.call_args[0][0]
+            assert cmd[2] == "repos/o/r/pulls/42/reviews"
+            assert cmd[cmd.index("--jq") + 1] == ".[].state"
+
+
+@pytest.mark.small
+class TestPrReplyToCommentBuiltin:
+    def test_argv_contains_post_method_and_body(self) -> None:
+        from kaji_harness.cli_main import _handle_pr
+
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.cli_main._detect_repo", return_value="o/r"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            _handle_pr(["reply-to-comment", "10", "--to", "999", "--body", "thanks"])
+            cmd = mock_run.call_args[0][0]
+            assert cmd[:4] == ["gh", "api", "--method", "POST"]
+            assert cmd[4] == "repos/o/r/pulls/10/comments/999/replies"
+            assert "-f" in cmd
+            assert cmd[cmd.index("-f") + 1] == "body=thanks"
+
+    def test_non_numeric_comment_id_returns_invalid_input(self) -> None:
+        from kaji_harness.cli_main import EXIT_INVALID_INPUT, _handle_pr
+
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.cli_main._detect_repo", return_value="o/r"),
+        ):
+            rc = _handle_pr(["reply-to-comment", "10", "--to", "abc", "--body", "x"])
+            assert rc == EXIT_INVALID_INPUT
+
+
+@pytest.mark.small
+class TestPrBuiltinDispatch:
+    """既存 passthrough の互換性と builtin 振り分け。"""
+
+    def test_existing_pr_view_falls_back_to_passthrough(self) -> None:
+        from kaji_harness.cli_main import _handle_pr
+
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            _handle_pr(["view", "153", "--comments"])
+            cmd = mock_run.call_args[0][0]
+            # builtin に該当しない → _forward_to_gh 経由で素通り
+            assert cmd == ["gh", "pr", "view", "153", "--comments"]
+
+    def test_review_comments_help_exits_zero(self) -> None:
+        """`--help` は argparse が SystemExit(0) で usage を表示する。"""
+        from kaji_harness.cli_main import _handle_pr
+
+        with pytest.raises(SystemExit) as exc:
+            _handle_pr(["review-comments", "--help"])
+        assert exc.value.code == 0
+
+    def test_review_comments_missing_args_exits_two(self) -> None:
+        """argparse default: 引数不足は exit code 2。"""
+        from kaji_harness.cli_main import _handle_pr
+
+        with pytest.raises(SystemExit) as exc:
+            _handle_pr(["review-comments"])
+        assert exc.value.code == 2
+
+
+# ============================================================
 # Helpers
 # ============================================================
 
