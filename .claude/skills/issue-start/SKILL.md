@@ -20,7 +20,7 @@ name: issue-start
 ## 引数
 
 ```
-$ARGUMENTS = <issue-number> [prefix]
+$ARGUMENTS = <issue_id> [prefix]
 ```
 
 - `issue-number` (必須): Issue番号 (例: 247)
@@ -29,8 +29,8 @@ $ARGUMENTS = <issue-number> [prefix]
 
 ## 命名規則
 
-- **ブランチ名**: `[prefix]/[issue-number]` (例: `docs/247`)
-- **ディレクトリ**: `../kaji-[prefix]-[issue-number]` (例: `../kaji-docs-247`)
+- **ブランチ名**: `[prefix]/[issue_id]` (例: `docs/247`)
+- **ディレクトリ**: `../kaji-[prefix]-[issue_id]` (例: `../kaji-docs-247`)
 
 ## 実行手順
 
@@ -45,7 +45,7 @@ $ARGUMENTS から issue-number と prefix を取得してください。
 
 ```bash
 MAIN_REPO=$(git rev-parse --show-toplevel)
-git worktree add -b [prefix]/[issue-number] "$MAIN_REPO/../kaji-[prefix]-[issue-number]" main
+git worktree add -b [prefix]/[issue_id] "$MAIN_REPO/../kaji-[prefix]-[issue_id]" main
 ```
 
 ### Step 1.5: venv シンボリックリンク作成
@@ -54,7 +54,7 @@ main プロジェクトの `.venv` へのシンボリックリンクを作成:
 
 ```bash
 MAIN_REPO=$(git rev-parse --show-toplevel)
-ln -s "$MAIN_REPO/.venv" "$MAIN_REPO/../kaji-[prefix]-[issue-number]/.venv"
+ln -s "$MAIN_REPO/.venv" "$MAIN_REPO/../kaji-[prefix]-[issue_id]/.venv"
 ```
 
 これにより `make check` が即座に実行可能になります。
@@ -73,20 +73,20 @@ Issue本文の先頭にWorktree情報を追記します:
 
 ```bash
 # 現在のIssue本文を取得
-CURRENT_BODY=$(gh issue view [issue-number] --json body -q '.body')
+CURRENT_BODY=$(kaji issue view [issue_id] --json body -q '.body')
 
 # メタ情報を先頭に追加した新しい本文を作成
 NEW_BODY=$(cat <<EOF
 > [!NOTE]
-> **Worktree**: \`../kaji-[prefix]-[issue-number]\`
-> **Branch**: \`[prefix]/[issue-number]\`
+> **Worktree**: \`../kaji-[prefix]-[issue_id]\`
+> **Branch**: \`[prefix]/[issue_id]\`
 
 $CURRENT_BODY
 EOF
 )
 
 # Issue本文を更新
-gh issue edit [issue-number] --body "$NEW_BODY"
+kaji issue edit [issue_id] --body "$NEW_BODY"
 ```
 
 ### Step 4: セットアップ完了報告
@@ -98,9 +98,9 @@ gh issue edit [issue-number] --body "$NEW_BODY"
 
 | 項目 | 値 |
 |------|-----|
-| Issue | #[issue-number] |
-| ブランチ | [prefix]/[issue-number] |
-| ディレクトリ | ../kaji-[prefix]-[issue-number] |
+| Issue | [issue_ref] |
+| ブランチ | [prefix]/[issue_id] |
+| ディレクトリ | ../kaji-[prefix]-[issue_id] |
 | 基点ブランチ | main |
 | venv | シンボリックリンク作成済み |
 | メタ情報 | Issue本文に追記済み |
@@ -109,11 +109,11 @@ gh issue edit [issue-number] --body "$NEW_BODY"
 
 このタスクに関する今後のコマンドは、すべて以下のディレクトリ内で実行してください:
 
-cd ../kaji-[prefix]-[issue-number]
+cd ../kaji-[prefix]-[issue_id]
 
 ### クリーンアップ（作業完了後）
 
-作業が完了したら `/issue-close [issue-number]` を実行してください。
+作業が完了したら `/issue-close [issue_id]` を実行してください。
 ```
 
 ## Verdict 出力

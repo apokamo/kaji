@@ -24,7 +24,7 @@ docs 修正後の確認を行う。
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_number` | int | GitHub Issue 番号 |
+| `issue_id` | str | GitHub Issue 番号 |
 | `step_id` | str | 現在のステップ ID |
 | `cycle_count` | int | 現在のイテレーション |
 | `max_iterations` | int | 上限回数 |
@@ -33,13 +33,13 @@ docs 修正後の確認を行う。
 ### 手動実行（スラッシュコマンド）
 
 ```
-$ARGUMENTS = <issue-number>
+$ARGUMENTS = <issue_id>
 ```
 
 ### 解決ルール
 
-コンテキスト変数 `issue_number` が存在すればそちらを使用。
-なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
+コンテキスト変数 `issue_id` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
 
 ## 前提知識の読み込み
 

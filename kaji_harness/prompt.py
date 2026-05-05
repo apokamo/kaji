@@ -24,10 +24,6 @@ def build_prompt(step: Step, issue: str, state: SessionState, workflow: Workflow
     issue_id = str(issue)
     issue_ref = _format_issue_ref(issue_id)
     variables: dict[str, object] = {
-        # Phase 1 後方互換 alias: 既存 Skill (.claude/skills/*/SKILL.md) は
-        # issue_number を「常に注入される変数」として参照しているため、
-        # provider 中立変数への移行が完了する Phase 2 まで残す。
-        "issue_number": issue_id,
         "issue_id": issue_id,
         "issue_ref": issue_ref,
         "step_id": step.id,

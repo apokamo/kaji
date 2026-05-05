@@ -681,7 +681,7 @@ class TestWorkflowRunnerWithConfig:
         ):
             runner = WorkflowRunner(
                 workflow=wf,
-                issue_number=1,
+                issue_number="1",
                 project_root=tmp_path,
                 artifacts_dir=tmp_path / ".kaji-artifacts",
                 config=config,
@@ -721,7 +721,7 @@ class TestWorkflowRunnerWithConfig:
         ):
             runner = WorkflowRunner(
                 workflow=wf,
-                issue_number=1,
+                issue_number="1",
                 project_root=tmp_path,
                 artifacts_dir=tmp_path / ".kaji-artifacts",
                 config=config,

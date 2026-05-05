@@ -24,7 +24,7 @@ name: issue-fix-design
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_number` | int | GitHub Issue 番号 |
+| `issue_id` | str | GitHub Issue 番号 |
 | `step_id` | str | 現在のステップ ID |
 
 **条件付きで注入される変数:**
@@ -38,13 +38,13 @@ name: issue-fix-design
 ### 手動実行（スラッシュコマンド）
 
 ```
-$ARGUMENTS = <issue-number>
+$ARGUMENTS = <issue_id>
 ```
 
 ### 解決ルール
 
-コンテキスト変数 `issue_number` が存在すればそちらを使用。
-なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
+コンテキスト変数 `issue_id` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
 
 ## 前提知識の読み込み
 
@@ -73,13 +73,13 @@ $ARGUMENTS = <issue-number>
 
 3. **レビュー内容の取得**:
    ```bash
-   gh issue view [issue-number] --comments
+   kaji issue view [issue_id] --comments
    ```
    最新の「設計レビュー結果」を取得。
 
 3. **設計書の現状確認**:
    ```bash
-   cat [worktree-absolute-path]/draft/design/issue-[number]-*.md
+   cat [worktree-absolute-path]/draft/design/issue-[issue_id]-*.md
    ```
 
 ### Step 2: 対応方針の検討
@@ -134,7 +134,7 @@ $ARGUMENTS = <issue-number>
 ### Step 4: コミット
 
 ```bash
-cd [worktree-absolute-path] && git add draft/design/ && git commit -m "docs: update design for #[issue-number]"
+cd [worktree-absolute-path] && git add draft/design/ && git commit -m "docs: update design for [issue_ref]"
 ```
 
 ### Step 5: 結果報告
@@ -142,7 +142,7 @@ cd [worktree-absolute-path] && git add draft/design/ && git commit -m "docs: upd
 Issueにコメントします:
 
 ```bash
-gh issue comment [issue-number] --body-file - <<'EOF'
+kaji issue comment [issue_id] --body-file - <<'EOF'
 # 設計修正報告
 
 ## 対応済み
@@ -157,7 +157,7 @@ gh issue comment [issue-number] --body-file - <<'EOF'
 
 ## 次のステップ
 
-`/issue-verify-design [issue-number]` で修正確認をお願いします。
+`/issue-verify-design [issue_id]` で修正確認をお願いします。
 EOF
 ```
 
@@ -170,13 +170,13 @@ EOF
 
 | 項目 | 値 |
 |------|-----|
-| Issue | #[issue-number] |
+| Issue | [issue_ref] |
 | 対応済み | N 件 |
 | 見送り | M 件 |
 
 ### 次のステップ
 
-`/issue-verify-design [issue-number]` で修正確認を実施してください。
+`/issue-verify-design [issue_id]` で修正確認を実施してください。
 ```
 
 ## Verdict 出力

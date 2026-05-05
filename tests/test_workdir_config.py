@@ -448,7 +448,7 @@ class TestWorkdirRunnerIntegration:
         ):
             runner = WorkflowRunner(
                 workflow=wf,
-                issue_number=1,
+                issue_number="1",
                 project_root=tmp_path,
                 artifacts_dir=tmp_path / ".kaji-artifacts",
                 config=config,
@@ -491,7 +491,7 @@ class TestWorkdirRunnerIntegration:
         ):
             runner = WorkflowRunner(
                 workflow=wf,
-                issue_number=1,
+                issue_number="1",
                 project_root=tmp_path,
                 artifacts_dir=tmp_path / ".kaji-artifacts",
                 config=config,
@@ -531,7 +531,7 @@ class TestWorkdirRunnerIntegration:
         ):
             runner = WorkflowRunner(
                 workflow=wf,
-                issue_number=1,
+                issue_number="1",
                 project_root=tmp_path,
                 artifacts_dir=tmp_path / ".kaji-artifacts",
                 config=config,
@@ -576,7 +576,7 @@ class TestWorkdirRunnerIntegration:
             mock_formatter.return_value = lambda raw: raw
             runner = WorkflowRunner(
                 workflow=wf,
-                issue_number=1,
+                issue_number="1",
                 project_root=tmp_path,
                 artifacts_dir=tmp_path / ".kaji-artifacts",
                 config=config,
@@ -602,7 +602,7 @@ class TestWorkdirRunnerIntegration:
         with patch("kaji_harness.runner.validate_skill_exists"):
             runner = WorkflowRunner(
                 workflow=wf,
-                issue_number=1,
+                issue_number="1",
                 project_root=tmp_path,
                 artifacts_dir=tmp_path / ".kaji-artifacts",
                 config=config,

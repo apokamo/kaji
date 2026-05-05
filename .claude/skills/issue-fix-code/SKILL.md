@@ -25,7 +25,7 @@ name: issue-fix-code
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_number` | int | GitHub Issue 番号 |
+| `issue_id` | str | GitHub Issue 番号 |
 | `step_id` | str | 現在のステップ ID |
 
 **条件付きで注入される変数:**
@@ -39,13 +39,13 @@ name: issue-fix-code
 ### 手動実行（スラッシュコマンド）
 
 ```
-$ARGUMENTS = <issue-number>
+$ARGUMENTS = <issue_id>
 ```
 
 ### 解決ルール
 
-コンテキスト変数 `issue_number` が存在すればそちらを使用。
-なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
+コンテキスト変数 `issue_id` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
 
 ## 前提知識の読み込み
 
@@ -71,7 +71,7 @@ $ARGUMENTS = <issue-number>
 
 3. **レビュー内容の取得**:
    ```bash
-   gh issue view [issue-number] --comments
+   kaji issue view [issue_id] --comments
    ```
    最新の「コードレビュー結果」を取得。
 
@@ -123,7 +123,7 @@ $ARGUMENTS = <issue-number>
 ### Step 4: コミット
 
 ```bash
-cd [worktree-absolute-path] && git add . && git commit -m "fix: address review feedback for #[issue-number]"
+cd [worktree-absolute-path] && git add . && git commit -m "fix: address review feedback for [issue_ref]"
 ```
 
 ### Step 5: 結果報告
@@ -131,7 +131,7 @@ cd [worktree-absolute-path] && git add . && git commit -m "fix: address review f
 Issueにコメントします:
 
 ```bash
-gh issue comment [issue-number] --body "$(cat <<'EOF'
+kaji issue comment [issue_id] --body "$(cat <<'EOF'
 # レビュー指摘への対応報告
 
 レビューありがとうございます。以下の通り検討・対応を行いました。
@@ -154,7 +154,7 @@ gh issue comment [issue-number] --body "$(cat <<'EOF'
 
 ## 次のステップ
 
-`/issue-verify-code [issue-number]` で修正確認をお願いします。
+`/issue-verify-code [issue_id]` で修正確認をお願いします。
 EOF
 )"
 ```
@@ -166,13 +166,13 @@ EOF
 
 | 項目 | 値 |
 |------|-----|
-| Issue | #[issue-number] |
+| Issue | [issue_ref] |
 | 対応済み | N 件 |
 | 見送り | M 件 |
 
 ### 次のステップ
 
-`/issue-verify-code [issue-number]` で修正確認を実施してください。
+`/issue-verify-code [issue_id]` で修正確認を実施してください。
 ```
 
 ## Verdict 出力

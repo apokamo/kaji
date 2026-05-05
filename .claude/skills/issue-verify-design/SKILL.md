@@ -30,7 +30,7 @@ name: issue-verify-design
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_number` | int | GitHub Issue 番号 |
+| `issue_id` | str | GitHub Issue 番号 |
 | `step_id` | str | 現在のステップ ID |
 
 **条件付きで注入される変数:**
@@ -43,13 +43,13 @@ name: issue-verify-design
 ### 手動実行（スラッシュコマンド）
 
 ```
-$ARGUMENTS = <issue-number>
+$ARGUMENTS = <issue_id>
 ```
 
 ### 解決ルール
 
-コンテキスト変数 `issue_number` が存在すればそちらを使用。
-なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
+コンテキスト変数 `issue_id` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
 
 ## 前提知識の読み込み
 
@@ -83,13 +83,13 @@ $ARGUMENTS = <issue-number>
 
 2. **前回の指摘内容を取得**:
    ```bash
-   gh issue view [issue-number] --comments
+   kaji issue view [issue_id] --comments
    ```
    「設計レビュー結果」と「設計修正報告」を確認。
 
 3. **現在の設計書を確認**:
    ```bash
-   cat [worktree-absolute-path]/draft/design/issue-[number]-*.md
+   cat [worktree-absolute-path]/draft/design/issue-[issue_id]-*.md
    ```
 
 ### Step 2: 修正確認
@@ -135,7 +135,7 @@ $ARGUMENTS = <issue-number>
 ### Step 3: 確認結果のコメント
 
 ```bash
-gh issue comment [issue-number] --body-file - <<'EOF'
+kaji issue comment [issue_id] --body-file - <<'EOF'
 # 設計修正確認結果
 
 ## 修正項目の確認
@@ -173,10 +173,10 @@ gh issue comment [issue-number] --body-file - <<'EOF'
 ## 次のステップ
 
 (Approve の場合)
-\`/issue-implement [issue-number]\` で実装を開始してください。
+\`/issue-implement [issue_id]\` で実装を開始してください。
 
 (Changes Requested の場合)
-\`/issue-fix-design [issue-number]\` で再度修正してください。
+\`/issue-fix-design [issue_id]\` で再度修正してください。
 EOF
 ```
 
@@ -189,13 +189,13 @@ EOF
 
 | 項目 | 値 |
 |------|-----|
-| Issue | #[issue-number] |
+| Issue | [issue_ref] |
 | 判定 | Approve / Changes Requested |
 
 ### 次のステップ
 
-- Approve: `/issue-implement [issue-number]` で実装開始
-- Changes Requested: `/issue-fix-design [issue-number]` で再修正
+- Approve: `/issue-implement [issue_id]` で実装開始
+- Changes Requested: `/issue-fix-design [issue_id]` で再修正
 ```
 
 ## Verdict 出力

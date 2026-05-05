@@ -30,19 +30,19 @@ worktree 不要（メインリポジトリから実行可能）。
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_number` | int | GitHub Issue 番号 |
+| `issue_id` | str | GitHub Issue 番号 |
 | `step_id` | str | 現在のステップ ID |
 
 ### 手動実行（スラッシュコマンド）
 
 ```
-$ARGUMENTS = <issue-number>
+$ARGUMENTS = <issue_id>
 ```
 
 ### 解決ルール
 
-コンテキスト変数 `issue_number` が存在すればそちらを使用。
-なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
+コンテキスト変数 `issue_id` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
 
 ## 共通ルール
 
@@ -69,7 +69,7 @@ Issue のラベル（`type:feature` / `type:bug` / `type:refactor` / `type:docs`
 ラベル取得（`type:` ラベルを全件、改行区切りで取得する）:
 
 ```bash
-gh issue view [issue-number] --json labels --jq '[.labels[].name] | map(select(startswith("type:"))) | .[]'
+kaji issue view [issue_id] --json labels --jq '[.labels[].name] | map(select(startswith("type:"))) | .[]'
 ```
 
 **判定の優先順（「未付与」「複数付与」「canonical 外」を区別）**:
@@ -144,7 +144,7 @@ gh issue view [issue-number] --json labels --jq '[.labels[].name] | map(select(s
 ### Step 1: Issue 本文の取得
 
 ```bash
-gh issue view [issue-number] --json title,body,labels --jq '{title: .title, body: .body, labels: [.labels[].name]}'
+kaji issue view [issue_id] --json title,body,labels --jq '{title: .title, body: .body, labels: [.labels[].name]}'
 ```
 
 取得した本文を以降のステップで分析する。
@@ -188,7 +188,7 @@ Verdict に応じて以下の形式で Issue コメントに投稿する。
 **PASS の場合:**
 
 ```bash
-gh issue comment [issue-number] --body-file - <<'EOF'
+kaji issue comment [issue_id] --body-file - <<'EOF'
 ## レディネスレビュー
 
 全観点クリア。作業着手に進行可。
@@ -198,7 +198,7 @@ EOF
 **RETRY の場合:**
 
 ```bash
-gh issue comment [issue-number] --body-file - <<'EOF'
+kaji issue comment [issue_id] --body-file - <<'EOF'
 ## レディネスレビュー
 
 ### 指摘事項
@@ -208,14 +208,14 @@ gh issue comment [issue-number] --body-file - <<'EOF'
 
 ### 判定
 
-RETRY — 上記を修正後、再度 `/issue-review-ready [number]` を実行してください。
+RETRY — 上記を修正後、再度 `/issue-review-ready [issue_id]` を実行してください。
 EOF
 ```
 
 **ABORT の場合:**
 
 ```bash
-gh issue comment [issue-number] --body-file - <<'EOF'
+kaji issue comment [issue_id] --body-file - <<'EOF'
 ## レディネスレビュー
 
 ### 理由
@@ -237,13 +237,13 @@ EOF
 
 | 項目 | 値 |
 |------|-----|
-| Issue | #[issue-number] |
+| Issue | [issue_ref] |
 | 判定 | PASS / RETRY / ABORT |
 
 ### 次のステップ
 
-- PASS: `/issue-start [issue-number]` で worktree をセットアップ
-- RETRY: Issue 本文を修正後、再度 `/issue-review-ready [issue-number]` を実行
+- PASS: `/issue-start [issue_id]` で worktree をセットアップ
+- RETRY: Issue 本文を修正後、再度 `/issue-review-ready [issue_id]` を実行
 - ABORT: Issue を close するか、内容を根本的に見直し
 ```
 

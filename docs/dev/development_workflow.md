@@ -57,7 +57,7 @@ flowchart TB
 | 実装 | `/issue-implement` | 実装、docs 更新、品質ゲート（`make check`）実行 |
 | コードレビュー | `/issue-review-code` | 設計整合、テスト証跡、docs 更新漏れの確認 |
 | 最終チェック | `/i-dev-final-check` | PR 前の最終品質ゲート（`make check`）、docs 整合、設計書 NOTE 直下添付、Issue 本文更新 |
-| PR 作成 | `/i-pr` | branch/worktree 解決、push、`gh pr create`（`--no-ff` merge 前提） |
+| PR 作成 | `/i-pr` | branch/worktree 解決、push、`kaji pr create`（`--no-ff` merge 前提） |
 | 完了 | `/issue-close` | PR merge、worktree cleanup、Issue close、完了報告コメント（※手動実行） |
 
 ## type 別の差分
