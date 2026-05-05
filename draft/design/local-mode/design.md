@@ -8,16 +8,16 @@ Issue: TBD（GitHub アカウント停止中。復旧後に起票して紐付け
 
 | カテゴリ | パス / コマンド | 参照目的 |
 |---------|----------------|---------|
-| **既存 CLI 実装** | `kaji_harness/cli_main.py:58-59` | `kaji run` の `issue` 引数が現在 `int` 型である事実、Phase 1 で `str` 化する根拠 |
-| 既存 CLI 実装 | `kaji_harness/state.py:34, 114` | `SessionState.issue_number` の型変更影響箇所 |
-| 既存 CLI 実装 | `kaji_harness/prompt.py:12, 48` | `f"GitHub Issue #{issue}"` の表示文言を provider 別に整形する根拠 |
-| 既存 CLI 実装 | `kaji_harness/logger.py:37` | log フィールド型の追従対象 |
+| **既存 CLI 実装** | `kaji_harness/cli_main.py:59` | `kaji run` の `issue` 引数が現在 `int` 型である事実、Phase 1 で `str` 化する根拠 |
+| 既存 CLI 実装 | `kaji_harness/state.py:34`（`SessionState.issue_number: int` 定義）、同 `_persist` 内 dict serialize（おおむね 100 行前後） | `SessionState.issue_number` の型変更影響箇所 |
+| 既存 CLI 実装 | `kaji_harness/prompt.py:17, 25, 48` | `f"GitHub Issue #{issue}"` の表示文言、prompt 引数辞書の `issue_number` キーを provider 別に整形する根拠 |
+| 既存 CLI 実装 | `kaji_harness/logger.py` の `issue` フィールド | log フィールド型の追従対象（Phase 1 で `int` → `str`） |
 | 既存 config | `.kaji/config.toml` | 現行に `[provider]` セクションが存在しない事実、Phase 3 で追記必須化する根拠 |
 | 既存 config 実装 | `kaji_harness/config.py:48` | TOML 拡張で `[provider]` を追加する整合性 |
 | 既存 workflow | `.kaji/wf/feature-development.yaml:1-3` | `issue-create` / `issue-start` 事前手動実行が前提である事実 |
 | 既存 Skill 全般 | `find .claude/skills -name SKILL.md \| wc -l` = **23**、dir 数 24 のうち `_shared/` を除外 | Skill 数の根拠（`gh` 直叩きカウント 20 の母数）。互換 alias `issue-pr` / `issue-doc-check` 削除後の値（refactor: drop deprecated skill aliases にて 25→23 に減少） |
 | 既存 Skill | `.claude/skills/issue-close/SKILL.md:81, 89` | `gh pr merge --merge` 呼び出しの存在、worktree → branch 削除順序の規範 |
-| 既存依存関係 | `pyproject.toml:25` の `[dependency-groups.dev]` | `pytest-httpx` が未掲載 → 追加要 |
+| 既存依存関係 | `pyproject.toml:21` の `[project.dependencies]` | `httpx` が未掲載 → sync は HTTP client を新規導入せず、`gh api` subprocess 経由で実装する根拠 |
 | インシデント | 2026-05-03 GitHub アカウント停止 | 本設計の動機（背景・目的セクション参照） |
 | 規約 | `docs/reference/testing-size-guide.md` | テストサイズ Small/Medium/Large の定義（Large = 外部実通信のみ） |
 | 規約 | `docs/guides/git-commit-flow.md` | merge 戦略 `--no-ff` 固定の根拠 |
@@ -100,12 +100,22 @@ kaji issue comment  ID   (--body TEXT | --body-file PATH)
 kaji issue close    ID   [--reason completed|not-planned]
 kaji issue list          [--state open|closed|all] [--label LABEL] [--json FIELDS] [--jq EXPR | -q EXPR]
 
-kaji pr   create    --base BRANCH --head BRANCH --title TEXT (--body TEXT | --body-file PATH)
+kaji pr   create    --base BRANCH [--head BRANCH] --title TEXT (--body TEXT | --body-file PATH)
+                                                # --head 省略時は現在の HEAD branch を採用（gh 互換）
 kaji pr   view      ID   [--comments] [--json FIELDS] [--jq EXPR | -q EXPR]
-kaji pr   list           [--head BRANCH] [--state open|merged|closed] [--json FIELDS] [--jq EXPR | -q EXPR]
+kaji pr   list           [--head BRANCH] [--search QUERY] [--state open|merged|closed] [--json FIELDS] [--jq EXPR | -q EXPR]
 kaji pr   merge     ID                          # 常に no-ff merge（後述）
 kaji pr   comment   ID   (--body TEXT | --body-file PATH)
-kaji pr   review    ID   --approve|--request-changes (--body TEXT | --body-file PATH)
+kaji pr   review    ID   --approve|--request-changes (--body TEXT | --body-file PATH | --body-file -)
+                                                # `--body-file -` で stdin 受付（既存 Skill が heredoc で多用）
+
+# 以下は GitHub provider 専用（forge 機能依存）。local provider では明示エラー停止
+kaji pr   review-comments  ID   [--json FIELDS] [--jq EXPR]
+                                                # gh api repos/.../pulls/N/comments の置換（pr-fix Skill が使用）
+kaji pr   reviews          ID   [--json FIELDS] [--jq EXPR]
+                                                # gh api repos/.../pulls/N/reviews の置換
+kaji pr   reply-to-comment PR_ID --to COMMENT_ID --body TEXT
+                                                # gh api .../comments/<id>/replies の置換
 
 # kaji pr 配下のコマンドは forge provider 専用
 # （PR / MR を持つ remote 系 provider。現状は github のみ、
@@ -127,11 +137,29 @@ kaji sync local-to-github-plan   [--json]
 
 `kaji sync from-github` は GitHub 上の Issue を全件（または `--since` 指定時はその日付以降の更新分）取得し、`.kaji/cache/issues/<gh-number>.json` に GitHub 形式で保存する。あわせて `.kaji/cache/state.json` に最終同期時刻を記録する。`--dry-run` で取得対象だけ表示する。
 
+**実装方針**: GitHubProvider が `gh` CLI ラッパーである方針と一貫させるため、sync も **`gh api repos/<owner>/<repo>/issues?...` を `subprocess.run` で呼び出す**形式で実装する。HTTP client（`httpx` 等）は新規導入しない（現行 `pyproject.toml:21` の runtime dependency に未掲載のため、依存追加を回避する）。paging は `gh api --paginate` フラグで処理。テストは `subprocess.run` を mock する Small テストでカバーし、Large テストで実 `gh api` 通信を検証する。
+
 `kaji sync status` は最終同期時刻、cache 件数、現在の provider、GitHub 接続性を表示する診断用コマンド。
 
 `kaji sync local-to-github-plan` は GitHub 復旧後の運用補助コマンドで、停止期間中に作られた `local-<machine>-<n>` Issue を **全 PC 横断**で一覧表示する（既に `migrated_to: <gh-number>` frontmatter を持つものは除外）。`--json` で機械可読出力（AI に転記依頼する用途）。**plan の出力のみ**を提供し、転記実行は user / AI の手動作業とする（後述「BCP フロー」参照）。
 
-`kaji issue edit ID --add-frontmatter KEY=VALUE` は frontmatter に任意の key を追記する（同名 key が既存なら上書き）。GitHub 復旧後の `migrated_to: <gh-number>` 記録など、ad-hoc な metadata を保持するための一般化された interface。値は string 固定（YAML scalar として安全）。
+`kaji issue edit ID --add-frontmatter KEY=VALUE` は frontmatter にユーザー拡張 key を追記する。ad-hoc な metadata（GitHub 復旧後の `migrated_to: <gh-number>` 等）を保持するための interface。
+
+**reserved field の保護**:
+
+frontmatter の core field（kaji 自身が semantics を定義する key）は `--add-frontmatter` で**上書き不可**。理由は user の typo / AI の判断ミスで状態管理が壊れることを防ぐため。違反入力はエラー停止し、専用 CLI（`kaji issue edit --body`、`--add-label`、`kaji issue close` 等）の使用をガイドする。
+
+| 分類 | key | 上書き手段 |
+|------|-----|----------|
+| **reserved（禁止）** | `id`, `state`, `labels`, `assignees`, `created_at`, `updated_at`, `closed_at`, `close_reason`, `closed_by`, `created_by`, `title` | 専用 CLI のみ（`--add-label`, `kaji issue close` 等）|
+| **user 拡張（許可）**| 上記以外の任意 key | `--add-frontmatter` で許可 |
+
+実装方針:
+
+- `RESERVED_FRONTMATTER_KEYS: frozenset[str]` を `kaji_harness/providers/models.py` で定義し、CLI 層で入力 KEY を validate
+- 値は string 固定（YAML scalar として安全。複合型を許容すると schema が膨らむため）
+- KEY 文法は `[a-z][a-z0-9_]{0,31}`（snake_case、32 文字以内、frontmatter key として安全）
+- 違反時のエラー文言は「`--add-frontmatter` cannot overwrite reserved key '`state`'. Use `kaji issue close` instead.」のように、reserved 各 key に専用ガイドを示す
 
 ID は以下のいずれの形式でも受理し、**provider と入力形式の組み合わせで解決先を一意に決定**する：
 
@@ -139,16 +167,23 @@ ID は以下のいずれの形式でも受理し、**provider と入力形式の
 |---------|-----------------|----------------|
 | `local-pc1-1` / `local-pc2-42` | エラー（local 専用形式） | local Issue として解決 |
 | `pc1-1`（machine 省略形）| エラー | local Issue として解決 |
-| 数値のみ `1` / `153` | GitHub Issue `#1` / `#153` | **local Issue `local-<config.machine_id>-1` を新規採番／参照**（cache 参照ではない） |
-| `#153` | GitHub Issue `#153` | **cache から読み出す GitHub Issue `#153`**（local mode 中の read-only 参照専用） |
+| 数値のみ `1` / `153` | GitHub Issue #1 / #153 | **local Issue `local-<config.machine_id>-1` を新規採番／参照**（cache 参照ではない） |
+| `gh:153` | GitHub Issue #153 | **cache から読み出す GitHub Issue #153**（local mode 中の read-only 参照専用） |
 
-**重要な設計判断**: local mode 中の数値のみ入力（例: `kaji issue view 153`）は **local 番号空間** (`local-<machine>-153`) として解釈する。GitHub cache を参照したい場合は `#153` を必須とする。これにより以下が達成できる：
+**重要な設計判断**: local mode 中の数値のみ入力（例: `kaji issue view 153`）は **local 番号空間** (`local-<machine>-153`) として解釈する。GitHub cache を参照したい場合は `gh:153` を必須とする。これにより以下が達成できる：
 
-- 数値のみ入力の解決先が provider 内で曖昧にならない（local mode 中は常に local 空間、`#` prefix で明示的に cache を指す）
-- normalize_id の出力が「`local-<machine>-<n>` または cache key `#N`」のいずれか一意に決まる
-- `kaji issue list` で local Issue と cache 由来 Issue を統合表示する際、ID 形式 (`local-pc1-1` vs `#153`) で出自が判別可能
+- 数値のみ入力の解決先が provider 内で曖昧にならない（local mode 中は常に local 空間、`gh:` prefix で明示的に cache を指す）
+- normalize_id の出力が「`local-<machine>-<n>` または cache key（github 番号）」のいずれか一意に決まる
+- `kaji issue list` で local Issue と cache 由来 Issue を統合表示する際、ID 形式 (`local-pc1-1` vs `gh:153`) で出自が判別可能
 
-provider が未確定で数値のみが渡された場合はエラー。`#N` 形式は cache 存在チェックを経て、cache 不在ならエラー停止（「provider=local 中、cache に GitHub Issue #N が見つかりません。`kaji sync from-github` を実行してください」とガイド）。
+**`#` ではなく `gh:` を採用する理由**（shell-safety）:
+
+- bash / zsh で未引用の `#153` はコメントとして parse され、`kaji issue view #153` だと `#153` 以降が捨てられる（実装が ID を一切受け取れない）
+- `'#153'` の quote 強制は user に毎回求める設計として粗悪
+- `gh:153` は colon を区切りとした URI scheme 風の prefix で、shell 上で quote なしに渡せる（`:` は bash の word boundary ではない）
+- 将来 `gitlab:42` `forgejo:7` 等の forge 別 prefix も同形で拡張できる
+
+provider が未確定で数値のみが渡された場合はエラー。`gh:N` 形式は cache 存在チェックを経て、cache 不在ならエラー停止（「provider=local 中、cache に GitHub Issue #N が見つかりません。`kaji sync from-github` を実行してください」とガイド）。**表示文言中の `#153`（人間可読の GitHub Issue 番号）はそのまま使用**し、CLI 入力構文の `gh:153` と区別する。
 
 #### 既存 Skill との互換契約
 
@@ -162,17 +197,63 @@ provider が未確定で数値のみが渡された場合はエラー。`#N` 形
 | `--label` | ラベル付与 | `gh` に渡す | frontmatter `labels` に追記 |
 | `--add-label` | ラベル追加（edit 時） | `gh` に渡す | frontmatter `labels` に append |
 | `--json FIELDS` | JSON 出力 | `gh` に渡す | LocalProvider が GitHub API スキーマで生成 |
-| `--jq EXPR` / `-q EXPR` | jq 式評価 | `gh` に渡す | Python 側で `pyjq` または `subprocess.run(["jq", "-e", expr])` で評価 |
+| `--jq EXPR` / `-q EXPR` | jq 式評価 | `gh` に渡す | Python `jq` library で評価し、**gh 互換 raw 出力**（scalar string は quote を外す）に整形（後述「LocalProvider の `--jq` 実装方針」参照）|
 | `--comments` | コメント含めて表示 | `gh` に渡す | コメントディレクトリを集約 |
 | `--state` / `--reason` | 状態指定 | `gh` に渡す | frontmatter 更新 |
 
-**LocalProvider の `--jq` 実装方針**:
+**LocalProvider の `--jq` 実装方針（gh 互換）**:
 
-- 第一選択: `subprocess.run(["jq", "-c", expr], input=json_str)` で外部 `jq` を呼ぶ（`gh` も内部で `jq` ライブラリを使うので動作互換性が高い）
-- 依存: `jq` バイナリが PATH に存在することを kaji の前提条件とする（受け入れ条件で検証）
-- `jq` 不在時のエラー: 「jq が PATH に見つかりません。`apt install jq` 等でインストールしてください」とガイド
+`gh --jq` の挙動は `jq -c` 単独では再現できない。具体的には以下の差がある（`gh` ソース `pkg/export/template.go` および動作確認済み）：
 
-これにより Skill の `gh issue view 123 --json title,body --jq '.title'` を `kaji issue view 123 --json title,body --jq '.title'` にそのまま置換できる。
+- **scalar の raw 出力**: `gh issue view N --jq '.body'` は **JSON quote / escape を外した raw string** を返す。`jq -c '.body'` は `"..."` を残す。Skill `.claude/skills/issue-start/SKILL.md:76` は `CURRENT_BODY=$(gh issue view ... -q '.body')` の出力を `gh issue edit ... --body "$CURRENT_BODY"` で **そのまま Issue body として書き戻す**ため、quote が混入すると本文が `"..."` で囲まれて壊れる
+- **配列の改行区切り出力**: 配列 / object stream は `\n` 区切りで出力（`jq -c` も同じ）
+- **null / boolean / number**: 値そのまま出力（quote なし）
+- **複合値（object / array）**: compact JSON で出力
+
+実装は外部 `jq` を呼ばず、**Python ライブラリ `jq` (PyPI `jq` パッケージ、libjq バインディング) を runtime dependency に追加**し、結果に対して以下の post-processing で gh 互換 raw 出力を再現する：
+
+```python
+import jq
+
+def gh_compatible_jq(expr: str, data: object) -> str:
+    """gh --jq の出力フォーマットを再現する。
+
+    - scalar string → quote を外した raw text
+    - null / bool / number → そのまま
+    - object / array → compact JSON
+    - 複数結果 → 改行区切り
+    """
+    results = jq.compile(expr).input_value(data).all()
+    lines: list[str] = []
+    for r in results:
+        if isinstance(r, str):
+            lines.append(r)              # raw（quote なし）— gh -q '.body' 互換
+        elif r is None:
+            lines.append("")             # gh の挙動: null は空行
+        elif isinstance(r, bool):
+            lines.append("true" if r else "false")
+        elif isinstance(r, (int, float)):
+            lines.append(str(r))
+        else:
+            lines.append(json.dumps(r, ensure_ascii=False, separators=(",", ":")))
+    return "\n".join(lines)
+```
+
+**依存追加**: `pyproject.toml` の `[project.dependencies]` に `jq>=1.6` を追加（C extension wheel 配布あり、Linux/macOS/Windows カバー）。外部 `jq` バイナリ依存を持たないため、ユーザーが追加インストールする必要がない。
+
+**互換性テスト（Small）**: 以下の入出力ペアが `gh` と一致することを確認する：
+
+| jq expr | input | 期待出力（gh 互換） | 注 |
+|---------|-------|------------------|----|
+| `.body` | `{"body": "hello\n世界"}` | `hello\n世界`（改行はそのまま、quote なし）| Issue body 復元の基本ケース |
+| `.title` | `{"title": "feat: \"X\""}` | `feat: "X"`（escape 解除）| escape 文字を持つ string |
+| `.labels[].name` | `{"labels":[{"name":"a"},{"name":"b"}]}` | `a\nb` | 改行区切り array |
+| `.number` | `{"number": 153}` | `153` | numeric scalar |
+| `.merged` | `{"merged": true}` | `true` | bool |
+| `.state` | `{"state": null}` | （空行）| null |
+| `.assignees` | `{"assignees":[{"login":"a"}]}` | `[{"login":"a"}]` | object array は compact JSON |
+
+これにより Skill の `gh issue view 123 --json title,body --jq '.title'` を `kaji issue view 123 --json title,body --jq '.title'` にそのまま置換でき、特に `CURRENT_BODY=$(... -q '.body')` パターンが壊れない。
 
 ### Config
 
@@ -455,7 +536,7 @@ flowchart TB
         S1[issue-create]
         S2[issue-design]
         S3[issue-close]
-        Sn[... 他 22 Skills]
+        Sn[... 他 20 Skills]
     end
     subgraph CLI["kaji CLI (kaji_harness/cli_main.py)"]
         IC[kaji issue ...]
@@ -615,8 +696,8 @@ MACHINE_RE = re.compile(r"^[a-z0-9]{1,16}$")
 LOCAL_ID_RE = re.compile(r"^local-([a-z0-9]{1,16})-([1-9][0-9]*)$")
 # 省略形: <machine>-<int>
 SHORT_RE = re.compile(r"^([a-z0-9]{1,16})-([1-9][0-9]*)$")
-# GitHub cache 参照: #N
-HASH_RE = re.compile(r"^#([1-9][0-9]*)$")
+# GitHub cache 参照: gh:N（# prefix は shell unsafe のため不採用）
+GH_REF_RE = re.compile(r"^gh:([1-9][0-9]*)$")
 
 
 @dataclass(frozen=True)
@@ -628,22 +709,22 @@ class ResolvedId:
 def normalize_id(raw: str, *, provider_name: str, machine_id: str | None) -> ResolvedId:
     """入力 ID を provider と組み合わせて一意な ResolvedId に正規化。
 
-    - provider=github: 数値 / "#N" → ResolvedId(github, "N")
+    - provider=github: 数値 / "gh:N" → ResolvedId(github, "N")
     - provider=local:
         - "local-<m>-<n>" / "<m>-<n>" / 数値 → ResolvedId(local, "local-<m>-<n>")
             （数値は config.machine_id を補う。cache の意味はもたない）
-        - "#N" → ResolvedId(github_cache, "N")（cache 参照専用、read-only）
+        - "gh:N" → ResolvedId(github_cache, "N")（cache 参照専用、read-only）
     """
     if provider_name == "github":
-        if m := HASH_RE.match(raw):
+        if m := GH_REF_RE.match(raw):
             return ResolvedId("github", m.group(1))
         if raw.isdigit() and int(raw) > 0:
             return ResolvedId("github", raw)
-        raise ValueError(f"github provider expects '#N' or positive integer, got: {raw}")
+        raise ValueError(f"github provider expects 'gh:N' or positive integer, got: {raw}")
 
     if provider_name == "local":
-        # cache 参照は明示的な "#N" のみ。数値のみは local 空間に予約する
-        if m := HASH_RE.match(raw):
+        # cache 参照は明示的な "gh:N" のみ。数値のみは local 空間に予約する
+        if m := GH_REF_RE.match(raw):
             return ResolvedId("github_cache", m.group(1))
         if m := LOCAL_ID_RE.match(raw):
             return ResolvedId("local", f"local-{m.group(1)}-{int(m.group(2))}")
@@ -655,7 +736,7 @@ def normalize_id(raw: str, *, provider_name: str, machine_id: str | None) -> Res
                     "machine_id is required to resolve numeric-only id under local provider; "
                     "set [provider.local] machine_id in .kaji/config.local.toml "
                     "or use 'local-<machine>-<n>' form explicitly. "
-                    "To reference a cached GitHub issue, use '#N' instead."
+                    "To reference a cached GitHub issue, use 'gh:N' instead."
                 )
             if not MACHINE_RE.match(machine_id):
                 raise ValueError(
@@ -664,7 +745,7 @@ def normalize_id(raw: str, *, provider_name: str, machine_id: str | None) -> Res
             return ResolvedId("local", f"local-{machine_id}-{int(raw)}")
         raise ValueError(
             f"local provider expects 'local-<machine>-<n>', '<machine>-<n>', "
-            f"numeric ID (local space), or '#N' (cache); got: {raw}"
+            f"numeric ID (local space), or 'gh:N' (cache); got: {raw}"
         )
 
     raise ValueError(f"unknown provider: {provider_name}")
@@ -676,7 +757,7 @@ CLI 層は `ResolvedId.kind` で分岐する：
 - `github_cache` → cache reader（read-only。edit/comment/close は明示エラー）
 - `github` → GitHubProvider の CRUD
 
-これにより L772 の `kaji issue view 153`（local mode 中）は **local-<machine>-153 として解釈**され、GitHub cache を参照したい場合は `kaji issue view #153` を必要とする。設計判断のサマリ表とも整合。
+これにより local mode 中の `kaji issue view 153` は **local-<machine>-153 として解釈**され、GitHub cache を参照したい場合は `kaji issue view gh:153` を必要とする。`gh:` prefix は shell-safe（quote 不要）。
 
 **ディレクトリ名の parse も同じ文法で一意化**: `local-pc1-1-foo` は regex `^local-([a-z0-9]{1,16})-([1-9][0-9]*)-(.+)$` で一意に machine=`pc1`, n=`1`, slug=`foo` に分解できる。
 
@@ -734,18 +815,72 @@ def resolve_issue_dir(issues_root: Path, issue_id: str) -> Path:
 
 **Phase 2 の置換時の注意**: 既存 Skill (`.claude/skills/issue-close/SKILL.md` 等) は `gh pr merge ... --merge` を呼んでいるが、`kaji pr merge` は method flag を露出しないため、置換時に `--merge` 引数も**同時に除去**する。単純な `gh` → `kaji` の文字列置換では済まない例外として Phase 2 タスクで扱う（legacy alias は受け入れない。混乱を増やすだけのため）。
 
-レビューコメント API (`gh api .../pulls/N/comments`) は GitHub の inline review 機能に依存しており local では非対応。`pr-fix` / `pr-verify` Skill は **provider が github の時のみ動作する**仕様とし、`provider=local` 時は「review コメントは設計書 / コミットメッセージで代替」というガイドを表示する。
+レビューコメント API (`gh api .../pulls/N/comments`、`.../reviews`、`.../comments/<id>/replies`) は GitHub の inline review 機能に依存しており local では非対応。Phase 2 の Skill 置換時には、これら 3 種の `gh api` 呼び出しを `kaji pr review-comments` / `kaji pr reviews` / `kaji pr reply-to-comment` 経由に置換する。`pr-fix` / `pr-verify` Skill は **provider が github の時のみ動作する**仕様とし、`provider=local` 時は「review コメントは設計書 / コミットメッセージで代替」というガイドを表示する。
 
-### ブランチ命名規則
+#### 実 Skill 棚卸しと CLI 契約の対応
 
-worktree や PR 作成時のブランチ名は provider 別に統一する。
+Phase 2 の置換対象は以下の `gh` 呼び出しパターン（`grep -rh "^[[:space:]]*gh " .claude/skills/*/SKILL.md` で抽出済）。すべて `kaji` 互換 CLI でカバーされる：
+
+| 既存 `gh` 呼び出し | 置換後 `kaji` 呼び出し | 備考 |
+|------------------|-----------------------|------|
+| `gh issue view N --json F --jq E` / `-q E` | `kaji issue view N --json F --jq E` | gh 互換 raw 出力 |
+| `gh issue view N --comments` | `kaji issue view N --comments` | コメント集約 |
+| `gh issue edit N --body ...` / `--body-file ...` | `kaji issue edit N --body ...` / `--body-file ...` | |
+| `gh issue comment N --body ...` / `--body-file -` | `kaji issue comment N --body ...` / `--body-file -` | heredoc/stdin 対応 |
+| `gh issue close N --reason completed` | `kaji issue close N --reason completed` | |
+| `gh pr create --base main --title ... --body ...` | `kaji pr create --base main --title ... --body ...` | `--head` は省略可（HEAD fallback。`i-pr` 互換）|
+| `gh pr list --search "..." --json ... --jq ...` | `kaji pr list --search "..." --json ... --jq ...` | `pr-fix` Skill が使用 |
+| `gh pr list --head "..." --json ...` | `kaji pr list --head "..." --json ...` | branch 名から PR を逆引き |
+| `gh pr view PR --comments` | `kaji pr view PR --comments` | |
+| `gh pr merge PR --merge` | `kaji pr merge PR` | `--merge` 引数を**同時に除去**（前述） |
+| `gh pr review PR --approve --body-file -` | `kaji pr review PR --approve --body-file -` | stdin heredoc |
+| `gh pr review PR --request-changes --body-file -` | `kaji pr review PR --request-changes --body-file -` | stdin heredoc |
+| `gh api .../pulls/N/comments --jq ...` | `kaji pr review-comments PR --jq ...` | github 専用 |
+| `gh api .../pulls/N/reviews --jq ...` | `kaji pr reviews PR --jq ...` | github 専用 |
+| `gh api .../pulls/N/comments/CID/replies` | `kaji pr reply-to-comment PR --to CID --body ...` | github 専用 |
+
+### ブランチ命名規則と provider 中立コンテキスト変数
+
+#### 既存 Skill の前提と齟齬
+
+既存 Skill の branch 命名は `<prefix>/<issue-number>` 形式である（`.claude/skills/issue-start/SKILL.md:32`、例: `docs/247`、`feat/153`）。本設計の初稿は `<type>-<gh-number>-<slug>` を提案していたが、**実装と乖離するため既存形式を正本とする**。`<type>` は `<prefix>` と同義（feat/fix/docs 等）、`/` 区切りも維持する。
 
 | provider | パターン | 例 |
 |---------|---------|------|
-| github | `<type>-<gh-number>-<slug>` | `feat-153-foo` |
-| local | `<type>-local-<machine>-<n>-<slug>` | `feat-local-pc1-1-foo` |
+| github | `<prefix>/<gh-number>` | `feat/153`, `docs/247` |
+| local | `<prefix>/local-<machine>-<n>` | `feat/local-pc1-1`, `docs/local-pc2-7` |
 
-worktree パスは `<repo-root>/<branch-name>/` を基本とする（kaji 既存運用と同形）。worktree 機構そのものは git 標準 (`git worktree add`) を使用するため、provider の違いによる影響はない。
+worktree パスは `<repo-root>/../kaji-<prefix>-<issue-number-or-local-id>/`（`.claude/skills/issue-start/SKILL.md:33` の既存規約に追従）。`/` を含む branch 名のため worktree dir 名は `-` で連結する。worktree 機構そのものは git 標準 (`git worktree add`) を使用するため、provider の違いによる影響はない。
+
+#### provider 中立コンテキスト変数
+
+既存 Skill の `[issue-number]` `[prefix]` `[branch-name]` 等の placeholder は **GitHub 番号が int であることを暗黙に前提**している（`.claude/skills/issue-design/SKILL.md:28` `issue_number: int`、`.claude/skills/issue-start/SKILL.md:23-26`）。local-mode で `local-pc1-1` のような string ID を導入するには、これらを provider 中立な変数名に整理する必要がある。
+
+Phase 2 の Skill 改修で以下の context 変数体系へ移行する：
+
+| 旧 placeholder | 新 context 変数 | 型 | 内容 / 例 |
+|---------------|----------------|----|---------|
+| `[issue-number]` / `issue_number` | `issue_id` | `str` | 正規化済み ID。`"153"` (github) / `"local-pc1-1"` (local) |
+| （表示用）| `issue_ref` | `str` | 人間可読参照。`"#153"` (github) / `"local-pc1-1"` (local)。GitHub Issue は `#` を維持、local は prefix なし |
+| （CLI 入力用）| `issue_input` | `str` | shell-safe な CLI 引数。`"153"` (github) / `"gh:153"` (local の cache 参照) / `"local-pc1-1"` |
+| `[prefix]` | `branch_prefix` | `str` | `feat` / `fix` / `docs` 等（変更なし） |
+| `[branch-name]` | `branch_name` | `str` | `feat/153` (github) / `feat/local-pc1-1` (local) |
+| （新規）| `worktree_dir` | `str` | `kaji-feat-153` / `kaji-feat-local-pc1-1`（worktree dir 名、`/` を `-` に） |
+| 設計書パス（暗黙） | `design_path` | `str` | `draft/design/issue-153-<slug>.md` (github) / `draft/design/local-pc1-1-<slug>.md` (local)。issue 番号空間と独立した命名 |
+
+#### Phase 2 で更新される全 Skill 範囲
+
+`grep -rl "issue-number\|issue_number\|<issue\|\[issue-number\]" .claude/skills/*/SKILL.md` で検出される全 Skill が対象。具体的には以下の更新が必要（Phase 2 のチェックリスト化）：
+
+1. **placeholder 置換**: `[issue-number]` → `[issue_id]`、`[prefix]` → `[branch_prefix]`、`[branch-name]` → `[branch_name]` 等を一括置換
+2. **frontmatter / 引数定義**: `issue_number: int` → `issue_id: str`（`.claude/skills/issue-design/SKILL.md:28` 等）
+3. **branch / worktree 名生成**: `[prefix]/[issue-number]` ハードコード箇所を `<branch_name>` 変数参照に
+4. **表示文言**: `Issue #[issue-number]` → `Issue [issue_ref]`（`#` の有無は provider で異なる）
+5. **設計書ファイル名**: `draft/design/issue-[number]-*.md` → `[design_path]` 変数参照（local では `issue-` prefix なし）
+
+これらは `gh` → `kaji` の単純置換とは独立した改修で、Phase 2 のスコープに含めて見積に追加する（後述「工数見積」更新）。
+
+context 変数の決定ロジックは `kaji_harness/runner.py` で `ResolvedId` から導出し、Skill には文字列で展開して渡す（Skill markdown 自体は provider を意識しない）。
 
 ### マルチ PC 並行運用
 
@@ -832,16 +967,18 @@ bare provider 環境では PR を介した merge が存在しないため、`/is
 
 ### 状態遷移（local mode）
 
+**state は `open` / `closed` の 2 値のみ**。`not-planned` は `state` ではなく `close_reason` field の値として保持する（GitHub の Issue モデルと同じ semantics: state は open/closed、reason は completed/not-planned）。
+
 ```mermaid
 stateDiagram-v2
     [*] --> open: kaji issue create
     open --> open: kaji issue edit\nkaji issue comment
-    open --> closed: kaji issue close --reason completed
-    open --> not_planned: kaji issue close --reason not-planned
-    closed: closed (completed)
-    not_planned: closed (not-planned)
-    closed --> [*]
-    not_planned --> [*]
+    open --> closed_completed: kaji issue close --reason completed
+    open --> closed_not_planned: kaji issue close --reason not-planned
+    closed_completed: state=closed, close_reason=completed
+    closed_not_planned: state=closed, close_reason=not-planned
+    closed_completed --> [*]
+    closed_not_planned --> [*]
 ```
 
 | イベント | 変更 |
@@ -914,14 +1051,14 @@ issues remain read-accessible from cache. New issues on this machine
 type = "local"
 ```
 
-- `kaji issue view #153` → cache から読み出して **provider=github と同形式で整形表示**（**`#` prefix 必須**。`kaji issue view 153` は local-<machine>-153 として解釈される）
+- `kaji issue view gh:153` → cache から読み出して **provider=github と同形式で整形表示**（**`gh:` prefix 必須**。`kaji issue view 153` は local-<machine>-153 として解釈される。`gh:` は shell-safe で quote 不要）
   - cache は GitHub API JSON 形式で保存されているので、view 整形ロジックは provider 共通。ユーザーは provider の違いを意識せずに同じ操作で内容を確認できる
 - `kaji issue list` → local Issue (`.kaji/issues/local-*`) と cache 由来 Issue (`.kaji/cache/issues/*`) を **統合して一覧表示**
   - state / label / assignee のフィルタは両者に対する union 検索
-  - 出力では ID 形式 (`local-pc1-1` vs `#153`) で出自が判別可能
+  - 出力では ID 形式 (`local-pc1-1` vs `gh:153`) で出自が判別可能
 - `kaji issue create ...` → 新規 Issue を `local-<machine>-<n>` で作成（machine は config 由来）
 - `kaji issue edit local-pc1-1 ...` → local Issue は通常通り編集可能
-- `kaji issue edit #153 ...` → cache 由来の GitHub Issue は **編集不可エラー**で停止（`is_readonly()` が True）
+- `kaji issue edit gh:153 ...` → cache 由来の GitHub Issue は **編集不可エラー**で停止（`is_readonly()` が True）
   - 「停止中の GitHub Issue 編集は cache では受け付けません。新規 local Issue を作成してください」
 - `/issue-design` 〜 `/issue-close` は `local-<machine>-<n>` に対して通常通り動作
 
@@ -1031,9 +1168,9 @@ Phase 4 で `pr-*` Skill の provider 対応に加え、**新規 `feature-develo
 |---------|----|---------|
 | `kaji_harness/cli_main.py` | 59 | `issue: int` の type hint → `str` (新型 alias `IssueId = str`) |
 | `kaji_harness/state.py` | 34 | `SessionState.issue_number: int` → `str` |
-| `kaji_harness/state.py` | 114 | dict serialize 時の int キャスト除去（str のまま保存） |
-| `kaji_harness/prompt.py` | 12, 48 | `f"GitHub Issue #{issue}"` を provider 別整形に変更（github: `#153`、local: `local-pc1-1`） |
-| `kaji_harness/logger.py` | 37 | log フィールド `issue: int` → `str` |
+| `kaji_harness/state.py` | `_persist` 内の dict serialize（おおむね 100 行前後）、`_write_progress_md` 内の `f"# Progress: Issue #{self.issue_number}"` 表示 | dict serialize は str のまま保存。progress 表示は provider 別整形に変更 |
+| `kaji_harness/prompt.py` | 17（docstring）, 25（prompt 引数辞書）, 48（`f"GitHub Issue #{issue}"`）| 表示文言と引数辞書を provider 別整形に変更（github: `#153`、local: `local-pc1-1`） |
+| `kaji_harness/logger.py` | `issue` フィールドの型 | log フィールド `int` → `str` |
 | `kaji_harness/runner.py` | 全般 | SessionState 経由で issue を扱う箇所の型追従 |
 
 **影響を受ける既存テスト**:
@@ -1180,21 +1317,27 @@ machine_id = "pc1"
 - [ ] `IssueProvider` Protocol の単体テストが `LocalProvider` / `GitHubProvider` 両方で通る（GitHubProvider はモック）
 - [ ] `kaji sync from-github` で全 Issue が `.kaji/cache/` に保存され、`kaji sync status` で件数・最終同期時刻が確認できる
 - [ ] cache が存在する状態で `provider: local` に切替えると、cache 由来 Issue は read 可能、新規は `local-<machine>-<n>` で作成される
-- [ ] `provider: local` 時に `kaji issue view #<gh-number>` が cache から読み出して `provider: github` 時と同形式の整形出力を返す（`#` prefix なしの数値入力は local 空間として解釈される）
+- [ ] `provider: local` 時に `kaji issue view gh:<gh-number>` が cache から読み出して `provider: github` 時と同形式の整形出力を返す（prefix なしの数値入力は local 空間として解釈される）。`gh:` prefix は shell-safe で quote 不要
 - [ ] `provider: local` 時に `kaji issue list` が local Issue と cache 由来 Issue を統合表示し、ユーザーは ID 形式で出自を判別できる
 - [ ] 4 PC 並行運用シナリオで、各 PC が独立した番号空間 (`local-pc1-*` / `local-pc2-*` / ...) で Issue を作成し、ID 衝突が発生しないことが integration test で確認できる
+- [ ] `.gitignore` に `.kaji/config.local.toml` のエントリが追加され（現行 `.gitignore:49` には未掲載）、新規 clone でも machine_id 設定ファイルが tracked されない
 - [ ] `.kaji/config.local.toml` を `.gitignore` に登録するセットアップ手順がドキュメント化され、誤 commit を防げる
 - [ ] config の必須項目欠落時にエラー停止し、エラーメッセージで「何を、どのファイルに、どう書くか」が完全に伝わる
 - [ ] `provider.type`、`machine_id`（provider=local 時）、`default_branch`（provider=local 時）、`github.repo`（provider=github 時）のいずれが欠けてもエラー停止する
 - [ ] `kaji issue` / `kaji pr` が `gh` の互換フラグ (`--body` / `--body-file` / `--label` / `--add-label` / `--json` / `--jq` / `-q` / `--comments` 等) をすべて受理し、Skill 側の置換は **原則として「`gh` → `kaji`」の文字列置換のみで完了する**。例外として `gh pr merge ... --merge` は `kaji pr merge ...` への置換と同時に `--merge` フラグを除去する（`kaji pr merge` は method flag を露出せず、内部で常に `--no-ff` 相当固定で実行するため。詳細は本文「Skill の改修」セクション参照）
 - [ ] machine_id が `[a-z0-9]{1,16}` の grammar に従い、ハイフン入力時はエラーで停止する
+- [ ] 既存 Skill の `[issue-number]` / `issue_number` placeholder が provider 中立な `issue_id` / `issue_ref` / `issue_input` / `branch_name` / `worktree_dir` / `design_path` 変数体系に移行され、`grep -r '\[issue-number\]\|issue_number' .claude/skills/` で残存ゼロ
+- [ ] branch 命名が `<prefix>/<gh-number>` (github) / `<prefix>/local-<machine>-<n>` (local) に統一され、worktree dir が `kaji-<prefix>-<id-or-local-id>` で生成される（既存 `.claude/skills/issue-start/SKILL.md:32-33` 規約と整合）
 - [ ] `kaji config set provider <type>` が `.kaji/config.local.toml`（gitignored）にのみ書き込み、tracked な `.kaji/config.toml` を変更しない
 - [ ] `paths.artifacts_dir` は user 設定可能な状態を維持し、既存 repo の `.kaji-artifacts` 等の値が破壊されない
 - [ ] `provider=local` で `kaji run feature-development-local.yaml local-pc1-1` が `issue-design` から `/issue-close` まで完走する（`/issue-create` `/issue-start` は事前手動実行）
 - [ ] `kaji pr merge` が `--method` フラグを露出せず、内部で常に `--no-ff` 相当の merge を実行する
 - [ ] resolve_issue_dir が glob で一意解決し、重複検出時は明示エラーで停止する
 - [ ] `next_local_id()` がカウンタファイル不在時（fresh clone / `make clean` 後）も既存 `.kaji/issues/local-<machine>-*` dir の最大値を見て採番衝突を起こさない
-- [ ] `kaji issue edit #<gh-number>` を `provider: local` 時に呼ぶと `is_readonly()` 経由で編集不可エラーが返る
+- [ ] `kaji issue edit --add-frontmatter` で reserved key（`id` / `state` / `labels` / `assignees` / `created_at` / `updated_at` / `closed_at` / `close_reason` / `closed_by` / `created_by` / `title`）を上書きしようとするとエラー停止し、適切な専用 CLI が案内される
+- [ ] `--add-frontmatter` の KEY が `[a-z][a-z0-9_]{0,31}` 文法に違反する入力（大文字・記号・長さ超過）はエラー停止する
+- [ ] `kaji issue view ID --jq '.body'` の出力が `gh issue view ID --jq '.body'` と bit-exact に一致する（scalar string の quote 除去、改行・escape 文字の保持）。特に `CURRENT_BODY=$(kaji issue view ID -q '.body')` → `kaji issue edit ID --body "$CURRENT_BODY"` のラウンドトリップで本文が壊れない
+- [ ] `kaji issue edit gh:<gh-number>` を `provider: local` 時に呼ぶと `is_readonly()` 経由で編集不可エラーが返る
 - [ ] `kaji sync local-to-github-plan` が停止期間中の `local-<machine>-<n>` を全 PC 横断で一覧表示する
 - [ ] 既存の `make check` が通る
 - [ ] `docs/cli-guides/` に `kaji issue` / `kaji pr` / `kaji sync` のリファレンスを追加
@@ -1218,14 +1361,14 @@ machine_id = "pc1"
 
 | 対象 | 例 |
 |------|------|
-| `normalize_id` の入力 / 出力 | provider × 入力の組み合わせ（`(github, "153")` → `ResolvedId(github, "153")`、`(local, "153")` → `ResolvedId(local, "local-<m>-153")`、`(local, "#153")` → `ResolvedId(github_cache, "153")`、`(local, "local-pc1-1")`、`(local, "pc1-1")`、不正入力 / machine_id 欠落の例外） |
+| `normalize_id` の入力 / 出力 | provider × 入力の組み合わせ（`(github, "153")` → `ResolvedId(github, "153")`、`(local, "153")` → `ResolvedId(local, "local-<m>-153")`、`(local, "gh:153")` → `ResolvedId(github_cache, "153")`、`(local, "local-pc1-1")`、`(local, "pc1-1")`、不正入力 / machine_id 欠落の例外） |
 | frontmatter parse / serialize | YAML frontmatter ↔ Python dict の round-trip |
 | string / object labels の双方向変換 | `["type:feature"]` ↔ `[{"name": "type:feature"}]` |
 | config merge の優先順位 | env > config.local.toml > config.toml > global の順序確認（in-memory dict の合成） |
 | ID 採番ロジック | `next_local_id()` の `max(counter, existing_max) + 1` の振る舞い（カウンタ不在 / カウンタ < dir max / カウンタ > dir max の各ケース） |
 | GitHubProvider の `gh` wrapper（mock） | `subprocess.run` を mock し、コマンドライン組み立て / 出力 parse を確認 |
-| `kaji sync from-github` の HTTP wrapper（mock） | `pytest-httpx` でレスポンスを mock し、parse / cache 書き出し直前までの logic を確認。**`pytest-httpx` は dev dependency に追加が必要**（現行 `pyproject.toml:25` の `[dependency-groups.dev]` に未掲載） |
-| `--jq` 評価 logic（mock）| jq subprocess を mock し、kaji 側の引数組み立て / 結果 parse を確認 |
+| `kaji sync from-github` の `gh api` wrapper（mock） | `subprocess.run` を mock し、`gh api repos/<owner>/<repo>/issues?state=all&page=N` 系の paging / cursor 処理 / cache 書き出し直前までの logic を確認 |
+| `--jq` 評価 logic（実 libjq）| Python `jq` library を実呼び出しし、scalar raw / 改行区切り / null / bool / number / object array の各ケースで `gh --jq` と bit-exact 一致することを確認（特に `.body` の quote 除去） |
 
 ### Medium（localhost リソース、実 file I/O / 実 git 操作）
 
@@ -1240,21 +1383,26 @@ machine_id = "pc1"
 | `/issue-close` の git 操作 | tmp repo で実ブランチ作成 → merge → frontmatter 更新まで完走 |
 | ID から Issue dir の glob 解決 | 実 directory 群を作成し、resolve_issue_dir の正常系 / 重複検出 / 不在エラーを確認 |
 
-### Medium 追加項目（外部サービス通信なし、localhost で完結する E2E / シナリオ）
+### Medium 追加項目（`click.testing.CliRunner` 経由 / localhost リソース）
 
-`docs/reference/testing-size-guide.md` の定義（Large = **外部サービスへの実通信**）に厳密に従い、以下は外部実通信を伴わないため Medium に分類する：
-
-| 対象 | 例 |
-|------|------|
-| provider=local での E2E workflow | `/issue-create` → `/issue-design` → `/issue-implement` → `/issue-close` の完走（kaji CLI を実プロセスで起動するが、すべて localhost file I/O + 実 git のみ） |
-| provider 切替シナリオ | 実 file system で github（gh は mock）→ local → github の往復で、cache 由来 Issue の read と local Issue の作成が両立 |
-| マルチ PC simulation | 2 worktree を立て、それぞれ別 machine_id で Issue create → git merge での同期（remote は localhost bare repo） |
-
-### Large（外部サービスへの実通信）
+`docs/reference/testing-size-guide.md:25-32` に従い、**`click.testing.CliRunner` ベースの CLI テストは Medium、subprocess で実 CLI を起動するものは Large** に分類する。
 
 | 対象 | 例 |
 |------|------|
-| 実 GitHub API での sync | テスト用 GitHub repo に対する `kaji sync from-github` 実通信（CI で apokamo 環境のみ実行）。**Large はこの 1 項目のみ** |
+| provider 切替ロジック（CliRunner） | `CliRunner` で github（gh は mock）→ local → github の往復を invoke し、cache 由来 Issue read / local Issue 作成の両立を確認 |
+| LocalProvider 単体の filesystem 操作 | tmp_path を使った Issue dir 作成・close・list（subprocess なし） |
+
+### Large（実 CLI subprocess、外部サービスへの実通信）
+
+`docs/reference/testing-size-guide.md:28` の規約に従い、**subprocess で実 CLI を起動するものは Large**。本機能では以下が該当する：
+
+| 対象 | 例 |
+|------|------|
+| provider=local での E2E workflow | `/issue-create` → `/issue-design` → `/issue-implement` → `/issue-close` を **kaji CLI 実プロセスで起動**して完走確認 |
+| マルチ PC simulation | 2 worktree を立て、それぞれ別 machine_id で `kaji issue create` を **subprocess 起動** → git merge での同期 |
+| 実 GitHub API での sync | テスト用 GitHub repo に対する `kaji sync from-github` 実通信（CI で apokamo 環境のみ実行） |
+
+**注**: 前回 review 対応で「外部実通信が無いから Medium」とした E2E / multi-PC simulation は誤り。`testing-size-guide.md:28` は subprocess 起動自体を Large の根拠としている（プロセス境界を越える結合テスト）。CLI ロジックを Medium で検証したい場合は CliRunner で代替する。
 
 ### 恒久テストで守る不変条件
 
@@ -1275,12 +1423,12 @@ machine_id = "pc1"
 | Phase | 内容 | 見積 |
 |-------|------|------|
 | 1 | `kaji issue/pr` CLI 追加（中身は gh 呼び出し）+ `kaji run` の issue 型 str 化（state.py / prompt.py / logger.py 含む） | 1.5 日 |
-| 2 | 20 Skill の `gh` → `kaji` 置換（互換フラグ全網羅。着手前に計測手法を見直し真値を確定） | 1.5 日 |
-| 3 | `LocalProvider` 実装 + 単体テスト + ID resolve / glob 解決 | 2 日 |
+| 2 | 20 Skill の `gh` → `kaji` 置換 + **provider 中立 context 変数移行**（`[issue-number]`→`[issue_id]`、branch 命名 / 設計書パス placeholder 整理、表示文言の `Issue #N` → `Issue [issue_ref]` 化）。`gh pr merge --merge` の `--merge` 同時除去を含む | 3 日 |
+| 3 | `LocalProvider` 実装 + 単体テスト + ID resolve / glob 解決 + **`.gitignore` に `.kaji/config.local.toml` 追加**（現行 `.gitignore:49` には未掲載のため必須） | 2 日 |
 | 4 | `pr-*` Skill の provider 対応 + 新規 `feature-development-local.yaml` 追加 + ドキュメント | 1 日 |
 | 5 | `kaji sync` 実装（from-github / status / local-to-github-plan） + BCP runbook（コード同期戦略章を含む） | 2 日 |
 | 予備 | バグ修正・統合テスト | 0.5 日 |
-| **合計** | | **8.5 日** |
+| **合計** | | **10 日** |
 
 GitHub 復旧が 5 営業日以内に来た場合、Phase 1 + Phase 2 + Phase 5（snapshot だけ）まで先行実装し、Phase 3-4 は復旧後に別 Issue として進めることもできる。Phase 5 単独でも「停止時に焦らない」効果は得られるため、優先度を上げる選択肢もある。
 
