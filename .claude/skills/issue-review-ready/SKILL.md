@@ -30,7 +30,8 @@ worktree 不要（メインリポジトリから実行可能）。
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_id` | str | GitHub Issue 番号 |
+| `issue_id` | str | 正規化済み Issue ID（GitHub 数値または local ID） |
+| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID） |
 | `step_id` | str | 現在のステップ ID |
 
 ### 手動実行（スラッシュコマンド）
@@ -43,6 +44,8 @@ $ARGUMENTS = <issue_id>
 
 コンテキスト変数 `issue_id` が存在すればそちらを使用。
 なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
+
+`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
 
 ## 共通ルール
 

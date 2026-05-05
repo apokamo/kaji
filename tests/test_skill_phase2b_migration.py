@@ -15,9 +15,11 @@ from unittest.mock import patch
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SKILL_GLOB = list((PROJECT_ROOT / ".claude" / "skills").glob("*/SKILL.md"))
-SHARED_GLOB = list((PROJECT_ROOT / ".claude" / "skills" / "_shared").glob("*.md"))
-ALL_SKILL_DOCS = SKILL_GLOB + SHARED_GLOB
+# `.claude/skills/**/*.md` を再帰走査する。`*/SKILL.md` + `_shared/*.md` の限定列挙だと
+# `_shared/design-by-type/` / `_shared/implement-by-type/` / `issue-create/templates/`
+# などのサブディレクトリを取りこぼす（PR review 指摘で `<number>` 残存が見逃された事案の
+# 再発防止）。
+ALL_SKILL_DOCS = sorted((PROJECT_ROOT / ".claude" / "skills").rglob("*.md"))
 
 
 def _scan(pattern: str) -> list[str]:
@@ -63,6 +65,11 @@ class TestSkillNoLegacyPlaceholders:
             # `<issue-number>` メタ変数（$ARGUMENTS = <issue-number> 等）も
             # 旧表記。`<issue_id>` に統一する。
             r"<issue-number>",
+            # `<number>` も同様に旧表記の山括弧形式（`issue-<number>-<slug>` 等の
+            # template 内 path 表現）。`<issue_id>` に統一する。本パターンが
+            # 無いと `issue-create/templates/issue-feat.md` などサブディレクトリ
+            # 配下の `<number>` が検出されない（PR review 指摘）。
+            r"<number>",
             # backtick `issue-number` や bare prose `issue-number` も検出。
             # 角括弧形式 `[issue-number]` だけ見ていると `- \`issue-number\` (必須)`
             # のような説明文を見逃す（PR review 指摘）。`pr-number` は

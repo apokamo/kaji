@@ -117,8 +117,8 @@ suggestion: |
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_id` | str | 正規化済み Issue ID（GitHub の数値、または `local-<machine>-<n>` 形式） |
-| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#153`、local では `local-pc1-1` 等） |
+| `issue_id` | str | 正規化済み Issue ID（GitHub 数値または local ID。例: `"153"` / `"local-pc1-1"`） |
+| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID。例: `"#153"` / `"local-pc1-1"`） |
 | `step_id` | str | 現在のステップ ID |
 | `previous_verdict` | str | 前ステップの verdict 要約（resume ステップ等） |
 | `cycle_count` | int | 現在のサイクルイテレーション（サイクル内ステップのみ） |
@@ -175,8 +175,8 @@ git add <files> && git commit -m "test: add tests for X"
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_id` | str | 正規化済み Issue ID |
-| `issue_ref` | str | 人間可読の Issue 参照 |
+| `issue_id` | str | 正規化済み Issue ID（GitHub 数値または local ID） |
+| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID） |
 | `step_id` | str | 現在のステップ ID |
 
 ### 手動実行（スラッシュコマンド）
@@ -187,6 +187,8 @@ $ARGUMENTS = <issue_id>
 
 コンテキスト変数 `issue_id` が存在すればそちらを使用。
 なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
+
+`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
 ```
 
 **優先順位**: コンテキスト変数 > `$ARGUMENTS`。ハーネスが変数を注入している場合はそちらを使い、手動実行時は従来通り `$ARGUMENTS` から取得する。

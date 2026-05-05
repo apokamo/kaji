@@ -30,6 +30,8 @@ $ARGUMENTS = <issue_id>
 コンテキスト変数 `issue_id` が存在すればそちらを使用。
 なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
 
+`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
+
 ## 前提知識の読み込み
 
 変更対象に応じて、以下のドキュメントを Read ツールで読み込んでから作業を開始すること。
