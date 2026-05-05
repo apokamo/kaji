@@ -1,4 +1,4 @@
-# 作業報告: 互換用 Skill エイリアスの削除
+# 実装レポート: 互換用 Skill エイリアスの削除
 
 | 項目 | 値 |
 |------|-----|
@@ -149,7 +149,7 @@ use /i-pr and /i-dev-final-check instead.
 4. `draft/design/local-mode/design.md` の母数更新（3 箇所）
 5. `tests/test_skill_harness_adaptation.py` の parametrize list 更新（2 箇所）
 6. 本設計書 `draft/design/drop-deprecated-skill-aliases/design.md`
-7. 本作業報告 `draft/design/drop-deprecated-skill-aliases/work-report.md`
+7. 本実装レポート `draft/design/drop-deprecated-skill-aliases/implementation-report.md`
 
 ## 完了条件チェック（設計書より）
 
