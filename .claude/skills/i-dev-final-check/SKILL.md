@@ -17,6 +17,28 @@ dev workflow の PR 前最終ゲート。
 
 **ワークフロー内の位置**: implement → review-code → **i-dev-final-check** → i-pr → close
 
+## 入力
+
+### ハーネス経由（コンテキスト変数）
+
+**常に注入される変数:**
+
+| 変数 | 型 | 説明 |
+|------|-----|------|
+| `issue_number` | int | GitHub Issue 番号 |
+| `step_id` | str | 現在のステップ ID |
+
+### 手動実行（スラッシュコマンド）
+
+```
+$ARGUMENTS = <issue-number>
+```
+
+### 解決ルール
+
+コンテキスト変数 `issue_number` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
+
 ## 前提知識の読み込み
 
 1. [docs/dev/development_workflow.md](../../../docs/dev/development_workflow.md)

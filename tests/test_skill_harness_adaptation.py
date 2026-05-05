@@ -36,6 +36,9 @@ WORKFLOW_SKILLS = [
     "issue-review-code",
     "issue-fix-code",
     "issue-verify-code",
+    "i-dev-final-check",
+    "i-doc-final-check",
+    "i-pr",
     "issue-close",
 ]
 
@@ -214,6 +217,9 @@ class TestSkillVerdictParseable:
         "issue-review-code": {"PASS", "RETRY", "BACK", "ABORT"},
         "issue-fix-code": {"PASS", "ABORT"},
         "issue-verify-code": {"PASS", "RETRY", "ABORT"},
+        "i-dev-final-check": {"PASS", "RETRY", "BACK", "ABORT"},
+        "i-doc-final-check": {"PASS", "RETRY", "BACK", "ABORT"},
+        "i-pr": {"PASS", "RETRY", "ABORT"},
         "issue-close": {"PASS", "RETRY", "ABORT"},
     }
 

@@ -131,39 +131,82 @@ issue-close
 
 `# This is the approximate output structure from the #73 issue-pr step` は Issue #73 の作業文脈を示す歴史的記述。設計の grep 対象に `tests/` が含まれないことと、過去経緯の保全のため、修正せず保持。レビュー時に異論があれば対応。
 
-## コミット予定
+## コミット履歴
 
-設計書通り、以下の 1 コミットで `refactor/drop-skill-aliases` ブランチに積む予定（**ユーザー承認待ち、本報告作成時点では未コミット**）:
+`refactor/drop-skill-aliases` ブランチに積まれた実コミット（2026-05-05 時点）:
 
-```
-refactor!: drop deprecated skill aliases (issue-pr, issue-doc-check)
+| 順 | SHA | type | 内容 |
+|---|-----|------|------|
+| 1 | `7bf10c2` | `refactor!:` | drop deprecated skill aliases (issue-pr, issue-doc-check)。`BREAKING CHANGE:` フッタ含む |
+| 2 | `c21bcad` | `docs:` | rename work-report.md to implementation-report.md |
+| 3 | （次の予定） | `refactor:` | レビュー指摘対応（.agents 正本 symlink 追加 / WORKFLOW_SKILLS coverage 補填 / 本レポート同期更新） |
 
-BREAKING CHANGE: /issue-pr and /issue-doc-check slash commands are removed;
-use /i-pr and /i-dev-final-check instead.
-```
+設計書では「1 PR にまとめる」推奨だったが、実装過程で 2 コミットに分かれた。理由:
 
-含める変更:
-1. `.claude/skills/issue-pr/`, `.claude/skills/issue-doc-check/` 削除
-2. `.agents/skills/issue-pr`, `.agents/skills/issue-doc-check` symlink 削除
-3. README.md / CLAUDE.md / docs の文言更新（7 ファイル、12 箇所）
-4. `draft/design/local-mode/design.md` の母数更新（3 箇所）
-5. `tests/test_skill_harness_adaptation.py` の parametrize list 更新（2 箇所）
-6. 本設計書 `draft/design/drop-deprecated-skill-aliases/design.md`
-7. 本実装レポート `draft/design/drop-deprecated-skill-aliases/implementation-report.md`
+- コミット 1: 設計書通りの実装本体
+- コミット 2: 実装後に気づいたレポート命名の改善（汎用名 `work-report.md` → 役割明示の `implementation-report.md`）。**設計書の射程外で発生した命名揺れ**であり、本体コミットに amend する余地もあったが「Never amend, always new commit」原則に従い分離
+
+レビュー指摘への対応コミットは 3 番目として積む。`refactor!:` ではなく `refactor:` にする理由は、コミット 1 で既に BREAKING CHANGE は宣言済みであり、本コミットは破壊的変更を伴わない補強（symlink 追加 / test 強化 / 文書同期）に閉じるため。
 
 ## 完了条件チェック（設計書より）
 
-- [x] `.claude/skills/issue-pr/` 削除完了
-- [x] `.claude/skills/issue-doc-check/` 削除完了
-- [x] `.agents/skills/issue-pr` symlink 削除完了
-- [x] `.agents/skills/issue-doc-check` symlink 削除完了
+- [x] `.claude/skills/issue-pr/` 削除完了 (commit `7bf10c2`)
+- [x] `.claude/skills/issue-doc-check/` 削除完了 (commit `7bf10c2`)
+- [x] `.agents/skills/issue-pr` symlink 削除完了 (commit `7bf10c2`)
+- [x] `.agents/skills/issue-doc-check` symlink 削除完了 (commit `7bf10c2`)
 - [x] `find .agents -xtype l` が 0 行（dangling symlink がない）
 - [x] README.md, CLAUDE.md, docs 配下の `/issue-pr` `/issue-doc-check` 言及がすべて正本名に置換済み
 - [x] `docs/ARCHITECTURE.md` の Skill 数記述が 23 に更新済み
 - [x] `draft/design/local-mode/design.md` の母数記述（Skill 数・`gh` 直叩き数）が新しい値に整合
 - [x] `grep -rn "issue-pr\|issue-doc-check" .claude .agents .kaji docs CLAUDE.md README.md` が 0 行
-- [x] `make check` 通過（660 passed, 1 skipped）
-- [ ] commit message が `refactor!:` プレフィックス + `BREAKING CHANGE:` フッタを含む（**コミット時に履行予定、未実施**）
+- [x] `make check` 通過（レビュー対応後: 675 passed, 1 skipped）
+- [x] commit message が `refactor!:` プレフィックス + `BREAKING CHANGE:` フッタを含む (commit `7bf10c2`)
+
+## レビュー指摘対応（2026-05-05 追記）
+
+レビュアー指摘 3 件すべてに対応:
+
+### Must Fix #1: `.agents/skills/` 正本 symlink 不足
+
+`.agents/skills/` は `.claude/skills/` のミラーとして整備すべきだが、`i-pr` / `i-dev-final-check` / `i-doc-final-check` の正本 symlink が欠落していた（旧 alias の symlink が存在する一方で正本が無い旧来からの不整合）。本リファクタで正本側に寄せた以上、ここで正本 symlink を整備するのが適切。
+
+追加した symlink:
+```
+.agents/skills/i-pr               → ../../.claude/skills/i-pr
+.agents/skills/i-dev-final-check  → ../../.claude/skills/i-dev-final-check
+.agents/skills/i-doc-final-check  → ../../.claude/skills/i-doc-final-check
+```
+
+`.agents/skills/` の skill 数: 20 → 23（`.claude/skills/` と完全同期）。
+
+### Must Fix #2: `WORKFLOW_SKILLS` の coverage 後退
+
+alias 削除で 2 件減ったが、対応する正本 (`i-pr` / `i-dev-final-check` / `i-doc-final-check`) を `WORKFLOW_SKILLS` に未追加だった。alias より coverage が増える形で補填:
+
+```python
+WORKFLOW_SKILLS = [
+    # ... existing
+    "i-dev-final-check",   # 追加
+    "i-doc-final-check",   # 追加（旧 alias には対応物なし、新規 coverage）
+    "i-pr",                # 追加
+    "issue-close",
+]
+
+_SKILL_STATUSES = {
+    # ... existing
+    "i-dev-final-check": {"PASS", "RETRY", "BACK", "ABORT"},
+    "i-doc-final-check": {"PASS", "RETRY", "BACK", "ABORT"},
+    "i-pr":              {"PASS", "RETRY", "ABORT"},
+}
+```
+
+副次的修正: `i-dev-final-check` / `i-doc-final-check` の SKILL.md には `## 入力` セクション（context variables / `$ARGUMENTS` 表記）が欠落していたため、`i-pr` の同セクションを参照テンプレートとして追加した。これにより `TestInputSectionDualMode` の context_variables / arguments テストを正本も passing 対象に含められる。
+
+`make check` 結果: 660 passed → **675 passed**（3 skill × 5 test = +15）。
+
+### Must Fix #3: 報告書と git 状態の矛盾
+
+旧版「コミット予定」セクションを「コミット履歴」に書き換え、実コミット 2 件（`7bf10c2`, `c21bcad`）と次の対応コミットを表で明示。完了条件のコミットメッセージ項目も `[x]` に更新。
 
 ## 次のアクション
 
