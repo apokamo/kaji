@@ -1,0 +1,116 @@
+name: feature-development-local
+description: |
+  provider=local 用の開発 workflow。
+  issue-create / issue-start は事前に手動実行済みであることが前提。
+  PR concept を持たないため、最終 step は issue-close
+  （local merge + frontmatter 更新。design.md § local mode における /issue-close の手順）。
+execution_policy: auto
+
+cycles:
+  design-review:
+    entry: review-design
+    loop: [fix-design, verify-design]
+    max_iterations: 3
+    on_exhaust: ABORT
+  code-review:
+    entry: review-code
+    loop: [fix-code, verify-code]
+    max_iterations: 3
+    on_exhaust: ABORT
+
+steps:
+  - id: design
+    skill: issue-design
+    agent: claude
+    model: opus
+    effort: medium
+    on:
+      PASS: review-design
+      ABORT: end
+
+  - id: review-design
+    skill: issue-review-design
+    agent: codex
+    model: gpt-5.4
+    effort: medium
+    on:
+      PASS: implement
+      RETRY: fix-design
+      ABORT: end
+
+  - id: fix-design
+    skill: issue-fix-design
+    agent: claude
+    model: opus
+    resume: design
+    on:
+      PASS: verify-design
+      ABORT: end
+
+  - id: verify-design
+    skill: issue-verify-design
+    agent: codex
+    model: gpt-5.4
+    effort: medium
+    on:
+      PASS: implement
+      RETRY: fix-design
+      ABORT: end
+
+  - id: implement
+    skill: issue-implement
+    agent: claude
+    model: opus
+    on:
+      PASS: review-code
+      RETRY: implement
+      BACK: design
+      ABORT: end
+
+  - id: review-code
+    skill: issue-review-code
+    agent: codex
+    model: gpt-5.4
+    effort: medium
+    on:
+      PASS: final-check
+      RETRY: fix-code
+      BACK: design
+      ABORT: end
+
+  - id: fix-code
+    skill: issue-fix-code
+    agent: claude
+    model: opus
+    inject_verdict: true
+    on:
+      PASS: verify-code
+      ABORT: end
+
+  - id: verify-code
+    skill: issue-verify-code
+    agent: codex
+    model: gpt-5.4
+    effort: medium
+    on:
+      PASS: final-check
+      RETRY: fix-code
+      ABORT: end
+
+  - id: final-check
+    skill: i-dev-final-check
+    agent: claude
+    model: opus
+    on:
+      PASS: close
+      RETRY: final-check
+      ABORT: end
+
+  - id: close
+    skill: issue-close
+    agent: claude
+    model: sonnet
+    on:
+      PASS: end
+      RETRY: close
+      ABORT: end
