@@ -23,7 +23,7 @@
    - 外部 API / E2E → `@pytest.mark.large`
 5. 実行して FAIL を確認:
    ```bash
-   cd [worktree-absolute-path] && source .venv/bin/activate && pytest tests/<path> -k <test_name> -v
+   cd [worktree_dir] && source .venv/bin/activate && pytest tests/<path> -k <test_name> -v
    ```
    - 誤って PASS してしまう場合: 再現条件が違う → 設計書「再現手順」に戻る
 
@@ -36,7 +36,7 @@
 ### Step B3: 再現テストの Green 確認
 
 ```bash
-cd [worktree-absolute-path] && source .venv/bin/activate && pytest tests/<path> -v
+cd [worktree_dir] && source .venv/bin/activate && pytest tests/<path> -v
 ```
 
 - 再現テストが PASS することを確認
@@ -59,7 +59,7 @@ cd [worktree-absolute-path] && source .venv/bin/activate && pytest tests/<path> 
 `make check` を実行し、ruff / mypy / pytest がすべて green になることを確認する。
 
 ```bash
-cd [worktree-absolute-path] && source .venv/bin/activate && make check
+cd [worktree_dir] && source .venv/bin/activate && make check
 ```
 
 ## コミット前チェックリスト

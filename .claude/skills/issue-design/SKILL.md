@@ -126,7 +126,7 @@ kaji issue view [issue_id] --json labels --jq '[.labels[].name] | map(select(sta
 
 1. **ディレクトリ作成**（絶対パスを使用）:
    ```bash
-   mkdir -p [worktree-absolute-path]/draft/design
+   mkdir -p [worktree_dir]/draft/design
    ```
 
 2. **ファイル名決定**:
@@ -260,7 +260,7 @@ Issue: [issue_ref]
 ### Step 3: コミット
 
 ```bash
-cd [worktree-absolute-path] && git add draft/design/ && git commit -m "docs: add design for [issue_ref]"
+cd [worktree_dir] && git add draft/design/ && git commit -m "docs: add design for [issue_ref]"
 ```
 
 ### Step 4: Issueにコメント

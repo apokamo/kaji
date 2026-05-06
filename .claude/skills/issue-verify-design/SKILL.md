@@ -92,7 +92,7 @@ $ARGUMENTS = <issue_id>
 
 3. **現在の設計書を確認**:
    ```bash
-   cat [worktree-absolute-path]/draft/design/issue-[issue_id]-*.md
+   cat [worktree_dir]/draft/design/issue-[issue_id]-*.md
    ```
 
 ### Step 2: 修正確認

@@ -82,7 +82,7 @@ cd "$MAIN_REPO"
 ### Step 3: PRのマージ
 
 ```bash
-kaji pr merge [branch-name]
+kaji pr merge [branch_name]
 ```
 
 マージコミットを作成してブランチ履歴を保持する。ブランチ削除は worktree 削除後に Step 4.5 で行う。
@@ -111,19 +111,19 @@ worktree 削除後にローカル・リモートブランチを削除する。
 git fetch origin
 
 # 2. ローカルブランチ削除: 存在確認 → マージ済み判定 → 安全な -D
-if git show-ref --verify --quiet refs/heads/[branch-name]; then
-    if git merge-base --is-ancestor [branch-name] origin/main; then
-        git branch -D [branch-name]
+if git show-ref --verify --quiet refs/heads/[branch_name]; then
+    if git merge-base --is-ancestor [branch_name] origin/main; then
+        git branch -D [branch_name]
     else
         echo "WARNING: branch not merged into origin/main, skipping local delete"
     fi
 fi
 
 # 3. リモートブランチ削除（ローカル削除の成否に依存しない）
-git ls-remote --exit-code --heads origin [branch-name] >/dev/null 2>&1
+git ls-remote --exit-code --heads origin [branch_name] >/dev/null 2>&1
 LS_EXIT=$?
 if [ "$LS_EXIT" -eq 0 ]; then
-    if ! git push origin --delete [branch-name]; then
+    if ! git push origin --delete [branch_name]; then
         echo "ERROR: git push origin --delete failed"
         exit 1
     fi

@@ -71,7 +71,7 @@ $ARGUMENTS = <issue_id>
 
 2. **設計情報の取得**:
    ```bash
-   cat [worktree-absolute-path]/draft/design/issue-[issue_id]-*.md
+   cat [worktree_dir]/draft/design/issue-[issue_id]-*.md
    ```
 
 3. **実装サマリーの取得**:
@@ -82,7 +82,7 @@ $ARGUMENTS = <issue_id>
 
 4. **実装差分の取得**:
    ```bash
-   cd [worktree-absolute-path] && git diff main...HEAD
+   cd [worktree_dir] && git diff main...HEAD
    ```
    変更内容を把握。差分が大きい場合は主要ファイルを個別に確認。
 
@@ -97,12 +97,12 @@ $ARGUMENTS = <issue_id>
 
 2. **Lint / Format / 型チェック（exit 0 必須）**:
    ```bash
-   cd [worktree-absolute-path] && source .venv/bin/activate && ruff check kaji_harness/ tests/ && ruff format --check kaji_harness/ tests/ && mypy kaji_harness/
+   cd [worktree_dir] && source .venv/bin/activate && ruff check kaji_harness/ tests/ && ruff format --check kaji_harness/ tests/ && mypy kaji_harness/
    ```
 
 3. **テスト実行（個別）**:
    ```bash
-   cd [worktree-absolute-path] && source .venv/bin/activate && pytest
+   cd [worktree_dir] && source .venv/bin/activate && pytest
    ```
    **`pytest` は `&&` チェーンに含めず、必ず個別に実行する。** baseline failure が残っていると exit 非 0 になるため、チェーンに含めると後続の判定に到達できない。
 

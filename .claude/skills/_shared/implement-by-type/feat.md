@@ -22,7 +22,7 @@
 - 実行して期待通りに赤くなることを確認（ImportError や assert 失敗）
 
 ```bash
-cd [worktree-absolute-path] && source .venv/bin/activate && pytest tests/<path> -v
+cd [worktree_dir] && source .venv/bin/activate && pytest tests/<path> -v
 ```
 
 ### Step F3: 最小実装で Green
@@ -66,7 +66,7 @@ cd [worktree-absolute-path] && source .venv/bin/activate && pytest tests/<path> 
 `make check` を実行し、ruff / mypy / pytest がすべて green になることを確認する（[CLAUDE.md](../../../../CLAUDE.md) の Pre-Commit 要件）。
 
 ```bash
-cd [worktree-absolute-path] && source .venv/bin/activate && make check
+cd [worktree_dir] && source .venv/bin/activate && make check
 ```
 
 ## コミット前チェックリスト

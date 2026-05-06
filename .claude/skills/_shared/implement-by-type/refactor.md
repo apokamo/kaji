@@ -22,7 +22,7 @@
 記録は Issue コメントの「実装完了報告」に含めるため、標準出力をそのまま保管する:
 
 ```bash
-cd [worktree-absolute-path] && source .venv/bin/activate && <計測コマンド> | tee /tmp/baseline-<issue>.txt
+cd [worktree_dir] && source .venv/bin/activate && <計測コマンド> | tee /tmp/baseline-<issue>.txt
 ```
 
 ### Step R2: safety net（既存テストの強化）
@@ -30,7 +30,7 @@ cd [worktree-absolute-path] && source .venv/bin/activate && <計測コマンド>
 対象モジュールの既存テストカバレッジを評価し、不足があれば**先に**テストを足す:
 
 ```bash
-cd [worktree-absolute-path] && source .venv/bin/activate && pytest --cov=<module> tests/<path>
+cd [worktree_dir] && source .venv/bin/activate && pytest --cov=<module> tests/<path>
 ```
 
 - カバーされていない分岐 / エッジケースに対してテストを追加
@@ -48,7 +48,7 @@ cd [worktree-absolute-path] && source .venv/bin/activate && pytest --cov=<module
 改修後に再度テスト全体を実行:
 
 ```bash
-cd [worktree-absolute-path] && source .venv/bin/activate && pytest tests/<path>
+cd [worktree_dir] && source .venv/bin/activate && pytest tests/<path>
 ```
 
 - 既存テスト + Step R2 で追加した safety net が全件 PASS
@@ -59,7 +59,7 @@ cd [worktree-absolute-path] && source .venv/bin/activate && pytest tests/<path>
 Step R1 と同じコマンドで改修後の値を計測:
 
 ```bash
-cd [worktree-absolute-path] && source .venv/bin/activate && <計測コマンド> | tee /tmp/after-<issue>.txt
+cd [worktree_dir] && source .venv/bin/activate && <計測コマンド> | tee /tmp/after-<issue>.txt
 ```
 
 - 設計書「改善指標」の目標値を達成しているか確認
@@ -77,7 +77,7 @@ cd [worktree-absolute-path] && source .venv/bin/activate && <計測コマンド>
 `make check` を実行し、ruff / mypy / pytest がすべて green になることを確認する。
 
 ```bash
-cd [worktree-absolute-path] && source .venv/bin/activate && make check
+cd [worktree_dir] && source .venv/bin/activate && make check
 ```
 
 ## コミット前チェックリスト
