@@ -29,12 +29,41 @@ class ExecutionConfig:
 
 
 @dataclass(frozen=True)
+class LocalProviderConfig:
+    """``[provider.local]`` セクション。"""
+
+    machine_id: str = ""
+    default_branch: str = "main"
+
+
+@dataclass(frozen=True)
+class GitHubProviderConfig:
+    """``[provider.github]`` セクション。"""
+
+    repo: str = ""
+
+
+@dataclass(frozen=True)
+class ProviderConfig:
+    """``[provider]`` 設定（Phase 3-c で導入、optional）。
+
+    Phase 3-c では未設定でも動作する（``get_provider`` 側で WARN + github
+    fallback）。Phase 3-e で必須化される（fail-fast）。
+    """
+
+    type: str  # "github" or "local"
+    local: LocalProviderConfig
+    github: GitHubProviderConfig
+
+
+@dataclass(frozen=True)
 class KajiConfig:
     """Top-level kaji configuration."""
 
     repo_root: Path
     paths: PathsConfig
     execution: ExecutionConfig
+    provider: ProviderConfig | None = None
 
     @property
     def artifacts_dir(self) -> Path:
@@ -107,7 +136,96 @@ class KajiConfig:
             )
         execution = ExecutionConfig(default_timeout=raw_timeout)
 
-        return cls(repo_root=path.parent.parent, paths=paths, execution=execution)
+        repo_root = path.parent.parent
+        provider = cls._parse_provider(path, data, repo_root)
+
+        return cls(repo_root=repo_root, paths=paths, execution=execution, provider=provider)
+
+    @staticmethod
+    def _parse_provider(
+        path: Path,
+        data: dict[str, object],
+        repo_root: Path,
+    ) -> ProviderConfig | None:
+        """Parse the optional ``[provider]`` section + ``config.local.toml`` overlay.
+
+        Phase 3-c: optional. Missing both tracked and overlay → returns ``None``;
+        ``get_provider`` issues a WARN and falls back to GitHub. Phase 3-e
+        tightens this to fail-fast.
+
+        Overlay rules（phase3c review #4 で拡張）:
+
+        - ``.kaji/config.local.toml`` の ``[provider]`` 全体をマージできる
+        - ``type`` / ``[provider.github]`` / ``[provider.local]`` のいずれも
+          上書き可能（tracked が ``type=github`` でも overlay で ``type=local``
+          に切替えられる）
+        - tracked と overlay の双方が無いときのみ ``None`` を返す
+        """
+        provider_data = data.get("provider")
+        if provider_data is not None and not isinstance(provider_data, dict):
+            raise ConfigLoadError(path, "[provider] must be a table")
+
+        # ---- overlay 読み込み ----
+        local_overlay_path = path.parent / "config.local.toml"
+        overlay_provider: dict[str, object] | None = None
+        if local_overlay_path.is_file():
+            try:
+                with open(local_overlay_path, "rb") as f:
+                    overlay = tomllib.load(f)
+            except tomllib.TOMLDecodeError as e:
+                raise ConfigLoadError(local_overlay_path, f"invalid TOML: {e}") from e
+            op = overlay.get("provider")
+            if op is not None:
+                if not isinstance(op, dict):
+                    raise ConfigLoadError(local_overlay_path, "[provider] must be a table")
+                overlay_provider = op
+
+        if provider_data is None and overlay_provider is None:
+            return None
+
+        # ---- tracked + overlay の deep-1 merge ----
+        merged: dict[str, object] = {}
+        if isinstance(provider_data, dict):
+            merged = dict(provider_data)
+        if overlay_provider is not None:
+            for k, v in overlay_provider.items():
+                if k in {"github", "local"} and isinstance(v, dict):
+                    base_sub = merged.get(k) or {}
+                    if not isinstance(base_sub, dict):
+                        base_sub = {}
+                    merged[k] = {**base_sub, **v}
+                else:
+                    merged[k] = v
+
+        # ---- 検証 ----
+        ptype_raw = merged.get("type")
+        if ptype_raw is None or not isinstance(ptype_raw, str):
+            raise ConfigLoadError(path, "provider.type is required (string)")
+        ptype = ptype_raw.strip()
+        if ptype not in {"github", "local"}:
+            raise ConfigLoadError(path, f"provider.type must be 'github' or 'local', got {ptype!r}")
+
+        github_raw = merged.get("github") or {}
+        if not isinstance(github_raw, dict):
+            raise ConfigLoadError(path, "[provider.github] must be a table")
+        repo_raw = github_raw.get("repo")
+        if repo_raw is not None and not isinstance(repo_raw, str):
+            raise ConfigLoadError(path, "provider.github.repo must be a string")
+        github_cfg = GitHubProviderConfig(repo=str(repo_raw or ""))
+
+        local_raw = merged.get("local") or {}
+        if not isinstance(local_raw, dict):
+            raise ConfigLoadError(path, "[provider.local] must be a table")
+        machine_id = local_raw.get("machine_id", "") or ""
+        if not isinstance(machine_id, str):
+            raise ConfigLoadError(path, "provider.local.machine_id must be a string")
+        default_branch = local_raw.get("default_branch", "main") or "main"
+        if not isinstance(default_branch, str):
+            raise ConfigLoadError(path, "provider.local.default_branch must be a string")
+        local_cfg = LocalProviderConfig(machine_id=machine_id, default_branch=default_branch)
+
+        del repo_root  # reserved for future cross-checks
+        return ProviderConfig(type=ptype, local=local_cfg, github=github_cfg)
 
     @staticmethod
     def _validate_artifacts_dir(config_path: Path, artifacts_dir: str) -> None:
