@@ -55,7 +55,7 @@ $ARGUMENTS = <issue_id>
    ```
    見つからない場合は Issue 本文の `> **Branch**:` 行からブランチ名を取得し:
    ```bash
-   kaji pr list --head "[branch-name]" --json number,title --jq '.'
+   kaji pr list --head "[branch_name]" --json number,title --jq '.'
    ```
 
 2. **Worktree パスの解決**:
@@ -94,7 +94,7 @@ $ARGUMENTS = <issue_id>
 2. **品質チェック（コミット前必須）**:
 
    ```bash
-   cd [worktree-absolute-path] && source .venv/bin/activate && make check
+   cd [worktree_dir] && source .venv/bin/activate && make check
    ```
 
    **すべてパスするまでコミットしてはならない**。
@@ -102,8 +102,8 @@ $ARGUMENTS = <issue_id>
 ### Step 4: コミット & プッシュ
 
 ```bash
-cd [worktree-absolute-path] && git add . && git commit -m "fix: address PR review feedback for [issue_ref]"
-cd [worktree-absolute-path] && git push
+cd [worktree_dir] && git add . && git commit -m "fix: address PR review feedback for [issue_ref]"
+cd [worktree_dir] && git push
 ```
 
 ### Step 5: PR にレビュー返信
