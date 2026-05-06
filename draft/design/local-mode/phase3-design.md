@@ -231,7 +231,7 @@ typically safe. Full Windows support is tracked as a future work item.
 2. **PR-3b**: `LocalProvider` / `GitHubProvider` 実装 + `normalize_id` + `remote_cache` reader。Medium テストはここで緑化
 3. **PR-3c**: `cli_main.py` を `get_provider(config)` 経由に切り替え、`prompt.py` を `IssueContext` 注入へ切り替える。**ただし `provider.type` 未設定時は WARN を出して `github` に fallback**（Phase 1-2 暫定挙動の継続）
 4. **PR-3d**: `kaji local init` + `feature-development-local.yaml` + Skill の 5 変数利用への移行 + dev repo の `.kaji/config.toml` / `.gitignore` dogfooding
-5. **PR-3e**: fail-fast 化を有効化（fallback 削除）。CHANGELOG / migration guide ドラフトを同梱
+5. **PR-3e**: fail-fast 化を有効化（fallback 削除）。CHANGELOG / migration guide ドラフトを同梱（**実装完了 — 2026-05-06、`feat/local-phase3e` ブランチ。`phase3e-design.md` および `phase3e-implementation-report.md` を参照**）
 
 **根拠**:
 
