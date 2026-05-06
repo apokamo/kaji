@@ -936,9 +936,9 @@ def _local_issue_create(provider: LocalProvider, rest: list[str]) -> int:
     p.add_argument("--label", action="append", default=[], type=str)
     p.add_argument(
         "--slug",
-        required=True,
+        default=None,
         type=str,
-        help="kebab-case slug (required for local provider)",
+        help="kebab-case slug (optional; derived from title when omitted)",
     )
     ns = p.parse_args(rest)
     body = _read_body_arg(ns.body, ns.body_file)

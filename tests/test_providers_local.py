@@ -110,9 +110,13 @@ class TestCRUD:
         assert view.title == "add foo"
         assert view.body.startswith("details")
 
-    def test_create_requires_slug(self, provider: LocalProvider) -> None:
-        with pytest.raises(ValueError, match="requires explicit 'slug'"):
-            provider.create_issue(title="x", body="y")
+    def test_create_without_slug_derives_from_title(self, provider: LocalProvider) -> None:
+        """Phase 3-d preflight § 4: ``slug`` 未指定なら title から導出する。"""
+        issue = provider.create_issue(title="Hello World", body="y")
+        assert issue.slug == "hello-world"
+        # directory も <id>-<derived-slug> 形式で作られる
+        issue_dir = provider._resolve_issue_dir("local-pc1-1")
+        assert issue_dir.name == "local-pc1-1-hello-world"
 
     def test_create_validates_slug(self, provider: LocalProvider) -> None:
         with pytest.raises(ValueError, match="invalid slug"):
