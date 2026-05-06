@@ -156,21 +156,18 @@ def test_issue_close_writes_close_reason(fresh_repo: Path) -> None:
 # ============================================================
 
 
-@pytest.mark.skip(reason="enable in commit 5 (fail-fast 化前は旧挙動)")
 def test_failfast_issue_view_no_provider_section(fresh_repo: Path) -> None:
     result = _run_kaji(fresh_repo, "issue", "view", "1")
     assert result.returncode == 2
     assert "[provider]" in result.stderr
 
 
-@pytest.mark.skip(reason="enable in commit 5")
 def test_failfast_pr_view_no_provider_section(fresh_repo: Path) -> None:
     result = _run_kaji(fresh_repo, "pr", "view", "153")
     assert result.returncode == 2
     assert "[provider]" in result.stderr
 
 
-@pytest.mark.skip(reason="enable in commit 5")
 def test_failfast_run_no_provider_section_exits_2(fresh_repo: Path, tmp_path: Path) -> None:
     # workflow yaml は適当でよい — get_provider 早期 fail-fast で先に止まる
     wf = tmp_path / "wf.yaml"
@@ -190,7 +187,6 @@ def test_failfast_run_no_provider_section_exits_2(fresh_repo: Path, tmp_path: Pa
     assert "[provider]" in result.stderr
 
 
-@pytest.mark.skip(reason="enable in commit 5")
 def test_failfast_issue_view_no_config_toml(tmp_path: Path) -> None:
     bare = tmp_path / "bare"
     bare.mkdir()
@@ -205,7 +201,6 @@ def test_failfast_issue_view_no_config_toml(tmp_path: Path) -> None:
     assert "config.toml" in result.stderr.lower()
 
 
-@pytest.mark.skip(reason="enable in commit 5")
 def test_failfast_run_no_config_toml(tmp_path: Path) -> None:
     bare = tmp_path / "bare"
     bare.mkdir()
