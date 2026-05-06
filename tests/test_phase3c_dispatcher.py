@@ -404,8 +404,6 @@ class TestLocalDispatcherFlags:
         の形で shell 変数に代入するため、``"body text"`` のような quote
         付き出力では下流が壊れる。jq の ``-r`` モード採用を構造的に検証。
         """
-        if not __import__("shutil").which("jq"):
-            pytest.skip("jq not installed in CI environment")
         monkeypatch.chdir(local_repo)
         rc = _handle_issue(["view", "1", "--json", "body", "-q", ".body"])
         assert rc == 0
@@ -423,8 +421,6 @@ class TestLocalDispatcherFlags:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """array / object 結果は ``-r`` でも JSON のまま（gh と同じ挙動）。"""
-        if not __import__("shutil").which("jq"):
-            pytest.skip("jq not installed in CI environment")
         monkeypatch.chdir(local_repo)
         rc = _handle_issue(["view", "1", "--json", "labels", "--jq", "[.labels[].name]"])
         assert rc == 0
@@ -442,8 +438,6 @@ class TestLocalDispatcherFlags:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """string ストリーム ``.labels[].name`` は raw 行で並ぶ（gh 互換）。"""
-        if not __import__("shutil").which("jq"):
-            pytest.skip("jq not installed in CI environment")
         monkeypatch.chdir(local_repo)
         # 追加 label を 1 つ足してストリームの確認を厚くする
         from kaji_harness.providers import LocalProvider as _LP
@@ -464,8 +458,6 @@ class TestLocalDispatcherFlags:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """``--jq`` 単独でも full Issue JSON を入力に raw 結果を返す。"""
-        if not __import__("shutil").which("jq"):
-            pytest.skip("jq not installed in CI environment")
         monkeypatch.chdir(local_repo)
         rc = _handle_issue(["view", "1", "--jq", ".title"])
         assert rc == 0
@@ -486,8 +478,6 @@ class TestLocalDispatcherFlags:
         の挙動（末尾改行剥ぎ落とし含む）を、subprocess + ``$()`` 等価の
         ``str.rstrip("\\n")`` で再現する。
         """
-        if not __import__("shutil").which("jq"):
-            pytest.skip("jq not installed in CI environment")
         import subprocess
         import sys as _sys
 
@@ -515,22 +505,27 @@ class TestLocalDispatcherFlags:
         captured = proc.stdout.rstrip("\n")
         assert captured == "body text"
 
-    def test_view_jq_unavailable_emits_runtime_error(
+    def test_view_jq_works_without_system_jq_binary(
         self,
         local_repo: Path,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """``jq`` 不在環境では exit 3 + ガイダンス（pyproject 非依存契約）。"""
+        """Phase 3-d preflight § 2: PATH に system ``jq`` バイナリが無くても動作する。
+
+        Python ``jq`` package が runtime dependency になったため、system ``jq``
+        に依存しない契約を構造的に検証する（``shutil.which("jq")`` を None で
+        固定化しても結果が出る）。
+        """
         monkeypatch.chdir(local_repo)
         with patch(
             "kaji_harness.cli_main.shutil.which",
             side_effect=lambda name: None if name == "jq" else "/usr/bin/" + name,
         ):
             rc = _handle_issue(["view", "1", "--json", "body", "-q", ".body"])
-        assert rc == 3
+        assert rc == 0
         captured = capsys.readouterr()
-        assert "jq" in captured.err.lower()
+        assert captured.out == "body text\n"
 
     def test_view_with_comments_flag(
         self,
@@ -629,8 +624,6 @@ class TestLocalDispatcherFlags:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        if not __import__("shutil").which("jq"):
-            pytest.skip("jq not installed in CI environment")
         monkeypatch.chdir(local_repo)
         rc = _handle_issue(
             ["list", "--state", "open", "--json", "labels", "--jq", ".[0].labels[0].name"]

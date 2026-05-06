@@ -7,6 +7,7 @@ seq / Windows 暫定 / IssueContext 解決）を本 module で扱う。
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -18,12 +19,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO
 
+import yaml
+
 from ._mappings import DEFAULT_BRANCH_PREFIX
 from .context import (
     build_branch_name,
     build_design_path,
     build_worktree_dir,
+    derive_slug_from_title,
     format_issue_ref,
+    validate_branch_prefix,
     validate_slug,
 )
 from .models import Comment, Issue, IssueContext, Label
@@ -34,6 +39,9 @@ _POS_INT_RE = re.compile(r"^[1-9]\d*$")
 _FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n(.*)\Z", re.DOTALL)
 _SUPPRESS_WIN_WARNING_ENV = "KAJI_SUPPRESS_WIN_WARNING"
 _WIN_WARNING_EMITTED = False
+_VALID_ISSUE_STATES: frozenset[str] = frozenset({"open", "closed"})
+# phase3d-preflight § 5: comment filename 競合 retry 上限
+MAX_COMMENT_WRITE_RETRIES: int = 8
 
 
 class LocalProviderError(RuntimeError):
@@ -70,6 +78,34 @@ def _atomic_write(path: Path, content: str) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(content, encoding="utf-8")
     os.replace(tmp, path)
+
+
+def _atomic_write_new(path: Path, content: str) -> None:
+    """``O_CREAT | O_EXCL`` で新規ファイルとして atomic に書き込む。
+
+    既存ファイルがある場合は ``FileExistsError`` を投げる。``path.open("x")`` は
+    buffering / kill 時の 0 byte file 懸念があるため、``os.open`` で fd を作って
+    bytes を loop で書ききる（phase3d-preflight-design § 5）。
+
+    POSIX ``write(2)`` は short write を許す契約なので、返り値が要求 byte 数より
+    少ない場合に備えて残バイトを再 write する。``n <= 0`` は通常起きないが、
+    EINTR を裸で晒さないため最低限の defensive な扱いとする。
+
+    既存 ``_atomic_write()`` は edit / close 等の上書き用として残す。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    fd = os.open(path, flags, 0o644)
+    try:
+        data = content.encode("utf-8")
+        written = 0
+        while written < len(data):
+            n = os.write(fd, data[written:])
+            if n <= 0:
+                raise OSError(f"os.write returned non-positive count {n}")
+            written += n
+    finally:
+        os.close(fd)
 
 
 def _emit_windows_warning() -> None:
@@ -127,125 +163,135 @@ def _counter_lock(counter_path: Path) -> Iterator[IO[str]]:
 
 
 # -------- frontmatter parse / serialize --------
+#
+# Phase 3-d preflight: 自前 parser を撤去し PyYAML に委譲する。
+# round-trip は byte-for-byte ではなく semantic 等価のみ保証する
+# （phase3d-preflight-design § 3）。
 
 
 def _serialize_frontmatter(meta: dict[str, object]) -> str:
-    """簡易 YAML frontmatter serializer。
+    """frontmatter dict を YAML 文字列に整形する（PyYAML safe_dump 委譲）。
 
-    Phase 3-ab では `local-mode` の frontmatter のみを対象にする。値は
-    str / int / bool / list[str] / list[dict] のみ。複雑な構造を持ち込まない。
-    PyYAML 等の重依存を避けるため簡易実装にする。
+    `sort_keys=False` で挿入順を維持。Unicode は escape せず素通し。
     """
-
-    def _emit_scalar(v: object) -> str:
-        if isinstance(v, bool):
-            return "true" if v else "false"
-        if isinstance(v, (int, float)):
-            return str(v)
-        s = str(v)
-        if s == "" or any(c in s for c in [":", "#", "'", '"', "\n"]):
-            escaped = s.replace('"', '\\"')
-            return f'"{escaped}"'
-        return s
-
-    lines: list[str] = []
-    for key, value in meta.items():
-        if isinstance(value, list):
-            if not value:
-                lines.append(f"{key}: []")
-                continue
-            lines.append(f"{key}:")
-            for item in value:
-                if isinstance(item, dict):
-                    # 単純対応: ``- name: foo``形式の最初の key だけ inline、残り
-                    # は次行 indent で出す（local mode label 表現用）
-                    items = list(item.items())
-                    if not items:
-                        lines.append("  - {}")
-                        continue
-                    first_key, first_val = items[0]
-                    lines.append(f"  - {first_key}: {_emit_scalar(first_val)}")
-                    for sub_key, sub_val in items[1:]:
-                        lines.append(f"    {sub_key}: {_emit_scalar(sub_val)}")
-                else:
-                    lines.append(f"  - {_emit_scalar(item)}")
-        else:
-            lines.append(f"{key}: {_emit_scalar(value)}")
-    return "\n".join(lines) + "\n"
+    return yaml.safe_dump(
+        meta,
+        allow_unicode=True,
+        sort_keys=False,
+        default_flow_style=False,
+    )
 
 
 def _parse_frontmatter(raw: str) -> tuple[dict[str, object], str]:
-    """frontmatter + body へ分割。
+    """frontmatter + body へ分割し、frontmatter は PyYAML で読む。
 
-    frontmatter が無い場合は ``({}, raw)`` を返す。本実装は serializer と
-    対称な範囲のみ扱う簡易 parser（PyYAML 非依存）。
+    frontmatter が無い場合は ``({}, raw)``。``safe_load`` の戻り値が ``None``
+    の場合は空 dict として扱う。mapping 以外で返ってきた場合（先頭が list 等の
+    変則 YAML）は ``LocalProviderError``。
     """
     m = _FRONTMATTER_RE.match(raw)
     if not m:
         return {}, raw
     fm_text = m.group(1)
     body = m.group(2)
-    meta: dict[str, object] = {}
-    current_list: list[object] | None = None
-    current_dict: dict[str, object] | None = None
-    for line in fm_text.splitlines():
-        if not line.strip():
-            continue
-        if line.startswith("    ") and current_dict is not None:
-            sub = line.strip()
-            if ":" in sub:
-                k, _, v = sub.partition(":")
-                current_dict[k.strip()] = _scalar(v.strip())
-            continue
-        if line.startswith("  - "):
-            assert current_list is not None
-            entry = line[4:]
-            stripped = entry.strip()
-            # quote 付きスカラー内の ':' を dict と誤認しない
-            is_quoted = stripped.startswith(('"', "'"))
-            if not is_quoted and ":" in entry:
-                k, _, v = entry.partition(":")
-                current_dict = {k.strip(): _scalar(v.strip())}
-                current_list.append(current_dict)
-            else:
-                current_list.append(_scalar(stripped))
-                current_dict = None
-            continue
-        # top-level key
-        current_list = None
-        current_dict = None
-        if ":" not in line:
-            continue
-        key, _, val = line.partition(":")
-        key = key.strip()
-        val = val.strip()
-        if val == "":
-            current_list = []
-            meta[key] = current_list
-        elif val == "[]":
-            meta[key] = []
-        else:
-            meta[key] = _scalar(val)
-    return meta, body
+    try:
+        loaded = yaml.safe_load(fm_text)
+    except yaml.YAMLError as exc:
+        raise LocalProviderError(f"invalid YAML frontmatter: {exc}") from exc
+    if loaded is None:
+        return {}, body
+    if not isinstance(loaded, dict):
+        raise LocalProviderError(f"frontmatter must be a YAML mapping, got {type(loaded).__name__}")
+    return loaded, body
 
 
-def _scalar(s: str) -> object:
-    """frontmatter scalar の最小限の型推定。"""
-    if s.startswith('"') and s.endswith('"') and len(s) >= 2:
-        # serializer の `\"` → `"` を逆変換
-        return s[1:-1].replace('\\"', '"')
-    if s.startswith("'") and s.endswith("'") and len(s) >= 2:
-        return s[1:-1]
-    if s == "true":
-        return True
-    if s == "false":
-        return False
-    if s.lstrip("-").isdigit():
+def _expected_id_from_dirname(dirname: str) -> str | None:
+    """``local-<machine>-<n>[-<slug>]`` の prefix 部分を抽出する。
+
+    ``local-pc1-9`` → ``local-pc1-9``、``local-pc1-9-foo-bar`` → ``local-pc1-9``。
+    parse できない場合は ``None``。`_resolve_issue_dir` 経由で得た directory
+    name に対する identity チェックに使う（phase3d-preflight review Finding 1）。
+    """
+    m = re.match(r"^(local-[a-z0-9]{1,16}-[1-9]\d*)(?:-|$)", dirname)
+    return m.group(1) if m else None
+
+
+def _validate_issue_meta(
+    meta: dict[str, object],
+    *,
+    strict_slug: bool,
+    expected_id: str | None = None,
+) -> None:
+    """frontmatter dict の最小限の構造を検証する。
+
+    Phase 3-d preflight § 3 の表に基づき、view / write 共通で id / state /
+    labels を fail-fast 検証する。slug は ``view_issue()`` では不在許容、
+    ``resolve_issue_context()`` / write 系では必須。
+
+    Phase 3-d preflight review:
+
+    - Finding 1: ``expected_id`` が渡された場合は frontmatter ``id`` と一致する
+      ことを fail-fast 検証する。dirname から導出した値を渡すことで、人間編集
+      ミス / merge ミスで dirname と frontmatter id が乖離した Issue を canonical
+      id として採用する事故を防ぐ
+    - Finding 3: ``labels`` の各要素も ``str`` / ``dict`` 限定で fail-fast 検証
+      する（silent drop を許さない）
+
+    Args:
+        meta: parsed frontmatter dict。
+        strict_slug: True なら slug 必須。
+        expected_id: 期待される ``id``。渡されたら一致確認。
+    """
+    issue_id = meta.get("id")
+    if not isinstance(issue_id, str) or not _LOCAL_ID_RE.match(issue_id):
+        raise LocalProviderError(
+            f"frontmatter 'id' must match local-<machine>-<n>, got {issue_id!r}"
+        )
+    if expected_id is not None and issue_id != expected_id:
+        raise LocalProviderError(
+            f"frontmatter 'id' {issue_id!r} does not match expected id "
+            f"{expected_id!r} derived from issue directory; the directory may "
+            f"have been renamed or the frontmatter edited in isolation"
+        )
+    state = meta.get("state", "open")
+    if not isinstance(state, str) or state not in _VALID_ISSUE_STATES:
+        raise LocalProviderError(f"frontmatter 'state' must be 'open' or 'closed', got {state!r}")
+    labels = meta.get("labels")
+    if labels is not None:
+        if not isinstance(labels, list):
+            raise LocalProviderError(
+                f"frontmatter 'labels' must be a list, got {type(labels).__name__}"
+            )
+        for index, entry in enumerate(labels):
+            if not isinstance(entry, (str, dict)):
+                raise LocalProviderError(
+                    f"frontmatter 'labels[{index}]' must be str or dict, got {type(entry).__name__}"
+                )
+    slug_value = meta.get("slug")
+    if slug_value not in (None, ""):
+        if not isinstance(slug_value, str):
+            raise LocalProviderError(
+                f"frontmatter 'slug' must be a string, got {type(slug_value).__name__}"
+            )
         try:
-            return int(s)
-        except ValueError:
-            return s
-    return s
+            validate_slug(slug_value)
+        except ValueError as exc:
+            raise LocalProviderError(f"frontmatter 'slug' invalid: {exc}") from exc
+    elif strict_slug:
+        raise LocalProviderError(
+            f"issue {issue_id!r} has no 'slug' in frontmatter; required for "
+            f"context resolution and write operations"
+        )
+    prefix_value = meta.get("branch_prefix")
+    if prefix_value not in (None, ""):
+        if not isinstance(prefix_value, str):
+            raise LocalProviderError(
+                f"frontmatter 'branch_prefix' must be a string, got {type(prefix_value).__name__}"
+            )
+        try:
+            validate_branch_prefix(prefix_value)
+        except ValueError as exc:
+            raise LocalProviderError(f"frontmatter 'branch_prefix' invalid: {exc}") from exc
 
 
 # -------- LocalProvider --------
@@ -365,15 +411,19 @@ class LocalProvider:
         if not issue_path.is_file():
             raise IssueNotFoundError(f"missing issue.md in {issue_dir}")
         meta, body = _parse_frontmatter(issue_path.read_text(encoding="utf-8"))
+        # view 経路では slug 不在を許容（migration 用）。dirname から導出した
+        # expected_id を渡すことで、frontmatter id と directory の乖離を fail-fast。
+        expected_id = _expected_id_from_dirname(issue_dir.name)
+        _validate_issue_meta(meta, strict_slug=False, expected_id=expected_id)
+        issue_id = str(meta["id"])
         labels = self._labels_from_meta(meta.get("labels"))
         comments = self._read_comments(issue_dir)
-        issue_id = str(meta.get("id", issue_dir.name))
         slug_value = meta.get("slug", "")
         return Issue(
             id=issue_id,
             title=str(meta.get("title", "") or ""),
             body=body,
-            state=str(meta.get("state", "open") or "open"),
+            state=str(meta.get("state", "open")),
             labels=labels,
             comments=comments,
             slug=str(slug_value or ""),
@@ -441,11 +491,11 @@ class LocalProvider:
         labels: list[str] | None = None,
         slug: str | None = None,
     ) -> Issue:
+        # Phase 3-d preflight § 4: slug を optional 化。未指定なら title から
+        # 導出する（GitHubProvider と同じ fallback）。明示 slug は従来どおり
+        # validate_slug で検証する。
         if slug is None:
-            raise ValueError(
-                "LocalProvider.create_issue requires explicit 'slug' "
-                "(phase3-design.md § slug の供給ルール)"
-            )
+            slug = derive_slug_from_title(title)
         validate_slug(slug)
         n = self._next_local_id()
         issue_id = f"local-{self.machine_id}-{n}"
@@ -482,6 +532,11 @@ class LocalProvider:
         issue_dir = self._resolve_issue_dir(issue_id)
         issue_path = issue_dir / "issue.md"
         meta, current_body = _parse_frontmatter(issue_path.read_text(encoding="utf-8"))
+        _validate_issue_meta(
+            meta,
+            strict_slug=True,
+            expected_id=_expected_id_from_dirname(issue_dir.name),
+        )
         if title is not None:
             meta["title"] = title
         if add_labels or remove_labels:
@@ -496,26 +551,72 @@ class LocalProvider:
         return self._read_issue(issue_dir)
 
     def comment_issue(self, issue_id: str, body: str) -> Comment:
+        """新しい comment を ``comments/<seq>-<machine>.md`` に書き込む。
+
+        Phase 3-d preflight § 5: 上書きしない filename 戦略。``O_CREAT | O_EXCL``
+        の atomic create に失敗した場合、seq を再採番して
+        ``MAX_COMMENT_WRITE_RETRIES`` 回まで retry する。並列 comment / 別 process
+        の競合下でも既存 file を上書きしない。
+
+        Phase 3-d preflight review Finding 2: write 系の一貫性として、comment
+        付与前にも frontmatter validation を通す。slug は comment 自体が消費
+        しないため ``strict_slug=False``。dirname と frontmatter id の乖離 /
+        invalid state / invalid labels は本経路でも fail-fast する。
+        """
         issue_dir = self._resolve_issue_dir(issue_id)
-        seq = self._next_comment_seq(issue_dir)
+        # frontmatter の整合性を comment 付与前にも検証する。issue.md 不在は
+        # IssueNotFoundError、parse / validation 失敗は LocalProviderError として
+        # 上位層へ伝搬する（CLI dispatcher が exit 2 / 3 にマップ）。
+        issue_path = issue_dir / "issue.md"
+        if not issue_path.is_file():
+            raise IssueNotFoundError(f"missing issue.md in {issue_dir}")
+        meta, _ = _parse_frontmatter(issue_path.read_text(encoding="utf-8"))
+        _validate_issue_meta(
+            meta,
+            strict_slug=False,
+            expected_id=_expected_id_from_dirname(issue_dir.name),
+        )
         cdir = issue_dir / "comments"
         cdir.mkdir(exist_ok=True)
         created_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        meta: dict[str, object] = {"author": self.machine_id, "created_at": created_at}
-        path = cdir / f"{seq}-{self.machine_id}.md"
-        _atomic_write(path, self._build_issue_md(meta, body))
-        return Comment(
-            author=self.machine_id,
-            body=body,
-            created_at=created_at,
-            seq=seq,
-            machine_id=self.machine_id,
+        comment_meta: dict[str, object] = {"author": self.machine_id, "created_at": created_at}
+        content = self._build_issue_md(comment_meta, body)
+        last_seq = ""
+        for _ in range(MAX_COMMENT_WRITE_RETRIES):
+            seq = self._next_comment_seq(issue_dir)
+            last_seq = seq
+            path = cdir / f"{seq}-{self.machine_id}.md"
+            try:
+                _atomic_write_new(path, content)
+            except FileExistsError:
+                continue
+            except OSError as exc:
+                if exc.errno == errno.EEXIST:
+                    continue
+                raise
+            return Comment(
+                author=self.machine_id,
+                body=body,
+                created_at=created_at,
+                seq=seq,
+                machine_id=self.machine_id,
+            )
+        raise LocalProviderError(
+            f"failed to allocate unique comment filename in {cdir} after "
+            f"{MAX_COMMENT_WRITE_RETRIES} retries (last attempted seq={last_seq!r}). "
+            f"Another process may be writing comments concurrently; retry later "
+            f"or inspect the directory."
         )
 
     def close_issue(self, issue_id: str, reason: str | None = None) -> Issue:
         issue_dir = self._resolve_issue_dir(issue_id)
         issue_path = issue_dir / "issue.md"
         meta, current_body = _parse_frontmatter(issue_path.read_text(encoding="utf-8"))
+        _validate_issue_meta(
+            meta,
+            strict_slug=True,
+            expected_id=_expected_id_from_dirname(issue_dir.name),
+        )
         meta["state"] = "closed"
         meta["closed_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         meta["closed_by"] = self.machine_id
@@ -567,17 +668,19 @@ class LocalProvider:
         issue_dir = self._resolve_issue_dir(issue_id)
         issue_path = issue_dir / "issue.md"
         meta, _ = _parse_frontmatter(issue_path.read_text(encoding="utf-8"))
-        slug_value = meta.get("slug")
-        slug = str(slug_value or "")
-        if not slug:
-            raise LocalProviderError(
-                f"issue {issue_id} has no 'slug' in frontmatter. "
-                f"Edit {issue_path} and add 'slug: <kebab-case>'."
-            )
+        # context 解決経路: slug 必須 + branch_prefix の値域も fail-fast。
+        # dirname / frontmatter id の乖離も identity check で fail-fast
+        # （phase3d-preflight review Finding 1）。
+        _validate_issue_meta(
+            meta,
+            strict_slug=True,
+            expected_id=_expected_id_from_dirname(issue_dir.name),
+        )
+        slug = str(meta["slug"])
         prefix_value = meta.get("branch_prefix")
         fallback = False
-        if prefix_value:
-            prefix = str(prefix_value)
+        if isinstance(prefix_value, str) and prefix_value:
+            prefix = prefix_value
         else:
             # local では type:* label からも導出を試みる
             from ._mappings import labels_to_branch_prefix

@@ -11,8 +11,15 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from ._mappings import LABEL_TO_PREFIX
+
 # slug の文字制約（phase3-design.md L356）
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+
+# Phase 3-d preflight: branch_prefix は kaji の type label / branch 命名規約の
+# 一部であり、自由入力にすると path / branch policy を provider 外へ漏らす。
+# 既知 prefix 値（_mappings.LABEL_TO_PREFIX の values）に限定する。
+_ALLOWED_BRANCH_PREFIXES: frozenset[str] = frozenset(LABEL_TO_PREFIX.values())
 
 
 def validate_slug(slug: str) -> None:
@@ -23,6 +30,17 @@ def validate_slug(slug: str) -> None:
             f"(lowercase alphanumeric, hyphen-separated, leading char alnum, "
             f"max 40 chars)"
         )
+
+
+def validate_branch_prefix(prefix: str) -> None:
+    """``branch_prefix`` が既知の type prefix のいずれかであることを検証する。
+
+    違反は ``ValueError``。Phase 3-d preflight で導入（phase3d-preflight-design
+    § 3 legacy frontmatter / validation 方針）。
+    """
+    if prefix not in _ALLOWED_BRANCH_PREFIXES:
+        allowed = ", ".join(sorted(_ALLOWED_BRANCH_PREFIXES))
+        raise ValueError(f"invalid branch_prefix {prefix!r}: must be one of {{{allowed}}}")
 
 
 def derive_slug_from_title(title: str) -> str:

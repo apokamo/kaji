@@ -298,6 +298,8 @@ class TestCmdRunMedium:
             mock_runner.return_value.run.return_value = MagicMock(
                 last_transition_verdict=Verdict("PASS", "done", "all good", "")
             )
+            # Phase 3-d preflight § 1: canonical_issue_ref 未設定で raw fallback 経路。
+            mock_runner.return_value.canonical_issue_ref = None
             exit_code = cmd_run_with_args(
                 str(workflow_file),
                 "42",

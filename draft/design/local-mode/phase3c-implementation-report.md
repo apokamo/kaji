@@ -158,7 +158,7 @@ read-only Issue を返す。`edit` / `comment` / `close` で `gh:N` を呼ぶと
 | フラグ | 対象 sub | 動作 |
 |--------|---------|------|
 | `--json FIELDS` | view / list | gh 互換の JSON 投影（dict / list 形式） |
-| `--jq EXPR` / `-q EXPR` | view / list | system `jq` への subprocess pipe |
+| `--jq EXPR` / `-q EXPR` | view / list | system `jq` への subprocess pipe（**Phase 3-d preflight § 2 で Python `jq` package へ移行**） |
 | `--comments` | view（plain） | 本文に続いてコメントを `---` 区切りで連結 |
 | `--body STRING` | create / edit / comment | 直値 |
 | `--body-file PATH` | create / edit / comment | ファイル読み込み（`-` で stdin） |
@@ -166,10 +166,16 @@ read-only Issue を返す。`edit` / `comment` / `close` で `gh:N` を呼ぶと
 | `--add-label / --remove-label` | edit | 既存 mapping への delta |
 | `--state` / `--label` / `--limit` | list | gh 互換 |
 
-**`jq` 依存**: Python パッケージ依存にせず、system tool として `shutil.which("jq")`
-で検出 + 不在時 exit 3（明示メッセージ付き）。`pyproject.toml` には記載しない
-（Skill が依存する jq 評価は GitHub provider 側でも `gh --jq` 経由で system
-jq に依存するため対称）。
+**`jq` 依存**（Phase 3-c 時点）: Python パッケージ依存にせず、system tool として
+`shutil.which("jq")` で検出 + 不在時 exit 3（明示メッセージ付き）。`pyproject.toml`
+には記載しない（Skill が依存する jq 評価は GitHub provider 側でも `gh --jq`
+経由で system jq に依存するため対称）。
+
+> **Phase 3-d preflight § 2 で撤回（2026-05-06）**: 上記の system `jq` 採用は、
+> local mode の自己完結性を弱める（fresh install で `kaji issue view ... -q '.body'`
+> が動かない）ため Phase 3-d preflight で破棄し、PyPI `jq` package を runtime
+> dependency へ追加した。詳細は `phase3d-preflight-design.md` および
+> `phase3d-preflight-implementation-report.md` を参照。
 
 **`jq -r` 採用（rev #2 で修正）**: `gh --jq` は内部で gojq を使い、
 結果が string なら raw 出力（`jq -r` 相当）。Skill 群は
@@ -379,12 +385,24 @@ pytest ................ 817 passed, 1 skipped (60.93s)
 **追加したテスト**: 21 件（`test_phase3c_dispatcher.py` 15 → 36）。`pytest`
 全体は 796 → 817 passed。
 
-**判断保留**: レビュー指摘の `pyproject.toml` への jq 依存追加は対応せず、
-runtime の `shutil.which("jq")` 検出 + 不在時 exit 3 で吸収する選択を採った。
-理由は (1) jq は Python パッケージではないため `pyproject.toml` の依存に
+**判断保留**（Phase 3-c 時点）: レビュー指摘の `pyproject.toml` への jq 依存追加は
+対応せず、runtime の `shutil.which("jq")` 検出 + 不在時 exit 3 で吸収する選択を
+採った。理由は (1) jq は Python パッケージではないため `pyproject.toml` の依存に
 書く先がない、(2) GitHub provider 経路でも `gh --jq` 経由で system jq が
 要るため対称性が保てる、(3) installer ガイドへの記載で十分な体感品質。
 本判断は本書 § 4.3.1 末尾でも明記。
+
+> **Phase 3-d preflight § 2 で撤回（2026-05-06）**:
+> - PyPI に Python binding `jq` が存在することを再確認（前提 (1) 誤り）
+> - GitHub provider と local provider の要求水準は対称ではなく、local mode は
+>   GitHub 非依存 / local-first を目的にしているため、追加 OS package install を
+>   必須にすると自己完結性が下がる（前提 (2) 不適切）
+> - Skill 中核の `kaji issue view ... -q '.body'` が fresh install で動かない
+>   ため (3) は user 体験として許容できない
+>
+> 以上により、Phase 3-d preflight で `jq>=1.6` を runtime dependency として
+> 追加し、`_apply_jq` を Python `jq` package 実装に置き換えた。詳細は
+> `phase3d-preflight-design.md § 2` を参照。
 
 ### 2026-05-06 rev #2 — `jq -r` 採用と exact-match テスト
 
