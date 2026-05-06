@@ -769,7 +769,14 @@ class TestPrBuiltinDispatch:
     def test_existing_pr_view_falls_back_to_passthrough(self) -> None:
         from kaji_harness.cli_main import _handle_pr
 
+        # config が無い（legacy）状態を強制し、--repo 注入が起きない経路を検証する。
+        # dev repo dogfooding で .kaji/config.toml に [provider] が追加されたため
+        # 明示的に config=None を mock する必要がある。
         with (
+            patch(
+                "kaji_harness.cli_main._load_config_for_dispatch_or_none",
+                return_value=None,
+            ),
             patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
             patch("kaji_harness.cli_main.subprocess.run") as mock_run,
         ):

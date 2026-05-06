@@ -365,6 +365,11 @@ def issue_view(ctx, issue_id, ...):
 
 ### `kaji local init` 仕様
 
+> **Cross-reference (Phase 3-d)**: 本節の Step 4-5 は `phase3d-design.md § 3` で
+> **上書き**された。実装では active provider 値（`type` / `machine_id` /
+> `default_branch`）をすべて `.kaji/config.local.toml` (gitignored) に書く。
+> 本節のテキストは設計史としてそのまま残す。
+
 local mode 初期化を user 手作業から CLI 化する。長期 local-first 運用で初期セットアップミス（machine_id 未設定、`.gitignore` 漏れ、config 不整合）を構造で防ぐ。
 
 **コマンド**:

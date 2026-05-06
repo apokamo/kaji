@@ -7,3 +7,12 @@ skill_dir = ".claude/skills"
 
 [execution]
 default_timeout = 1800
+
+# Repository default. 各 user は `kaji local init` で
+# .kaji/config.local.toml (gitignored) overlay を作って provider 切替できる。
+[provider]
+type = "github"
+
+[provider.github]
+repo = "apokamo/kaji"
+default_branch = "main"
