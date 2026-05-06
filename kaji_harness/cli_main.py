@@ -62,6 +62,9 @@ def create_parser() -> argparse.ArgumentParser:
     _register_validate(subparsers)
     _register_issue(subparsers)
     _register_pr(subparsers)
+    from .local_init import register_subcommand as _register_local
+
+    _register_local(subparsers)
     return parser
 
 
@@ -1043,6 +1046,10 @@ def main(argv: list[str] | None = None) -> int:
         return _handle_issue(args.args)
     if args.command == "pr":
         return _handle_pr(args.args)
+    if args.command == "local":
+        from .local_init import cmd_local
+
+        return cmd_local(args)
 
     parser.print_help()
     return EXIT_ABORT
