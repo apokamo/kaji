@@ -17,6 +17,40 @@ source .venv/bin/activate
 
 ## 2. 初期化（`kaji local init`）
 
+### 前提: tracked `.kaji/config.toml`
+
+`kaji local init` は **overlay (`.kaji/config.local.toml`) しか作らない**。
+tracked `.kaji/config.toml` が無い repo では `kaji issue` / `kaji pr` /
+`kaji run` がいずれも `.kaji/config.toml not found` で停止するため、
+overlay 生成より前に最低限の base config を 1 度だけ commit する必要がある。
+
+最小テンプレート:
+
+```toml
+# .kaji/config.toml （tracked）
+[paths]
+artifacts_dir = ".kaji-artifacts"
+skill_dir = ".claude/skills"
+
+[execution]
+default_timeout = 1800
+
+[provider]
+type = "local"
+```
+
+`type = "github"` 運用なら上記 `[provider]` ブロックを以下に差し替える:
+
+```toml
+[provider]
+type = "github"
+
+[provider.github]
+repo = "<owner>/<repo>"
+```
+
+### overlay 生成
+
 リポジトリ root から:
 
 ```bash

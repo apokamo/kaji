@@ -18,9 +18,12 @@ class ConfigNotFoundError(HarnessError):
         super().__init__(
             f".kaji/config.toml not found. Searched from {self.start_dir} to /.\n\n"
             "`kaji issue` / `kaji pr` / `kaji run` require a kaji repository.\n"
-            "  - For local-first: run `kaji local init` in your repo root.\n"
-            "  - For GitHub: create `.kaji/config.toml` with a [provider] section\n"
-            "    (see `docs/cli-guides/local-mode.md`)."
+            "First create `.kaji/config.toml` with `[paths]` and `[execution]`\n"
+            "sections (template in `docs/cli-guides/local-mode.md` § 2),\n"
+            "then add a `[provider]` section:\n"
+            '  - For GitHub:    type = "github" + [provider.github] repo = "<owner>/<repo>"\n'
+            '  - For local-first: type = "local"  (then run `kaji local init`\n'
+            "                    to write the gitignored machine_id overlay)."
         )
 
 

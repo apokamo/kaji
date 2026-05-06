@@ -199,10 +199,45 @@ def test_failfast_issue_view_no_config_toml(tmp_path: Path) -> None:
     )
     assert result.returncode == 2
     err = result.stderr
-    # phase3e-design.md § 9 文面: 「kaji repo が必要」+ 2 つの導線を含むこと
+    # phase3e-design.md § 9 文面: 「kaji repo が必要」+ base config 必要 +
+    # GitHub / local-first 双方の導線を含むこと（local-first ガイドが
+    # `kaji local init` 単独で完結しないことを明示する）
     assert ".kaji/config.toml not found" in err
+    assert "[paths]" in err and "[execution]" in err
     assert "kaji local init" in err
-    assert "[provider]" in err
+    assert '"github"' in err and '"local"' in err
+
+
+def test_local_init_alone_does_not_unblock_kaji_issue_when_base_config_missing(
+    tmp_path: Path,
+) -> None:
+    """`kaji local init` は overlay しか作らないため、tracked `.kaji/config.toml`
+    が無い bare directory では init 後も `kaji issue` が同じ fail-fast を返す。
+    エラーメッセージの local-first 導線（base config 作成）が誤誘導しない
+    ことを構造で担保するためのリグレッションガード。"""
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    rc = subprocess.run(
+        [*_KAJI_CMD, "local", "init", "--machine-id", "pc1", "--non-interactive"],
+        cwd=bare,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert rc.returncode == 0, rc.stderr
+    # overlay は作られたが tracked .kaji/config.toml は無い
+    assert (bare / ".kaji" / "config.local.toml").exists()
+    assert not (bare / ".kaji" / "config.toml").exists()
+    # `kaji issue list` は config.toml not found で停止する（init 単独では足りない）
+    result = subprocess.run(
+        [*_KAJI_CMD, "issue", "list"],
+        cwd=bare,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 2
+    assert ".kaji/config.toml not found" in result.stderr
 
 
 def test_failfast_run_no_config_toml(tmp_path: Path) -> None:
