@@ -720,42 +720,82 @@ def _read_body_arg(body: str | None, body_file: str | None) -> str | None:
 
 
 def _apply_jq(json_text: str, expr: str) -> tuple[str, int]:
-    """``jq`` を subprocess 起動して ``json_text`` に式を適用する。
+    """Python ``jq`` package で ``json_text`` に式を適用する（``gh --jq`` 互換 raw 出力）。
 
-    ``gh --jq`` 互換挙動として **raw 出力**（`-r`）を採用する。
+    Phase 3-d preflight: system ``jq`` バイナリ依存を撤去し、PyPI ``jq``
+    package を runtime dependency に格上げした（design.md / phase3d-preflight
+    § 2）。
 
-    `gh` は内部で gojq を使い、結果が string 値の場合のみ quote 無しで
-    raw 出力する（array / object はそのまま JSON）。これは `jq -r` と
-    同じ動作。Skill 群は ``CURRENT_BODY=$(kaji issue view N --json body
-    -q '.body')`` のように shell 変数代入で raw 値を期待しているため、
-    quote 付き出力では下流が壊れる（rev 2 で発覚した本指摘）。
+    `gh --jq` および `jq -r` と互換な raw 出力ルール:
 
-    Phase 3-c では Python 製 jq 互換実装を持たず、system ``jq`` に委譲する。
-    ``jq`` 不在時は exit 3（runtime error）。
+    - string         → 改行を含めてそのまま出力 + 末尾 newline 1
+    - number / bool  → decimal / ``true`` / ``false`` + newline
+    - null           → 空行（newline のみ）
+    - object / array → compact JSON + newline
+    - stream         → 各結果を上記ルールで整形し連結
+    - empty stream   → 出力なし、exit 0
+    - syntax/runtime → exit 3、stderr に jq 例外メッセージを user-facing 整形
+
+    Skill 群は ``CURRENT_BODY=$(kaji issue view N --json body -q '.body')``
+    のように shell 変数代入で raw 値を期待しているため、string は quote 無しで
+    出さなければならない。
     """
-    if shutil.which("jq") is None:
-        sys.stderr.write(
-            "Error: 'jq' is required for --jq/-q under provider.type='local' "
-            "but was not found in PATH. Install jq (e.g. 'apt install jq', "
-            "'brew install jq') or invoke without --jq.\n"
-        )
-        return "", EXIT_RUNTIME_ERROR
+    import json as _json
+
     try:
-        proc = subprocess.run(
-            # -r: raw output for string results (gh --jq compatible)
-            ["jq", "-r", expr],
-            input=json_text,
-            capture_output=True,
-            text=True,
-            check=False,
+        data = _json.loads(json_text)
+    except _json.JSONDecodeError as exc:
+        sys.stderr.write(f"Error: invalid JSON passed to jq: {exc}\n")
+        return "", EXIT_RUNTIME_ERROR
+
+    try:
+        import jq as _jq  # type: ignore[import-not-found]
+    except ImportError as exc:  # pragma: no cover — runtime dependency 化後は不到達
+        sys.stderr.write(
+            "Error: Python 'jq' package is required but not installed. "
+            f"Reinstall kaji ('uv sync' / 'pip install kaji'). Detail: {exc}\n"
         )
-    except OSError as exc:
-        sys.stderr.write(f"Error: failed to invoke 'jq': {exc}\n")
         return "", EXIT_RUNTIME_ERROR
-    if proc.returncode != 0:
-        sys.stderr.write(proc.stderr)
+
+    try:
+        program = _jq.compile(expr)
+    except ValueError as exc:
+        sys.stderr.write(f"Error: jq compile failed: {exc}\n")
         return "", EXIT_RUNTIME_ERROR
-    return proc.stdout, EXIT_OK
+
+    try:
+        results = program.input_value(data).all()
+    except ValueError as exc:
+        sys.stderr.write(f"Error: jq runtime error: {exc}\n")
+        return "", EXIT_RUNTIME_ERROR
+
+    return _format_jq_results(results), EXIT_OK
+
+
+def _format_jq_results(results: list[object]) -> str:
+    """``jq.compile(...).all()`` の結果配列を ``jq -r`` 互換 raw 出力に整形する。
+
+    各 result を 1 行として扱い末尾 newline を付ける。string は raw、null は
+    空行、object/array は compact JSON にする(design.md § jq 互換 / phase3d
+    preflight § 2 出力契約)。
+    """
+    import json as _json
+
+    parts: list[str] = []
+    for value in results:
+        if value is None:
+            parts.append("")
+        elif isinstance(value, str):
+            parts.append(value)
+        elif isinstance(value, bool):
+            parts.append("true" if value else "false")
+        elif isinstance(value, (int, float)):
+            parts.append(_json.dumps(value))
+        else:
+            parts.append(_json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+    if not parts:
+        return ""
+    return "\n".join(parts) + "\n"
 
 
 def _issue_to_json_dict(issue: object, *, include_comments: bool = True) -> dict[str, object]:
