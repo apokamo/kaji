@@ -25,6 +25,43 @@ EXIT_OVERLAY_EXISTS = 3
 _GITIGNORE_LINE = ".kaji/config.local.toml"
 _LOCAL_DIR_RE = re.compile(r"^local-([a-z0-9]+)-\d+(?:-.*)?$")
 
+# git の branch 命名規則（git check-ref-format --branch 相当）の保守的な
+# サブセット。許容: 英数字 / `_` / `.` / `/` / `-`。これらだけでも
+# `feat/foo`, `release-1.2`, `main`, `develop` 等の一般的な branch 名は表現できる。
+# TOML 文字列の安全性も同時に保証する（quote / 制御文字 / 改行を排除）。
+_DEFAULT_BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+_DEFAULT_BRANCH_MAX_LEN = 255
+
+
+def validate_default_branch(value: str) -> None:
+    """``provider.{local,github}.default_branch`` の値域を検証する。
+
+    git の ``check-ref-format`` ルールの保守的なサブセットを採用する。
+    `_DEFAULT_BRANCH_RE` を通り、かつ git の禁止規則
+    （先頭末尾 ``.`` / ``/``、``..``、``//``、``.lock`` 末尾、空文字、
+    255 文字超）に該当しないことを確認する。
+
+    Raises:
+        ValueError: 上記いずれかに違反したとき。
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError("default_branch must be a non-empty string")
+    if len(value) > _DEFAULT_BRANCH_MAX_LEN:
+        raise ValueError(f"default_branch too long (max {_DEFAULT_BRANCH_MAX_LEN}): {value!r}")
+    if not _DEFAULT_BRANCH_RE.match(value):
+        raise ValueError(
+            f"invalid default_branch {value!r}: only [A-Za-z0-9._/-] are allowed "
+            f"(no whitespace, quotes, control chars, or other shell/TOML metacharacters)"
+        )
+    if value.startswith(("/", ".", "-")):
+        raise ValueError(f"default_branch must not start with '/' / '.' / '-': {value!r}")
+    if value.endswith(("/", ".")):
+        raise ValueError(f"default_branch must not end with '/' or '.': {value!r}")
+    if ".." in value or "//" in value:
+        raise ValueError(f"default_branch must not contain '..' or '//': {value!r}")
+    if value.endswith(".lock"):
+        raise ValueError(f"default_branch must not end with '.lock': {value!r}")
+
 
 def register_subcommand(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
@@ -94,7 +131,16 @@ def cmd_local_init(args: argparse.Namespace) -> int:
     # Step 1: collect existing machine_ids from issue dirs (for duplicate warning)
     existing_ids = _collect_existing_machine_ids(issues_dir)
 
-    # Step 2: resolve machine_id
+    # Step 2a: validate --default-branch（TOML escape / git ref-format 安全性）。
+    # bad"branch / 改行 / 制御文字 を early に弾くことで壊れた overlay を生成しない。
+    default_branch_raw = args.default_branch or "main"
+    try:
+        validate_default_branch(default_branch_raw)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+
+    # Step 2b: resolve machine_id
     try:
         machine_id = _resolve_machine_id(args, existing_ids)
     except ValueError as exc:
@@ -118,7 +164,7 @@ def cmd_local_init(args: argparse.Namespace) -> int:
     # Step 4: don't touch tracked .kaji/config.toml (per phase3d-design § 3)
 
     # Step 5: write overlay
-    default_branch = args.default_branch or "main"
+    default_branch = default_branch_raw
     kaji_dir.mkdir(parents=True, exist_ok=True)
     overlay_content = _build_overlay_toml(machine_id=machine_id, default_branch=default_branch)
     overlay_path.write_text(overlay_content, encoding="utf-8")

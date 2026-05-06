@@ -14,6 +14,7 @@ from kaji_harness.local_init import (
     EXIT_OVERLAY_EXISTS,
     cmd_local_init,
     register_subcommand,
+    validate_default_branch,
 )
 
 
@@ -182,3 +183,86 @@ def test_register_subcommand_attaches_local_init() -> None:
     assert ns.command == "local"
     assert ns.local_command == "init"
     assert ns.machine_id == "pc1"
+
+
+# -----------------------------------------------------------
+# Phase 3-d レビュー反映: --default-branch validation
+# -----------------------------------------------------------
+
+
+@pytest.mark.small
+@pytest.mark.parametrize(
+    "good",
+    ["main", "develop", "release-1.2", "feat/foo", "v0.1.0", "a", "x" * 255],
+)
+def test_validate_default_branch_accepts(good: str) -> None:
+    validate_default_branch(good)
+
+
+@pytest.mark.small
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        'bad"branch',
+        "bad\nbranch",
+        "bad\rbranch",
+        "bad\x00branch",
+        "bad branch",
+        "bad\tbranch",
+        ".main",
+        "main.",
+        "main/",
+        "/main",
+        "-main",
+        "main..dev",
+        "main//dev",
+        "main.lock",
+        "x" * 256,
+        "main`whoami`",
+        "main$(id)",
+        "main;rm",
+    ],
+)
+def test_validate_default_branch_rejects(bad: str) -> None:
+    with pytest.raises(ValueError):
+        validate_default_branch(bad)
+
+
+@pytest.mark.medium
+def test_local_init_rejects_quote_in_default_branch(tmp_path: Path) -> None:
+    """--default-branch に `"` を含むと TOML literal を壊すので exit 2。"""
+    rc = _run_init(tmp_path, machine_id="pc1", default_branch='bad"branch')
+    assert rc == EXIT_INVALID_INPUT
+    assert not (tmp_path / ".kaji" / "config.local.toml").exists()
+
+
+@pytest.mark.medium
+def test_local_init_rejects_newline_in_default_branch(tmp_path: Path) -> None:
+    """改行を含む --default-branch も exit 2 で拒否する。"""
+    rc = _run_init(tmp_path, machine_id="pc1", default_branch="bad\nbranch")
+    assert rc == EXIT_INVALID_INPUT
+    assert not (tmp_path / ".kaji" / "config.local.toml").exists()
+
+
+@pytest.mark.medium
+def test_local_init_rejects_control_char_in_default_branch(tmp_path: Path) -> None:
+    rc = _run_init(tmp_path, machine_id="pc1", default_branch="bad\x00branch")
+    assert rc == EXIT_INVALID_INPUT
+    assert not (tmp_path / ".kaji" / "config.local.toml").exists()
+
+
+@pytest.mark.medium
+def test_local_init_rejects_double_dot_in_default_branch(tmp_path: Path) -> None:
+    rc = _run_init(tmp_path, machine_id="pc1", default_branch="main..dev")
+    assert rc == EXIT_INVALID_INPUT
+    assert not (tmp_path / ".kaji" / "config.local.toml").exists()
+
+
+@pytest.mark.medium
+def test_local_init_accepts_branch_with_slash(tmp_path: Path) -> None:
+    """`feat/foo` 等のスラッシュ含み branch は通る。"""
+    rc = _run_init(tmp_path, machine_id="pc1", default_branch="feat/foo")
+    assert rc == EXIT_OK
+    overlay = (tmp_path / ".kaji" / "config.local.toml").read_text(encoding="utf-8")
+    assert 'default_branch = "feat/foo"' in overlay

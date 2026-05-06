@@ -65,8 +65,15 @@ default_branch = "main"
 ## 4. Issue / Workflow
 
 ```bash
-# Issue 作成（slug は title から自動導出。明示したい場合は --slug を渡す）
-kaji issue create --title "do something" --label type:feature
+# Issue 作成（--body または --body-file が必須。slug は title から自動導出。
+# 明示したい場合は --slug を渡す）
+kaji issue create \
+  --title "do something" \
+  --body "describe the work" \
+  --label type:feature
+
+# 本文をファイルから読み込む場合
+kaji issue create --title "do something" --body-file issue-body.md --label type:feature
 
 # 一覧
 kaji issue list

@@ -83,7 +83,9 @@ def test_issue_close_skill_contains_local_six_steps() -> None:
         "[provider_type]",
         "[default_branch]",
         "Preflight check",
-        "Base branch",
+        # Phase 3-d レビュー反映: base worktree 側で merge / commit / cleanup を
+        # 行う運用に変更したため "Base branch" → "Base worktree" を期待する。
+        "Base worktree",
         "merge --no-ff",
         "kaji issue close [issue_id] --reason completed",
         "git worktree remove",

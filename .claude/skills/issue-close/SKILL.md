@@ -231,41 +231,58 @@ COMMENT_EOF
 `[provider_type]` が `local` のとき、PR 概念が無いため
 design.md § local mode における /issue-close の手順 (6 step) を実行する。
 
-#### Step 1: Preflight check
+> **重要 (worktree 運用)**: bare repository + worktree パターンでは
+> `[default_branch]` は **feature worktree とは別の worktree**（通常 main repo 側）
+> で checkout されている。そのため merge / close commit は **base worktree 側
+> で実行**し、feature worktree (`[worktree_dir]`) はその後で削除する。
+> feature worktree 内で `git switch [default_branch]` を実行しても、別 worktree
+> がそのブランチを保持しているため Git に拒否される。
+
+#### Step 1: Preflight check（feature worktree で確認）
 
 ```bash
 cd [worktree_dir]
-test -z "$(git status --porcelain)" || { echo "ABORT: uncommitted changes"; exit 1; }
+test -z "$(git status --porcelain)" || { echo "ABORT: uncommitted changes in [worktree_dir]"; exit 1; }
 git rev-parse --abbrev-ref HEAD | grep -qE "^[a-z]+/local-[a-z0-9]+-[0-9]+(-[a-z0-9-]+)?$" || { echo "ABORT: not on feature branch"; exit 1; }
-git rev-parse --verify [default_branch] >/dev/null 2>&1 || { echo "ABORT: base branch [default_branch] missing locally"; exit 1; }
 ```
 
-未コミット変更 / feature ブランチ外 / base branch 不在のいずれかなら ABORT。
+未コミット変更 / feature ブランチ外なら ABORT。
 
-#### Step 2: Base branch 最新化
+#### Step 2: Base worktree を特定し、base branch を最新化
+
+`git worktree list --porcelain` から `[default_branch]` を checkout している
+worktree を抽出する。見つからなければ user が手動で base 側を準備する必要が
+あるため ABORT。
 
 ```bash
+# [default_branch] を checkout している worktree を取得
+BASE_WT=$(git worktree list --porcelain | awk -v b="[default_branch]" '
+    /^worktree / { wt=$2 }
+    $0 == "branch refs/heads/" b { print wt; exit }
+')
+test -n "$BASE_WT" || { echo "ABORT: no worktree has [default_branch] checked out. Run 'git worktree add <path> [default_branch]' or 'git switch [default_branch]' in your main checkout first."; exit 1; }
+
+cd "$BASE_WT"
+test -z "$(git status --porcelain)" || { echo "ABORT: uncommitted changes in base worktree $BASE_WT"; exit 1; }
+
 # remote 設定がある場合のみ fetch + ff-only merge
 if git remote get-url origin >/dev/null 2>&1; then
     git fetch origin [default_branch]
-    git switch [default_branch]
-    git merge --ff-only origin/[default_branch] || { echo "ABORT: ff-only merge failed"; exit 1; }
-else
-    git switch [default_branch]
+    git merge --ff-only "origin/[default_branch]" || { echo "ABORT: ff-only merge failed in base worktree"; exit 1; }
 fi
 ```
 
-fast-forward できない場合は ABORT（base が divergence した状態で merge すると履歴が壊れる）。
+fast-forward できない / base worktree 側に未コミット変更が残っている場合は ABORT。
 
-#### Step 3: Merge 実行
+#### Step 3: Merge 実行（base worktree 上で）
 
 ```bash
-git merge --no-ff --no-edit [branch_name] || { echo "ABORT: merge conflict, resolve manually"; exit 1; }
+git merge --no-ff --no-edit [branch_name] || { echo "ABORT: merge conflict, resolve manually in $BASE_WT then retry"; exit 1; }
 ```
 
-衝突したら ABORT。Issue は open のまま。手動で resolve した後再実行する。
+衝突したら ABORT。Issue は open のまま、user が手動 resolve した後で再実行する。
 
-#### Step 4: Issue frontmatter 更新 + commit
+#### Step 4: Issue frontmatter 更新 + commit（base worktree 上で）
 
 ```bash
 kaji issue close [issue_id] --reason completed
@@ -278,18 +295,21 @@ git commit -m "chore(issue): close [issue_ref]" || { echo "ABORT: commit failed"
 
 **Step 4 完了で Issue close は確定**。以降の失敗は警告のみ。
 
-#### Step 5: Cleanup（worktree → branch の順序必須）
+#### Step 5: Cleanup（base worktree から feature worktree を削除）
+
+base worktree に居る状態で feature worktree を削除する。`cwd == 削除対象` を
+回避するため、Step 2 の `cd "$BASE_WT"` は維持したまま実行する。
 
 ```bash
-git worktree remove [worktree_dir] || echo "WARNING: worktree remove failed, manual cleanup needed"
-git branch -d [branch_name] || echo "WARNING: branch delete failed, manual cleanup needed"
+git worktree remove [worktree_dir] || echo "WARNING: worktree remove failed for [worktree_dir]; manual cleanup needed"
+git branch -d [branch_name] || echo "WARNING: branch delete failed for [branch_name]; manual cleanup needed"
 ```
 
-#### Step 6: Push（remote 設定がある場合）
+#### Step 6: Push（remote 設定がある場合、base worktree から）
 
 ```bash
 if git remote get-url origin >/dev/null 2>&1; then
-    git push origin [default_branch] || echo "WARNING: push failed, manual push needed"
+    git push origin [default_branch] || echo "WARNING: push failed; manual push needed"
 fi
 ```
 
