@@ -94,26 +94,29 @@ def _register_run(subparsers: argparse._SubParsersAction[argparse.ArgumentParser
 
 
 def _register_issue(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    """Register the `issue` subcommand (gh issue passthrough wrapper).
+    """Register the `issue` subcommand.
 
-    Phase 1: provider 抽象が未導入のため、すべての引数を `gh issue` に転送する。
-    Phase 3 で LocalProvider 導入時に dispatch ロジックへ差し替える。
+    Phase 3-e 以降は ``provider.type`` に応じて分岐する。
+    ``provider.type='local'`` → LocalProvider 経由の structured CRUD、
+    ``provider.type='github'`` → ``gh issue`` passthrough（``--repo`` 自動注入）。
     """
     p = subparsers.add_parser(
         "issue",
-        help="Issue operations (Phase 1: gh issue passthrough)",
+        help="Issue operations (provider-aware: github passthrough or local CRUD)",
         add_help=False,
     )
     p.add_argument("args", nargs=argparse.REMAINDER, help="Arguments forwarded to 'gh issue'")
 
 
 def _register_pr(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    """Register the `pr` subcommand (gh pr passthrough wrapper).
+    """Register the `pr` subcommand.
 
-    Phase 1: すべての引数を `gh pr` に転送する。例外として `pr merge` は
-    method flag (``--merge`` / ``--squash`` / ``--rebase``) を露出せず、
-    内部で常に ``--merge`` (= ``--no-ff`` 相当) 固定で gh に渡す
+    Phase 3-e: すべての引数を `gh pr` に転送する（`provider.type='github'` 時に
+    ``--repo`` を自動注入）。`pr merge` は method flag
+    (``--merge`` / ``--squash`` / ``--rebase``) を露出せず、内部で常に
+    ``--merge`` (= ``--no-ff`` 相当) 固定で gh に渡す
     (`docs/guides/git-commit-flow.md` の merge 規約に従う)。
+    Phase 4 で `provider.type='local'` 配下では bare-provider エラー化予定。
     """
     p = subparsers.add_parser(
         "pr",

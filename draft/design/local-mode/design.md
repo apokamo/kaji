@@ -1280,7 +1280,9 @@ flowchart TB
 
 ### 既存 config の移行手順
 
-fail-fast 原則の採用により、既存の `.kaji/config.toml`（`[provider]` セクションなし）は **Phase 3 リリース以降、次回 `kaji run` 実行時にエラーで停止**する（Phase 1-2 の間は config なしで動作）。Phase 3 リリース時に利用者は以下の追記を 1 度行う必要がある。
+fail-fast 原則の採用により、既存の `.kaji/config.toml`（`[provider]` セクションなし）は **Phase 3-e リリース以降、次回 `kaji issue` / `kaji pr` / `kaji run` 実行時に exit 2 で停止**する（Phase 3-d までは WARN + GitHub fallback で動作）。Phase 3-e リリース時に利用者は以下の追記を 1 度行う必要がある。
+
+**Phase 3-e 確定（2026-05-06）**: `phase3e-implementation-report.md` 参照。`.kaji/config.toml` 自体が無い repo で `kaji issue` / `kaji pr` を呼ぶ legacy passthrough も同時に削除された（kaji リポジトリ外で `gh` ラッパとして使う経路は撤去）。`provider.local.machine_id` の `[a-z0-9]{1,16}` 検証も config load 段に統合された。
 
 **最小の追記例（既存 GitHub 運用を継続するケース）**:
 
@@ -1317,7 +1319,7 @@ machine_id = "pc1"
 ### 既存 GitHub 運用への影響
 
 - **Phase 3 以降**、既存ユーザーは初回 `kaji run` 前に `[provider]` セクションを 1 度追記する必要がある（前述「既存 config の移行手順」参照）。一度追記すれば従来運用がそのまま継続できる
-- **Phase 1-2 の間**は config 追記なしでも `kaji issue` / `kaji pr` が `gh` 互換ラッパーとして動作する（既存挙動を温存）。fail-fast 化は Phase 3 で初めて発生する破壊的変更とし、CHANGELOG / release notes で明示告知する
+- **Phase 1 〜 Phase 3-d の間**は config 追記なしでも `kaji issue` / `kaji pr` が `gh` 互換ラッパーとして動作した（Phase 3-c 以降は WARN を出した上での過渡的 fallback）。fail-fast 化は **Phase 3-e で確定済の破壊的変更**で、`CHANGELOG.md` で明示告知している。`.kaji/config.toml` 自体が無い場所での passthrough も同時撤去された
 - 移行は段階実装可能：
   1. Phase 1: `kaji issue` / `kaji pr` CLI を追加し、内部実装は `gh` 直呼び出し（GitHub provider のみ）
   2. Phase 2: 全 Skill の `gh` を `kaji` に置換

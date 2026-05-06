@@ -198,7 +198,11 @@ def test_failfast_issue_view_no_config_toml(tmp_path: Path) -> None:
         timeout=30,
     )
     assert result.returncode == 2
-    assert "config.toml" in result.stderr.lower()
+    err = result.stderr
+    # phase3e-design.md § 9 文面: 「kaji repo が必要」+ 2 つの導線を含むこと
+    assert ".kaji/config.toml not found" in err
+    assert "kaji local init" in err
+    assert "[provider]" in err
 
 
 def test_failfast_run_no_config_toml(tmp_path: Path) -> None:

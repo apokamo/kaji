@@ -234,8 +234,19 @@ class KajiConfig:
             try:
                 _validate_machine_id(machine_id)
             except ValueError as exc:
+                # 修正先 path は machine_id の出所を優先: overlay が定義していれば
+                # overlay path、そうでなければ tracked path。`kaji local init` で
+                # 作る overlay を直接編集させたいケースを誤誘導しない。
+                overlay_local = (
+                    overlay_provider.get("local") if isinstance(overlay_provider, dict) else None
+                )
+                source_path = (
+                    local_overlay_path
+                    if isinstance(overlay_local, dict) and "machine_id" in overlay_local
+                    else path
+                )
                 raise ConfigLoadError(
-                    path,
+                    source_path,
                     f"provider.local.machine_id {machine_id!r} is invalid: {exc}",
                 ) from exc
         default_branch = local_raw.get("default_branch", "main") or "main"

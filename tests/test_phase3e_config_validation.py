@@ -80,14 +80,17 @@ class TestMachineIdConfigValidation:
         with pytest.raises(ConfigLoadError, match="machine_id"):
             KajiConfig.discover(start_dir=repo)
 
-    def test_overlay_invalid_machine_id_rejected(self, tmp_path: Path) -> None:
+    def test_overlay_invalid_machine_id_rejected_with_overlay_path(self, tmp_path: Path) -> None:
+        """overlay 由来の違反は overlay ファイルを修正先として指す（実運用導線）。"""
         repo = _write_repo(
             tmp_path,
             tracked_provider='\n[provider]\ntype = "local"\n',
             overlay_provider='[provider.local]\nmachine_id = "PC1"\n',
         )
-        with pytest.raises(ConfigLoadError, match="machine_id"):
+        with pytest.raises(ConfigLoadError, match="machine_id") as exc_info:
             KajiConfig.discover(start_dir=repo)
+        # ConfigLoadError.path が overlay (config.local.toml) を指していること
+        assert exc_info.value.path.name == "config.local.toml"
 
     def test_empty_machine_id_accepted_for_github_provider(self, tmp_path: Path) -> None:
         # type=github + 空 [provider.local] が default ケース。validation は走らない。

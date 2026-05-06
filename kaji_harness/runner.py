@@ -143,8 +143,9 @@ class WorkflowRunner:
         """``kaji run`` 起動時に Issue 識別を 1 度だけ決定する。
 
         Phase 3-d preflight § 1: state / run log / prompt / success summary が
-        共有する canonical id を確定する。``[provider]`` 未設定 fallback では
-        raw 入力をそのまま canonical 扱いする（Phase 2-B 互換）。
+        共有する canonical id を確定する。Phase 3-e 以降は ``[provider]`` が必須の
+        ため、provider 経由 IssueContext の ``issue_id`` / ``issue_ref`` を
+        canonical 値として直接採用する（Phase 2-B 互換 fallback は廃止済）。
 
         legacy raw-id artifacts directory が残っていた場合（例: 補正前の
         ``kaji run ... 1`` で作られた ``.kaji-artifacts/1/``）は WARN を出すが
