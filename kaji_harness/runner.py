@@ -16,6 +16,7 @@ from .cli import execute_cli
 from .config import KajiConfig
 from .errors import (
     InvalidTransition,
+    IssueContextResolutionError,
     MissingResumeSessionError,
     WorkdirNotFoundError,
     WorkflowValidationError,
@@ -23,6 +24,8 @@ from .errors import (
 from .logger import RunLogger
 from .models import CostInfo, Verdict, Workflow
 from .prompt import build_prompt
+from .providers import IssueContext, get_provider, normalize_id
+from .providers.local import LocalProvider
 from .skill import validate_skill_exists
 from .state import SessionState
 from .verdict import create_verdict_formatter, parse_verdict
@@ -46,6 +49,76 @@ class WorkflowRunner:
     def __post_init__(self) -> None:
         # int / その他から str へ正規化（既存呼び出し互換のため）
         self.issue_number = str(self.issue_number)
+
+    def _resolve_issue_context(self) -> IssueContext | None:
+        """provider 経由で IssueContext を解決する。
+
+        Phase 3-c 方針（rev #3 で fail-fast 化、review #2 反映）:
+
+        - ``config.provider`` が **未設定** → ``None``（legacy 2 変数 fallback。
+          ``[provider]`` 未設定の repo を壊さないための過渡的互換経路。
+          Phase 3-e で削除予定）
+        - ``config.provider`` が **明示設定** → ``normalize_id`` を経由して
+          provider 内部 ID に正規化（``1`` / ``pc1-1`` / ``local-pc1-1`` /
+          ``gh:N`` を一貫して扱う）してから解決。失敗は
+          ``IssueContextResolutionError`` で raise し、agent 起動前に exit
+          する（machine_id 不足 / Issue 不在 / frontmatter 不備で半端な
+          context のまま Skill 起動を許さない）
+        """
+        try:
+            provider = get_provider(self.config)
+        except ValueError as exc:
+            # 明示 provider 設定の不整合（machine_id 不在 / repo 不在等）
+            raise IssueContextResolutionError(
+                issue_input=self.issue_number,
+                provider_type=(self.config.provider.type if self.config.provider else "unset"),
+                cause=exc,
+            ) from exc
+        if provider is None:
+            # `[provider]` 未設定 → legacy 互換経路
+            return None
+
+        assert self.config.provider is not None  # for type checker
+        provider_type = self.config.provider.type
+        machine_id = self.config.provider.local.machine_id if provider_type == "local" else None
+        try:
+            rid = normalize_id(
+                self.issue_number,
+                provider_name=provider_type,
+                machine_id=machine_id,
+            )
+        except ValueError as exc:
+            raise IssueContextResolutionError(
+                issue_input=self.issue_number,
+                provider_type=provider_type,
+                cause=exc,
+            ) from exc
+
+        if rid.kind == "remote_cache":
+            # `provider=local` 配下で `gh:N` を `kaji run` 対象にするのは
+            # write 系 Skill が走るため意味的に矛盾。明示的に拒否する。
+            raise IssueContextResolutionError(
+                issue_input=self.issue_number,
+                provider_type=provider_type,
+                cause=ValueError(
+                    "remote_cache (gh:N) issues are read-only and cannot be "
+                    "the target of `kaji run`. Use a local issue id "
+                    "(e.g. local-<machine>-<n>) or run under provider.type='github'."
+                ),
+            )
+
+        # provider 別に内部 ID で resolve
+        try:
+            if isinstance(provider, LocalProvider):
+                return provider.resolve_issue_context(rid.value)
+            # GitHubProvider: rid.kind == "github"、value は数値文字列
+            return provider.resolve_issue_context(rid.value)
+        except Exception as exc:
+            raise IssueContextResolutionError(
+                issue_input=self.issue_number,
+                provider_type=provider_type,
+                cause=exc,
+            ) from exc
 
     def run(self) -> SessionState:
         """ワークフローを実行し、最終状態を返す。
@@ -74,6 +147,10 @@ class WorkflowRunner:
 
         # 2. issue-scoped な状態をロード
         state = SessionState.load_or_create(self.issue_number, self.artifacts_dir)
+
+        # 2.5. IssueContext を一度だけ解決し、以降の build_prompt で再利用する。
+        #     [provider] 未設定 / 解決失敗時は Phase 2-B 互換の 2 変数のみ注入。
+        issue_context = self._resolve_issue_context()
 
         # 3. run ログディレクトリを作成
         run_dir = (
@@ -126,7 +203,13 @@ class WorkflowRunner:
                     cost: CostInfo | None = None
                 else:
                     # プロンプト構築
-                    prompt = build_prompt(current_step, self.issue_number, state, self.workflow)
+                    prompt = build_prompt(
+                        current_step,
+                        self.issue_number,
+                        state,
+                        self.workflow,
+                        issue_context=issue_context,
+                    )
 
                     # セッション ID の取得
                     session_id = (

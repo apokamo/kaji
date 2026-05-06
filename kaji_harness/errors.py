@@ -83,6 +83,24 @@ class WorkdirNotFoundError(HarnessError):
         super().__init__(f"Step '{step_id}' workdir does not exist: {workdir}")
 
 
+class IssueContextResolutionError(HarnessError):
+    """`provider.resolve_issue_context` が明示 provider 設定下で失敗した。
+
+    Phase 3-c で導入。``[provider]`` が明示設定されている場合は agent 起動前に
+    fail-fast する。fallback（legacy 2 変数注入）は ``[provider]`` 未設定の
+    互換経路に限定する（review #2 反映、phase3-design.md L322 と整合）。
+    """
+
+    def __init__(self, issue_input: str, provider_type: str, cause: BaseException):
+        self.issue_input = issue_input
+        self.provider_type = provider_type
+        self.cause = cause
+        super().__init__(
+            f"Failed to resolve IssueContext for {issue_input!r} under "
+            f"provider.type={provider_type!r}: {type(cause).__name__}: {cause}"
+        )
+
+
 class MissingResumeSessionError(HarnessError):
     """resume 指定ステップで継続元のセッション ID が見つからない。"""
 

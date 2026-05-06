@@ -9,21 +9,95 @@ Phase 3-c で行う（design.md L226-244 参照）。
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from .base import IssueProvider
+from .github import GitHubProvider
+from .local import LocalProvider
 from .models import Comment, Issue, IssueContext, Label
+
+if TYPE_CHECKING:
+    from ..config import KajiConfig
 
 __all__ = [
     "Comment",
+    "GitHubProvider",
     "Issue",
     "IssueContext",
     "IssueProvider",
     "Label",
+    "LocalProvider",
     "ResolvedId",
+    "get_provider",
     "normalize_id",
 ]
+
+
+_PROVIDER_FALLBACK_WARNED = False
+
+
+def _emit_provider_fallback_warning() -> None:
+    """``[provider]`` 未設定時の WARN を 1 度のみ stderr に出す。
+
+    Phase 3-c の段階。Phase 3-e で fallback は削除される（fail-fast）。
+    """
+    global _PROVIDER_FALLBACK_WARNED
+    if _PROVIDER_FALLBACK_WARNED:
+        return
+    _PROVIDER_FALLBACK_WARNED = True
+    print(
+        "WARNING: [provider] section is not configured in .kaji/config.toml. "
+        "Falling back to provider.type='github' for backward compatibility. "
+        "This fallback will be removed in a future release; add the following "
+        "to your .kaji/config.toml:\n"
+        "    [provider]\n"
+        '    type = "github"\n\n'
+        "    [provider.github]\n"
+        '    repo = "<owner>/<repo>"\n'
+        "For local-first development, run 'kaji local init'.",
+        file=sys.stderr,
+    )
+
+
+def get_provider(config: KajiConfig) -> IssueProvider | None:
+    """`KajiConfig` から provider インスタンスを構築する。
+
+    Phase 3-c の挙動:
+
+    - ``config.provider`` が ``None`` → WARN を出して ``None`` を返す。
+      ``kaji issue`` / ``kaji pr`` の passthrough、`build_prompt` の
+      Phase 2-B 互換動作、いずれも ``None`` 受領時は legacy 経路で動く
+    - ``provider.type == "github"`` → GitHubProvider
+    - ``provider.type == "local"`` → LocalProvider
+
+    Phase 3-e で fallback 経路は削除される（phase3-design.md § 4 ロールアウト）。
+    """
+    if config.provider is None:
+        _emit_provider_fallback_warning()
+        return None
+
+    if config.provider.type == "github":
+        if not config.provider.github.repo:
+            raise ValueError(
+                "provider.type='github' requires provider.github.repo (e.g. 'owner/name')."
+            )
+        return GitHubProvider(repo=config.provider.github.repo, repo_root=config.repo_root)
+    if config.provider.type == "local":
+        local_cfg = config.provider.local
+        if not local_cfg.machine_id:
+            raise ValueError(
+                "provider.type='local' requires provider.local.machine_id. "
+                "Run 'kaji local init' or set machine_id in "
+                ".kaji/config.local.toml."
+            )
+        return LocalProvider(
+            repo_root=config.repo_root,
+            machine_id=local_cfg.machine_id,
+            default_branch=local_cfg.default_branch,
+        )
+    raise ValueError(f"unknown provider.type: {config.provider.type!r}")
 
 
 ResolvedKind = Literal["github", "local", "remote_cache"]

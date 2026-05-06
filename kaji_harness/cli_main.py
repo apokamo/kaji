@@ -21,6 +21,13 @@ from .errors import (
     SkillNotFound,
     WorkflowValidationError,
 )
+from .providers import ResolvedId, get_provider, normalize_id
+from .providers.local import (
+    IssueNotFoundError,
+    IssueReadOnlyError,
+    LocalProvider,
+    LocalProviderError,
+)
 from .runner import WorkflowRunner
 from .skill import validate_skill_exists
 from .state import _format_issue_ref
@@ -304,19 +311,26 @@ def cmd_run(args: argparse.Namespace) -> int:
 _FORGE_METHOD_FLAGS = {"--merge", "--squash", "--rebase"}
 
 
-def _forward_to_gh(group: str, raw_args: list[str]) -> int:
-    """`gh <group> ...` に引数を転送する Phase 1 用 wrapper。
+def _forward_to_gh(group: str, raw_args: list[str], *, repo: str | None = None) -> int:
+    """`gh <group> ...` に引数を転送する wrapper。
 
     `pr merge` の method flag は露出せず常に `--merge` (= no-ff) 固定で渡す。
     詳細: ``docs/guides/git-commit-flow.md``。
 
     `argparse.REMAINDER` は先頭の `--` を残したり残さなかったりするため、
     user 入力の意味を変えないよう先頭の単独 `--` のみを除去する。
+
+    Phase 3-c rev #3（review #3 反映）:
+
+    - ``repo`` が指定されると ``--repo <owner/name>`` を末尾に強制注入する
+      （既に user が ``--repo`` を渡している場合は user 値を尊重し触らない）
+    - 用途: ``provider.type='github'`` の `[provider.github] repo` を
+      尊重し、worktree の git remote / fork による silent な書き先誤りを防ぐ
     """
     if not shutil.which("gh"):
         print(
             "Error: 'gh' CLI not found in PATH. "
-            "Install GitHub CLI to use 'kaji issue' / 'kaji pr' (Phase 1).",
+            "Install GitHub CLI to use 'kaji issue' / 'kaji pr'.",
             file=sys.stderr,
         )
         return EXIT_RUNTIME_ERROR
@@ -331,6 +345,10 @@ def _forward_to_gh(group: str, raw_args: list[str]) -> int:
         head = [args[0]]
         rest = [a for a in args[1:] if a not in _FORGE_METHOD_FLAGS]
         args = head + rest + ["--merge"]
+
+    if repo and "--repo" not in args and "-R" not in args:
+        # gh は --repo を sub の前後どちらでも受理する。末尾追加で副作用最小
+        args = [*args, "--repo", repo]
 
     cmd = ["gh", group, *args]
     try:
@@ -361,11 +379,16 @@ _GH_MISSING_GUIDANCE = (
 )
 
 
-def _detect_repo() -> str | None:
-    """Return current repository in `owner/name` form, or None on failure.
+def _detect_repo(*, override: str | None = None) -> str | None:
+    """Return repository in `owner/name` form.
 
-    Calls ``gh repo view --json nameWithOwner -q .nameWithOwner``.
+    Phase 3-c rev #3 で ``override`` を追加（review #3 反映）:
+
+    - ``override`` が non-empty → そのまま採用（``[provider.github] repo`` 由来）
+    - 不在 → ``gh repo view`` で current repo を auto-detect する legacy 経路
     """
+    if override:
+        return override
     try:
         result = subprocess.run(
             ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
@@ -405,10 +428,15 @@ def _forward_pr_review_comments(
     *,
     json_fields: list[str] | None,
     jq_expr: str | None,
+    repo_override: str | None = None,
 ) -> int:
     """Forward to ``gh api repos/<repo>/pulls/<N>/comments``."""
     return _forward_pr_api_list(
-        pr_id, path_suffix="comments", json_fields=json_fields, jq_expr=jq_expr
+        pr_id,
+        path_suffix="comments",
+        json_fields=json_fields,
+        jq_expr=jq_expr,
+        repo_override=repo_override,
     )
 
 
@@ -417,10 +445,15 @@ def _forward_pr_reviews(
     *,
     json_fields: list[str] | None,
     jq_expr: str | None,
+    repo_override: str | None = None,
 ) -> int:
     """Forward to ``gh api repos/<repo>/pulls/<N>/reviews``."""
     return _forward_pr_api_list(
-        pr_id, path_suffix="reviews", json_fields=json_fields, jq_expr=jq_expr
+        pr_id,
+        path_suffix="reviews",
+        json_fields=json_fields,
+        jq_expr=jq_expr,
+        repo_override=repo_override,
     )
 
 
@@ -430,6 +463,7 @@ def _forward_pr_api_list(
     path_suffix: str,
     json_fields: list[str] | None,
     jq_expr: str | None,
+    repo_override: str | None = None,
 ) -> int:
     if not _is_ascii_decimal(pr_id):
         sys.stderr.write(f"Error: PR_ID must be ASCII decimal, got: {pr_id}\n")
@@ -437,7 +471,7 @@ def _forward_pr_api_list(
     if shutil.which("gh") is None:
         sys.stderr.write(_GH_MISSING_GUIDANCE)
         return EXIT_RUNTIME_ERROR
-    repo = _detect_repo()
+    repo = _detect_repo(override=repo_override)
     if repo is None:
         sys.stderr.write(
             "Error: failed to detect current repository.\n"
@@ -455,7 +489,13 @@ def _forward_pr_api_list(
         return EXIT_RUNTIME_ERROR
 
 
-def _forward_pr_reply_to_comment(pr_id: str, *, comment_id: str, body: str) -> int:
+def _forward_pr_reply_to_comment(
+    pr_id: str,
+    *,
+    comment_id: str,
+    body: str,
+    repo_override: str | None = None,
+) -> int:
     """POST a reply to a PR review comment."""
     if not _is_ascii_decimal(pr_id):
         sys.stderr.write(f"Error: PR_ID must be ASCII decimal, got: {pr_id}\n")
@@ -466,7 +506,7 @@ def _forward_pr_reply_to_comment(pr_id: str, *, comment_id: str, body: str) -> i
     if shutil.which("gh") is None:
         sys.stderr.write(_GH_MISSING_GUIDANCE)
         return EXIT_RUNTIME_ERROR
-    repo = _detect_repo()
+    repo = _detect_repo(override=repo_override)
     if repo is None:
         sys.stderr.write(
             "Error: failed to detect current repository.\n"
@@ -489,7 +529,7 @@ def _forward_pr_reply_to_comment(pr_id: str, *, comment_id: str, body: str) -> i
         return EXIT_RUNTIME_ERROR
 
 
-def _dispatch_pr_builtin(sub: str, rest: list[str]) -> int:
+def _dispatch_pr_builtin(sub: str, rest: list[str], *, repo_override: str | None = None) -> int:
     """Parse ``rest`` with a sub-specific argparse and dispatch to the handler.
 
     ``--help`` / ``-h`` prints sub-specific usage. argparse's default exit
@@ -529,24 +569,423 @@ def _dispatch_pr_builtin(sub: str, rest: list[str]) -> int:
             return EXIT_INVALID_INPUT
         fields = parts
     if sub == "review-comments":
-        return _forward_pr_review_comments(ns.pr_id, json_fields=fields, jq_expr=ns.jq_expr)
+        return _forward_pr_review_comments(
+            ns.pr_id, json_fields=fields, jq_expr=ns.jq_expr, repo_override=repo_override
+        )
     if sub == "reviews":
-        return _forward_pr_reviews(ns.pr_id, json_fields=fields, jq_expr=ns.jq_expr)
-    return _forward_pr_reply_to_comment(ns.pr_id, comment_id=ns.comment_id, body=ns.body)
+        return _forward_pr_reviews(
+            ns.pr_id, json_fields=fields, jq_expr=ns.jq_expr, repo_override=repo_override
+        )
+    return _forward_pr_reply_to_comment(
+        ns.pr_id, comment_id=ns.comment_id, body=ns.body, repo_override=repo_override
+    )
 
 
 def _handle_pr(raw_args: list[str]) -> int:
     """Two-stage dispatch for ``kaji pr``.
 
     builtin sub (``review-comments`` / ``reviews`` / ``reply-to-comment``) →
-    dedicated handler; otherwise fall back to Phase 1 ``gh pr`` passthrough.
+    dedicated handler; otherwise fall back to ``gh pr`` passthrough.
+
+    Phase 3-c rev #3（review #3 反映）:
+
+    - 壊れた config → exit 2（fail-fast、握りつぶさない）
+    - ``[provider.github] repo`` が設定されている場合は ``--repo`` で強制注入
+      （builtin / passthrough 両方）。``provider.type='local'`` 配下は
+      Phase 4 で bare-provider エラー化するため、本 PR では legacy 経路で
+      通す（``repo_override`` は ``None``）
     """
+    try:
+        config = _load_config_for_dispatch_or_none()
+    except ConfigLoadError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    repo_override: str | None = None
+    if config is not None and config.provider is not None and config.provider.type == "github":
+        if not config.provider.github.repo:
+            sys.stderr.write(
+                "Error: provider.type='github' requires provider.github.repo (e.g. 'owner/name').\n"
+            )
+            return EXIT_INVALID_INPUT
+        repo_override = config.provider.github.repo
+    elif config is not None and config.provider is None:
+        # `[provider]` 未設定 → WARN（副作用）+ legacy 経路
+        get_provider(config)
+
     args = list(raw_args)
     if args and args[0] == "--":
         args = args[1:]
     if args and args[0] in _PR_BUILTIN_SUBCOMMANDS:
-        return _dispatch_pr_builtin(args[0], args[1:])
-    return _forward_to_gh("pr", raw_args)
+        return _dispatch_pr_builtin(args[0], args[1:], repo_override=repo_override)
+    return _forward_to_gh("pr", raw_args, repo=repo_override)
+
+
+def _load_config_for_dispatch_or_none() -> KajiConfig | None:
+    """Config を読み込む（``kaji issue`` / ``kaji pr`` dispatch 用）。
+
+    Phase 3-c の方針（review #3 反映）:
+
+    - ``ConfigNotFoundError`` のみ ``None`` で legacy 経路に fallback
+      （リポジトリ外で `kaji issue view 1` が直接 `gh` に転送される従来挙動）
+    - ``ConfigLoadError``（壊れた TOML / 未知の type 等）は **raise**
+      → 呼出側が user-facing error として exit 2 を返す
+    """
+    try:
+        return KajiConfig.discover(start_dir=Path.cwd())
+    except ConfigNotFoundError:
+        return None
+
+
+def _handle_issue(raw_args: list[str]) -> int:
+    """``kaji issue`` の dispatcher。
+
+    Phase 3-c:
+
+    - ``provider.type == "local"`` → ``LocalProvider`` 経由の structured CRUD
+    - ``provider.type == "github"`` → ``gh issue`` passthrough。ただし
+      ``[provider.github] repo`` を ``--repo`` で強制注入する（review #3 反映）
+    - ``[provider]`` 未設定 → WARN + Phase 1 互換 passthrough（``--repo`` 無し）
+
+    fail-fast 経路（review #3 反映）:
+
+    - 壊れた config → exit 2
+    - ``provider`` 設定値の不整合（``machine_id`` 不在 / ``repo`` 不在等） → exit 2
+    """
+    try:
+        config = _load_config_for_dispatch_or_none()
+    except ConfigLoadError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    if config is not None and config.provider is not None:
+        try:
+            provider = get_provider(config)
+        except ValueError as exc:
+            sys.stderr.write(f"Error: {exc}\n")
+            return EXIT_INVALID_INPUT
+        if isinstance(provider, LocalProvider):
+            return _handle_issue_local(provider, raw_args)
+        # GitHubProvider 経路: 設定 repo を --repo で強制注入し cwd 推論を防ぐ
+        return _forward_to_gh("issue", raw_args, repo=config.provider.github.repo)
+    # `[provider]` 未設定 → WARN（副作用）+ legacy 経路
+    if config is not None:
+        get_provider(config)
+    return _forward_to_gh("issue", raw_args)
+
+
+# ---------- LocalProvider dispatch ----------
+
+
+def _resolve_local_id(provider: LocalProvider, raw: str, *, write: bool) -> ResolvedId | int:
+    """``normalize_id`` 経由で input id を `ResolvedId` に解決する。
+
+    Phase 3-c の契約（review #1 反映）:
+
+    - ``"153"``       → ``local-<machine_id>-153``
+    - ``"pc1-3"``     → ``local-pc1-3``
+    - ``"local-..."`` → そのまま
+    - ``"gh:N"``      → remote_cache（read-only。write 系で受理 → exit 2）
+
+    解決失敗 / write 拒否は ``EXIT_INVALID_INPUT`` を返す。
+    """
+    try:
+        rid = normalize_id(raw, provider_name="local", machine_id=provider.machine_id)
+    except ValueError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+    if rid.kind == "remote_cache" and write:
+        sys.stderr.write(
+            f"Error: cannot modify {raw!r} under provider.type='local'. "
+            f"Cached GitHub issues (gh:N) are read-only.\n"
+        )
+        return EXIT_INVALID_INPUT
+    return rid
+
+
+def _read_body_arg(body: str | None, body_file: str | None) -> str | None:
+    """``--body`` / ``--body-file`` を解決する。両方指定 / 不在の扱いは呼出側。
+
+    ``body_file == "-"`` で stdin、それ以外はファイル読み込み。
+    """
+    if body is not None and body_file is not None:
+        raise ValueError("--body and --body-file are mutually exclusive")
+    if body is not None:
+        return body
+    if body_file is None:
+        return None
+    if body_file == "-":
+        return sys.stdin.read()
+    return Path(body_file).read_text(encoding="utf-8")
+
+
+def _apply_jq(json_text: str, expr: str) -> tuple[str, int]:
+    """``jq`` を subprocess 起動して ``json_text`` に式を適用する。
+
+    ``gh --jq`` 互換挙動として **raw 出力**（`-r`）を採用する。
+
+    `gh` は内部で gojq を使い、結果が string 値の場合のみ quote 無しで
+    raw 出力する（array / object はそのまま JSON）。これは `jq -r` と
+    同じ動作。Skill 群は ``CURRENT_BODY=$(kaji issue view N --json body
+    -q '.body')`` のように shell 変数代入で raw 値を期待しているため、
+    quote 付き出力では下流が壊れる（rev 2 で発覚した本指摘）。
+
+    Phase 3-c では Python 製 jq 互換実装を持たず、system ``jq`` に委譲する。
+    ``jq`` 不在時は exit 3（runtime error）。
+    """
+    if shutil.which("jq") is None:
+        sys.stderr.write(
+            "Error: 'jq' is required for --jq/-q under provider.type='local' "
+            "but was not found in PATH. Install jq (e.g. 'apt install jq', "
+            "'brew install jq') or invoke without --jq.\n"
+        )
+        return "", EXIT_RUNTIME_ERROR
+    try:
+        proc = subprocess.run(
+            # -r: raw output for string results (gh --jq compatible)
+            ["jq", "-r", expr],
+            input=json_text,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        sys.stderr.write(f"Error: failed to invoke 'jq': {exc}\n")
+        return "", EXIT_RUNTIME_ERROR
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stderr)
+        return "", EXIT_RUNTIME_ERROR
+    return proc.stdout, EXIT_OK
+
+
+def _issue_to_json_dict(issue: object, *, include_comments: bool = True) -> dict[str, object]:
+    """``Issue`` → gh ``issue view --json ...`` 互換の dict に整形。"""
+    from .providers.models import Issue as _Issue  # local import to avoid cycle
+
+    assert isinstance(issue, _Issue)
+    out: dict[str, object] = {
+        "number": issue.id,
+        "title": issue.title,
+        "body": issue.body,
+        "state": issue.state,
+        "labels": [
+            {"name": label.name, "description": label.description, "color": label.color}
+            for label in issue.labels
+        ],
+    }
+    if include_comments:
+        out["comments"] = [
+            {"author": c.author, "body": c.body, "createdAt": c.created_at} for c in issue.comments
+        ]
+    return out
+
+
+def _emit_json(payload: object, *, jq_expr: str | None) -> int:
+    """JSON を ``--jq`` 経由で整形して stdout に書く。"""
+    import json as _json
+
+    text = _json.dumps(payload, ensure_ascii=False)
+    if jq_expr is None:
+        sys.stdout.write(text + "\n")
+        return EXIT_OK
+    out, rc = _apply_jq(text, jq_expr)
+    if rc != EXIT_OK:
+        return rc
+    # jq は末尾 newline を出すため二重出力を避けて write
+    sys.stdout.write(out)
+    return EXIT_OK
+
+
+_LOCAL_ISSUE_SUBS = {"view", "create", "edit", "comment", "close", "list"}
+
+
+def _handle_issue_local(provider: LocalProvider, raw_args: list[str]) -> int:
+    """``kaji issue`` の LocalProvider 経由 CRUD dispatcher。
+
+    対応 sub: ``view`` / ``create`` / ``edit`` / ``comment`` / ``close`` /
+    ``list``。Skill が現在使用中のフラグはすべて受理する（review #2 反映）:
+
+    - ``--json FIELDS`` / ``--jq EXPR`` / ``-q EXPR``
+    - ``--comments``（plain view）
+    - ``--body`` / ``--body-file PATH`` (``-`` で stdin)
+    """
+    args = list(raw_args)
+    if args and args[0] == "--":
+        args = args[1:]
+    if not args:
+        sys.stderr.write(
+            "Error: 'kaji issue' requires a subcommand under provider.type='local'. "
+            f"Supported: {', '.join(sorted(_LOCAL_ISSUE_SUBS))}.\n"
+        )
+        return EXIT_INVALID_INPUT
+    sub, rest = args[0], args[1:]
+    if sub not in _LOCAL_ISSUE_SUBS:
+        sys.stderr.write(
+            f"Error: 'kaji issue {sub}' is not supported under provider.type='local' "
+            f"(Phase 3-c). Supported: {', '.join(sorted(_LOCAL_ISSUE_SUBS))}.\n"
+        )
+        return EXIT_INVALID_INPUT
+    try:
+        if sub == "view":
+            return _local_issue_view(provider, rest)
+        if sub == "create":
+            return _local_issue_create(provider, rest)
+        if sub == "edit":
+            return _local_issue_edit(provider, rest)
+        if sub == "comment":
+            return _local_issue_comment(provider, rest)
+        if sub == "close":
+            return _local_issue_close(provider, rest)
+        # sub == "list"
+        return _local_issue_list(provider, rest)
+    except IssueReadOnlyError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+    except IssueNotFoundError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+    except (LocalProviderError, ValueError) as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+    except OSError as exc:
+        sys.stderr.write(f"Error: I/O failure: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+
+
+def _local_issue_view(provider: LocalProvider, rest: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="kaji issue view", add_help=True)
+    p.add_argument("issue_id", type=str)
+    p.add_argument("--json", dest="json_fields", default=None, type=str)
+    p.add_argument("--jq", "-q", dest="jq_expr", default=None, type=str)
+    p.add_argument("--comments", action="store_true")
+    ns = p.parse_args(rest)
+
+    rid_or_rc = _resolve_local_id(provider, ns.issue_id, write=False)
+    if isinstance(rid_or_rc, int):
+        return rid_or_rc
+    rid = rid_or_rc
+
+    if rid.kind == "remote_cache":
+        issue = provider.view_cached_issue(rid.value)
+    else:
+        issue = provider.view_issue(rid.value)
+
+    json_mode = ns.json_fields is not None or ns.jq_expr is not None
+    if json_mode:
+        full = _issue_to_json_dict(issue)
+        if ns.json_fields:
+            fields = [f.strip() for f in ns.json_fields.split(",") if f.strip()]
+            payload: object = {k: full.get(k) for k in fields} if fields else full
+        else:
+            payload = full
+        return _emit_json(payload, jq_expr=ns.jq_expr)
+
+    sys.stdout.write(f"# {issue.title}\n\n{issue.body}\n")
+    if ns.comments and issue.comments:
+        for c in issue.comments:
+            header = f"[{c.author or 'unknown'} @ {c.created_at or 'n/a'}]"
+            sys.stdout.write(f"\n---\n{header}\n{c.body}\n")
+    return EXIT_OK
+
+
+def _local_issue_create(provider: LocalProvider, rest: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="kaji issue create", add_help=True)
+    p.add_argument("--title", required=True, type=str)
+    p.add_argument("--body", default=None, type=str)
+    p.add_argument("--body-file", dest="body_file", default=None, type=str)
+    p.add_argument("--label", action="append", default=[], type=str)
+    p.add_argument(
+        "--slug",
+        required=True,
+        type=str,
+        help="kebab-case slug (required for local provider)",
+    )
+    ns = p.parse_args(rest)
+    body = _read_body_arg(ns.body, ns.body_file)
+    if body is None:
+        raise ValueError("'kaji issue create' requires --body or --body-file")
+    issue = provider.create_issue(title=ns.title, body=body, labels=ns.label, slug=ns.slug)
+    sys.stdout.write(f"{issue.id}\n")
+    return EXIT_OK
+
+
+def _local_issue_edit(provider: LocalProvider, rest: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="kaji issue edit", add_help=True)
+    p.add_argument("issue_id", type=str)
+    p.add_argument("--title", default=None, type=str)
+    p.add_argument("--body", default=None, type=str)
+    p.add_argument("--body-file", dest="body_file", default=None, type=str)
+    p.add_argument("--add-label", dest="add_label", action="append", default=[], type=str)
+    p.add_argument("--remove-label", dest="remove_label", action="append", default=[], type=str)
+    ns = p.parse_args(rest)
+    rid_or_rc = _resolve_local_id(provider, ns.issue_id, write=True)
+    if isinstance(rid_or_rc, int):
+        return rid_or_rc
+    rid = rid_or_rc
+    body = _read_body_arg(ns.body, ns.body_file)
+    provider.edit_issue(
+        rid.value,
+        title=ns.title,
+        body=body,
+        add_labels=ns.add_label,
+        remove_labels=ns.remove_label,
+    )
+    return EXIT_OK
+
+
+def _local_issue_comment(provider: LocalProvider, rest: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="kaji issue comment", add_help=True)
+    p.add_argument("issue_id", type=str)
+    p.add_argument("--body", default=None, type=str)
+    p.add_argument("--body-file", dest="body_file", default=None, type=str)
+    ns = p.parse_args(rest)
+    rid_or_rc = _resolve_local_id(provider, ns.issue_id, write=True)
+    if isinstance(rid_or_rc, int):
+        return rid_or_rc
+    rid = rid_or_rc
+    body = _read_body_arg(ns.body, ns.body_file)
+    if body is None:
+        raise ValueError("'kaji issue comment' requires --body or --body-file")
+    comment = provider.comment_issue(rid.value, body)
+    sys.stdout.write(f"{comment.seq}-{comment.machine_id}\n")
+    return EXIT_OK
+
+
+def _local_issue_close(provider: LocalProvider, rest: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="kaji issue close", add_help=True)
+    p.add_argument("issue_id", type=str)
+    p.add_argument("--reason", default=None, type=str)
+    ns = p.parse_args(rest)
+    rid_or_rc = _resolve_local_id(provider, ns.issue_id, write=True)
+    if isinstance(rid_or_rc, int):
+        return rid_or_rc
+    rid = rid_or_rc
+    provider.close_issue(rid.value, reason=ns.reason)
+    return EXIT_OK
+
+
+def _local_issue_list(provider: LocalProvider, rest: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="kaji issue list", add_help=True)
+    p.add_argument("--state", default="open", type=str, choices=["open", "closed", "all"])
+    p.add_argument("--label", action="append", default=[], type=str)
+    p.add_argument("--limit", default=None, type=int)
+    p.add_argument("--json", dest="json_fields", default=None, type=str)
+    p.add_argument("--jq", "-q", dest="jq_expr", default=None, type=str)
+    ns = p.parse_args(rest)
+    issues = provider.list_issues(state=ns.state, labels=ns.label or None, limit=ns.limit)
+    json_mode = ns.json_fields is not None or ns.jq_expr is not None
+    if json_mode:
+        items: list[dict[str, object]] = [
+            _issue_to_json_dict(i, include_comments=False) for i in issues
+        ]
+        if ns.json_fields:
+            fields = [f.strip() for f in ns.json_fields.split(",") if f.strip()]
+            if fields:
+                items = [{k: it.get(k) for k in fields} for it in items]
+        return _emit_json(items, jq_expr=ns.jq_expr)
+    for issue in issues:
+        sys.stdout.write(f"{issue.id}\t{issue.state}\t{issue.title}\n")
+    return EXIT_OK
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -559,7 +998,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "validate":
         return cmd_validate(args)
     if args.command == "issue":
-        return _forward_to_gh("issue", args.args)
+        return _handle_issue(args.args)
     if args.command == "pr":
         return _handle_pr(args.args)
 
