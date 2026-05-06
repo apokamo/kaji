@@ -85,7 +85,11 @@ def _atomic_write_new(path: Path, content: str) -> None:
 
     既存ファイルがある場合は ``FileExistsError`` を投げる。``path.open("x")`` は
     buffering / kill 時の 0 byte file 懸念があるため、``os.open`` で fd を作って
-    bytes を一括 write する（phase3d-preflight-design § 5）。
+    bytes を loop で書ききる（phase3d-preflight-design § 5）。
+
+    POSIX ``write(2)`` は short write を許す契約なので、返り値が要求 byte 数より
+    少ない場合に備えて残バイトを再 write する。``n <= 0`` は通常起きないが、
+    EINTR を裸で晒さないため最低限の defensive な扱いとする。
 
     既存 ``_atomic_write()`` は edit / close 等の上書き用として残す。
     """
@@ -93,7 +97,13 @@ def _atomic_write_new(path: Path, content: str) -> None:
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
     fd = os.open(path, flags, 0o644)
     try:
-        os.write(fd, content.encode("utf-8"))
+        data = content.encode("utf-8")
+        written = 0
+        while written < len(data):
+            n = os.write(fd, data[written:])
+            if n <= 0:
+                raise OSError(f"os.write returned non-positive count {n}")
+            written += n
     finally:
         os.close(fd)
 
@@ -195,30 +205,68 @@ def _parse_frontmatter(raw: str) -> tuple[dict[str, object], str]:
     return loaded, body
 
 
-def _validate_issue_meta(meta: dict[str, object], *, strict_slug: bool) -> None:
+def _expected_id_from_dirname(dirname: str) -> str | None:
+    """``local-<machine>-<n>[-<slug>]`` の prefix 部分を抽出する。
+
+    ``local-pc1-9`` → ``local-pc1-9``、``local-pc1-9-foo-bar`` → ``local-pc1-9``。
+    parse できない場合は ``None``。`_resolve_issue_dir` 経由で得た directory
+    name に対する identity チェックに使う（phase3d-preflight review Finding 1）。
+    """
+    m = re.match(r"^(local-[a-z0-9]{1,16}-[1-9]\d*)(?:-|$)", dirname)
+    return m.group(1) if m else None
+
+
+def _validate_issue_meta(
+    meta: dict[str, object],
+    *,
+    strict_slug: bool,
+    expected_id: str | None = None,
+) -> None:
     """frontmatter dict の最小限の構造を検証する。
 
     Phase 3-d preflight § 3 の表に基づき、view / write 共通で id / state /
     labels を fail-fast 検証する。slug は ``view_issue()`` では不在許容、
     ``resolve_issue_context()`` / write 系では必須。
 
+    Phase 3-d preflight review:
+
+    - Finding 1: ``expected_id`` が渡された場合は frontmatter ``id`` と一致する
+      ことを fail-fast 検証する。dirname から導出した値を渡すことで、人間編集
+      ミス / merge ミスで dirname と frontmatter id が乖離した Issue を canonical
+      id として採用する事故を防ぐ
+    - Finding 3: ``labels`` の各要素も ``str`` / ``dict`` 限定で fail-fast 検証
+      する（silent drop を許さない）
+
     Args:
         meta: parsed frontmatter dict。
         strict_slug: True なら slug 必須。
+        expected_id: 期待される ``id``。渡されたら一致確認。
     """
     issue_id = meta.get("id")
     if not isinstance(issue_id, str) or not _LOCAL_ID_RE.match(issue_id):
         raise LocalProviderError(
             f"frontmatter 'id' must match local-<machine>-<n>, got {issue_id!r}"
         )
+    if expected_id is not None and issue_id != expected_id:
+        raise LocalProviderError(
+            f"frontmatter 'id' {issue_id!r} does not match expected id "
+            f"{expected_id!r} derived from issue directory; the directory may "
+            f"have been renamed or the frontmatter edited in isolation"
+        )
     state = meta.get("state", "open")
     if not isinstance(state, str) or state not in _VALID_ISSUE_STATES:
         raise LocalProviderError(f"frontmatter 'state' must be 'open' or 'closed', got {state!r}")
     labels = meta.get("labels")
-    if labels is not None and not isinstance(labels, list):
-        raise LocalProviderError(
-            f"frontmatter 'labels' must be a list, got {type(labels).__name__}"
-        )
+    if labels is not None:
+        if not isinstance(labels, list):
+            raise LocalProviderError(
+                f"frontmatter 'labels' must be a list, got {type(labels).__name__}"
+            )
+        for index, entry in enumerate(labels):
+            if not isinstance(entry, (str, dict)):
+                raise LocalProviderError(
+                    f"frontmatter 'labels[{index}]' must be str or dict, got {type(entry).__name__}"
+                )
     slug_value = meta.get("slug")
     if slug_value not in (None, ""):
         if not isinstance(slug_value, str):
@@ -363,16 +411,11 @@ class LocalProvider:
         if not issue_path.is_file():
             raise IssueNotFoundError(f"missing issue.md in {issue_dir}")
         meta, body = _parse_frontmatter(issue_path.read_text(encoding="utf-8"))
-        # view 経路では slug 不在を許容（migration 用）
-        _validate_issue_meta(meta, strict_slug=False)
+        # view 経路では slug 不在を許容（migration 用）。dirname から導出した
+        # expected_id を渡すことで、frontmatter id と directory の乖離を fail-fast。
+        expected_id = _expected_id_from_dirname(issue_dir.name)
+        _validate_issue_meta(meta, strict_slug=False, expected_id=expected_id)
         issue_id = str(meta["id"])
-        # directory 名と id の対応をチェック（``<id>`` 単独 or ``<id>-<slug>``）
-        dirname = issue_dir.name
-        if dirname != issue_id and not dirname.startswith(f"{issue_id}-"):
-            raise LocalProviderError(
-                f"issue directory name {dirname!r} does not match frontmatter id "
-                f"{issue_id!r} in {issue_path}"
-            )
         labels = self._labels_from_meta(meta.get("labels"))
         comments = self._read_comments(issue_dir)
         slug_value = meta.get("slug", "")
@@ -489,7 +532,11 @@ class LocalProvider:
         issue_dir = self._resolve_issue_dir(issue_id)
         issue_path = issue_dir / "issue.md"
         meta, current_body = _parse_frontmatter(issue_path.read_text(encoding="utf-8"))
-        _validate_issue_meta(meta, strict_slug=True)
+        _validate_issue_meta(
+            meta,
+            strict_slug=True,
+            expected_id=_expected_id_from_dirname(issue_dir.name),
+        )
         if title is not None:
             meta["title"] = title
         if add_labels or remove_labels:
@@ -510,13 +557,30 @@ class LocalProvider:
         の atomic create に失敗した場合、seq を再採番して
         ``MAX_COMMENT_WRITE_RETRIES`` 回まで retry する。並列 comment / 別 process
         の競合下でも既存 file を上書きしない。
+
+        Phase 3-d preflight review Finding 2: write 系の一貫性として、comment
+        付与前にも frontmatter validation を通す。slug は comment 自体が消費
+        しないため ``strict_slug=False``。dirname と frontmatter id の乖離 /
+        invalid state / invalid labels は本経路でも fail-fast する。
         """
         issue_dir = self._resolve_issue_dir(issue_id)
+        # frontmatter の整合性を comment 付与前にも検証する。issue.md 不在は
+        # IssueNotFoundError、parse / validation 失敗は LocalProviderError として
+        # 上位層へ伝搬する（CLI dispatcher が exit 2 / 3 にマップ）。
+        issue_path = issue_dir / "issue.md"
+        if not issue_path.is_file():
+            raise IssueNotFoundError(f"missing issue.md in {issue_dir}")
+        meta, _ = _parse_frontmatter(issue_path.read_text(encoding="utf-8"))
+        _validate_issue_meta(
+            meta,
+            strict_slug=False,
+            expected_id=_expected_id_from_dirname(issue_dir.name),
+        )
         cdir = issue_dir / "comments"
         cdir.mkdir(exist_ok=True)
         created_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        meta: dict[str, object] = {"author": self.machine_id, "created_at": created_at}
-        content = self._build_issue_md(meta, body)
+        comment_meta: dict[str, object] = {"author": self.machine_id, "created_at": created_at}
+        content = self._build_issue_md(comment_meta, body)
         last_seq = ""
         for _ in range(MAX_COMMENT_WRITE_RETRIES):
             seq = self._next_comment_seq(issue_dir)
@@ -548,7 +612,11 @@ class LocalProvider:
         issue_dir = self._resolve_issue_dir(issue_id)
         issue_path = issue_dir / "issue.md"
         meta, current_body = _parse_frontmatter(issue_path.read_text(encoding="utf-8"))
-        _validate_issue_meta(meta, strict_slug=True)
+        _validate_issue_meta(
+            meta,
+            strict_slug=True,
+            expected_id=_expected_id_from_dirname(issue_dir.name),
+        )
         meta["state"] = "closed"
         meta["closed_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         meta["closed_by"] = self.machine_id
@@ -600,8 +668,14 @@ class LocalProvider:
         issue_dir = self._resolve_issue_dir(issue_id)
         issue_path = issue_dir / "issue.md"
         meta, _ = _parse_frontmatter(issue_path.read_text(encoding="utf-8"))
-        # context 解決経路: slug 必須 + branch_prefix の値域も fail-fast
-        _validate_issue_meta(meta, strict_slug=True)
+        # context 解決経路: slug 必須 + branch_prefix の値域も fail-fast。
+        # dirname / frontmatter id の乖離も identity check で fail-fast
+        # （phase3d-preflight review Finding 1）。
+        _validate_issue_meta(
+            meta,
+            strict_slug=True,
+            expected_id=_expected_id_from_dirname(issue_dir.name),
+        )
         slug = str(meta["slug"])
         prefix_value = meta.get("branch_prefix")
         fallback = False

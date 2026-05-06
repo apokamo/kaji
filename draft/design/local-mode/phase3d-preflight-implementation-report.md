@@ -296,3 +296,28 @@ directory 名 / id 対応の強制、`_atomic_write_new` の `os.open` 採用）
 
 GitHub 不可期間のため、本 worktree でのコミットは未確定（人間レビュー後に
 `--no-ff` でマージする想定）。
+
+## 9. レビュー指摘への対応（2026-05-06 follow-up）
+
+最初の 5 commit に対する人間レビューで以下 4 件が指摘された。すべて受け入れ、
+1 つの commit (`fix(providers): tighten LocalProvider validation per
+phase3d-preflight review`) で対応した。
+
+| Finding | 重大度 | 対応 |
+|---------|--------|------|
+| 1: `resolve_issue_context()` が dirname / frontmatter id の照合を欠く | Critical | `_expected_id_from_dirname()` helper を新設し、`_validate_issue_meta(expected_id=...)` を追加。`resolve_issue_context` / `view_issue` (`_read_issue` 経由) / `edit_issue` / `close_issue` / `comment_issue` のすべての経路で dirname から導出した期待 id と frontmatter id の一致を fail-fast 検証する |
+| 2: `comment_issue()` が strict frontmatter 検証を通っていない | Major | `comment_issue` 冒頭で frontmatter を読み、`_validate_issue_meta(strict_slug=False, expected_id=...)` を呼ぶ。`strict_slug=False` を採用したのは comment 自体が slug を消費しないため（slug 欠落だけで comment を拒むのは UX 過敏）。id / state / labels / branch_prefix の整合性は本経路でも fail-fast |
+| 3: `labels` の各要素検証が silent drop になっている | Major | `_validate_issue_meta` で `labels` の各要素を `(str, dict)` 限定にする。違反は `labels[<index>]` 付きで fail-fast。例: `labels: [123, type:feature]` は `view_issue` 時点で `LocalProviderError` |
+| 4: `_atomic_write_new()` が `os.write` の short write を扱っていない | Moderate | `while written < len(data): os.write(fd, data[written:])` の loop で全量書ききる。`n <= 0` は防御的に `OSError` |
+
+追加テスト (`tests/test_phase3d_preflight.py` に 11 件追加):
+
+- `TestDirnameIdIdentity`: resolve / view / edit / close の 4 経路で id 不一致が
+  fail-fast することを確認
+- `TestCommentValidatesFrontmatter`: comment 経路の dirname / id 不一致と invalid
+  state を fail-fast、slug 不在は許容
+- `TestLabelsElementValidation`: labels 内の int / null を fail-fast
+- `TestAtomicWriteNewShortWrite`: `os.write` を 7 byte ずつしか書かない mock で
+  全量書ききることを確認、0 を返すと `OSError`
+
+最終 `make check`: **893 passed / 1 skipped**（前回 882 → +11）。

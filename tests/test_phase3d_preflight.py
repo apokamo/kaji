@@ -428,3 +428,154 @@ class TestCommentWriteRetry:
     def test_max_retries_constant_is_eight(self) -> None:
         """設計書 § 5: ``MAX_COMMENT_WRITE_RETRIES = 8``。"""
         assert MAX_COMMENT_WRITE_RETRIES == 8
+
+
+# ============================================================
+# Review-driven hardening (Findings 1-4)
+# ============================================================
+
+
+@pytest.mark.medium
+class TestDirnameIdIdentity:
+    """phase3d-preflight review Finding 1: dirname と frontmatter id の乖離を fail-fast。"""
+
+    def _make_provider(self, tmp_path: Path) -> LocalProvider:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".kaji").mkdir()
+        return LocalProvider(repo_root=repo, machine_id="pc1")
+
+    def _seed_mismatched_issue(self, provider: LocalProvider) -> None:
+        """``local-pc1-9-x/`` の frontmatter id を ``local-pc1-8`` にする。"""
+        d = provider.repo_root / ".kaji" / "issues" / "local-pc1-9-x"
+        d.mkdir(parents=True)
+        (d / "issue.md").write_text(
+            "---\n"
+            "id: local-pc1-8\n"  # dirname と乖離
+            "state: open\n"
+            "slug: x\n"
+            "---\n"
+            "body\n"
+        )
+
+    def test_resolve_issue_context_rejects_mismatch(self, tmp_path: Path) -> None:
+        provider = self._make_provider(tmp_path)
+        self._seed_mismatched_issue(provider)
+        with pytest.raises(LocalProviderError, match="does not match expected id"):
+            provider.resolve_issue_context("local-pc1-9")
+
+    def test_view_issue_rejects_mismatch(self, tmp_path: Path) -> None:
+        provider = self._make_provider(tmp_path)
+        self._seed_mismatched_issue(provider)
+        with pytest.raises(LocalProviderError, match="does not match expected id"):
+            provider.view_issue("local-pc1-9")
+
+    def test_edit_issue_rejects_mismatch(self, tmp_path: Path) -> None:
+        provider = self._make_provider(tmp_path)
+        self._seed_mismatched_issue(provider)
+        with pytest.raises(LocalProviderError, match="does not match expected id"):
+            provider.edit_issue("local-pc1-9", title="new")
+
+    def test_close_issue_rejects_mismatch(self, tmp_path: Path) -> None:
+        provider = self._make_provider(tmp_path)
+        self._seed_mismatched_issue(provider)
+        with pytest.raises(LocalProviderError, match="does not match expected id"):
+            provider.close_issue("local-pc1-9")
+
+
+@pytest.mark.medium
+class TestCommentValidatesFrontmatter:
+    """phase3d-preflight review Finding 2: comment 付与前にも frontmatter 検証。"""
+
+    def _make_provider(self, tmp_path: Path) -> LocalProvider:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".kaji").mkdir()
+        return LocalProvider(repo_root=repo, machine_id="pc1")
+
+    def test_comment_rejects_dirname_id_mismatch(self, tmp_path: Path) -> None:
+        provider = self._make_provider(tmp_path)
+        d = provider.repo_root / ".kaji" / "issues" / "local-pc1-9-x"
+        d.mkdir(parents=True)
+        (d / "issue.md").write_text("---\nid: local-pc1-8\nstate: open\nslug: x\n---\nbody\n")
+        with pytest.raises(LocalProviderError, match="does not match expected id"):
+            provider.comment_issue("local-pc1-9", "hi")
+
+    def test_comment_rejects_invalid_state(self, tmp_path: Path) -> None:
+        provider = self._make_provider(tmp_path)
+        d = provider.repo_root / ".kaji" / "issues" / "local-pc1-1-x"
+        d.mkdir(parents=True)
+        (d / "issue.md").write_text("---\nid: local-pc1-1\nstate: weird\nslug: x\n---\nbody\n")
+        with pytest.raises(LocalProviderError, match="state"):
+            provider.comment_issue("local-pc1-1", "hi")
+
+    def test_comment_allows_missing_slug(self, tmp_path: Path) -> None:
+        """slug 不在は comment 経路では許容（slug は comment 自体が消費しない）。"""
+        provider = self._make_provider(tmp_path)
+        d = provider.repo_root / ".kaji" / "issues" / "local-pc1-1"
+        d.mkdir(parents=True)
+        (d / "issue.md").write_text("---\nid: local-pc1-1\nstate: open\n---\nbody\n")
+        c = provider.comment_issue("local-pc1-1", "hi")
+        assert c.seq == "0001"
+
+
+@pytest.mark.small
+class TestLabelsElementValidation:
+    """phase3d-preflight review Finding 3: labels の各要素も str/dict 限定。"""
+
+    def test_int_element_in_labels_fails_fast(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".kaji").mkdir()
+        provider = LocalProvider(repo_root=repo, machine_id="pc1")
+        d = provider.repo_root / ".kaji" / "issues" / "local-pc1-1-x"
+        d.mkdir(parents=True)
+        (d / "issue.md").write_text(
+            "---\nid: local-pc1-1\nstate: open\nslug: x\nlabels: [123, type:feature]\n---\nbody\n"
+        )
+        with pytest.raises(LocalProviderError, match=r"labels\[0\]"):
+            provider.view_issue("local-pc1-1")
+
+    def test_none_element_in_labels_fails_fast(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".kaji").mkdir()
+        provider = LocalProvider(repo_root=repo, machine_id="pc1")
+        d = provider.repo_root / ".kaji" / "issues" / "local-pc1-1-x"
+        d.mkdir(parents=True)
+        (d / "issue.md").write_text(
+            "---\nid: local-pc1-1\nstate: open\nslug: x\nlabels: [type:feature, null]\n---\nbody\n"
+        )
+        with pytest.raises(LocalProviderError, match=r"labels\[1\]"):
+            provider.view_issue("local-pc1-1")
+
+
+@pytest.mark.small
+class TestAtomicWriteNewShortWrite:
+    """phase3d-preflight review Finding 4: ``os.write`` short write 耐性。"""
+
+    def test_loops_until_all_bytes_written(self, tmp_path: Path) -> None:
+        """``os.write`` が要求 byte 数より少ない値を返す状況で全量書ききる。"""
+        from kaji_harness.providers import local as _local_mod
+
+        target = tmp_path / "out.md"
+        full_payload = b"hello world\n" * 100  # 1200 bytes
+        real_write = _local_mod.os.write
+
+        # 各呼び出しで先頭 7 bytes だけ書く偽 os.write
+        def short_write(fd: int, data: bytes) -> int:
+            chunk = data[:7]
+            return real_write(fd, chunk)
+
+        with patch.object(_local_mod.os, "write", side_effect=short_write):
+            _local_mod._atomic_write_new(target, full_payload.decode("utf-8"))
+        assert target.read_bytes() == full_payload
+
+    def test_non_positive_return_raises(self, tmp_path: Path) -> None:
+        """``os.write`` が 0 を返したら防御的に OSError を投げる。"""
+        from kaji_harness.providers import local as _local_mod
+
+        target = tmp_path / "out.md"
+        with patch.object(_local_mod.os, "write", return_value=0):
+            with pytest.raises(OSError, match="non-positive"):
+                _local_mod._atomic_write_new(target, "hello")
