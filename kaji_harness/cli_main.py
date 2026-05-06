@@ -303,8 +303,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         return EXIT_ABORT
 
-    # Success summary
-    print(f"Workflow '{workflow.name}' completed for issue {_format_issue_ref(args.issue)}")
+    # Success summary: canonical_issue_ref を優先（Phase 3-d preflight § 1）。
+    # ``[provider]`` 未設定 fallback などで未確定の場合のみ raw 入力で整形する。
+    issue_ref = runner.canonical_issue_ref or _format_issue_ref(args.issue)
+    print(f"Workflow '{workflow.name}' completed for issue {issue_ref}")
     return EXIT_OK
 
 

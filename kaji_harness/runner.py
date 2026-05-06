@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -27,9 +27,29 @@ from .prompt import build_prompt
 from .providers import IssueContext, get_provider, normalize_id
 from .providers.local import LocalProvider
 from .skill import validate_skill_exists
-from .state import SessionState
+from .state import SessionState, _format_issue_ref
 from .verdict import create_verdict_formatter, parse_verdict
 from .workflow import validate_workflow
+
+
+@dataclass(frozen=True)
+class RunIssueContext:
+    """``kaji run`` 起動時に確定する Issue 識別の DTO。
+
+    Phase 3-d preflight § 1 で導入。``input_id`` は user 入力、``canonical_id`` は
+    state / artifacts / run log / prompt が共有する正規化済み Issue ID。
+    ``issue_ref`` は人間可読な参照（``#153`` / ``local-pc1-3`` など）。
+
+    ``issue_context`` は provider が解決した IssueContext、または ``[provider]``
+    未設定 fallback では ``None``。
+
+    Runner 内部に閉じた DTO で public API として export しない。
+    """
+
+    input_id: str
+    canonical_id: str
+    issue_ref: str
+    issue_context: IssueContext | None
 
 
 @dataclass
@@ -45,6 +65,10 @@ class WorkflowRunner:
     single_step: str | None = None
     before_step: str | None = None
     verbose: bool = True
+    # Phase 3-d preflight: ``run()`` 完了後に外部から参照される canonical id。
+    # ``cmd_run()`` の成功表示などが利用する。``run()`` 起動前は ``None``。
+    canonical_issue_id: str | None = field(default=None, init=False)
+    canonical_issue_ref: str | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         # int / その他から str へ正規化（既存呼び出し互換のため）
@@ -120,6 +144,55 @@ class WorkflowRunner:
                 cause=exc,
             ) from exc
 
+    def _resolve_run_issue_context(self) -> RunIssueContext:
+        """``kaji run`` 起動時に Issue 識別を 1 度だけ決定する。
+
+        Phase 3-d preflight § 1: state / run log / prompt / success summary が
+        共有する canonical id を確定する。``[provider]`` 未設定 fallback では
+        raw 入力をそのまま canonical 扱いする（Phase 2-B 互換）。
+
+        legacy raw-id artifacts directory が残っていた場合（例: 補正前の
+        ``kaji run ... 1`` で作られた ``.kaji-artifacts/1/``）は WARN を出すが
+        自動 migration はしない。raw / canonical の対応は provider config /
+        machine_id に依存し、agent が暗黙に move / copy すると別 Issue の state
+        を混ぜる事故が起きうるため。
+        """
+        ctx = self._resolve_issue_context()
+        input_id = self.issue_number
+        if ctx is not None:
+            canonical_id = ctx.issue_id
+            issue_ref = ctx.issue_ref
+        else:
+            canonical_id = input_id
+            issue_ref = _format_issue_ref(input_id)
+        if input_id != canonical_id:
+            self._warn_legacy_artifacts(input_id, canonical_id)
+        return RunIssueContext(
+            input_id=input_id,
+            canonical_id=canonical_id,
+            issue_ref=issue_ref,
+            issue_context=ctx,
+        )
+
+    def _warn_legacy_artifacts(self, raw_id: str, canonical_id: str) -> None:
+        """raw-id 側の artifacts directory が残っていれば 1 度 WARN を出す。
+
+        ``SessionState.load_or_create`` は fallback 探索しないため、user に手動
+        移動を促す（phase3d-preflight-design § 1 既存 state / artifacts の扱い）。
+        """
+        legacy_dir = self.artifacts_dir / raw_id
+        if not legacy_dir.exists():
+            return
+        canonical_dir = self.artifacts_dir / canonical_id
+        sys.stderr.write(
+            f"WARNING: legacy artifact directory exists for raw issue id {raw_id!r}:\n"
+            f"  {legacy_dir}\n"
+            f"This run will use canonical issue id {canonical_id!r}:\n"
+            f"  {canonical_dir}\n"
+            f"If you need to resume the old session, move the directory manually "
+            f"after confirming it belongs to the same issue.\n"
+        )
+
     def run(self) -> SessionState:
         """ワークフローを実行し、最終状態を返す。
 
@@ -145,20 +218,26 @@ class WorkflowRunner:
             if not self.workflow.find_step(self.before_step):
                 raise WorkflowValidationError(f"Step '{self.before_step}' not found (--before)")
 
-        # 2. issue-scoped な状態をロード
-        state = SessionState.load_or_create(self.issue_number, self.artifacts_dir)
+        # 2. canonical issue id を確定し、以降の state / run log / prompt /
+        #    success summary に一貫適用する（phase3d-preflight § 1）。
+        run_ctx = self._resolve_run_issue_context()
+        self.canonical_issue_id = run_ctx.canonical_id
+        self.canonical_issue_ref = run_ctx.issue_ref
+        issue_context = run_ctx.issue_context
 
-        # 2.5. IssueContext を一度だけ解決し、以降の build_prompt で再利用する。
-        #     [provider] 未設定 / 解決失敗時は Phase 2-B 互換の 2 変数のみ注入。
-        issue_context = self._resolve_issue_context()
+        # 3. issue-scoped な状態をロード（canonical id ベース）
+        state = SessionState.load_or_create(run_ctx.canonical_id, self.artifacts_dir)
 
-        # 3. run ログディレクトリを作成
+        # 4. run ログディレクトリを作成（canonical id ベース）
         run_dir = (
-            self.artifacts_dir / self.issue_number / "runs" / datetime.now().strftime("%y%m%d%H%M")
+            self.artifacts_dir
+            / run_ctx.canonical_id
+            / "runs"
+            / datetime.now().strftime("%y%m%d%H%M")
         )
         run_dir.mkdir(parents=True, exist_ok=True)
         logger = RunLogger(log_path=run_dir / "run.log")
-        logger.log_workflow_start(self.issue_number, self.workflow.name)
+        logger.log_workflow_start(run_ctx.canonical_id, self.workflow.name)
 
         # 4. 開始ステップの決定
         if self.single_step:
@@ -202,10 +281,10 @@ class WorkflowRunner:
                     )
                     cost: CostInfo | None = None
                 else:
-                    # プロンプト構築
+                    # プロンプト構築（canonical id を渡す）
                     prompt = build_prompt(
                         current_step,
-                        self.issue_number,
+                        run_ctx.canonical_id,
                         state,
                         self.workflow,
                         issue_context=issue_context,
