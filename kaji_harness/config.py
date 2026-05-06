@@ -226,6 +226,18 @@ class KajiConfig:
         machine_id = local_raw.get("machine_id", "") or ""
         if not isinstance(machine_id, str):
             raise ConfigLoadError(path, "provider.local.machine_id must be a string")
+        if machine_id:
+            # Phase 3-e: 手書き overlay の罠を構造で防ぐ。`type=github` + 空 [provider.local]
+            # は default で空文字を残す正常ケースなので non-empty 時のみ検証する。
+            from .providers.local import validate_machine_id as _validate_machine_id
+
+            try:
+                _validate_machine_id(machine_id)
+            except ValueError as exc:
+                raise ConfigLoadError(
+                    path,
+                    f"provider.local.machine_id {machine_id!r} is invalid: {exc}",
+                ) from exc
         default_branch = local_raw.get("default_branch", "main") or "main"
         if not isinstance(default_branch, str):
             raise ConfigLoadError(path, "provider.local.default_branch must be a string")
