@@ -49,6 +49,8 @@ def build_prompt(
         variables["branch_name"] = issue_context.branch_name
         variables["worktree_dir"] = issue_context.worktree_dir
         variables["design_path"] = issue_context.design_path
+        variables["provider_type"] = issue_context.provider_type
+        variables["default_branch"] = issue_context.default_branch
 
     # サイクル変数（サイクル内ステップのみ）
     cycle = workflow.find_cycle_for_step(step.id)
