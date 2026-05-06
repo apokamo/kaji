@@ -1,5 +1,5 @@
 .PHONY: check lint format typecheck test test-small test-medium test-large \
-        verify-docs verify-packaging setup
+        test-large-local verify-docs verify-packaging setup
 
 SOURCES := kaji_harness/ tests/
 
@@ -25,6 +25,9 @@ test-medium:
 
 test-large:
 	pytest -m large
+
+test-large-local:
+	pytest -m large_local
 
 verify-docs:
 	python3 scripts/check_doc_links.py docs/ README.md CLAUDE.md .claude/skills/
