@@ -41,6 +41,7 @@ class GitHubProviderConfig:
     """``[provider.github]`` セクション。"""
 
     repo: str = ""
+    default_branch: str = "main"
 
 
 @dataclass(frozen=True)
@@ -211,7 +212,13 @@ class KajiConfig:
         repo_raw = github_raw.get("repo")
         if repo_raw is not None and not isinstance(repo_raw, str):
             raise ConfigLoadError(path, "provider.github.repo must be a string")
-        github_cfg = GitHubProviderConfig(repo=str(repo_raw or ""))
+        gh_default_branch_raw = github_raw.get("default_branch", "main") or "main"
+        if not isinstance(gh_default_branch_raw, str):
+            raise ConfigLoadError(path, "provider.github.default_branch must be a string")
+        github_cfg = GitHubProviderConfig(
+            repo=str(repo_raw or ""),
+            default_branch=gh_default_branch_raw,
+        )
 
         local_raw = merged.get("local") or {}
         if not isinstance(local_raw, dict):

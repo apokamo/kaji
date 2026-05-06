@@ -700,6 +700,7 @@ class LocalProvider:
             design_path=build_design_path(issue_id, slug),
             provider_type="local",
             branch_prefix_fallback=fallback,
+            default_branch=self.default_branch,
         )
 
     # -------- remote cache reader (gh:N) --------

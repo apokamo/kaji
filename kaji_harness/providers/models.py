@@ -83,6 +83,11 @@ class IssueContext:
             Phase 3 では slug 同梱しない（既存 ``kaji-<prefix>-<id>`` を維持）。
         design_path: 設計書パス（``draft/design/issue-<id>-<slug>.md`` 等）。
         provider_type: ``"github"`` / ``"local"``。
+        default_branch: provider の default branch。``main`` 等。
+            ``provider=local`` では ``provider.local.default_branch``、
+            ``provider=github`` では ``provider.github.default_branch`` が source。
+            Skill prompt の ``[default_branch]`` placeholder で参照される
+            （phase3d-design.md § 2）。
     """
 
     issue_id: str
@@ -95,3 +100,4 @@ class IssueContext:
     design_path: str
     provider_type: str
     branch_prefix_fallback: bool = False
+    default_branch: str = "main"
