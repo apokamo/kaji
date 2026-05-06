@@ -189,9 +189,7 @@ class TestCRUD:
         assert meta["close_reason"] == "completed"
         assert meta["closed_by"] == "pc1"
 
-    def test_close_with_empty_reason_defaults_to_completed(
-        self, provider: LocalProvider
-    ) -> None:
+    def test_close_with_empty_reason_defaults_to_completed(self, provider: LocalProvider) -> None:
         """空文字 reason も default の ``completed`` にフォールバックさせる。"""
         provider.create_issue(title="t", body="b", slug="x")
         provider.close_issue("local-pc1-1", reason="")

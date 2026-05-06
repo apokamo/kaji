@@ -173,8 +173,9 @@ def _resolve_machine_id(args: argparse.Namespace, existing_ids: set[str]) -> str
         ValueError: ``--machine-id`` の値が文法違反のとき。
     """
     if args.machine_id is not None:
-        validate_machine_id(args.machine_id)
-        return args.machine_id
+        machine_id: str = args.machine_id
+        validate_machine_id(machine_id)
+        return machine_id
 
     # hostname sanitize
     raw = socket.gethostname()

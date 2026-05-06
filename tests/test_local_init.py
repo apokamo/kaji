@@ -84,7 +84,7 @@ def test_local_init_existing_overlay_aborts(tmp_path: Path) -> None:
     kaji_dir = tmp_path / ".kaji"
     kaji_dir.mkdir()
     overlay = kaji_dir / "config.local.toml"
-    overlay.write_text("[provider]\ntype = \"local\"\n", encoding="utf-8")
+    overlay.write_text('[provider]\ntype = "local"\n', encoding="utf-8")
     original = overlay.read_text(encoding="utf-8")
 
     rc = _run_init(tmp_path, machine_id="pc2")
