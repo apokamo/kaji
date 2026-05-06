@@ -620,7 +620,9 @@ class LocalProvider:
         meta["state"] = "closed"
         meta["closed_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         meta["closed_by"] = self.machine_id
-        meta["close_reason"] = reason or ""
+        # Phase 3-d: default を "completed" に変更（design.md L985 / 状態遷移図
+        # L1011-L1015 と整合）。明示値 ("not-planned" 等) はそのまま採用。
+        meta["close_reason"] = reason if reason else "completed"
         _atomic_write(issue_path, self._build_issue_md(meta, current_body))
         return self._read_issue(issue_dir)
 
@@ -700,6 +702,7 @@ class LocalProvider:
             design_path=build_design_path(issue_id, slug),
             provider_type="local",
             branch_prefix_fallback=fallback,
+            default_branch=self.default_branch,
         )
 
     # -------- remote cache reader (gh:N) --------

@@ -82,7 +82,7 @@ $ARGUMENTS = <issue_id>
 
 3. **設計書の現状確認**:
    ```bash
-   cat [worktree-absolute-path]/draft/design/issue-[issue_id]-*.md
+   cat [worktree_dir]/draft/design/issue-[issue_id]-*.md
    ```
 
 ### Step 2: 対応方針の検討
@@ -137,7 +137,7 @@ $ARGUMENTS = <issue_id>
 ### Step 4: コミット
 
 ```bash
-cd [worktree-absolute-path] && git add draft/design/ && git commit -m "docs: update design for [issue_ref]"
+cd [worktree_dir] && git add draft/design/ && git commit -m "docs: update design for [issue_ref]"
 ```
 
 ### Step 5: 結果報告

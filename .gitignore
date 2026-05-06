@@ -53,6 +53,10 @@ test-artifacts/
 # pc2 が pull した際に番号空間が汚染される）。LocalProvider が書き込む。
 .kaji/counters/
 
+# kaji local mode — per-machine config overlay（machine_id / active provider）。
+# `kaji local init` で生成され、commit してはいけない。
+.kaji/config.local.toml
+
 # Environment
 .env
 .env.local

@@ -69,7 +69,7 @@ $ARGUMENTS = <issue_id>
    ```
    見つからない場合は Issue 本文の `> **Branch**:` 行からブランチ名を取得し:
    ```bash
-   kaji pr list --head "[branch-name]" --json number,title --jq '.'
+   kaji pr list --head "[branch_name]" --json number,title --jq '.'
    ```
 
 2. **Worktree パスの解決**:
@@ -85,8 +85,8 @@ $ARGUMENTS = <issue_id>
 
 4. **修正差分の確認**:
    ```bash
-   cd [worktree-absolute-path] && git log --oneline -5
-   cd [worktree-absolute-path] && git diff HEAD~1
+   cd [worktree_dir] && git log --oneline -5
+   cd [worktree_dir] && git diff HEAD~1
    ```
 
 ### Step 2: 修正確認
@@ -131,7 +131,7 @@ $ARGUMENTS = <issue_id>
 ### Step 3: 品質チェック
 
 ```bash
-cd [worktree-absolute-path] && source .venv/bin/activate && make check
+cd [worktree_dir] && source .venv/bin/activate && make check
 ```
 
 ### Step 4: 確認結果の投稿と PR レビュー状態の更新

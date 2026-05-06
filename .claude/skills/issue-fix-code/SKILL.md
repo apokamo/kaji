@@ -111,13 +111,13 @@ $ARGUMENTS = <issue_id>
    #### 3.1 Lint / Format / 型チェック（exit 0 必須）
 
    ```bash
-   cd [worktree-absolute-path] && source .venv/bin/activate && ruff check kaji_harness/ tests/ && ruff format kaji_harness/ tests/ && mypy kaji_harness/
+   cd [worktree_dir] && source .venv/bin/activate && ruff check kaji_harness/ tests/ && ruff format kaji_harness/ tests/ && mypy kaji_harness/
    ```
 
    #### 3.2 テスト実行
 
    ```bash
-   cd [worktree-absolute-path] && source .venv/bin/activate && pytest
+   cd [worktree_dir] && source .venv/bin/activate && pytest
    ```
 
    **`pytest` は `&&` チェーンに含めず、必ず個別に実行する。** 合否判定は `issue-implement` Step 7b と
@@ -126,7 +126,7 @@ $ARGUMENTS = <issue_id>
 ### Step 4: コミット
 
 ```bash
-cd [worktree-absolute-path] && git add . && git commit -m "fix: address review feedback for [issue_ref]"
+cd [worktree_dir] && git add . && git commit -m "fix: address review feedback for [issue_ref]"
 ```
 
 ### Step 5: 結果報告

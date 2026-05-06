@@ -83,7 +83,11 @@ def get_provider(config: KajiConfig) -> IssueProvider | None:
             raise ValueError(
                 "provider.type='github' requires provider.github.repo (e.g. 'owner/name')."
             )
-        return GitHubProvider(repo=config.provider.github.repo, repo_root=config.repo_root)
+        return GitHubProvider(
+            repo=config.provider.github.repo,
+            repo_root=config.repo_root,
+            default_branch=config.provider.github.default_branch,
+        )
     if config.provider.type == "local":
         local_cfg = config.provider.local
         if not local_cfg.machine_id:

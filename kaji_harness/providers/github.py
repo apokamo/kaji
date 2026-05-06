@@ -38,10 +38,14 @@ class GitHubProvider:
     Attributes:
         repo: ``owner/name`` 形式。``provider.github.repo`` config 由来。
         repo_root: 設計書 path / worktree path 計算に必要。
+        default_branch: ``provider.github.default_branch`` config 由来。``main`` 等。
+            `IssueContext.default_branch` の source として用いる
+            （phase3d-design.md § 2 / § 3）。
     """
 
     repo: str
     repo_root: Path
+    default_branch: str = "main"
 
     @property
     def is_readonly(self) -> bool:
@@ -296,4 +300,5 @@ class GitHubProvider:
             design_path=build_design_path(issue.id, slug),
             provider_type="github",
             branch_prefix_fallback=fallback,
+            default_branch=self.default_branch,
         )

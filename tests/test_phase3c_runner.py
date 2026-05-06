@@ -112,6 +112,42 @@ class TestPromptIssueContextInjection:
         assert "- worktree_dir: /path/kaji-feat-local-pc1-3" in prompt
         assert "- design_path: draft/design/issue-local-pc1-3-my-slug.md" in prompt
 
+    def test_with_context_injects_provider_type_and_default_branch(self) -> None:
+        """phase3d-design.md § 2: provider_type / default_branch の注入。"""
+        ctx = IssueContext(
+            issue_id="local-pc1-3",
+            issue_ref="local-pc1-3",
+            issue_input="local-pc1-3",
+            slug="my-slug",
+            branch_prefix="feat",
+            branch_name="feat/local-pc1-3",
+            worktree_dir="/path/kaji-feat-local-pc1-3",
+            design_path="draft/design/issue-local-pc1-3-my-slug.md",
+            provider_type="local",
+            default_branch="develop",
+        )
+        prompt = build_prompt(
+            self._step(),
+            issue="local-pc1-3",
+            state=_make_state(),
+            workflow=self._workflow(),
+            issue_context=ctx,
+        )
+        assert "- provider_type: local" in prompt
+        assert "- default_branch: develop" in prompt
+
+    def test_no_context_does_not_inject_provider_type_or_default_branch(self) -> None:
+        """fallback 経路では provider_type / default_branch を注入しない。"""
+        prompt = build_prompt(
+            self._step(),
+            issue="42",
+            state=_make_state(),
+            workflow=self._workflow(),
+            issue_context=None,
+        )
+        assert "- provider_type:" not in prompt
+        assert "- default_branch:" not in prompt
+
 
 # ============================================================
 # rev #3: kaji run の IssueContext 解決を normalize_id に通す

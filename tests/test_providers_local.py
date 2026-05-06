@@ -178,15 +178,36 @@ class TestCRUD:
         assert meta["closed_by"] == "pc1"
         assert isinstance(meta.get("closed_at"), str) and meta["closed_at"]
 
-    def test_close_without_reason_persists_empty(self, provider: LocalProvider) -> None:
+    def test_close_without_reason_defaults_to_completed(self, provider: LocalProvider) -> None:
+        """Phase 3-d: --reason 未指定時の default は ``completed``（design.md L985）。"""
         provider.create_issue(title="t", body="b", slug="x")
         provider.close_issue("local-pc1-1")
         from kaji_harness.providers.local import _parse_frontmatter
 
         issue_dir = provider._resolve_issue_dir("local-pc1-1")
         meta, _ = _parse_frontmatter((issue_dir / "issue.md").read_text())
-        assert meta["close_reason"] == ""
+        assert meta["close_reason"] == "completed"
         assert meta["closed_by"] == "pc1"
+
+    def test_close_with_empty_reason_defaults_to_completed(self, provider: LocalProvider) -> None:
+        """空文字 reason も default の ``completed`` にフォールバックさせる。"""
+        provider.create_issue(title="t", body="b", slug="x")
+        provider.close_issue("local-pc1-1", reason="")
+        from kaji_harness.providers.local import _parse_frontmatter
+
+        issue_dir = provider._resolve_issue_dir("local-pc1-1")
+        meta, _ = _parse_frontmatter((issue_dir / "issue.md").read_text())
+        assert meta["close_reason"] == "completed"
+
+    def test_close_with_not_planned_preserves_value(self, provider: LocalProvider) -> None:
+        """明示値 ``not-planned`` は default に上書きされない。"""
+        provider.create_issue(title="t", body="b", slug="x")
+        provider.close_issue("local-pc1-1", reason="not-planned")
+        from kaji_harness.providers.local import _parse_frontmatter
+
+        issue_dir = provider._resolve_issue_dir("local-pc1-1")
+        meta, _ = _parse_frontmatter((issue_dir / "issue.md").read_text())
+        assert meta["close_reason"] == "not-planned"
 
     def test_list_filters_state_and_labels(self, provider: LocalProvider) -> None:
         provider.create_issue(title="a", body="", slug="a", labels=["type:feature"])

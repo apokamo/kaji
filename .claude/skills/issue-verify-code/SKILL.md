@@ -94,7 +94,7 @@ $ARGUMENTS = <issue_id>
 
 4. **修正差分を確認**:
    ```bash
-   cd [worktree-absolute-path] && git diff HEAD~1
+   cd [worktree_dir] && git diff HEAD~1
    ```
 
 ### Step 2: 修正確認

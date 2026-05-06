@@ -1,0 +1,129 @@
+# Local Mode CLI Guide
+
+`kaji` を GitHub なしで運用するための最小ガイド。Phase 3-d で追加された
+`kaji local init` と `feature-development-local.yaml` が前提。
+
+## いつ使うか
+
+- GitHub 不通 / 個人開発で issue / PR を立てたくない / GitLab 移行検討中
+- 数週間〜数ヶ月の長期 local 運用も想定
+
+## 1. インストール
+
+```bash
+uv sync
+source .venv/bin/activate
+```
+
+## 2. 初期化（`kaji local init`）
+
+リポジトリ root から:
+
+```bash
+kaji local init
+```
+
+挙動:
+
+- `.kaji/config.local.toml` を新規生成（既存があれば exit 3 で abort）
+- `.gitignore` に `.kaji/config.local.toml` 行を追記（重複時は no-op）
+- tracked `.kaji/config.toml` は **touch しない**（個人選択を commit しない設計）
+
+machine_id は次の優先順で決まる:
+
+1. `--machine-id <name>` 明示（`[a-z0-9]{1,16}` 違反は exit 2）
+2. `socket.gethostname()` を sanitize（lowercase + 英数字 + 16 文字切り詰め）
+3. `pc1` / `pc2` / … に fallback（既存 `.kaji/issues/local-*` と衝突しない最小値）
+
+`--default-branch <branch>` を渡すと overlay の `provider.local.default_branch`
+に反映される（既定 `main`）。
+
+### 生成される overlay 例
+
+```toml
+# .kaji/config.local.toml （gitignored）
+[provider]
+type = "local"
+
+[provider.local]
+machine_id = "pc1"
+default_branch = "main"
+```
+
+## 3. provider 切替
+
+`.kaji/config.toml` (committed) は repository default を保持し、
+`.kaji/config.local.toml` (gitignored) が overlay として個人選択を上書きする。
+
+| 状態 | 効果 |
+|------|------|
+| overlay なし | `.kaji/config.toml` の `[provider]` がそのまま使われる |
+| overlay あり | overlay の `[provider]` セクションがマージされる |
+| overlay の `type = "local"` | LocalProvider 経路 |
+| overlay 削除 | tracked default に戻る |
+
+## 4. Issue / Workflow
+
+```bash
+# Issue 作成（--body または --body-file が必須。slug は title から自動導出。
+# 明示したい場合は --slug を渡す）
+kaji issue create \
+  --title "do something" \
+  --body "describe the work" \
+  --label type:feature
+
+# 本文をファイルから読み込む場合
+kaji issue create --title "do something" --body-file issue-body.md --label type:feature
+
+# 一覧
+kaji issue list
+
+# workflow 起動（local 専用）
+kaji run .kaji/wf/feature-development-local.yaml local-pc1-1
+```
+
+`feature-development-local.yaml` は `feature-development.yaml` の最終 step
+（`i-pr`）を `issue-close` に差し替えたもの。PR は作らず、`/issue-close`
+が `git merge --no-ff` + frontmatter close を行う。
+
+## 5. ID 文法
+
+| 形式 | 意味 |
+|------|------|
+| `local-pc1-3` | machine_id `pc1` の 3 番目（フル形式） |
+| `pc1-3` | 短縮形。provider=local 時のみ受理 |
+| `3` | provider=local 時は machine_id を補完して `local-<self>-3` に解決 |
+| `gh:153` | GitHub cache 由来の read-only 参照（`.kaji/cache/issues/153.json` 必要） |
+
+## 6. /issue-close の挙動（local）
+
+design.md L972-996 に従う 6 step:
+
+1. Preflight check（uncommitted / branch / base 確認）
+2. Base branch 最新化（`git fetch` + `merge --ff-only`）
+3. Merge 実行（`git merge --no-ff --no-edit`）
+4. Issue frontmatter 更新 + commit（`kaji issue close [issue_id] --reason completed`）
+5. Cleanup（`git worktree remove` → `git branch -d`）
+6. Push（remote ありなら `git push origin [default_branch]`）
+
+Step 4 完了で Issue close は確定し、Step 5/6 の失敗は警告のみ。
+`--reason` 未指定時の default は `completed`（GitHub Issue API の慣行と整合）。
+
+## 7. ファイル / レイアウト
+
+```
+.kaji/
+├── config.toml          (tracked, repo default)
+├── config.local.toml    (gitignored, overlay)
+├── counters/<machine>.txt   (gitignored)
+├── issues/local-<machine>-<n>-<slug>/
+│   ├── issue.md         (frontmatter + body)
+│   └── comments/<seq>-<machine>.md
+└── cache/issues/<n>.json    (GitHub の read-only キャッシュ)
+```
+
+## 8. 既知の制限
+
+- Windows は flock を skip（並列 `kaji issue create` で衝突する場合がある）
+- `kaji pr` 系（`pr-fix` / `pr-verify` / `i-pr`）は Phase 4 で provider 別エラー化予定
+- `kaji sync from-github` は Phase 5 で実装予定（buildout 中は `.kaji/cache/issues/N.json` を手動投入）

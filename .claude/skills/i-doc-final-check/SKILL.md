@@ -60,7 +60,7 @@ $ARGUMENTS = <issue_id>
 ## Step 3 詳細: リンク整合性
 
 ```bash
-cd [worktree-absolute-path] && source .venv/bin/activate && make verify-docs
+cd [worktree_dir] && source .venv/bin/activate && make verify-docs
 ```
 
 exit 0 必須。
