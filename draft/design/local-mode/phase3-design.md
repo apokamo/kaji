@@ -351,7 +351,7 @@ def issue_view(ctx, issue_id, ...):
 
 **LocalProvider**:
 
-- `kaji issue create --slug <slug>` を **必須引数**とする（自動生成しない、user 意図を明示）
+- `kaji issue create --slug <slug>` は **optional**（Phase 3-d preflight § 4 で必須から変更）。未指定時は GitHubProvider と同じく title を sanitize して slug を導出する。`derive_slug_from_title()` の結果が空（記号のみ等）になる場合は `untitled` を使用
 - frontmatter `slug` field に保存。以降は `IssueContext.slug` として frontmatter から read
 - 文字制約: `^[a-z0-9][a-z0-9-]{0,39}$`（lowercase + 数字 + hyphen、先頭は英数字、最大 40 文字）。違反は `kaji issue create` 時点で fail-fast
 - ディレクトリ名: `.kaji/issues/local-<machine>-<n>-<slug>/`（design.md L446 と整合）
