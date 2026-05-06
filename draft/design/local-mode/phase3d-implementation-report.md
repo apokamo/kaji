@@ -14,10 +14,10 @@ branch: feat/local-phase3d
 ## 結果サマリ
 
 - **ブランチ**: `feat/local-phase3d`（main から派生）
-- **コミット数**: 10（design の 9 commit 計画 + lint fixup 1）
+- **コミット数**: 12（design の 9 commit 計画 + lint fixup 1 + 実装報告 1 + レビュー反映 1）
 - **`make check`**: 全段緑（ruff check / ruff format / mypy / pytest）
-- **テスト**: 925 passed, 1 skipped
-- **新規テスト**: 28 件（test_phase3d_default_branch / test_local_init / test_phase3d_skills + 既存ファイル拡張）
+- **テスト**: 956 passed, 1 skipped
+- **新規テスト**: 50+ 件（test_phase3d_default_branch / test_local_init / test_phase3d_skills + 既存ファイル拡張 + レビュー反映で追加した default_branch validation）
 
 ## 実装サマリ（コミット順）
 
@@ -164,6 +164,48 @@ active provider 値（`type` / `machine_id` / `default_branch`）はすべて
 
 `phase3d-design.md` § 4 の commit 順序（副作用小から大へ）を遵守。Phase 3-e
 直前で dev repo dogfooding 済の状態を維持する。
+
+## レビュー反映（commit `0d81577`）
+
+初回実装後のレビューで指摘された 3 件の Must Fix を以下のように対応した。
+
+### 1. `issue-close` /local 経路の worktree 運用修正
+
+- **指摘**: feature worktree 内で `git switch [default_branch]` していたが、
+  bare + worktree 構成では base branch が別 worktree で checkout 済みのため
+  Git に拒否される。さらに自分自身の worktree を `git worktree remove` する
+  構造になっていた。
+- **対応**: `git worktree list --porcelain` で `[default_branch]` を checkout
+  している base worktree を抽出し、merge / close commit / cleanup / push を
+  base 側で実行する手順に書き換えた。feature worktree (`[worktree_dir]`) は
+  base 側から `git worktree remove` で削除する。
+- **テスト追従**: `tests/test_phase3d_skills.py` の static keyword を
+  "Base branch" → "Base worktree" に更新。
+
+### 2. `--default-branch` 値の validation
+
+- **指摘**: `bad"branch` / 改行 / 制御文字 などが overlay TOML に直書きされ、
+  次回 config load が `ConfigLoadError` になる事故を構造で防いでいなかった。
+- **対応**: `local_init.py` に `validate_default_branch()` を新設。git の
+  `check-ref-format` の保守的サブセット（`[A-Za-z0-9._/-]`、長さ 255、
+  `'.'` / `'..'` / `'.lock'` / leading `'-'` 等の禁止）を適用し、不正値は
+  `cmd_local_init` 入口で exit 2 にして overlay を生成しない。
+- **テスト**: Small parametrized（accept 7 件 / reject 19 件）+ Medium 5 件
+  を追加。
+
+### 3. docs の `kaji issue create` 例に `--body` 追加
+
+- **指摘**: `kaji_harness/cli_main.py:950` で `--body` / `--body-file` が必須
+  だが、ガイドの例にどちらも無く user が最初の smoke で詰まる。
+- **対応**: `docs/cli-guides/local-mode.md` の例に `--body` 版と
+  `--body-file` 版の両方を提示。
+
+### Hygiene について
+
+レビューで指摘された未追跡ファイル（`.kaji/wf/design-only.yaml` 等、`actionlint`、
+`draft/lab/`）は Phase 3-d 開始時点（main HEAD）から既に untracked として
+存在していたものであり、本 Phase の作業対象外。Phase 3-d スコープに
+含めず、別途整理する位置づけとする。
 
 ## 参照
 
