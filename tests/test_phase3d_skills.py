@@ -63,3 +63,31 @@ def test_new_placeholders_used_somewhere() -> None:
                 found = True
                 break
         assert found, f"no skill markdown uses pattern {pattern!r}"
+
+
+@pytest.mark.medium
+def test_issue_close_skill_contains_local_six_steps() -> None:
+    """`issue-close` SKILL.md が design.md L972-996 の 6-step を含む。
+
+    phase3d-design.md § 7 で要求される keyword:
+
+    - ``provider_type`` への分岐
+    - ``[default_branch]`` の使用
+    - 各 Step の特徴的キーワード
+    - Step 4 で ``--reason completed`` を明示
+    """
+    path = SKILL_DIR / "issue-close" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+
+    expected_keywords = [
+        "[provider_type]",
+        "[default_branch]",
+        "Preflight check",
+        "Base branch",
+        "merge --no-ff",
+        "kaji issue close [issue_id] --reason completed",
+        "git worktree remove",
+        "git push origin [default_branch]",
+    ]
+    for kw in expected_keywords:
+        assert kw in text, f"issue-close SKILL.md missing keyword {kw!r}"
