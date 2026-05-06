@@ -56,7 +56,7 @@ $ARGUMENTS = <issue_id>
 3. 必要最小限で根拠となる実装 / docs / workflow / CLAUDE.md を再確認
 4. 変更ファイルに絞ったリンクチェック結果を確認:
    ```bash
-   cd [worktree-absolute-path] && python3 scripts/check_doc_links.py [changed-markdown-files...]
+   cd [worktree_dir] && python3 scripts/check_doc_links.py [changed-markdown-files...]
    ```
 5. 新規発見事項があっても今回の判定には含めない
 6. 結果を Issue にコメント

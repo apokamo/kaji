@@ -57,11 +57,11 @@ $ARGUMENTS = <issue_id>
 2. Issue コメントから直近の docs-only 更新報告を確認
 3. 設計書を確認:
    ```bash
-   cat [worktree-absolute-path]/draft/design/issue-[issue_id]-*.md
+   cat [worktree_dir]/draft/design/issue-[issue_id]-*.md
    ```
 4. 差分を確認:
    ```bash
-   cd [worktree-absolute-path] && git diff main...HEAD
+   cd [worktree_dir] && git diff main...HEAD
    ```
 
 ### Step 2: レビュー
@@ -80,7 +80,7 @@ $ARGUMENTS = <issue_id>
 変更された Markdown ファイルに絞って以下を実行する。
 
 ```bash
-cd [worktree-absolute-path] && python3 scripts/check_doc_links.py [changed-markdown-files...]
+cd [worktree_dir] && python3 scripts/check_doc_links.py [changed-markdown-files...]
 ```
 
 ### Step 4: 結果を Issue にコメント
