@@ -257,6 +257,15 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_CONFIG_NOT_FOUND
 
+    # Phase 3-e § 1.5: provider config を runner 起動前に validate し、
+    # `[provider]` 不在を `IssueContextResolutionError` 経由 exit 3 に落とさず
+    # exit 2 で正規化する。`kaji issue` / `kaji pr` と契約を統一。
+    try:
+        get_provider(config)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+
     project_root = config.repo_root
 
     # Load and validate workflow
@@ -601,22 +610,26 @@ def _handle_pr(raw_args: list[str]) -> int:
       通す（``repo_override`` は ``None``）
     """
     try:
-        config = _load_config_for_dispatch_or_none()
-    except ConfigLoadError as exc:
+        config = _load_config_for_dispatch()
+    except (ConfigLoadError, ConfigNotFoundError) as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    try:
+        provider = get_provider(config)
+    except ValueError as exc:
         sys.stderr.write(f"Error: {exc}\n")
         return EXIT_INVALID_INPUT
 
     repo_override: str | None = None
-    if config is not None and config.provider is not None and config.provider.type == "github":
+    if config.provider is not None and config.provider.type == "github":
         if not config.provider.github.repo:
             sys.stderr.write(
                 "Error: provider.type='github' requires provider.github.repo (e.g. 'owner/name').\n"
             )
             return EXIT_INVALID_INPUT
         repo_override = config.provider.github.repo
-    elif config is not None and config.provider is None:
-        # `[provider]` 未設定 → WARN（副作用）+ legacy 経路
-        get_provider(config)
+    del provider  # PR routing は config 経由で済む
 
     args = list(raw_args)
     if args and args[0] == "--":
@@ -626,20 +639,15 @@ def _handle_pr(raw_args: list[str]) -> int:
     return _forward_to_gh("pr", raw_args, repo=repo_override)
 
 
-def _load_config_for_dispatch_or_none() -> KajiConfig | None:
+def _load_config_for_dispatch() -> KajiConfig:
     """Config を読み込む（``kaji issue`` / ``kaji pr`` dispatch 用）。
 
-    Phase 3-c の方針（review #3 反映）:
-
-    - ``ConfigNotFoundError`` のみ ``None`` で legacy 経路に fallback
-      （リポジトリ外で `kaji issue view 1` が直接 `gh` に転送される従来挙動）
-    - ``ConfigLoadError``（壊れた TOML / 未知の type 等）は **raise**
-      → 呼出側が user-facing error として exit 2 を返す
+    Phase 3-e: ``ConfigNotFoundError`` も propagate する（fail-fast 化）。
+    Phase 3-c までの「config 不在 → legacy gh passthrough」は廃止。
+    呼出側 dispatcher で ``ConfigNotFoundError`` / ``ConfigLoadError`` を
+    catch して exit 2 を返す契約。
     """
-    try:
-        return KajiConfig.discover(start_dir=Path.cwd())
-    except ConfigNotFoundError:
-        return None
+    return KajiConfig.discover(start_dir=Path.cwd())
 
 
 def _handle_issue(raw_args: list[str]) -> int:
@@ -658,25 +666,22 @@ def _handle_issue(raw_args: list[str]) -> int:
     - ``provider`` 設定値の不整合（``machine_id`` 不在 / ``repo`` 不在等） → exit 2
     """
     try:
-        config = _load_config_for_dispatch_or_none()
-    except ConfigLoadError as exc:
+        config = _load_config_for_dispatch()
+    except (ConfigLoadError, ConfigNotFoundError) as exc:
         sys.stderr.write(f"Error: {exc}\n")
         return EXIT_INVALID_INPUT
 
-    if config is not None and config.provider is not None:
-        try:
-            provider = get_provider(config)
-        except ValueError as exc:
-            sys.stderr.write(f"Error: {exc}\n")
-            return EXIT_INVALID_INPUT
-        if isinstance(provider, LocalProvider):
-            return _handle_issue_local(provider, raw_args)
-        # GitHubProvider 経路: 設定 repo を --repo で強制注入し cwd 推論を防ぐ
-        return _forward_to_gh("issue", raw_args, repo=config.provider.github.repo)
-    # `[provider]` 未設定 → WARN（副作用）+ legacy 経路
-    if config is not None:
-        get_provider(config)
-    return _forward_to_gh("issue", raw_args)
+    try:
+        provider = get_provider(config)
+    except ValueError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    if isinstance(provider, LocalProvider):
+        return _handle_issue_local(provider, raw_args)
+    # GitHubProvider 経路: 設定 repo を --repo で強制注入し cwd 推論を防ぐ
+    assert config.provider is not None  # for type checker
+    return _forward_to_gh("issue", raw_args, repo=config.provider.github.repo)
 
 
 # ---------- LocalProvider dispatch ----------

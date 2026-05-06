@@ -227,15 +227,14 @@ class TestRunnerIssueContextNormalization:
         assert ctx.issue_id == "153"
         assert ctx.issue_ref == "#153"
 
-    def test_no_provider_returns_none_legacy_fallback(self, tmp_path: Path) -> None:
-        """``[provider]`` 未設定時のみ legacy 2 変数 fallback。"""
-        import kaji_harness.providers as providers_pkg
+    def test_no_provider_raises_resolution_error(self, tmp_path: Path) -> None:
+        """Phase 3-e: `[provider]` 未設定は legacy fallback ではなく fail-fast。"""
+        from kaji_harness.errors import IssueContextResolutionError
 
-        providers_pkg._PROVIDER_FALLBACK_WARNED = False
         repo = _write_repo(tmp_path)  # provider 未設定
         runner = _make_runner(repo, "42")
-        ctx = runner._resolve_issue_context()
-        assert ctx is None  # legacy 互換
+        with pytest.raises(IssueContextResolutionError):
+            runner._resolve_issue_context()
 
 
 @pytest.mark.medium

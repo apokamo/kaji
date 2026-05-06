@@ -60,7 +60,9 @@ def workdir(tmp_path: Path) -> Path:
     config_dir = d / ".kaji"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
-        '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+        '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n'
+        "[execution]\ndefault_timeout = 1800\n\n"
+        '[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
     )
     return d
 
@@ -500,11 +502,18 @@ class TestCLILarge:
         config_dir = workdir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n'
+            "[execution]\ndefault_timeout = 1800\n\n"
+            '[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
         skill_dir = workdir / ".claude" / "skills" / "test-skill"
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("# Test Skill\n")
+
+        # Phase 3-e: provider=local の subprocess kaji run は対象 issue dir 要。
+        from tests.conftest import ensure_local_issue
+
+        ensure_local_issue(workdir, "999")
 
         # Restrict PATH to only the Python executable's directory so that
         # agent CLIs (claude, codex, gemini) are guaranteed not to be found.
@@ -766,25 +775,21 @@ class TestPrReplyToCommentBuiltin:
 class TestPrBuiltinDispatch:
     """既存 passthrough の互換性と builtin 振り分け。"""
 
-    def test_existing_pr_view_falls_back_to_passthrough(self) -> None:
+    def test_existing_pr_view_fails_when_config_missing(self) -> None:
+        """Phase 3-e: `.kaji/config.toml` 不在で `kaji pr` は exit 2 で fail-fast。"""
         from kaji_harness.cli_main import _handle_pr
+        from kaji_harness.errors import ConfigNotFoundError
 
-        # config が無い（legacy）状態を強制し、--repo 注入が起きない経路を検証する。
-        # dev repo dogfooding で .kaji/config.toml に [provider] が追加されたため
-        # 明示的に config=None を mock する必要がある。
         with (
             patch(
-                "kaji_harness.cli_main._load_config_for_dispatch_or_none",
-                return_value=None,
+                "kaji_harness.cli_main._load_config_for_dispatch",
+                side_effect=ConfigNotFoundError(Path("/tmp")),
             ),
-            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
             patch("kaji_harness.cli_main.subprocess.run") as mock_run,
         ):
-            mock_run.return_value = MagicMock(returncode=0)
-            _handle_pr(["view", "153", "--comments"])
-            cmd = mock_run.call_args[0][0]
-            # builtin に該当しない → _forward_to_gh 経由で素通り
-            assert cmd == ["gh", "pr", "view", "153", "--comments"]
+            rc = _handle_pr(["view", "153", "--comments"])
+        assert rc == 2
+        mock_run.assert_not_called()
 
     def test_review_comments_help_exits_zero(self) -> None:
         """`--help` は argparse が SystemExit(0) で usage を表示する。"""

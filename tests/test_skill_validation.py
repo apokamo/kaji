@@ -147,7 +147,7 @@ class TestRunnerSkillDirIntegration:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = "my-skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = "my-skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
         config = KajiConfig._load(config_dir / "config.toml")
 
@@ -209,7 +209,7 @@ class TestSkillDirE2E:
         kaji_dir = tmp_path / ".kaji"
         kaji_dir.mkdir()
         (kaji_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         # Create skill
@@ -266,7 +266,7 @@ steps:
         kaji_dir = tmp_path / ".kaji"
         kaji_dir.mkdir()
         (kaji_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = "custom/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = "custom/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         _create_skill(tmp_path, "custom/skills", "my-skill")
@@ -321,7 +321,7 @@ steps:
         kaji_dir.mkdir()
         # No skill_dir in config (but artifacts_dir is present to isolate the error)
         (kaji_dir / "config.toml").write_text(
-            '[paths]\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         workflows_dir = tmp_path / "workflows"

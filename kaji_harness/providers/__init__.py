@@ -9,7 +9,6 @@ Phase 3-c で行う（design.md L226-244 参照）。
 from __future__ import annotations
 
 import re
-import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -35,48 +34,28 @@ __all__ = [
 ]
 
 
-_PROVIDER_FALLBACK_WARNED = False
-
-
-def _emit_provider_fallback_warning() -> None:
-    """``[provider]`` 未設定時の WARN を 1 度のみ stderr に出す。
-
-    Phase 3-c の段階。Phase 3-e で fallback は削除される（fail-fast）。
-    """
-    global _PROVIDER_FALLBACK_WARNED
-    if _PROVIDER_FALLBACK_WARNED:
-        return
-    _PROVIDER_FALLBACK_WARNED = True
-    print(
-        "WARNING: [provider] section is not configured in .kaji/config.toml. "
-        "Falling back to provider.type='github' for backward compatibility. "
-        "This fallback will be removed in a future release; add the following "
-        "to your .kaji/config.toml:\n"
-        "    [provider]\n"
-        '    type = "github"\n\n'
-        "    [provider.github]\n"
-        '    repo = "<owner>/<repo>"\n'
-        "For local-first development, run 'kaji local init'.",
-        file=sys.stderr,
-    )
-
-
-def get_provider(config: KajiConfig) -> IssueProvider | None:
+def get_provider(config: KajiConfig) -> IssueProvider:
     """`KajiConfig` から provider インスタンスを構築する。
 
-    Phase 3-c の挙動:
+    Phase 3-e で fallback 経路を削除。``config.provider`` が ``None`` であれば
+    ``ValueError`` を raise し、呼出側に `[provider]` セクションを必須として
+    要求する。
 
-    - ``config.provider`` が ``None`` → WARN を出して ``None`` を返す。
-      ``kaji issue`` / ``kaji pr`` の passthrough、`build_prompt` の
-      Phase 2-B 互換動作、いずれも ``None`` 受領時は legacy 経路で動く
     - ``provider.type == "github"`` → GitHubProvider
     - ``provider.type == "local"`` → LocalProvider
-
-    Phase 3-e で fallback 経路は削除される（phase3-design.md § 4 ロールアウト）。
     """
     if config.provider is None:
-        _emit_provider_fallback_warning()
-        return None
+        raise ValueError(
+            "[provider] section is required in .kaji/config.toml.\n\n"
+            "You must add the following to your .kaji/config.toml:\n"
+            "    [provider]\n"
+            '    type = "github"\n\n'
+            "    [provider.github]\n"
+            '    repo = "<owner>/<repo>"\n\n'
+            "For GitHub-independent (local-first) development, run "
+            "`kaji local init`.\n"
+            "See `docs/cli-guides/local-mode.md`."
+        )
 
     if config.provider.type == "github":
         if not config.provider.github.repo:

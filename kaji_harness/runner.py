@@ -27,7 +27,7 @@ from .prompt import build_prompt
 from .providers import IssueContext, get_provider, normalize_id
 from .providers.local import LocalProvider
 from .skill import validate_skill_exists
-from .state import SessionState, _format_issue_ref
+from .state import SessionState
 from .verdict import create_verdict_formatter, parse_verdict
 from .workflow import validate_workflow
 
@@ -40,8 +40,8 @@ class RunIssueContext:
     state / artifacts / run log / prompt が共有する正規化済み Issue ID。
     ``issue_ref`` は人間可読な参照（``#153`` / ``local-pc1-3`` など）。
 
-    ``issue_context`` は provider が解決した IssueContext、または ``[provider]``
-    未設定 fallback では ``None``。
+    ``issue_context`` は provider が解決した IssueContext。Phase 3-e の fail-fast
+    化以降は必ず非 None（``cmd_run`` 冒頭で `[provider]` 必須化を validate するため）。
 
     Runner 内部に閉じた DTO で public API として export しない。
     """
@@ -49,7 +49,7 @@ class RunIssueContext:
     input_id: str
     canonical_id: str
     issue_ref: str
-    issue_context: IssueContext | None
+    issue_context: IssueContext
 
 
 @dataclass
@@ -74,20 +74,18 @@ class WorkflowRunner:
         # int / その他から str へ正規化（既存呼び出し互換のため）
         self.issue_number = str(self.issue_number)
 
-    def _resolve_issue_context(self) -> IssueContext | None:
+    def _resolve_issue_context(self) -> IssueContext:
         """provider 経由で IssueContext を解決する。
 
-        Phase 3-c 方針（rev #3 で fail-fast 化、review #2 反映）:
+        Phase 3-e で fail-fast 化。`cmd_run` 冒頭で `get_provider` の早期
+        validation を済ませているため、ここで `config.provider is None` には
+        到達しない（型 checker のため assert を残す）。
 
-        - ``config.provider`` が **未設定** → ``None``（legacy 2 変数 fallback。
-          ``[provider]`` 未設定の repo を壊さないための過渡的互換経路。
-          Phase 3-e で削除予定）
-        - ``config.provider`` が **明示設定** → ``normalize_id`` を経由して
-          provider 内部 ID に正規化（``1`` / ``pc1-1`` / ``local-pc1-1`` /
-          ``gh:N`` を一貫して扱う）してから解決。失敗は
-          ``IssueContextResolutionError`` で raise し、agent 起動前に exit
-          する（machine_id 不足 / Issue 不在 / frontmatter 不備で半端な
-          context のまま Skill 起動を許さない）
+        ``normalize_id`` を経由して provider 内部 ID に正規化（``1`` /
+        ``pc1-1`` / ``local-pc1-1`` / ``gh:N`` を一貫して扱う）してから解決。
+        失敗は ``IssueContextResolutionError`` で raise し、agent 起動前に
+        exit する（machine_id 不足 / Issue 不在 / frontmatter 不備で半端な
+        context のまま Skill 起動を許さない）。
         """
         try:
             provider = get_provider(self.config)
@@ -98,9 +96,6 @@ class WorkflowRunner:
                 provider_type=(self.config.provider.type if self.config.provider else "unset"),
                 cause=exc,
             ) from exc
-        if provider is None:
-            # `[provider]` 未設定 → legacy 互換経路
-            return None
 
         assert self.config.provider is not None  # for type checker
         provider_type = self.config.provider.type
@@ -159,12 +154,8 @@ class WorkflowRunner:
         """
         ctx = self._resolve_issue_context()
         input_id = self.issue_number
-        if ctx is not None:
-            canonical_id = ctx.issue_id
-            issue_ref = ctx.issue_ref
-        else:
-            canonical_id = input_id
-            issue_ref = _format_issue_ref(input_id)
+        canonical_id = ctx.issue_id
+        issue_ref = ctx.issue_ref
         if input_id != canonical_id:
             self._warn_legacy_artifacts(input_id, canonical_id)
         return RunIssueContext(
