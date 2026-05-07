@@ -582,7 +582,7 @@ flowchart TB
         GH[GitHubProvider\ngh CLI ラッパー]
         LO[LocalProvider\nファイルベース実装]
     end
-    Storage1[".kaji/issues/\n.kaji/counters/"]
+    Storage1[".kaji/issues/ (tracked)\n.kaji/counters/ (gitignored)"]
     Storage2[".kaji/cache/"]
     GHAPI[GitHub API\nvia gh CLI]
 
@@ -897,7 +897,7 @@ Phase 2 の Skill 改修で以下の context 変数体系へ移行する：
 | `[prefix]` | `branch_prefix` | `str` | `feat` / `fix` / `docs` 等（変更なし） |
 | `[branch-name]` | `branch_name` | `str` | `feat/153` (github) / `feat/local-pc1-1` (local) |
 | （新規）| `worktree_dir` | `str` | `kaji-feat-153` / `kaji-feat-local-pc1-1`（worktree dir 名、`/` を `-` に） |
-| 設計書パス（暗黙） | `design_path` | `str` | `draft/design/issue-153-<slug>.md` (github) / `draft/design/issue-local-pc1-1-<slug>.md` (local)。`kaji_harness/providers/context.py::build_design_path()` の実装に合わせ、常に `issue-<issue_id>-<slug>.md` 形式 |
+| 設計書パス（暗黙） | `design_path` | `str` | `draft/design/issue-153-<slug>.md` (github) / `draft/design/issue-local-pc1-1-<slug>.md` (local)。`kaji_harness/providers/context.py::build_design_path()` の実装に合わせ、provider を問わず `issue-<issue_id>-<slug>.md` 形式 |
 | `[pr-number]` | `pr_id` | `str` | 正規化済み PR ID。`"42"` (github) / local では PR 概念が無いため未注入（Phase 4 で `pr-fix`/`pr-verify` 自体を bare provider エラー化する） |
 | （表示用）| `pr_ref` | `str` | 人間可読 PR 参照。`"#42"` (github) のみ。`issue_ref` と同様 `prompt.py` 側で provider 別整形 |
 
@@ -1081,7 +1081,11 @@ ERROR: GitHub API returned 403 (account suspended).
 Your local cache is available with 170 issues from last sync at 2026-05-04 09:00 JST.
 
 To continue working in local mode:
-  kaji local init
+  if test -f .kaji/config.local.toml; then
+    sed -n '1,80p' .kaji/config.local.toml
+  else
+    kaji local init
+  fi
 
 If .kaji/config.local.toml already exists, edit it so that:
   [provider]
@@ -1344,11 +1348,11 @@ machine_id = "pc1"
 
 Phase 3 完了時点では、LocalProvider / IssueContext / `kaji local init` / `feature-development-local.yaml` / fail-fast / Large-local 基盤は完了済み。以下の未完了項目は Phase 4（PR/MR 整理）または Phase 5（sync / BCP）に残る。特に `kaji config set` は Phase 3 実装から外れ、現時点の標準操作は `.kaji/config.local.toml` overlay である。
 
-- [ ] ``[buildout-ok]`` `kaji issue` / `kaji pr` CLI が `kaji --help` で確認できる
-- [ ] ``[buildout-ok]`` `provider: github` 経路で Skill が従来通り動作することを **CliRunner + subprocess mock の pass-through テストで担保**する（wrapper の引数組み立て / stdout-stdin 透過 / exit code 伝播の各契約）。実 `gh` での `feature-development.yaml` 完走確認は ``[forge-required]`` として復旧後追跡
+- [x] ``[buildout-ok]`` `kaji issue` / `kaji pr` CLI が `kaji --help` で確認できる
+- [x] ``[buildout-ok]`` `provider: github` 経路で Skill が従来通り動作することを **CliRunner + subprocess mock の pass-through テストで担保**する（wrapper の引数組み立て / stdout-stdin 透過 / exit code 伝播の各契約）。実 `gh` での `feature-development.yaml` 完走確認は ``[forge-required]`` として復旧後追跡
 - [ ] ``[buildout-ok]`` `provider: local` で、`/issue-create` → `/issue-start`（事前手動実行）→ `kaji run feature-development-local.yaml local-pc1-1` で `issue-design` 〜 `/issue-close` までが完走する（**Phase 3 完了時点が初の検証点**）
-- [ ] ``[buildout-ok]`` `pr-fix` / `pr-verify` は `provider: local` で明示的にエラー停止し、代替手順をガイドする
-- [ ] ``[buildout-ok]`` `IssueProvider` Protocol の単体テストが `LocalProvider` / `GitHubProvider` 両方で通る（GitHubProvider はモック）
+- [ ] **Phase 4 前提**: `pr-fix` / `pr-verify` は `provider: local` で明示的にエラー停止し、代替手順をガイドする
+- [x] ``[buildout-ok]`` `IssueProvider` Protocol の単体テストが `LocalProvider` / `GitHubProvider` 両方で通る（GitHubProvider はモック）
 - [ ] ``[forge-required]`` `kaji sync from-github` で全 Issue が `.kaji/cache/` に保存され、`kaji sync status` で件数・最終同期時刻が確認できる（buildout 中は subprocess mock + 録画レスポンスでの logic 検証のみ可能、実通信検証は復旧後）
 - [ ] ``[buildout-ok]`` cache が存在する状態で `provider: local` に切替えると、cache 由来 Issue は read 可能、新規は `local-<machine>-<n>` で作成される（cache を tmp_path で擬似再現する Medium テストで担保）
 - [ ] ``[buildout-ok]`` `provider: local` 時に `kaji issue view gh:<gh-number>` が cache から読み出して `provider: github` 時と同形式の整形出力を返す（prefix なしの数値入力は local 空間として解釈される）。`gh:` prefix は shell-safe で quote 不要
@@ -1356,34 +1360,34 @@ Phase 3 完了時点では、LocalProvider / IssueContext / `kaji local init` / 
 - [ ] 4 PC 並行運用シナリオで、各 PC が独立した番号空間 (`local-pc1-*` / `local-pc2-*` / ...) で Issue を作成し、ID 衝突が発生しないことが integration test で確認できる
 - [x] `.gitignore` に `.kaji/config.local.toml` と `.kaji/counters/` のエントリが追加され、新規 clone でも machine 固有ファイルが tracked されない
 - [x] `.kaji/config.local.toml` を `.gitignore` に登録するセットアップ手順が `kaji local init` と docs により担保され、誤 commit を防げる
-- [ ] config の必須項目欠落時にエラー停止し、エラーメッセージで「何を、どのファイルに、どう書くか」が完全に伝わる
-- [ ] `provider.type`、`machine_id`（provider=local 時）、`default_branch`（provider=local 時）、`github.repo`（provider=github 時）のいずれが欠けてもエラー停止する
-- [ ] `kaji issue` / `kaji pr` が `gh` の互換フラグ (`--body` / `--body-file` / `--label` / `--add-label` / `--json` / `--jq` / `-q` / `--comments` 等) をすべて受理し、Skill 側の置換は **原則として「`gh` → `kaji`」の文字列置換のみで完了する**。例外として `gh pr merge ... --merge` は `kaji pr merge ...` への置換と同時に `--merge` フラグを除去する（`kaji pr merge` は method flag を露出せず、内部で常に `--no-ff` 相当固定で実行するため。詳細は本文「Skill の改修」セクション参照）
-- [ ] machine_id が `[a-z0-9]{1,16}` の grammar に従い、ハイフン入力時はエラーで停止する
+- [x] config の必須項目欠落時にエラー停止し、エラーメッセージで「何を、どのファイルに、どう書くか」が完全に伝わる
+- [x] `provider.type`、`machine_id`（provider=local 時）、`github.repo`（provider=github 時）のいずれが欠けてもエラー停止する。`default_branch` は未指定時 `main` を採用する現行実装であり、formal validation の config load 統合は後続オープン論点
+- [ ] **Phase 4 前提**: `kaji issue` / `kaji pr` が provider 別の互換フラグ (`--body` / `--body-file` / `--label` / `--add-label` / `--json` / `--jq` / `-q` / `--comments` 等) をすべて受理し、bare provider で PR/MR 系を明示エラー化する。Phase 3-e 時点では `kaji issue` と GitHub passthrough は実装済み、`kaji pr` の bare provider 整理が未完了
+- [x] machine_id が `[a-z0-9]{1,16}` の grammar に従い、ハイフン入力時はエラーで停止する
 - [x] ``[buildout-ok]`` 既存 Skill の `[issue-number]` / `issue_number` placeholder が **`issue_id` / `issue_ref` の 2 変数**に移行され、Phase 3-d で `issue_input` / `branch_name` / `worktree_dir` / `design_path` / `provider_type` / `default_branch` も `IssueContext` 経由の注入に移行済み
 - [x] ``[buildout-ok]`` branch 命名が `<prefix>/<gh-number>` (github) / `<prefix>/local-<machine>-<n>` (local) に統一され、worktree dir が `kaji-<prefix>-<id-or-local-id>` で生成される（既存 `.claude/skills/issue-start/SKILL.md:32-33` 規約と整合）。Phase 3-d で `branch_name` / `worktree_dir` を `IssueContext` 経由に正本化済み
-- [ ] `kaji local init` / overlay 手編集による provider 切替が `.kaji/config.local.toml`（gitignored）に閉じ、tracked な `.kaji/config.toml` を変更しない（`kaji config set` を将来追加する場合もこの書き込み先契約を守る）
-- [ ] `paths.artifacts_dir` は user 設定可能な状態を維持し、既存 repo の `.kaji-artifacts` 等の値が破壊されない
+- [x] `kaji local init` / overlay 手編集による provider 切替が `.kaji/config.local.toml`（gitignored）に閉じ、tracked な `.kaji/config.toml` を変更しない（`kaji config set` を将来追加する場合もこの書き込み先契約を守る）
+- [x] `paths.artifacts_dir` は user 設定可能な状態を維持し、既存 repo の `.kaji-artifacts` 等の値が破壊されない
 - [ ] `provider=local` で `kaji run feature-development-local.yaml local-pc1-1` が `issue-design` から `/issue-close` まで完走する（`/issue-create` `/issue-start` は事前手動実行）
-- [ ] `kaji pr merge` が `--method` フラグを露出せず、内部で常に `--no-ff` 相当の merge を実行する
-- [ ] resolve_issue_dir が glob で一意解決し、重複検出時は明示エラーで停止する
-- [ ] `next_local_id()` がカウンタファイル不在時（fresh clone / `make clean` 後）も既存 `.kaji/issues/local-<machine>-*` dir の最大値を見て採番衝突を起こさない
+- [x] `kaji pr merge` が `--method` フラグを露出せず、内部で常に `--no-ff` 相当の merge を実行する（GitHub passthrough 経路）
+- [x] resolve_issue_dir が glob で一意解決し、重複検出時は明示エラーで停止する
+- [x] `next_local_id()` がカウンタファイル不在時（fresh clone / `make clean` 後）も既存 `.kaji/issues/local-<machine>-*` dir の最大値を見て採番衝突を起こさない
 - [ ] **Phase 5 前提**: `kaji issue edit --add-frontmatter` で reserved key（`id` / `state` / `labels` / `assignees` / `created_at` / `updated_at` / `closed_at` / `close_reason` / `closed_by` / `created_by` / `title`）を上書きしようとするとエラー停止し、適切な専用 CLI が案内される
 - [ ] **Phase 5 前提**: `--add-frontmatter` の KEY が `[a-z][a-z0-9_]{0,31}` 文法に違反する入力（大文字・記号・長さ超過）はエラー停止する
 - [ ] ``[buildout-ok]`` `kaji issue view ID --jq '.body'` の `--jq` 評価が `gh issue view ID --jq '.body'` と bit-exact に一致する（scalar string の quote 除去、改行・escape 文字の保持）。**buildout 中は Python `jq` library の直呼びで bit-exact 検証**（Small テスト、§ Small 1371 行）+ subprocess mock pass-through で `CURRENT_BODY=$(...)` ラウンドトリップを担保。実 `gh` 出力との bit-exact 比較は ``[forge-required]`` として復旧後追跡
-- [ ] ``[buildout-ok]`` `kaji issue edit gh:<gh-number>` を `provider: local` 時に呼ぶと `is_readonly()` 経由で編集不可エラーが返る
+- [x] ``[buildout-ok]`` `kaji issue edit gh:<gh-number>` を `provider: local` 時に呼ぶと `is_readonly()` 経由で編集不可エラーが返る
 - [ ] ``[buildout-ok]`` `kaji sync local-to-github-plan` が停止期間中の `local-<machine>-<n>` を全 PC 横断で一覧表示する（filesystem の状態のみ参照するため github 通信不要）
-- [ ] 既存の `make check` が通る
+- [x] 既存の `make check` が通る
 - [ ] `docs/cli-guides/` に `kaji issue` / `kaji pr` / `kaji sync` のリファレンスを追加
 - [ ] `docs/dev/workflow_guide.md` に provider 切り替え + BCP フローの記述を追加
 - [ ] `docs/operations/` に GitHub 停止時の運用 runbook を追加
 - [ ] runbook 内に「コード同期戦略」セクションがあり、cloud mirror / self-host / bundle の 3 案と選定基準が記述されている
 - [ ] 「テスト戦略」セクション記載の Small / Medium / **Large-local** テストが各 Phase 完了時点で緑になっている。**Large-forge** は復旧後追跡（``[forge-required]``）
-- [ ] `kaji run` の `issue` パラメータが str 受理に変更され、既存テスト（`tests/test_cli_main.py` 等）が更新後 緑になっている
-- [ ] `.kaji/issues/` が directory-per-issue 構造（`<id>-<slug>/issue.md` + `comments/`）で実装されている
-- [ ] `provider: local` 時の `/issue-close` が「local mode における /issue-close の手順」記載のステップ通りに動作する（preflight check 失敗 / merge 衝突 / push 失敗 が ABORT または警告で正しく扱われる）
-- [ ] `/issue-close` が frontmatter 更新 commit → worktree 削除 → branch 削除の順序で実行され、cleanup 失敗時も Issue 状態は closed として確定する
-- [ ] LocalProvider の `kaji issue view --json` 出力が、既存 Skill が参照する GitHub API field の互換 subset（`labels[].name`、`title`、`body`、PR の `number`/`title`/`headRefName` 等）を満たしている
+- [x] `kaji run` の `issue` パラメータが str 受理に変更され、既存テスト（`tests/test_cli_main.py` 等）が更新後 緑になっている
+- [x] `.kaji/issues/` が directory-per-issue 構造（`<id>-<slug>/issue.md` + `comments/`）で実装されている
+- [x] `provider: local` 時の `/issue-close` が「local mode における /issue-close の手順」記載のステップ通りに動作する（preflight check 失敗 / merge 衝突 / push 失敗 が ABORT または警告で正しく扱われる）
+- [x] `/issue-close` が frontmatter 更新 commit → worktree 削除 → branch 削除の順序で実行され、cleanup 失敗時も Issue 状態は closed として確定する
+- [x] LocalProvider の `kaji issue view --json` 出力が、既存 Skill が参照する GitHub API field の互換 subset（`labels[].name`、`title`、`body`、PR の `number`/`title`/`headRefName` 等）を満たしている
 
 ## テスト戦略
 
