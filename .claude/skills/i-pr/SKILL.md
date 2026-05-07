@@ -158,7 +158,9 @@ cd [worktree_dir] && git push -u origin HEAD
 ```
 
 ```bash
-PR_URL=$(cd [worktree_dir] && kaji pr create --base main --title "[prefix]: タイトル ([issue_ref])" --body "$(cat <<'EOF'
+# stderr は捨てず stdout と分離して取得する（失敗を握りつぶさないため）。
+# ``2>&1 | tail -1`` 形式は pipeline exit status が tail 側で 0 になるため使わない。
+pr_output=$(cd [worktree_dir] && kaji pr create --base main --title "[prefix]: タイトル ([issue_ref])" --body "$(cat <<'EOF'
 ## Summary
 
 (Issueの概要を1-2文で)
@@ -179,15 +181,49 @@ Closes [issue_ref]
 - [ ] 新規テストを追加（該当する場合）
 - [ ] 手動検証: (必要な場合)
 EOF
-)" 2>&1 | tail -1)
-# kaji pr create は最後の行に PR URL を返す:
-# https://github.com/<owner>/<repo>/pull/<N>
+)")
+pr_create_rc=$?
 
-# pr_id / pr_ref / pr_url を確定（以降の Step で参照する）
-pr_url="$PR_URL"
-pr_id=$(echo "$pr_url" | sed 's|.*/||')      # "42"
-pr_ref="#${pr_id}"                            # "#42"
+if [ "$pr_create_rc" -ne 0 ]; then
+    # 失敗時は pr_id / pr_ref を確定しない。Step 5 / Step 6 へ進まず、
+    # ABORT verdict を出して終了する（後述「失敗時の処理」参照）。
+    echo "ERROR: kaji pr create exited with $pr_create_rc"
+    echo "$pr_output"
+    # 続く verdict 出力で workflow を停止させる
+fi
+
+# 最終行が PR URL（``https://github.com/<owner>/<repo>/pull/<N>``）。
+pr_url=$(printf '%s\n' "$pr_output" | tail -n1)
+
+# 形式検証: 先頭一致で URL regex を確認（不一致なら ABORT）
+if ! printf '%s' "$pr_url" | grep -Eq '^https://github\.com/[^/]+/[^/]+/pull/[1-9][0-9]*$'; then
+    echo "ERROR: kaji pr create returned unexpected last line: $pr_url"
+    # 続く verdict 出力で workflow を停止させる
+fi
+
+# pr_id / pr_ref を確定（以降の Step で参照する）
+pr_id="${pr_url##*/}"   # "42"
+pr_ref="#${pr_id}"      # "#42"
 ```
+
+> **失敗時の処理**: `pr_create_rc` が 0 でない、または `pr_url` が
+> `https://github.com/.../pull/<N>` 形式に一致しない場合、Step 5 / Step 6 に
+> 進まず以下の ABORT verdict を出力して終了する:
+>
+> ```text
+> ---VERDICT---
+> status: ABORT
+> reason: |
+>   kaji pr create failed or returned an unexpected output.
+> evidence: |
+>   pr_create_rc=$pr_create_rc, pr_url="$pr_url"
+>   (full output captured in pr_output above)
+> suggestion: |
+>   Re-run after addressing the underlying error (auth / rate limit /
+>   pre-existing PR for the branch). Check `gh auth status` and
+>   `kaji pr list --head <branch>`.
+> ---END_VERDICT---
+> ```
 
 > **重要**: PR body に `Closes [issue_ref]` を必ず含めること。これにより GitHub の Development sidebar に正式リンクが作成される。
 
