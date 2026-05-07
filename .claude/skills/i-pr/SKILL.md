@@ -184,31 +184,41 @@ EOF
 )")
 pr_create_rc=$?
 
+# 成功時のみ最終行を取り出す（失敗時の stdout を URL として誤認しないため）。
+pr_url=""
+if [ "$pr_create_rc" -eq 0 ]; then
+    pr_url=$(printf '%s\n' "$pr_output" | tail -n1)
+fi
+
+# 失敗 / 形式不一致のいずれかなら abort_reason に診断を入れて分岐する。
+# pr_id / pr_ref は abort_reason が空のときだけ確定する（壊れた値を作らない）。
+abort_reason=""
 if [ "$pr_create_rc" -ne 0 ]; then
-    # 失敗時は pr_id / pr_ref を確定しない。Step 5 / Step 6 へ進まず、
-    # ABORT verdict を出して終了する（後述「失敗時の処理」参照）。
-    echo "ERROR: kaji pr create exited with $pr_create_rc"
-    echo "$pr_output"
-    # 続く verdict 出力で workflow を停止させる
+    abort_reason="kaji pr create exited with rc=$pr_create_rc"
+elif ! printf '%s' "$pr_url" | grep -Eq '^https://github\.com/[^/]+/[^/]+/pull/[1-9][0-9]*$'; then
+    abort_reason="kaji pr create last line is not a PR URL: '$pr_url'"
 fi
 
-# 最終行が PR URL（``https://github.com/<owner>/<repo>/pull/<N>``）。
-pr_url=$(printf '%s\n' "$pr_output" | tail -n1)
-
-# 形式検証: 先頭一致で URL regex を確認（不一致なら ABORT）
-if ! printf '%s' "$pr_url" | grep -Eq '^https://github\.com/[^/]+/[^/]+/pull/[1-9][0-9]*$'; then
-    echo "ERROR: kaji pr create returned unexpected last line: $pr_url"
-    # 続く verdict 出力で workflow を停止させる
+if [ -n "$abort_reason" ]; then
+    # 失敗時: 診断を stderr に出し、Step 5 / Step 6 には進まない。
+    # 後述「失敗時の処理」の ABORT verdict をそのまま stdout に出力して終了する。
+    printf 'ERROR: %s\n' "$abort_reason" >&2
+    printf '%s\n' "$pr_output" >&2
+    # ここから先（pr_id 確定 / Step 5 / Step 6）には進まないこと。
+else
+    # 成功時のみ pr_id / pr_ref を確定する。
+    pr_id="${pr_url##*/}"   # "42"
+    pr_ref="#${pr_id}"      # "#42"
 fi
-
-# pr_id / pr_ref を確定（以降の Step で参照する）
-pr_id="${pr_url##*/}"   # "42"
-pr_ref="#${pr_id}"      # "#42"
 ```
 
-> **失敗時の処理**: `pr_create_rc` が 0 でない、または `pr_url` が
-> `https://github.com/.../pull/<N>` 形式に一致しない場合、Step 5 / Step 6 に
-> 進まず以下の ABORT verdict を出力して終了する:
+> **失敗時の処理**: `abort_reason` が非空（= `pr_create_rc` 非 0、または
+> `pr_url` が `https://github.com/.../pull/<N>` 形式に一致しない）の場合、
+> **以降のステップ（Step 5: Issue 本文への PR 番号追記、Step 6: 完了報告）には
+> 進まない**こと。`pr_id` / `pr_ref` は確定しておらず、未確定値で Issue 本文を
+> 上書きすると壊れた `**PR**:` 行を残す事故になる。
+>
+> その場合は以下の ABORT verdict を **そのまま stdout に出力して** 終了する:
 >
 > ```text
 > ---VERDICT---
@@ -216,8 +226,9 @@ pr_ref="#${pr_id}"      # "#42"
 > reason: |
 >   kaji pr create failed or returned an unexpected output.
 > evidence: |
->   pr_create_rc=$pr_create_rc, pr_url="$pr_url"
->   (full output captured in pr_output above)
+>   abort_reason="$abort_reason"
+>   pr_create_rc=$pr_create_rc
+>   (full output captured in pr_output / stderr above)
 > suggestion: |
 >   Re-run after addressing the underlying error (auth / rate limit /
 >   pre-existing PR for the branch). Check `gh auth status` and
