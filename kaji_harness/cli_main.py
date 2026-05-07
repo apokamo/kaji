@@ -677,9 +677,15 @@ def _handle_pr(raw_args: list[str]) -> int:
     dedicated handler; otherwise fall back to ``gh pr`` passthrough.
 
     Phase 4: ``provider.type='local'`` 配下では bare-provider エラーで
-    fail-fast する。``--help`` を含むすべてのサブコマンド、および
-    ``_PR_BUILTIN_SUBCOMMANDS`` （``gh api`` 直叩き）も同じガードで止める。
-    GitHub mode の挙動は Phase 3-e と bit-exact に維持する。
+    fail-fast する。``_PR_BUILTIN_SUBCOMMANDS`` （``gh api`` 直叩き）も
+    同じガードで止める。GitHub mode の挙動は Phase 3-e と bit-exact に
+    維持する。
+
+    Note: ``kaji pr --help`` / ``-h`` は本関数に到達せず、argparse 上位の
+    ``unrecognized arguments`` エラーで先に止まる（``_register_pr`` が
+    ``add_help=False`` + ``REMAINDER`` で登録されている既存挙動）。
+    bare provider 配下でも GitHub mode でも同じ。設計書 § 1 設計判断
+    「`kaji pr --help` を bare で見せない」要件は本挙動で満たされる。
     """
     try:
         config = _load_config_for_dispatch()

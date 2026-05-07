@@ -70,55 +70,60 @@ $ARGUMENTS = <issue_id>
 
 ### Step 0: provider check
 
-本 Skill は forge provider 専用。`provider_type` を解決し、`github` 以外なら ABORT する。
+本 Skill は forge provider 専用。最初に `provider_type` を解決し、
+`github` 以外なら **以降のステップに進まず ABORT verdict を出力して終了** する。
 
-**provider_type の解決順序**:
+**手順**:
 
-1. ハーネス経由で `[provider_type]` が注入されていればそれを使用
-2. 未注入（手動実行）の場合は `kaji config provider-type` を呼んで解決:
+1. **`provider_type` の解決**（ハーネス注入 → 手動 fallback の優先順）:
 
    ```bash
    PROVIDER_TYPE="${provider_type:-$(kaji config provider-type 2>/dev/null || true)}"
    ```
 
-   `|| true` で exit code を握りつぶし、空文字 / 不明値の場合は次の判定で明示的に ABORT する。
+   `|| true` は手動実行で `[provider]` 不在時に `kaji config provider-type` が
+   exit 2 を返しても shell 全体を落とさないため。空文字に縮退する。
 
-**判定**:
+2. **判定と verdict 出力**:
 
-```bash
-case "$PROVIDER_TYPE" in
-    github) : ;;  # 続行
-    local)
-        cat <<'MSG'
-i-pr is a forge-only skill and cannot run under provider.type='local'.
-Pull request concept does not exist in local mode. Use:
-  /issue-close   # local merge (--no-ff) + frontmatter 更新
-MSG
-        exit 0
-        ;;
-    *)
-        echo "ABORT: provider_type unresolved. Check .kaji/config.toml has [provider]."
-        exit 0
-        ;;
-esac
-```
+   - `PROVIDER_TYPE` が `github` → Step 1 に進む
+   - `PROVIDER_TYPE` が `local` → 以下の ABORT verdict を **そのまま stdout に
+     出力**して以降のステップは実行しない:
 
-`provider_type` が `github` 以外の場合は以下の verdict で **ABORT** すること:
+     ```text
+     ---VERDICT---
+     status: ABORT
+     reason: |
+       i-pr is a forge-only skill; provider.type='local'.
+     evidence: |
+       Pull request concept does not exist in local mode (bare provider).
+     suggestion: |
+       Use /issue-close for local merge instead.
+     ---END_VERDICT---
+     ```
 
-```text
----VERDICT---
-status: ABORT
-reason: |
-  i-pr is a forge-only skill; current provider.type is not 'github'.
-evidence: |
-  PROVIDER_TYPE="$PROVIDER_TYPE"（local mode では PR 概念が無い）
-suggestion: |
-  Use /issue-close for local merge instead.
----END_VERDICT---
-```
+   - `PROVIDER_TYPE` がそれ以外（空文字 / 不明値）→ 以下の ABORT verdict を
+     出力して終了:
 
-> **補足**: workflow 経由で起動された場合は、`kaji run` の `requires_provider` 検証
-> （Phase 4 commit 4）で先に止まるはずだが、user が `provider=local` 配下で
+     ```text
+     ---VERDICT---
+     status: ABORT
+     reason: |
+       i-pr could not resolve provider_type.
+     evidence: |
+       provider_type was not injected and `kaji config provider-type` failed
+       (likely missing `[provider]` section in .kaji/config.toml).
+     suggestion: |
+       Add `[provider]` to .kaji/config.toml. See docs/cli-guides/local-mode.md.
+     ---END_VERDICT---
+     ```
+
+> **重要**: ABORT verdict は **shell の `exit` に任せず agent 自身が stdout に
+> 出力する**こと。workflow runner はその verdict を読み取って `on: ABORT: end`
+> で workflow を終わらせる。
+>
+> **補足**: workflow 経由で起動された場合は、`kaji run` の `requires_provider`
+> 検証（Phase 4 commit 4）で先に止まるはずだが、user が `provider=local` 配下で
 > `/i-pr` を直接呼ぶケースに備えて Skill 層でも止める（3 層ガードの冗長性）。
 
 ### Step 1: Worktree 情報の取得
