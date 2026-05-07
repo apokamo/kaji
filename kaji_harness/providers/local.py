@@ -119,10 +119,8 @@ def _emit_windows_warning() -> None:
     _WIN_WARNING_EMITTED = True
     print(
         "WARNING: kaji local mode is running on Windows without process-level "
-        "locking. If you launch multiple kaji processes simultaneously on this "
-        "PC, ID collisions are possible. As a single user with serial workflow "
-        "this is typically safe. Full Windows support is tracked as a future "
-        "work item.",
+        "locking. Windows native is not a supported local-mode environment. "
+        "Use WSL for supported local-mode operation.",
         file=sys.stderr,
     )
 

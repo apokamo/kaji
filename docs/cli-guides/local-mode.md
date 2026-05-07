@@ -124,6 +124,6 @@ Step 4 完了で Issue close は確定し、Step 5/6 の失敗は警告のみ。
 
 ## 8. 既知の制限
 
-- Windows は flock を skip（並列 `kaji issue create` で衝突する場合がある）
+- Windows native は現時点では対応対象外。Windows では WSL 上で使う
 - `kaji pr` 系（`pr-fix` / `pr-verify` / `i-pr`）は Phase 4 で provider 別エラー化予定
 - `kaji sync from-github` は Phase 5 で実装予定（buildout 中は `.kaji/cache/issues/N.json` を手動投入）
