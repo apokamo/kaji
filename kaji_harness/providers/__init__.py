@@ -29,9 +29,35 @@ __all__ = [
     "Label",
     "LocalProvider",
     "ResolvedId",
+    "actual_provider_type",
     "get_provider",
     "normalize_id",
 ]
+
+
+def actual_provider_type(config: KajiConfig) -> str:
+    """``get_provider(config)`` 成功後に ``provider.type`` を取り出す helper。
+
+    Phase 3-e 以降、``get_provider(config)`` が成功すれば ``config.provider``
+    は必ず非 ``None``。本 helper は型 narrowing と「provider 確定後に呼ぶ」
+    契約を呼出側に強制する役割を持つ。
+
+    Args:
+        config: ``KajiConfig`` インスタンス。``get_provider()`` で事前に
+            検証済みであることが前提。
+
+    Returns:
+        ``"github"`` または ``"local"``。
+
+    Raises:
+        ValueError: ``config.provider`` が ``None``（``get_provider()`` を
+            経由せず本 helper を呼んだ場合の防御的ガード）。
+    """
+    if config.provider is None:
+        raise ValueError(
+            "actual_provider_type() called before get_provider(); config.provider is None"
+        )
+    return config.provider.type
 
 
 def get_provider(config: KajiConfig) -> IssueProvider:

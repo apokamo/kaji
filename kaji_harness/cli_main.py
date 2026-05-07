@@ -21,7 +21,7 @@ from .errors import (
     SkillNotFound,
     WorkflowValidationError,
 )
-from .providers import ResolvedId, get_provider, normalize_id
+from .providers import ResolvedId, actual_provider_type, get_provider, normalize_id
 from .providers.local import (
     IssueNotFoundError,
     IssueReadOnlyError,
@@ -62,10 +62,32 @@ def create_parser() -> argparse.ArgumentParser:
     _register_validate(subparsers)
     _register_issue(subparsers)
     _register_pr(subparsers)
+    _register_config(subparsers)
     from .local_init import register_subcommand as _register_local
 
     _register_local(subparsers)
     return parser
+
+
+def _register_config(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Register the ``config`` subcommand group.
+
+    Phase 4 で ``kaji config provider-type`` を read-only で公開する。
+    Skill / 自動化スクリプトが overlay (``.kaji/config.local.toml``) を
+    考慮した正しい provider type を取得するための入口。
+    """
+    p = subparsers.add_parser("config", help="Read-only config inspection commands")
+    config_subs = p.add_subparsers(dest="config_command", required=True)
+    pt = config_subs.add_parser(
+        "provider-type",
+        help="Print resolved provider.type ('github' or 'local')",
+    )
+    pt.add_argument(
+        "--workdir",
+        type=Path,
+        default=Path.cwd(),
+        help="Starting directory for config discovery (default: current directory)",
+    )
 
 
 def _register_run(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -1041,6 +1063,39 @@ def _local_issue_list(provider: LocalProvider, rest: list[str]) -> int:
     return EXIT_OK
 
 
+def cmd_config_provider_type(args: argparse.Namespace) -> int:
+    """Print resolved ``provider.type`` ("github" / "local") to stdout.
+
+    Phase 4 で導入。Skill / 自動化スクリプトが overlay 込みの provider type を
+    副作用なく取得するための read-only エントリ。``KajiConfig.discover()``
+    と ``get_provider()`` の検証を経由するため、`_handle_pr` / `_handle_issue`
+    / `cmd_run` と同じ config resolution path を共有する。
+
+    Exit codes:
+        0: 解決成功（stdout に ``"github\\n"`` または ``"local\\n"``）
+        2: config 不在 or 不正（stderr に診断メッセージ）
+    """
+    start_dir = args.workdir.resolve()
+    if not start_dir.is_dir():
+        print(
+            f"Error: --workdir '{args.workdir}' is not a valid directory",
+            file=sys.stderr,
+        )
+        return EXIT_INVALID_INPUT
+    try:
+        config = KajiConfig.discover(start_dir=start_dir)
+    except (ConfigNotFoundError, ConfigLoadError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    try:
+        get_provider(config)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    sys.stdout.write(f"{actual_provider_type(config)}\n")
+    return EXIT_OK
+
+
 def main(argv: list[str] | None = None) -> int:
     """Main entrypoint."""
     parser = create_parser()
@@ -1054,6 +1109,11 @@ def main(argv: list[str] | None = None) -> int:
         return _handle_issue(args.args)
     if args.command == "pr":
         return _handle_pr(args.args)
+    if args.command == "config":
+        if args.config_command == "provider-type":
+            return cmd_config_provider_type(args)
+        parser.print_help()
+        return EXIT_ABORT
     if args.command == "local":
         from .local_init import cmd_local
 
