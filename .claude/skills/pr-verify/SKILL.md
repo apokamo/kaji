@@ -19,6 +19,7 @@ PR レビュー修正後の確認を行う。
 |-----------|-----------------|
 | `/pr-fix` 後の修正確認 | ✅ 必須 |
 | 新規レビューが必要な場合 | ❌ PR 上で直接レビューを実施 |
+| `provider.type='local'` 配下 | ❌ Step 0 で ABORT。代替は `/issue-verify-code` |
 
 **ワークフロー内の位置**: i-pr → [PR review] → (pr-fix → **pr-verify**) → close
 
@@ -30,12 +31,22 @@ $ARGUMENTS = <issue_id>
 
 - Issue 番号を受け付ける（関連 PR を自動解決する）
 
+### コンテキスト変数
+
+| 変数 | 型 | 説明 |
+|------|-----|------|
+| `issue_id` | str | 正規化済み Issue ID（GitHub 数値、または `local-*`） |
+| `issue_ref` | str | 人間可読の Issue 参照 |
+| `provider_type` | str | `github` または `local`。Step 0 のガード判定に使用 |
+
 ### 解決ルール
 
 コンテキスト変数 `issue_id` が存在すればそちらを使用。
 なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
 
 `issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
+
+`pr_id` はハーネス経由では Phase 4 時点ではプロンプトに自動注入されない（Phase 5 で GitHubProvider が解決して prompt 注入する予定）。Phase 4 時点では Step 1 内で `kaji pr list --search` から取得して確定する。`pr_ref` は `pr_id` から導出する: GitHub 数値 ID なら `#<pr_id>`、それ以外は bare ID。
 
 ## 前提知識の読み込み
 
@@ -60,30 +71,90 @@ $ARGUMENTS = <issue_id>
 
 ## 実行手順
 
+### Step 0: provider check
+
+本 Skill は forge provider 専用。`provider_type` を解決し、`github` 以外なら ABORT する。
+
+**provider_type の解決順序**:
+
+1. ハーネス経由で `[provider_type]` が注入されていればそれを使用
+2. 未注入（手動実行）の場合は `kaji config provider-type` を呼んで解決:
+
+   ```bash
+   PROVIDER_TYPE="${provider_type:-$(kaji config provider-type 2>/dev/null || true)}"
+   ```
+
+   `|| true` で exit code を握りつぶし、空文字 / 不明値の場合は次の判定で明示的に ABORT する。
+
+**判定**:
+
+```bash
+case "$PROVIDER_TYPE" in
+    github) : ;;  # 続行
+    local)
+        cat <<'MSG'
+pr-verify is a forge-only skill and cannot run under provider.type='local'.
+Pull request concept does not exist in local mode. Use the verify skill
+for code review directly:
+  /issue-verify-code
+MSG
+        exit 0
+        ;;
+    *)
+        echo "ABORT: provider_type unresolved. Check .kaji/config.toml has [provider]."
+        exit 0
+        ;;
+esac
+```
+
+`provider_type` が `github` 以外の場合は以下の verdict で **ABORT** すること:
+
+```text
+---VERDICT---
+status: ABORT
+reason: |
+  pr-verify is a forge-only skill; current provider.type is not 'github'.
+evidence: |
+  PROVIDER_TYPE="$PROVIDER_TYPE"（local mode では PR 概念が無い）
+suggestion: |
+  Use /issue-verify-code instead.
+---END_VERDICT---
+```
+
 ### Step 1: コンテキスト取得
 
 1. **PR の特定**:
-   Issue 番号から関連 PR を解決する。
+   Issue 番号から関連 PR を解決し、`pr_id` / `pr_ref` を確定する。
+
    ```bash
-   kaji pr list --search "[issue_id]" --json number,title,headRefName --jq '.'
+   PR_JSON=$(kaji pr list --search "[issue_id]" --json number,title,headRefName --jq '.[0]')
+   pr_id=$(echo "$PR_JSON" | jq -r '.number')
+   pr_ref="#${pr_id}"
    ```
+
    見つからない場合は Issue 本文の `> **Branch**:` 行からブランチ名を取得し:
+
    ```bash
-   kaji pr list --head "[branch_name]" --json number,title --jq '.'
+   PR_JSON=$(kaji pr list --head "[branch_name]" --json number,title --jq '.[0]')
+   pr_id=$(echo "$PR_JSON" | jq -r '.number')
+   pr_ref="#${pr_id}"
    ```
 
 2. **Worktree パスの解決**:
    [_shared/worktree-resolve.md](../_shared/worktree-resolve.md) の手順に従い、Worktree の絶対パスを取得。
 
 3. **前回の指摘と対応報告の取得**:
+
    ```bash
-   kaji pr view [pr-number] --comments
-   kaji pr reviews [pr-number] --jq '.[] | {user: .user.login, state: .state, body: .body}'
-   kaji pr review-comments [pr-number] --jq '.[] | {path: .path, line: .line, body: .body, user: .user.login}'
+   kaji pr view [pr_id] --comments
+   kaji pr reviews [pr_id] --jq '.[] | {user: .user.login, state: .state, body: .body}'
+   kaji pr review-comments [pr_id] --jq '.[] | {path: .path, line: .line, body: .body, user: .user.login}'
    ```
+
    「レビュー指摘への対応報告」コメントを確認する。
 
 4. **修正差分の確認**:
+
    ```bash
    cd [worktree_dir] && git log --oneline -5
    cd [worktree_dir] && git diff HEAD~1
@@ -126,7 +197,7 @@ $ARGUMENTS = <issue_id>
 
 - **判定には含めない**（verify の収束保証のため）
 - **報告は行う**（情報損失を防ぐため）
-- **推奨対応を添える**（放置されないように）
+- **推奨対応を添える**(放置されないように)
 
 ### Step 3: 品質チェック
 
@@ -141,7 +212,7 @@ cd [worktree_dir] && source .venv/bin/activate && make check
 #### Approve の場合
 
 ```bash
-kaji pr review [pr-number] --approve --body-file - <<'EOF'
+kaji pr review [pr_id] --approve --body-file - <<'EOF'
 ## PR レビュー修正確認結果
 
 ### 修正項目の確認
@@ -173,7 +244,7 @@ EOF
 #### Changes Requested の場合
 
 ```bash
-kaji pr review [pr-number] --request-changes --body-file - <<'EOF'
+kaji pr review [pr_id] --request-changes --body-file - <<'EOF'
 ## PR レビュー修正確認結果
 
 ### 修正項目の確認
@@ -205,7 +276,7 @@ EOF
 
 | 項目 | 値 |
 |------|-----|
-| PR | #[pr-number] |
+| PR | [pr_ref] |
 | Issue | [issue_ref] |
 | 判定 | Approve / Changes Requested |
 
@@ -238,4 +309,4 @@ suggestion: |
 |--------|------|
 | PASS | Approve |
 | RETRY | 修正不十分 |
-| ABORT | 重大な問題 |
+| ABORT | 重大な問題 / Step 0 で provider mismatch |
