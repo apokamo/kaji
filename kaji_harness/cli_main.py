@@ -21,6 +21,7 @@ from .errors import (
     SkillNotFound,
     WorkflowValidationError,
 )
+from .models import Workflow
 from .providers import ResolvedId, actual_provider_type, get_provider, normalize_id
 from .providers.local import (
     IssueNotFoundError,
@@ -308,6 +309,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_DEFINITION_ERROR
 
+    # Phase 4: workflow ↔ provider 整合検証。``requires_provider != "any"`` の
+    # 場合のみ ``config.provider.type`` と突合し、不整合を ``EXIT_INVALID_INPUT``
+    # で fail-fast する。
+    rc = _validate_workflow_provider_match(workflow, config)
+    if rc != EXIT_OK:
+        return rc
+
     # Run workflow
     try:
         runner = WorkflowRunner(
@@ -345,6 +353,33 @@ def cmd_run(args: argparse.Namespace) -> int:
     issue_ref = runner.canonical_issue_ref or _format_issue_ref(args.issue)
     print(f"Workflow '{workflow.name}' completed for issue {issue_ref}")
     return EXIT_OK
+
+
+def _validate_workflow_provider_match(workflow: Workflow, config: KajiConfig) -> int:
+    """``workflow.requires_provider`` と ``config.provider.type`` の突合検証。
+
+    Phase 4 で導入。``requires_provider`` が ``"any"`` 以外で
+    ``config.provider.type`` と一致しない場合、``EXIT_INVALID_INPUT`` を返し、
+    切替手順を stderr に出力する。
+
+    本 helper は ``get_provider(config)`` が成功した直後に呼ぶことが前提
+    （``actual_provider_type(config)`` の narrowing 契約に従う）。
+    """
+    if workflow.requires_provider == "any":
+        return EXIT_OK
+    actual = actual_provider_type(config)
+    if workflow.requires_provider == actual:
+        return EXIT_OK
+    print(
+        f"Error: workflow '{workflow.name}' requires provider.type="
+        f"'{workflow.requires_provider}' but current config has "
+        f"provider.type='{actual}'.\n"
+        f"  - To run this workflow, switch provider in .kaji/config.local.toml.\n"
+        f"  - To use the current provider, choose a workflow with "
+        f"requires_provider='{actual}' or 'any'.",
+        file=sys.stderr,
+    )
+    return EXIT_INVALID_INPUT
 
 
 _FORGE_METHOD_FLAGS = {"--merge", "--squash", "--rebase"}
