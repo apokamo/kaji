@@ -13,6 +13,22 @@
 
 判断に迷うケースは [workflow_overview.md](workflow_overview.md) の判断テーブルを参照。
 
+## provider × workflow の対応表（Phase 4 以降）
+
+各 builtin workflow が要求する provider type。`kaji run` 起動時に
+`config.provider.type` と突合し、不整合を exit 2 で fail-fast する。
+
+| Workflow | `requires_provider` | 末尾 step | 備考 |
+|----------|---------------------|-----------|------|
+| `feature-development.yaml` | `github` | `i-pr` | forge 必須 |
+| `feature-development-light.yaml` | `github` | `i-pr` | forge 必須 |
+| `implement-to-pr.yaml` | `github` | `i-pr` | forge 必須 |
+| `feature-development-local.yaml` | `local` | `issue-close` | local merge (`--no-ff`) 前提 |
+| `design-only.yaml` | `any` | `verify-design` | 設計完了で終わるため provider 中立 |
+
+custom workflow への `requires_provider` 追加は推奨（[workflow-authoring.md](workflow-authoring.md)
+§ `requires_provider` 参照）。
+
 ## feature-development
 
 コード変更を伴う Issue のワークフロー。設計 → 設計レビュー → 実装 → コードレビュー → 最終チェック → PR。

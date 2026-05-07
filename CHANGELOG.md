@@ -20,6 +20,41 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   invalid values (`PC1`, `pc-1`, 17+ characters, etc.) now fails fast
   with `ConfigLoadError` instead of crashing later in `kaji issue` /
   `kaji run`.
+- **Phase 4**: `kaji pr ...` (including `pr create` / `pr list` /
+  `pr review-comments` / `pr reviews` / `pr reply-to-comment`) now
+  exits 2 with a `forge-only` error message when run under
+  `provider.type='local'`. Previously, the call was passed through to
+  `gh pr` even in local mode, risking accidental PR creation against the
+  GitHub remote.
+- **Phase 4**: `kaji run` now validates that `workflow.requires_provider`
+  matches `config.provider.type` before dispatching the runner.
+  Mismatches exit 2 with a switching guide (e.g. running
+  `feature-development.yaml` under `provider.type='local'` exits 2 instead
+  of stopping mid-workflow at the `i-pr` step).
+- **Phase 4**: `prompt.build_prompt(...)` requires `issue_context:
+  IssueContext` (no longer Optional). All callers must pass the
+  resolved `IssueContext` from
+  `WorkflowRunner._resolve_run_issue_context()`. The internal `if
+  issue_context is not None:` fallback paths have been removed.
+
+### Added
+
+- **Phase 4**: `kaji config provider-type` — read-only subcommand that
+  prints the resolved provider type (`github` / `local`) on stdout. Skill
+  manual-execution paths use this to reconcile `[provider_type]` when the
+  context variable has not been injected by the harness.
+- **Phase 4**: `Workflow.requires_provider` field
+  (`"github"` / `"local"` / `"any"`, default `"any"`). Declares which
+  provider type a workflow expects. Builtin workflows in `.kaji/wf/*.yaml`
+  declare it explicitly: `feature-development.yaml`,
+  `feature-development-light.yaml`, `implement-to-pr.yaml` →
+  `github`; `feature-development-local.yaml` → `local`;
+  `design-only.yaml` → `any`.
+- **Phase 4**: Step 0 provider-check guard added to `pr-fix` /
+  `pr-verify` / `i-pr` SKILL.md. Forge-only skills now ABORT under
+  `provider.type='local'` with guidance toward the bare-mode alternatives
+  (`/issue-review-code` / `/issue-fix-code` / `/issue-verify-code` /
+  `/issue-close`).
 
 ### Migration
 
@@ -33,6 +68,16 @@ For existing GitHub-based usage, add to `.kaji/config.toml`:
 
 For local-first usage, run `kaji local init` (creates
 `.kaji/config.local.toml` overlay). See `docs/cli-guides/local-mode.md`.
+
+For **custom workflow YAMLs** that include forge-only skills (`i-pr` /
+`pr-fix` / `pr-verify` / direct `kaji pr` invocations), add to opt into
+the new fail-fast guard:
+
+    requires_provider: github
+
+The default value `any` keeps existing custom workflows running, but the
+guard will not catch provider mismatches until the field is set. See
+`docs/dev/workflow-authoring.md` for details.
 
 The exit-code contract is now:
 
