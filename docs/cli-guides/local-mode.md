@@ -156,13 +156,38 @@ Step 4 完了で Issue close は確定し、Step 5/6 の失敗は警告のみ。
 └── cache/issues/<n>.json    (GitHub の read-only キャッシュ)
 ```
 
-## 8. 既知の制限
+## 8. `kaji pr` の挙動（Phase 4 以降）
+
+`provider.type='local'` 配下では `kaji pr ...` は **bare-provider error** で
+exit 2 する（Phase 4 で導入）。PR 概念が無いため、`kaji pr create`
+/ `kaji pr list` / `kaji pr review-comments` 等すべてのサブコマンドが
+同じ挙動になる。事故 PR を防ぐ目的のガード。
+
+代替手段:
+
+| 旧（GitHub mode） | local mode 代替 |
+|------------------|-----------------|
+| Code review (`/pr-fix`, `/pr-verify`) | `/issue-review-code` / `/issue-fix-code` / `/issue-verify-code`（PR 概念を介さず Issue 上で回す） |
+| Merge & close (`/i-pr` → review → `/issue-close`) | `/issue-close` 直行（`git merge --no-ff <feat-branch>` + `kaji issue close --reason completed`） |
+| PR 一覧 | `git branch --list 'feat/local-*'` |
+
+`pr-fix` / `pr-verify` / `i-pr` Skill は手動実行（`/pr-fix <issue_id>`）でも
+Step 0 で `provider_type` を確認して ABORT する。手動実行時の解決経路:
+
+```bash
+PROVIDER_TYPE="${provider_type:-$(kaji config provider-type 2>/dev/null || true)}"
+```
+
+GitHub mode に戻したい場合は `.kaji/config.local.toml` の `[provider] type =
+"github"` に書き換える（または overlay を削除して tracked
+`.kaji/config.toml` を有効化）。
+
+## 9. 既知の制限
 
 - Windows native は現時点では対応対象外。Windows では WSL 上で使う
-- `kaji pr` 系（`pr-fix` / `pr-verify` / `i-pr`）は Phase 4 で provider 別エラー化予定
 - `kaji sync from-github` は Phase 5 で実装予定（buildout 中は `.kaji/cache/issues/N.json` を手動投入）
 
-## 9. Phase 3-e migration（既存 user 向け）
+## 10. Phase 3-e migration（既存 user 向け）
 
 Phase 3-e で `[provider]` セクションは **必須** になった。`.kaji/config.toml`
 に `[provider]` が無い repo は `kaji issue` / `kaji pr` / `kaji run` が

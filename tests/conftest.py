@@ -13,7 +13,60 @@ from pathlib import Path
 
 import pytest
 
-from kaji_harness.providers import LocalProvider
+from kaji_harness.providers import IssueContext, LocalProvider
+
+
+def make_issue_context(
+    *,
+    provider_type: str = "github",
+    issue_id: str = "42",
+    slug: str = "test",
+    branch_prefix: str = "feat",
+    repo_root: Path | None = None,
+    default_branch: str = "main",
+    branch_prefix_fallback: bool = False,
+) -> IssueContext:
+    """Phase 4: ``build_prompt`` を直接呼び出すテスト向け IssueContext factory.
+
+    Phase 3-e で provider 経由解決が fail-fast 化されたが、``build_prompt`` を
+    直接呼び出すテストは provider 経由を回避して `IssueContext` を組み立てる
+    必要がある。本 helper は github / local 両 provider 用の最小限な
+    ``IssueContext`` を返す。
+
+    Args:
+        provider_type: ``"github"`` / ``"local"``。
+        issue_id: github なら数値文字列、local なら ``"local-pc1-3"`` 形式。
+        slug: Issue 末尾 slug（``test`` 等）。
+        branch_prefix: ``feat`` / ``fix`` / ``docs`` 等。
+        repo_root: worktree_dir の親パス。``None`` の場合は ``"/tmp/repo"``。
+        default_branch: ``main`` 等。
+        branch_prefix_fallback: ``type:*`` label 不在で ``chore`` fallback された
+            場合 True。
+    """
+    base = repo_root if repo_root is not None else Path("/tmp/repo")
+    if provider_type == "github":
+        issue_ref = f"#{issue_id}"
+        issue_input = issue_id
+    elif provider_type == "local":
+        # local では issue_id がそのまま ref / input
+        issue_ref = issue_id
+        issue_input = issue_id
+    else:
+        raise ValueError(f"unknown provider_type: {provider_type!r}")
+
+    return IssueContext(
+        issue_id=issue_id,
+        issue_ref=issue_ref,
+        issue_input=issue_input,
+        slug=slug,
+        branch_prefix=branch_prefix,
+        branch_name=f"{branch_prefix}/{issue_id}",
+        worktree_dir=str(base / f"kaji-{branch_prefix}-{issue_id}"),
+        design_path=f"draft/design/issue-{issue_id}-{slug}.md",
+        provider_type=provider_type,
+        branch_prefix_fallback=branch_prefix_fallback,
+        default_branch=default_branch,
+    )
 
 
 def ensure_local_issue(repo_root: Path, issue: str, machine_id: str = "pc1") -> None:

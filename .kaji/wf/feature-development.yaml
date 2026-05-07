@@ -1,11 +1,10 @@
-name: feature-development-local
+name: feature-development
 description: |
-  provider=local 用の開発 workflow。
+  Issue の設計から PR 作成までの開発ワークフロー。
   issue-create / issue-start は事前に手動実行済みであることが前提。
-  PR concept を持たないため、最終 step は issue-close
-  （local merge + frontmatter 更新。design.md § local mode における /issue-close の手順）。
 execution_policy: auto
-requires_provider: local
+requires_provider: github
+# workdir: /home//////
 
 cycles:
   design-review:
@@ -103,15 +102,15 @@ steps:
     agent: claude
     model: opus
     on:
-      PASS: close
+      PASS: pr
       RETRY: final-check
       ABORT: end
 
-  - id: close
-    skill: issue-close
+  - id: pr
+    skill: i-pr
     agent: claude
     model: sonnet
     on:
       PASS: end
-      RETRY: close
+      RETRY: pr
       ABORT: end

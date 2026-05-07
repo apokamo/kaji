@@ -68,23 +68,6 @@ class TestPromptIssueContextInjection:
             cycles=[],
         )
 
-    def test_no_context_uses_legacy_two_variables(self) -> None:
-        prompt = build_prompt(
-            self._step(),
-            issue="42",
-            state=_make_state(),
-            workflow=self._workflow(),
-            issue_context=None,
-        )
-        assert "- issue_id: 42" in prompt
-        assert "- issue_ref: #42" in prompt
-        # IssueContext 由来の 5 変数は注入されない
-        assert "- branch_prefix:" not in prompt
-        assert "- branch_name:" not in prompt
-        assert "- worktree_dir:" not in prompt
-        assert "- design_path:" not in prompt
-        assert "- issue_input:" not in prompt
-
     def test_with_context_injects_five_extra_variables(self) -> None:
         ctx = IssueContext(
             issue_id="local-pc1-3",
@@ -136,17 +119,29 @@ class TestPromptIssueContextInjection:
         assert "- provider_type: local" in prompt
         assert "- default_branch: develop" in prompt
 
-    def test_no_context_does_not_inject_provider_type_or_default_branch(self) -> None:
-        """fallback 経路では provider_type / default_branch を注入しない。"""
+    def test_default_default_branch_uses_main(self) -> None:
+        """``IssueContext.default_branch`` が ``main`` のとき注入値も ``main``。"""
+        ctx = IssueContext(
+            issue_id="153",
+            issue_ref="#153",
+            issue_input="153",
+            slug="x",
+            branch_prefix="feat",
+            branch_name="feat/153",
+            worktree_dir="/p/kaji-feat-153",
+            design_path="draft/design/issue-153-x.md",
+            provider_type="github",
+            # default_branch defaults to "main"
+        )
         prompt = build_prompt(
             self._step(),
-            issue="42",
+            issue="153",
             state=_make_state(),
             workflow=self._workflow(),
-            issue_context=None,
+            issue_context=ctx,
         )
-        assert "- provider_type:" not in prompt
-        assert "- default_branch:" not in prompt
+        assert "- provider_type: github" in prompt
+        assert "- default_branch: main" in prompt
 
 
 # ============================================================

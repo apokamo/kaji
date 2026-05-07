@@ -371,6 +371,8 @@ class TestPreviousVerdictPropagation:
         from kaji_harness.prompt import build_prompt
         from kaji_harness.state import SessionState
 
+        from .conftest import make_issue_context
+
         # Create a state with a relaxed verdict recorded
         output = (
             "Result: BACK\n"
@@ -401,7 +403,13 @@ class TestPreviousVerdictPropagation:
             steps=[step],
         )
 
-        prompt = build_prompt(step, 99999, state, workflow)
+        prompt = build_prompt(
+            step,
+            "99999",
+            state,
+            workflow,
+            issue_context=make_issue_context(issue_id="99999"),
+        )
         assert "設計に問題あり" in prompt
         assert "API仕様不整合" in prompt
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 
 @dataclass
@@ -75,6 +76,7 @@ class Workflow:
     cycles: list[CycleDefinition] = field(default_factory=list)
     default_timeout: int | None = None
     workdir: str | None = None
+    requires_provider: Literal["github", "local", "any"] = "any"
 
     def find_step(self, step_id: str) -> Step | None:
         """ID でステップを検索。見つからなければ None。"""

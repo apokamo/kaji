@@ -21,7 +21,8 @@ from .errors import (
     SkillNotFound,
     WorkflowValidationError,
 )
-from .providers import ResolvedId, get_provider, normalize_id
+from .models import Workflow
+from .providers import ResolvedId, actual_provider_type, get_provider, normalize_id
 from .providers.local import (
     IssueNotFoundError,
     IssueReadOnlyError,
@@ -62,10 +63,32 @@ def create_parser() -> argparse.ArgumentParser:
     _register_validate(subparsers)
     _register_issue(subparsers)
     _register_pr(subparsers)
+    _register_config(subparsers)
     from .local_init import register_subcommand as _register_local
 
     _register_local(subparsers)
     return parser
+
+
+def _register_config(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Register the ``config`` subcommand group.
+
+    Phase 4 で ``kaji config provider-type`` を read-only で公開する。
+    Skill / 自動化スクリプトが overlay (``.kaji/config.local.toml``) を
+    考慮した正しい provider type を取得するための入口。
+    """
+    p = subparsers.add_parser("config", help="Read-only config inspection commands")
+    config_subs = p.add_subparsers(dest="config_command", required=True)
+    pt = config_subs.add_parser(
+        "provider-type",
+        help="Print resolved provider.type ('github' or 'local')",
+    )
+    pt.add_argument(
+        "--workdir",
+        type=Path,
+        default=Path.cwd(),
+        help="Starting directory for config discovery (default: current directory)",
+    )
 
 
 def _register_run(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -286,6 +309,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_DEFINITION_ERROR
 
+    # Phase 4: workflow ↔ provider 整合検証。``requires_provider != "any"`` の
+    # 場合のみ ``config.provider.type`` と突合し、不整合を ``EXIT_INVALID_INPUT``
+    # で fail-fast する。
+    rc = _validate_workflow_provider_match(workflow, config)
+    if rc != EXIT_OK:
+        return rc
+
     # Run workflow
     try:
         runner = WorkflowRunner(
@@ -323,6 +353,33 @@ def cmd_run(args: argparse.Namespace) -> int:
     issue_ref = runner.canonical_issue_ref or _format_issue_ref(args.issue)
     print(f"Workflow '{workflow.name}' completed for issue {issue_ref}")
     return EXIT_OK
+
+
+def _validate_workflow_provider_match(workflow: Workflow, config: KajiConfig) -> int:
+    """``workflow.requires_provider`` と ``config.provider.type`` の突合検証。
+
+    Phase 4 で導入。``requires_provider`` が ``"any"`` 以外で
+    ``config.provider.type`` と一致しない場合、``EXIT_INVALID_INPUT`` を返し、
+    切替手順を stderr に出力する。
+
+    本 helper は ``get_provider(config)`` が成功した直後に呼ぶことが前提
+    （``actual_provider_type(config)`` の narrowing 契約に従う）。
+    """
+    if workflow.requires_provider == "any":
+        return EXIT_OK
+    actual = actual_provider_type(config)
+    if workflow.requires_provider == actual:
+        return EXIT_OK
+    print(
+        f"Error: workflow '{workflow.name}' requires provider.type="
+        f"'{workflow.requires_provider}' but current config has "
+        f"provider.type='{actual}'.\n"
+        f"  - To run this workflow, switch provider in .kaji/config.local.toml.\n"
+        f"  - To use the current provider, choose a workflow with "
+        f"requires_provider='{actual}' or 'any'.",
+        file=sys.stderr,
+    )
+    return EXIT_INVALID_INPUT
 
 
 _FORGE_METHOD_FLAGS = {"--merge", "--squash", "--rebase"}
@@ -377,6 +434,21 @@ def _forward_to_gh(group: str, raw_args: list[str], *, repo: str | None = None) 
 
 
 _PR_BUILTIN_SUBCOMMANDS = {"review-comments", "reviews", "reply-to-comment"}
+
+_PR_BARE_PROVIDER_ERROR = (
+    "Error: 'kaji pr' is a forge-only command and cannot run under "
+    "provider.type='local'.\n"
+    "Pull request concept does not exist in local mode (bare provider). "
+    "Use git/issue operations directly:\n\n"
+    "  - Code review:        /issue-review-code, /issue-fix-code, "
+    "/issue-verify-code\n"
+    "  - Merge + close:      /issue-close (executes 'git merge --no-ff' + "
+    "frontmatter update)\n"
+    "  - Branch listing:     git branch --list 'feat/local-*'\n\n"
+    "To switch back to GitHub mode (e.g. after the outage), edit\n"
+    '.kaji/config.local.toml and set [provider] type = "github" (or remove the\n'
+    "overlay so the tracked .kaji/config.toml takes effect).\n"
+)
 
 
 def _is_ascii_decimal(s: str) -> bool:
@@ -604,13 +676,16 @@ def _handle_pr(raw_args: list[str]) -> int:
     builtin sub (``review-comments`` / ``reviews`` / ``reply-to-comment``) →
     dedicated handler; otherwise fall back to ``gh pr`` passthrough.
 
-    Phase 3-c rev #3（review #3 反映）:
+    Phase 4: ``provider.type='local'`` 配下では bare-provider エラーで
+    fail-fast する。``_PR_BUILTIN_SUBCOMMANDS`` （``gh api`` 直叩き）も
+    同じガードで止める。GitHub mode の挙動は Phase 3-e と bit-exact に
+    維持する。
 
-    - 壊れた config → exit 2（fail-fast、握りつぶさない）
-    - ``[provider.github] repo`` が設定されている場合は ``--repo`` で強制注入
-      （builtin / passthrough 両方）。``provider.type='local'`` 配下は
-      Phase 4 で bare-provider エラー化するため、本 PR では legacy 経路で
-      通す（``repo_override`` は ``None``）
+    Note: ``kaji pr --help`` / ``-h`` は本関数に到達せず、argparse 上位の
+    ``unrecognized arguments`` エラーで先に止まる（``_register_pr`` が
+    ``add_help=False`` + ``REMAINDER`` で登録されている既存挙動）。
+    bare provider 配下でも GitHub mode でも同じ。設計書 § 1 設計判断
+    「`kaji pr --help` を bare で見せない」要件は本挙動で満たされる。
     """
     try:
         config = _load_config_for_dispatch()
@@ -622,6 +697,10 @@ def _handle_pr(raw_args: list[str]) -> int:
         provider = get_provider(config)
     except ValueError as exc:
         sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    if isinstance(provider, LocalProvider):
+        sys.stderr.write(_PR_BARE_PROVIDER_ERROR)
         return EXIT_INVALID_INPUT
 
     repo_override: str | None = None
@@ -1041,6 +1120,39 @@ def _local_issue_list(provider: LocalProvider, rest: list[str]) -> int:
     return EXIT_OK
 
 
+def cmd_config_provider_type(args: argparse.Namespace) -> int:
+    """Print resolved ``provider.type`` ("github" / "local") to stdout.
+
+    Phase 4 で導入。Skill / 自動化スクリプトが overlay 込みの provider type を
+    副作用なく取得するための read-only エントリ。``KajiConfig.discover()``
+    と ``get_provider()`` の検証を経由するため、`_handle_pr` / `_handle_issue`
+    / `cmd_run` と同じ config resolution path を共有する。
+
+    Exit codes:
+        0: 解決成功（stdout に ``"github\\n"`` または ``"local\\n"``）
+        2: config 不在 or 不正（stderr に診断メッセージ）
+    """
+    start_dir = args.workdir.resolve()
+    if not start_dir.is_dir():
+        print(
+            f"Error: --workdir '{args.workdir}' is not a valid directory",
+            file=sys.stderr,
+        )
+        return EXIT_INVALID_INPUT
+    try:
+        config = KajiConfig.discover(start_dir=start_dir)
+    except (ConfigNotFoundError, ConfigLoadError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    try:
+        get_provider(config)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    sys.stdout.write(f"{actual_provider_type(config)}\n")
+    return EXIT_OK
+
+
 def main(argv: list[str] | None = None) -> int:
     """Main entrypoint."""
     parser = create_parser()
@@ -1054,6 +1166,11 @@ def main(argv: list[str] | None = None) -> int:
         return _handle_issue(args.args)
     if args.command == "pr":
         return _handle_pr(args.args)
+    if args.command == "config":
+        if args.config_command == "provider-type":
+            return cmd_config_provider_type(args)
+        parser.print_help()
+        return EXIT_ABORT
     if args.command == "local":
         from .local_init import cmd_local
 

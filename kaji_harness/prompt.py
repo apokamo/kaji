@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from .models import Step, Workflow
 from .providers import IssueContext
-from .state import SessionState, _format_issue_ref
+from .state import SessionState
 
 
 def build_prompt(
@@ -15,42 +15,39 @@ def build_prompt(
     issue: str,
     state: SessionState,
     workflow: Workflow,
-    issue_context: IssueContext | None = None,
+    issue_context: IssueContext,
 ) -> str:
     """ステップ実行用のプロンプトを構築する。
 
+    Phase 4 で ``issue_context`` を required 化。Phase 3-e で
+    ``WorkflowRunner._resolve_issue_context()`` が ``IssueContext`` を必ず
+    返す設計に変わったため、``build_prompt`` 呼び出し時点で
+    ``IssueContext`` は確定している（``runner.py:_resolve_run_issue_context``）。
+
     Args:
         step: 実行するステップ
-        issue: Issue ID（GitHub の数値、または ``local-<machine>-<n>`` 形式）
+        issue: Issue ID（呼出側のログ・互換のため signature には残すが、
+            注入される値は ``issue_context.issue_id`` を採用する）
         state: 現在のセッション状態
         workflow: ワークフロー定義
-        issue_context: provider が解決した `IssueContext`。``None`` の場合は
-            Phase 2-B 互換の 2 変数（``issue_id`` / ``issue_ref``）のみ注入する
-            （Phase 3-c では `[provider]` 未設定の repo で legacy 互換を維持）。
+        issue_context: provider が解決した `IssueContext`。
 
     Returns:
         CLI に渡すプロンプト文字列
     """
-    issue_id = str(issue)
-    issue_ref = _format_issue_ref(issue_id)
-    if issue_context is not None:
-        # provider が IssueContext を解決済の場合、issue_id / issue_ref も
-        # context 由来の値を採用する（machine_id 等の正規化を尊重するため）。
-        issue_id = issue_context.issue_id
-        issue_ref = issue_context.issue_ref
+    del issue  # 互換 signature。注入は issue_context 経由で行う
     variables: dict[str, object] = {
-        "issue_id": issue_id,
-        "issue_ref": issue_ref,
+        "issue_id": issue_context.issue_id,
+        "issue_ref": issue_context.issue_ref,
         "step_id": step.id,
+        "issue_input": issue_context.issue_input,
+        "branch_prefix": issue_context.branch_prefix,
+        "branch_name": issue_context.branch_name,
+        "worktree_dir": issue_context.worktree_dir,
+        "design_path": issue_context.design_path,
+        "provider_type": issue_context.provider_type,
+        "default_branch": issue_context.default_branch,
     }
-    if issue_context is not None:
-        variables["issue_input"] = issue_context.issue_input
-        variables["branch_prefix"] = issue_context.branch_prefix
-        variables["branch_name"] = issue_context.branch_name
-        variables["worktree_dir"] = issue_context.worktree_dir
-        variables["design_path"] = issue_context.design_path
-        variables["provider_type"] = issue_context.provider_type
-        variables["default_branch"] = issue_context.default_branch
 
     # サイクル変数（サイクル内ステップのみ）
     cycle = workflow.find_cycle_for_step(step.id)
@@ -71,7 +68,7 @@ def build_prompt(
     return f"""スキル `{step.skill}` を実行してください。
 
 ## セッション開始プロトコル
-1. Issue {issue_ref} を読み、現在の進捗を把握する
+1. Issue {issue_context.issue_ref} を読み、現在の進捗を把握する
 2. git log --oneline -10 で最近の変更を確認する
 3. 以下のコンテキスト変数を確認する
 4. 上記を踏まえて、スキルの指示に従って作業を実行する

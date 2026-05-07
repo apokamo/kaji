@@ -25,6 +25,10 @@ FORBIDDEN_PATTERNS = [
     r"<branch-name>",
     r"<design-path>",
     r"<issue-input>",
+    # Phase 4 で追加: pr-* 系の hyphen 形式 placeholder（pr-fix / pr-verify /
+    # i-pr で全廃）
+    r"\[pr-number\]",
+    r"<pr-number>",
 ]
 
 
