@@ -15,7 +15,16 @@ class ConfigNotFoundError(HarnessError):
 
     def __init__(self, start_dir: Path):
         self.start_dir = start_dir
-        super().__init__(f".kaji/config.toml not found. Searched from {self.start_dir} to /.")
+        super().__init__(
+            f".kaji/config.toml not found. Searched from {self.start_dir} to /.\n\n"
+            "`kaji issue` / `kaji pr` / `kaji run` require a kaji repository.\n"
+            "First create `.kaji/config.toml` with `[paths]` and `[execution]`\n"
+            "sections (template in `docs/cli-guides/local-mode.md` § 2),\n"
+            "then add a `[provider]` section:\n"
+            '  - For GitHub:    type = "github" + [provider.github] repo = "<owner>/<repo>"\n'
+            '  - For local-first: type = "local"  (then run `kaji local init`\n'
+            "                    to write the gitignored machine_id overlay)."
+        )
 
 
 class ConfigLoadError(HarnessError):
@@ -84,11 +93,14 @@ class WorkdirNotFoundError(HarnessError):
 
 
 class IssueContextResolutionError(HarnessError):
-    """`provider.resolve_issue_context` が明示 provider 設定下で失敗した。
+    """`provider.resolve_issue_context` が失敗した。
 
-    Phase 3-c で導入。``[provider]`` が明示設定されている場合は agent 起動前に
-    fail-fast する。fallback（legacy 2 変数注入）は ``[provider]`` 未設定の
-    互換経路に限定する（review #2 反映、phase3-design.md L322 と整合）。
+    Phase 3-c で導入、Phase 3-e で `[provider]` セクションが必須化されたため、
+    Issue 解決失敗（machine_id 不在 / Issue dir 不在 / cache 不整合 等）は
+    agent 起動前に常に fail-fast する。``cmd_run`` では `EXIT_RUNTIME_ERROR
+    (= 3)` にマップされる。``[provider]`` 未設定 / 設定不整合の問題は
+    ``ValueError`` として `cmd_run` 冒頭で `EXIT_INVALID_INPUT (= 2)` に
+    正規化されるため、本例外には到達しない。
     """
 
     def __init__(self, issue_input: str, provider_type: str, cause: BaseException):

@@ -115,9 +115,36 @@ def _make_config(tmp_path: Path) -> KajiConfig:
     config_file = kaji_dir / "config.toml"
     if not config_file.exists():
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
     return KajiConfig._load(config_file)
+
+
+def _ensure_local_issue(tmp_path: Path, issue: int) -> None:
+    """provider=local 用に `local-pc1-<issue>` が存在することを保証する。
+
+    Phase 3-e 以降は `WorkflowRunner.run()` 前に IssueContext 解決が走るため、
+    Issue dir が無いと IssueContextResolutionError で fail-fast する。
+
+    counter file を ``issue - 1`` に固定してから 1 度 create_issue を呼ぶ
+    ことで、`issue` を直接採番させる（O(1) で目的の id を作る）。
+    """
+    from kaji_harness.providers import LocalProvider
+
+    counter_path = tmp_path / ".kaji" / "counters" / "pc1.txt"
+    counter_path.parent.mkdir(parents=True, exist_ok=True)
+    issues_root = tmp_path / ".kaji" / "issues"
+    issues_root.mkdir(parents=True, exist_ok=True)
+    if any(d.name.startswith(f"local-pc1-{issue}-") for d in issues_root.iterdir()):
+        return
+    counter_path.write_text(str(issue - 1))
+    provider = LocalProvider(repo_root=tmp_path, machine_id="pc1")
+    provider.create_issue(
+        title=f"test issue {issue}",
+        body="body",
+        labels=["type:feature"],
+        slug=f"test-{issue}",
+    )
 
 
 def _make_runner(
@@ -130,6 +157,8 @@ def _make_runner(
     """Create a WorkflowRunner with project_root and artifacts_dir."""
     if config is None:
         config = _make_config(tmp_path)
+    if config.provider is not None and config.provider.type == "local":
+        _ensure_local_issue(tmp_path, issue)
     return WorkflowRunner(
         workflow=workflow,
         issue_number=issue,

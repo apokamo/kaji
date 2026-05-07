@@ -17,6 +17,40 @@ source .venv/bin/activate
 
 ## 2. 初期化（`kaji local init`）
 
+### 前提: tracked `.kaji/config.toml`
+
+`kaji local init` は **overlay (`.kaji/config.local.toml`) しか作らない**。
+tracked `.kaji/config.toml` が無い repo では `kaji issue` / `kaji pr` /
+`kaji run` がいずれも `.kaji/config.toml not found` で停止するため、
+overlay 生成より前に最低限の base config を 1 度だけ commit する必要がある。
+
+最小テンプレート:
+
+```toml
+# .kaji/config.toml （tracked）
+[paths]
+artifacts_dir = ".kaji-artifacts"
+skill_dir = ".claude/skills"
+
+[execution]
+default_timeout = 1800
+
+[provider]
+type = "local"
+```
+
+`type = "github"` 運用なら上記 `[provider]` ブロックを以下に差し替える:
+
+```toml
+[provider]
+type = "github"
+
+[provider.github]
+repo = "<owner>/<repo>"
+```
+
+### overlay 生成
+
 リポジトリ root から:
 
 ```bash
@@ -127,3 +161,53 @@ Step 4 完了で Issue close は確定し、Step 5/6 の失敗は警告のみ。
 - Windows native は現時点では対応対象外。Windows では WSL 上で使う
 - `kaji pr` 系（`pr-fix` / `pr-verify` / `i-pr`）は Phase 4 で provider 別エラー化予定
 - `kaji sync from-github` は Phase 5 で実装予定（buildout 中は `.kaji/cache/issues/N.json` を手動投入）
+
+## 9. Phase 3-e migration（既存 user 向け）
+
+Phase 3-e で `[provider]` セクションは **必須** になった。`.kaji/config.toml`
+に `[provider]` が無い repo は `kaji issue` / `kaji pr` / `kaji run` が
+exit 2 で停止する。
+
+### A. GitHub 運用継続の場合
+
+`.kaji/config.toml` に以下を追記する:
+
+```toml
+[provider]
+type = "github"
+
+[provider.github]
+repo = "<owner>/<repo>"
+```
+
+- `repo` を設定すると `kaji issue` / `kaji pr` は `gh` 起動時に
+  `--repo <owner>/<repo>` を自動注入する。worktree の git remote が
+  fork を指していても、書き先が意図せずズレない。
+
+### B. local-first 運用に切り替える場合
+
+```bash
+kaji local init
+```
+
+- `.kaji/config.local.toml`（gitignored）を作成し、`machine_id` /
+  `default_branch` を書き込む
+- `.gitignore` に `.kaji/config.local.toml` 行を自動追加（既存なら no-op）
+- 既存 `.kaji/config.toml` の `[provider]` セクションは尊重されるため、
+  user が手動で `type = "local"` を tracked 側に書く場合と overlay で
+  上書きする場合の両方を選べる
+
+### C. `.kaji/config.toml` 自体が無い repo
+
+Phase 3-e より前は kaji リポジトリ外で `kaji issue view 1` を呼ぶと
+`gh issue view 1` に素通りしていた。Phase 3-e でこの passthrough は
+削除された。`.kaji/config.toml` を持たない場所では `gh` を直接呼ぶ。
+
+### D. `provider.local.machine_id` の手書きに注意
+
+`config.local.toml` を手書きする場合、`machine_id` は `[a-z0-9]{1,16}`
+を満たす必要がある（lowercase 英数字のみ、ハイフン不可、最大 16 文字）。
+Phase 3-e から config 読み込み段で文法 validation が走り、`PC1` /
+`pc-1` / 17 文字超は `ConfigLoadError` で fail-fast する。
+
+迷ったら `kaji local init` を使えば候補生成 + 重複検知が走る。

@@ -102,20 +102,12 @@ class TestProviderConfigParsing:
 
 @pytest.mark.medium
 class TestGetProviderRouting:
-    def test_no_provider_returns_none_with_warning(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        # WARN は process-wide flag で 1 度しか出ないため、テスト前に reset
-        import kaji_harness.providers as providers_pkg
-
-        providers_pkg._PROVIDER_FALLBACK_WARNED = False
+    def test_no_provider_raises_value_error(self, tmp_path: Path) -> None:
+        """Phase 3-e: `[provider]` 不在は WARN ではなく fail-fast (ValueError)。"""
         repo = _write_repo(tmp_path)
         cfg = KajiConfig.discover(start_dir=repo)
-        provider = get_provider(cfg)
-        assert provider is None
-        captured = capsys.readouterr()
-        assert "[provider]" in captured.err
-        assert "fallback" in captured.err.lower()
+        with pytest.raises(ValueError, match=r"\[provider\] section is required"):
+            get_provider(cfg)
 
     def test_github_provider_routing(self, tmp_path: Path) -> None:
         repo = _write_repo(
@@ -166,20 +158,18 @@ class TestGetProviderRouting:
 
 @pytest.mark.medium
 class TestHandleIssueDispatch:
-    def test_no_provider_falls_back_to_gh_passthrough(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_no_provider_section_fails_fast_exit_2(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
+        """Phase 3-e: `[provider]` 不在で `kaji issue` は exit 2 で stop し、gh は呼ばない。"""
         repo = _write_repo(tmp_path)
         monkeypatch.chdir(repo)
-        with (
-            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
-        ):
-            mock_run.return_value = MagicMock(returncode=0)
+        with patch("kaji_harness.cli_main.subprocess.run") as mock_run:
             rc = _handle_issue(["view", "42"])
-        assert rc == 0
-        cmd = mock_run.call_args[0][0]
-        assert cmd[:3] == ["gh", "issue", "view"]
+        assert rc == 2
+        mock_run.assert_not_called()
+        captured = capsys.readouterr()
+        assert "[provider]" in captured.err
 
     def test_github_provider_routes_to_passthrough(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -783,20 +773,16 @@ class TestForwardToGhRepoInjection:
         assert cmd.count("--repo") == 1
         assert cmd[cmd.index("--repo") + 1] == "user/explicit"
 
-    def test_no_provider_passthrough_does_not_inject_repo(
+    def test_no_provider_section_does_not_invoke_gh(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``[provider]`` 未設定（legacy）では --repo を注入しない（既存挙動維持）。"""
+        """Phase 3-e: `[provider]` 未設定では fail-fast し、gh subprocess を呼ばない。"""
         repo = _write_repo(tmp_path)  # provider なし
         monkeypatch.chdir(repo)
-        with (
-            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
-        ):
-            mock_run.return_value = MagicMock(returncode=0)
-            _handle_issue(["view", "42"])
-        cmd = mock_run.call_args[0][0]
-        assert "--repo" not in cmd
+        with patch("kaji_harness.cli_main.subprocess.run") as mock_run:
+            rc = _handle_issue(["view", "42"])
+        assert rc == 2
+        mock_run.assert_not_called()
 
     def test_pr_passthrough_injects_repo(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -96,17 +96,14 @@ class TestCanonicalIssueId:
         assert run_ctx.issue_context is not None
         assert run_ctx.issue_context.issue_id == "local-pc1-1"
 
-    def test_no_provider_fallback_uses_raw_input_as_canonical(self, tmp_path: Path) -> None:
-        """``[provider]`` 未設定の Phase 2-B 互換経路では raw 入力をそのまま canonical 扱い。"""
-        import kaji_harness.providers as providers_pkg
+    def test_no_provider_section_raises_resolution_error(self, tmp_path: Path) -> None:
+        """Phase 3-e: `[provider]` 未設定は fail-fast。canonical id は確定しない。"""
+        from kaji_harness.errors import IssueContextResolutionError
 
-        providers_pkg._PROVIDER_FALLBACK_WARNED = False
         repo = _write_repo(tmp_path)
         runner = _make_runner(repo, "42")
-        run_ctx = runner._resolve_run_issue_context()
-        assert run_ctx.canonical_id == "42"
-        assert run_ctx.issue_ref == "#42"
-        assert run_ctx.issue_context is None
+        with pytest.raises(IssueContextResolutionError):
+            runner._resolve_run_issue_context()
 
     def test_legacy_raw_artifacts_dir_emits_warning(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

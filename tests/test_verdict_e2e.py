@@ -412,11 +412,17 @@ def _setup_fake_agent_env(
     config_dir = workdir / ".kaji"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
-        '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+        '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
     )
     skill_dir = workdir / ".claude" / "skills" / "test-skill"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("# Test Skill\n")
+
+    # Phase 3-e: provider=local の subprocess kaji run には対象 issue dir が必要。
+    from tests.conftest import ensure_local_issue
+
+    for issue in ("9990", "9991", "9992"):
+        ensure_local_issue(workdir, issue)
 
 
 # ============================================================
