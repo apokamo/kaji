@@ -435,6 +435,21 @@ def _forward_to_gh(group: str, raw_args: list[str], *, repo: str | None = None) 
 
 _PR_BUILTIN_SUBCOMMANDS = {"review-comments", "reviews", "reply-to-comment"}
 
+_PR_BARE_PROVIDER_ERROR = (
+    "Error: 'kaji pr' is a forge-only command and cannot run under "
+    "provider.type='local'.\n"
+    "Pull request concept does not exist in local mode (bare provider). "
+    "Use git/issue operations directly:\n\n"
+    "  - Code review:        /issue-review-code, /issue-fix-code, "
+    "/issue-verify-code\n"
+    "  - Merge + close:      /issue-close (executes 'git merge --no-ff' + "
+    "frontmatter update)\n"
+    "  - Branch listing:     git branch --list 'feat/local-*'\n\n"
+    "To switch back to GitHub mode (e.g. after the outage), edit\n"
+    '.kaji/config.local.toml and set [provider] type = "github" (or remove the\n'
+    "overlay so the tracked .kaji/config.toml takes effect).\n"
+)
+
 
 def _is_ascii_decimal(s: str) -> bool:
     """True iff ``s`` is a non-empty ASCII decimal string.
@@ -661,13 +676,10 @@ def _handle_pr(raw_args: list[str]) -> int:
     builtin sub (``review-comments`` / ``reviews`` / ``reply-to-comment``) →
     dedicated handler; otherwise fall back to ``gh pr`` passthrough.
 
-    Phase 3-c rev #3（review #3 反映）:
-
-    - 壊れた config → exit 2（fail-fast、握りつぶさない）
-    - ``[provider.github] repo`` が設定されている場合は ``--repo`` で強制注入
-      （builtin / passthrough 両方）。``provider.type='local'`` 配下は
-      Phase 4 で bare-provider エラー化するため、本 PR では legacy 経路で
-      通す（``repo_override`` は ``None``）
+    Phase 4: ``provider.type='local'`` 配下では bare-provider エラーで
+    fail-fast する。``--help`` を含むすべてのサブコマンド、および
+    ``_PR_BUILTIN_SUBCOMMANDS`` （``gh api`` 直叩き）も同じガードで止める。
+    GitHub mode の挙動は Phase 3-e と bit-exact に維持する。
     """
     try:
         config = _load_config_for_dispatch()
@@ -679,6 +691,10 @@ def _handle_pr(raw_args: list[str]) -> int:
         provider = get_provider(config)
     except ValueError as exc:
         sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    if isinstance(provider, LocalProvider):
+        sys.stderr.write(_PR_BARE_PROVIDER_ERROR)
         return EXIT_INVALID_INPUT
 
     repo_override: str | None = None
