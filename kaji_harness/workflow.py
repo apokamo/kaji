@@ -50,6 +50,7 @@ def load_workflow_from_str(yaml_str: str) -> Workflow:
 
 
 VALID_EXECUTION_POLICIES = {"auto", "sandbox", "interactive"}
+VALID_REQUIRES_PROVIDER = {"github", "local", "any"}
 
 _STEP_REQUIRED_KEYS = ("id", "skill", "agent")
 
@@ -231,6 +232,17 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
             )
         raw_workdir = str(expanded_workdir)
 
+    raw_requires_provider = data.get("requires_provider", "any")
+    if not isinstance(raw_requires_provider, str):
+        raise WorkflowValidationError(
+            f"'requires_provider' must be a string, got {type(raw_requires_provider).__name__}"
+        )
+    if raw_requires_provider not in VALID_REQUIRES_PROVIDER:
+        raise WorkflowValidationError(
+            f"'requires_provider' must be one of {sorted(VALID_REQUIRES_PROVIDER)}, "
+            f"got {raw_requires_provider!r}"
+        )
+
     return Workflow(
         name=data.get("name", ""),
         description=data.get("description", ""),
@@ -239,6 +251,7 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
         cycles=cycles,
         default_timeout=raw_default_timeout,
         workdir=raw_workdir,
+        requires_provider=raw_requires_provider,  # type: ignore[arg-type]
     )
 
 
@@ -273,6 +286,13 @@ def validate_workflow(workflow: Workflow) -> None:
         errors.append(
             f"execution_policy must be one of {sorted(VALID_EXECUTION_POLICIES)}, "
             f"got '{workflow.execution_policy}'"
+        )
+
+    # requires_provider の enum 検証（_parse_workflow() を経由しない場合も担保）
+    if workflow.requires_provider not in VALID_REQUIRES_PROVIDER:
+        errors.append(
+            f"requires_provider must be one of {sorted(VALID_REQUIRES_PROVIDER)}, "
+            f"got '{workflow.requires_provider}'"
         )
 
     # workdir の検証（_parse_workflow() を経由しない場合も担保）
