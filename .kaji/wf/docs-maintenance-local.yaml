@@ -50,6 +50,7 @@ steps:
     agent: codex
     model: gpt-5.4
     effort: medium
+    resume: doc-review
     on:
       PASS: final-check
       RETRY: doc-fix
@@ -62,6 +63,7 @@ steps:
     on:
       PASS: close
       RETRY: final-check
+      BACK: doc-update
       ABORT: end
 
   - id: close

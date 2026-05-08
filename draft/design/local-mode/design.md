@@ -1124,14 +1124,16 @@ local 用 workflow は **PR 作成 step を skip し、直接 issue-close（merg
 
 ```bash
 # GitHub mode（既存、検証期間中は使用しない）
-kaji run feature-development.yaml 153
+kaji run .kaji/wf/feature-development.yaml 153
 
 # local mode (type:feature)
-kaji run feature-development-local.yaml local-pc1-1
+kaji run .kaji/wf/feature-development-local.yaml local-pc1-1
 
 # local mode (type:docs、Phase 5 追加)
-kaji run docs-maintenance-local.yaml local-pc1-2
+kaji run .kaji/wf/docs-maintenance-local.yaml local-pc1-2
 ```
+
+> `kaji run` は workflow ファイルのパス（相対 / 絶対）必須。basename 探索はしない。
 
 config の `provider.type` と workflow ファイルの整合は **Phase 4 で `Workflow.requires_provider: Literal["github", "local", "any"]` により fail-fast 化済**（`feature-development-local.yaml` / `docs-maintenance-local.yaml` は `requires_provider: local`、`feature-development.yaml` は `requires_provider: github`）。`provider=github` で local 用 workflow を呼ぶ等の不整合は kaji 起動時に exit 2 で停止する。
 
@@ -1322,7 +1324,7 @@ Phase 1-4 で LocalProvider / IssueContext / `kaji local init` / `feature-develo
 
 - [x] ``[buildout-ok]`` `kaji issue` / `kaji pr` CLI が `kaji --help` で確認できる
 - [x] ``[buildout-ok]`` `provider: github` 経路で Skill が従来通り動作することを **CliRunner + subprocess mock の pass-through テストで担保**する。実 `gh` 完走確認は §残課題（forge 採用先確定後に再評価）
-- [x] ``[buildout-ok]`` `provider: local` で、`/issue-create` → `/issue-start`（事前手動実行）→ `kaji run feature-development-local.yaml local-pc1-1` で `issue-design` 〜 `/issue-close` までが完走する（Phase 3 完了で確立、Phase 4 で 3 層ガード追加）
+- [x] ``[buildout-ok]`` `provider: local` で、`/issue-create` → `/issue-start`（事前手動実行）→ `kaji run .kaji/wf/feature-development-local.yaml local-pc1-1` で `issue-design` 〜 `/issue-close` までが完走する（Phase 3 完了で確立、Phase 4 で 3 層ガード追加）
 - [x] **Phase 4 完了**: `pr-fix` / `pr-verify` / `i-pr` は `provider: local` で明示的にエラー停止し、代替手順をガイドする
 - [x] ``[buildout-ok]`` `IssueProvider` Protocol の単体テストが `LocalProvider` / `GitHubProvider` 両方で通る（GitHubProvider はモック）
 - [ ] §残課題 `kaji sync from-github` で全 Issue が `.kaji/cache/` に自動 populate される（forge 採用先確定後に再評価）
@@ -1339,8 +1341,8 @@ Phase 1-4 で LocalProvider / IssueContext / `kaji local init` / `feature-develo
 - [x] ``[buildout-ok]`` branch 命名が `<prefix>/<gh-number>` (github) / `<prefix>/local-<machine>-<n>` (local) に統一され、worktree dir が `kaji-<prefix>-<id-or-local-id>` で生成される（既存 `.claude/skills/issue-start/SKILL.md:32-33` 規約と整合）。Phase 3-d で `branch_name` / `worktree_dir` を `IssueContext` 経由に正本化済み
 - [x] `kaji local init` / overlay 手編集による provider 切替が `.kaji/config.local.toml`（gitignored）に閉じ、tracked な `.kaji/config.toml` を変更しない（`kaji config set` を将来追加する場合もこの書き込み先契約を守る）
 - [x] `paths.artifacts_dir` は user 設定可能な状態を維持し、既存 repo の `.kaji-artifacts` 等の値が破壊されない
-- [x] `provider=local` で `kaji run feature-development-local.yaml local-pc1-1` が `issue-design` から `/issue-close` まで完走する（`/issue-create` `/issue-start` は事前手動実行）
-- [x] **Phase 5 追加**: `provider=local` で `kaji run docs-maintenance-local.yaml local-pc1-N` が `i-doc-update` から `/issue-close` まで完走する（type:docs Issue 用、Phase 5 で追加）
+- [x] `provider=local` で `kaji run .kaji/wf/feature-development-local.yaml local-pc1-1` が `issue-design` から `/issue-close` まで完走する（`/issue-create` `/issue-start` は事前手動実行）
+- [x] **Phase 5 追加**: `provider=local` で `kaji run .kaji/wf/docs-maintenance-local.yaml local-pc1-N` が `i-doc-update` から `/issue-close` まで完走する（type:docs Issue 用、Phase 5 追加）
 - [x] `kaji pr merge` が `--method` フラグを露出せず、内部で常に `--no-ff` 相当の merge を実行する（GitHub passthrough 経路）
 - [x] resolve_issue_dir が glob で一意解決し、重複検出時は明示エラーで停止する
 - [x] `next_local_id()` がカウンタファイル不在時（fresh clone / `make clean` 後）も既存 `.kaji/issues/local-<machine>-*` dir の最大値を見て採番衝突を起こさない

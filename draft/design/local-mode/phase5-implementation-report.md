@@ -206,3 +206,23 @@ phase5-design.md § ロールバック方針 に従い、各 commit は他 commi
 1. user 手動で §残課題 の各項目を local Issue (`local-<m>-N`) として起票
 2. forge 採用先 (gitlab 本格採用 / github 復帰 / 他) の判断を進める
 3. forge 採用先確定後、Phase 6 の設計書を起こして §残課題 の項目を順次再評価
+
+## 実装後レビュー反映 (review v1)
+
+設計書段階のレビュー (v1-v3) 通過後、実装完了時点で改めてレビューを実施。
+以下 3 件の Must Fix 指摘を受けて follow-up commit で対応した：
+
+| # | 指摘 | 検証根拠 | 対応 |
+|---|------|---------|------|
+| RV-impl-1 | `.kaji/wf/docs-maintenance-local.yaml` の `doc-verify` に `resume:` も `inject_verdict:` も無く、`prompt.py:59` の `(step.resume or step.inject_verdict)` 条件で `previous_verdict` が注入されない | `kaji_harness/prompt.py:58-63`、既存 `workflows/docs-maintenance.yaml:49` の `verify-doc` には `resume: review-doc` が明示 | `doc-verify` に `resume: doc-review` を追加 |
+| RV-impl-2 | `final-check.on` に BACK が無い。`i-doc-final-check` SKILL.md は BACK を返し得るため未充足条件で遷移不能 | `.claude/skills/i-doc-final-check/SKILL.md:82, 109`、既存 `workflows/docs-maintenance.yaml:62` には `BACK: update-doc` が明示 | `final-check.on` に `BACK: doc-update` を追加 |
+| RV-impl-3 | `kaji run docs-maintenance-local.yaml ...` は `Error: Workflow file not found` で失敗。CLI は basename 探索をしない | 実行検証済、runbook §3.1 / docs_maintenance_workflow.md L43 / design.md Workflow YAML 章の起動例が事実誤認 | runbook / docs_maintenance_workflow / design.md の起動例をすべて `kaji run .kaji/wf/<filename>.yaml ...` に修正、注記も追記 |
+
+follow-up commit: `<commit 7 SHA pending>`
+
+機械検証再実行（review v1 反映後）：
+- `make check`: 1037 passed / 1 skipped 緑
+- `make verify-docs`: 73 ファイル全リンク健全
+- `make test-large-local`: 25 件緑
+- `kaji validate .kaji/wf/*.yaml`: 全 6 ファイル緑
+- `grep -rn "Phase 5 で" kaji_harness/ docs/ .claude/skills/ CHANGELOG.md`: ヒット 0 件

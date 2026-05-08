@@ -40,8 +40,9 @@ flowchart TB
 > される。`provider=local` の場合は `/i-pr` が Phase 4 の bare-provider
 > ガードで停止するため、以下のいずれかで対応する：
 >
-> - `kaji run docs-maintenance-local.yaml <issue_id>` を使う（Phase 5
->   追加の local 用 workflow YAML、`/i-pr` 相当の step を持たず
+> - `kaji run .kaji/wf/docs-maintenance-local.yaml <issue_id>` を使う
+>   （Phase 5 追加の local 用 workflow YAML。`kaji run` はファイル
+>   パス必須で basename 探索はしない。`/i-pr` 相当の step を持たず
 >   `/issue-close` で終端する）
 > - `/i-doc-update` 〜 `/issue-close` を Skill 単位で手動実行する
 >   （`docs/operations/local-mode-runbook.md` § 3.1a 参照）
