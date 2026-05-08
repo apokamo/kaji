@@ -37,8 +37,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `WorkflowRunner._resolve_run_issue_context()`. The internal `if
   issue_context is not None:` fallback paths have been removed.
 
+### Changed
+
+- **Phase 5**: Repositioned local-mode from "BCP for GitHub outage"
+  to "primary SoT during validation period". GitHub recovery is no
+  longer a precondition for the project. See
+  `draft/design/local-mode/design.md` (re-organized) and the new
+  `docs/operations/local-mode-runbook.md` for the validation-period
+  operating model.
+- **Phase 5**: Updated `LocalProvider.view_cached_issue()` docstring
+  and `IssueNotFoundError` user-facing message to reframe
+  `kaji sync from-github` and related cache features as "remaining
+  tasks (re-evaluated when forge migration target is decided)" rather
+  than "to be implemented in Phase 5". The cache reader contract
+  itself (Phase 3-c) is preserved.
+
 ### Added
 
+- **Phase 5**: `.kaji/wf/docs-maintenance-local.yaml` — new workflow
+  that lets `type:docs` issues run under `provider.type='local'`
+  without hitting the bare-provider PR guard. Mirrors
+  `feature-development-local.yaml` but uses `i-doc-*` skills and
+  terminates at `issue-close`.
+- **Phase 5**: `docs/operations/local-mode-runbook.md` — new operations
+  runbook covering single-PC / multi-PC setup, daily Issue lifecycle
+  (including the docs-only manual fallback), code synchronisation
+  strategy (GitLab Cloud / self-host / NAS / bundle), forge migration
+  judgement criteria, and troubleshooting.
 - **Phase 4**: `kaji config provider-type` — read-only subcommand that
   prints the resolved provider type (`github` / `local`) on stdout. Skill
   manual-execution paths use this to reconcile `[provider_type]` when the
@@ -55,6 +80,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `provider.type='local'` with guidance toward the bare-mode alternatives
   (`/issue-review-code` / `/issue-fix-code` / `/issue-verify-code` /
   `/issue-close`).
+
+### Notes
+
+- **Phase 5**: No public CLI / config changes. Updates are limited to
+  docs, in-source comments / docstrings, user-facing error messages,
+  Skill markdown wording, and one new workflow YAML
+  (`.kaji/wf/docs-maintenance-local.yaml`) that mirrors
+  `feature-development-local.yaml` for type:docs Issues.
 
 ### Migration
 

@@ -1,0 +1,76 @@
+name: docs-maintenance-local
+description: |
+  provider=local 用の docs-only 開発 workflow。
+  type:docs Issue を local provider 配下で完走させる。
+  issue-create / issue-start は事前に手動実行済みであることが前提。
+  PR concept を持たないため、最終 step は issue-close
+  （local merge + frontmatter 更新）。
+execution_policy: auto
+requires_provider: local
+
+cycles:
+  doc-review:
+    entry: doc-review
+    loop: [doc-fix, doc-verify]
+    max_iterations: 3
+    on_exhaust: ABORT
+
+steps:
+  - id: doc-update
+    skill: i-doc-update
+    agent: claude
+    model: opus
+    effort: medium
+    on:
+      PASS: doc-review
+      ABORT: end
+
+  - id: doc-review
+    skill: i-doc-review
+    agent: codex
+    model: gpt-5.4
+    effort: medium
+    on:
+      PASS: final-check
+      RETRY: doc-fix
+      ABORT: end
+
+  - id: doc-fix
+    skill: i-doc-fix
+    agent: claude
+    model: opus
+    inject_verdict: true
+    resume: doc-update
+    on:
+      PASS: doc-verify
+      ABORT: end
+
+  - id: doc-verify
+    skill: i-doc-verify
+    agent: codex
+    model: gpt-5.4
+    effort: medium
+    resume: doc-review
+    on:
+      PASS: final-check
+      RETRY: doc-fix
+      ABORT: end
+
+  - id: final-check
+    skill: i-doc-final-check
+    agent: claude
+    model: opus
+    on:
+      PASS: close
+      RETRY: final-check
+      BACK: doc-update
+      ABORT: end
+
+  - id: close
+    skill: issue-close
+    agent: claude
+    model: sonnet
+    on:
+      PASS: end
+      RETRY: close
+      ABORT: end
