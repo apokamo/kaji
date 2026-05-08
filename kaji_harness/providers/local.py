@@ -709,8 +709,13 @@ class LocalProvider:
         """``.kaji/cache/issues/<n>.json`` から read-only に Issue を組み立てる。
 
         cache fixture が無ければ明示エラー（phase3-design.md L78）。
-        Phase 5 の `kaji sync from-github` 未実装のため、buildout 中は user
-        が手動で JSON を投入する運用前提。
+
+        cache 自動 populate (`kaji sync from-github`) は残課題（forge 採用先
+        確定時に再評価、`design.md` §残課題 参照）。2026-05-08 方針転換以降、
+        検証期間中は forge 通信を行わない方針のため、本メソッドが呼ばれるのは
+        user が手動で JSON を投入した場合に限られる。cache reader 自体は
+        Phase 3-c で実装された既存契約として維持される
+        （`tests/test_phase3c_dispatcher.py:329-365` で検証済）。
         """
         if not _POS_INT_RE.match(number):
             raise ValueError(
@@ -720,9 +725,12 @@ class LocalProvider:
         if not path.is_file():
             raise IssueNotFoundError(
                 f"no cached issue at {path}. "
-                f"Phase 5 'kaji sync from-github' will populate this; until then, "
-                f"manually drop the JSON exported via 'gh issue view {number} "
-                f"--json number,title,body,state,labels,comments' into the cache."
+                f"Cache population (`kaji sync from-github`) is a remaining task, "
+                f"re-evaluated when the forge migration target is decided. "
+                f"During the local-mode validation period, manual `gh:` references "
+                f"are not recommended (see docs/operations/local-mode-runbook.md). "
+                f"If the JSON is intentionally pre-populated, ensure the file path "
+                f"matches the cache layout."
             )
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))

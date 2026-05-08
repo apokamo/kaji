@@ -46,7 +46,7 @@ $ARGUMENTS = <issue_id>
 
 `issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
 
-`pr_id` はハーネス経由では Phase 4 時点ではプロンプトに自動注入されない（Phase 5 で GitHubProvider が解決して prompt 注入する予定）。Phase 4 時点では Step 1 内で `kaji pr list --search` から取得して確定する。`pr_ref` は `pr_id` から導出する: GitHub 数値 ID なら `#<pr_id>`、それ以外は bare ID。
+`pr_id` はハーネス経由では現時点ではプロンプトに自動注入されない（forge 採用先確定時に再評価、`draft/design/local-mode/design.md` §残課題 参照）。Step 1 内で `kaji pr list --search` から取得して確定する。`pr_ref` は `pr_id` から導出する: GitHub 数値 ID なら `#<pr_id>`、それ以外は bare ID。
 
 ## 前提知識の読み込み
 

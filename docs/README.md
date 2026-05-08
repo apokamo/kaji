@@ -50,6 +50,7 @@ kaji のドキュメント一覧。[Diataxis フレームワーク](https://diat
 |-------------|------|
 | [Release-Please Admin 設定](operations/release/admin-setup.md) | GitHub App / secret / Actions permissions 初期設定と dry-run 手順 |
 | [Release Runbook](operations/release/runbook.md) | 通常リリース運用（Release PR の merge）と緊急時 fallback |
+| [Local Mode 検証期間運用 Runbook](operations/local-mode-runbook.md) | 検証期間中の local-mode SoT 運用、複数 PC、コード同期戦略、forge 移行判断 |
 
 ## Explanation（コンセプト）
 

@@ -127,7 +127,7 @@ kaji run .kaji/wf/feature-development-local.yaml local-pc1-1
 | `local-pc1-3` | machine_id `pc1` の 3 番目（フル形式） |
 | `pc1-3` | 短縮形。provider=local 時のみ受理 |
 | `3` | provider=local 時は machine_id を補完して `local-<self>-3` に解決 |
-| `gh:153` | GitHub cache 由来の read-only 参照（`.kaji/cache/issues/153.json` 必要） |
+| `gh:153` | GitHub cache 由来の read-only 参照。検証期間中は cache 自動 populate 未実装のため、必要時のみ手動で JSON 投入 |
 
 ## 6. /issue-close の挙動（local）
 
@@ -153,7 +153,7 @@ Step 4 完了で Issue close は確定し、Step 5/6 の失敗は警告のみ。
 ├── issues/local-<machine>-<n>-<slug>/
 │   ├── issue.md         (frontmatter + body)
 │   └── comments/<seq>-<machine>.md
-└── cache/issues/<n>.json    (GitHub の read-only キャッシュ)
+└── cache/issues/<n>.json    (GitHub の read-only キャッシュ。検証期間中は手動投入)
 ```
 
 ## 8. `kaji pr` の挙動（Phase 4 以降）
@@ -185,7 +185,17 @@ GitHub mode に戻したい場合は `.kaji/config.local.toml` の `[provider] t
 ## 9. 既知の制限
 
 - Windows native は現時点では対応対象外。Windows では WSL 上で使う
-- `kaji sync from-github` は Phase 5 で実装予定（buildout 中は `.kaji/cache/issues/N.json` を手動投入）
+- `kaji sync from-github` は残課題（forge 採用先確定時に再評価）。検証期間中は cache 自動 populate を行わないため、必要時のみ `.kaji/cache/issues/N.json` を手動投入する
+
+## 9a. 検証期間運用について
+
+2026-05-08 以降、kaji は **検証期間中 local-mode を SoT として運用**する方針。
+forge 通信を要する `kaji sync` 系 / PR context 注入 / `--add-frontmatter` は
+すべて [残課題](../../draft/design/local-mode/design.md#残課題) として後送り。
+
+検証期間中の運用手順（複数 PC / コード同期戦略 / forge 移行判断）は
+[Local Mode 検証期間運用 Runbook](../operations/local-mode-runbook.md)
+を参照。
 
 ## 10. Phase 3-e migration（既存 user 向け）
 

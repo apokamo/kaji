@@ -24,10 +24,21 @@
 | `feature-development-light.yaml` | `github` | `i-pr` | forge 必須 |
 | `implement-to-pr.yaml` | `github` | `i-pr` | forge 必須 |
 | `feature-development-local.yaml` | `local` | `issue-close` | local merge (`--no-ff`) 前提 |
+| `docs-maintenance-local.yaml` | `local` | `issue-close` | docs-only / local。Phase 5 追加 |
 | `design-only.yaml` | `any` | `verify-design` | 設計完了で終わるため provider 中立 |
 
 custom workflow への `requires_provider` 追加は推奨（[workflow-authoring.md](workflow-authoring.md)
 § `requires_provider` 参照）。
+
+## 検証期間中の主 workflow（2026-05-08 以降）
+
+GitHub 復旧前提を放棄した後の検証期間中は、**`feature-development-local.yaml`
+と `docs-maintenance-local.yaml` が主 workflow** となる。github 用
+(`feature-development.yaml` / `feature-development-light.yaml` /
+`implement-to-pr.yaml`) は forge 通信を伴うため検証期間中は使用しない。
+provider 切替の手順は [docs/cli-guides/local-mode.md](../cli-guides/local-mode.md)
+を、検証期間中の運用は [docs/operations/local-mode-runbook.md](../operations/local-mode-runbook.md)
+を参照。`provider=local` を default にする変更は行わない（user の設定に従う）。
 
 ## feature-development
 
