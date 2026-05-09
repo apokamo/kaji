@@ -10,6 +10,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from kaji_harness.cli_main import cmd_run, create_parser, main
+from kaji_harness.config import (
+    ExecutionConfig,
+    GitHubProviderConfig,
+    KajiConfig,
+    LocalProviderConfig,
+    PathsConfig,
+    ProviderConfig,
+)
 from kaji_harness.errors import (
     CLIExecutionError,
     CLINotFoundError,
@@ -25,6 +33,27 @@ from kaji_harness.errors import (
     WorkflowValidationError,
 )
 from kaji_harness.models import Verdict
+
+
+def _stub_github_config() -> KajiConfig:
+    """Return a minimal github-provider KajiConfig for `_handle_pr` test isolation.
+
+    Used by autouse fixtures in PR builtin test classes to bypass CWD-based
+    config discovery (which picks up ``.kaji/config.local.toml`` overlay
+    in main checkout and triggers bare-provider early-exit). See
+    issue local-pc5090-15.
+    """
+    return KajiConfig(
+        repo_root=Path("/tmp/stub"),
+        paths=PathsConfig(skill_dir=".claude/skills", artifacts_dir=".kaji/artifacts"),
+        execution=ExecutionConfig(default_timeout=1800),
+        provider=ProviderConfig(
+            type="github",
+            local=LocalProviderConfig(),
+            github=GitHubProviderConfig(repo="owner/repo"),
+        ),
+    )
+
 
 # ============================================================
 # Fixtures
@@ -629,6 +658,13 @@ class TestComposeJsonAndJq:
 class TestPrReviewCommentsBuiltin:
     """`kaji pr review-comments` の argv 組み立てと異常系。"""
 
+    @pytest.fixture(autouse=True)
+    def _isolate_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "kaji_harness.cli_main._load_config_for_dispatch",
+            _stub_github_config,
+        )
+
     def _patches(self, repo: str | None = "owner/repo"):
         which = patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh")
         detect = patch("kaji_harness.cli_main._detect_repo", return_value=repo)
@@ -721,6 +757,13 @@ class TestPrReviewCommentsBuiltin:
 
 @pytest.mark.small
 class TestPrReviewsBuiltin:
+    @pytest.fixture(autouse=True)
+    def _isolate_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "kaji_harness.cli_main._load_config_for_dispatch",
+            _stub_github_config,
+        )
+
     def test_argv_uses_reviews_path(self) -> None:
         from kaji_harness.cli_main import _handle_pr
 
@@ -738,6 +781,13 @@ class TestPrReviewsBuiltin:
 
 @pytest.mark.small
 class TestPrReplyToCommentBuiltin:
+    @pytest.fixture(autouse=True)
+    def _isolate_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "kaji_harness.cli_main._load_config_for_dispatch",
+            _stub_github_config,
+        )
+
     def test_argv_contains_post_method_and_body(self) -> None:
         from kaji_harness.cli_main import _handle_pr
 
@@ -774,6 +824,13 @@ class TestPrReplyToCommentBuiltin:
 @pytest.mark.small
 class TestPrBuiltinDispatch:
     """既存 passthrough の互換性と builtin 振り分け。"""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "kaji_harness.cli_main._load_config_for_dispatch",
+            _stub_github_config,
+        )
 
     def test_existing_pr_view_fails_when_config_missing(self) -> None:
         """Phase 3-e: `.kaji/config.toml` 不在で `kaji pr` は exit 2 で fail-fast。"""

@@ -122,6 +122,31 @@ class TestSkillNoMergeFlag:
 class TestPrReviewCommentsCliRunnerIntegration:
     """Verify the `kaji pr review-comments` builtin composes argv via CLI dispatch."""
 
+    @pytest.fixture(autouse=True)
+    def _isolate_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from kaji_harness.config import (
+            ExecutionConfig,
+            GitHubProviderConfig,
+            KajiConfig,
+            LocalProviderConfig,
+            PathsConfig,
+            ProviderConfig,
+        )
+
+        def _stub() -> KajiConfig:
+            return KajiConfig(
+                repo_root=Path("/tmp/stub"),
+                paths=PathsConfig(skill_dir=".claude/skills", artifacts_dir=".kaji/artifacts"),
+                execution=ExecutionConfig(default_timeout=1800),
+                provider=ProviderConfig(
+                    type="github",
+                    local=LocalProviderConfig(),
+                    github=GitHubProviderConfig(repo="acme/widgets"),
+                ),
+            )
+
+        monkeypatch.setattr("kaji_harness.cli_main._load_config_for_dispatch", _stub)
+
     def test_review_comments_invokes_gh_with_composed_jq(self) -> None:
         from kaji_harness.cli_main import main
 

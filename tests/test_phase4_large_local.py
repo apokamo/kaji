@@ -185,7 +185,7 @@ def test_validate_rejects_unknown_requires_provider(github_repo: Path) -> None:
     wf = github_repo / "bad.yaml"
     wf.write_text(
         'name: bad\ndescription: ""\nexecution_policy: auto\n'
-        "requires_provider: gitlab\n"
+        "requires_provider: nonexistent\n"
         "steps:\n"
         "  - id: only\n    skill: noop\n    agent: echo\n    on:\n      PASS: end\n"
     )
