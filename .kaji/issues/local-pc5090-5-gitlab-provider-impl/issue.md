@@ -1,12 +1,15 @@
 ---
 id: local-pc5090-5
 title: GitLabProvider 実装 + config + dispatcher 拡張
-state: open
+state: closed
 slug: gitlab-provider-impl
 labels:
 - type:feature
 - scope:gitlab-validation
 created_at: '2026-05-09T06:01:49Z'
+closed_at: '2026-05-09T07:54:30Z'
+closed_by: pc5090
+close_reason: completed
 ---
 > [!NOTE]
 > **Worktree**: `../kaji-feat-local-pc5090-5`
