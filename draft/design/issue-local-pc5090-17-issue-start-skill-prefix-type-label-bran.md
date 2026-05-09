@@ -153,9 +153,31 @@ kaji issue context <issue_id> [--json FIELDS] [--jq EXPR | -q EXPR]
 
 | 引数 | 必須 | 説明 |
 |------|------|------|
-| `issue_id` | ✅ | `153` / `pc1-3` / `local-pc1-3` / `gh:N` 等。`_resolve_local_id` と同じ正規化 |
+| `issue_id` | ✅ | `provider.type='local'` 配下では `153` / `pc1-3` / `local-pc1-3` / `gh:N`。`provider.type='github'` 配下では `153` / `gh:153`。GitLab 経路は本 Issue の対象外（後述「対象 provider スコープ」§） |
 | `--json FIELDS` | 任意 | 出力フィールドを CSV で限定（`kaji issue view --json` と同フォーマット） |
 | `--jq EXPR` / `-q EXPR` | 任意 | 出力 JSON に jq 式適用（`kaji issue view -q` と同フォーマット） |
+
+#### 対象 provider スコープ（GitLab 除外の明示）
+
+本 Issue では `kaji issue context` の対象 provider を **`local` と `github` のみ** に限定する。GitLab は範囲外。
+
+**根拠**:
+
+- `kaji_harness/providers/__init__.py:185-186` の `normalize_id()` は `provider_name in {"github", "local"}` のみ受理し、`gitlab` を渡すと `ValueError("unknown provider: 'gitlab'")` を返す
+- `kaji_harness/cli_main.py:735-771` の `_handle_issue` dispatcher も `LocalProvider` 分岐 + 残りは `gh issue` passthrough という二極構成で、GitLab 経路自体が `kaji issue` サブコマンドに存在しない
+- 一方、`kaji_harness/providers/gitlab.py:391-409` には `GitLabProvider.resolve_issue_context()` が実装されているため、provider 側の API 単体では呼べる状態にある
+- 本 Issue の根本目的は `/issue-start` skill と context 正本の同期であり、GitLab 対応を含めると `normalize_id()` 拡張 + dispatcher 拡張 + GitLab 用 ID 構文（`gl:N` 等）の正書化が必要となり、Issue のスコープを大きく超える
+
+**実装方針**:
+
+- `kaji issue context` は `provider.type='gitlab'` 配下では明示的に拒否する
+- 拒否経路: dispatcher が GitLab provider を検出した時点で `EXIT_INVALID_INPUT` + 以下のメッセージ:
+  ```
+  Error: 'kaji issue context' is not supported under provider.type='gitlab'.
+  GitLab support is tracked separately (normalize_id() and dispatcher require
+  extension; see future issue). Use provider.type='local' or 'github'.
+  ```
+- 将来 GitLab 対応する際は、別 Issue で `normalize_id()` の `provider_name` 受理拡張 + dispatcher の GitLab 経路追加 + GitLab 用 ID 構文確定をまとめて行う
 
 **出力フィールド**（`IssueContext` dataclass の全フィールド）:
 
@@ -175,11 +197,23 @@ kaji issue context <issue_id> [--json FIELDS] [--jq EXPR | -q EXPR]
 
 **デフォルト出力**: `--json` 省略時は全フィールドを compact JSON で出力（newline 終端）。
 
+**`--json` フィールドの未知 key 取扱い**:
+
+- 未知 key（`IssueContext` に存在しないフィールド名）は **`null` を返す**（既存 `kaji issue view --json` と同挙動。`kaji_harness/cli_main.py:1012-1018` で `full.get(k)` を実装）
+- 例: `kaji issue context <id> --json branch_prefix,nonexistent` →
+  `{"branch_prefix": "fix", "nonexistent": null}` + exit 0
+- これは **stricter エラーにせず、既存 `--json` 規約に揃える** 設計判断:
+  - `_local_issue_view` と挙動を揃えることで skill / shell スクリプト側の jq 経由参照の挙動が統一される
+  - 未知 key を `EXIT_INVALID_INPUT` に倒すと、`kaji issue view` との整合性が崩れ、ヘルプ・テスト期待値・skill 動線がぶれる
+  - 未知 key の早期検出が必要なケースは `-q '.<key>'` 経由で `null` チェックすれば済む
+
 **exit code**:
 
-- `0` 成功
-- `2` invalid input（不正 issue_id 形式 / フィールド名 typo 等。`EXIT_INVALID_INPUT`）
-- `runtime error` Issue 不在 / frontmatter 不備等（`EXIT_RUNTIME_ERROR`）
+| code | 条件 |
+|------|------|
+| `0` | 成功（未知 `--json` フィールドは含まない） |
+| `2` (`EXIT_INVALID_INPUT`) | 不正 `issue_id` 形式 / `provider.type='gitlab'` で未対応 / `argparse` レベルの引数エラー |
+| `4` (`EXIT_RUNTIME_ERROR`) | Issue 不在 / frontmatter 不備等の解決時例外（`IssueContextResolutionError` 系） |
 
 **使用例**:
 
@@ -198,10 +232,12 @@ git worktree add -b "$BRANCH" "$WT" "$DEFAULT_BRANCH"
 PREFIX=$(kaji issue context "$ISSUE_ID" --json branch_prefix -q '.branch_prefix')
 ```
 
-### dispatcher の特殊処理（github 経路）
+### dispatcher の特殊処理（github / gitlab 経路）
 
 `_handle_issue` は `provider.type='github'` で `gh issue` passthrough する。
-`gh issue context` は存在しないため、**`context` subcommand は passthrough しない**:
+`gh issue context` は存在しないため、**`context` subcommand は passthrough しない**。
+また `provider.type='gitlab'` 配下では `kaji issue context` を未対応として
+明示拒否する:
 
 ```python
 # _handle_issue の擬似コード（変更後）
@@ -209,6 +245,14 @@ if isinstance(provider, LocalProvider):
     return _handle_issue_local(provider, raw_args)
 # context は github でも provider.resolve_issue_context() で解決
 if raw_args and raw_args[0] == "context":
+    if isinstance(provider, GitLabProvider):
+        sys.stderr.write(
+            "Error: 'kaji issue context' is not supported under "
+            "provider.type='gitlab'. GitLab support requires "
+            "normalize_id() and dispatcher extension (tracked separately). "
+            "Use provider.type='local' or 'github'.\n"
+        )
+        return EXIT_INVALID_INPUT
     return _handle_issue_context(provider, raw_args[1:])
 # 既存通り gh passthrough
 forwarded = [a for a in raw_args if a != "--commit"]
@@ -253,7 +297,7 @@ return _forward_to_gh("issue", forwarded, repo=...)
 
 - `kaji_harness/cli_main.py`
   - `_LOCAL_ISSUE_SUBS` に `"context"` 追加
-  - `_handle_issue` に github 経路用の context 特殊分岐追加
+  - `_handle_issue` に context special-case 分岐追加（github は provider 経由処理、gitlab は明示拒否）
   - `_handle_issue_context(provider, rest)` 新設（local / github 共通）
   - `_local_issue_context(provider, rest)` 新設（dispatcher 互換のため、内部で `_handle_issue_context` 呼び出し）
 
@@ -363,8 +407,8 @@ def _handle_issue_context(provider: IssueProvider, rest: list[str]) -> int:
   - `--json branch_prefix,branch_name` → 2 key のみ出力
   - `-q '.branch_prefix'` → raw 値（quote なし）出力
 - 不正 issue_id 形式 → `EXIT_INVALID_INPUT`
-- 不正フィールド名 → `IssueContext` に存在しない key は `null` を返す（既存
-  `_local_issue_view` と同挙動。`--json` の挙動統一）
+- 未知 `--json` フィールド名 → `null` を返す + exit 0（`_local_issue_view` の `full.get(k)` 挙動に揃える。インターフェース § で確定した契約）
+- `provider.type='gitlab'` で `kaji issue context` 呼び出し → `EXIT_INVALID_INPUT` + 未対応メッセージ
 
 ### Medium テスト
 
@@ -421,6 +465,8 @@ Issue 本文「完了条件」セクションへの対応:
 ### 設計段階で確認
 
 - [x] helper CLI `kaji issue context` の引数仕様・出力スキーマ確定 → 「インターフェース」§
+- [x] 未知 `--json` フィールドの契約確定（`null` 返却 + exit 0、`kaji issue view` と同挙動） → 「インターフェース § `--json` フィールドの未知 key 取扱い」
+- [x] 対象 provider スコープ確定（local / github のみ、gitlab は本 Issue 範囲外） → 「インターフェース § 対象 provider スコープ」
 - [x] helper CLI が薄いラッパーで context 解決ロジックを重複実装しないこと → 「方針」§
 - [x] 明示 prefix 引数の廃止が breaking change として後方互換セクションに明記 → 「インターフェース § 後方互換性」
 - [x] 同根の他 skill 影響調査結果（context 変数を直接埋め込む箇所） → 「根本原因 § 同根の他箇所」
@@ -437,6 +483,8 @@ Issue 本文「完了条件」セクションへの対応:
 - [ ] frontmatter `branch_prefix` 優先動作確認（label `type:bug` + frontmatter `branch_prefix: docs` → `docs/<id>`）
 - [ ] `/issue-start <id> fix` で第 2 引数指定時の ABORT 動作確認
 - [ ] 既存 `feat/<id>` 運用中 Issue 再起動で fail-fast 維持確認
+- [ ] 未知 `--json` フィールドが `null` + exit 0 を返すことの test
+- [ ] `provider.type='gitlab'` で `kaji issue context` が `EXIT_INVALID_INPUT` + 専用エラーメッセージを返すことの test
 - [ ] `make check` 通過
 
 ## 参照情報（Primary Sources）
@@ -457,4 +505,4 @@ Issue 本文「完了条件」セクションへの対応:
 | 実害ログ | `.kaji-artifacts/local-pc5090-14/runs/2605091631/close/console.log:3-4` | agent fallback の生記録 |
 | `[branch_name]` 直接埋込 | `.claude/skills/issue-close/SKILL.md:333` | `git merge --no-ff --no-edit [branch_name]` |
 | review-ready Findings 採用 | `.kaji/issues/local-pc5090-17-issue-start-skill-prefix-type-label-bran/comments/0001-pc5090.md` | 3 件 Findings 全件採用（A 案 + helper CLI 化 + 同根調査） |
-| Bettenburg et al. (2008) | bug.md の参照（OB+EB+steps-to-reproduce） | bug 設計書の 3 点必須化の根拠 |
+| Bettenburg et al. (2008) 引用 | `.claude/skills/_shared/design-by-type/bug.md:22-27` | 「良い bug report は OB + EB + steps-to-reproduce を備える。設計書でもこの 3 点を分離して書く」 |
