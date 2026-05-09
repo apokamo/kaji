@@ -96,7 +96,7 @@ cat [worktree_dir]/draft/design/issue-[issue_id]-*.md
    b. Issue コメントに以下のフォーマットで投稿する（commit hash を含める）:
 
    ````bash
-   kaji issue comment [issue_id] --body "$(cat <<'BASELINE_EOF'
+   kaji issue comment [issue_id] --commit --body "$(cat <<'BASELINE_EOF'
    ## Baseline Check 結果
 
    ### 実行環境
@@ -278,7 +278,7 @@ cd [worktree_dir] && git add . && git commit -m "feat: implement [feature] for [
 実装完了をIssueにコメントします。pytest および品質チェックの出力をそのまま含めること。
 
 ````bash
-kaji issue comment [issue_id] --body "$(cat <<'COMMENT_EOF'
+kaji issue comment [issue_id] --commit --body "$(cat <<'COMMENT_EOF'
 ## 実装完了報告 (TDD)
 
 設計に基づき、TDDにて実装を行いました。

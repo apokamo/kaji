@@ -70,7 +70,7 @@ $ARGUMENTS = <issue_id>
 `kaji issue edit` で Issue 本文を更新する。
 
 ```bash
-kaji issue edit [issue_id] --body "[updated-body]"
+kaji issue edit [issue_id] --commit --body "[updated-body]"
 ```
 
 **注意事項**:
@@ -83,7 +83,7 @@ kaji issue edit [issue_id] --body "[updated-body]"
 修正内容と反論を Issue コメントに記録する。
 
 ```bash
-kaji issue comment [issue_id] --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit --body-file - <<'EOF'
 ## レディネス指摘への対応報告
 
 ### 対応済み

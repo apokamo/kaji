@@ -118,7 +118,7 @@ cd [worktree_dir] && git add docs/ README.md workflows/ .claude/skills/ .agents/
 ### Step 7: Issue コメント
 
 ```bash
-kaji issue comment [issue_id] --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit --body-file - <<'EOF'
 ## docs-only 更新完了
 
 ### 更新内容

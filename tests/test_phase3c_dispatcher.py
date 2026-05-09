@@ -190,6 +190,31 @@ class TestHandleIssueDispatch:
         assert cmd[:3] == ["gh", "issue", "view"]
         assert "--json" in cmd  # passthrough は引数を保持する
 
+    def test_github_provider_strips_local_only_commit_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue local-pc5090-16 B: github mode forwards to gh without `--commit`.
+
+        Skill 側は provider 型を意識せず `--commit` を付与できるよう設計したため、
+        github mode では silent に剥がして gh に forward する（gh CLI に渡ると
+        unknown flag で fail する）。
+        """
+        repo = _write_repo(
+            tmp_path,
+            provider_section=('\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "o/r"\n'),
+        )
+        monkeypatch.chdir(repo)
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            rc = _handle_issue(["comment", "42", "--body", "x", "--commit"])
+        assert rc == 0
+        cmd = mock_run.call_args[0][0]
+        assert "--commit" not in cmd
+        assert cmd[:3] == ["gh", "issue", "comment"]
+
     def test_local_provider_view_dispatches_to_local_handler(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:

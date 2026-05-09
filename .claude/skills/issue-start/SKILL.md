@@ -86,7 +86,7 @@ EOF
 )
 
 # Issue本文を更新
-kaji issue edit [issue_id] --body "$NEW_BODY"
+kaji issue edit [issue_id] --commit --body "$NEW_BODY"
 ```
 
 ### Step 4: セットアップ完了報告

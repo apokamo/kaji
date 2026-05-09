@@ -191,7 +191,7 @@ Verdict に応じて以下の形式で Issue コメントに投稿する。
 **PASS の場合:**
 
 ```bash
-kaji issue comment [issue_id] --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit --body-file - <<'EOF'
 ## レディネスレビュー
 
 全観点クリア。作業着手に進行可。
@@ -201,7 +201,7 @@ EOF
 **RETRY の場合:**
 
 ```bash
-kaji issue comment [issue_id] --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit --body-file - <<'EOF'
 ## レディネスレビュー
 
 ### 指摘事項
@@ -218,7 +218,7 @@ EOF
 **ABORT の場合:**
 
 ```bash
-kaji issue comment [issue_id] --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit --body-file - <<'EOF'
 ## レディネスレビュー
 
 ### 理由

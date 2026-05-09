@@ -145,7 +145,7 @@ cd [worktree_dir] && git add draft/design/ && git commit -m "docs: update design
 Issueにコメントします:
 
 ```bash
-kaji issue comment [issue_id] --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit --body-file - <<'EOF'
 # 設計修正報告
 
 ## 対応済み

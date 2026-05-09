@@ -761,9 +761,14 @@ def _handle_issue(raw_args: list[str]) -> int:
 
     if isinstance(provider, LocalProvider):
         return _handle_issue_local(provider, raw_args)
-    # GitHubProvider 経路: 設定 repo を --repo で強制注入し cwd 推論を防ぐ
+    # GitHubProvider 経路: 設定 repo を --repo で強制注入し cwd 推論を防ぐ。
+    # `--commit` は LocalProvider 専用フラグ（.kaji/issues/<id>/ への永続化と
+    # commit を atomic 化する用途）。skill は provider 型を意識せず付与できる
+    # ように設計したので、github mode では silent に剥がして gh に forward する
+    # （gh CLI に誤って渡ると unknown flag で fail する）。
+    forwarded = [a for a in raw_args if a != "--commit"]
     assert config.provider is not None  # for type checker
-    return _forward_to_gh("issue", raw_args, repo=config.provider.github.repo)
+    return _forward_to_gh("issue", forwarded, repo=config.provider.github.repo)
 
 
 # ---------- LocalProvider dispatch ----------
@@ -1041,6 +1046,43 @@ def _local_issue_create(provider: LocalProvider, rest: list[str]) -> int:
     return EXIT_OK
 
 
+def _commit_local_issue_change(
+    *,
+    provider: LocalProvider,
+    rid: ResolvedId,
+    action: str,
+    paths: list[Path],
+) -> None:
+    """Commit only the given ``paths`` atomically, leaving other staged changes untouched.
+
+    Two-step flow:
+      1. ``git add <paths>`` — register untracked targets (new comment markdown)
+         and update the index entry for tracked targets (modified ``issue.md``).
+         This only touches the listed paths; other entries already staged in the
+         user's index are not modified.
+      2. ``git commit --only -- <paths>`` — build a temporary index from HEAD
+         plus the listed paths and commit it. Pre-existing staged changes for
+         paths *not* listed are excluded from HEAD and remain staged in the
+         user's index after the commit (per ``man git-commit`` § ``--only``).
+
+    Together these guarantee the atomicity requirement: the resulting commit
+    contains only ``paths`` even when the user had unrelated files staged.
+    """
+    rel_paths = [str(p.relative_to(provider.repo_root)) for p in paths]
+    issue_ref = _format_issue_ref(rid.value)
+    msg = f"chore(local): {action} for {issue_ref}"
+    subprocess.run(
+        ["git", "add", "--", *rel_paths],
+        cwd=provider.repo_root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "--only", "-m", msg, "--", *rel_paths],
+        cwd=provider.repo_root,
+        check=True,
+    )
+
+
 def _local_issue_edit(provider: LocalProvider, rest: list[str]) -> int:
     p = argparse.ArgumentParser(prog="kaji issue edit", add_help=True)
     p.add_argument("issue_id", type=str)
@@ -1049,19 +1091,36 @@ def _local_issue_edit(provider: LocalProvider, rest: list[str]) -> int:
     p.add_argument("--body-file", dest="body_file", default=None, type=str)
     p.add_argument("--add-label", dest="add_label", action="append", default=[], type=str)
     p.add_argument("--remove-label", dest="remove_label", action="append", default=[], type=str)
+    p.add_argument(
+        "--commit",
+        action="store_true",
+        help=(
+            "Commit the resulting .kaji/issues/<id>/issue.md atomically after "
+            "persistence (uses `git commit --only` so other staged changes are "
+            "not included in the new commit)."
+        ),
+    )
     ns = p.parse_args(rest)
     rid_or_rc = _resolve_local_id(provider, ns.issue_id, write=True)
     if isinstance(rid_or_rc, int):
         return rid_or_rc
     rid = rid_or_rc
     body = _read_body_arg(ns.body, ns.body_file)
-    provider.edit_issue(
+    issue = provider.edit_issue(
         rid.value,
         title=ns.title,
         body=body,
         add_labels=ns.add_label,
         remove_labels=ns.remove_label,
     )
+    if ns.commit:
+        issue_dir = provider._resolve_issue_dir(issue.id)
+        _commit_local_issue_change(
+            provider=provider,
+            rid=rid,
+            action="edit",
+            paths=[issue_dir / "issue.md"],
+        )
     return EXIT_OK
 
 
@@ -1070,6 +1129,15 @@ def _local_issue_comment(provider: LocalProvider, rest: list[str]) -> int:
     p.add_argument("issue_id", type=str)
     p.add_argument("--body", default=None, type=str)
     p.add_argument("--body-file", dest="body_file", default=None, type=str)
+    p.add_argument(
+        "--commit",
+        action="store_true",
+        help=(
+            "Commit the resulting .kaji/issues/<id>/comments/<seq>-<machine>.md "
+            "atomically after persistence (uses `git commit --only` so other "
+            "staged changes are not included in the new commit)."
+        ),
+    )
     ns = p.parse_args(rest)
     rid_or_rc = _resolve_local_id(provider, ns.issue_id, write=True)
     if isinstance(rid_or_rc, int):
@@ -1080,6 +1148,15 @@ def _local_issue_comment(provider: LocalProvider, rest: list[str]) -> int:
         raise ValueError("'kaji issue comment' requires --body or --body-file")
     comment = provider.comment_issue(rid.value, body)
     sys.stdout.write(f"{comment.seq}-{comment.machine_id}\n")
+    if ns.commit:
+        issue_dir = provider._resolve_issue_dir(rid.value)
+        comment_path = issue_dir / "comments" / f"{comment.seq}-{comment.machine_id}.md"
+        _commit_local_issue_change(
+            provider=provider,
+            rid=rid,
+            action="comment",
+            paths=[comment_path],
+        )
     return EXIT_OK
 
 

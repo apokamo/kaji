@@ -149,7 +149,7 @@ git worktree list
 #### 成功テンプレート
 
 ````bash
-kaji issue comment [issue_id] --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit --body-file - <<'EOF'
 # ワークフロー実行検証結果
 
 ## 実行コマンド
@@ -188,7 +188,7 @@ EOF
 #### 失敗テンプレート
 
 ````bash
-kaji issue comment [issue_id] --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit --body-file - <<'EOF'
 # ワークフロー実行検証結果
 
 ## 実行コマンド
