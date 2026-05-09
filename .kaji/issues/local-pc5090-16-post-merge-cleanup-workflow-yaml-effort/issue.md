@@ -1,11 +1,14 @@
 ---
 id: local-pc5090-16
 title: 'post-merge cleanup: workflow YAML effort 値の型強化 + Issue ファイル commit 動線改善'
-state: open
+state: closed
 slug: post-merge-cleanup-workflow-yaml-effort
 labels:
 - type:bug
 created_at: '2026-05-09T12:03:18Z'
+closed_at: '2026-05-09T13:59:15Z'
+closed_by: pc5090
+close_reason: completed
 ---
 > [!NOTE]
 > **Worktree**: `../kaji-feat-local-pc5090-16`
