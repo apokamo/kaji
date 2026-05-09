@@ -1,11 +1,14 @@
 ---
 id: local-pc5090-14
 title: kaji run の Claude ステップで進捗が見えず最終メッセージが二重表示される（ClaudeAdapter.extract_text 改修）
-state: open
+state: closed
 slug: claude-adapter-tool-progress-visibility
 labels:
 - type:bug
 created_at: '2026-05-09T07:22:52Z'
+closed_at: '2026-05-09T08:12:28Z'
+closed_by: pc5090
+close_reason: completed
 ---
 > [!NOTE]
 > **Worktree**: `../kaji-feat-local-pc5090-14`
