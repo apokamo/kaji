@@ -20,46 +20,62 @@ name: issue-start
 ## 引数
 
 ```
-$ARGUMENTS = <issue_id> [prefix]
+$ARGUMENTS = <issue_id>
 ```
 
-- `issue_id` (必須): Issue番号 (例: 247)
-- `prefix` (任意): ブランチプレフィックス (デフォルト: feat)
-  - 例: docs, fix, feat, refactor, test
+- `issue_id` (必須): Issue番号 (例: 247 / `local-pc1-3` / `gh:153`)
+
+第 2 引数は **廃止** されました（issue local-pc5090-17）。ブランチ prefix は
+`kaji issue context` が返す `branch_prefix`（frontmatter `branch_prefix` →
+`type:*` ラベル → `chore` fallback の優先順）から自動決定します。
 
 ## 命名規則
 
-- **ブランチ名**: `[prefix]/[issue_id]` (例: `docs/247`)
-- **ディレクトリ**: `../kaji-[prefix]-[issue_id]` (例: `../kaji-docs-247`)
+`kaji issue context <issue_id>` の出力（`provider.resolve_issue_context()` が正本）から
+取得する `branch_name` / `worktree_dir` をそのまま使います。
+
+- **ブランチ名**: `<branch_prefix>/<issue_id>` (例: `fix/247`)
+- **ディレクトリ**: `<repo_root>/../kaji-<branch_prefix>-<issue_id>` (例: `../kaji-fix-247`)
 
 ## 実行手順
 
-### Step 0: 引数の解析
+### Step 0: 引数の検査
 
-$ARGUMENTS から issue_id と prefix を取得してください。
-- prefix が指定されていない場合は `feat` をデフォルトとする
+`$ARGUMENTS` から `issue_id` を取得してください。第 2 引数（旧 `prefix`）が
+渡された場合は **ABORT** verdict を出して停止し、廃止アナウンスをユーザに返してください
+（label / frontmatter からの自動導出に一本化されているため）。
 
-### Step 1: ブランチとWorktreeの作成
+### Step 1: context 正本の取得
+
+```bash
+CTX=$(kaji issue context [issue_id] --json branch_prefix,branch_name,worktree_dir)
+PREFIX=$(echo "$CTX" | jq -r '.branch_prefix')
+BRANCH=$(echo "$CTX" | jq -r '.branch_name')
+WT=$(echo "$CTX" | jq -r '.worktree_dir')
+```
+
+`worktree_dir` は絶対パスで返ります。以降の手順では上記 3 変数を使います。
+
+### Step 2: ブランチとWorktreeの作成
 
 メインリポジトリのルートから実行:
 
 ```bash
 MAIN_REPO=$(git rev-parse --show-toplevel)
-git worktree add -b [prefix]/[issue_id] "$MAIN_REPO/../kaji-[prefix]-[issue_id]" main
+git worktree add -b "$BRANCH" "$WT" main
 ```
 
-### Step 1.5: venv シンボリックリンク作成
+### Step 2.5: venv シンボリックリンク作成
 
 main プロジェクトの `.venv` へのシンボリックリンクを作成:
 
 ```bash
-MAIN_REPO=$(git rev-parse --show-toplevel)
-ln -s "$MAIN_REPO/.venv" "$MAIN_REPO/../kaji-[prefix]-[issue_id]/.venv"
+ln -s "$MAIN_REPO/.venv" "$WT/.venv"
 ```
 
 これにより `make check` が即座に実行可能になります。
 
-### Step 2: Worktreeの確認
+### Step 3: Worktreeの確認
 
 ```bash
 git worktree list
@@ -67,7 +83,7 @@ git worktree list
 
 ワークツリーが正しく作成されたことを確認してください。
 
-### Step 3: Issue本文にメタ情報を追記
+### Step 4: Issue本文にメタ情報を追記
 
 Issue本文の先頭にWorktree情報を追記します:
 
@@ -76,10 +92,11 @@ Issue本文の先頭にWorktree情報を追記します:
 CURRENT_BODY=$(kaji issue view [issue_id] --json body -q '.body')
 
 # メタ情報を先頭に追加した新しい本文を作成
+WT_BASENAME=$(basename "$WT")
 NEW_BODY=$(cat <<EOF
 > [!NOTE]
-> **Worktree**: \`../kaji-[prefix]-[issue_id]\`
-> **Branch**: \`[prefix]/[issue_id]\`
+> **Worktree**: \`../$WT_BASENAME\`
+> **Branch**: \`$BRANCH\`
 
 $CURRENT_BODY
 EOF
@@ -89,9 +106,9 @@ EOF
 kaji issue edit [issue_id] --commit --body "$NEW_BODY"
 ```
 
-### Step 4: セットアップ完了報告
+### Step 5: セットアップ完了報告
 
-以下の形式で報告してください:
+以下の形式で報告してください（`$PREFIX` / `$BRANCH` / `$WT` の値で埋めること）:
 
 ```
 ## Worktree セットアップ完了
@@ -99,8 +116,8 @@ kaji issue edit [issue_id] --commit --body "$NEW_BODY"
 | 項目 | 値 |
 |------|-----|
 | Issue | [issue_ref] |
-| ブランチ | [prefix]/[issue_id] |
-| ディレクトリ | ../kaji-[prefix]-[issue_id] |
+| ブランチ | $BRANCH |
+| ディレクトリ | ../$(basename "$WT") |
 | 基点ブランチ | main |
 | venv | シンボリックリンク作成済み |
 | メタ情報 | Issue本文に追記済み |
@@ -109,7 +126,7 @@ kaji issue edit [issue_id] --commit --body "$NEW_BODY"
 
 このタスクに関する今後のコマンドは、すべて以下のディレクトリ内で実行してください:
 
-cd ../kaji-[prefix]-[issue_id]
+cd ../$(basename "$WT")
 
 ### クリーンアップ（作業完了後）
 
@@ -138,4 +155,4 @@ suggestion: |
 | status | 条件 |
 |--------|------|
 | PASS | Worktree 構築成功 |
-| ABORT | 構築失敗 |
+| ABORT | 構築失敗 / 第 2 引数（旧 `prefix`）が渡された |

@@ -112,9 +112,18 @@ kaji issue create --title "do something" --body-file issue-body.md --label type:
 # 一覧
 kaji issue list
 
+# context 解決（skill / 自動化スクリプト用、`provider.resolve_issue_context()` の薄いラッパー）
+kaji issue context local-pc1-1 --json branch_prefix,branch_name,worktree_dir
+# → {"branch_prefix":"feat","branch_name":"feat/local-pc1-1","worktree_dir":"/abs/.../kaji-feat-local-pc1-1"}
+
 # workflow 起動（local 専用）
 kaji run .kaji/wf/feature-development-local.yaml local-pc1-1
 ```
+
+`kaji issue context` は frontmatter `branch_prefix` 優先 → `type:*` ラベル
+mapping → `chore` fallback の優先順で context を解決する（`provider.type='local'`
+/ `'github'` の両方で利用可能。`'gitlab'` は本コマンドでは未対応で `EXIT_INVALID_INPUT`
+を返す）。`/issue-start` skill が worktree / branch 名を導出するために使う。
 
 `feature-development-local.yaml` は `feature-development.yaml` の最終 step
 （`i-pr`）を `issue-close` に差し替えたもの。PR は作らず、`/issue-close`
