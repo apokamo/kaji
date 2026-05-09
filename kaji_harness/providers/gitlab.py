@@ -9,6 +9,12 @@ mutating 系（create/edit/comment/close）は ``glab issue <sub>`` を直接起
 read 系（view/list/list_labels）は ``glab api projects/<URL-encoded-repo>/...``
 で REST JSON を取得する（``glab issue list`` は ``--output-format
 details/ids/urls`` のみで構造化 JSON を出さないため）。
+
+host 固定: 本 provider は ``provider.gitlab.repo`` のみで対象 forge を一意に決める
+契約のため、すべての ``glab`` 起動に ``--hostname gitlab.com`` を default 注入する。
+``glab`` の global flag ``--hostname`` は current git directory / login config による
+host 解決を強制 override するため、これにより ``glab api`` / mutating 系の双方で
+self-hosted host への誤送信を防ぐ（self-hosted 非対応は確定事項 #3）。
 """
 
 from __future__ import annotations
@@ -32,6 +38,12 @@ from .models import Comment, Issue, IssueContext, Label
 
 class GitLabProviderError(RuntimeError):
     """``glab`` CLI 起動失敗 / 戻り値非ゼロ / JSON parse 失敗等。"""
+
+
+# 確定事項 #3: self-hosted 非対応 / ``gitlab.com`` 内部固定。``glab`` の host 解決
+# （current git directory / login config）への暗黙依存を切り、``provider.gitlab.repo``
+# のみで forge が一意に決まることを保証する。
+_GITLAB_HOSTNAME = "gitlab.com"
 
 
 @dataclass
@@ -60,6 +72,12 @@ class GitLabProvider:
     def _run_glab(self, *args: str, capture: bool = True) -> subprocess.CompletedProcess[str]:
         """``glab`` を subprocess で起動する。
 
+        ``glab`` の global flag ``--hostname gitlab.com`` を全 invocation に default 注入
+        することで、current git directory / login config に基づく host 解決を強制
+        override する（``glab api --help`` / ``glab issue --help`` 参照）。これにより
+        self-hosted GitLab 環境や複数 host を持つ workstation でも、``provider.gitlab.repo``
+        が指す ``gitlab.com`` 上の project だけが対象になることを保証する。
+
         ``--repo <repo>`` は呼出側で ``args`` に明示する責務。``glab api`` は
         ``--repo`` を受け付けないため endpoint URL 側に encoded repo を埋める。
         """
@@ -67,7 +85,7 @@ class GitLabProvider:
             raise GitLabProviderError(
                 "'glab' CLI not found in PATH. Install glab to use provider.type='gitlab'."
             )
-        cmd = ["glab", *args]
+        cmd = ["glab", "--hostname", _GITLAB_HOSTNAME, *args]
         try:
             return subprocess.run(
                 cmd,
@@ -217,6 +235,13 @@ class GitLabProvider:
         return self.view_issue(iid)
 
     def view_issue(self, issue_id: str) -> Issue:
+        """Issue 本体 + notes (= comments) を取得する。
+
+        notes は ``?per_page=100`` の 1 ページ目のみ取得する（pagination 未対応、
+        list_labels と同方針）。100 件に達した場合は warning を残し、後続 pagination
+        対応を検出可能にする。完全な pagination は実需要が出るまで保留（design §
+        list_labels の pagination 方針 / Should Fix #1 反映）。
+        """
         encoded = self._encoded_repo()
         payload = self._glab_api_get(f"projects/{encoded}/issues/{issue_id}")
         if not isinstance(payload, dict):
@@ -228,6 +253,13 @@ class GitLabProvider:
         if not isinstance(notes_payload, list):
             raise GitLabProviderError("glab api returned non-array JSON for notes")
         comments = self._parse_comments_payload(notes_payload)
+        if len(notes_payload) == 100:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "GitLabProvider.view_issue: notes returned 100 entries (per_page cap), "
+                "pagination is not implemented; comments beyond the first page may be missing."
+            )
         return Issue(
             id=issue.id,
             title=issue.title,
@@ -297,6 +329,12 @@ class GitLabProvider:
         labels: list[str] | None = None,
         limit: int | None = None,
     ) -> list[Issue]:
+        """Issue 一覧を 1 リクエスト分（最大 ``per_page=100``）取得する。
+
+        ``limit`` は GitLab REST の ``per_page`` に転写し、上限 100 で頭打ちにする
+        （GitLab pagination doc 参照）。pagination ループは未実装。100 件に達した
+        場合は warning を残す（list_labels / view_issue notes と同方針）。
+        """
         encoded = self._encoded_repo()
         # GitLab REST: state は ``opened`` / ``closed`` / ``all``
         gl_state = "opened" if state == "open" else state
@@ -312,6 +350,13 @@ class GitLabProvider:
         for entry in payload:
             if isinstance(entry, dict):
                 result.append(self._parse_issue_payload(entry))
+        if len(result) == 100:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "GitLabProvider.list_issues: returned 100 issues (per_page cap), "
+                "pagination is not implemented; issues beyond the first page may be missing."
+            )
         return result
 
     def list_labels(self) -> list[Label]:

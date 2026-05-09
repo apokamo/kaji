@@ -295,6 +295,85 @@ class TestRunGlab:
 
 
 @pytest.mark.small
+class TestHostnamePinning:
+    """全 ``glab`` invocation が ``--hostname gitlab.com`` を default 注入することを保証する。
+
+    EPIC `local-pc5090-4` 確定事項 #3「self-hosted 非対応 / ``gitlab.com`` 内部固定」と
+    Issue 本文「current project / login に依存しない」要求の回帰防止。``glab`` の
+    host 解決（current git directory / login config）への暗黙依存を切る。
+    """
+
+    def _captured_first(
+        self, provider: GitLabProvider, callable_name: str, *args: object, **kwargs: object
+    ) -> list[list[str]]:
+        captured: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+            captured.append(cmd)
+            endpoint = cmd[-1] if cmd else ""
+            # array endpoints
+            if "/notes" in endpoint or endpoint.endswith("/labels?per_page=100"):
+                return _ok(stdout="[]")
+            if "/issues?" in endpoint:
+                return _ok(stdout="[]")
+            if endpoint.startswith("projects/") and "/issues/" in endpoint:
+                # single-issue dict
+                return _ok(
+                    stdout=json.dumps(
+                        {
+                            "iid": 1,
+                            "title": "t",
+                            "description": "",
+                            "state": "opened",
+                            "labels": [],
+                        }
+                    )
+                )
+            # mutating subcommand stdout for create — provide URL so iid extraction works
+            return _ok(stdout="https://gitlab.com/group/project/-/issues/1\n")
+
+        with (
+            patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
+            patch("kaji_harness.providers.gitlab.subprocess.run", side_effect=fake_run),
+        ):
+            getattr(provider, callable_name)(*args, **kwargs)
+        return captured
+
+    def test_view_issue_pins_hostname(self, provider: GitLabProvider) -> None:
+        captured = self._captured_first(provider, "view_issue", "1")
+        assert captured[0][:3] == ["glab", "--hostname", "gitlab.com"]
+
+    def test_list_issues_pins_hostname(self, provider: GitLabProvider) -> None:
+        captured = self._captured_first(provider, "list_issues")
+        assert captured[0][:3] == ["glab", "--hostname", "gitlab.com"]
+
+    def test_list_labels_pins_hostname(self, provider: GitLabProvider) -> None:
+        captured = self._captured_first(provider, "list_labels")
+        assert captured[0][:3] == ["glab", "--hostname", "gitlab.com"]
+
+    def test_create_issue_pins_hostname(self, provider: GitLabProvider) -> None:
+        captured = self._captured_first(provider, "create_issue", title="t", body="b")
+        assert captured[0][:3] == ["glab", "--hostname", "gitlab.com"]
+        # mutating subcommand follows the global flag
+        assert captured[0][3:5] == ["issue", "create"]
+
+    def test_edit_issue_pins_hostname(self, provider: GitLabProvider) -> None:
+        captured = self._captured_first(provider, "edit_issue", "1", title="t")
+        assert captured[0][:3] == ["glab", "--hostname", "gitlab.com"]
+        assert captured[0][3:5] == ["issue", "update"]
+
+    def test_comment_issue_pins_hostname(self, provider: GitLabProvider) -> None:
+        captured = self._captured_first(provider, "comment_issue", "1", "msg")
+        assert captured[0][:3] == ["glab", "--hostname", "gitlab.com"]
+        assert captured[0][3:5] == ["issue", "note"]
+
+    def test_close_issue_pins_hostname(self, provider: GitLabProvider) -> None:
+        captured = self._captured_first(provider, "close_issue", "1")
+        assert captured[0][:3] == ["glab", "--hostname", "gitlab.com"]
+        assert captured[0][3:5] == ["issue", "close"]
+
+
+@pytest.mark.small
 class TestViewIssue:
     def test_combines_issue_and_notes(self, provider: GitLabProvider) -> None:
         issue_payload = {
@@ -350,12 +429,12 @@ class TestViewIssue:
             patch("kaji_harness.providers.gitlab.subprocess.run", side_effect=fake_run),
         ):
             provider.view_issue("42")
-        # 1st call: issue body
-        assert captured[0][0] == "glab"
-        assert captured[0][1] == "api"
-        assert captured[0][2] == "projects/group%2Fproject/issues/42"
+        # 1st call: issue body — "glab --hostname gitlab.com api <endpoint>"
+        assert captured[0][:4] == ["glab", "--hostname", "gitlab.com", "api"]
+        assert captured[0][4] == "projects/group%2Fproject/issues/42"
         # 2nd call: notes
-        assert captured[1][2].startswith("projects/group%2Fproject/issues/42/notes")
+        assert captured[1][:4] == ["glab", "--hostname", "gitlab.com", "api"]
+        assert captured[1][4].startswith("projects/group%2Fproject/issues/42/notes")
 
     def test_glab_failure_raises(self, provider: GitLabProvider) -> None:
         with (
@@ -409,7 +488,8 @@ class TestCreateIssue:
 
         def fake_run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
             captured.append(cmd)
-            if cmd[1:3] == ["issue", "create"]:
+            # mutating: "glab --hostname gitlab.com issue create ..."
+            if cmd[3:5] == ["issue", "create"]:
                 return _ok(stdout="https://gitlab.com/group/project/-/issues/9\n")
             return _ok(
                 stdout=json.dumps(
@@ -425,8 +505,7 @@ class TestCreateIssue:
         ):
             provider.create_issue(title="t", body="b", labels=["a", "b"])
         create_cmd = captured[0]
-        assert create_cmd[0] == "glab"
-        assert create_cmd[1:3] == ["issue", "create"]
+        assert create_cmd[:5] == ["glab", "--hostname", "gitlab.com", "issue", "create"]
         assert "--repo" in create_cmd
         assert create_cmd[create_cmd.index("--repo") + 1] == "group/project"
         # combined label flag
@@ -464,8 +543,11 @@ class TestListIssues:
             patch("kaji_harness.providers.gitlab.subprocess.run", side_effect=fake_run),
         ):
             provider.list_issues(state="open")
-        assert captured[0][2].startswith("projects/group%2Fproject/issues?")
-        assert "state=opened" in captured[0][2]
+        # ``glab --hostname gitlab.com api <endpoint>``
+        assert captured[0][:4] == ["glab", "--hostname", "gitlab.com", "api"]
+        endpoint = captured[0][4]
+        assert endpoint.startswith("projects/group%2Fproject/issues?")
+        assert "state=opened" in endpoint
 
     def test_caps_per_page_at_100(self, provider: GitLabProvider) -> None:
         captured: list[list[str]] = []
@@ -479,7 +561,7 @@ class TestListIssues:
             patch("kaji_harness.providers.gitlab.subprocess.run", side_effect=fake_run),
         ):
             provider.list_issues(limit=500)
-        assert "per_page=100" in captured[0][2]
+        assert "per_page=100" in captured[0][4]
 
 
 @pytest.mark.small
