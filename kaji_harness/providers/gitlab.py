@@ -386,6 +386,148 @@ class GitLabProvider:
             )
         return out
 
+    # -------- PR (MR) helpers ----------
+    #
+    # 本セクションは Issue local-pc5090-6 で追加。``kaji pr`` の GitLab dispatcher が
+    # 呼ぶ薄い helper 群と、純粋な GitLab→GitHub shape 変換層 ``_GitLabPrShape`` を
+    # 提供する。``pr_*`` の単純な CLI passthrough は cli_main 側で ``_run_glab`` を
+    # 直接呼ぶ薄い経路を採るため、provider 側に集約するのは:
+    #
+    # 1. Branch 名 → MR IID の解決（``resolve_mr_iid_from_branch``）
+    # 2. discussions API + 互換 shape 変換（``list_pr_review_comments``）
+    # 3. notes API + approvals API + marker による reviews 合成（``list_pr_reviews``）
+    # 4. discussion thread への reply（``reply_to_pr_comment``）
+    #
+    # の 4 つに限る。Tier B の create/view/list/merge/comment/review は dispatcher
+    # 側で sub 名 / flag rewrite + ``_run_glab`` 起動で完結する。
+
+    def resolve_mr_iid_from_branch(self, branch: str) -> str:
+        """``glab mr list --source-branch <branch>`` で branch から MR IID を引く。
+
+        ``issue-close`` Step 3 が ``kaji pr merge [branch_name]`` を呼ぶ経路で、
+        branch 名 → IID の正引きが必要になる（GitHub の ``gh pr merge <branch>``
+        は branch を直接受理するが、glab は IID のみ受理）。
+
+        Returns:
+            project-local IID（``"42"``）。見つからない / 複数該当の場合は
+            ``GitLabProviderError``。
+        """
+        encoded = self._encoded_repo()
+        # state=opened に絞り込まないと過去 close MR とぶつかる可能性がある。
+        from urllib.parse import quote as _quote
+
+        endpoint = (
+            f"projects/{encoded}/merge_requests"
+            f"?source_branch={_quote(branch, safe='')}&state=opened"
+        )
+        payload = self._glab_api_get(endpoint)
+        if not isinstance(payload, list):
+            raise GitLabProviderError(
+                f"glab api returned non-array JSON for MR lookup by branch {branch!r}"
+            )
+        iids = [
+            str(entry["iid"]) for entry in payload if isinstance(entry, dict) and "iid" in entry
+        ]
+        if not iids:
+            raise GitLabProviderError(f"no open merge request found for source branch {branch!r}")
+        if len(iids) > 1:
+            raise GitLabProviderError(
+                f"multiple open merge requests found for source branch {branch!r}: {iids}"
+            )
+        return iids[0]
+
+    def list_pr_review_comments(self, mr_iid: str) -> list[dict[str, object]]:
+        """``glab api .../merge_requests/<iid>/discussions`` を GitHub 互換 subset に整形。"""
+        encoded = self._encoded_repo()
+        payload = self._glab_api_get(f"projects/{encoded}/merge_requests/{mr_iid}/discussions")
+        if not isinstance(payload, list):
+            raise GitLabProviderError("glab api returned non-array JSON for MR discussions")
+        return _GitLabPrShape.to_github_review_comments(payload)
+
+    def list_pr_reviews(self, mr_iid: str) -> list[dict[str, object]]:
+        """notes + approvals を join し、GitHub ``pulls/<N>/reviews`` 互換 list を返す。
+
+        詳細仕様は設計書 § ``reviews`` contract の合成方法 を参照。
+        """
+        encoded = self._encoded_repo()
+        notes_payload = self._glab_api_get(
+            f"projects/{encoded}/merge_requests/{mr_iid}/notes?per_page=100"
+        )
+        approvals_payload = self._glab_api_get(
+            f"projects/{encoded}/merge_requests/{mr_iid}/approvals"
+        )
+        if not isinstance(notes_payload, list):
+            raise GitLabProviderError("glab api returned non-array JSON for MR notes")
+        if not isinstance(approvals_payload, dict):
+            raise GitLabProviderError("glab api returned non-object JSON for MR approvals")
+        return _GitLabPrShape.to_github_reviews(notes_payload, approvals_payload)
+
+    def reply_to_pr_comment(self, mr_iid: str, *, discussion_id: str, body: str) -> None:
+        """discussion thread に reply note を POST する。
+
+        ``glab api`` の POST 引数 ``-f body=<text>`` を使う。
+        """
+        encoded = self._encoded_repo()
+        endpoint = f"projects/{encoded}/merge_requests/{mr_iid}/discussions/{discussion_id}/notes"
+        proc = self._run_glab("api", "--method", "POST", endpoint, "-f", f"body={body}")
+        if proc.returncode != 0:
+            raise GitLabProviderError(
+                f"glab api POST {endpoint} failed: {proc.stderr.strip() or proc.stdout.strip()}"
+            )
+
+    def get_mr_view_payload(self, mr_iid: str) -> dict[str, object]:
+        """``GET projects/:id/merge_requests/:iid`` の生 dict を返す。
+
+        ``glab mr view`` は JSON 出力 flag を持たないため、view 経路は
+        ``glab api`` ベースで統一する（list_issues / view_issue と同方針）。
+        """
+        encoded = self._encoded_repo()
+        payload = self._glab_api_get(f"projects/{encoded}/merge_requests/{mr_iid}")
+        if not isinstance(payload, dict):
+            raise GitLabProviderError("glab api returned non-object JSON for MR view")
+        return payload
+
+    def list_mrs_payload(
+        self,
+        *,
+        state: str | None = None,
+        source_branch: str | None = None,
+        target_branch: str | None = None,
+        search: str | None = None,
+        per_page: int = 100,
+    ) -> list[object]:
+        """``GET projects/:id/merge_requests?...`` の生 list を返す。
+
+        ``glab mr list`` は JSON 出力 flag を持たないため、list 経路も
+        ``glab api`` ベースで統一する。
+        """
+        encoded = self._encoded_repo()
+        params: list[str] = [f"per_page={min(max(per_page, 1), 100)}"]
+        if state:
+            params.append(f"state={quote(state, safe='')}")
+        if source_branch:
+            params.append(f"source_branch={quote(source_branch, safe='')}")
+        if target_branch:
+            params.append(f"target_branch={quote(target_branch, safe='')}")
+        if search:
+            params.append(f"search={quote(search, safe='')}")
+        endpoint = f"projects/{encoded}/merge_requests?{'&'.join(params)}"
+        payload = self._glab_api_get(endpoint)
+        if not isinstance(payload, list):
+            raise GitLabProviderError("glab api returned non-array JSON for MR list")
+        return payload
+
+    def get_mr_approval_state(self, mr_iid: str) -> dict[str, object]:
+        """approvals API の生 payload（``approved_by`` / ``approvals_left`` 等）を返す。
+
+        ``--request-changes`` 時の revoke 要否判定（自分が approve 済か）に使う。
+        """
+        encoded = self._encoded_repo()
+        payload = self._glab_api_get(f"projects/{encoded}/merge_requests/{mr_iid}/approvals")
+        if not isinstance(payload, dict):
+            raise GitLabProviderError("glab api returned non-object JSON for MR approvals")
+        return payload
+
     # -------- Context ----------
 
     def resolve_issue_context(self, issue_id: str) -> IssueContext:
@@ -407,3 +549,262 @@ class GitLabProvider:
             branch_prefix_fallback=fallback,
             default_branch=self.default_branch,
         )
+
+
+# ----------------------------------------------------------------------------
+# _GitLabPrShape — pure GitLab → GitHub shape 変換層
+# ----------------------------------------------------------------------------
+#
+# Issue local-pc5090-6 で導入。``glab mr view --output json`` 等の payload を
+# ``gh pr view --json`` 互換 dict に変換する純粋関数群。subprocess を呼ばず
+# JSON 構造のみを扱うため Small テスト容易。
+#
+# 設計書 § ``reviews`` contract の合成方法 / § テスト戦略 § Small に対応。
+
+# kaji marker: review state を note body 先頭に埋め込む HTML コメント。
+# 1 行目に置き、2 行目以降が user body。GitLab UI 上では HTML コメントとして
+# 不可視のため、UI の review 体験を壊さない。
+_KAJI_REVIEW_MARKER_PREFIX = "<!-- kaji-review: state="
+_KAJI_REVIEW_MARKER_SUFFIX = " -->"
+
+_REVIEW_STATES_VALID = {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}
+
+
+def build_kaji_review_marker(state: str) -> str:
+    """``state`` から marker 文字列（先頭行のみ、改行なし）を組み立てる。
+
+    Args:
+        state: ``APPROVED`` / ``CHANGES_REQUESTED`` / ``COMMENTED`` のいずれか。
+
+    Raises:
+        ValueError: 不明な state。
+    """
+    if state not in _REVIEW_STATES_VALID:
+        raise ValueError(f"invalid review state {state!r}: expected one of {_REVIEW_STATES_VALID}")
+    return f"{_KAJI_REVIEW_MARKER_PREFIX}{state}{_KAJI_REVIEW_MARKER_SUFFIX}"
+
+
+def _parse_kaji_review_marker(body: str) -> tuple[str, str] | None:
+    """note body 先頭行が kaji marker なら ``(state, body_without_marker)`` を返す。
+
+    marker 形式不正 / state が ``_REVIEW_STATES_VALID`` 外 → ``None``。
+    """
+    if not body.startswith(_KAJI_REVIEW_MARKER_PREFIX):
+        return None
+    head, _, tail = body.partition("\n")
+    if not head.endswith(_KAJI_REVIEW_MARKER_SUFFIX):
+        return None
+    state = head[len(_KAJI_REVIEW_MARKER_PREFIX) : -len(_KAJI_REVIEW_MARKER_SUFFIX)]
+    if state not in _REVIEW_STATES_VALID:
+        return None
+    return state, tail
+
+
+class _GitLabPrShape:
+    """GitLab REST API JSON → GitHub ``gh pr`` 互換 dict 変換。
+
+    すべて ``@staticmethod``。インスタンス化しない。
+    """
+
+    @staticmethod
+    def to_github(payload: dict[str, object]) -> dict[str, object]:
+        """``glab mr view --output json`` の dict を GitHub ``pr view --json`` 互換に。
+
+        変換ルール:
+
+        - ``iid`` → ``number``（int として保持）
+        - ``state`` ``opened`` → ``OPEN``、``closed`` → ``CLOSED``、``merged`` → ``MERGED``
+          （GitHub の state 命名は upper-case 列挙値）
+        - ``description`` → ``body``
+        - ``title`` → ``title`` (そのまま)
+        - ``source_branch`` → ``headRefName``
+        - ``target_branch`` → ``baseRefName``
+        - ``web_url`` → ``url``
+        - ``author.username`` → ``author.login``（dict の中で互換 key）
+        - ``labels: list[str]`` → ``labels: [{"name": str}]``
+        """
+        iid = payload.get("iid")
+        number: object
+        if iid is None:
+            number = None
+        elif isinstance(iid, int):
+            number = iid
+        else:
+            try:
+                number = int(str(iid))
+            except (TypeError, ValueError):
+                number = iid
+        gl_state = str(payload.get("state", "") or "").lower()
+        gh_state_map = {
+            "opened": "OPEN",
+            "closed": "CLOSED",
+            "merged": "MERGED",
+            "locked": "LOCKED",
+        }
+        state = gh_state_map.get(gl_state, gl_state.upper())
+        author_obj = payload.get("author")
+        author: dict[str, object] = {}
+        if isinstance(author_obj, dict):
+            author = {"login": str(author_obj.get("username", "") or "")}
+        labels_raw = payload.get("labels", []) or []
+        labels: list[dict[str, object]] = []
+        if isinstance(labels_raw, list):
+            for entry in labels_raw:
+                if isinstance(entry, str):
+                    labels.append({"name": entry})
+                elif isinstance(entry, dict):
+                    labels.append({"name": str(entry.get("name", "") or "")})
+        return {
+            "number": number,
+            "title": str(payload.get("title", "") or ""),
+            "body": str(payload.get("description", "") or ""),
+            "state": state,
+            "headRefName": str(payload.get("source_branch", "") or ""),
+            "baseRefName": str(payload.get("target_branch", "") or ""),
+            "url": str(payload.get("web_url", "") or ""),
+            "author": author,
+            "labels": labels,
+        }
+
+    @staticmethod
+    def to_github_list(payload: list[object]) -> list[dict[str, object]]:
+        """``glab mr list -F json`` の list を GitHub ``pulls`` array shape に。"""
+        out: list[dict[str, object]] = []
+        for entry in payload:
+            if isinstance(entry, dict):
+                out.append(_GitLabPrShape.to_github(entry))
+        return out
+
+    @staticmethod
+    def to_github_review_comments(
+        discussions_payload: list[object],
+    ) -> list[dict[str, object]]:
+        """``GET .../discussions`` を ``pulls/<N>/comments`` 互換 subset に。
+
+        各 discussion の ``notes[0]`` を 1 entry とする（GitHub の review-comment は
+        thread 起点を 1 entry として扱う流儀に揃える）。
+
+        出力 entry shape:
+        - ``id``: ``"<discussion_id>:<note_id>"`` 形式の opaque string
+        - ``path``: file path（diff 上のコメントの場合）
+        - ``line``: 行番号（diff 上のコメントの場合）
+        - ``body``: note body（GitLab は marker の概念なしのため raw を流す）
+        - ``user``: ``{"login": <username>}``
+        """
+        out: list[dict[str, object]] = []
+        for entry in discussions_payload:
+            if not isinstance(entry, dict):
+                continue
+            discussion_id = str(entry.get("id", "") or "")
+            notes = entry.get("notes", []) or []
+            if not isinstance(notes, list) or not notes:
+                continue
+            head_note = notes[0]
+            if not isinstance(head_note, dict):
+                continue
+            if head_note.get("system") is True:
+                # state change 等の system note を含む discussion はスキップ
+                continue
+            note_id = str(head_note.get("id", "") or "")
+            author_obj = head_note.get("author")
+            login = ""
+            if isinstance(author_obj, dict):
+                login = str(author_obj.get("username", "") or "")
+            position = head_note.get("position")
+            path = ""
+            line: object = None
+            if isinstance(position, dict):
+                path = str(position.get("new_path", "") or position.get("old_path", "") or "")
+                # GitLab の position.new_line が None の場合は old_line を採る。
+                # GitHub では line は int / null。
+                raw_line = position.get("new_line", position.get("old_line"))
+                if raw_line is not None:
+                    try:
+                        line = int(raw_line)
+                    except (TypeError, ValueError):
+                        line = None
+            out.append(
+                {
+                    "id": f"{discussion_id}:{note_id}",
+                    "path": path,
+                    "line": line,
+                    "body": str(head_note.get("body", "") or ""),
+                    "user": {"login": login},
+                }
+            )
+        return out
+
+    @staticmethod
+    def to_github_reviews(
+        notes_payload: list[object],
+        approvals_payload: dict[str, object],
+    ) -> list[dict[str, object]]:
+        """notes + approvals を join し ``pulls/<N>/reviews`` 互換 list を返す。
+
+        詳細仕様は設計書 § ``reviews`` contract の合成方法 を参照:
+
+        1. body 先頭に kaji marker を持つ note → ``state`` / ``body``（marker 剥がし後）
+           を復元
+        2. approvals API の ``approved_by[]`` のうち marker note を持たない approver
+           は ``state="APPROVED"`` / ``body=""`` で補完
+        3. ``submitted_at`` 昇順でソート
+        4. system note / marker 形式不正 note は無視（fail-fast しない）
+        """
+        reviews: list[dict[str, object]] = []
+        users_with_marker_note: set[str] = set()
+        for entry in notes_payload:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("system") is True:
+                continue
+            body = str(entry.get("body", "") or "")
+            parsed = _parse_kaji_review_marker(body)
+            if parsed is None:
+                continue
+            state, body_without_marker = parsed
+            author_obj = entry.get("author")
+            login = ""
+            if isinstance(author_obj, dict):
+                login = str(author_obj.get("username", "") or "")
+            created_at = str(entry.get("created_at", "") or "")
+            reviews.append(
+                {
+                    "user": {"login": login},
+                    "state": state,
+                    "body": body_without_marker,
+                    "submitted_at": created_at,
+                }
+            )
+            if login:
+                users_with_marker_note.add(login)
+
+        approved_by_raw = approvals_payload.get("approved_by", []) or []
+        if isinstance(approved_by_raw, list):
+            for approver_entry in approved_by_raw:
+                if not isinstance(approver_entry, dict):
+                    continue
+                user_obj = approver_entry.get("user")
+                if not isinstance(user_obj, dict):
+                    continue
+                login = str(user_obj.get("username", "") or "")
+                if not login or login in users_with_marker_note:
+                    continue
+                # GitLab approvals API は approver ごとの timestamp を返さないため、
+                # ``submitted_at`` は空文字で補完する（GitHub 側は ISO8601 文字列を
+                # 期待するが空文字でも ``gh api`` の jq 経路は壊れない）。
+                reviews.append(
+                    {
+                        "user": {"login": login},
+                        "state": "APPROVED",
+                        "body": "",
+                        "submitted_at": "",
+                    }
+                )
+
+        # submitted_at 昇順。空文字列は最後に置く（marker note 由来のものを優先表示）。
+        def _sort_key(r: dict[str, object]) -> tuple[int, str]:
+            ts = str(r.get("submitted_at", "") or "")
+            return (1 if not ts else 0, ts)
+
+        reviews.sort(key=_sort_key)
+        return reviews

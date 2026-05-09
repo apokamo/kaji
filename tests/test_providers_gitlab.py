@@ -26,7 +26,11 @@ from kaji_harness.config import (
 )
 from kaji_harness.errors import ConfigLoadError
 from kaji_harness.providers import GitLabProvider, get_provider
-from kaji_harness.providers.gitlab import GitLabProviderError
+from kaji_harness.providers.gitlab import (
+    GitLabProviderError,
+    _GitLabPrShape,
+    build_kaji_review_marker,
+)
 
 
 def _ok(stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess[str]:
@@ -637,3 +641,358 @@ class TestIssueContext:
         assert ctx.branch_prefix == "chore"
         assert ctx.branch_prefix_fallback is True
         assert ctx.provider_type == "gitlab"
+
+
+# ---------------------------------------------------------------------------
+# _GitLabPrShape: pure shape converter (Issue local-pc5090-6)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.small
+class TestGitLabPrShapeView:
+    def test_basic_view_payload(self) -> None:
+        payload = {
+            "iid": 42,
+            "title": "Add feature",
+            "description": "body text",
+            "state": "opened",
+            "source_branch": "feat/x",
+            "target_branch": "main",
+            "web_url": "https://gitlab.com/g/p/-/merge_requests/42",
+            "author": {"username": "alice"},
+            "labels": ["bug", "priority:high"],
+        }
+        out = _GitLabPrShape.to_github(payload)
+        assert out == {
+            "number": 42,
+            "title": "Add feature",
+            "body": "body text",
+            "state": "OPEN",
+            "headRefName": "feat/x",
+            "baseRefName": "main",
+            "url": "https://gitlab.com/g/p/-/merge_requests/42",
+            "author": {"login": "alice"},
+            "labels": [{"name": "bug"}, {"name": "priority:high"}],
+        }
+
+    def test_state_mapping(self) -> None:
+        for gl, gh in [("opened", "OPEN"), ("closed", "CLOSED"), ("merged", "MERGED")]:
+            out = _GitLabPrShape.to_github({"iid": 1, "state": gl})
+            assert out["state"] == gh
+
+    def test_dict_labels_form(self) -> None:
+        payload = {"iid": 1, "labels": [{"name": "bug", "color": "#fff"}]}
+        out = _GitLabPrShape.to_github(payload)
+        assert out["labels"] == [{"name": "bug"}]
+
+    def test_missing_optional_fields(self) -> None:
+        out = _GitLabPrShape.to_github({"iid": 5})
+        assert out["number"] == 5
+        assert out["title"] == ""
+        assert out["body"] == ""
+        assert out["author"] == {}
+        assert out["labels"] == []
+
+
+@pytest.mark.small
+class TestGitLabPrShapeList:
+    def test_list_conversion(self) -> None:
+        payload = [
+            {"iid": 1, "state": "opened", "title": "A"},
+            {"iid": 2, "state": "merged", "title": "B"},
+        ]
+        out = _GitLabPrShape.to_github_list(payload)
+        assert [e["number"] for e in out] == [1, 2]
+        assert [e["state"] for e in out] == ["OPEN", "MERGED"]
+
+    def test_skips_non_dict_entries(self) -> None:
+        out = _GitLabPrShape.to_github_list([{"iid": 1}, "ignored", None])
+        assert len(out) == 1
+
+
+@pytest.mark.small
+class TestGitLabPrShapeReviewComments:
+    def test_diff_comment_with_position(self) -> None:
+        payload = [
+            {
+                "id": "abc123",
+                "notes": [
+                    {
+                        "id": 99,
+                        "system": False,
+                        "body": "looks off",
+                        "author": {"username": "bob"},
+                        "position": {"new_path": "src/a.py", "new_line": 42},
+                    }
+                ],
+            }
+        ]
+        out = _GitLabPrShape.to_github_review_comments(payload)
+        assert out == [
+            {
+                "id": "abc123:99",
+                "path": "src/a.py",
+                "line": 42,
+                "body": "looks off",
+                "user": {"login": "bob"},
+            }
+        ]
+
+    def test_skips_system_discussion(self) -> None:
+        payload = [
+            {
+                "id": "sys",
+                "notes": [{"id": 1, "system": True, "body": "state changed"}],
+            }
+        ]
+        assert _GitLabPrShape.to_github_review_comments(payload) == []
+
+    def test_skips_empty_notes(self) -> None:
+        assert _GitLabPrShape.to_github_review_comments([{"id": "x", "notes": []}]) == []
+
+
+@pytest.mark.small
+class TestKajiReviewMarker:
+    def test_build_marker(self) -> None:
+        assert build_kaji_review_marker("APPROVED") == "<!-- kaji-review: state=APPROVED -->"
+        assert (
+            build_kaji_review_marker("CHANGES_REQUESTED")
+            == "<!-- kaji-review: state=CHANGES_REQUESTED -->"
+        )
+
+    def test_invalid_state_raises(self) -> None:
+        with pytest.raises(ValueError, match="invalid review state"):
+            build_kaji_review_marker("BOGUS")
+
+
+@pytest.mark.small
+class TestGitLabPrShapeReviews:
+    def test_marker_note_approved(self) -> None:
+        notes = [
+            {
+                "id": 1,
+                "system": False,
+                "body": "<!-- kaji-review: state=APPROVED -->\nLGTM!",
+                "author": {"username": "alice"},
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+        approvals = {"approved_by": []}
+        out = _GitLabPrShape.to_github_reviews(notes, approvals)
+        assert out == [
+            {
+                "user": {"login": "alice"},
+                "state": "APPROVED",
+                "body": "LGTM!",
+                "submitted_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+
+    def test_marker_note_changes_requested(self) -> None:
+        notes = [
+            {
+                "id": 2,
+                "system": False,
+                "body": "<!-- kaji-review: state=CHANGES_REQUESTED -->\nplease fix",
+                "author": {"username": "bob"},
+                "created_at": "2026-01-02T00:00:00Z",
+            }
+        ]
+        out = _GitLabPrShape.to_github_reviews(notes, {"approved_by": []})
+        assert out[0]["state"] == "CHANGES_REQUESTED"
+        assert out[0]["body"] == "please fix"
+
+    def test_implicit_approval_from_approvals_api(self) -> None:
+        # marker note を持たない approver は state=APPROVED / body="" で補完
+        notes: list[object] = []
+        approvals = {"approved_by": [{"user": {"username": "carol"}}]}
+        out = _GitLabPrShape.to_github_reviews(notes, approvals)
+        assert out == [
+            {
+                "user": {"login": "carol"},
+                "state": "APPROVED",
+                "body": "",
+                "submitted_at": "",
+            }
+        ]
+
+    def test_marker_note_dedupes_implicit_approval(self) -> None:
+        # 同じ user が marker note を持つ場合、approvals 側の補完は抑止
+        notes = [
+            {
+                "id": 1,
+                "system": False,
+                "body": "<!-- kaji-review: state=APPROVED -->\ndone",
+                "author": {"username": "alice"},
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+        approvals = {"approved_by": [{"user": {"username": "alice"}}]}
+        out = _GitLabPrShape.to_github_reviews(notes, approvals)
+        assert len(out) == 1
+        assert out[0]["body"] == "done"
+
+    def test_invalid_marker_state_ignored(self) -> None:
+        notes = [
+            {
+                "id": 1,
+                "system": False,
+                "body": "<!-- kaji-review: state=BOGUS -->\nx",
+                "author": {"username": "a"},
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ]
+        assert _GitLabPrShape.to_github_reviews(notes, {"approved_by": []}) == []
+
+    def test_system_note_skipped(self) -> None:
+        notes = [
+            {
+                "id": 1,
+                "system": True,
+                "body": "<!-- kaji-review: state=APPROVED -->\nshould skip",
+                "author": {"username": "a"},
+            }
+        ]
+        assert _GitLabPrShape.to_github_reviews(notes, {"approved_by": []}) == []
+
+    def test_sort_by_submitted_at(self) -> None:
+        notes = [
+            {
+                "id": 1,
+                "system": False,
+                "body": "<!-- kaji-review: state=APPROVED -->\nB",
+                "author": {"username": "u2"},
+                "created_at": "2026-01-02T00:00:00Z",
+            },
+            {
+                "id": 2,
+                "system": False,
+                "body": "<!-- kaji-review: state=APPROVED -->\nA",
+                "author": {"username": "u1"},
+                "created_at": "2026-01-01T00:00:00Z",
+            },
+        ]
+        out = _GitLabPrShape.to_github_reviews(notes, {"approved_by": []})
+        assert [r["body"] for r in out] == ["A", "B"]
+
+
+# ---------------------------------------------------------------------------
+# GitLabProvider PR helper subprocess tests (Issue local-pc5090-6)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.small
+class TestGetMrViewPayload:
+    def test_returns_dict_payload(self, provider: GitLabProvider) -> None:
+        payload = json.dumps({"iid": 1, "state": "opened"})
+        with (
+            patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
+            patch(
+                "kaji_harness.providers.gitlab.subprocess.run",
+                return_value=_ok(stdout=payload),
+            ) as mock_run,
+        ):
+            out = provider.get_mr_view_payload("1")
+        assert out == {"iid": 1, "state": "opened"}
+        cmd = mock_run.call_args[0][0]
+        # glab api projects/g%2Fp/merge_requests/1
+        assert "api" in cmd
+        assert any("merge_requests/1" in str(c) for c in cmd)
+        # 実 glab CLI に存在しない `mr view --output json` 経路ではない
+        assert "view" not in cmd
+
+    def test_non_object_raises(self, provider: GitLabProvider) -> None:
+        with (
+            patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
+            patch(
+                "kaji_harness.providers.gitlab.subprocess.run",
+                return_value=_ok(stdout="[1,2]"),
+            ),
+        ):
+            with pytest.raises(GitLabProviderError, match="non-object"):
+                provider.get_mr_view_payload("1")
+
+
+@pytest.mark.small
+class TestListMrsPayload:
+    def test_query_params_url_encoded(self, provider: GitLabProvider) -> None:
+        with (
+            patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
+            patch(
+                "kaji_harness.providers.gitlab.subprocess.run",
+                return_value=_ok(stdout="[]"),
+            ) as mock_run,
+        ):
+            provider.list_mrs_payload(
+                state="opened",
+                source_branch="feat/x",
+                target_branch="main",
+                search="hello world",
+                per_page=50,
+            )
+        cmd = mock_run.call_args[0][0]
+        endpoint = next(c for c in cmd if "merge_requests" in str(c))
+        assert "state=opened" in endpoint
+        # URL encode: feat/x → feat%2Fx, "hello world" → hello%20world
+        assert "source_branch=feat%2Fx" in endpoint
+        assert "target_branch=main" in endpoint
+        assert "search=hello%20world" in endpoint
+        assert "per_page=50" in endpoint
+        # 実 glab CLI に存在しない `mr list -F json` 経路ではない
+        assert "list" not in cmd
+
+    def test_per_page_clamps_to_100(self, provider: GitLabProvider) -> None:
+        with (
+            patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
+            patch(
+                "kaji_harness.providers.gitlab.subprocess.run",
+                return_value=_ok(stdout="[]"),
+            ) as mock_run,
+        ):
+            provider.list_mrs_payload(per_page=999)
+        cmd = mock_run.call_args[0][0]
+        endpoint = next(c for c in cmd if "merge_requests" in str(c))
+        assert "per_page=100" in endpoint
+
+    def test_non_array_raises(self, provider: GitLabProvider) -> None:
+        with (
+            patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
+            patch(
+                "kaji_harness.providers.gitlab.subprocess.run",
+                return_value=_ok(stdout='{"x":1}'),
+            ),
+        ):
+            with pytest.raises(GitLabProviderError, match="non-array"):
+                provider.list_mrs_payload()
+
+
+@pytest.mark.small
+class TestResolveMrIidFromBranch:
+    def test_resolves_unique_open_mr(self, provider: GitLabProvider) -> None:
+        mr_payload = json.dumps([{"iid": 42, "title": "x"}])
+        with (
+            patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
+            patch(
+                "kaji_harness.providers.gitlab.subprocess.run", return_value=_ok(stdout=mr_payload)
+            ),
+        ):
+            assert provider.resolve_mr_iid_from_branch("feat/x") == "42"
+
+    def test_no_mr_raises(self, provider: GitLabProvider) -> None:
+        with (
+            patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
+            patch("kaji_harness.providers.gitlab.subprocess.run", return_value=_ok(stdout="[]")),
+        ):
+            with pytest.raises(GitLabProviderError, match="no open merge request"):
+                provider.resolve_mr_iid_from_branch("feat/x")
+
+    def test_multiple_mrs_raises(self, provider: GitLabProvider) -> None:
+        mr_payload = json.dumps([{"iid": 1}, {"iid": 2}])
+        with (
+            patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
+            patch(
+                "kaji_harness.providers.gitlab.subprocess.run", return_value=_ok(stdout=mr_payload)
+            ),
+        ):
+            with pytest.raises(GitLabProviderError, match="multiple open merge requests"):
+                provider.resolve_mr_iid_from_branch("feat/x")
