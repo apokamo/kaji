@@ -11,6 +11,10 @@ created_at: '2026-05-09T12:05:59Z'
 > **Worktree**: `../kaji-fix-local-pc5090-17`
 > **Branch**: `fix/local-pc5090-17`
 
+> [!NOTE]
+> **Worktree**: `../kaji-fix-local-pc5090-17`
+> **Branch**: `fix/local-pc5090-17`
+
 ## 概要
 
 `/issue-start <issue_id>` を prefix 引数なしで実行すると `feat/<id>` worktree が作られるが、kaji_harness 側の context 変数解決は frontmatter `branch_prefix` → `type:*` label の優先順で prefix を導出する（`type:bug` → `fix` 等）。両者が同期していないため、type:bug 等の Issue を `/issue-start` のデフォルトで起動すると **context 変数 (`branch_name=fix/<id>`) と実態 (`feat/<id>`) が永続的に乖離** し、後続 skill 全てで fallback 解釈を強いられる。
@@ -156,5 +160,6 @@ kaji issue context <issue_id> --json branch_prefix,branch_name,worktree_dir,bran
   - `.kaji-artifacts/local-pc5090-14/runs/2605091631/close/console.log:3-4` (実害ログ)
 - 関連ドキュメント:
   - 設計書配置予定: `draft/design/issue-local-pc5090-17-issue-start-prefix-label-sync.md`
+
 
 
