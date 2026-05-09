@@ -8,6 +8,10 @@ labels:
 - scope:gitlab-validation
 created_at: '2026-05-09T06:02:09Z'
 ---
+> [!NOTE]
+> **Worktree**: `../kaji-feat-local-pc5090-7`
+> **Branch**: `feat/local-pc5090-7`
+
 ## 概要
 
 branch 名から GitLab MR を逆引きし、`pr_id`（project-local `merge_request_iid`） / `pr_ref` を `prompt.py` に注入する経路を実装する。GitLab 固有の `resolved` 状態などは確定事項 #7 に従い provider 内部で保持する。
