@@ -882,6 +882,91 @@ class TestGitLabPrShapeReviews:
 
 
 @pytest.mark.small
+class TestGetMrViewPayload:
+    def test_returns_dict_payload(self, provider: GitLabProvider) -> None:
+        payload = json.dumps({"iid": 1, "state": "opened"})
+        with (
+            patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
+            patch(
+                "kaji_harness.providers.gitlab.subprocess.run",
+                return_value=_ok(stdout=payload),
+            ) as mock_run,
+        ):
+            out = provider.get_mr_view_payload("1")
+        assert out == {"iid": 1, "state": "opened"}
+        cmd = mock_run.call_args[0][0]
+        # glab api projects/g%2Fp/merge_requests/1
+        assert "api" in cmd
+        assert any("merge_requests/1" in str(c) for c in cmd)
+        # 実 glab CLI に存在しない `mr view --output json` 経路ではない
+        assert "view" not in cmd
+
+    def test_non_object_raises(self, provider: GitLabProvider) -> None:
+        with (
+            patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
+            patch(
+                "kaji_harness.providers.gitlab.subprocess.run",
+                return_value=_ok(stdout="[1,2]"),
+            ),
+        ):
+            with pytest.raises(GitLabProviderError, match="non-object"):
+                provider.get_mr_view_payload("1")
+
+
+@pytest.mark.small
+class TestListMrsPayload:
+    def test_query_params_url_encoded(self, provider: GitLabProvider) -> None:
+        with (
+            patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
+            patch(
+                "kaji_harness.providers.gitlab.subprocess.run",
+                return_value=_ok(stdout="[]"),
+            ) as mock_run,
+        ):
+            provider.list_mrs_payload(
+                state="opened",
+                source_branch="feat/x",
+                target_branch="main",
+                search="hello world",
+                per_page=50,
+            )
+        cmd = mock_run.call_args[0][0]
+        endpoint = next(c for c in cmd if "merge_requests" in str(c))
+        assert "state=opened" in endpoint
+        # URL encode: feat/x → feat%2Fx, "hello world" → hello%20world
+        assert "source_branch=feat%2Fx" in endpoint
+        assert "target_branch=main" in endpoint
+        assert "search=hello%20world" in endpoint
+        assert "per_page=50" in endpoint
+        # 実 glab CLI に存在しない `mr list -F json` 経路ではない
+        assert "list" not in cmd
+
+    def test_per_page_clamps_to_100(self, provider: GitLabProvider) -> None:
+        with (
+            patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
+            patch(
+                "kaji_harness.providers.gitlab.subprocess.run",
+                return_value=_ok(stdout="[]"),
+            ) as mock_run,
+        ):
+            provider.list_mrs_payload(per_page=999)
+        cmd = mock_run.call_args[0][0]
+        endpoint = next(c for c in cmd if "merge_requests" in str(c))
+        assert "per_page=100" in endpoint
+
+    def test_non_array_raises(self, provider: GitLabProvider) -> None:
+        with (
+            patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
+            patch(
+                "kaji_harness.providers.gitlab.subprocess.run",
+                return_value=_ok(stdout='{"x":1}'),
+            ),
+        ):
+            with pytest.raises(GitLabProviderError, match="non-array"):
+                provider.list_mrs_payload()
+
+
+@pytest.mark.small
 class TestResolveMrIidFromBranch:
     def test_resolves_unique_open_mr(self, provider: GitLabProvider) -> None:
         mr_payload = json.dumps([{"iid": 42, "title": "x"}])

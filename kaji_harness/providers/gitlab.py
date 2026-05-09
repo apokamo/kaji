@@ -475,6 +475,48 @@ class GitLabProvider:
                 f"glab api POST {endpoint} failed: {proc.stderr.strip() or proc.stdout.strip()}"
             )
 
+    def get_mr_view_payload(self, mr_iid: str) -> dict[str, object]:
+        """``GET projects/:id/merge_requests/:iid`` の生 dict を返す。
+
+        ``glab mr view`` は JSON 出力 flag を持たないため、view 経路は
+        ``glab api`` ベースで統一する（list_issues / view_issue と同方針）。
+        """
+        encoded = self._encoded_repo()
+        payload = self._glab_api_get(f"projects/{encoded}/merge_requests/{mr_iid}")
+        if not isinstance(payload, dict):
+            raise GitLabProviderError("glab api returned non-object JSON for MR view")
+        return payload
+
+    def list_mrs_payload(
+        self,
+        *,
+        state: str | None = None,
+        source_branch: str | None = None,
+        target_branch: str | None = None,
+        search: str | None = None,
+        per_page: int = 100,
+    ) -> list[object]:
+        """``GET projects/:id/merge_requests?...`` の生 list を返す。
+
+        ``glab mr list`` は JSON 出力 flag を持たないため、list 経路も
+        ``glab api`` ベースで統一する。
+        """
+        encoded = self._encoded_repo()
+        params: list[str] = [f"per_page={min(max(per_page, 1), 100)}"]
+        if state:
+            params.append(f"state={quote(state, safe='')}")
+        if source_branch:
+            params.append(f"source_branch={quote(source_branch, safe='')}")
+        if target_branch:
+            params.append(f"target_branch={quote(target_branch, safe='')}")
+        if search:
+            params.append(f"search={quote(search, safe='')}")
+        endpoint = f"projects/{encoded}/merge_requests?{'&'.join(params)}"
+        payload = self._glab_api_get(endpoint)
+        if not isinstance(payload, list):
+            raise GitLabProviderError("glab api returned non-array JSON for MR list")
+        return payload
+
     def get_mr_approval_state(self, mr_iid: str) -> dict[str, object]:
         """approvals API の生 payload（``approved_by`` / ``approvals_left`` 等）を返す。
 

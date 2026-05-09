@@ -288,6 +288,43 @@ class TestGitLabPrCreate:
         assert "--base" not in cmd
         assert "--description" in cmd
         assert "--body" not in cmd
+        # 非対話実行を保証する --yes 注入（skill が prompt 待ちで stuck しないため）
+        assert "--yes" in cmd
+
+
+@pytest.mark.medium
+class TestGitLabIssueCreateYes:
+    def test_issue_create_injects_yes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _write_gitlab_repo(tmp_path)
+        monkeypatch.chdir(repo)
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/glab"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            rc = _handle_issue(["create", "--title", "T", "--body", "B"])
+        assert rc == 0
+        cmd = mock_run.call_args[0][0]
+        # 非対話実行のため --yes が注入される
+        assert "--yes" in cmd
+
+    def test_issue_create_does_not_double_inject_yes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """user が --yes を指定済なら kaji 側で重複注入しない。"""
+        repo = _write_gitlab_repo(tmp_path)
+        monkeypatch.chdir(repo)
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/glab"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            rc = _handle_issue(["create", "--title", "T", "--body", "B", "--yes"])
+        assert rc == 0
+        cmd = mock_run.call_args[0][0]
+        assert cmd.count("--yes") == 1
 
 
 @pytest.mark.medium
@@ -297,7 +334,7 @@ class TestGitLabPrList:
     ) -> None:
         repo = _write_gitlab_repo(tmp_path)
         monkeypatch.chdir(repo)
-        # _GitLabProvider._run_glab → mr list -F json
+        # provider.list_mrs_payload → glab api projects/.../merge_requests?...
         list_payload = json.dumps([{"iid": 1, "state": "opened", "title": "x"}])
         with (
             patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
@@ -319,10 +356,12 @@ class TestGitLabPrList:
             )
         assert rc == 0
         cmd = mock_run.call_args[0][0]
-        assert "--source-branch" in cmd
-        assert "feat/x" in cmd
-        assert "--search" in cmd
-        assert "foo" in cmd
+        # glab api projects/g%2Fp/merge_requests?...&source_branch=feat%2Fx&search=foo
+        assert "api" in cmd
+        endpoint = next(c for c in cmd if "merge_requests" in c)
+        assert "source_branch=feat%2Fx" in endpoint
+        assert "search=foo" in endpoint
+        assert "state=opened" in endpoint
         out = capsys.readouterr().out
         items = json.loads(out)
         assert items == [{"number": 1, "state": "OPEN"}]
@@ -470,12 +509,17 @@ class TestGitLabPrViewWithJson:
             patch(
                 "kaji_harness.providers.gitlab.subprocess.run",
                 return_value=_ok(stdout=view_payload),
-            ),
+            ) as mock_run,
         ):
             rc = _handle_pr(["view", "42", "--json", "number,state,title", "--jq", ".number"])
         assert rc == 0
         out = capsys.readouterr().out.strip()
         assert out == "42"
+        # 実 glab CLI に存在しない `--output json` ではなく `glab api` 経由で取得する
+        cmd = mock_run.call_args[0][0]
+        assert "api" in cmd
+        assert any("merge_requests/42" in str(c) for c in cmd)
+        assert "--output" not in cmd
 
     def test_comments_passthrough(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = _write_gitlab_repo(tmp_path)

@@ -1428,7 +1428,11 @@ def _handle_issue_gitlab(provider: GitLabProvider, raw_args: list[str]) -> int:
     normalized = _normalize_gitlab_issue_id_in_args(rewritten, sub)
     if isinstance(normalized, int):
         return normalized
-    return _forward_to_glab("issue", [glab_sub, *normalized], repo=provider.repo)
+    # 非対話実行 (skill 経由) を前提とするため、create に確認 prompt 抑止 flag を注入
+    extra: list[str] = []
+    if sub == "create" and "--yes" not in normalized and "-y" not in normalized:
+        extra.append("--yes")
+    return _forward_to_glab("issue", [glab_sub, *normalized, *extra], repo=provider.repo)
 
 
 def _normalize_gitlab_issue_id_in_args(args: list[str], sub: str) -> list[str] | int:
@@ -1601,6 +1605,8 @@ def _gitlab_pr_create(provider: GitLabProvider, rest: list[str]) -> int:
         glab_args.extend(["--assignee", ",".join(ns.assignee)])
     if ns.draft:
         glab_args.append("--draft")
+    # 非対話実行を前提とする skill (i-pr) から呼ばれるため確認 prompt を抑止する
+    glab_args.append("--yes")
     return _forward_to_glab("mr", glab_args, repo=provider.repo)
 
 
@@ -1624,23 +1630,9 @@ def _gitlab_pr_view(provider: GitLabProvider, rest: list[str]) -> int:
     if ns.comments:
         return _forward_to_glab("mr", ["view", iid, "--comments"], repo=provider.repo)
 
-    # JSON 経路: glab mr view --output json → shape 変換
-    proc = provider._run_glab("mr", "view", iid, "--repo", provider.repo, "--output", "json")
-    if proc.returncode != 0:
-        sys.stderr.write(
-            f"Error: glab mr view failed: {proc.stderr.strip() or proc.stdout.strip()}\n"
-        )
-        return EXIT_RUNTIME_ERROR
-    import json as _json
-
-    try:
-        payload = _json.loads(proc.stdout)
-    except _json.JSONDecodeError as exc:
-        sys.stderr.write(f"Error: glab returned invalid JSON: {exc}\n")
-        return EXIT_RUNTIME_ERROR
-    if not isinstance(payload, dict):
-        sys.stderr.write("Error: glab mr view returned non-object JSON\n")
-        return EXIT_RUNTIME_ERROR
+    # JSON 経路: glab mr view は構造化 JSON 出力 flag を持たないため、glab api 経由で
+    # 統一する（issue view/list と同方針）。
+    payload = provider.get_mr_view_payload(iid)
     full = _GitLabPrShape.to_github(payload)
     if ns.json_fields:
         fields = [f.strip() for f in ns.json_fields.split(",") if f.strip()]
@@ -1651,7 +1643,12 @@ def _gitlab_pr_view(provider: GitLabProvider, rest: list[str]) -> int:
 
 
 def _gitlab_pr_list(provider: GitLabProvider, rest: list[str]) -> int:
-    """``kaji pr list [--head BR] [--search Q] [--state X]`` → ``glab mr list -F json``。"""
+    """``kaji pr list [--head BR] [--search Q] [--state X]`` → ``glab api .../merge_requests``。
+
+    ``glab mr list`` は構造化 JSON 出力 flag を持たないため、provider の
+    ``list_mrs_payload`` (=``glab api``) 経由で payload を取り、GitHub 互換
+    shape に変換する。
+    """
     p = argparse.ArgumentParser(prog="kaji pr list", add_help=True)
     p.add_argument("--head", default=None, type=str)
     p.add_argument("--base", default=None, type=str)
@@ -1661,35 +1658,15 @@ def _gitlab_pr_list(provider: GitLabProvider, rest: list[str]) -> int:
     p.add_argument("--json", dest="json_fields", default=None, type=str)
     p.add_argument("--jq", "-q", dest="jq_expr", default=None, type=str)
     ns = p.parse_args(rest)
-    glab_args = ["mr", "list", "--repo", provider.repo, "-F", "json"]
-    # GitHub mode は state を受理しないが、GitLab 側は受理。GitHub の
-    # ``--state open`` を ``--state opened`` に変換しておく。
+    # GitHub の ``--state open`` を GitLab の ``opened`` に変換
     state_map = {"open": "opened", "closed": "closed", "merged": "merged", "all": "all"}
-    glab_args.extend(["--state", state_map.get(ns.state, ns.state)])
-    if ns.head:
-        glab_args.extend(["--source-branch", ns.head])
-    if ns.base:
-        glab_args.extend(["--target-branch", ns.base])
-    if ns.search:
-        glab_args.extend(["--search", ns.search])
-    if ns.limit is not None:
-        glab_args.extend(["--per-page", str(min(ns.limit, 100))])
-    proc = provider._run_glab(*glab_args)
-    if proc.returncode != 0:
-        sys.stderr.write(
-            f"Error: glab mr list failed: {proc.stderr.strip() or proc.stdout.strip()}\n"
-        )
-        return EXIT_RUNTIME_ERROR
-    import json as _json
-
-    try:
-        payload = _json.loads(proc.stdout) if proc.stdout.strip() else []
-    except _json.JSONDecodeError as exc:
-        sys.stderr.write(f"Error: glab returned invalid JSON: {exc}\n")
-        return EXIT_RUNTIME_ERROR
-    if not isinstance(payload, list):
-        sys.stderr.write("Error: glab mr list returned non-array JSON\n")
-        return EXIT_RUNTIME_ERROR
+    payload = provider.list_mrs_payload(
+        state=state_map.get(ns.state, ns.state),
+        source_branch=ns.head,
+        target_branch=ns.base,
+        search=ns.search,
+        per_page=min(ns.limit, 100) if ns.limit is not None else 100,
+    )
     items = _GitLabPrShape.to_github_list(payload)
     if ns.json_fields:
         fields = [f.strip() for f in ns.json_fields.split(",") if f.strip()]
