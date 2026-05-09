@@ -74,6 +74,43 @@ class TestErrors:
             normalize_id("PC1-3", provider_name="local", machine_id="pc1")
 
 
+class TestGitLabProvider:
+    """``provider_name='gitlab'`` 配下の ``normalize_id`` 受理形式。"""
+
+    def test_numeric_input(self) -> None:
+        rid = normalize_id("42", provider_name="gitlab", machine_id=None)
+        assert rid == ResolvedId(kind="gitlab", value="42", raw="42")
+
+    def test_gl_prefix_input(self) -> None:
+        rid = normalize_id("gl:42", provider_name="gitlab", machine_id=None)
+        assert rid == ResolvedId(kind="gitlab", value="42", raw="gl:42")
+
+    def test_gh_prefix_rejected_under_gitlab(self) -> None:
+        with pytest.raises(ValueError, match="'gh:N' requires provider.type"):
+            normalize_id("gh:42", provider_name="gitlab", machine_id=None)
+
+    def test_local_form_rejected(self) -> None:
+        with pytest.raises(ValueError, match="requires provider.type='local'"):
+            normalize_id("local-pc1-3", provider_name="gitlab", machine_id=None)
+
+    def test_short_form_rejected(self) -> None:
+        with pytest.raises(ValueError, match="requires provider.type='local'"):
+            normalize_id("pc1-3", provider_name="gitlab", machine_id=None)
+
+
+class TestGitLabRemoteCache:
+    """``provider_name='local'`` で ``gl:N`` を読む経路（remote_cache）。"""
+
+    def test_gl_prefix_returns_remote_cache_under_local(self) -> None:
+        rid = normalize_id("gl:42", provider_name="local", machine_id="pc1")
+        assert rid.kind == "remote_cache"
+        assert rid.value == "42"
+
+    def test_gl_prefix_rejected_under_github(self) -> None:
+        with pytest.raises(ValueError, match="'gl:N' requires provider.type"):
+            normalize_id("gl:42", provider_name="github", machine_id=None)
+
+
 class TestPositiveIntGrammar:
     """Issue 番号は 1 始まり整数のみ。0 / leading zero / gh:0 を拒否する。"""
 
@@ -92,6 +129,18 @@ class TestPositiveIntGrammar:
     def test_gh_leading_zero_rejected(self) -> None:
         with pytest.raises(ValueError, match="invalid issue id"):
             normalize_id("gh:01", provider_name="local", machine_id="pc1")
+
+    def test_gl_zero_rejected(self) -> None:
+        with pytest.raises(ValueError, match="invalid issue id"):
+            normalize_id("gl:0", provider_name="gitlab", machine_id=None)
+
+    def test_gl_leading_zero_rejected(self) -> None:
+        with pytest.raises(ValueError, match="invalid issue id"):
+            normalize_id("gl:042", provider_name="gitlab", machine_id=None)
+
+    def test_zero_rejected_gitlab(self) -> None:
+        with pytest.raises(ValueError, match="invalid issue id"):
+            normalize_id("0", provider_name="gitlab", machine_id=None)
 
     def test_local_zero_rejected(self) -> None:
         with pytest.raises(ValueError, match="invalid issue id"):
