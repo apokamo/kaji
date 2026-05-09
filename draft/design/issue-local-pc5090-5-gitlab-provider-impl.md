@@ -57,13 +57,13 @@ class GitLabProvider:
 
 | メソッド | 引数 / 戻り値 | 実装方針 |
 |---------|---------------|----------|
-| `create_issue(title, body, labels, slug)` → `Issue` | GitHubProvider と同シグネチャ。`slug` は GitLab では title 由来で導出するため受け取るが採用しない（`del slug`） | `glab issue create --repo <repo> --title <title> --description <body> --label <l1,l2,...> --yes` |
+| `create_issue(title, body, labels, slug)` → `Issue` | GitHubProvider と同シグネチャ。`slug` は GitLab では title 由来で導出するため受け取るが採用しない（`del slug`） | `glab issue create --repo <repo> --title <title> --description <body> --label <l1,l2,...> --yes` を起動。stdout 末尾に出力される issue URL（`https://gitlab.com/<group>/<project>/-/issues/<iid>`）の最後のセグメントから `iid` を抽出し、続けて `view_issue(iid)` で `Issue` を取得する（GitHubProvider と同戦略、`kaji_harness/providers/github.py:155-162`）。URL parse 失敗時は `GitLabProviderError` |
 | `view_issue(issue_id: str)` → `Issue` | `issue_id` は project-local IID の数値文字列 | `glab api projects/<url-encoded-repo>/issues/<iid>` で issue JSON、`/notes` で comments JSON、結果を `Issue` に詰める |
 | `edit_issue(issue_id, title?, body?, add_labels?, remove_labels?)` → `Issue` | GitHubProvider と同シグネチャ | `glab issue update <iid> --repo <repo> [--title <t>] [--description <b>] [--label l1,l2] [--unlabel l1,l2]`、最後に `view_issue` で再取得 |
 | `comment_issue(issue_id, body)` → `Comment` | GitHub と同様、created_at / author を返さない最小情報 | `glab issue note <iid> --repo <repo> --message <body>` |
 | `close_issue(issue_id, reason?)` → `Issue` | `reason` は GitLab では受けないため `del reason` | `glab issue close <iid> --repo <repo>`、最後に `view_issue` |
-| `list_issues(state, labels, limit)` → `list[Issue]` | state: `"open"` / `"closed"` / `"all"` | `glab api projects/<repo>/issues?state=opened\|closed\|all&labels=...&per_page=<limit>` |
-| `list_labels()` → `list[Label]` | | `glab api projects/<repo>/labels?per_page=200` |
+| `list_issues(state, labels, limit)` → `list[Issue]` | state: `"open"` / `"closed"` / `"all"` | `glab api projects/<repo>/issues?state=opened\|closed\|all&labels=...&per_page=<min(limit, 100)>`。GitLab REST の `per_page` 上限は 100（後述 § 方針 / Primary Sources 参照） |
+| `list_labels()` → `list[Label]` | | `glab api projects/<repo>/labels?per_page=100`（GitLab REST `per_page` 上限）。本 Issue の実装範囲では **1 回呼び切り**（pagination なし）。`>100` ラベルを持つ project は将来課題（後述 § 方針 / list_labels の pagination 方針 参照） |
 | `resolve_issue_context(issue_id)` → `IssueContext` | | `view_issue` を 1 度呼び、label / title から `IssueContext` を組み立てる（GitHub provider と同形）。`provider_type="gitlab"`、`issue_ref` は `gl:<iid>` 形式 |
 
 #### 内部 helper（GitHubProvider と対称）
@@ -121,17 +121,22 @@ class GitLabProviderConfig:
 ```python
 @dataclass(frozen=True)
 class ProviderConfig:
-    type: str  # "github" | "local" | "gitlab"
+    type: Literal["github", "local", "gitlab"]  # str → Literal に強化（Issue 要求 IN scope）
     local: LocalProviderConfig
     github: GitHubProviderConfig
     gitlab: GitLabProviderConfig  # 新規
 ```
 
+> **型契約強化の根拠**: Issue 本文が `ProviderConfig.type Literal に "gitlab" 追加` を IN scope に明記している。既存実装（`kaji_harness/config.py:55`）は `type: str  # "github" or "local"` と Literal を使っていなかったが、本 Issue で `Workflow.requires_provider` を `Literal[...]` に拡張するのと対称形にして mypy で値域違反を fail-fast させる。runtime 値域は `_parse_provider` 内の set ガード（後述）が二重防衛として残す。
+>
+> 既存 set ガードによって runtime での `provider.type='foo'` は既に拒否されているため、この Literal 化は **既存 user の TOML を破壊しない**（既存有効値 `"github"` / `"local"` は引き続き受理される）。
+
 #### `_parse_provider` 拡張
 
-- `provider.type` の値域を `{"github", "local", "gitlab"}` に拡張
+- `provider.type` の値域を `{"github", "local", "gitlab"}` に拡張（既存 `kaji_harness/config.py:206`）
 - `[provider.gitlab]` table を読み、`repo` (string optional) / `default_branch` (string default `"main"`) を `GitLabProviderConfig` に詰める
-- overlay merge（`config.local.toml` 経由）も `gitlab` サブテーブルを deep-1 merge 対象に追加
+- overlay merge（`config.local.toml` 経由）も `gitlab` サブテーブルを deep-1 merge 対象に追加（`{"github", "local"}` → `{"github", "local", "gitlab"}`、既存 `kaji_harness/config.py:193`）
+- 既存 error message `"provider.type must be 'github' or 'local', got ..."`（`kaji_harness/config.py:207`）も `'github', 'local', or 'gitlab'` に更新
 
 ### 3. `kaji_harness/providers/__init__.py` 拡張
 
@@ -283,12 +288,18 @@ assert ctx.issue_ref == "gl:42"
 
 #### IN（本 Issue で実装）
 
-- `kaji_harness/providers/gitlab.py`（`GitLabProvider` + `GitLabProviderError`）
-- `kaji_harness/config.py`（`GitLabProviderConfig` 新設、`ProviderConfig.gitlab` 追加、`_parse_provider` の `gitlab` 受理、overlay merge 対応）
-- `kaji_harness/providers/__init__.py`（`get_provider` 分岐、`__all__`、`actual_provider_type` docstring）
-- `kaji_harness/models.py` / `kaji_harness/workflow.py`（`Workflow.requires_provider` Literal 拡張、`VALID_REQUIRES_PROVIDER` 拡張）
-- `kaji_harness/providers/models.py`（`IssueContext.provider_type` の docstring 拡張）
-- 既存テスト fixture を壊さないため、新規 test ファイル `tests/test_providers_gitlab.py` 等を追加して enum 拡張 / dispatcher 経路 / mock 経由 CRUD を検証
+- **コード**:
+  - `kaji_harness/providers/gitlab.py`（`GitLabProvider` + `GitLabProviderError`）
+  - `kaji_harness/config.py`（`GitLabProviderConfig` 新設、`ProviderConfig.type` の Literal 化 + `gitlab` 追加、`_parse_provider` の `gitlab` 受理、overlay merge 対応、エラーメッセージ更新）
+  - `kaji_harness/providers/__init__.py`（`get_provider` 分岐、`__all__`、`actual_provider_type` の戻り値型 docstring、`get_provider` docstring）
+  - `kaji_harness/models.py` / `kaji_harness/workflow.py`（`Workflow.requires_provider` Literal 拡張、`VALID_REQUIRES_PROVIDER` 拡張）
+  - `kaji_harness/providers/models.py`（`IssueContext.provider_type` の docstring 拡張）
+  - `kaji_harness/cli_main.py`（`provider-type` subcommand help / `cmd_config_provider_type` docstring の値域表記更新）
+  - `kaji_harness/errors.py`（`ConfigNotFoundError` guidance に gitlab 最小例を追加）
+- **テスト**:
+  - 新規 test ファイル `tests/test_providers_gitlab.py` 等を追加して enum 拡張 / dispatcher 経路 / mock 経由 CRUD を検証（既存 fixture を壊さない）
+- **docs**:
+  - `docs/dev/workflow-authoring.md` の `requires_provider` 値域記述に `gitlab` を追加（line 35 / 53-78、影響ドキュメント表 § "本 Issue で更新する" の根拠による）
 
 #### OUT（後続子 Issue / EPIC OUT スコープ）
 
@@ -347,6 +358,19 @@ GitLab の issue state は `"opened"` / `"closed"`。kaji の `Issue.state` は 
 ### labels の取り扱い
 
 GitLab REST API の issue 応答での `labels` フィールドは `string[]`（label name array）。一方 `GET /projects/:id/labels` の応答は object array（`{name, description, color, ...}`）。`_parse_issue_payload` では `string[]` から `Label(name=...)` だけ詰める（GitHubProvider が string entries を受けるロジックと同形）。`list_labels()` は `_glab_api_get("projects/<repo>/labels")` の object array をそのまま `Label` に詰める。
+
+### list_labels の pagination 方針
+
+GitLab REST API の `per_page` クエリパラメータは **上限 100** に固定されている（GitLab pagination docs、本設計書 § Primary Sources 参照）。GitHubProvider の `--limit 200`（`kaji_harness/providers/github.py:262`）とは値域が異なる。
+
+本 Issue の実装範囲は以下:
+
+- `list_labels()` は `?per_page=100` の **1 回呼び切り** とする（pagination ループは実装しない）
+- 呼び出し側（`kaji label list` 等）にとって `>100` ラベルが必要になる project は本 Issue の責務範囲外
+- ラベル数が 100 を超える project に対しては **silently 切り詰めず、設計書に従って pagination 未対応であることを実装段階の docstring と warning で明示** する（実装時に `len(payload) == 100` の場合に `RunLogger` で warning を出す。これは behavior としての fail-fast ではなく、運用での気付きを残す目的）
+- 完全な pagination 対応（`?page=N` ループ）は **将来課題**。実需要が出るまで保留し、必要になった段階で `kaji_harness/providers/gitlab.py` の `list_labels` に閉じて拡張する（API 形は変えない）
+
+`list_issues()` は呼び出し側で `limit` を渡す既存契約に従い、`min(limit, 100)` を `per_page` に渡す。`limit` が 100 を超える呼び出しは GitHubProvider と同等に呼び出し側責任（GitHubProvider も `--limit` をそのまま渡しているだけで pagination はしない）。
 
 ### resolve_issue_context
 
@@ -425,18 +449,45 @@ if k in {"github", "local", "gitlab"} and isinstance(v, dict):
 
 ## 影響ドキュメント
 
-| ドキュメント | 影響の有無 | 理由 |
-|-------------|-----------|------|
-| `docs/adr/` | **なし**（本 Issue では） | 確定事項 #1〜#7 が EPIC 本文に固定済。新規 ADR を立てる必要は本 Issue にはない（kaji 全体の forge 戦略 ADR は別 Issue で検討） |
-| `docs/ARCHITECTURE.md` | **なし** | provider 抽象自体は Phase 3 で確立済、新規 provider 追加だけならアーキテクチャ図に変更なし |
-| `docs/dev/development_workflow.md` | **なし** | workflow 起動時の provider 整合 fail-fast の節は既存 `github`/`local` 説明のまま流用できる（`gitlab` 追加は値域拡張のみ） |
-| `docs/dev/workflow_guide.md` | **あり**（小） | provider × workflow の対応表に `gitlab` 行を追加するか、子 Issue #5 (`local-pc5090-9`) で `gitlab-mode.md` 新設時に集中対応するか検討。**判断: 子 Issue #5 でまとめる**（本 Issue 単独で部分追加すると docs 整合性が崩れる） |
-| `docs/cli-guides/` | **なし**（本 Issue では） | `gitlab-mode.md` の新設は子 Issue #5 の責務 |
-| `docs/reference/python/` | **なし** | コーディング規約には影響しない |
-| `CLAUDE.md` | **なし** | 規約は変わらない（builtin workflow ポリシーも変えない） |
-| `kaji_harness/providers/__init__.py` の docstring | **あり**（コード内） | `provider.type` の値域に `gitlab` を追加する説明をコメント / docstring に反映 |
+`docs/dev/documentation_update_criteria.md:15-35` の「更新が必要になりやすいケース」表に従い、**本 Issue で実装する変更の説明資産が stale にならない範囲** で外部 docs / 内部 docstring を本 Issue 内で更新する。子 Issue へ送れる更新（gitlab 用 builtin workflow 追加が前提となる説明 / 新規 docs ガイド）と切り分ける。
 
-> **判断**: 本 Issue では **コード変更 + 既存コード内 docstring 更新のみ**。外部 docs の更新は子 Issue #5 (`local-pc5090-9`) に集中させる。これにより本 Issue の review-design / review-code が docs 整合性で棚上げされにくくする。
+### 本 Issue で更新する（必須）
+
+| ドキュメント | 該当箇所 | 更新内容 |
+|-------------|----------|----------|
+| `docs/dev/workflow-authoring.md` | line 35（YAML サンプルコメント） / line 53-78（`### requires_provider` 節） | (a) line 35 のコメント `# 省略可: github / local / any（default: any）` を `# 省略可: github / local / gitlab / any（default: any）` に更新。(b) line 58-64 の値域表に `gitlab` 行（`i-pr` / `pr-fix` / `pr-verify` / `kaji pr ...` 等の forge 機能を GitLab MR 経路で要求する）を追加。**判断根拠**: `Workflow.requires_provider` の enum 値域は本 Issue で `gitlab` を追加するため、ここを更新しないと「実装と公式 manual の値域が乖離した状態」が即座に発生する。子 Issue に送ると review-code / final-check で必ず指摘が再発する |
+| `kaji_harness/config.py` のコメント / error message | `:55`（`type: str  # "github" or "local"`） / `:206-207`（`{"github", "local"}` set / `"provider.type must be 'github' or 'local'..."` error） / `:193`（overlay merge set） | Literal 化（前述）に伴い、コメントを `Literal["github", "local", "gitlab"]` に更新。set / error message も `gitlab` を含む値域へ更新 |
+| `kaji_harness/providers/__init__.py` の docstring | `:67-83`（`get_provider` docstring の "github" / "local" 列挙） / `:38-60`（`actual_provider_type` docstring 戻り値範囲） / `:71-72`（`provider.type == "github"` / `"local"` の説明） | gitlab 分岐の説明を追加。`actual_provider_type()` の Returns 文を `"github" | "local" | "gitlab"` に更新 |
+| `kaji_harness/cli_main.py` の help / docstring | `:84`（`provider-type` subcommand help: `"Print resolved provider.type ('github' or 'local')"`） / `:1124`（`cmd_config_provider_type` docstring: `("github" / "local")`） | 値域表記に `gitlab` を追加 |
+| `kaji_harness/errors.py` の guidance | `:25` 付近の `ConfigNotFoundError` ガイダンス（`type = "local"` の例示部） | gitlab を選びたい user 向けの最小ガイダンス（`type = "gitlab"` + `[provider.gitlab]` `repo` 必須）を 1 行追加。詳細手順は子 Issue #5 の docs に委譲することを示すリンク文 |
+| `kaji_harness/providers/models.py` | `IssueContext.provider_type` docstring（`:101`） | 値域に `"gitlab"` を追加（コメント上のみ。runtime 型は `str` のまま） |
+
+### 子 Issue #5 (`local-pc5090-9`) に送る
+
+| ドキュメント | 理由 |
+|-------------|------|
+| `docs/cli-guides/gitlab-mode.md`（新設） | 子 Issue #5 の主成果物。`kaji issue` / `kaji pr` passthrough と一体で書く方が読み手にとって有用 |
+| `docs/dev/workflow_guide.md` の provider × workflow 対応表（`:21-28`） | 本 Issue では gitlab 用 builtin workflow を追加しないため、対応表に `gitlab` 行を足す必要がない。子 Issue #2 以降で `feature-development-gitlab.yaml` 等を追加する時点で更新する。本 Issue で先行追加すると **対応表に書かれているが該当 yaml が存在しない** という不整合が起きる |
+| `docs/dev/development_workflow.md` § "workflow 起動時の provider 整合 fail-fast"（`:111-123`） | 本文は具体的 builtin yaml 名と provider 値を例示しているのみ。本 Issue で追加する builtin workflow がない以上、新規例示の追加は不要。値域のみの記述ではないため、`gitlab` を追加するメリットが薄い。子 Issue #5 で全面的な見直しを行う |
+| `docs/cli-guides/local-mode.md` 等の forge-neutral 化 | 子 Issue #5 のスコープ（EPIC 本文に明記） |
+
+### 子 Issue #2 (`local-pc5090-6`) に送る
+
+| ドキュメント | 理由 |
+|-------------|------|
+| `kaji_harness/providers/__init__.py` の `normalize_id` docstring と error messages（`:145-221`） | `gl:N` ID 規約 / project-local IID 解釈は子 Issue #2 のスコープ。本 Issue で先行更新すると docstring と実装が乖離する |
+| `kaji_harness/cli_main.py:128`（`kaji issue` help: "github passthrough or local CRUD"） | `kaji issue` の gitlab passthrough は子 Issue #2 のスコープ。本 Issue で先行追加すると help と実装が乖離する |
+
+### 評価しなかった / 影響なし
+
+| ドキュメント | 判断 |
+|-------------|------|
+| `docs/adr/` | **なし**。確定事項 #1〜#7 が EPIC 本文に固定済。新規 ADR を立てる必要は本 Issue にはない |
+| `docs/ARCHITECTURE.md` | **なし**。provider 抽象自体は Phase 3 で確立済、新規 provider 追加だけならアーキテクチャ図に変更なし |
+| `docs/reference/python/` | **なし**。コーディング規約には影響しない |
+| `CLAUDE.md` | **なし**。規約は変わらない（builtin workflow ポリシー / pre-commit / git flow いずれも変更なし） |
+
+> **判断のサマリ**: review feedback の指摘どおり、`docs/dev/workflow-authoring.md` は **本 Issue 完了直後に説明資産が stale になる** ため本 Issue で更新する。コード内 docstring / help / error message も同様。一方で gitlab 用 builtin workflow を伴わないと意味を成さない外部 docs（`workflow_guide.md` の対応表 / `gitlab-mode.md` 新設）は子 Issue #5 に集中させる方が docs 整合性が高い。
 
 ## 参照情報（Primary Sources）
 
