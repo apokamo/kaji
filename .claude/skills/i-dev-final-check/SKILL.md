@@ -152,7 +152,7 @@ kaji issue view [issue_id] --json body -q '.body' > /tmp/issue-body.md
 # 例: sed -i 's/- \[ \] 条件A/- [x] 条件A/' /tmp/issue-body.md
 
 # 更新を反映
-kaji issue edit [issue_id] --body-file /tmp/issue-body.md
+kaji issue edit [issue_id] --commit --body-file /tmp/issue-body.md
 ```
 
 ### BACK の場合
@@ -224,7 +224,7 @@ BODY=$(kaji issue view [issue_id] --json body -q '.body')
 
 # NOTE ブロック終端位置を検出し、その次の空行の後に挿入
 # new_body = body[:insert_at] + 設計書セクション + body[insert_at:]
-kaji issue edit [issue_id] --body-file /tmp/issue-body-updated.md
+kaji issue edit [issue_id] --commit --body-file /tmp/issue-body-updated.md
 ```
 
 ### 7.5-6. フォールバック
@@ -238,7 +238,7 @@ kaji issue edit [issue_id] --body-file /tmp/issue-body-updated.md
 ## Step 8 詳細: 最終チェックコメントのテンプレート
 
 ```bash
-kaji issue comment [issue_id] --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit --body-file - <<'EOF'
 ## 最終チェック結果
 
 ### 前段証跡の確認

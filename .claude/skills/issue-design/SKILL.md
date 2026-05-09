@@ -268,7 +268,7 @@ cd [worktree_dir] && git add draft/design/ && git commit -m "docs: add design fo
 設計完了をIssueにコメントします。
 
 ```bash
-kaji issue comment [issue_id] --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit --body-file - <<'EOF'
 ## 設計書作成完了
 
 設計書を作成しました。

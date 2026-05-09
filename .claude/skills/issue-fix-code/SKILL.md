@@ -134,7 +134,7 @@ cd [worktree_dir] && git add . && git commit -m "fix: address review feedback fo
 Issueにコメントします:
 
 ```bash
-kaji issue comment [issue_id] --body "$(cat <<'EOF'
+kaji issue comment [issue_id] --commit --body "$(cat <<'EOF'
 # レビュー指摘への対応報告
 
 レビューありがとうございます。以下の通り検討・対応を行いました。

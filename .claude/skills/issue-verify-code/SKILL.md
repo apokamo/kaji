@@ -139,7 +139,7 @@ $ARGUMENTS = <issue_id>
 ### Step 3: 確認結果のコメント
 
 ```bash
-kaji issue comment [issue_id] --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit --body-file - <<'EOF'
 # コード修正確認結果
 
 ## 修正項目の確認
