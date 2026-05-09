@@ -112,6 +112,7 @@ steps:
     on:
       PASS: close
       RETRY: final-check
+      BACK: review-code
       ABORT: end
 
   - id: close
