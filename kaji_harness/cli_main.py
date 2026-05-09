@@ -22,7 +22,15 @@ from .errors import (
     WorkflowValidationError,
 )
 from .models import Workflow
-from .providers import ResolvedId, actual_provider_type, get_provider, normalize_id
+from .providers import (
+    GitLabProvider,
+    IssueProvider,
+    ResolvedId,
+    actual_provider_type,
+    get_provider,
+    normalize_id,
+)
+from .providers.github import GitHubProviderError
 from .providers.local import (
     IssueNotFoundError,
     IssueReadOnlyError,
@@ -759,6 +767,24 @@ def _handle_issue(raw_args: list[str]) -> int:
         sys.stderr.write(f"Error: {exc}\n")
         return EXIT_INVALID_INPUT
 
+    # ``context`` subcommand は provider 共通で provider.resolve_issue_context()
+    # を呼ぶ helper（issue local-pc5090-17）。``gh issue context`` は存在しない
+    # ため、GitHub passthrough 前に捕捉する。GitLab 経路は本 Issue 範囲外として
+    # 明示拒否（normalize_id() / dispatcher の GitLab 拡張は別 Issue で対応）。
+    args = list(raw_args)
+    if args and args[0] == "--":
+        args = args[1:]
+    if args and args[0] == "context":
+        if isinstance(provider, GitLabProvider):
+            sys.stderr.write(
+                "Error: 'kaji issue context' is not supported under "
+                "provider.type='gitlab'. GitLab support requires "
+                "normalize_id() and dispatcher extension (tracked separately). "
+                "Use provider.type='local' or 'github'.\n"
+            )
+            return EXIT_INVALID_INPUT
+        return _handle_issue_context(provider, args[1:])
+
     if isinstance(provider, LocalProvider):
         return _handle_issue_local(provider, raw_args)
     # GitHubProvider 経路: 設定 repo を --repo で強制注入し cwd 推論を防ぐ。
@@ -933,7 +959,64 @@ def _emit_json(payload: object, *, jq_expr: str | None) -> int:
     return EXIT_OK
 
 
-_LOCAL_ISSUE_SUBS = {"view", "create", "edit", "comment", "close", "list"}
+def _handle_issue_context(provider: IssueProvider, rest: list[str]) -> int:
+    """``kaji issue context <id>`` の実装（local / github 共通）。
+
+    薄いラッパー: ``provider.resolve_issue_context()`` の戻り値を JSON
+    シリアライズして stdout に書く。``--json FIELDS`` でキー絞り込み、
+    ``-q EXPR`` で jq 式適用。未知 ``--json`` キーは ``null`` を返す
+    （``_local_issue_view`` の ``full.get(k)`` 挙動に揃える）。
+
+    issue local-pc5090-17 で導入。skill (`/issue-start`) が context 正本と
+    同期するために参照する。
+    """
+    import dataclasses
+
+    p = argparse.ArgumentParser(prog="kaji issue context", add_help=True)
+    p.add_argument("issue_id", type=str)
+    p.add_argument("--json", dest="json_fields", default=None, type=str)
+    p.add_argument("--jq", "-q", dest="jq_expr", default=None, type=str)
+    ns = p.parse_args(rest)
+
+    # provider 別 ID 正規化（_resolve_local_id を local 経路で再利用）
+    if isinstance(provider, LocalProvider):
+        rid_or_rc = _resolve_local_id(provider, ns.issue_id, write=False)
+        if isinstance(rid_or_rc, int):
+            return rid_or_rc
+        issue_id_value = rid_or_rc.value
+    else:
+        # GitHub: 数値 / ``gh:N`` を受理し github の数値 ID に正規化
+        try:
+            rid = normalize_id(ns.issue_id, provider_name="github", machine_id=None)
+        except ValueError as exc:
+            sys.stderr.write(f"Error: {exc}\n")
+            return EXIT_INVALID_INPUT
+        issue_id_value = rid.value
+
+    try:
+        ctx = provider.resolve_issue_context(issue_id_value)
+    except IssueNotFoundError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+    except GitHubProviderError as exc:
+        # GitHub 経路の `gh` 不在 / `gh issue view` 非 0 終了 / 不正 JSON 等を
+        # user-facing なエラー出力 + EXIT_RUNTIME_ERROR に正規化する。
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+    except (LocalProviderError, ValueError) as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    payload: dict[str, object] = dataclasses.asdict(ctx)
+    if ns.json_fields:
+        fields = [f.strip() for f in ns.json_fields.split(",") if f.strip()]
+        if fields:
+            payload = {k: payload.get(k) for k in fields}
+
+    return _emit_json(payload, jq_expr=ns.jq_expr)
+
+
+_LOCAL_ISSUE_SUBS = {"view", "create", "edit", "comment", "close", "list", "context"}
 
 
 def _handle_issue_local(provider: LocalProvider, raw_args: list[str]) -> int:
@@ -973,6 +1056,10 @@ def _handle_issue_local(provider: LocalProvider, raw_args: list[str]) -> int:
             return _local_issue_comment(provider, rest)
         if sub == "close":
             return _local_issue_close(provider, rest)
+        if sub == "context":
+            # 通常 top-level `_handle_issue` が context を先回り捕捉するが、
+            # `_handle_issue_local` が直接呼ばれた場合の保険として委譲する。
+            return _handle_issue_context(provider, rest)
         # sub == "list"
         return _local_issue_list(provider, rest)
     except IssueReadOnlyError as exc:
