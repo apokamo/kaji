@@ -1,12 +1,15 @@
 ---
 id: local-pc5090-6
 title: kaji issue / kaji pr passthrough gitlab 対応 + ID 規約 (gl:N) 拡張
-state: open
+state: closed
 slug: kaji-issue-pr-gitlab-passthrough
 labels:
 - type:feature
 - scope:gitlab-validation
 created_at: '2026-05-09T06:02:00Z'
+closed_at: '2026-05-09T16:57:38Z'
+closed_by: pc5090
+close_reason: completed
 ---
 > [!NOTE]
 > **Worktree**: `../kaji-feat-local-pc5090-6`
