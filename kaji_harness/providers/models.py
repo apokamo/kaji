@@ -101,3 +101,24 @@ class IssueContext:
     provider_type: str
     branch_prefix_fallback: bool = False
     default_branch: str = "main"
+
+
+@dataclass(frozen=True)
+class PRContext:
+    """Skill 注入用の PR コンテキスト変数。
+
+    `IssueContext` と分離している理由は、PR が workflow 実行中に新規作成
+    されるため `IssueContext` 解決時点（`kaji run` 起動直後）で確定でき
+    ない点にある。`prompt.py` は `provider.resolve_pr_context(branch_name)`
+    の戻り値が ``None`` でない場合に限り `pr_id` / `pr_ref` を variables に
+    追加する。
+
+    Attributes:
+        pr_id: provider 内部 ID。github なら ``"42"``、gitlab なら
+            project-local ``merge_request_iid`` の文字列（``"42"``）。
+        pr_ref: 人間可読参照。github なら ``"#42"``、gitlab なら
+            ``"gl:42"``（`kaji-pr-mr-bridge.md` § 設計原則 1 に準拠）。
+    """
+
+    pr_id: str
+    pr_ref: str

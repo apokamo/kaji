@@ -179,3 +179,11 @@ class TestIssueContext:
             ctx = provider.resolve_issue_context("153")
         assert ctx.branch_prefix == "chore"
         assert ctx.branch_prefix_fallback is True
+
+
+class TestResolvePrContext:
+    """Issue local-pc5090-7: GitHub side is a no-op until forge is selected."""
+
+    def test_returns_none_for_any_branch(self, provider: GitHubProvider) -> None:
+        assert provider.resolve_pr_context("feat/153") is None
+        assert provider.resolve_pr_context("does-not-matter") is None

@@ -14,6 +14,7 @@ import pytest
 
 from kaji_harness.models import CycleDefinition, Step, Verdict, Workflow
 from kaji_harness.prompt import build_prompt
+from kaji_harness.providers import PRContext
 from kaji_harness.state import SessionState
 
 from .conftest import make_issue_context
@@ -500,3 +501,62 @@ class TestStepModelInjectVerdictDefault:
     def test_default_is_false(self) -> None:
         step = Step(id="test", skill="test-skill", agent="claude", on={"PASS": "end"})
         assert step.inject_verdict is False
+
+
+# ============================================================
+# 15. pr_context (Issue local-pc5090-7)
+# ============================================================
+
+
+@pytest.mark.small
+class TestPrContextInjection:
+    """Issue local-pc5090-7: pr_id / pr_ref are conditionally injected via pr_context."""
+
+    def test_pr_context_none_omits_pr_variables(self) -> None:
+        step = _make_step()
+        workflow = _make_workflow(steps=[step])
+        state = _make_state(issue="42")
+
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+        )
+
+        assert "- pr_id:" not in prompt
+        assert "- pr_ref:" not in prompt
+
+    def test_pr_context_present_injects_pr_variables(self) -> None:
+        step = _make_step()
+        workflow = _make_workflow(steps=[step])
+        state = _make_state(issue="42")
+
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+            pr_context=PRContext(pr_id="42", pr_ref="gl:42"),
+        )
+
+        assert "- pr_id: 42" in prompt
+        assert "- pr_ref: gl:42" in prompt
+
+    def test_pr_context_default_is_none(self) -> None:
+        """Backward compatibility: no-arg call works with default None."""
+        step = _make_step()
+        workflow = _make_workflow(steps=[step])
+        state = _make_state(issue="42")
+
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+        )
+
+        assert "- issue_id: 42" in prompt

@@ -6,7 +6,7 @@ Builds prompts with context variables for CLI execution.
 from __future__ import annotations
 
 from .models import Step, Workflow
-from .providers import IssueContext
+from .providers import IssueContext, PRContext
 from .state import SessionState
 
 
@@ -16,6 +16,8 @@ def build_prompt(
     state: SessionState,
     workflow: Workflow,
     issue_context: IssueContext,
+    *,
+    pr_context: PRContext | None = None,
 ) -> str:
     """ステップ実行用のプロンプトを構築する。
 
@@ -31,6 +33,9 @@ def build_prompt(
         state: 現在のセッション状態
         workflow: ワークフロー定義
         issue_context: provider が解決した `IssueContext`。
+        pr_context: provider が解決した `PRContext`。``None`` の場合
+            ``pr_id`` / ``pr_ref`` は variables に含まれない（branch 未 push /
+            MR 未作成 / GitHub・Local provider の no-op 実装等）。
 
     Returns:
         CLI に渡すプロンプト文字列
@@ -48,6 +53,10 @@ def build_prompt(
         "provider_type": issue_context.provider_type,
         "default_branch": issue_context.default_branch,
     }
+
+    if pr_context is not None:
+        variables["pr_id"] = pr_context.pr_id
+        variables["pr_ref"] = pr_context.pr_ref
 
     # サイクル変数（サイクル内ステップのみ）
     cycle = workflow.find_cycle_for_step(step.id)

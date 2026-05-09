@@ -16,7 +16,7 @@ from .base import IssueProvider
 from .github import GitHubProvider
 from .gitlab import GitLabProvider
 from .local import LocalProvider
-from .models import Comment, Issue, IssueContext, Label
+from .models import Comment, Issue, IssueContext, Label, PRContext
 
 if TYPE_CHECKING:
     from ..config import KajiConfig
@@ -30,6 +30,7 @@ __all__ = [
     "IssueProvider",
     "Label",
     "LocalProvider",
+    "PRContext",
     "ResolvedId",
     "actual_provider_type",
     "get_provider",

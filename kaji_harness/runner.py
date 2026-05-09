@@ -24,7 +24,8 @@ from .errors import (
 from .logger import RunLogger
 from .models import CostInfo, Verdict, Workflow
 from .prompt import build_prompt
-from .providers import IssueContext, get_provider, normalize_id
+from .providers import IssueContext, IssueProvider, PRContext, get_provider, normalize_id
+from .providers.gitlab import GitLabProviderError
 from .providers.local import LocalProvider
 from .skill import validate_skill_exists
 from .state import SessionState
@@ -166,6 +167,27 @@ class WorkflowRunner:
             issue_context=ctx,
         )
 
+    def _resolve_pr_context_safe(
+        self, provider: IssueProvider, branch_name: str
+    ) -> PRContext | None:
+        """provider から `PRContext` を解決。known provider error のみ WARN + None。
+
+        catch する範囲は ``GitLabProviderError`` のみ（GitHub の本実装後は
+        ``GitHubProviderError`` も追加する）。それ以外（``AttributeError`` /
+        ``TypeError`` 等の実装バグ、``KeyboardInterrupt`` 等の signal 系）は
+        raise を継承する。``docs/reference/python/error-handling.md`` § 基本
+        原則 1「握り潰し禁止」「広すぎる catch を避ける」遵守。
+        """
+        try:
+            return provider.resolve_pr_context(branch_name)
+        except GitLabProviderError as exc:
+            sys.stderr.write(
+                f"WARNING: resolve_pr_context for branch {branch_name!r} failed: {exc}\n"
+                f"  pr_id / pr_ref will not be auto-injected; "
+                f"skill must resolve manually.\n"
+            )
+            return None
+
     def _warn_legacy_artifacts(self, raw_id: str, canonical_id: str) -> None:
         """raw-id 側の artifacts directory が残っていれば 1 度 WARN を出す。
 
@@ -216,6 +238,11 @@ class WorkflowRunner:
         self.canonical_issue_id = run_ctx.canonical_id
         self.canonical_issue_ref = run_ctx.issue_ref
         issue_context = run_ctx.issue_context
+
+        # PR context 注入用に provider を 1 度だけ構築する（step ごとに再構築すると
+        # subprocess hit が無駄に増える）。``cmd_run`` 冒頭で `[provider]` を
+        # 必須化済みのため、ここで `get_provider` が再度失敗することは想定外。
+        provider = get_provider(self.config)
 
         # 3. issue-scoped な状態をロード（canonical id ベース）
         state = SessionState.load_or_create(run_ctx.canonical_id, self.artifacts_dir)
@@ -273,6 +300,10 @@ class WorkflowRunner:
                     )
                     cost: CostInfo | None = None
                 else:
+                    # PR context は step ごとに最新状態を見る（`i-pr` step 実行後など、
+                    # workflow 中に MR が新規作成されるケースを反映するため）。
+                    pr_context = self._resolve_pr_context_safe(provider, issue_context.branch_name)
+
                     # プロンプト構築（canonical id を渡す）
                     prompt = build_prompt(
                         current_step,
@@ -280,6 +311,7 @@ class WorkflowRunner:
                         state,
                         self.workflow,
                         issue_context=issue_context,
+                        pr_context=pr_context,
                     )
 
                     # セッション ID の取得

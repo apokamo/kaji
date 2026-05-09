@@ -25,7 +25,7 @@ from kaji_harness.config import (
     ProviderConfig,
 )
 from kaji_harness.errors import ConfigLoadError
-from kaji_harness.providers import GitLabProvider, get_provider
+from kaji_harness.providers import GitLabProvider, PRContext, get_provider
 from kaji_harness.providers.gitlab import (
     GitLabProviderError,
     _GitLabPrShape,
@@ -996,3 +996,43 @@ class TestResolveMrIidFromBranch:
         ):
             with pytest.raises(GitLabProviderError, match="multiple open merge requests"):
                 provider.resolve_mr_iid_from_branch("feat/x")
+
+
+@pytest.mark.small
+class TestResolvePrContext:
+    def test_resolves_unique_mr_to_pr_context(self, provider: GitLabProvider) -> None:
+        mr_payload = json.dumps([{"iid": 42, "title": "x"}])
+        with (
+            patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
+            patch(
+                "kaji_harness.providers.gitlab.subprocess.run", return_value=_ok(stdout=mr_payload)
+            ),
+        ):
+            ctx = provider.resolve_pr_context("feat/x")
+        assert ctx == PRContext(pr_id="42", pr_ref="gl:42")
+
+    def test_no_mr_returns_none(self, provider: GitLabProvider) -> None:
+        with (
+            patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
+            patch("kaji_harness.providers.gitlab.subprocess.run", return_value=_ok(stdout="[]")),
+        ):
+            assert provider.resolve_pr_context("feat/x") is None
+
+    def test_multiple_mrs_raises(self, provider: GitLabProvider) -> None:
+        mr_payload = json.dumps([{"iid": 1}, {"iid": 2}])
+        with (
+            patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
+            patch(
+                "kaji_harness.providers.gitlab.subprocess.run", return_value=_ok(stdout=mr_payload)
+            ),
+        ):
+            with pytest.raises(GitLabProviderError, match="multiple open merge requests"):
+                provider.resolve_pr_context("feat/x")
+
+    def test_api_error_raises(self, provider: GitLabProvider) -> None:
+        with (
+            patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
+            patch("kaji_harness.providers.gitlab.subprocess.run", return_value=_fail()),
+        ):
+            with pytest.raises(GitLabProviderError):
+                provider.resolve_pr_context("feat/x")
