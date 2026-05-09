@@ -47,11 +47,12 @@ $ARGUMENTS = <issue_id>
 
 ### Step 1: context 正本の取得
 
+system `jq` バイナリ依存を持ち込まないため、`kaji issue context` の `-q` (Python jq) を使う:
+
 ```bash
-CTX=$(kaji issue context [issue_id] --json branch_prefix,branch_name,worktree_dir)
-PREFIX=$(echo "$CTX" | jq -r '.branch_prefix')
-BRANCH=$(echo "$CTX" | jq -r '.branch_name')
-WT=$(echo "$CTX" | jq -r '.worktree_dir')
+PREFIX=$(kaji issue context [issue_id] -q '.branch_prefix')
+BRANCH=$(kaji issue context [issue_id] -q '.branch_name')
+WT=$(kaji issue context [issue_id] -q '.worktree_dir')
 ```
 
 `worktree_dir` は絶対パスで返ります。以降の手順では上記 3 変数を使います。

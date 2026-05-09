@@ -249,6 +249,33 @@ class TestContextCLIMedium:
         assert rc == 0
         assert capsys.readouterr().out.strip() == "docs"
 
+    def test_github_provider_error_is_normalized_to_runtime_error(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """GitHub 経路で ``GitHubProviderError`` (gh 不在 / 非 0 終了 / 不正 JSON) が
+        例外漏れせず ``EXIT_RUNTIME_ERROR`` + stderr に正規化される。"""
+        from kaji_harness.providers.github import GitHubProviderError
+
+        repo = tmp_path / "repo"
+        (repo / ".kaji").mkdir(parents=True)
+        (repo / ".kaji" / "config.toml").write_text(
+            '[paths]\nartifacts_dir = ".kaji-artifacts"\nskill_dir = ".claude/skills"\n\n'
+            "[execution]\ndefault_timeout = 1800\n\n"
+            '[provider]\ntype = "github"\n\n[provider.github]\nrepo = "o/r"\n'
+        )
+        monkeypatch.chdir(repo)
+        with patch(
+            "kaji_harness.providers.GitHubProvider.resolve_issue_context",
+            side_effect=GitHubProviderError("boom"),
+        ):
+            rc = _handle_issue(["context", "123"])
+        assert rc == 3  # EXIT_RUNTIME_ERROR
+        captured = capsys.readouterr()
+        assert "boom" in captured.err
+
     def test_github_provider_resolves_via_provider_method_not_passthrough(
         self,
         tmp_path: Path,

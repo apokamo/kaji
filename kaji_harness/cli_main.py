@@ -30,6 +30,7 @@ from .providers import (
     get_provider,
     normalize_id,
 )
+from .providers.github import GitHubProviderError
 from .providers.local import (
     IssueNotFoundError,
     IssueReadOnlyError,
@@ -997,6 +998,11 @@ def _handle_issue_context(provider: IssueProvider, rest: list[str]) -> int:
     except IssueNotFoundError as exc:
         sys.stderr.write(f"Error: {exc}\n")
         return EXIT_RUNTIME_ERROR
+    except GitHubProviderError as exc:
+        # GitHub 経路の `gh` 不在 / `gh issue view` 非 0 終了 / 不正 JSON 等を
+        # user-facing なエラー出力 + EXIT_RUNTIME_ERROR に正規化する。
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_RUNTIME_ERROR
     except (LocalProviderError, ValueError) as exc:
         sys.stderr.write(f"Error: {exc}\n")
         return EXIT_INVALID_INPUT
@@ -1010,7 +1016,7 @@ def _handle_issue_context(provider: IssueProvider, rest: list[str]) -> int:
     return _emit_json(payload, jq_expr=ns.jq_expr)
 
 
-_LOCAL_ISSUE_SUBS = {"view", "create", "edit", "comment", "close", "list"}
+_LOCAL_ISSUE_SUBS = {"view", "create", "edit", "comment", "close", "list", "context"}
 
 
 def _handle_issue_local(provider: LocalProvider, raw_args: list[str]) -> int:
@@ -1050,6 +1056,10 @@ def _handle_issue_local(provider: LocalProvider, raw_args: list[str]) -> int:
             return _local_issue_comment(provider, rest)
         if sub == "close":
             return _local_issue_close(provider, rest)
+        if sub == "context":
+            # 通常 top-level `_handle_issue` が context を先回り捕捉するが、
+            # `_handle_issue_local` が直接呼ばれた場合の保険として委譲する。
+            return _handle_issue_context(provider, rest)
         # sub == "list"
         return _local_issue_list(provider, rest)
     except IssueReadOnlyError as exc:
