@@ -61,10 +61,15 @@ kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
 ## Git & GitHub
 
 - **GitHub CLI**: `gh` available (PR, Issue, API operations)
-- **Branches**: Feature branches via worktree, never commit to main directly
-- **Commits**: Conventional Commits (feat/fix/docs/test/refactor)
+- **Branches / main 直コミット**:
+  - **Feature / 実装作業**（`kaji_harness/` / `tests/` / `Makefile` / `pyproject.toml` 等のコード変更）は **必ず feature branch (worktree) → `--no-ff` merge**。main 直コミット禁止
+  - 以下は **main 直コミット許容**:
+    - `chore(local)`: kaji local Issue ファイル (`.kaji/issues/`) の追加・更新（`kaji issue create/edit/comment/close` の永続化）
+    - `docs(...)`: `docs/` / `draft/` 配下の設計文書 / lab note 等、コードを伴わない文書変更
+    - `chore`: 設定ファイル (`.gitignore` / `.github/labels.yml` 等) の minor 修正（コードビルドに影響しない範囲）
+- **Commits**: Conventional Commits (feat/fix/docs/test/refactor/chore)
 - **Merge**: `--no-ff` only (squash merge prohibited)
-- **Before commit**: Run pre-commit checks
+- **Before commit**: Run pre-commit checks（コード変更を含むコミット時。markdown / 設計文書のみのコミットは省略可）
 
 詳細ガイド:
 - [Git Worktree ガイド](docs/guides/git-worktree.md) - Bare Repository + Worktree パターン
@@ -82,10 +87,10 @@ kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
 - Never trust external input without validation
 
 ## Prohibitions
-1. Never commit to main directly
+1. Never commit **code changes** to main directly（`kaji_harness/` / `tests/` / `Makefile` / `pyproject.toml` 等。例外として markdown / docs / `.kaji/issues/` のみのコミットは main 直可。詳細は § Git & GitHub）
 2. Never trust user input without validation
 3. Never hardcode secrets
-4. Never skip pre-commit checks
+4. Never skip pre-commit checks **for commits that include code changes**（markdown / 設計文書のみのコミットは省略可）
 
 ## Documentation
 
