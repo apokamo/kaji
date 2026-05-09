@@ -32,7 +32,7 @@ description: "設計→実装→PR フロー" # 必須: 説明
 execution_policy: auto             # 必須: auto / sandbox / interactive
 default_timeout: 600               # 省略可: ワークフロー全体のデフォルトタイムアウト（秒）
 workdir: /home/user/project        # 省略可: 全ステップのデフォルト作業ディレクトリ
-requires_provider: github          # 省略可: github / local / any（default: any）
+requires_provider: github          # 省略可: github / local / gitlab / any（default: any）
 
 cycles:                            # 省略可: ループサイクル定義
   <cycle-name>:
@@ -57,7 +57,8 @@ Phase 4 で導入。workflow が要求する provider を宣言する。`kaji ru
 
 | 値 | 意味 |
 |----|------|
-| `github` | `i-pr` / `pr-fix` / `pr-verify` / `kaji pr ...` 等の forge 機能を必要とする |
+| `github` | `i-pr` / `pr-fix` / `pr-verify` / `kaji pr ...` 等の forge 機能を GitHub 経路で必要とする |
+| `gitlab` | 同 forge 機能を GitLab MR 経路で必要とする（後続子 Issue で MR 経路実装。本値域は基盤のみ） |
 | `local` | bare provider 限定の workflow（最終 step が `issue-close` 等） |
 | `any` | provider 中立。設計のみ / Issue 操作のみで forge を呼ばない |
 

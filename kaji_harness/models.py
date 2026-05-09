@@ -76,7 +76,7 @@ class Workflow:
     cycles: list[CycleDefinition] = field(default_factory=list)
     default_timeout: int | None = None
     workdir: str | None = None
-    requires_provider: Literal["github", "local", "any"] = "any"
+    requires_provider: Literal["github", "local", "gitlab", "any"] = "any"
 
     def find_step(self, step_id: str) -> Step | None:
         """ID でステップを検索。見つからなければ None。"""

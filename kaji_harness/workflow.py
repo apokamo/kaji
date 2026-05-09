@@ -50,7 +50,7 @@ def load_workflow_from_str(yaml_str: str) -> Workflow:
 
 
 VALID_EXECUTION_POLICIES = {"auto", "sandbox", "interactive"}
-VALID_REQUIRES_PROVIDER = {"github", "local", "any"}
+VALID_REQUIRES_PROVIDER = {"github", "local", "gitlab", "any"}
 
 _STEP_REQUIRED_KEYS = ("id", "skill", "agent")
 
