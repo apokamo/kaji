@@ -72,15 +72,15 @@ created_at: '2026-05-09T06:02:00Z'
 
 ## 完了条件
 
-- [ ] `normalize_id` の Small テストで `gl:N` / 数値 / local-form の各組み合わせが緑
-- [ ] `kaji issue {create / view / edit / list / close / comment}` が GitLab project に対して動作（mock テスト緑）
-- [ ] `kaji pr {create / view / list / merge / comment / review / review-comments / reviews / reply-to-comment}` が GitLab project に対して GitHub 互換 shape を返す（mock テスト緑）
-- [ ] `kaji pr merge --squash` / `--rebase` が拒否される（rc=2）
-- [ ] `kaji pr review --approve --body-file` が note 投稿 → approve のシーケンスで動作（mock 検証）
-- [ ] `kaji pr review --request-changes` の未 approve 時 no-op 挙動が確認できる（mock 検証）
-- [ ] `kaji pr <未対応 sub>` が `EXIT_INVALID_INPUT` で明示エラー
-- [ ] skill 側に GitHub/GitLab 分岐が入っていない（diff 確認）
-- [ ] `make check` 緑
+- [x] `normalize_id` の Small テストで `gl:N` / 数値 / local-form の各組み合わせが緑
+- [x] `kaji issue {create / view / edit / list / close / comment}` が GitLab project に対して動作（mock テスト緑）
+- [x] `kaji pr {create / view / list / merge / comment / review / review-comments / reviews / reply-to-comment}` が GitLab project に対して GitHub 互換 shape を返す（mock テスト緑）
+- [x] `kaji pr merge --squash` / `--rebase` が拒否される（rc=2）
+- [x] `kaji pr review --approve --body-file` が note 投稿 → approve のシーケンスで動作（mock 検証）
+- [x] `kaji pr review --request-changes` の未 approve 時 no-op 挙動が確認できる（mock 検証）
+- [x] `kaji pr <未対応 sub>` が `EXIT_INVALID_INPUT` で明示エラー
+- [x] skill 側に GitHub/GitLab 分岐が入っていない（diff 確認）
+- [x] `make check` 緑
 
 ## 依存
 
@@ -92,4 +92,3 @@ created_at: '2026-05-09T06:02:00Z'
 - 確定事項 #7: 本 EPIC 本文
 - 既存実装: `kaji_harness/cli_main.py:436-723`、`kaji_harness/providers/_mappings.py`
 - skill 一覧: `.claude/skills/{i-pr,issue-close,pr-fix,pr-verify}/SKILL.md`
-
