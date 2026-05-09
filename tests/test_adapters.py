@@ -62,10 +62,10 @@ class TestClaudeAdapter:
         assert adapter.extract_cost(event) is None
 
     @pytest.mark.small
-    def test_extract_text_from_result_event(self, adapter: ClaudeAdapter) -> None:
-        """Result event returns the result text."""
+    def test_extract_text_from_result_event_returns_none(self, adapter: ClaudeAdapter) -> None:
+        """Result event no longer returns text (anomaly B fix)."""
         event = {"type": "result", "result": "final text", "total_cost_usd": 0.05}
-        assert adapter.extract_text(event) == "final text"
+        assert adapter.extract_text(event) is None
 
     @pytest.mark.small
     def test_extract_cost_from_result_event_with_usd(self, adapter: ClaudeAdapter) -> None:
@@ -74,6 +74,253 @@ class TestClaudeAdapter:
         cost = adapter.extract_cost(event)
         assert cost is not None
         assert cost.usd == 0.12
+
+    @pytest.mark.small
+    def test_extract_text_from_tool_use_bash(self, adapter: ClaudeAdapter) -> None:
+        """tool_use Bash renders summary with command head."""
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "tool_use", "name": "Bash", "input": {"command": "ls -la"}}]
+            },
+        }
+        assert adapter.extract_text(event) == "[tool] Bash $ ls -la"
+
+    @pytest.mark.small
+    def test_extract_text_from_tool_use_bash_replaces_newlines(
+        self, adapter: ClaudeAdapter
+    ) -> None:
+        """Bash command newlines are replaced with spaces."""
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "tool_use", "name": "Bash", "input": {"command": "echo a\necho b"}}
+                ]
+            },
+        }
+        assert adapter.extract_text(event) == "[tool] Bash $ echo a echo b"
+
+    @pytest.mark.small
+    def test_extract_text_from_tool_use_read(self, adapter: ClaudeAdapter) -> None:
+        """tool_use Read renders summary with file_path."""
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Read",
+                        "input": {"file_path": "kaji_harness/adapters.py"},
+                    }
+                ]
+            },
+        }
+        assert adapter.extract_text(event) == "[tool] Read kaji_harness/adapters.py"
+
+    @pytest.mark.small
+    def test_extract_text_from_tool_use_edit(self, adapter: ClaudeAdapter) -> None:
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Edit",
+                        "input": {"file_path": "kaji_harness/adapters.py"},
+                    }
+                ]
+            },
+        }
+        assert adapter.extract_text(event) == "[tool] Edit kaji_harness/adapters.py"
+
+    @pytest.mark.small
+    def test_extract_text_from_tool_use_write(self, adapter: ClaudeAdapter) -> None:
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Write",
+                        "input": {"file_path": "draft/design/issue-XX.md"},
+                    }
+                ]
+            },
+        }
+        assert adapter.extract_text(event) == "[tool] Write draft/design/issue-XX.md"
+
+    @pytest.mark.small
+    def test_extract_text_from_tool_use_grep(self, adapter: ClaudeAdapter) -> None:
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "tool_use", "name": "Grep", "input": {"pattern": "extract_text"}}
+                ]
+            },
+        }
+        assert adapter.extract_text(event) == "[tool] Grep extract_text"
+
+    @pytest.mark.small
+    def test_extract_text_from_tool_use_glob(self, adapter: ClaudeAdapter) -> None:
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Glob",
+                        "input": {"pattern": "kaji_harness/**/*.py"},
+                    }
+                ]
+            },
+        }
+        assert adapter.extract_text(event) == "[tool] Glob kaji_harness/**/*.py"
+
+    @pytest.mark.small
+    def test_extract_text_from_tool_use_todowrite(self, adapter: ClaudeAdapter) -> None:
+        """TodoWrite renders count of todos."""
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "TodoWrite",
+                        "input": {"todos": [{}, {}, {}, {}]},
+                    }
+                ]
+            },
+        }
+        assert adapter.extract_text(event) == "[tool] TodoWrite (4 items)"
+
+    @pytest.mark.small
+    def test_extract_text_from_tool_use_skill(self, adapter: ClaudeAdapter) -> None:
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "tool_use", "name": "Skill", "input": {"skill": "issue-design"}}
+                ]
+            },
+        }
+        assert adapter.extract_text(event) == "[tool] Skill issue-design"
+
+    @pytest.mark.small
+    def test_extract_text_from_tool_use_toolsearch(self, adapter: ClaudeAdapter) -> None:
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "ToolSearch",
+                        "input": {"query": "select:TodoWrite"},
+                    }
+                ]
+            },
+        }
+        assert adapter.extract_text(event) == "[tool] ToolSearch select:TodoWrite"
+
+    @pytest.mark.small
+    def test_extract_text_from_tool_use_unknown(self, adapter: ClaudeAdapter) -> None:
+        """Unknown tools render only the tool name (no input repr for safety)."""
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "WebFetch",
+                        "input": {"url": "https://example.com", "api_key": "secret"},
+                    }
+                ]
+            },
+        }
+        assert adapter.extract_text(event) == "[tool] WebFetch"
+
+    @pytest.mark.small
+    def test_tool_summary_truncated_at_80_chars(self, adapter: ClaudeAdapter) -> None:
+        """tool_use summary values are truncated to 80 characters."""
+        long_path = "a" * 200
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "tool_use", "name": "Read", "input": {"file_path": long_path}}]
+            },
+        }
+        out = adapter.extract_text(event)
+        assert out is not None
+        # prefix "[tool] Read " + 80 chars
+        assert out == f"[tool] Read {'a' * 80}"
+
+    @pytest.mark.small
+    def test_extract_text_from_thinking_redacted_returns_none(self, adapter: ClaudeAdapter) -> None:
+        """Empty `thinking` (Extended Thinking redacted) is suppressed."""
+        event = {
+            "type": "assistant",
+            "message": {"content": [{"type": "thinking", "thinking": "", "signature": "abc"}]},
+        }
+        assert adapter.extract_text(event) is None
+
+    @pytest.mark.small
+    def test_extract_text_from_thinking_with_content(self, adapter: ClaudeAdapter) -> None:
+        """Non-empty thinking renders with [thinking] prefix."""
+        event = {
+            "type": "assistant",
+            "message": {"content": [{"type": "thinking", "thinking": "I should check the file."}]},
+        }
+        assert adapter.extract_text(event) == "[thinking] I should check the file."
+
+    @pytest.mark.small
+    def test_extract_text_from_thinking_truncated_at_160_chars(
+        self, adapter: ClaudeAdapter
+    ) -> None:
+        """thinking content is truncated to 160 characters."""
+        long_thought = "x" * 300
+        event = {
+            "type": "assistant",
+            "message": {"content": [{"type": "thinking", "thinking": long_thought}]},
+        }
+        out = adapter.extract_text(event)
+        assert out == f"[thinking] {'x' * 160}"
+
+    @pytest.mark.small
+    def test_extract_text_mixed_text_and_tool_use(self, adapter: ClaudeAdapter) -> None:
+        """Mixed text + tool_use blocks are joined with newline.
+
+        Note: 1 assistant message can hold multiple parallel tool_use blocks
+        (Anthropic tool use parallel calls). Since stream_and_log adds the
+        timestamp/step prefix once per extract_text return value, the rendered
+        multi-line string carries a single prefix — accepted as-is for now.
+        """
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "Let me check."},
+                    {"type": "tool_use", "name": "Read", "input": {"file_path": "foo.py"}},
+                ]
+            },
+        }
+        assert adapter.extract_text(event) == "Let me check.\n[tool] Read foo.py"
+
+    @pytest.mark.small
+    def test_extract_text_assistant_with_only_unknown_blocks_returns_none(
+        self, adapter: ClaudeAdapter
+    ) -> None:
+        """Assistant message with only unrenderable blocks returns None."""
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "thinking", "thinking": "", "signature": "s"},
+                    {"type": "unknown_future_block", "data": "x"},
+                ]
+            },
+        }
+        assert adapter.extract_text(event) is None
 
 
 # ==========================================
