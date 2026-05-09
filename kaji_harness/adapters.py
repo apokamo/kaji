@@ -22,6 +22,13 @@ _TOOL_SUMMARY_LEN = 80
 _THINKING_SUMMARY_LEN = 160
 
 
+def _truncate(value: str, limit: int) -> str:
+    """Truncate to `limit` chars, marking truncation with a trailing `…`."""
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "…"
+
+
 def _tool_summary(name: str, inp: dict[str, Any]) -> str:
     """Render a 1-line summary for a tool_use input.
 
@@ -30,18 +37,18 @@ def _tool_summary(name: str, inp: dict[str, Any]) -> str:
     match name:
         case "Bash":
             cmd = str(inp.get("command", "")).replace("\n", " ")
-            return f"$ {cmd[:_TOOL_SUMMARY_LEN]}"
+            return f"$ {_truncate(cmd, _TOOL_SUMMARY_LEN)}"
         case "Read" | "Edit" | "Write":
-            return str(inp.get("file_path", ""))[:_TOOL_SUMMARY_LEN]
+            return _truncate(str(inp.get("file_path", "")), _TOOL_SUMMARY_LEN)
         case "Grep" | "Glob":
-            return str(inp.get("pattern", ""))[:_TOOL_SUMMARY_LEN]
+            return _truncate(str(inp.get("pattern", "")), _TOOL_SUMMARY_LEN)
         case "TodoWrite":
             todos = inp.get("todos", [])
             return f"({len(todos)} items)"
         case "Skill":
-            return str(inp.get("skill", ""))[:_TOOL_SUMMARY_LEN]
+            return _truncate(str(inp.get("skill", "")), _TOOL_SUMMARY_LEN)
         case "ToolSearch":
-            return str(inp.get("query", ""))[:_TOOL_SUMMARY_LEN]
+            return _truncate(str(inp.get("query", "")), _TOOL_SUMMARY_LEN)
         case _:
             return ""
 
@@ -61,7 +68,7 @@ def _render_claude_block(block: dict[str, Any]) -> str | None:
     if btype == "thinking":
         thinking = block.get("thinking")
         if isinstance(thinking, str) and thinking:
-            return f"[thinking] {thinking[:_THINKING_SUMMARY_LEN]}"
+            return f"[thinking] {_truncate(thinking, _THINKING_SUMMARY_LEN)}"
         return None
     return None
 

@@ -242,7 +242,7 @@ class TestClaudeAdapter:
 
     @pytest.mark.small
     def test_tool_summary_truncated_at_80_chars(self, adapter: ClaudeAdapter) -> None:
-        """tool_use summary values are truncated to 80 characters."""
+        """tool_use summary values are truncated to 80 chars with `…` suffix."""
         long_path = "a" * 200
         event = {
             "type": "assistant",
@@ -252,8 +252,22 @@ class TestClaudeAdapter:
         }
         out = adapter.extract_text(event)
         assert out is not None
-        # prefix "[tool] Read " + 80 chars
-        assert out == f"[tool] Read {'a' * 80}"
+        # 80 chars taken + "…" suffix marking truncation (per design)
+        assert out == f"[tool] Read {'a' * 80}…"
+
+    @pytest.mark.small
+    def test_tool_summary_no_ellipsis_when_within_limit(self, adapter: ClaudeAdapter) -> None:
+        """tool_use summary at exactly the limit has no `…` suffix."""
+        boundary_path = "a" * 80
+        event = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "tool_use", "name": "Read", "input": {"file_path": boundary_path}}
+                ]
+            },
+        }
+        assert adapter.extract_text(event) == f"[tool] Read {'a' * 80}"
 
     @pytest.mark.small
     def test_extract_text_from_thinking_redacted_returns_none(self, adapter: ClaudeAdapter) -> None:
@@ -277,14 +291,14 @@ class TestClaudeAdapter:
     def test_extract_text_from_thinking_truncated_at_160_chars(
         self, adapter: ClaudeAdapter
     ) -> None:
-        """thinking content is truncated to 160 characters."""
+        """thinking content is truncated to 160 characters with `…` suffix."""
         long_thought = "x" * 300
         event = {
             "type": "assistant",
             "message": {"content": [{"type": "thinking", "thinking": long_thought}]},
         }
         out = adapter.extract_text(event)
-        assert out == f"[thinking] {'x' * 160}"
+        assert out == f"[thinking] {'x' * 160}…"
 
     @pytest.mark.small
     def test_extract_text_mixed_text_and_tool_use(self, adapter: ClaudeAdapter) -> None:
