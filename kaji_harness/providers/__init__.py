@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Literal
 
 from .base import IssueProvider
 from .github import GitHubProvider
+from .gitlab import GitLabProvider
 from .local import LocalProvider
 from .models import Comment, Issue, IssueContext, Label
 
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
 __all__ = [
     "Comment",
     "GitHubProvider",
+    "GitLabProvider",
     "Issue",
     "IssueContext",
     "IssueProvider",
@@ -47,7 +49,7 @@ def actual_provider_type(config: KajiConfig) -> str:
             検証済みであることが前提。
 
     Returns:
-        ``"github"`` または ``"local"``。
+        ``"github"`` / ``"local"`` / ``"gitlab"`` のいずれか。
 
     Raises:
         ValueError: ``config.provider`` が ``None``（``get_provider()`` を
@@ -69,6 +71,7 @@ def get_provider(config: KajiConfig) -> IssueProvider:
 
     - ``provider.type == "github"`` → GitHubProvider
     - ``provider.type == "local"`` → LocalProvider
+    - ``provider.type == "gitlab"`` → GitLabProvider
     """
     if config.provider is None:
         raise ValueError(
@@ -105,6 +108,16 @@ def get_provider(config: KajiConfig) -> IssueProvider:
             repo_root=config.repo_root,
             machine_id=local_cfg.machine_id,
             default_branch=local_cfg.default_branch,
+        )
+    if config.provider.type == "gitlab":
+        if not config.provider.gitlab.repo:
+            raise ValueError(
+                "provider.type='gitlab' requires provider.gitlab.repo (e.g. 'group/project')."
+            )
+        return GitLabProvider(
+            repo=config.provider.gitlab.repo,
+            repo_root=config.repo_root,
+            default_branch=config.provider.gitlab.default_branch,
         )
     raise ValueError(f"unknown provider.type: {config.provider.type!r}")
 

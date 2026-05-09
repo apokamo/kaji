@@ -41,7 +41,7 @@ def test_requires_provider_defaults_to_any() -> None:
 
 
 @pytest.mark.small
-@pytest.mark.parametrize("value", ["github", "local", "any"])
+@pytest.mark.parametrize("value", ["github", "local", "gitlab", "any"])
 def test_requires_provider_accepts_valid_enum(value: str) -> None:
     wf = load_workflow_from_str(_yaml_with_requires_provider(value))
     assert wf.requires_provider == value
@@ -50,7 +50,7 @@ def test_requires_provider_accepts_valid_enum(value: str) -> None:
 @pytest.mark.small
 def test_requires_provider_rejects_unknown_string() -> None:
     with pytest.raises(WorkflowValidationError, match="requires_provider"):
-        load_workflow_from_str(_yaml_with_requires_provider("gitlab"))
+        load_workflow_from_str(_yaml_with_requires_provider("bitbucket"))
 
 
 @pytest.mark.small

@@ -82,7 +82,7 @@ class IssueContext:
         worktree_dir: worktree 絶対パス（``/path/to/kaji-feat-153``）。
             Phase 3 では slug 同梱しない（既存 ``kaji-<prefix>-<id>`` を維持）。
         design_path: 設計書パス（``draft/design/issue-<id>-<slug>.md`` 等）。
-        provider_type: ``"github"`` / ``"local"``。
+        provider_type: ``"github"`` / ``"local"`` / ``"gitlab"``。
         default_branch: provider の default branch。``main`` 等。
             ``provider=local`` では ``provider.local.default_branch``、
             ``provider=github`` では ``provider.github.default_branch`` が source。

@@ -81,7 +81,7 @@ def _register_config(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
     config_subs = p.add_subparsers(dest="config_command", required=True)
     pt = config_subs.add_parser(
         "provider-type",
-        help="Print resolved provider.type ('github' or 'local')",
+        help="Print resolved provider.type ('github', 'local', or 'gitlab')",
     )
     pt.add_argument(
         "--workdir",
@@ -1121,7 +1121,7 @@ def _local_issue_list(provider: LocalProvider, rest: list[str]) -> int:
 
 
 def cmd_config_provider_type(args: argparse.Namespace) -> int:
-    """Print resolved ``provider.type`` ("github" / "local") to stdout.
+    """Print resolved ``provider.type`` ("github" / "local" / "gitlab") to stdout.
 
     Phase 4 で導入。Skill / 自動化スクリプトが overlay 込みの provider type を
     副作用なく取得するための read-only エントリ。``KajiConfig.discover()``
@@ -1129,7 +1129,7 @@ def cmd_config_provider_type(args: argparse.Namespace) -> int:
     / `cmd_run` と同じ config resolution path を共有する。
 
     Exit codes:
-        0: 解決成功（stdout に ``"github\\n"`` または ``"local\\n"``）
+        0: 解決成功（stdout に ``"github\\n"`` / ``"local\\n"`` / ``"gitlab\\n"``）
         2: config 不在 or 不正（stderr に診断メッセージ）
     """
     start_dir = args.workdir.resolve()

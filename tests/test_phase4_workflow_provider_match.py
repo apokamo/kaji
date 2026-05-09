@@ -27,6 +27,7 @@ default_timeout = 600
 
 _PROVIDER_GH = '[provider]\ntype = "github"\n[provider.github]\nrepo = "owner/name"\n'
 _PROVIDER_LOCAL = '[provider]\ntype = "local"\n[provider.local]\nmachine_id = "pc1"\n'
+_PROVIDER_GITLAB = '[provider]\ntype = "gitlab"\n[provider.gitlab]\nrepo = "group/project"\n'
 
 # Minimal valid workflow content (skill `noop` doesn't need to exist for cmd_run
 # entry-time provider match check; we exit before runner/skill validation).
@@ -47,7 +48,11 @@ steps:
 def _setup(tmp_path: Path, *, provider: str, requires: str) -> Path:
     """Set up tmp repo with config + a single workflow YAML; returns YAML path."""
     (tmp_path / ".kaji").mkdir()
-    body = _PROVIDER_GH if provider == "github" else _PROVIDER_LOCAL
+    body = {
+        "github": _PROVIDER_GH,
+        "local": _PROVIDER_LOCAL,
+        "gitlab": _PROVIDER_GITLAB,
+    }[provider]
     (tmp_path / ".kaji" / "config.toml").write_text(_BASE_CONFIG + body)
     wf_path = tmp_path / "wf.yaml"
     wf_path.write_text(_WORKFLOW_MIN.format(name="test-wf", provider=requires))
@@ -109,6 +114,41 @@ def test_cmd_run_any_passes_under_local(tmp_path: Path) -> None:
 @pytest.mark.medium
 def test_cmd_run_any_passes_under_github(tmp_path: Path) -> None:
     wf = _setup(tmp_path, provider="github", requires="any")
+    rc, _, stderr = _run(["run", str(wf), "1", "--workdir", str(tmp_path)])
+    assert "requires provider.type" not in stderr
+    assert rc != 0
+
+
+@pytest.mark.medium
+def test_cmd_run_rejects_github_workflow_under_gitlab_provider(tmp_path: Path) -> None:
+    wf = _setup(tmp_path, provider="gitlab", requires="github")
+    rc, _, stderr = _run(["run", str(wf), "1", "--workdir", str(tmp_path)])
+    assert rc == 2
+    assert "requires provider.type='github'" in stderr
+    assert "provider.type='gitlab'" in stderr
+
+
+@pytest.mark.medium
+def test_cmd_run_rejects_gitlab_workflow_under_github_provider(tmp_path: Path) -> None:
+    wf = _setup(tmp_path, provider="github", requires="gitlab")
+    rc, _, stderr = _run(["run", str(wf), "1", "--workdir", str(tmp_path)])
+    assert rc == 2
+    assert "requires provider.type='gitlab'" in stderr
+    assert "provider.type='github'" in stderr
+
+
+@pytest.mark.medium
+def test_cmd_run_passes_gitlab_match(tmp_path: Path) -> None:
+    """provider=gitlab + requires=gitlab は突合 OK（後続 skill 検証で別エラー）。"""
+    wf = _setup(tmp_path, provider="gitlab", requires="gitlab")
+    rc, _, stderr = _run(["run", str(wf), "1", "--workdir", str(tmp_path)])
+    assert "requires provider.type" not in stderr
+    assert rc != 0  # later validation/runtime error, not provider mismatch
+
+
+@pytest.mark.medium
+def test_cmd_run_any_passes_under_gitlab(tmp_path: Path) -> None:
+    wf = _setup(tmp_path, provider="gitlab", requires="any")
     rc, _, stderr = _run(["run", str(wf), "1", "--workdir", str(tmp_path)])
     assert "requires provider.type" not in stderr
     assert rc != 0

@@ -89,7 +89,7 @@ class TestProviderConfigParsing:
 
         repo = _write_repo(
             tmp_path,
-            provider_section='\n[provider]\ntype = "gitlab"\n',
+            provider_section='\n[provider]\ntype = "bitbucket"\n',
         )
         with pytest.raises(ConfigLoadError):
             KajiConfig.discover(start_dir=repo)

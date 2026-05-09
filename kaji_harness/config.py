@@ -9,6 +9,7 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from .errors import ConfigLoadError, ConfigNotFoundError
 
@@ -45,6 +46,25 @@ class GitHubProviderConfig:
 
 
 @dataclass(frozen=True)
+class GitLabProviderConfig:
+    """``[provider.gitlab]`` セクション。
+
+    Attributes:
+        repo: ``group/project`` 形式（GitLab namespace path）。``provider.type='gitlab'``
+            利用時は必須（空文字なら ``get_provider()`` が ``ValueError``）。
+            ``glab --repo`` および ``glab api projects/<URL-encoded repo>`` に渡す。
+        default_branch: ``main`` / ``master`` 等の既定 branch 名。
+
+    Note:
+        ``hostname`` フィールドは持たない。EPIC `local-pc5090-4` 確定事項 #3
+        「self-hosted 非対応 / ``gitlab.com`` 前提」の論理的帰結。
+    """
+
+    repo: str = ""
+    default_branch: str = "main"
+
+
+@dataclass(frozen=True)
 class ProviderConfig:
     """``[provider]`` 設定（Phase 3-c で導入、optional）。
 
@@ -52,9 +72,13 @@ class ProviderConfig:
     fallback）。Phase 3-e で必須化される（fail-fast）。
     """
 
-    type: str  # "github" or "local"
+    type: Literal["github", "local", "gitlab"]
     local: LocalProviderConfig
     github: GitHubProviderConfig
+    # ``GitLabProviderConfig`` は frozen=True で mutable state を持たないため、
+    # shared default インスタンスでも問題ない。既存 callsite（``ProviderConfig(type=..., local=..., github=...)``）
+    # の互換性を保つため default を持つ。
+    gitlab: GitLabProviderConfig = GitLabProviderConfig()
 
 
 @dataclass(frozen=True)
@@ -190,7 +214,7 @@ class KajiConfig:
             merged = dict(provider_data)
         if overlay_provider is not None:
             for k, v in overlay_provider.items():
-                if k in {"github", "local"} and isinstance(v, dict):
+                if k in {"github", "local", "gitlab"} and isinstance(v, dict):
                     base_sub = merged.get(k) or {}
                     if not isinstance(base_sub, dict):
                         base_sub = {}
@@ -203,8 +227,11 @@ class KajiConfig:
         if ptype_raw is None or not isinstance(ptype_raw, str):
             raise ConfigLoadError(path, "provider.type is required (string)")
         ptype = ptype_raw.strip()
-        if ptype not in {"github", "local"}:
-            raise ConfigLoadError(path, f"provider.type must be 'github' or 'local', got {ptype!r}")
+        if ptype not in {"github", "local", "gitlab"}:
+            raise ConfigLoadError(
+                path,
+                f"provider.type must be 'github', 'local', or 'gitlab', got {ptype!r}",
+            )
 
         github_raw = merged.get("github") or {}
         if not isinstance(github_raw, dict):
@@ -254,8 +281,27 @@ class KajiConfig:
             raise ConfigLoadError(path, "provider.local.default_branch must be a string")
         local_cfg = LocalProviderConfig(machine_id=machine_id, default_branch=default_branch)
 
+        gitlab_raw = merged.get("gitlab") or {}
+        if not isinstance(gitlab_raw, dict):
+            raise ConfigLoadError(path, "[provider.gitlab] must be a table")
+        gl_repo_raw = gitlab_raw.get("repo")
+        if gl_repo_raw is not None and not isinstance(gl_repo_raw, str):
+            raise ConfigLoadError(path, "provider.gitlab.repo must be a string")
+        gl_default_branch_raw = gitlab_raw.get("default_branch", "main") or "main"
+        if not isinstance(gl_default_branch_raw, str):
+            raise ConfigLoadError(path, "provider.gitlab.default_branch must be a string")
+        gitlab_cfg = GitLabProviderConfig(
+            repo=str(gl_repo_raw or ""),
+            default_branch=gl_default_branch_raw,
+        )
+
         del repo_root  # reserved for future cross-checks
-        return ProviderConfig(type=ptype, local=local_cfg, github=github_cfg)
+        return ProviderConfig(
+            type=ptype,  # type: ignore[arg-type]
+            local=local_cfg,
+            github=github_cfg,
+            gitlab=gitlab_cfg,
+        )
 
     @staticmethod
     def _validate_artifacts_dir(config_path: Path, artifacts_dir: str) -> None:
