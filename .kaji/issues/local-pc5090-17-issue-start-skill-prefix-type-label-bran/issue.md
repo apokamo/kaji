@@ -1,11 +1,14 @@
 ---
 id: local-pc5090-17
 title: issue-start skill のデフォルト prefix が type:* label 由来の branch_prefix と不整合
-state: open
+state: closed
 slug: issue-start-skill-prefix-type-label-bran
 labels:
 - type:bug
 created_at: '2026-05-09T12:05:59Z'
+closed_at: '2026-05-09T14:53:18Z'
+closed_by: pc5090
+close_reason: completed
 ---
 > [!NOTE]
 > **Worktree**: `../kaji-fix-local-pc5090-17`
