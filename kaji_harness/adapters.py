@@ -18,6 +18,61 @@ class CLIEventAdapter(Protocol):
     def extract_cost(self, event: dict[str, Any]) -> CostInfo | None: ...
 
 
+_TOOL_SUMMARY_LEN = 80
+_THINKING_SUMMARY_LEN = 160
+
+
+def _truncate(value: str, limit: int) -> str:
+    """Truncate to `limit` chars, marking truncation with a trailing `…`."""
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "…"
+
+
+def _tool_summary(name: str, inp: dict[str, Any]) -> str:
+    """Render a 1-line summary for a tool_use input.
+
+    Unknown tools return "" (no input repr) to avoid leaking secrets.
+    """
+    match name:
+        case "Bash":
+            cmd = str(inp.get("command", "")).replace("\n", " ")
+            return f"$ {_truncate(cmd, _TOOL_SUMMARY_LEN)}"
+        case "Read" | "Edit" | "Write":
+            return _truncate(str(inp.get("file_path", "")), _TOOL_SUMMARY_LEN)
+        case "Grep" | "Glob":
+            return _truncate(str(inp.get("pattern", "")), _TOOL_SUMMARY_LEN)
+        case "TodoWrite":
+            todos = inp.get("todos", [])
+            return f"({len(todos)} items)"
+        case "Skill":
+            return _truncate(str(inp.get("skill", "")), _TOOL_SUMMARY_LEN)
+        case "ToolSearch":
+            return _truncate(str(inp.get("query", "")), _TOOL_SUMMARY_LEN)
+        case _:
+            return ""
+
+
+def _render_claude_block(block: dict[str, Any]) -> str | None:
+    btype = block.get("type")
+    if btype == "text":
+        text = block.get("text")
+        return text if isinstance(text, str) and text else None
+    if btype == "tool_use":
+        name = str(block.get("name", "?"))
+        inp = block.get("input") or {}
+        if not isinstance(inp, dict):
+            inp = {}
+        summary = _tool_summary(name, inp)
+        return f"[tool] {name} {summary}".rstrip()
+    if btype == "thinking":
+        thinking = block.get("thinking")
+        if isinstance(thinking, str) and thinking:
+            return f"[thinking] {_truncate(thinking, _THINKING_SUMMARY_LEN)}"
+        return None
+    return None
+
+
 class ClaudeAdapter:
     """Claude Code CLI の JSONL イベントアダプタ。"""
 
@@ -27,14 +82,19 @@ class ClaudeAdapter:
         return None
 
     def extract_text(self, event: dict[str, Any]) -> str | None:
-        if event.get("type") == "assistant":
-            content = event.get("message", {}).get("content", [])
-            texts = [c["text"] for c in content if c.get("type") == "text" and "text" in c]
-            return "\n".join(texts) if texts else None
-        if event.get("type") == "result":
-            result = event.get("result")
-            return result if isinstance(result, str) and result else None
-        return None
+        # `result` イベントの text 抽出は廃止（issue local-pc5090-14: assistant
+        # 最終 text と二重出力されていた）。cost のみ extract_cost が処理する。
+        if event.get("type") != "assistant":
+            return None
+        content = event.get("message", {}).get("content", [])
+        rendered: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            line = _render_claude_block(block)
+            if line:
+                rendered.append(line)
+        return "\n".join(rendered) if rendered else None
 
     def extract_cost(self, event: dict[str, Any]) -> CostInfo | None:
         if event.get("type") == "result":

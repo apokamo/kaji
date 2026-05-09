@@ -60,7 +60,8 @@ class TestStreamAndLog:
 
         assert result.session_id == "sess-001"
         assert "Hello world" in result.full_output
-        assert "Done" in result.full_output
+        # anomaly B fix: result event no longer replays as text
+        assert "Done" not in result.full_output
         assert result.cost is not None
         assert result.cost.usd == 0.05
 
@@ -68,6 +69,83 @@ class TestStreamAndLog:
         raw_log = (log_dir / "stdout.log").read_text()
         assert "system" in raw_log
         assert "assistant" in raw_log
+
+    def test_claude_streaming_renders_tool_use_lines(self, tmp_path: Path) -> None:
+        """tool_use blocks appear as [tool] ... lines in full_output and console.log (anomaly A)."""
+        jsonl_lines = [
+            json.dumps({"type": "system", "subtype": "init", "session_id": "sess-tool"}),
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {"type": "tool_use", "name": "Bash", "input": {"command": "ls -la"}}
+                        ]
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "name": "Read",
+                                "input": {"file_path": "kaji_harness/adapters.py"},
+                            }
+                        ]
+                    },
+                }
+            ),
+            json.dumps({"type": "result", "result": "done", "total_cost_usd": 0.01}),
+        ]
+        script = _create_mock_cli_script(tmp_path, jsonl_lines)
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+
+        process = subprocess.Popen(
+            [str(script)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        adapter = ClaudeAdapter()
+        result = stream_and_log(process, adapter, "design", log_dir, verbose=False)
+        process.wait()
+
+        assert "[tool] Bash $ ls -la" in result.full_output
+        assert "[tool] Read kaji_harness/adapters.py" in result.full_output
+
+        console = (log_dir / "console.log").read_text()
+        assert "[tool] Bash $ ls -la" in console
+        assert "[tool] Read kaji_harness/adapters.py" in console
+
+    def test_claude_streaming_no_duplicate_final_text(self, tmp_path: Path) -> None:
+        """Final assistant text appears only once in full_output (anomaly B)."""
+        final_text = "## Final Verdict\nstatus: PASS"
+        jsonl_lines = [
+            json.dumps({"type": "system", "subtype": "init", "session_id": "sess-dup"}),
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": final_text}]},
+                }
+            ),
+            # result event with same text mirrored — should not be re-emitted
+            json.dumps({"type": "result", "result": final_text, "total_cost_usd": 0.02}),
+        ]
+        script = _create_mock_cli_script(tmp_path, jsonl_lines)
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+
+        process = subprocess.Popen(
+            [str(script)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        adapter = ClaudeAdapter()
+        result = stream_and_log(process, adapter, "design", log_dir, verbose=False)
+        process.wait()
+
+        assert result.full_output.count(final_text) == 1
+        assert result.cost is not None
+        assert result.cost.usd == 0.02
 
     def test_codex_streaming_extracts_thread_id(self, tmp_path: Path) -> None:
         """Codex JSONL stream extracts thread_id as session_id."""
