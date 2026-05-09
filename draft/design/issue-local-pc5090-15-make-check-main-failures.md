@@ -122,16 +122,25 @@ bug 修正のため公開 IF は変更しない。テスト内部の fixture / p
 
 ## 方針（修正アプローチ）
 
-### 原因 A: 各 test class に autouse fixture を追加して `_load_config_for_dispatch` を stub する
+### 原因 A: 各 test class 内に **function-scoped** autouse fixture を nest して `_load_config_for_dispatch` を stub する
 
-各影響クラスに class-scoped `@pytest.fixture(autouse=True)` を追加し、`monkeypatch.setattr` で `_load_config_for_dispatch` を「github 設定の `KajiConfig` を返す callable」に置き換える。
+各影響クラスの内部に **`@pytest.fixture(autouse=True)`（scope は明示しない = pytest デフォルトの function scope）** を method として定義し、`monkeypatch.setattr` で `_load_config_for_dispatch` を「github 設定の `KajiConfig` を返す callable」に置き換える。
+
+#### 用語の正確な定義（review-design RETRY 反映）
+
+「class 内に nest する」と「`scope="class"`」は別概念であり、本設計では混同しない:
+
+- **scope（fixture のライフサイクル）**: 本設計は **`scope="function"`（pytest デフォルト、明示指定しない）** を採用する。`pytest.MonkeyPatch` fixture は function-scoped であり、`scope="class"` を指定すると `ScopeMismatch: You tried to access the function scoped fixture monkeypatch with a class scoped request object.` で fail する。よって `scope="class"` は採用しない
+- **適用範囲（fixture が autouse で動く対象テストの集合）**: fixture を class の method として nest 定義することで、その class 内の test method にのみ autouse が及ぶ（pytest の標準仕様。class 外で定義された fixture は同 module の全 test に autouse される）。本設計の「affected class のみに限定する」要件はこの nest 定義で満たす
+
+要約すると、本設計の autouse fixture は「**function scope** で **affected class 内に nest 定義**」する。
 
 #### 採用根拠
 
 1. **既存パターンとの整合**: 同 file `tests/test_cli_main.py:783-787` の passing test `test_existing_pr_view_fails_when_config_missing` が同一の patch target（`_load_config_for_dispatch`）を使っている。横展開はパターン継承のみで完結する
 2. **テスト主旨の明確化**: 9 テストはいずれも「argv 組み立て / 引数バリデーション / argparse exit code」を検証する。config 解決はテスト主旨ではないため、boundary を `_handle_pr` の内部呼び出し点でカットするのが意図と整合
 3. **ambient state からの独立**: CWD / overlay / tracked config いずれの変更にも非依存になり、worktree 環境変動（gitignored overlay の存否）に対する耐性が増す
-4. **`tests/conftest.py` を汚染しない**: 全テスト共通の autouse にすると `test_existing_pr_view_fails_when_config_missing`（config-not-found を意図的に発生させる test）や `test_phase3c_dispatcher.py` 系（実 config を tmp に置く test）と衝突する可能性。class-scoped にすることで影響範囲を局所化する
+4. **`tests/conftest.py` を汚染しない**: 全テスト共通の autouse にすると `test_existing_pr_view_fails_when_config_missing`（config-not-found を意図的に発生させる test）や `test_phase3c_dispatcher.py` 系（実 config を tmp に置く test）と衝突する可能性。**class 内 nest 定義** で適用範囲を局所化する
 5. **`monkeypatch.setattr` と `with patch` の共存**: `test_existing_pr_view_fails_when_config_missing` は内部で `with patch(...)` を使っているため、autouse の `monkeypatch.setattr` を test 内 `with patch` がさらに上書きする形で動作する（pytest の patch stack 仕様）。autouse を入れても既存挙動を破壊しない
 
 #### 擬似コード（実装段階で TDD する）
@@ -150,16 +159,35 @@ def _stub_github_config() -> KajiConfig:
         ),
     )
 
-# 各 affected class に追加（重複削減のため module-level fixture 化も可）
+# 各 affected class の method として nest 定義（scope は省略 = function scope）
 class TestPrReviewCommentsBuiltin:
     @pytest.fixture(autouse=True)
     def _isolate_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # function-scoped: monkeypatch も function-scoped で整合する
+        # nest 定義: TestPrReviewCommentsBuiltin の test_* method のみに適用
         monkeypatch.setattr(
             "kaji_harness.cli_main._load_config_for_dispatch",
             _stub_github_config,
         )
     # ... 既存テストはそのまま
 ```
+
+`scope="class"` を使わない理由（review-design 指摘反映）:
+
+```python
+# ❌ 採用しない: ScopeMismatch エラーになる
+@pytest.fixture(scope="class", autouse=True)
+def _isolate_config(self, monkeypatch):  # monkeypatch は function-scoped
+    ...
+```
+
+代替案として `pytest.MonkeyPatch()` を手動 instantiate して `scope="class"` 化する手段も検討したが、
+
+- function-scoped autouse でも実害（class 内 test 数 × stub 生成回数 = 軽量 dataclass 構築 × 9〜数個）は無視できる
+- 手動 `MonkeyPatch()` は finalizer 管理（`undo()` を `yield` 後に呼ぶ等）が必要で実装が冗長になる
+- 採用パターン（function scope + class 内 nest）が `tests/test_phase3c_dispatcher.py` の既存 isolation 設計（`monkeypatch.chdir` を function fixture で都度設定）と粒度が一致する
+
+ため **不採用** とする。
 
 #### 設計上の trade-off
 
@@ -191,6 +219,7 @@ class TestPrReviewCommentsBuiltin:
 - 既存 9 テスト（A 群）が `_load_config_for_dispatch` stub fixture 適用後に PASS することを確認
 - 既存 1 テスト（B 群、`test_validate_rejects_unknown_requires_provider`）が fixture 修正後に PASS することを確認
 - 既存 passing test `test_existing_pr_view_fails_when_config_missing` が autouse fixture 追加後も継続 PASS（`with patch(side_effect=ConfigNotFoundError)` が autouse `monkeypatch.setattr` を上書きする pytest 仕様の検証）
+- **fixture scope 整合性の事前確認**: 実装段階で fixture 追加時にまず `pytest tests/test_cli_main.py::TestPrReviewCommentsBuiltin -x` を 1 件流し、`ScopeMismatch` が出ないことを確認する（function scope + monkeypatch の整合は pytest 標準仕様だが、書き間違いを早期検出するため）
 
 ### Medium テスト
 
@@ -241,3 +270,5 @@ class TestPrReviewCommentsBuiltin:
 | `tests/conftest.py:105-132` | 同 worktree 内 | 既存の autouse fixture が `WorkflowRunner.__post_init__` 限定であり、`_load_config_for_dispatch` には介入していないことの確認元 |
 | Issue 5 commit `a60e6f4` | `git log -p a60e6f4 -- tests/test_phase4_large_local.py` | `feat: add GitLabProvider + config + dispatcher (local-pc5090-5)` の差分が `test_phase4_large_local.py:188` を含まないことの確認元（fixture 移行漏れの根拠） |
 | Issue 本文 `make check` 実測ログ | `.kaji/issues/local-pc5090-15-make-check-main-failures/issue.md` § OB | `10 failed, 1091 passed` の一次出力。切り分け subset 実行 `1 failed, 16 passed in 0.84s` も同節に記載 |
+| pytest 公式 — `monkeypatch` fixture | https://docs.pytest.org/en/stable/how-to/monkeypatch.html | 「`monkeypatch` is a function-scoped fixture」（要約）。本設計が `scope="class"` を採用しない根拠（review-design RETRY 反映） |
+| pytest 公式 — fixture scopes | https://docs.pytest.org/en/stable/how-to/fixtures.html#fixture-scopes | scope 上位（class/module/session）の fixture が scope 下位（function）の fixture を request すると `ScopeMismatch` で fail することの一次情報 |
