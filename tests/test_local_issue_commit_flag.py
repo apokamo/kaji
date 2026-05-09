@@ -185,6 +185,51 @@ class TestEditCommitFlag:
             f"expected issue.md to be dirty: {status!r}"
         )
 
+    def test_edit_with_commit_is_noop_when_body_unchanged(
+        self, provider_with_issue: tuple[LocalProvider, str]
+    ) -> None:
+        """no-op edit (body 不変) で `--commit` が `nothing to commit` で fail しない.
+
+        `LocalProvider.edit_issue` は同一 body でも issue.md を再書込するため、
+        単純に `git commit --only` を呼ぶと `nothing to commit, working tree clean`
+        で exit 1 になる。`/issue-fix-ready` や `/i-dev-final-check` が同一本文を
+        再送する動線でこれを踏むため、no-op は成功扱いで commit を skip すること。
+        """
+        provider, issue_id = provider_with_issue
+        # initial body is "b" (set in provider_with_issue fixture)
+        head_before = _git(provider.repo_root, "rev-parse", "HEAD").stdout.strip()
+
+        # Re-send the same body via --commit
+        rc = _local_issue_edit(provider, [issue_id, "--body", "b", "--commit"])
+        assert rc == 0
+
+        # working tree must be clean (no-op was absorbed)
+        status = _git(provider.repo_root, "status", "--porcelain").stdout
+        assert status == "", f"unexpected dirty status after no-op edit: {status!r}"
+
+        # HEAD must not have moved (no new commit was created)
+        head_after = _git(provider.repo_root, "rev-parse", "HEAD").stdout.strip()
+        assert head_before == head_after, f"HEAD moved on no-op edit: {head_before} -> {head_after}"
+
+    def test_edit_with_commit_noop_preserves_unrelated_staged_files(
+        self, provider_with_issue: tuple[LocalProvider, str]
+    ) -> None:
+        """no-op edit で skip した場合でも user の他の staged file を破壊しない."""
+        provider, issue_id = provider_with_issue
+        # Pre-stage an unrelated file
+        other = provider.repo_root / "other.txt"
+        other.write_text("other\n")
+        _git(provider.repo_root, "add", "other.txt")
+
+        rc = _local_issue_edit(provider, [issue_id, "--body", "b", "--commit"])
+        assert rc == 0
+
+        # other.txt remains staged in the index untouched
+        staged = (
+            _git(provider.repo_root, "diff", "--cached", "--name-only").stdout.strip().splitlines()
+        )
+        assert "other.txt" in staged
+
 
 class TestCommitMessageFormat:
     """commit message が `chore(local): <action> for <issue_ref>` 形式であること."""

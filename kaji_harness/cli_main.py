@@ -1076,6 +1076,19 @@ def _commit_local_issue_change(
         cwd=provider.repo_root,
         check=True,
     )
+    # `LocalProvider.edit_issue` は同一 body 再送でも `issue.md` を再書込するため、
+    # `kaji issue edit --commit` が no-op edit で呼ばれた場合は staged diff が空に
+    # なる。`git commit --only` をそのまま呼ぶと `nothing to commit` で exit 1 に
+    # 落ちるため、対象 path の staged diff を確認して空なら commit を skip する。
+    # `git diff --cached --quiet` の exit code: 0=差分なし / 1=差分あり / >1=エラー。
+    diff_check = subprocess.run(
+        ["git", "diff", "--cached", "--quiet", "--", *rel_paths],
+        cwd=provider.repo_root,
+    )
+    if diff_check.returncode == 0:
+        return
+    if diff_check.returncode != 1:
+        diff_check.check_returncode()
     subprocess.run(
         ["git", "commit", "--only", "-m", msg, "--", *rel_paths],
         cwd=provider.repo_root,
