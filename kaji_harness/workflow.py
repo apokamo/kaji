@@ -54,6 +54,17 @@ VALID_REQUIRES_PROVIDER = {"github", "local", "gitlab", "any"}
 
 _STEP_REQUIRED_KEYS = ("id", "skill", "agent")
 
+# Agent ごとの effort 許容値。CLI 仕様の一次情報:
+#   claude: `claude --help` の `--effort` 列挙 (low/medium/high/xhigh/max)
+#   codex:  codex error message "expected one of `none`, `minimal`, `low`,
+#           `medium`, `high`, `xhigh` in `model_reasoning_effort`"
+# 辞書未登録の agent (gemini 等) は validation skip。新 agent 追加時に本辞書へ
+# 1 行加える。docs/dev/workflow-authoring.md に同じ表を保持する。
+_AGENT_EFFORT_ALLOWED: dict[str, frozenset[str]] = {
+    "claude": frozenset({"low", "medium", "high", "xhigh", "max"}),
+    "codex": frozenset({"none", "minimal", "low", "medium", "high", "xhigh"}),
+}
+
 
 def _parse_workflow(data: dict[str, Any]) -> Workflow:
     """YAML data dict をワークフローオブジェクトに変換する。"""
@@ -120,6 +131,20 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                 )
             raw_step_workdir = str(expanded_step_workdir)
 
+        raw_effort = step_data.get("effort")
+        if raw_effort is not None:
+            if not isinstance(raw_effort, str):
+                raise WorkflowValidationError(
+                    f"Step '{step_data['id']}' 'effort' must be a string, "
+                    f"got {type(raw_effort).__name__}"
+                )
+            allowed = _AGENT_EFFORT_ALLOWED.get(step_data["agent"])
+            if allowed is not None and raw_effort not in allowed:
+                raise WorkflowValidationError(
+                    f"Step '{step_data['id']}' effort '{raw_effort}' is not valid for "
+                    f"agent '{step_data['agent']}' (allowed: {sorted(allowed)})"
+                )
+
         raw_timeout = step_data.get("timeout")
         if raw_timeout is not None:
             if not isinstance(raw_timeout, int) or isinstance(raw_timeout, bool):
@@ -138,7 +163,7 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                 skill=step_data["skill"],
                 agent=step_data["agent"],
                 model=step_data.get("model"),
-                effort=step_data.get("effort"),
+                effort=raw_effort,
                 max_budget_usd=step_data.get("max_budget_usd"),
                 max_turns=step_data.get("max_turns"),
                 timeout=raw_timeout,

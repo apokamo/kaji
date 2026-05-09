@@ -24,7 +24,7 @@ steps:
     skill: issue-design
     agent: claude
     model: opus
-    effort: xHigh
+    effort: xhigh
     on:
       PASS: review-design
       ABORT: end
@@ -43,7 +43,7 @@ steps:
     skill: issue-fix-design
     agent: claude
     model: opus
-    effort: xHigh
+    effort: xhigh
     resume: design
     on:
       PASS: verify-design
@@ -64,7 +64,7 @@ steps:
     skill: issue-implement
     agent: claude
     model: opus
-    effort: High
+    effort: high
     on:
       PASS: review-code
       RETRY: implement
@@ -86,7 +86,7 @@ steps:
     skill: issue-fix-code
     agent: claude
     model: opus
-    effort: High
+    effort: high
     resume: implement
     inject_verdict: true
     on:

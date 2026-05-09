@@ -87,12 +87,37 @@ config 非依存のため）。
 | `agent` | str | ✅ | `claude` / `codex` / `gemini` |
 | `on` | mapping | ✅ | verdict → next step ID のマッピング。非空必須 |
 | `model` | str | — | モデル名（省略時は agent デフォルト） |
-| `effort` | str | — | `low` / `medium` / `high`（agent がサポートする場合） |
+| `effort` | str | — | エージェント別の許容値で書く。後述「effort 値」参照 |
 | `max_budget_usd` | float | — | コスト上限（USD） |
 | `max_turns` | int | — | ターン数上限 |
 | `timeout` | int | — | タイムアウト（秒）。フォールバック: step.timeout → workflow.default_timeout → config.execution.default_timeout |
 | `workdir` | str | — | 作業ディレクトリ（絶対パス）。フォールバック: step.workdir → workflow.workdir → project_root |
 | `resume` | str | — | resume するステップ ID（同一 agent のセッション継続） |
+
+### effort 値
+
+エージェント別に **小文字** の許容値が異なる。`workflow.py` の YAML parse 時に
+runtime validator が agent 別 allowed values で reject するため、本仕様から
+外れる値（特に大文字 `High` / `xHigh`）を書くと `WorkflowValidationError` が
+発生する。
+
+| agent | 許容値（小文字） | 一次情報 |
+|-------|-----------------|----------|
+| `claude` | `low`, `medium`, `high`, `xhigh`, `max` | `claude --help` の `--effort` 列挙 |
+| `codex` | `none`, `minimal`, `low`, `medium`, `high`, `xhigh` | codex error message: `expected one of \`none\`, \`minimal\`, \`low\`, \`medium\`, \`high\`, \`xhigh\` in \`model_reasoning_effort\`` |
+| その他 (`gemini` 等) | 検証スキップ（passthrough） | allowed values 辞書未登録のため |
+
+> **罠（UI 表示と YAML 値の差異）**: claude / codex どちらの対話 UI も effort
+> を **大文字**（`Low` / `Medium` / `High` / `Extra high`）で表示する。
+> しかし CLI に渡す内部値は **小文字**。UI 表示をそのまま YAML にコピーすると
+> codex 側で `unknown variant 'High'` で workflow が ERROR 停止する（claude 側は
+> 暗黙の lowercase 化で通る場合があるが、許容値の方針として統一する）。
+
+採択方針 (Issue local-pc5090-16): **agent 別 allowed values 辞書** を `workflow.py`
+の module-level 定数として保持し、`step.agent` でルックアップして reject する。
+共通 subset (`low/medium/high/xhigh`) のみで縛らない（claude `max` / codex
+`none/minimal` を将来も使えるようにするため）。新 agent 追加時は
+`_AGENT_EFFORT_ALLOWED` 辞書に 1 行加える。
 
 ### `on` マッピング
 
