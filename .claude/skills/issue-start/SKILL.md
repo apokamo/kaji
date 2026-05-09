@@ -76,6 +76,25 @@ ln -s "$MAIN_REPO/.venv" "$WT/.venv"
 
 これにより `make check` が即座に実行可能になります。
 
+### Step 2.6: provider overlay (`.kaji/config.local.toml`) シンボリックリンク作成
+
+`.kaji/config.local.toml` は gitignored のため `git worktree add` では worktree に転写されない。
+overlay 不在の worktree では `kaji` CLI が `.kaji/config.toml` の `provider.type=github` 既定値で動き、
+`local-*` / `gl:N` 形式 ID が拒否される（codex 等が worktree 配下で `kaji issue comment` を
+叩けず、レビュー判定の Issue 記録が欠落する原因）。
+
+main の overlay が存在する場合のみ、worktree の `.kaji/` にシンボリックリンクで共有する:
+
+```bash
+if [ -f "$MAIN_REPO/.kaji/config.local.toml" ]; then
+  ln -sf "$MAIN_REPO/.kaji/config.local.toml" "$WT/.kaji/config.local.toml"
+fi
+```
+
+`-f` で再作成を許容（既存 symlink を上書き）。`.gitignore` に登録済みのパスなので
+worktree 側 git status には現れない。`provider=github` 運用では main にも overlay が
+無いため何も起きない（既存挙動と等価）。
+
 ### Step 3: Worktreeの確認
 
 ```bash
@@ -121,6 +140,7 @@ kaji issue edit [issue_id] --commit --body "$NEW_BODY"
 | ディレクトリ | ../$(basename "$WT") |
 | 基点ブランチ | main |
 | venv | シンボリックリンク作成済み |
+| provider overlay | シンボリックリンク作成済み / 不要（main に未配置） |
 | メタ情報 | Issue本文に追記済み |
 
 ### 次のステップ

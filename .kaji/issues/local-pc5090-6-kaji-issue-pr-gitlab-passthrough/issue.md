@@ -8,6 +8,10 @@ labels:
 - scope:gitlab-validation
 created_at: '2026-05-09T06:02:00Z'
 ---
+> [!NOTE]
+> **Worktree**: `../kaji-feat-local-pc5090-6`
+> **Branch**: `feat/local-pc5090-6`
+
 ## 概要
 
 `kaji issue` / `kaji pr` の CLI dispatch を GitLab provider に対応させ、`gl:N` ID 規約を `normalize_id` に追加する。OQ-2 決定文書 `kaji-pr-mr-bridge.md` の互換 contract を実装する。
@@ -88,3 +92,4 @@ created_at: '2026-05-09T06:02:00Z'
 - 確定事項 #7: 本 EPIC 本文
 - 既存実装: `kaji_harness/cli_main.py:436-723`、`kaji_harness/providers/_mappings.py`
 - skill 一覧: `.claude/skills/{i-pr,issue-close,pr-fix,pr-verify}/SKILL.md`
+
