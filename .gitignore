@@ -65,3 +65,7 @@ secrets/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local tools — CLI markers / standalone binaries dropped at repo root
+.codex
+actionlint
