@@ -124,6 +124,27 @@ class TestGitLabIssueDispatch:
         assert "42" in cmd
         assert "gl:42" not in cmd
 
+    def test_list_rewrites_limit_to_per_page(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue ``local-p1-23`` regression: bare ``kaji issue list --limit N`` は
+        ``glab issue list`` の同義 flag ``--per-page`` に rewrite して渡す（``glab``
+        側に ``--limit`` flag は存在せず ``Unknown flag`` で reject されるため）。
+        """
+        repo = _write_gitlab_repo(tmp_path)
+        monkeypatch.chdir(repo)
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/glab"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            rc = _handle_issue(["list", "--limit", "5"])
+        assert rc == 0
+        cmd = mock_run.call_args[0][0]
+        assert "--limit" not in cmd
+        assert "--per-page" in cmd
+        assert cmd[cmd.index("--per-page") + 1] == "5"
+
     def test_unsupported_sub_rejected(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:

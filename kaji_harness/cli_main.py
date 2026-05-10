@@ -1426,7 +1426,9 @@ _GITLAB_ISSUE_SUB_MAP: dict[str, tuple[str, dict[str, str]]] = {
     "create": ("create", {"--body": "--description"}),
     "view": ("view", {}),
     "edit": ("update", {"--body": "--description"}),
-    "list": ("list", {}),
+    # ``--limit`` は GitHub ``gh issue list`` の page-size flag。``glab issue list``
+    # は同義 flag を ``--per-page`` として実装しているため、skill 互換のために rewrite。
+    "list": ("list", {"--limit": "--per-page"}),
     "close": ("close", {}),
     "comment": ("note", {"--body": "--message"}),
 }
