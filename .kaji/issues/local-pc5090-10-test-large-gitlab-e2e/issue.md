@@ -1,12 +1,15 @@
 ---
 id: local-pc5090-10
 title: make test-large-gitlab + provider=gitlab E2E
-state: open
+state: closed
 slug: test-large-gitlab-e2e
 labels:
 - type:test
 - scope:gitlab-validation
 created_at: '2026-05-09T06:02:27Z'
+closed_at: '2026-05-10T03:12:51Z'
+closed_by: pc5090
+close_reason: completed
 ---
 > [!NOTE]
 > **Worktree**: `../kaji-test-local-pc5090-10`
