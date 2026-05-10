@@ -1,6 +1,6 @@
 """GitLabProvider: ``glab`` CLI + ``glab api`` 経由の Issue CRUD + IssueContext 解決。
 
-EPIC ``local-pc5090-4`` 確定事項 #1（CLI subprocess 必須）/ #3（``gitlab.com`` 固定）に基づく。
+EPIC ``local-p1-4`` 確定事項 #1（CLI subprocess 必須）/ #3（``gitlab.com`` 固定）に基づく。
 ``GitHubProvider`` の ``gh`` CLI passthrough と対称構造を取り、構造的差異は
 GitLab REST API の field 名（``iid`` / ``description`` / ``state='opened'`` / labels が
 string array）に閉じる。
@@ -394,7 +394,7 @@ class GitLabProvider:
 
     # -------- PR (MR) helpers ----------
     #
-    # 本セクションは Issue local-pc5090-6 で追加。``kaji pr`` の GitLab dispatcher が
+    # 本セクションは Issue local-p1-6 で追加。``kaji pr`` の GitLab dispatcher が
     # 呼ぶ薄い helper 群と、純粋な GitLab→GitHub shape 変換層 ``_GitLabPrShape`` を
     # 提供する。``pr_*`` の単純な CLI passthrough は cli_main 側で ``_run_glab`` を
     # 直接呼ぶ薄い経路を採るため、provider 側に集約するのは:
@@ -582,7 +582,7 @@ class GitLabProvider:
 # _GitLabPrShape — pure GitLab → GitHub shape 変換層
 # ----------------------------------------------------------------------------
 #
-# Issue local-pc5090-6 で導入。``glab mr view --output json`` 等の payload を
+# Issue local-p1-6 で導入。``glab mr view --output json`` 等の payload を
 # ``gh pr view --json`` 互換 dict に変換する純粋関数群。subprocess を呼ばず
 # JSON 構造のみを扱うため Small テスト容易。
 #

@@ -344,7 +344,7 @@ class LocalProvider:
         """``.kaji/cache/`` 直下。``gl-*.json`` / ``.sync-meta.json`` を置く。
 
         既存 ``_cache_dir`` (``= .kaji/cache/issues``) は ``gh:`` 専用 layout として
-        据え置く（issue ``local-pc5090-8`` 設計 § 互換性保持）。
+        据え置く（issue ``local-p1-8`` 設計 § 互換性保持）。
         """
         return self.repo_root / ".kaji" / "cache"
 
@@ -686,7 +686,7 @@ class LocalProvider:
                 out.append(issue)
                 if limit is not None and len(out) >= limit:
                     return out
-        # GitLab cache 由来 entry を末尾に append（issue ``local-pc5090-8``）。
+        # GitLab cache 由来 entry を末尾に append（issue ``local-p1-8``）。
         # 表示 state の決定は ``_list_cached_gitlab_issues`` 内で正規化する。
         out.extend(self._list_cached_gitlab_issues(state, labels))
         if limit is not None:
@@ -800,7 +800,7 @@ class LocalProvider:
         """``.kaji/cache/gl-<iid>.json`` から read-only に Issue を組み立てる。
 
         cache fixture が無ければ ``IssueNotFoundError``（``kaji sync from-gitlab``
-        を案内するメッセージ）。issue ``local-pc5090-8`` § インターフェース 3。
+        を案内するメッセージ）。issue ``local-p1-8`` § インターフェース 3。
         """
         if not _POS_INT_RE.match(iid):
             raise ValueError(
@@ -823,7 +823,7 @@ class LocalProvider:
     def _list_cached_gitlab_issues(self, state: str, labels: list[str] | None) -> list[Issue]:
         """``.kaji/cache/gl-*.json`` を読み state / labels filter 込みで返す。
 
-        表示 state の決定ルール (issue ``local-pc5090-8`` 設計 § list_issues):
+        表示 state の決定ルール (issue ``local-p1-8`` 設計 § list_issues):
 
         - ``kaji_local.is_stale=true`` → 無条件 ``"closed"``（GitLab issue.state に依らない）
         - ``is_stale=false`` AND ``issue.state="opened"`` → ``"open"``
@@ -941,7 +941,7 @@ def _cached_issue_from_payload(payload: dict[str, object]) -> Issue:
 def _cached_gitlab_issue_from_payload(payload: dict[str, object]) -> Issue:
     """GitLab cache wrapper JSON → Issue に整形（``view_cached_gitlab_issue`` 用）。
 
-    wrapper schema (issue ``local-pc5090-8`` 設計 § cache 配置):
+    wrapper schema (issue ``local-p1-8`` 設計 § cache 配置):
 
     - ``payload["issue"]``: GitLab REST 由来 issue JSON
     - ``payload["kaji_local"]``: ``is_stale`` / ``last_seen_at`` / ``staled_at``

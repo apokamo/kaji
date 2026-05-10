@@ -153,22 +153,19 @@ def _phase_rename_dirs(repo: Path, dry_run: bool) -> None:
         n = _issue_n_from_dirname(issue_dir.name)
         if n is None or n not in MIGRATE_RANGE:
             continue
-        new_name = issue_dir.name.replace(
-            f"local-{OLD_MACHINE}-", f"local-{NEW_MACHINE}-", 1
-        )
+        new_name = issue_dir.name.replace(f"local-{OLD_MACHINE}-", f"local-{NEW_MACHINE}-", 1)
         targets.append((issue_dir, issue_dir.with_name(new_name), n))
 
     print(f"[rename-dirs] {len(targets)} dirs (issues 1..20 only; 21 stays put)")
     # cross-ref rewrite: N=1..20 only. 21 references protected.
-    cross_ref_re = re.compile(
-        rf"local-{re.escape(OLD_MACHINE)}-(?P<n>[1-9]|1[0-9]|20)\b"
-    )
+    cross_ref_re = re.compile(rf"local-{re.escape(OLD_MACHINE)}-(?P<n>[1-9]|1[0-9]|20)\b")
 
     # Step 1: rewrite frontmatter id + body cross-refs in *all* issue.md files
     # （1..20 + 21 自身の本文中で 1..20 へ言及がある可能性）。21 への参照は
     # cross_ref_re が N=1..20 のみマッチするので保護される。
     all_issue_dirs = [
-        d for d in sorted(issues_dir.iterdir())
+        d
+        for d in sorted(issues_dir.iterdir())
         if d.is_dir() and _issue_n_from_dirname(d.name) is not None
     ]
     for d in all_issue_dirs:
@@ -176,9 +173,7 @@ def _phase_rename_dirs(repo: Path, dry_run: bool) -> None:
         if not issue_md.is_file():
             continue
         text = issue_md.read_text(encoding="utf-8")
-        new_text = cross_ref_re.sub(
-            lambda m: f"local-{NEW_MACHINE}-{m.group('n')}", text
-        )
+        new_text = cross_ref_re.sub(lambda m: f"local-{NEW_MACHINE}-{m.group('n')}", text)
         if new_text == text:
             continue
         rel = issue_md.relative_to(repo)
@@ -210,8 +205,9 @@ def _phase_config(repo_main: Path, dry_run: bool) -> None:
 
     print("[config]")
     if counter_old.is_file():
-        print(f"  rename {counter_old.relative_to(repo_main)} -> "
-              f"{counter_new.relative_to(repo_main)}")
+        print(
+            f"  rename {counter_old.relative_to(repo_main)} -> {counter_new.relative_to(repo_main)}"
+        )
         if not dry_run:
             counter_new.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(counter_old), str(counter_new))
@@ -228,8 +224,7 @@ def _phase_config(repo_main: Path, dry_run: bool) -> None:
             text,
         )
         if new_text != text:
-            print(f"  set machine_id = {NEW_MACHINE!r} in "
-                  f"{config.relative_to(repo_main)}")
+            print(f"  set machine_id = {NEW_MACHINE!r} in {config.relative_to(repo_main)}")
             if not dry_run:
                 config.write_text(new_text, encoding="utf-8")
         else:
@@ -250,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         "--repo-main",
         default=None,
         help="main repo path for gitignored .kaji/counters and config.local.toml. "
-             "Defaults to --repo.",
+        "Defaults to --repo.",
     )
     p.add_argument("--dry-run", action="store_true")
     ns = p.parse_args(argv)
@@ -258,11 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     repo = Path(ns.repo).resolve()
     repo_main = Path(ns.repo_main).resolve() if ns.repo_main else repo
 
-    phases = (
-        ["rename-comments", "rename-dirs", "config"]
-        if ns.phase == "all"
-        else [ns.phase]
-    )
+    phases = ["rename-comments", "rename-dirs", "config"] if ns.phase == "all" else [ns.phase]
     for phase in phases:
         if phase == "rename-comments":
             _phase_rename_comments(repo, ns.dry_run)

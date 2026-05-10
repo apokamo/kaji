@@ -85,7 +85,7 @@ def create_parser() -> argparse.ArgumentParser:
 
 
 def _register_sync(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    """``kaji sync`` 系の subcommand 登録 (issue ``local-pc5090-8``)。
+    """``kaji sync`` 系の subcommand 登録 (issue ``local-p1-8``)。
 
     ``from-gitlab``: GitLab project から open Issue を全件 fetch して
     ``.kaji/cache/gl-<iid>.json`` に atomic write する。
@@ -815,7 +815,7 @@ def _handle_issue(raw_args: list[str]) -> int:
         return EXIT_INVALID_INPUT
 
     # ``context`` subcommand は provider 共通で provider.resolve_issue_context()
-    # を呼ぶ helper（issue local-pc5090-17）。``gh issue context`` は存在しない
+    # を呼ぶ helper（issue local-p1-17）。``gh issue context`` は存在しない
     # ため、GitHub passthrough 前に捕捉する。GitLab 経路は本 Issue 範囲外として
     # 明示拒否（normalize_id() / dispatcher の GitLab 拡張は別 Issue で対応）。
     args = list(raw_args)
@@ -1016,7 +1016,7 @@ def _handle_issue_context(provider: IssueProvider, rest: list[str]) -> int:
     ``-q EXPR`` で jq 式適用。未知 ``--json`` キーは ``null`` を返す
     （``_local_issue_view`` の ``full.get(k)`` 挙動に揃える）。
 
-    issue local-pc5090-17 で導入。skill (`/issue-start`) が context 正本と
+    issue local-p1-17 で導入。skill (`/issue-start`) が context 正本と
     同期するために参照する。
     """
     import dataclasses
@@ -1350,7 +1350,7 @@ def _local_issue_list(provider: LocalProvider, rest: list[str]) -> int:
 
 
 # ============================================================
-# GitLab dispatcher (Issue local-pc5090-6)
+# GitLab dispatcher (Issue local-p1-6)
 # ============================================================
 #
 # ``kaji issue`` / ``kaji pr`` の ``provider.type='gitlab'`` 配下処理。
@@ -1931,7 +1931,7 @@ def cmd_config_provider_type(args: argparse.Namespace) -> int:
 
 
 def cmd_sync_from_gitlab(args: argparse.Namespace) -> int:
-    """``kaji sync from-gitlab`` の dispatcher (issue ``local-pc5090-8``)。
+    """``kaji sync from-gitlab`` の dispatcher (issue ``local-p1-8``)。
 
     将来予約 flag（``--include-closed`` / ``--state`` / ``--since``）は exit 2 で
     fail-fast する。silently ignore は完了条件違反。
@@ -1985,7 +1985,7 @@ def cmd_sync_from_gitlab(args: argparse.Namespace) -> int:
 
 
 def cmd_sync_status(args: argparse.Namespace) -> int:
-    """``kaji sync status`` の dispatcher (issue ``local-pc5090-8``)。"""
+    """``kaji sync status`` の dispatcher (issue ``local-p1-8``)。"""
     import json as _json
 
     from .sync import SyncError, format_elapsed_human, read_sync_status

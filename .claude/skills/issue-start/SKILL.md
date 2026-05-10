@@ -25,7 +25,7 @@ $ARGUMENTS = <issue_id>
 
 - `issue_id` (必須): Issue番号 (例: 247 / `local-pc1-3` / `gh:153`)
 
-第 2 引数は **廃止** されました（issue local-pc5090-17）。ブランチ prefix は
+第 2 引数は **廃止** されました（issue local-p1-17）。ブランチ prefix は
 `kaji issue context` が返す `branch_prefix`（frontmatter `branch_prefix` →
 `type:*` ラベル → `chore` fallback の優先順）から自動決定します。
 

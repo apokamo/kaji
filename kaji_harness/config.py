@@ -56,7 +56,7 @@ class GitLabProviderConfig:
         default_branch: ``main`` / ``master`` 等の既定 branch 名。
 
     Note:
-        ``hostname`` フィールドは持たない。EPIC `local-pc5090-4` 確定事項 #3
+        ``hostname`` フィールドは持たない。EPIC `local-p1-4` 確定事項 #3
         「self-hosted 非対応 / ``gitlab.com`` 前提」の論理的帰結。
     """
 

@@ -1,6 +1,6 @@
 """GitLab → ローカル cache 同期 (`kaji sync from-gitlab` / `kaji sync status`)。
 
-Issue ``local-pc5090-8``。``provider.type='local'`` 配下から ``gl:N`` で GitLab
+Issue ``local-p1-8``。``provider.type='local'`` 配下から ``gl:N`` で GitLab
 Issue を参照できるようにするため、本 module は GitLab project の open Issue を
 全件取得して ``.kaji/cache/gl-<iid>.json`` に atomic write する。
 
