@@ -7,6 +7,10 @@ labels:
 - type:bug
 created_at: '2026-05-10T14:25:34Z'
 ---
+> [!NOTE]
+> **Worktree**: `../kaji-fix-local-p1-23`
+> **Branch**: `fix/local-p1-23`
+
 ## 概要
 
 `kaji_harness` の GitLab provider が `glab` 起動時に `--hostname gitlab.com` を全 subcommand に強制注入しているが、`glab` v1.36.0 / v1.95.0 双方で `--hostname` は `glab api` 専用 sub-flag として実装されている。結果として `kaji issue list` / `kaji issue create` 等の `glab issue` / `glab mr` を経由する全 mutating パスが起動直後に `Unknown flag: --hostname` で reject され、`provider.type='gitlab'` 配下では `glab api` を直叩きする `kaji sync from-gitlab` のみ偶然動作する。
