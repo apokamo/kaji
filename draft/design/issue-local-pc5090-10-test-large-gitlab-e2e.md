@@ -128,7 +128,8 @@ make test-large-gitlab          # 全 test skip、exit 0
 | Pytest 設定 | `pyproject.toml` | `[tool.pytest.ini_options].markers` に `large_gitlab` 登録 |
 | テスト | `tests/test_large_gitlab/__init__.py` | 新設（モジュール化） |
 | テスト | `tests/test_large_gitlab/conftest.py` | 共通 skip fixture / project クリーンアップ / unique suffix 生成 |
-| テスト | `tests/test_large_gitlab/test_workflow_e2e.py` | `feature-development.yaml` を `provider.type='gitlab'` で 1 本完走 |
+| テスト | `tests/test_large_gitlab/fixtures/feature-development-gitlab.yaml` | テスト専用 workflow（`requires_provider: gitlab`）。本 Issue のスコープを「テスト追加」に閉じるため、production 用 builtin workflow（`.kaji/wf/feature-development-gitlab.yaml`）の追加は別 Issue とする |
+| テスト | `tests/test_large_gitlab/test_workflow_e2e.py` | テスト fixture workflow を `provider.type='gitlab'` で 1 本完走 |
 | テスト | `tests/test_large_gitlab/test_issue_roundtrip.py` | `kaji issue create/view/edit/comment/close` |
 | テスト | `tests/test_large_gitlab/test_pr_roundtrip.py` | `kaji pr create/view/list/comment/review/merge` 系 |
 | テスト | `tests/test_large_gitlab/test_pr_review_contract.py` | `--approve --body-file` の note→approve 順 / `--request-changes` 未 approve no-op / `--squash` `--rebase` 拒否 |
@@ -212,33 +213,104 @@ def kaji_workspace(tmp_path, gitlab_repo) -> Path:
 
 ### 4. workflow E2E（test_workflow_e2e.py）
 
-- `tmp_path` に minimal repo を作り、`feature-development.yaml` を `provider.type
-  = "gitlab"` で 1 issue について design → ... → i-pr まで完走させる
-- agent 起動コストを避けるため、`execution_policy: dryrun` 相当 / mock skill で
-  なく **実 skill を回す方針** を取るかは判断が分かれる。本設計では:
-  - **採用**: workflow runner レベルの round-trip（各 step が `kaji issue
-    comment --commit` 等で provider に書き込めることまで）を検証する
-  - **不採用**: 実 LLM agent 呼び出し（コスト・flakiness）→ skill 内 LLM 呼び
-    出しは stub agent provider で差し替える
-- 完走判定: 最終 `kaji pr view <iid>` で MR が open 状態に存在し、Issue が close
-  に至っていること
+#### 対象 workflow の選定（review 指摘 #1 への対応）
 
-> 補足: 実 LLM agent を回さない方針は子 Issue #1〜#4 の large_local テストと
-> 同じ思想（agent 起動 ≠ provider contract 検証）。
+現行 `.kaji/wf/feature-development.yaml` は `requires_provider: github`、
+`.kaji/wf/feature-development-local.yaml` は `requires_provider: local` であり、
+`provider.type='gitlab'` で完走させられる builtin workflow は現状存在しない。
+`kaji_harness/cli_main.py:411-431` で workflow load 直後に provider mismatch を
+exit 2 で fail-fast するため、`feature-development.yaml` をそのまま使う設計は
+成立しない。
+
+本 Issue のスコープを「Makefile + tests」に閉じるため、以下の方針を採る:
+
+- **採用**: `tests/test_large_gitlab/fixtures/feature-development-gitlab.yaml` を
+  テスト専用 fixture として配置する（`requires_provider: gitlab` を明示し、step
+  構成は `feature-development-local.yaml` を参考に最小化）。
+- **不採用**: `.kaji/wf/feature-development-gitlab.yaml` を builtin として追加
+  する案。production 用 workflow YAML の整備は本 Issue のテスト目的を超える
+  ため、必要であれば子 Issue として切り出す（本 Issue の Issue 本文 § OUT を
+  援用）。
+- **不採用**: 既存 `.kaji/wf/design-only.yaml`（`requires_provider: any`）の
+  流用案。`design-only` は `kaji issue` / `kaji pr` の write path を踏まないため、
+  provider=gitlab で workflow runner と provider が連動することの検証としては
+  弱い。
+
+#### fixture workflow の設計概要
+
+`tests/test_large_gitlab/fixtures/feature-development-gitlab.yaml` は:
+
+- `name: feature-development-gitlab-fixture`
+- `requires_provider: gitlab`
+- `execution_policy: auto`
+- step 構成: `kaji issue` / `kaji pr` の write path を踏む最小の sequence
+  （例: `design` → `implement` → `pr`）。各 step の skill / agent 指定は
+  `feature-development-local.yaml` と同じ枠組みで定義する
+
+完走判定の観点（test 側 assertion）:
+
+- 各 step が provider 書き込みを伴うものは `kaji issue view` / `kaji pr view`
+  の応答を `glab api` で再観測して整合確認
+- 最終 step 通過後、`glab api projects/<encoded>/merge_requests/<iid>` で MR が
+  存在すること、対応する Issue が close 済みであることを確認
+- workflow runner が exit 0 で終了すること（`kaji_harness/cli_main.py:364-431`
+  の provider 整合検証層を通過したことを意味する）
+
+#### agent 起動の扱い
+
+- agent 起動コストを避けるため、**実 LLM agent は呼ばない**（子 Issue #1〜#4 の
+  large_local テストと同じ思想）。skill 内 LLM 呼び出しは stub agent provider
+  で差し替える
+- 検証範囲は **workflow runner ↔ provider の境界**（各 step が `kaji issue
+  comment --commit` 等で GitLab に書き込めることまで）。skill 自体の出力品質は
+  本 Large レイヤーの責務外
 
 ### 5. PR contract（test_pr_review_contract.py）
 
-`kaji-pr-mr-bridge.md` の決定事項を E2E で固定:
+`kaji-pr-mr-bridge.md` の決定事項を E2E で固定する。観測経路は **`glab api`
+（実在する GitLab REST API）** を正本とする（review 指摘 #2 への対応）。
+`glab mr discussion` サブコマンドは現行 `glab` CLI に存在しないため使用しない。
+`kaji_harness/providers/gitlab.py:467-498, 553` で provider 実装が既に同じ
+endpoint を使っており、テスト側もそれに揃える。
 
-- **note→approve 順**: `kaji pr review <iid> --approve --body-file <path>` を
-  呼び、その後 `glab mr discussion list <iid>` で note 投稿が approve より時間
-  的に先行していることを確認（`created_at` 比較 or discussion ID 順序）
-- **request-changes 未 approve no-op**: 未 approve の MR に対し
-  `kaji pr review --request-changes --body-file -` を実行し、`glab mr revoke`
-  の error 起因の test 失敗が起きないこと（note のみ投稿され revoke skip）を
-  検証
-- **merge flag 拒否**: `kaji pr merge <iid> --squash` / `--rebase` で
-  `EXIT_INVALID_INPUT`（exit code）と stderr メッセージを assert
+#### review --approve --body-file の note + approval 観測 contract
+
+`kaji pr review <iid> --approve --body-file <path>` 実行後、以下 2 観点を独立に
+assert する。**順序検証は二次確認** とし、本 contract の必達は「note と
+approval が両立する」状態の観測とする（review 指摘 #2「観測可能な contract に
+再定義」採用）。
+
+| 観点 | 観測経路 | assert 内容 |
+|------|----------|-------------|
+| note 投稿 | `glab api projects/<encoded>/merge_requests/<iid>/notes?per_page=100` | レスポンス JSON 配列に `body == <投稿した body>` を持つ要素が 1 件以上存在 |
+| approval 成立 | `glab api projects/<encoded>/merge_requests/<iid>/approvals` | `approved_by[].user.username` に `glab api user` で取得した自身の username が含まれる |
+| 順序（参考） | 上記 notes の `created_at` と approvals の `updated_at` を比較 | note `created_at` ≤ approvals `updated_at`。timestamp 解像度（秒単位）で同値となる場合は順序検証を skip し warning を出す |
+
+> **設計含意**: GitLab API の timestamp は秒精度であり、note → approve を
+> 連続呼び出しすると同秒に丸められる可能性がある。順序を必達 contract にすると
+> flakiness の温床になるため、**「両立すること」を必達、「note ≤ approve」を
+> 観測可能なら追加 assert** という二段構えにする。`kaji-pr-mr-bridge.md` の
+> 「body は捨てない」「順序は note 投稿 → approve」の意図は両 assert の合成で
+> 実質的に保護される（body が approve と同時に必ず存在することを保証する）。
+
+#### request-changes 未 approve no-op contract
+
+未 approve の MR に対し `kaji pr review <iid> --request-changes --body-file -`
+を実行する。
+
+| 観点 | 観測経路 | assert 内容 |
+|------|----------|-------------|
+| note 投稿 | `glab api .../merge_requests/<iid>/notes` | body が末尾に追加されている |
+| revoke が no-op | `kaji` 実行の exit code | exit 0（`glab mr revoke` の "Not approved" エラーが provider 内部で no-op 扱いされ test に伝搬しない） |
+| approvals 不変 | `glab api .../merge_requests/<iid>/approvals` | `approved_by` が空のまま |
+
+#### merge flag 拒否 contract
+
+| 観点 | 観測経路 | assert 内容 |
+|------|----------|-------------|
+| `--squash` 拒否 | `kaji pr merge <iid> --squash` の exit code / stderr | `EXIT_INVALID_INPUT` 相当 + stderr に `--squash` 拒否メッセージ |
+| `--rebase` 拒否 | 同上 | 同上 |
+| MR 状態 | `glab api .../merge_requests/<iid>` | `state` が `opened` のまま（拒否で MR が触られていないこと） |
 
 ### 6. 未対応 sub（test_pr_unsupported_sub.py）
 
@@ -257,6 +329,12 @@ silent passthrough（exit 0 で `glab` の出力がそのまま流れる）を *
 - `kaji pr reply-to-comment <iid> <comment_id> --body ...` で投稿後、
   再度 `review-comments` を引いたとき、`comment_id` が同じ形式で復元できること
   （discussion thread reply が provider-local ID として整形されている）
+
+検証の裏付けとして `glab api projects/<encoded>/merge_requests/<iid>/discussions`
+の生レスポンスを取得し、`kaji pr review-comments` の整形結果が同 endpoint の
+discussion → note 構造を GitHub 互換 subset に正しく落とし込んでいることを
+確認する（`kaji_harness/providers/gitlab.py:467-498, 707-722` の整形ロジックの
+回帰検出）。
 
 確定事項 #7 / `kaji-pr-mr-bridge.md` Tier A の検証層に該当。
 
@@ -304,12 +382,12 @@ pytest 自身の挙動でテスト不要、Makefile 変更も同様）。
 
 | 観点 | 対応モジュール | 検証 contract |
 |------|----------------|---------------|
-| workflow 1 本完走 | `test_workflow_e2e.py` | `feature-development.yaml` × `provider.type='gitlab'` の round-trip |
+| workflow 1 本完走 | `test_workflow_e2e.py` | `tests/test_large_gitlab/fixtures/feature-development-gitlab.yaml`（`requires_provider: gitlab`）× `provider.type='gitlab'` の round-trip |
 | `kaji issue` round-trip | `test_issue_roundtrip.py` | `create`/`view`/`edit`/`comment`/`close` |
 | `kaji pr` round-trip | `test_pr_roundtrip.py` | `create`/`view`/`list`/`comment`/`review`/`merge` |
-| review contract | `test_pr_review_contract.py` | note→approve 順 / 未 approve no-op / merge flag 拒否 |
+| review contract | `test_pr_review_contract.py` | note と approval の両立 / 未 approve no-op / merge flag 拒否（観測経路は `glab api .../notes` と `.../approvals`） |
 | 未対応 sub | `test_pr_unsupported_sub.py` | silent passthrough 禁止 |
-| review shape & ID 復元 | `test_review_shape.py` | GitHub 互換 field 名 / `reply-to-comment` ID 復元 |
+| review shape & ID 復元 | `test_review_shape.py` | GitHub 互換 field 名 / `reply-to-comment` ID 復元（裏付けに `glab api .../discussions`） |
 | `kaji sync from-gitlab` | `test_sync_from_gitlab.py` | 実 API → cache → `gl:N` read |
 
 > 「Large は CI で再現できる構成」という規約（testing-convention.md § 不正当な
@@ -348,5 +426,12 @@ pytest 自身の挙動でテスト不要、Makefile 変更も同様）。
 | GitLab provider docs | [`docs/cli-guides/gitlab-mode.md`](../../docs/cli-guides/gitlab-mode.md) | § 1.2 認証 (a)/(b)、§ 1.3 Merge method/Squash 必須前提、§ 4 `make test-large-gitlab` 実行前提を本テストの skip 条件 / 失敗時誘導の正本とする |
 | Testing convention | [`docs/dev/testing-convention.md`](../../docs/dev/testing-convention.md) | サイズ判定基準（外部 API 疎通あり → Large）、省略 4 条件、`uv pip install -e .` の隔離原則、AI のテスト省略傾向への警告 |
 | Testing size guide | [`docs/reference/testing-size-guide.md`](../../docs/reference/testing-size-guide.md) | マーカー登録・実行マトリクスの正本 |
-| `glab` CLI（実 binary 仕様） | https://gitlab.com/gitlab-org/cli (公開) / `glab mr --help` 出力 | `glab mr note --message` / `glab mr approve` / `glab mr revoke` / `glab mr discussion list` の sub 名・引数体系。`kaji-pr-mr-bridge.md` の contract 表を経由して参照 |
+| `glab` CLI（実 binary 仕様） | https://gitlab.com/gitlab-org/cli (公開) / `glab mr --help` / `glab api --help` | `glab mr note --message` / `glab mr approve` / `glab mr revoke` の sub 名・引数体系（`kaji-pr-mr-bridge.md` の contract 経由で利用）。`glab mr discussion` サブコマンドは現行 CLI に存在しないため使用しない（review 指摘 #2） |
+| GitLab Notes API | https://docs.gitlab.com/api/notes/ | 「`GET /projects/:id/merge_requests/:merge_request_iid/notes` returns `id`, `body`, `author`, `created_at`, ...」(要約)。本テストの note 投稿観測の正本として `glab api projects/<encoded>/merge_requests/<iid>/notes?per_page=100` 経由で読む |
+| GitLab Merge Request Approvals API | https://docs.gitlab.com/api/merge_request_approvals/ | 「`GET /projects/:id/merge_requests/:merge_request_iid/approvals` returns `approved_by` array of users」(要約)。approval 状態観測の正本として `glab api .../approvals` を使用 |
+| GitLab Discussions API | https://docs.gitlab.com/api/discussions/ | 「`GET /projects/:id/merge_requests/:merge_request_iid/discussions` returns nested notes per discussion」(要約)。`reply-to-comment` の provider-local ID 復元検証で `glab api .../discussions` および `.../discussions/<id>/notes` を使用（`kaji_harness/providers/gitlab.py:467-498, 553` と同経路） |
+| GitLab Merge Requests API | https://docs.gitlab.com/api/merge_requests/ | 「`GET /projects/:id/merge_requests/:merge_request_iid` returns `state`, `merge_status`, ...」(要約)。merge flag 拒否後の MR 状態確認 / workflow 完走確認に使用 |
 | 既存 large テスト実装 | [`tests/test_phase3e_large_local.py`](../../tests/test_phase3e_large_local.py) | `pytestmark = [pytest.mark.large, pytest.mark.large_local]` の宣言 pattern と subprocess fixture の設計を参考にする |
+| `kaji` workflow / provider 整合検証実装 | [`kaji_harness/cli_main.py:411-431`](../../kaji_harness/cli_main.py) | 「`requires_provider != 'any'` で `provider.type` と一致しないとき exit 2 で fail-fast」（要約）。本設計が test fixture workflow を `requires_provider: gitlab` で用意する根拠 |
+| 既存 builtin workflow（参考） | [`.kaji/wf/feature-development-local.yaml`](../../.kaji/wf/feature-development-local.yaml) | `feature-development` 系 workflow の step 構成。fixture workflow の最小構成の参考 |
+| GitLab provider 実装 | [`kaji_harness/providers/gitlab.py:467-498, 553`](../../kaji_harness/providers/gitlab.py) | 既に `glab api .../discussions` `.../notes` `.../approvals` を経由している。テスト側の観測経路を実装と揃える根拠 |
