@@ -3,7 +3,7 @@ description: |
   Issue の設計から PR 作成までの開発ワークフロー。
   issue-create / issue-start は事前に手動実行済みであることが前提。
 execution_policy: auto
-requires_provider: github
+requires_provider: gitlab
 # workdir: /home//////
 
 cycles:
