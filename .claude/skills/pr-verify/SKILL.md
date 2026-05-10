@@ -46,7 +46,7 @@ $ARGUMENTS = <issue_id>
 
 `issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
 
-`pr_id` はハーネス経由では `provider.resolve_pr_context()` 経由で branch 名から自動逆引きしてプロンプトに注入される（`provider.type='github'` / `'gitlab'` 共通。実装は `kaji_harness/runner.py` の `_resolve_pr_context_safe`）。手動実行時、または auto-resolve が失敗した場合のみ Step 1 内で `kaji pr list --search` から取得して確定する。`pr_ref` は `pr_id` から導出する: GitHub 数値 ID なら `#<pr_id>`、それ以外は bare ID。
+`pr_id` のハーネス自動注入は **`provider.type='gitlab'` 配下のみ**で成立する（`kaji_harness/providers/gitlab.py` の `resolve_pr_context()` が branch 名から MR を逆引きし `PRContext` を返す。`runner.py` の `_resolve_pr_context_safe` がプロンプト変数に展開）。`provider.type='github'` 配下では `kaji_harness/providers/github.py:306-316` の `resolve_pr_context()` が no-op（`None` 返却）なので注入は発生せず、Step 1 内で `kaji pr list --search` から取得して確定する。手動実行時、および GitLab 側 auto-resolve が失敗した（branch 未 push / MR 未作成）場合も同様に `kaji pr list --search` から取得する。`pr_ref` は `pr_id` から provider 別に導出する: `provider.type='github'` なら `#<pr_id>`、`provider.type='gitlab'` なら `gl:<pr_id>`（`kaji_harness/providers/models.py` `PRContext` および `kaji-pr-mr-bridge.md` § 設計原則 1 に準拠）。
 
 ## 前提知識の読み込み
 
