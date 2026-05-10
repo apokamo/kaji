@@ -87,6 +87,32 @@ class TestResolveRepo:
 
 
 @pytest.mark.small
+class TestHostnameEnvPinning:
+    """Issue ``local-p1-23`` 回帰防止: ``sync._glab_api_get`` も env 経由で hostname pin する。
+
+    ``--hostname`` を引数注入していた旧実装は ``glab api`` 経路に限り偶発的に動作していたが、
+    一貫性のため env 経路に揃える。``--hostname`` が cmd に **含まれない**、``GITLAB_HOST``
+    が ``env`` kwarg に **含まれる**、の 2 点を assert する。
+    """
+
+    def test_glab_api_get_uses_gitlab_host_env(self) -> None:
+        captured: list[tuple[list[str], dict[str, str] | None]] = []
+
+        def fake_run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+            env_kw = kw.get("env")
+            captured.append((cmd, env_kw if isinstance(env_kw, dict) else None))
+            return _ok(stdout="[]")
+
+        with _glab_present(), patch("kaji_harness.sync.subprocess.run", side_effect=fake_run):
+            sync_mod._glab_api_get("projects/g%2Fp/issues")
+        cmd, env = captured[0]
+        assert "--hostname" not in cmd
+        assert cmd[:2] == ["glab", "api"]
+        assert env is not None
+        assert env.get("GITLAB_HOST") == "gitlab.com"
+
+
+@pytest.mark.small
 class TestPagination:
     def _patch_payloads(self, payloads: list[object]) -> object:
         outputs = iter(payloads)

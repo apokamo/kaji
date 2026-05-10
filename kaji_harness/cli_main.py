@@ -1359,16 +1359,18 @@ def _local_issue_list(provider: LocalProvider, rest: list[str]) -> int:
 # ``note`` / ``--target-branch`` / ``--source-branch``）への変換は本層で吸収する。
 # 設計書 § 方針 §2 / §3 を参照。
 
-_GITLAB_HOSTNAME_FOR_DISPATCH = "gitlab.com"
-
 
 def _forward_to_glab(group: str, raw_args: list[str], *, repo: str) -> int:
     """``glab <group> ...`` に引数を転送する wrapper（``_forward_to_gh`` の symmetric）。
 
-    ``--hostname gitlab.com`` と ``--repo <group/project>`` を末尾に強制注入する。
+    ``--repo <group/project>`` を末尾に強制注入し、``GITLAB_HOST=gitlab.com`` を環境
+    変数として渡す（``--hostname`` は ``glab issue`` / ``glab mr`` の parser には存在
+    しないため引数注入は使えない。詳細は ``providers.gitlab._glab_env`` の docstring）。
     user が ``--repo`` を渡している場合は user 値を尊重して触らない（``_forward_to_gh``
     と同方針）。
     """
+    from .providers.gitlab import _glab_env
+
     if not shutil.which("glab"):
         print(
             "Error: 'glab' CLI not found in PATH. "
@@ -1381,9 +1383,9 @@ def _forward_to_glab(group: str, raw_args: list[str], *, repo: str) -> int:
         args = args[1:]
     if "--repo" not in args and "-R" not in args:
         args = [*args, "--repo", repo]
-    cmd = ["glab", "--hostname", _GITLAB_HOSTNAME_FOR_DISPATCH, group, *args]
+    cmd = ["glab", group, *args]
     try:
-        result = subprocess.run(cmd, check=False)
+        result = subprocess.run(cmd, check=False, env=_glab_env())
     except OSError as exc:
         print(f"Error: failed to invoke 'glab': {exc}", file=sys.stderr)
         return EXIT_RUNTIME_ERROR

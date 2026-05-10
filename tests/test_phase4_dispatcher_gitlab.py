@@ -42,7 +42,7 @@ def _ok(stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess[str]:
 
 @pytest.mark.medium
 class TestGitLabIssueDispatch:
-    def test_create_forwards_with_repo_and_hostname(
+    def test_create_forwards_with_repo_and_host_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         repo = _write_gitlab_repo(tmp_path)
@@ -55,9 +55,11 @@ class TestGitLabIssueDispatch:
             rc = _handle_issue(["create", "--title", "T", "--body", "B"])
         assert rc == 0
         cmd = mock_run.call_args[0][0]
-        # glab --hostname gitlab.com issue create --title T --description B --repo g/p
+        # glab issue create --title T --description B --repo g/p (hostname は env で渡る)
         assert cmd[0] == "glab"
-        assert "--hostname" in cmd and "gitlab.com" in cmd
+        assert "--hostname" not in cmd
+        env = mock_run.call_args.kwargs.get("env")
+        assert env is not None and env.get("GITLAB_HOST") == "gitlab.com"
         assert "create" in cmd
         # --body → --description 変換
         assert "--description" in cmd

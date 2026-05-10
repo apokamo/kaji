@@ -25,7 +25,6 @@ if TYPE_CHECKING:
     from .config import KajiConfig
 
 
-_GITLAB_HOSTNAME = "gitlab.com"
 _PER_PAGE = 100
 _MAX_PAGES = 200
 _SYNC_META_FILENAME = ".sync-meta.json"
@@ -102,18 +101,23 @@ def _resolve_repo(config: KajiConfig, override: str | None) -> str:
 
 
 def _glab_api_get(endpoint: str) -> object:
-    """``glab api --hostname gitlab.com <endpoint>`` を起動し JSON を parse して返す。
+    """``glab api <endpoint>`` を ``GITLAB_HOST=gitlab.com`` env 経由で起動し JSON を parse して返す。
 
     GitLabProvider._glab_api_get と機能等価だが、provider instance 非依存
     （``provider.type='local'`` 配下でも使える）。失敗は ``SyncError``。
+
+    hostname 注入は ``--hostname`` 引数ではなく ``GITLAB_HOST`` 環境変数経由（理由は
+    ``providers.gitlab._glab_env`` の docstring 参照）。
     """
+    from .providers.gitlab import _glab_env
+
     if shutil.which("glab") is None:
         raise SyncError(
             "'glab' CLI not found in PATH. Install glab to use 'kaji sync from-gitlab'."
         )
-    cmd = ["glab", "--hostname", _GITLAB_HOSTNAME, "api", endpoint]
+    cmd = ["glab", "api", endpoint]
     try:
-        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True, env=_glab_env())
     except OSError as exc:
         raise SyncError(f"failed to invoke 'glab': {exc}") from exc
     if proc.returncode != 0:
