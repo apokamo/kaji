@@ -66,12 +66,12 @@ created_at: '2026-05-09T06:02:20Z'
 
 ## 完了条件
 
-- [ ] `docs/cli-guides/gitlab-mode.md` が存在し、上記 IN 項目をすべてカバーする
-- [ ] `docs/cli-guides/local-mode.md` および `docs/operations/local-mode-runbook.md` から gitlab-mode.md へのリンクがある
-- [ ] skill 内に `gh ` 直接呼び出しが残っていない（`grep -rn "gh " .claude/skills/` で 0 件、もしくは forge-neutral コメント等の説明的言及のみ）
-- [ ] `make verify-docs` 緑（doc link checker）
-- [ ] `make check` 緑
-- [ ] **PR の diff が `docs/` および `.claude/skills/` 配下に限定されており、`kaji_harness/` / `tests/` / `Makefile` / `pyproject.toml` への変更を含まない**（docs-only 検証）
+- [x] `docs/cli-guides/gitlab-mode.md` が存在し、上記 IN 項目をすべてカバーする
+- [x] `docs/cli-guides/local-mode.md` および `docs/operations/local-mode-runbook.md` から gitlab-mode.md へのリンクがある
+- [x] skill 内に `gh ` 直接呼び出しが残っていない（`grep -rn "gh " .claude/skills/` で 0 件、もしくは forge-neutral コメント等の説明的言及のみ）
+- [x] `make verify-docs` 緑（doc link checker）
+- [x] `make check` 緑
+- [x] **PR の diff が `docs/` および `.claude/skills/` 配下に限定されており、`kaji_harness/` / `tests/` / `Makefile` / `pyproject.toml` への変更を含まない**（docs-only 検証）
 
 ## 依存
 
