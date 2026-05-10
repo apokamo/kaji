@@ -18,7 +18,13 @@
 @pytest.mark.small
 @pytest.mark.medium
 @pytest.mark.large
+# Large の細分（必要に応じて large と併記）
+@pytest.mark.large_local   # subprocess あり / ネットワーク無し
+@pytest.mark.large_forge   # 実 GitHub API 疎通
+@pytest.mark.large_gitlab  # 実 GitLab API 疎通（make test-large-gitlab）
 ```
+
+`large_gitlab` は `make check` のデフォルト（`pytest -m "not large_gitlab"`）から除外される。実行前提と Make ターゲットは [`testing-size-guide.md` § Large の細分マーカー](../reference/testing-size-guide.md) と [`gitlab-mode.md` § 4](../cli-guides/gitlab-mode.md) を参照。
 
 ### 判定基準
 
