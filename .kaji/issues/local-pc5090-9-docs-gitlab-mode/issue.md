@@ -8,6 +8,10 @@ labels:
 - scope:gitlab-validation
 created_at: '2026-05-09T06:02:20Z'
 ---
+> [!NOTE]
+> **Worktree**: `../kaji-docs-local-pc5090-9`
+> **Branch**: `docs/local-pc5090-9`
+
 ## 概要
 
 `docs/cli-guides/gitlab-mode.md` を新設して GitLab provider のセットアップ / 運用 / 前提を記述し、既存 docs / skill 内の `gh` 直接記述を forge-neutral に整理する。`kaji-pr-mr-bridge.md` の merge method 保証範囲 (ii) docs 前提も本ガイドに集約する。
