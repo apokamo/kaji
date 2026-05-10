@@ -77,51 +77,120 @@ class CLIEventAdapter(Protocol):
     def is_terminal_event(self, event: dict[str, Any]) -> bool: ...   # ← 新規
 ```
 
-各 adapter での判定（暫定。最終的な event 種別は実装フェーズで一次情報を再確認する）:
+各 adapter での判定（success terminal / failure terminal / 非 terminal を一次情報で確定）:
 
-| Adapter | terminal 判定 | 根拠 |
-|---------|--------------|------|
-| `ClaudeAdapter` | `event.get("type") == "result"` | 観測 artifact `stdout.log` で `result` イベントが session 終了マーカーとして 1 度だけ出ることを確認 |
-| `CodexAdapter` | `event.get("type") == "turn.completed"` を terminal とみなす（実装時に Codex の `--json` 仕様で session 終端を持つ別 event があれば差し替える） | 既存 `extract_cost` も `turn.completed` を採用 |
-| `GeminiAdapter` | `event.get("type") == "result"` | `kaji_harness/adapters.py:144-151` の docstring に明記済み（stream-json: `result: {type: "result", status, stats:...}` が session 終端） |
+| Adapter | success terminal | failure terminal | 非 terminal（intermediate） | 根拠（一次情報） |
+|---------|-----------------|-----------------|----------------------------|-----------------|
+| `ClaudeAdapter` | `type == "result"` (1 回限り) | 同上（`is_error: true` でも `result` は出る。session 終端マーカーは 1 種類） | `system` / `assistant` / `user` 等 | `docs/cli-guides/claude-code-cli-guide.md:467-474` および観測 artifact `.kaji-artifacts/local-pc5090-21/runs/2605101619/final-check/stdout.log` で `type:"result"`/`terminal_reason:"completed"` が session 末尾に 1 度だけ出ることを確認 |
+| `CodexAdapter` | `type == "turn.completed"` | `type == "turn.failed"` | `thread.started` / `turn.started` / `item.started` / `item.completed` / `error` | `docs/cli-guides/codex-cli-session-guide.md:243-252` のイベントタイプ表で `turn.completed` / `turn.failed` をそれぞれ「ターン終了」「ターン失敗」と定義。`codex exec --json` は単一ターン実行であり、turn 終了 = session 終了。`error` は intermediate（`tests/test_codex_robustness.py:315-324` の挙動から `error` 単独では session が終わらず後続に `turn.failed` を伴う観測あり） |
+| `GeminiAdapter` | `type == "result"` (1 回限り) | 同上（`status` フィールドで成功/失敗を区別） | `init` / `message` | `docs/cli-guides/gemini-cli-session-guide.md:623-631`（stream-json で `{type: "result", status, stats}` が session 終端）と既存 `kaji_harness/adapters.py:144-151` の docstring |
 
-### `stream_and_log`（変更）
+設計判断:
 
-戻り値 `CLIResult` の構造は不変。break 動作のみ追加:
+- **success/failure を区別せず両方とも terminal として break する**。理由: `is_terminal_event` は「session が論理的に終わったか」だけを返す責務であり、成功/失敗判定は `process.returncode` および `error_messages` で行う既存経路が独立に存在する（`kaji_harness/cli.py:135-137`）。
+- **Codex の `error` event は terminal にしない**。理由: 既存テスト `tests/test_codex_robustness.py:272-324` が示す通り、`error` は `turn.failed` の前に流れる intermediate 性質。`error` で break すると後続の `turn.failed` の `error.message` が `error_messages` に集約されず、`CLIExecutionError` の詳細が薄くなる。
+
+### `stream_and_log` と `_execute_cli_once`（変更）
+
+**timer race の解消**: 現行 `kaji_harness/cli.py:117-131` では `timer = Timer(timeout, _kill_process, ...)` が armed のまま `stream_and_log` を呼んでおり、timer cancel は finally でしか起きない。terminal event 観測後に `process.terminate() → wait(5) → kill()` を行うと、timer の grace 5s と timeout がオーバーラップする時点（terminal event が timeout 直前に届いたケース）で timer が発火し、`timed_out` が立ってしまい「論理終端を見たのに `StepTimeoutError`」になる race が残る。
+
+**解消設計**: `stream_and_log` が `terminal_seen: bool` を返し、`_execute_cli_once` 側で **break 検知後は timer を先に cancel してから後始末する**。これにより grace wait 中の timer 発火を構造的に排除する。
+
+`CLIResult` モデル拡張（`kaji_harness/models.py`）:
 
 ```python
-for line in process.stdout:
-    f_raw.write(line); f_raw.flush()
-    try:
-        event = json.loads(line)
-    except json.JSONDecodeError:
-        ...
-        continue
-    # 既存の extract_session_id / extract_text / extract_cost / error event 処理
-    ...
-    if adapter.is_terminal_event(event):
-        break
-# break 抜け or 正常 EOF 後、後始末を行う:
-if process.poll() is None:
-    process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
+@dataclass
+class CLIResult:
+    full_output: str
+    session_id: str | None
+    cost: CostInfo | None
+    stderr: str
+    error_messages: list[str]
+    terminal_seen: bool = False   # ← 新規（後方互換のためデフォルト False）
 ```
 
-`_execute_cli_once` の `process.wait()` (`kaji_harness/cli.py:129`) は冗長になるため整理する（`stream_and_log` 側で wait まで完結させる）。timer.cancel() の経路は維持。
+`stream_and_log`:
 
-後方互換性: terminal event を出さない CLI / 出る前に死ぬ CLI / `JSONDecodeError` だけが流れる経路は従来通り EOF or `_kill_process` timer で守られる。
+```python
+def stream_and_log(...) -> CLIResult:
+    terminal_seen = False
+    ...
+    for line in process.stdout:
+        ...
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            ...
+            continue
+        # 既存の extract_session_id / extract_text / extract_cost / error event 収集
+        ...
+        if adapter.is_terminal_event(event):
+            terminal_seen = True
+            break
+    # 後始末は呼び出し側 (_execute_cli_once) に委譲し、stderr 読み出しのみここで行う
+    stderr = process.stderr.read() if process.stderr else ""
+    if stderr:
+        (log_dir / "stderr.log").write_text(stderr, encoding="utf-8")
+    return CLIResult(..., terminal_seen=terminal_seen)
+```
+
+`_execute_cli_once`（順序が race 防止の核心）:
+
+```python
+timed_out = threading.Event()
+timer = threading.Timer(timeout, _kill_process, args=[process, timed_out])
+timer.start()
+try:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    result = stream_and_log(process, adapter, step.id, log_dir, verbose)
+    if result.terminal_seen:
+        # 1) terminal event を見た → 即座に timer を disarm（race 防止の本丸）
+        timer.cancel()
+        # 2) プロセスが自発 exit していなければ、timeout に依存しない短い grace wait
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+    else:
+        # 通常経路: EOF まで読んだ → process.wait() で残骸回収（timer は最終ガード）
+        process.wait()
+finally:
+    timer.cancel()
+
+if timed_out.is_set():
+    raise StepTimeoutError(step.id, timeout)
+if process.returncode != 0:
+    ...
+```
+
+**race 防止の保証**:
+- terminal event を観測した瞬間に `timer.cancel()` が走る → grace 5s wait 中に `_kill_process` が呼ばれない → `timed_out` は立たない。
+- `Timer.cancel()` は既に発火してしまった timer を止めない可能性があるが、その場合は `_kill_process` 内の `terminate()` が我々の `terminate()` と冪等に重なるだけで、`timed_out.is_set()` 判定がもはや正しい意味（= ユーザ視点でもタイムアウト）を持たない（terminal event が見えていれば成功扱いにすべき）。これを避けるため、`timed_out.is_set()` の評価を `terminal_seen` で短絡する追加ガードを入れる:
+
+```python
+if timed_out.is_set() and not result.terminal_seen:
+    raise StepTimeoutError(step.id, timeout)
+```
+
+これで以下のいずれかが成り立つ:
+1. terminal event 観測前に timer 発火 → `terminal_seen=False`, `timed_out=True` → `StepTimeoutError`（既存挙動）
+2. terminal event 観測 → `terminal_seen=True` → `timer.cancel()` 成功 or 既に発火していても `StepTimeoutError` を抑制（terminal event が真実の終端）
+3. 通常 EOF → `terminal_seen=False`, `timed_out=False` → 正常完了
+
+後方互換性: terminal event を出さない CLI / 出る前に死ぬ CLI / `JSONDecodeError` だけが流れる経路は `terminal_seen=False` のままなので EOF or `_kill_process` timer による既存挙動。`CLIResult.terminal_seen` のデフォルト値 False により、既存テストや CLIResult 利用箇所への影響はない。
 
 ## 変更スコープ
 
 | ファイル | 変更内容 |
 |---------|---------|
-| `kaji_harness/adapters.py` | `CLIEventAdapter` Protocol に `is_terminal_event` を追加、3 adapter に実装を追加 |
-| `kaji_harness/cli.py` | `stream_and_log` に terminal event break + terminate 後始末を追加。`_execute_cli_once` の wait 経路を整理 |
-| `tests/test_adapters.py` | 各 adapter の `is_terminal_event` 単体テスト（Small） |
-| `tests/test_cli_streaming_integration.py` | 再現テスト（terminal event 後 stdout を close しない fake CLI で timeout せず終了することを検証）（Medium） |
+| `kaji_harness/adapters.py` | `CLIEventAdapter` Protocol に `is_terminal_event` を追加、3 adapter に実装を追加（Codex は `turn.completed` / `turn.failed` の両方） |
+| `kaji_harness/models.py` | `CLIResult` に `terminal_seen: bool = False` を追加（後方互換のためデフォルト False） |
+| `kaji_harness/cli.py` | `stream_and_log` で terminal event 観測時に `terminal_seen=True` を返し、後始末は呼び出し側に委譲。`_execute_cli_once` で timer cancel → terminate → wait(5) → kill 順で race を解消、`timed_out and not terminal_seen` 短絡ガードを追加 |
+| `tests/test_adapters.py` | 各 adapter の `is_terminal_event` 単体テスト（Small）。Codex は success/failure 両 terminal をカバー |
+| `tests/test_cli_streaming_integration.py` | 再現テスト + race regression テスト + Codex failure terminal テスト（Medium） |
 
 影響するコマンド: `kaji run`（全 workflow / 全 step）。
 
@@ -132,11 +201,17 @@ if process.poll() is None:
 
 ## 方針（修正アプローチ）
 
-最小侵襲で「terminal event を観測したら積極的に break + terminate」を実装する。
+最小侵襲で「terminal event を観測したら積極的に break + terminate、ただし timer race を構造的に排除する」を実装する。
 
-1. **adapters.py**: Protocol 拡張 + 3 実装追加。`Protocol` への method 追加は既存の adapter 登録（`ADAPTERS = {...}`）を破壊しないが、3 クラス全てに `is_terminal_event` を実装することで Protocol の structural typing を満たす。
-2. **cli.py**: `stream_and_log` 内で event デコード後に `is_terminal_event` を見て break。break 経路でも EOF 経路でも、関数末尾で `process.poll() is None` のときに `terminate → wait(5) → kill` を行う。`_execute_cli_once` から `process.wait()` 重複呼び出しを除去（`stream_and_log` が wait まで完結）。timer は `_kill_process` 用に残す。
-3. **timed_out との衝突回避**: `terminate()` を `stream_and_log` でも `_kill_process` でも呼ぶ可能性があるが、`Popen.terminate` は冪等（既に終了しているプロセスへの SIGTERM は no-op に近い）。`timed_out.is_set()` の判定は `_execute_cli_once` 末尾で従来通り行う。
+1. **adapters.py**: `CLIEventAdapter` Protocol に `is_terminal_event` を追加。`ClaudeAdapter` / `GeminiAdapter` は `type == "result"`、`CodexAdapter` は `type in ("turn.completed", "turn.failed")` を返す。3 クラス全てで実装することで Protocol の structural typing を満たす。
+2. **models.py**: `CLIResult` に `terminal_seen: bool = False` を追加。デフォルト False により既存テスト・既存利用箇所は影響を受けない。
+3. **cli.py / stream_and_log**: event デコード後に `is_terminal_event` を見て break。後始末（terminate / wait / kill）は **呼び出し側に委譲**し、ここでは `terminal_seen` フラグを `CLIResult` に乗せて返すだけにする。
+4. **cli.py / _execute_cli_once（race 解消の本丸）**:
+   - `result.terminal_seen` が True の場合、**最初に `timer.cancel()` を呼ぶ**。これにより grace wait 中の `_kill_process` 発火を構造的に排除する。
+   - その後 `process.poll() is None` なら `terminate → wait(5) → kill` で fd を閉じる。
+   - 通常 EOF（`terminal_seen=False`）なら従来通り `process.wait()`（timer が最終ガード）。
+   - 末尾の `timed_out` 判定は `not result.terminal_seen` で短絡し、cancel 失敗の極端ケースでも terminal event が真実の終端として尊重されるようにする。
+5. **冪等性**: `Popen.terminate` は既に終了しているプロセスへの SIGTERM が no-op なため、`stream_and_log` 経路でも `_kill_process` 経路でも安全に重なる。
 
 リファクタは混ぜない（`stream_and_log` の責務再設計は別 Issue で扱う）。
 
@@ -149,31 +224,38 @@ if process.poll() is None:
 ### Small テスト（`tests/test_adapters.py`）
 
 - `ClaudeAdapter.is_terminal_event`:
-  - `{"type": "result", ...}` で True
-  - `{"type": "assistant", ...}` / `{"type": "system", ...}` で False
+  - `{"type": "result", "subtype": "success", ...}` で True
+  - `{"type": "result", "subtype": "error", "is_error": true, ...}` で True（success/failure 共に session 終端）
+  - `{"type": "assistant", ...}` / `{"type": "system", "subtype": "init"}` / `{"type": "user", ...}` で False
   - 空 dict / `type` 欠落で False
 - `CodexAdapter.is_terminal_event`:
-  - `{"type": "turn.completed", ...}` で True（暫定。Codex 仕様再確認は実装フェーズ）
-  - `{"type": "thread.started", ...}` / `{"type": "item.completed", ...}` で False
+  - `{"type": "turn.completed", ...}` で True（success terminal）
+  - `{"type": "turn.failed", "error": {...}}` で True（failure terminal）
+  - `{"type": "error", "message": "..."}` で **False**（intermediate。後続に `turn.failed` を伴うため break しない）
+  - `{"type": "thread.started", ...}` / `{"type": "turn.started"}` / `{"type": "item.completed", ...}` で False
 - `GeminiAdapter.is_terminal_event`:
-  - `{"type": "result", ...}` で True
+  - `{"type": "result", "status": "success", ...}` で True
+  - `{"type": "result", "status": "error", ...}` で True
   - `{"type": "init", ...}` / `{"type": "message", ...}` で False
 
 ### Medium テスト（`tests/test_cli_streaming_integration.py`）
 
-bug 設計ガイド準拠の **再現テスト（修正前 Red）** を 1 本以上含む:
+bug 設計ガイド準拠の **再現テスト（修正前 Red）** を含み、加えて timer race と Codex failure path の regression を検証:
 
-- **再現テスト（必須）**: bash スクリプトで以下を出力する fake CLI を用意:
-  ```
-  echo '{"type":"system","subtype":"init","session_id":"sess-leak"}'
-  echo '{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}'
-  echo '{"type":"result","subtype":"success","total_cost_usd":0.01}'
-  exec sleep 30   # stdout fd を保持したまま 30s 待つ
-  ```
-  `execute_cli` を `default_timeout=3` で呼び、3 秒以内に成功で戻ることを assert。修正前は `StepTimeoutError`、修正後は `CLIResult.session_id == "sess-leak"` で完了。
-- **正常終了 regression**: 既存 `test_claude_streaming_extracts_session_and_text` 等の「`result` 後すぐに exit する」ケースが従来通り PASS することを確認（regression なし）。
-- **terminal event なし regression**: terminal event を出さないまま exit するパターン（CLI クラッシュなど）でも従来通り EOF 経路で正常完了することを確認。
-- **timer 経路 regression**: terminal event を出さず stdout も閉じない fake CLI を `default_timeout=2` で呼び、`StepTimeoutError` が従来通り発火することを確認（最終ガードが効いている）。
+1. **再現テスト（fd leak）— 必須**: bash スクリプトで以下を出力する fake CLI を用意:
+   ```
+   echo '{"type":"system","subtype":"init","session_id":"sess-leak"}'
+   echo '{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}'
+   echo '{"type":"result","subtype":"success","total_cost_usd":0.01}'
+   exec sleep 30   # stdout fd を保持したまま 30s 待つ
+   ```
+   `execute_cli` を `default_timeout=3` で呼び、3 秒以内に成功で戻ることを assert。修正前は `StepTimeoutError`、修正後は `CLIResult.session_id == "sess-leak"` で完了。
+2. **timer race regression（重要）**: fake CLI が `result` を出した直後に `sleep 4`（grace wait 5s と timeout の境界をまたぐ条件）。`default_timeout=1`（terminal event は 0.5s 後、grace 4s）で実行し、`StepTimeoutError` ではなく成功で完了することを確認。これは `terminal_seen=True` 観測時の `timer.cancel()` が正しく機能していることを保証する。
+3. **Codex failure terminal**: fake CLI が `{"type":"turn.failed","error":{"message":"capacity"}}` を出した後 stdout fd を保持して sleep。修正後は terminal event として break、`error_messages` に "capacity" を含み、`exit_code=1` 経由で `CLIExecutionError` が発火することを確認。
+4. **Codex error は terminal 扱いにしない regression**: fake CLI が `{"type":"error",...}` の後に `{"type":"turn.failed",...}` を出すケース（既存 `tests/test_codex_robustness.py:315-324` と同形）で、`error` で break せず `turn.failed` まで読み切り `error_messages` に両方集約されることを確認。
+5. **正常終了 regression**: 既存 `test_claude_streaming_extracts_session_and_text` 等が従来通り PASS（CLIResult.terminal_seen=True が新たに付くだけで、ほかは不変）。
+6. **terminal event なし regression**: terminal event を出さず exit する fake CLI（CLI クラッシュ模擬）が EOF 経路で従来通り完了することを確認。
+7. **timer 最終ガード regression**: terminal event なし & stdout 閉じない fake CLI を `default_timeout=2` で呼び、`StepTimeoutError` が発火することを確認（最終ガードが効いている）。
 
 ### Large テスト
 
@@ -193,14 +275,27 @@ bug 設計ガイド準拠の **再現テスト（修正前 Red）** を 1 本以
 
 ## 参照情報（Primary Sources）
 
+### Agent 別の正本（仕様ソース）
+
+| Agent | 仕様ドキュメント | 確認ポイント |
+|-------|----------------|------------|
+| Claude Code | `docs/cli-guides/claude-code-cli-guide.md:467-474` | stream-json の最終結果が `type: "result"` であり、`subtype: "success" | "error"` と `terminal_reason` を持つ |
+| Codex | `docs/cli-guides/codex-cli-session-guide.md:243-252` | イベントタイプ表で `turn.completed`（成功）、`turn.failed`（失敗）、`error`（エラーイベント = intermediate）が定義されている |
+| Gemini | `docs/cli-guides/gemini-cli-session-guide.md:623-631` | stream-json で `{type: "result", status, stats}` が session 終端 |
+
+### 観測 artifact / 既存実装
+
 | 情報源 | URL/パス | 根拠（引用/要約） |
 |--------|----------|-------------------|
 | 観測 artifact (stdout.log) | `/home/aki/dev/kaji/main/.kaji-artifacts/local-pc5090-21/runs/2605101619/final-check/stdout.log` | `result` イベントが `terminal_reason: completed`, `duration_ms: 418868` を持ち session 終了マーカーとして機能。後続イベントなし |
 | 観測 artifact (console.log) | `/home/aki/dev/kaji/main/.kaji-artifacts/local-pc5090-21/runs/2605101619/final-check/console.log` | `[tool] Bash $ ... while kill -0 ...; sleep 5` の痕跡から claude が background bash + polling を実行したセッションだったことを確認 |
+| 既存実装 | `kaji_harness/cli.py:117-138` (`_execute_cli_once`) | timer は finally でしか cancel されず、現状のままだと grace wait 中に `_kill_process` が発火する race を抱える |
 | 既存実装 | `kaji_harness/cli.py:141-216` (`stream_and_log`) | `for line in process.stdout` が EOF まで blocking する構造を確認 |
 | 既存実装 | `kaji_harness/cli.py:219-226` (`_kill_process`) | terminate → wait(5) → kill の手順を流用可能 |
 | 既存実装 | `kaji_harness/adapters.py:13-18` (`CLIEventAdapter` Protocol) | extract_* 群と並べて `is_terminal_event` を追加するのが責務分離上自然 |
-| 既存実装 | `kaji_harness/adapters.py:99-104` (`ClaudeAdapter.extract_cost`) | `result` event を既に session 終了相当とみなして cost 抽出している（terminal event 判定の根拠） |
+| 既存実装 | `kaji_harness/adapters.py:99-104` (`ClaudeAdapter.extract_cost`) | `result` event を既に session 終了相当とみなして cost 抽出 |
+| 既存実装 | `kaji_harness/adapters.py:133-141` (`CodexAdapter.extract_cost`) | `turn.completed` の `usage` を抽出しており、turn.completed が session 末尾と一致する観測 |
 | 既存実装 | `kaji_harness/adapters.py:144-151` (GeminiAdapter docstring) | stream-json の `result` event が session 終端である旨を明記 |
+| 既存テスト | `tests/test_codex_robustness.py:272-324` | `error` 単独 or `error` → `turn.failed` の連続パターンが既存挙動として観測されており、Codex で `error` を terminal にしないと「`error` 後に来る `turn.failed` の `error.message` を `error_messages` に集約する」既存契約を破らない根拠 |
 | 関連 Issue | `local-pc5090-21` | 本問題が観測された dev workflow 実行 |
 | testing-convention | `docs/dev/testing-convention.md` | 4 条件と Small/Medium/Large 判定基準 |
