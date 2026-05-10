@@ -8,6 +8,10 @@ labels:
 - scope:gitlab-validation
 created_at: '2026-05-09T06:02:27Z'
 ---
+> [!NOTE]
+> **Worktree**: `../kaji-test-local-pc5090-10`
+> **Branch**: `test/local-pc5090-10`
+
 ## 概要
 
 GitLab provider の E2E テスト（`make test-large-gitlab`）を新設し、`provider=gitlab` で 1 本の workflow が完走することを検証する。`make check` のデフォルト実行から分離し、env / glab auth / 検証用 project 前提を Makefile および docs に明記する。
