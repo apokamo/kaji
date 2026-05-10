@@ -31,7 +31,7 @@ from .context import (
     validate_branch_prefix,
     validate_slug,
 )
-from .models import Comment, Issue, IssueContext, Label
+from .models import Comment, Issue, IssueContext, Label, PRContext
 
 _MACHINE_ID_RE = re.compile(r"^[a-z0-9]{1,16}$")
 _LOCAL_ID_RE = re.compile(r"^local-([a-z0-9]{1,16})-([1-9]\d*)$")
@@ -702,6 +702,17 @@ class LocalProvider:
             branch_prefix_fallback=fallback,
             default_branch=self.default_branch,
         )
+
+    def resolve_pr_context(self, branch_name: str) -> PRContext | None:
+        """no-op 実装。local mode に PR 概念は存在しない。
+
+        ``provider.type='local'`` 配下では ``/i-pr`` / ``/pr-fix`` /
+        ``/pr-verify`` が Step 0 で ABORT するため、本 method が呼ばれた
+        時点で何かが間違っているが、`IssueProvider` Protocol 整合のため
+        防御的に ``None`` を返す。
+        """
+        del branch_name
+        return None
 
     # -------- remote cache reader (gh:N) --------
 

@@ -33,7 +33,7 @@ from .context import (
     build_worktree_dir,
     derive_slug_from_title,
 )
-from .models import Comment, Issue, IssueContext, Label
+from .models import Comment, Issue, IssueContext, Label, PRContext
 
 
 class GitLabProviderError(RuntimeError):
@@ -44,6 +44,12 @@ class GitLabProviderError(RuntimeError):
 # （current git directory / login config）への暗黙依存を切り、``provider.gitlab.repo``
 # のみで forge が一意に決まることを保証する。
 _GITLAB_HOSTNAME = "gitlab.com"
+
+# ``resolve_mr_iid_from_branch`` が「該当 0 件」を表すために raise する
+# ``GitLabProviderError`` のメッセージ prefix。``resolve_pr_context`` が
+# 「該当なし → None」と他のエラー（複数該当 / API エラー）を区別するために
+# 文字列比較で参照する。両側を 1 箇所に集約することで結合度を明示する。
+_NO_MR_FOUND_MSG_PREFIX = "no open merge request found for source branch"
 
 
 @dataclass
@@ -429,12 +435,33 @@ class GitLabProvider:
             str(entry["iid"]) for entry in payload if isinstance(entry, dict) and "iid" in entry
         ]
         if not iids:
-            raise GitLabProviderError(f"no open merge request found for source branch {branch!r}")
+            raise GitLabProviderError(f"{_NO_MR_FOUND_MSG_PREFIX} {branch!r}")
         if len(iids) > 1:
             raise GitLabProviderError(
                 f"multiple open merge requests found for source branch {branch!r}: {iids}"
             )
         return iids[0]
+
+    def resolve_pr_context(self, branch_name: str) -> PRContext | None:
+        """branch から MR を逆引きし `PRContext` を組み立てる。
+
+        内部実装は ``resolve_mr_iid_from_branch`` を再利用する。
+        「該当 0 件」（``_NO_MR_FOUND_MSG_PREFIX`` で識別）のみ ``None`` に
+        翻訳し、複数該当 / API エラー / ``glab`` 起動失敗は
+        ``GitLabProviderError`` を raise 継続する（runner 側 helper で
+        WARN + None に変換する責務）。
+
+        Returns:
+            ``PRContext(pr_id=iid, pr_ref=f"gl:{iid}")``: 一意 MR が存在。
+            ``None``: 対応 MR が存在しない（branch 未 push / MR 未作成）。
+        """
+        try:
+            iid = self.resolve_mr_iid_from_branch(branch_name)
+        except GitLabProviderError as exc:
+            if str(exc).startswith(_NO_MR_FOUND_MSG_PREFIX):
+                return None
+            raise
+        return PRContext(pr_id=iid, pr_ref=f"gl:{iid}")
 
     def list_pr_review_comments(self, mr_iid: str) -> list[dict[str, object]]:
         """``glab api .../merge_requests/<iid>/discussions`` を GitHub 互換 subset に整形。"""

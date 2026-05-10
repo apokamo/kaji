@@ -24,7 +24,7 @@ from .context import (
     derive_slug_from_title,
     format_issue_ref,
 )
-from .models import Comment, Issue, IssueContext, Label
+from .models import Comment, Issue, IssueContext, Label, PRContext
 
 
 class GitHubProviderError(RuntimeError):
@@ -302,3 +302,16 @@ class GitHubProvider:
             branch_prefix_fallback=fallback,
             default_branch=self.default_branch,
         )
+
+    def resolve_pr_context(self, branch_name: str) -> PRContext | None:
+        """no-op 実装。本実装は forge 採用後の別 Issue で扱う。
+
+        本 Issue（``local-pc5090-7``）では `IssueProvider` Protocol 整合の
+        ため ``return None`` のみ。GitHub 側で本実装すると
+        ``gh pr list --head <branch>`` 等の subprocess hit が増えるが、
+        skill 側暫定運用記述（``kaji pr list --search``）は本 Issue では
+        削除しない（子 Issue ``local-pc5090-9`` の OUT スコープ）ため、
+        no-op で十分。
+        """
+        del branch_name
+        return None

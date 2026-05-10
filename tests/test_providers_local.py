@@ -339,3 +339,11 @@ class TestRemoteCacheReader:
     def test_is_readonly_provider_flag_false(self, provider: LocalProvider) -> None:
         # provider 全体は read-write。経路ごとの read-only は別判定。
         assert provider.is_readonly is False
+
+
+class TestResolvePrContext:
+    """Issue local-pc5090-7: LocalProvider has no PR concept; returns None."""
+
+    def test_returns_none_for_any_branch(self, provider: LocalProvider) -> None:
+        assert provider.resolve_pr_context("feat/local-pc1-1") is None
+        assert provider.resolve_pr_context("does-not-matter") is None
