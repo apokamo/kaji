@@ -539,3 +539,64 @@ class TestIsTerminalEvent:
         assert not adapter.is_terminal_event(
             {"type": "message", "role": "assistant", "content": "hi"}
         )
+
+
+class TestIsTerminalFailure:
+    """is_terminal_failure: terminal event 内の failure シグナル判定（local-p1-22 fix）。"""
+
+    @pytest.mark.small
+    def test_claude_subtype_error_is_failure(self) -> None:
+        adapter = ClaudeAdapter()
+        assert adapter.is_terminal_failure({"type": "result", "subtype": "error"})
+
+    @pytest.mark.small
+    def test_claude_is_error_true_is_failure(self) -> None:
+        adapter = ClaudeAdapter()
+        assert adapter.is_terminal_failure(
+            {"type": "result", "subtype": "success", "is_error": True}
+        )
+
+    @pytest.mark.small
+    def test_claude_success_is_not_failure(self) -> None:
+        adapter = ClaudeAdapter()
+        assert not adapter.is_terminal_failure(
+            {"type": "result", "subtype": "success", "is_error": False}
+        )
+
+    @pytest.mark.small
+    def test_claude_non_terminal_is_not_failure(self) -> None:
+        adapter = ClaudeAdapter()
+        assert not adapter.is_terminal_failure({"type": "assistant"})
+        assert not adapter.is_terminal_failure({})
+
+    @pytest.mark.small
+    def test_codex_turn_failed_is_failure(self) -> None:
+        adapter = CodexAdapter()
+        assert adapter.is_terminal_failure({"type": "turn.failed", "error": {"message": "x"}})
+
+    @pytest.mark.small
+    def test_codex_turn_completed_is_not_failure(self) -> None:
+        adapter = CodexAdapter()
+        assert not adapter.is_terminal_failure({"type": "turn.completed", "usage": {}})
+
+    @pytest.mark.small
+    def test_codex_error_is_not_failure(self) -> None:
+        # error は intermediate（is_terminal_event でも False）
+        adapter = CodexAdapter()
+        assert not adapter.is_terminal_failure({"type": "error", "message": "x"})
+
+    @pytest.mark.small
+    def test_gemini_status_error_is_failure(self) -> None:
+        adapter = GeminiAdapter()
+        assert adapter.is_terminal_failure({"type": "result", "status": "error", "stats": {}})
+
+    @pytest.mark.small
+    def test_gemini_status_success_is_not_failure(self) -> None:
+        adapter = GeminiAdapter()
+        assert not adapter.is_terminal_failure({"type": "result", "status": "success", "stats": {}})
+
+    @pytest.mark.small
+    def test_gemini_non_terminal_is_not_failure(self) -> None:
+        adapter = GeminiAdapter()
+        assert not adapter.is_terminal_failure({"type": "init"})
+        assert not adapter.is_terminal_failure({"type": "message"})

@@ -564,6 +564,98 @@ class TestTerminalEventBreak:
         assert result.session_id == "sess-eof"
         assert "no result" in result.full_output
 
+    def test_claude_failure_terminal_raises_cli_execution_error(self, tmp_path: Path) -> None:
+        """Claude `result` の subtype:error / is_error:true は failure terminal として CLIExecutionError。"""
+        jsonl_lines = [
+            json.dumps({"type": "system", "subtype": "init", "session_id": "sess-fail"}),
+            json.dumps(
+                {
+                    "type": "result",
+                    "subtype": "error",
+                    "is_error": True,
+                    "total_cost_usd": 0.01,
+                }
+            ),
+        ]
+        # terminal event 後 stdout fd を保持して fd leak を再現（exec sleep）。
+        # 我々の terminate 後 returncode は -15 になるが、terminal_failure で失敗判定する。
+        script = tmp_path / "claude_fail.sh"
+        echos = "\n".join(f"echo '{line}'" for line in jsonl_lines)
+        script.write_text(f"#!/bin/bash\n{echos}\nexec sleep 30\n")
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
+        step = Step(id="cfail", skill="t", agent="claude", on={"PASS": "end"})
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                execute_cli(
+                    step=step,
+                    prompt="x",
+                    workdir=tmp_path,
+                    session_id=None,
+                    log_dir=tmp_path / "logs",
+                    execution_policy="auto",
+                    verbose=False,
+                    default_timeout=15,
+                )
+        assert exc_info.value.step_id == "cfail"
+
+    def test_gemini_failure_terminal_raises_cli_execution_error(self, tmp_path: Path) -> None:
+        """Gemini `result` の status:error は failure terminal として CLIExecutionError。"""
+        jsonl_lines = [
+            json.dumps({"type": "init", "session_id": "g-fail", "model": "auto"}),
+            json.dumps(
+                {
+                    "type": "result",
+                    "status": "error",
+                    "stats": {"input_tokens": 10, "output_tokens": 0},
+                }
+            ),
+        ]
+        script = tmp_path / "gemini_fail.sh"
+        echos = "\n".join(f"echo '{line}'" for line in jsonl_lines)
+        script.write_text(f"#!/bin/bash\n{echos}\nexec sleep 30\n")
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
+        step = Step(id="gfail", skill="t", agent="gemini", on={"PASS": "end"})
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                execute_cli(
+                    step=step,
+                    prompt="x",
+                    workdir=tmp_path,
+                    session_id=None,
+                    log_dir=tmp_path / "logs",
+                    execution_policy="auto",
+                    verbose=False,
+                    default_timeout=15,
+                )
+        assert exc_info.value.step_id == "gfail"
+
+    def test_claude_success_terminal_with_self_exit_nonzero_raises(self, tmp_path: Path) -> None:
+        """`result` が success でも CLI が自発的に exit 1 した場合は CLIExecutionError。"""
+        jsonl_lines = [
+            json.dumps({"type": "system", "subtype": "init", "session_id": "sess-sx"}),
+            json.dumps(
+                {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": 0.0}
+            ),
+        ]
+        # exec sleep せず即 exit 1 → process.returncode = 1（自発 exit、SIGTERM ではない）
+        script = _create_mock_cli_script(tmp_path, jsonl_lines, exit_code=1)
+
+        step = Step(id="sx", skill="t", agent="claude", on={"PASS": "end"})
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            with pytest.raises(CLIExecutionError):
+                execute_cli(
+                    step=step,
+                    prompt="x",
+                    workdir=tmp_path,
+                    session_id=None,
+                    log_dir=tmp_path / "logs",
+                    execution_policy="auto",
+                    verbose=False,
+                    default_timeout=10,
+                )
+
     def test_timer_still_guards_when_no_terminal_event(self, tmp_path: Path) -> None:
         """terminal event なし & stdout 閉じない場合は最終ガードの timeout が効く。"""
         script = tmp_path / "stuck.sh"

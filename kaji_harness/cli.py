@@ -149,11 +149,15 @@ def _execute_cli_once(
 
     if timed_out.is_set() and not result.terminal_seen:
         raise StepTimeoutError(step.id, timeout)
-    # terminal event 観測時の成功/失敗判定は error_messages を一次情報とする。
-    # 我々が後始末で SIGTERM した（returncode < 0）後の returncode は失敗根拠にならない。
+    # 失敗判定の優先順位:
+    # 1) terminal event 自体の failure シグナル（adapter.is_terminal_failure）
+    # 2) process が自発的に正の終了コードで exit（returncode > 0）
+    # 3) error_messages が集約されている
+    # 我々が後始末で SIGTERM した結果の returncode（< 0）は失敗根拠にしない（terminal event を真実とする）。
+    self_exit_failure = process.returncode is not None and process.returncode > 0
     if result.terminal_seen:
-        if result.error_messages:
-            detail = result.stderr or "\n".join(result.error_messages[-3:])
+        if result.terminal_failure or self_exit_failure or result.error_messages:
+            detail = result.stderr or "\n".join(result.error_messages[-3:]) or "terminal failure"
             rc = process.returncode if process.returncode is not None else -1
             raise CLIExecutionError(step.id, rc, detail)
         return result
@@ -176,6 +180,7 @@ def stream_and_log(
     texts: list[str] = []
     error_messages: list[str] = []
     terminal_seen = False
+    terminal_failure = False
 
     with (
         open(log_dir / "stdout.log", "a", encoding="utf-8") as f_raw,
@@ -229,6 +234,7 @@ def stream_and_log(
 
             if adapter.is_terminal_event(event):
                 terminal_seen = True
+                terminal_failure = adapter.is_terminal_failure(event)
                 break
 
     # terminal_seen で early-break した場合、process がまだ生きているため
@@ -247,6 +253,7 @@ def stream_and_log(
         stderr=stderr,
         error_messages=error_messages,
         terminal_seen=terminal_seen,
+        terminal_failure=terminal_failure,
     )
 
 

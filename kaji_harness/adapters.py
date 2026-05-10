@@ -17,6 +17,7 @@ class CLIEventAdapter(Protocol):
     def extract_text(self, event: dict[str, Any]) -> str | None: ...
     def extract_cost(self, event: dict[str, Any]) -> CostInfo | None: ...
     def is_terminal_event(self, event: dict[str, Any]) -> bool: ...
+    def is_terminal_failure(self, event: dict[str, Any]) -> bool: ...
 
 
 _TOOL_SUMMARY_LEN = 80
@@ -107,6 +108,14 @@ class ClaudeAdapter:
     def is_terminal_event(self, event: dict[str, Any]) -> bool:
         return event.get("type") == "result"
 
+    def is_terminal_failure(self, event: dict[str, Any]) -> bool:
+        # Claude `result` の failure シグナル: is_error:true もしくは subtype:"error"。
+        if event.get("type") != "result":
+            return False
+        if event.get("is_error") is True:
+            return True
+        return event.get("subtype") == "error"
+
 
 class CodexAdapter:
     """Codex CLI の JSONL イベントアダプタ。"""
@@ -147,6 +156,9 @@ class CodexAdapter:
     def is_terminal_event(self, event: dict[str, Any]) -> bool:
         return event.get("type") in ("turn.completed", "turn.failed")
 
+    def is_terminal_failure(self, event: dict[str, Any]) -> bool:
+        return event.get("type") == "turn.failed"
+
 
 class GeminiAdapter:
     """Gemini CLI の JSONL イベントアダプタ。
@@ -180,6 +192,13 @@ class GeminiAdapter:
 
     def is_terminal_event(self, event: dict[str, Any]) -> bool:
         return event.get("type") == "result"
+
+    def is_terminal_failure(self, event: dict[str, Any]) -> bool:
+        # Gemini `result` の failure シグナル: status が "success" 以外なら失敗扱い。
+        if event.get("type") != "result":
+            return False
+        status = event.get("status")
+        return status is not None and status != "success"
 
 
 ADAPTERS: dict[str, CLIEventAdapter] = {
