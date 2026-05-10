@@ -193,17 +193,60 @@ def _phase_rename_dirs(repo: Path, dry_run: bool) -> None:
         _git(repo, "mv", str(rel_old), str(rel_new))
 
 
+def _resolve_repo_main(repo: Path) -> Path:
+    """worktree から main repo の root を解決する。
+
+    優先順:
+        1. ``.kaji/config.local.toml`` が symlink ならその実体の親の親
+           （symlink target = ``<main-repo>/.kaji/config.local.toml``）
+        2. ``git rev-parse --git-common-dir`` の親
+        3. ``repo`` 自身（main repo として実行された場合）
+
+    解決不能な場合は ``SystemExit`` で fail-fast。完了条件
+    （``.kaji/counters/p1.txt`` 存在 / ``pc5090.txt`` 削除 / config 切替）
+    を保証するため、warning でなく error にする。
+    """
+    config_link = repo / ".kaji" / "config.local.toml"
+    if config_link.is_symlink():
+        target = config_link.resolve()
+        # target = <main-repo>/.kaji/config.local.toml
+        if target.parent.name == ".kaji":
+            return target.parent.parent
+
+    # git common dir 経由（worktree → main repo の git metadata）
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+    except subprocess.CalledProcessError:
+        return repo
+    common = Path(out)
+    if common.name == ".git":
+        return common.parent
+    # bare repo: common == bare repo dir。main worktree dir は別途設定が必要。
+    # 既知の構成では config.local.toml symlink で解決できるはずなので、ここは
+    # fail-fast して --repo-main 明示を促す。
+    return repo
+
+
 def _phase_config(repo_main: Path, dry_run: bool) -> None:
     """gitignored な config / counter の rename / 書き換え。
 
     .kaji/config.local.toml と .kaji/counters/ は worktree では symlink /
     不在のため、main repo (``repo_main``) 上で操作する必要がある。
+
+    完了条件保証のため、counter file が見つからない / config に旧値が残る
+    場合は ``SystemExit`` で fail-fast する（warning では migration の
+    完了確認が漏れるため）。
     """
     counter_old = repo_main / ".kaji" / "counters" / f"{OLD_MACHINE}.txt"
     counter_new = repo_main / ".kaji" / "counters" / f"{NEW_MACHINE}.txt"
     config = repo_main / ".kaji" / "config.local.toml"
 
-    print("[config]")
+    print(f"[config] repo_main={repo_main}")
     if counter_old.is_file():
         print(
             f"  rename {counter_old.relative_to(repo_main)} -> {counter_new.relative_to(repo_main)}"
@@ -214,23 +257,36 @@ def _phase_config(repo_main: Path, dry_run: bool) -> None:
     elif counter_new.is_file():
         print(f"  counter already at {counter_new.relative_to(repo_main)} (idempotent)")
     else:
-        print(f"  WARNING: no counter file at {counter_old} or {counter_new}")
-
-    if config.is_file():
-        text = config.read_text(encoding="utf-8")
-        new_text = re.sub(
-            rf'machine_id\s*=\s*"{re.escape(OLD_MACHINE)}"',
-            f'machine_id = "{NEW_MACHINE}"',
-            text,
+        raise SystemExit(
+            f"no counter file found at {counter_old} or {counter_new}. "
+            f"Pass --repo-main pointing to the directory containing "
+            f"'.kaji/counters/{OLD_MACHINE}.txt'."
         )
-        if new_text != text:
-            print(f"  set machine_id = {NEW_MACHINE!r} in {config.relative_to(repo_main)}")
-            if not dry_run:
-                config.write_text(new_text, encoding="utf-8")
-        else:
-            print(f"  config already migrated (idempotent): {config}")
+
+    if not config.is_file():
+        raise SystemExit(
+            f"no config at {config}. Pass --repo-main pointing to the directory "
+            f"containing '.kaji/config.local.toml'."
+        )
+    text = config.read_text(encoding="utf-8")
+    new_text = re.sub(
+        rf'machine_id\s*=\s*"{re.escape(OLD_MACHINE)}"',
+        f'machine_id = "{NEW_MACHINE}"',
+        text,
+    )
+    if new_text != text:
+        print(f"  set machine_id = {NEW_MACHINE!r} in {config.relative_to(repo_main)}")
+        if not dry_run:
+            config.write_text(new_text, encoding="utf-8")
     else:
-        print(f"  WARNING: no config at {config}")
+        # 既に p1 になっているか、そもそも machine_id 行が無いかを区別する
+        if f'"{NEW_MACHINE}"' in text:
+            print(f"  config already migrated (idempotent): {config}")
+        else:
+            raise SystemExit(
+                f"config at {config} has no 'machine_id = \"{OLD_MACHINE}\"' line "
+                f"and no 'machine_id = \"{NEW_MACHINE}\"' either. Inspect manually."
+            )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -245,13 +301,14 @@ def main(argv: list[str] | None = None) -> int:
         "--repo-main",
         default=None,
         help="main repo path for gitignored .kaji/counters and config.local.toml. "
-        "Defaults to --repo.",
+        "Auto-detected from .kaji/config.local.toml symlink or "
+        "'git rev-parse --git-common-dir' when omitted.",
     )
     p.add_argument("--dry-run", action="store_true")
     ns = p.parse_args(argv)
 
     repo = Path(ns.repo).resolve()
-    repo_main = Path(ns.repo_main).resolve() if ns.repo_main else repo
+    repo_main = Path(ns.repo_main).resolve() if ns.repo_main else _resolve_repo_main(repo)
 
     phases = ["rename-comments", "rename-dirs", "config"] if ns.phase == "all" else [ns.phase]
     for phase in phases:
