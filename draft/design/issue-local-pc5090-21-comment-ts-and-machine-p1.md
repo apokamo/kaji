@@ -46,6 +46,7 @@ issue ID (`local-pc5090-N`)、comment filename (`-pc5090.md`)、CLI 出力（`[a
 | issue_dir 名 | `local-pc5090-N-<slug>/` (1〜20) | `local-p1-N-<slug>/` (1〜20)。**21 は据置** |
 | issue.md frontmatter `id:` | `local-pc5090-N` | `local-p1-N`（21 を除く） |
 | counter file | `.kaji/counters/pc5090.txt`（中身 `21`） | `.kaji/counters/p1.txt`（中身 `21`、旧 file 削除） |
+| 21 配下の既存 comment | `0001-pc5090.md` / `0002-pc5090.md`（旧 seq 形式） | `<ts>-pc5090.md`（新形式 timestamp + machine 部分は `pc5090` を維持。**dir / branch path と同様に時点記録として machine_id 部分を保護**） |
 
 #### timestamp_compact のフォーマット
 
@@ -93,36 +94,51 @@ comment = provider.comment_issue("local-p1-22", "review feedback")
 # -> .kaji/issues/local-p1-22-*/comments/20260510T142536Z-p1.md が atomic 作成
 print(f"{comment.seq}-{comment.machine_id}")  # "20260510T142536Z-p1"
 
-# 旧形式 comment の読み取り（移行 commit より前 / 21 配下では fallback parser が活きる）
+# 21 配下の既存 comment 読み取り（移行後）
 issue = provider.view_issue("local-pc5090-21")
-# 21/comments/0001-pc5090.md は seq="0001", machine_id="pc5090" として読める
+# 21/comments/<ts>-pc5090.md は seq=<ts>, machine_id="pc5090" として読める
+# (machine 部分が pc5090 でも、新形式 timestamp parser で解釈可能)
+
+# config 切替（migration commit 群の最後）以降、21 への新規 comment 投稿は
+# self.machine_id="p1" となり <ts>-p1.md で書かれる。21 配下に pc5090 / p1 の
+# machine_id が混在することを許容する（前者は migration 前の時点記録、
+# 後者は config 切替後の新規投稿）。完了条件は「**移行時点で存在した** 21 配下
+# コメントの machine 部分が pc5090 のまま保持されている」を指す。
 ```
 
 ### エラー
 
 | ケース | 振る舞い |
 |--------|---------|
-| 同秒衝突（同一 machine、同一 timestamp string） | `_atomic_write_new` が `FileExistsError` → timestamp を `+1s` して retry。`MAX_COMMENT_WRITE_RETRIES`（既存値 8）まで繰り返す |
+| 同秒衝突（同一 machine、同一 timestamp string） | `_atomic_write_new` が `FileExistsError` → filename 用 timestamp を `+1s` して retry。`MAX_COMMENT_WRITE_RETRIES`（既存値 8）まで繰り返す。**filename の timestamp は uniqueness 用、ordering の正本は frontmatter `created_at`**（§ 制約 / § 方針 (1) 参照）。同秒衝突時に filename と `created_at` が乖離しても ordering には影響しない |
 | 8 retry 全敗 | `LocalProviderError(f"failed to allocate unique comment filename ... after {N} retries")`。既存メッセージのまま timestamp を含めた diagnostic 文に更新 |
-| 旧形式 comment の parser fallback 削除後に旧形式 file が混入 | `_read_comments` は当該 file を skip せず、エラーで早期失敗（fail-fast）させる。移行完了後は混入そのものが事故扱いだから |
-| 移行スクリプトの timestamp 衝突（同一 issue dir 内で同一秒）| 既存 142 件は seq 順を保つため、frontmatter `created_at` を**そのまま filename に転写**するのではなく、**入力順に 1 秒ずつ加算する deterministic 変換**を採用（§ 移行スクリプト方針） |
+| `_read_comments` で既知形式（timestamp / 旧 seq）にマッチしない filename | `LocalProviderError` で fail-fast。skip しない |
+| 移行スクリプトの timestamp 衝突（同一 issue dir 内で同一秒）| 既存 142 件は seq 順を保つため、frontmatter `created_at` を**そのまま filename に転写**するのではなく、**入力順に 1 秒ずつ加算する deterministic 変換**を採用（§ 移行スクリプト方針）。frontmatter `created_at` 自体は無変更 = ordering の正本も無変更 |
 
 ## 制約・前提条件
 
 - LocalProvider 以外の provider（github / gitlab）には影響を与えない
-- comment 並び順は **filename ASCII sort** に依存する（`_read_comments` の `sorted(cdir.iterdir())`）。timestamp は固定長 16 文字なので lexical sort = chronological sort
+- **comment ordering の正本は frontmatter `created_at`**（Issue 目的「comment フィルター順序の正本を `created_at` に一本化」に従う）
+  - `_read_comments` は frontmatter `created_at` をパースして dataclass に詰めた後、**`Comment.created_at` で stable sort** する
+  - 同 `created_at` 内のタイブレーカーは filename ASCII sort（決定性確保のため）
+  - filename の timestamp は **uniqueness 用** であり、衝突時 +1s 加算で `created_at` と乖離しても ordering には波及しない
+  - 旧形式 (`<seq>-pc5090.md`) で frontmatter `created_at` 不在のレガシーケースは想定しない（既存 142 件 + 21 の 2 件すべてに `created_at` 存在を移行スクリプトで前提検証 = preflight assertion）
 - 移行は **本 PR 内で完結** させる（中途半端な mixed-format 状態を main に残さない）
 - **21 (本 issue) の dir / branch / worktree path は移行対象外** として `local-pc5090-21` のまま残す。理由: 移行作業中の worktree path / branch name 整合性を保つ
 - migration commits の途中で別 worktree から `kaji issue *` を実行しないことを運用合意とする（mixed-format race 回避）
 
-### 21 を例外扱いする境界条件
+### 21 配下の comment に対する統一ルール（review-design Must Fix 1 反映）
 
-- `21/comments/0001-pc5090.md` は新形式 parser の fallback で読める必要がある
-- fallback は migration commit 5（`refactor: drop legacy parser`）で削除されるが、その時点で `21/comments/` に**新規 comment を書かない運用**であれば fallback 削除後も存在する旧 file は **read 不可** になる
-- → fallback 削除タイミングは「21 完了 (close) 後」が安全だが、**本 PR は 21 close 前に merge する** ため、fallback は **保持したまま merge** する選択肢も検討
-- **採用方針**: fallback parser は **保持して merge** し、22 番以降の運用が `p1` 系で安定したのち、別 issue で削除する。本 PR で削除すると 21 の comment が読めなくなるため
+| 観点 | ルール |
+|------|--------|
+| 既存 comment の filename スキーマ | migration script で **新形式 timestamp に rename** する（1〜20 と同様） |
+| 既存 comment の machine 部分 | `pc5090` を **維持** する（時点記録として保護。dir / branch / worktree path と同等の扱い） |
+| 既存 comment frontmatter `author` / `created_at` | 無変更（時点記録） |
+| config 切替後（migration 群の最後）の 21 への新規 comment | `self.machine_id="p1"` で投稿される → `<ts>-p1.md`。21 配下に pc5090 / p1 が混在することを **許容**。完了条件は「**移行時点で存在した** 21 配下コメントの machine 部分が pc5090」を指す |
+| `_read_comments` の解釈 | 新形式 timestamp parser で `<ts>-pc5090.md` / `<ts>-p1.md` の両方を解釈する（machine 部分は値として読み取るだけで、parser 側で固定値を期待しない） |
+| 旧 seq 形式 (`0001-pc5090.md`) の fallback parser | **本 PR で削除** する。migration script が 21 既存 2 件も含めて全件を新形式 timestamp に rename するため、移行完了後の repo に旧 seq 形式は残らない（fallback は不要） |
 
-→ 完了条件 §「`_read_comments` が新形式を解釈できる（旧形式 fallback は移行 commit 後に削除）」の **後段（fallback 削除）は本 issue から外し、別 issue 化** する旨、Issue 本文の「OUT」または別 issue 切り出しを review-design 段階で擦り合わせる。
+→ Issue 本文の完了条件「`_read_comments` が新形式を解釈できる（旧形式 fallback は移行 commit 後に削除）」と整合。前回設計の「fallback 保持で merge」案は **撤回** し、Issue 完了条件を満たす形に統一する。
 
 ## 変更スコープ
 
@@ -130,13 +146,14 @@ issue = provider.view_issue("local-pc5090-21")
 
 | ファイル | 変更内容 |
 |---------|---------|
-| `kaji_harness/providers/local.py` | `_next_comment_seq` 削除、`comment_issue` の filename 生成変更、`_read_comments` の parser を timestamp 形式 + 旧形式 fallback に拡張、retry ロジック調整 |
+| `kaji_harness/providers/local.py` | `_next_comment_seq` 削除、`comment_issue` の filename 生成変更、`_read_comments` の parser を **timestamp 形式単独** に切替（旧 seq 形式 fallback は導入せず、未知形式は fail-fast）、`Comment.created_at` を ordering の正本として stable sort、retry ロジック調整 |
 | `kaji_harness/providers/models.py` | `Comment.seq` の docstring を更新（timestamp 形式も許容） |
 | `kaji_harness/cli_main.py` | docstring / help 文の `<seq>` 表記を変更（line 1288 周辺）。format 文 `f"{seq}-{machine}"` は無変更 |
 | `.kaji/config.local.toml` | `machine_id = "p1"` |
 | `.kaji/counters/pc5090.txt` → `.kaji/counters/p1.txt` | rename + 中身そのまま (`21`) |
 | `.kaji/issues/local-pc5090-{1..20}-*/` | `local-p1-{1..20}-*/` へ rename |
 | `.kaji/issues/local-pc5090-{1..20}-*/comments/*.md` | timestamp 形式 + `-p1.md` へ rename + frontmatter 無変更を保証 |
+| `.kaji/issues/local-pc5090-21-*/comments/*.md` | timestamp 形式 + `-pc5090.md` へ rename（machine 部分は維持、frontmatter 無変更）|
 | `.kaji/issues/local-pc5090-{1..20}-*/issue.md` | frontmatter `id:` 書き換え + 本文 cross-ref 書き換え |
 | `tests/test_providers_local.py` | comment filename 形式に依存する fixture / assertion を新形式に更新 |
 | `.claude/skills/issue-close/SKILL.md` | comment seq renumber 関連記述を新形式に整合 |
@@ -148,7 +165,8 @@ issue = provider.view_issue("local-pc5090-21")
 - commit history 中の `pc5090` 文字列（rewrite 不実施）
 - `draft/design/issue-local-pc5090-N-*.md` ファイル名 / 本文（時点記録として正確性保持）
 - 既存 comment frontmatter の `author: pc5090` / 既存 issue の `closed_by: pc5090`（時点記録）
-- `21/` dir 配下（dir 名・comment filename ともに `pc5090` のまま）
+- `21/` dir 名（`local-pc5090-21-<slug>/`）と branch / worktree path
+- 21 配下 comment の **machine 部分** (`-pc5090.md`)。filename スキーマ（seq → timestamp）は揃えるが、machine 部分は時点記録として保護
 
 ## 方針（Minimal How）
 
@@ -157,41 +175,52 @@ issue = provider.view_issue("local-pc5090-21")
 ```python
 # local.py 内の擬似コード（変更箇所のみ）
 
+# 新形式 filename: <YYYYMMDDTHHMMSSZ>-<machine>
+# - timestamp 部: 16 文字固定 (8 digit date + "T" + 6 digit time + "Z")
+# - machine 部: [a-z0-9]{1,16} (validate_machine_id と同じ正規表現)
+_COMMENT_FILENAME_RE = re.compile(
+    r"^(?P<ts>\d{8}T\d{6}Z)-(?P<machine>[a-z0-9]{1,16})$"
+)
+
 def _read_comments(self, issue_dir: Path) -> list[Comment]:
     cdir = issue_dir / "comments"
     if not cdir.is_dir():
         return []
-    result = []
-    for path in sorted(cdir.iterdir()):
+    result: list[Comment] = []
+    for path in cdir.iterdir():
         if path.suffix != ".md":
             continue
-        stem = path.stem
-        # 新形式: <YYYYMMDDTHHMMSSZ>-<machine>
-        if _TIMESTAMP_FILENAME_RE.match(stem):
-            ts, _, machine = stem.partition("-")
-            seq_value = ts
-        # 旧形式 fallback: <NNNN>-<machine>
-        elif _LEGACY_FILENAME_RE.match(stem):
-            seq_value, _, machine = stem.partition("-")
-        else:
-            # 解釈不能 → fail-fast
+        m = _COMMENT_FILENAME_RE.match(path.stem)
+        if m is None:
+            # 旧 seq 形式 / 規約外 → fail-fast (migration 完了済み前提)
             raise LocalProviderError(f"unrecognized comment filename: {path}")
+        ts, machine = m["ts"], m["machine"]
         meta, body = _parse_frontmatter(path.read_text(encoding="utf-8"))
+        created_at = str(meta.get("created_at", "") or "")
+        if not created_at:
+            # ordering の正本が欠落 → fail-fast
+            raise LocalProviderError(f"missing 'created_at' in {path}")
         result.append(Comment(
-            author=str(meta.get("author", "")),
+            author=str(meta.get("author", "") or ""),
             body=body,
-            created_at=str(meta.get("created_at", "")),
-            seq=seq_value,
+            created_at=created_at,
+            seq=ts,             # filename uniqueness 値（参考用、CLI 表示互換）
             machine_id=machine,
         ))
+    # ordering の正本は frontmatter created_at。同 created_at は filename
+    # （= seq フィールド）でタイブレーカー。Python sort は stable なので
+    # (created_at, seq) の lexicographic 比較で決定的順序が得られる
+    result.sort(key=lambda c: (c.created_at, c.seq))
     return result
 
 def comment_issue(self, issue_id: str, body: str) -> Comment:
     # ... 既存の validate / mkdir 部分は無変更 ...
-    created_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    base_dt = datetime.now(UTC)  # filename 用の独立 timestamp
+    created_at_str = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    base_dt = datetime.now(UTC)  # filename 用の独立 timestamp（衝突 retry で +1s）
     last_attempted = ""
     for attempt in range(MAX_COMMENT_WRITE_RETRIES):
+        # filename の timestamp は uniqueness 用。+1s 加算で created_at と
+        # 乖離しても、ordering は frontmatter created_at で決まるため波及しない
         ts = (base_dt + timedelta(seconds=attempt)).strftime("%Y%m%dT%H%M%SZ")
         last_attempted = ts
         path = cdir / f"{ts}-{self.machine_id}.md"
@@ -203,8 +232,10 @@ def comment_issue(self, issue_id: str, body: str) -> Comment:
             if exc.errno == errno.EEXIST:
                 continue
             raise
-        return Comment(author=self.machine_id, body=body, created_at=created_at,
-                       seq=ts, machine_id=self.machine_id)
+        return Comment(
+            author=self.machine_id, body=body, created_at=created_at_str,
+            seq=ts, machine_id=self.machine_id,
+        )
     raise LocalProviderError(
         f"failed to allocate unique comment filename in {cdir} after "
         f"{MAX_COMMENT_WRITE_RETRIES} retries (last attempted ts={last_attempted!r})"
@@ -223,20 +254,32 @@ def comment_issue(self, issue_id: str, body: str) -> Comment:
 
 #### 処理ステップ（一回の Python スクリプト実行）
 
-1. `.kaji/issues/local-pc5090-{1..20}-*/comments/*.md` を発見
-2. 各ファイルの frontmatter から `created_at` を読み出し、compact ISO 8601 に変換
-3. 同一 issue dir 内で同一 timestamp が衝突した場合、**入力順 (元の seq 昇順) に 1 秒ずつ加算** して重複解消
-4. `git mv <old> <new>`（new = `<ts>-p1.md`）
-5. issue dir 名を `git mv` で `local-p1-N-<slug>/` に rename
-6. 各 issue.md の frontmatter `id:` を `local-pc5090-N` → `local-p1-N` に sed 書き換え
-7. 各 issue.md の **本文中の cross-ref**（`local-pc5090-N` → `local-p1-N`、N=1〜20 のみ。**21 は据置**）を sed 書き換え
-8. counter file rename（`pc5090.txt` → `p1.txt`、中身 `21` 維持）
-9. **最後に** `.kaji/config.local.toml` の `machine_id = "p1"` を書き換え
+1. **preflight assertion**: `.kaji/issues/local-pc5090-{1..20,21}-*/comments/*.md` 全件で frontmatter `created_at` が存在することを検証（欠落は abort、人手 resolve）。ordering の正本が欠落した状態で migration を進めないため
+2. `.kaji/issues/local-pc5090-{1..20}-*/comments/*.md` を発見し、各ファイルの `created_at` を compact ISO 8601 に変換
+3. 同一 issue dir 内で同一 timestamp が衝突した場合、**入力順 (元の seq 昇順) に 1 秒ずつ加算** して filename を重複解消（**frontmatter `created_at` は無変更** = ordering の正本不変）
+4. `git mv <old> <new>`（new = `<ts>-p1.md`、1〜20 配下）
+5. **21 配下の comment** (`0001-pc5090.md` / `0002-pc5090.md` / 以降の追加分) を同様に処理: `git mv <old> <ts>-pc5090.md`（machine 部分は **`pc5090` を維持**、frontmatter `created_at` 不変、衝突 +1s ロジックは共通）
+6. issue dir 名を `git mv` で `local-p1-N-<slug>/` に rename（**1〜20 のみ。21 は据置**）
+7. 各 issue.md の frontmatter `id:` を `local-pc5090-N` → `local-p1-N` に sed 書き換え（1〜20 のみ）
+8. 各 issue.md の **本文中の cross-ref**（`local-pc5090-N` → `local-p1-N`、N=1〜20 のみ。**21 は据置**）を sed 書き換え
+9. counter file rename（`pc5090.txt` → `p1.txt`、中身 `21` 維持）
+10. **最後に** `.kaji/config.local.toml` の `machine_id = "p1"` を書き換え
 
-#### 21 の境界保証
+#### 21 の境界保証（統一ルール反映）
 
-- スクリプト内で `local-pc5090-21-*` は処理対象外として **明示的に除外**（glob で `[1-9]-*` `1[0-9]-*` `20-*` のみ拾う、または除外リストで `21` を skip）
-- cross-ref 書き換えで `local-pc5090-21` の文字列は **書き換えない**（21 自身を指す参照 / commit message 内の参照を保護）
+| 対象 | 動作 |
+|------|------|
+| `local-pc5090-21-<slug>/` (dir 名) | **据置** |
+| `21/comments/*.md` (filename スキーマ) | **新形式 timestamp に rename** |
+| `21/comments/*.md` (machine 部分) | **`pc5090` を維持** (`<ts>-pc5090.md`) |
+| `21/comments/*.md` (frontmatter `author` / `created_at`) | **無変更** |
+| `21/issue.md` (frontmatter `id:`) | **据置**（`local-pc5090-21`） |
+| `21/issue.md` 本文中の `local-pc5090-21` 自己参照 | **据置** |
+| 1〜20 issue.md 本文中の `local-pc5090-21` への cross-ref | **据置**（21 を指すため） |
+| migration 後・config 切替後の 21 への新規 comment | `<ts>-p1.md` で書き込み（許容） |
+
+- 実装上の glob: 1〜20 の `git mv <dir>` は名前列挙（`local-pc5090-1-*` 〜 `local-pc5090-20-*`）で確実に 21 を除外
+- cross-ref sed: regex は `local-pc5090-(?:[1-9]|1[0-9]|20)\b` のように **N=1〜20 のみマッチ** させ、`local-pc5090-21` を保護
 
 ### 3. config 変更タイミング（commit 3）
 
@@ -250,20 +293,24 @@ Issue 本文の commit 構成案を踏襲。本設計書では以下を明示:
 1. feat(local): switch comment filename to compact ISO 8601 timestamp
    - LocalProvider._read_comments / comment_issue 改修
    - _next_comment_seq 削除、Comment.seq docstring 更新
-   - 旧形式 fallback parser を併存
-   - tests/test_providers_local.py 新形式対応
+   - parser は新形式 timestamp 単独（旧 seq 形式 fallback 導入なし、未知形式は fail-fast）
+   - ordering を frontmatter created_at で stable sort に切替
+   - tests/test_providers_local.py を新形式に更新（旧 seq 形式 fixture は migration commit で消える前提）
 
-2. chore(migration): rename comment files to timestamp format (1..20)
-   - 142 ファイルの git mv（21 は据置）
+2. chore(migration): rename comment files to timestamp format (1..20 + 21)
+   - 1〜20 配下: <ts>-p1.md にrename (~142 件)
+   - 21 配下: <ts>-pc5090.md にrename (machine 部分維持、~2 件)
+   - frontmatter は無変更
 
 3. chore(config): rename counter and switch machine_id to p1
    - .kaji/counters/pc5090.txt → p1.txt
    - .kaji/config.local.toml の machine_id = "p1"
+   - **このタイミングで commit 1 の新 parser が config の機械的読込と整合**
 
 4. chore(migration): rename issue dirs and cross-refs to p1 (1..20)
-   - 20 issue dir の git mv
-   - issue.md frontmatter id 書き換え
-   - issue.md 本文 cross-ref 書き換え（21 references は保護）
+   - 20 issue dir の git mv（21 は据置）
+   - issue.md frontmatter id 書き換え（1〜20 のみ）
+   - issue.md 本文 cross-ref 書き換え（regex で N=1〜20 のみマッチ、21 references は保護）
 
 5. chore: update example references in skills / docs / kaji_harness docstrings
    - issue-close skill / cli-guides / runbook / cli_main.py docstring 等
@@ -271,7 +318,7 @@ Issue 本文の commit 構成案を踏襲。本設計書では以下を明示:
 6. test: update fixtures depending on user-specific machine_id (if any)
 ```
 
-**fallback parser 削除 commit は本 PR には含めない**（§ 21 を例外扱いする境界条件 参照）。別 issue で 21 close 後に実施。
+**重要**: commit 1 で parser を新形式単独に切り替え、commit 2 で全 file を新形式に rename する。commit 1 と commit 2 の間（中間状態）では migration script 内部でのみ操作し、`kaji issue *` を実行しないことが必須運用制約。**本 PR merge 時に旧 seq 形式 file は repo 上に存在しない**（→ fallback 不要、Issue 完了条件に整合）。
 
 ## テスト戦略
 
@@ -282,46 +329,62 @@ Issue 本文の commit 構成案を踏襲。本設計書では以下を明示:
 
 **実行時コード変更**（LocalProvider のロジック変更）+ **データ移行**（既存 .kaji/issues/ の rename）。
 
-### Small テスト（単体ロジック）
+> **テストサイズ判定の根拠**: [`docs/reference/testing-size-guide.md` § subprocess / コマンド実行](../../docs/reference/testing-size-guide.md) に従い、`subprocess.run` で実 CLI / git を実行する検証は **Large (`large_local` マーカー)** に分類する。`tmp_path` でのファイル I/O 結合は Medium、純粋なロジック / 文字列操作は Small。
+
+### Small テスト（単体ロジック、外部依存なし）
 
 `tests/test_providers_local.py` に以下を追加:
 
-- `_read_comments`: 新形式 file (`20260510T142536Z-p1.md`) を読み取って `Comment(seq="20260510T142536Z", machine_id="p1")` を返す
-- `_read_comments`: 旧形式 file (`0001-pc5090.md`) を読み取って `Comment(seq="0001", machine_id="pc5090")` を返す（fallback 動作）
-- `_read_comments`: 同一 dir に新旧 mixed の場合、ASCII sort 順で読み出す（`0001-pc5090.md` < `20260510...` の lexical 関係を確認）
-- `_read_comments`: 規約外の filename（例: `foo-bar.md`）で `LocalProviderError` を raise
-- `comment_issue`: 新規投稿で `<ts>-<machine>.md` 形式の file が atomic 生成され、Comment.seq が timestamp、machine_id が config 値となる
-- `comment_issue`: 同秒衝突（既存 file がある）で 1 秒繰り上げ retry が動作する（mock で時刻固定）
-- `comment_issue`: 8 retry 全敗で `LocalProviderError` を raise（既存テストの error message を新形式に合わせて更新）
-- `_next_comment_seq` 削除に伴い、当該テストを削除
+- `_read_comments`: 新形式 file (`20260510T142536Z-p1.md`) を読み取って `Comment(seq="20260510T142536Z", machine_id="p1", created_at="...")` を返す
+- `_read_comments`: machine 部分が `pc5090` の新形式 file (`20260510T142536Z-pc5090.md`) も解釈できる（21 配下の rename 結果）
+- `_read_comments`: 旧 seq 形式 (`0001-pc5090.md`) や規約外 filename (`foo-bar.md`) で `LocalProviderError` を raise（fail-fast、fallback なし）
+- `_read_comments`: frontmatter `created_at` 欠落で `LocalProviderError` を raise（ordering 正本欠落の fail-fast）
+- `_read_comments`: **ordering** が frontmatter `created_at` 順になる（filename ASCII 順とずらした fixture で検証）
+- `_read_comments`: 同 `created_at` 内では filename タイブレーカーで決定的順序になる
+- `comment_issue`: 同秒衝突（既存 file がある）で filename timestamp が +1s 加算される。frontmatter `created_at` は **base_dt** の値で固定（ordering 用）— mock で時刻固定して両者の値が一致 / 乖離するケースを assert
+- `comment_issue`: 8 retry 全敗で `LocalProviderError`（error message に最後の attempted ts が含まれる）
+- `_next_comment_seq` テストを削除（メソッドそのもの削除）
+- `_COMMENT_FILENAME_RE` 単独テスト: `YYYYMMDDTHHMMSSZ-<machine>` の正例 / 反例（短い ts、不正 machine 等）
 
-### Medium テスト（ファイル I/O 結合）
+### Medium テスト（ファイル I/O 結合、subprocess なし）
 
 `tests/test_providers_local.py` に以下を追加:
 
-- end-to-end: tmp_path 上に LocalProvider を構築 → comment_issue 連続呼び出し → file system 上で N 個の `<ts>-<m>.md` が生成されることを確認
-- migration script の dry-run: fixture (旧形式 dir 1 つ + 旧形式 comment 3 個) に対し、rename plan が deterministic に生成されることを assert（実 rename はせず plan を返す mode）
-- counter file rename: pc5090.txt → p1.txt の中身保全と、新規 `comment_issue` 後の counter 不変を確認
-- `cli_main.py:1305` の `--commit` path: comment 投稿 → 生成 path が新形式で git commit に含まれる（subprocess.run で `git status` を確認）
+- `tmp_path` 上に LocalProvider を構築 → `comment_issue` 連続呼び出し → file system 上で `<ts>-<m>.md` が生成され、`view_issue().comments` が `created_at` 順で返ることを確認
+- migration script の **dry-run plan 生成** (subprocess なし、純 Python 関数): fixture (旧 seq 形式 dir 1 つ + 旧 seq 形式 comment 3 個 + 同秒衝突ケース) に対し、rename plan が deterministic に生成されることを assert
+- migration script の **実 rename** (`os.rename` ベースの dry-run=False mode、`git mv` ではなく `Path.rename`): tmp_path に fixture を組み立てて rename → 新 filename が生成され、frontmatter が無変更であることを assert
+- counter file rename ロジック (`pc5090.txt` → `p1.txt`): 中身保全と新規 `comment_issue` 後の counter 不変を確認
+- `_resolve_issue_dir` が migration 完了後の `local-p1-N-*` glob で正しく解決すること（fixture を直接組んで確認）
 
-### Large テスト
+### Large テスト（subprocess あり、外部 API なし → `large_local` マーカー）
 
-**追加しない**。理由:
+`tests/test_providers_local.py` または `tests/test_local_issue_commit_flag.py` に以下を追加（`@pytest.mark.large` + `@pytest.mark.large_local`）:
 
-1. 本変更は LocalProvider 内部の filename / parser の変更であり、外部 API（GitHub / GitLab）疎通を伴わない
-2. CLI E2E 観点は既存の `tests/test_cli_main.py` / `tests/test_local_issue_commit_flag.py` が新形式 fixture に追従すれば吸収可能（追加テストは Small / Medium で十分）
-3. `make test-large-local` の subprocess CLI tests は Phase 3-d 既存の comment write カバレッジで再現可能
+- `kaji issue comment` CLI を `subprocess.run` で実行 → 生成された comment file が新形式 (`<ts>-<machine>.md`) であること、stdout に `<ts>-<machine>` が出力されることを assert（`cli_main.py:1302` の format 整合）
+- `kaji issue comment --commit` を `subprocess.run` で実行 → `git status` を `subprocess.run` で確認し、新形式 path が staging されていること（`cli_main.py:1305` 経路）
+- migration script を `subprocess.run [..., "scripts/migrate_..."]` で実行（tmp_path に組んだ fixture 上で）→ 142+α file が新形式に rename され、`local-pc5090-21-*` dir / `21/comments/*-pc5090.md` machine 部分が保護されていることを assert
+- `kaji issue list` smoke: subprocess 実行で migration 後の全 issue が正常に列挙されること
+
+**実 GitHub / GitLab API 疎通は不要** のため `large_forge` / `large_gitlab` マーカーは付与しない。`make test-large-local` で実行範囲がカバーされる。
 
 ### 移行検証（変更固有検証、恒久化しない）
 
-以下は本 PR でのみ実行し、恒久 test には**含めない**:
+以下は本 PR の作業者が一度だけ実行し、恒久 test には**含めない**:
 
-- `find .kaji/issues -name "comments" -type d -exec ls {} \; | grep -E '^[0-9]{4}-pc5090\.md$' | wc -l == 1`（21 配下の `0001-pc5090.md` のみが残ること）
-- `find .kaji/issues -name "*.md" -path "*/comments/*" | grep -v "^.kaji/issues/local-pc5090-21" | grep -E '\d{4}-pc5090\.md$' | wc -l == 0`（21 以外に旧形式が残らないこと）
-- `grep -rn pc5090 .kaji/counters .kaji/config.local.toml kaji_harness/providers/local.py | wc -l == 0`
-- `kaji issue list` が 1〜20 + 21 を全件表示する smoke test
-- `kaji issue create --title "smoke"` で `local-p1-22` が採番されることの smoke test
-- `make check` 緑
+- `find .kaji/issues -path "*/comments/*.md" | grep -E '/[0-9]{4}-[a-z0-9]+\.md$' | wc -l == 0`（旧 seq 形式が repo 全体に残らないこと、21 含む全件が新形式に揃ったこと）
+- `find .kaji/issues -path "*/comments/*-pc5090.md" | grep -v "^.kaji/issues/local-pc5090-21-" | wc -l == 0`（21 以外に `-pc5090.md` machine の comment が残らないこと）
+- `find .kaji/issues/local-pc5090-21-*/comments -name '*-pc5090.md' | wc -l >= 2`（21 配下に `-pc5090.md` machine の comment が 2 件以上残ること）
+- `grep -rn pc5090 .kaji/counters .kaji/config.local.toml kaji_harness/providers/local.py | wc -l == 0`（コード / config / counter から `pc5090` 残存が消えていること）
+- `kaji issue list` が 1〜20 + 21 を全件表示する smoke（手動）
+- `kaji issue create --title "smoke"` で `local-p1-22` が採番されることの smoke（手動）
+- `make check` 緑（恒久ゲート、最終確認用）
+
+これらの検証を Large テストに恒久化しない理由（`testing-convention.md` 4 条件）:
+
+1. 本 PR 固有のデータ移行検証であり、移行完了後は再実行する状況がない（独自ロジックの恒久実行に該当しない）
+2. 想定不具合パターン（旧 seq 残存・21 保護違反・コード内 pc5090 残存）は Large `large_local` の migration script subprocess テストでカバー済み
+3. 1 回限りの確認を恒久化しても回帰検出情報が増えない（migration は冪等だが状況変化なし）
+4. 上記理由を本セクションでレビュー可能な形で説明済み
 
 ## 影響ドキュメント
 
@@ -350,5 +413,7 @@ Issue 本文の commit 構成案を踏襲。本設計書では以下を明示:
 | 衝突 commit 実例 | git log: `877fa84 chore(local): renumber conflicting comment files for local-pc5090-10` | 手動 renumber が必要だった事実の git history 上の証跡 |
 | ISO 8601 compact format | RFC 3339 / ISO 8601 (basic format): `YYYYMMDDTHHMMSSZ` | UTC 秒精度の固定長表現。Python: `datetime.strftime("%Y%m%dT%H%M%SZ")`。lexical sort = chronological sort が成立 |
 | Python datetime strftime | https://docs.python.org/3/library/datetime.html#strftime-strptime-behavior | `%Y%m%dT%H%M%SZ` ディレクティブの公式仕様。"Z" は literal 文字（UTC indicator として規約上使用） |
-| testing-convention | `docs/dev/testing-convention.md` § テスト戦略の原則 | 「実行時の振る舞いを変えるコード変更 → 影響範囲に応じて Small / Medium / Large を設計」に従い、Large は省略理由を明記する形を採用 |
+| testing-convention | `docs/dev/testing-convention.md` § テスト戦略の原則 | 「実行時の振る舞いを変えるコード変更 → 影響範囲に応じて Small / Medium / Large を設計」に従い、Small / Medium / Large の各サイズで観点を定義する。変更固有検証の恒久テスト不要は 4 条件で justify |
+| testing-size-guide | `docs/reference/testing-size-guide.md` § subprocess / コマンド実行 | 「実際の CLI コマンドを subprocess で実行 → Large」の規約。subprocess 検証を Large (`large_local` マーカー) に分類する根拠 |
+| Large 細分マーカー | `docs/reference/testing-size-guide.md` § Large の細分マーカー | `large_local`: subprocess あり / 外部ネットワーク無し（kaji 自身の CLI 等）。本 PR の subprocess テストはこれに該当 |
 | feat 設計テンプレ | `.claude/skills/_shared/design-by-type/feat.md` | type=feature の必須セクション（IF / 使用例 / エラー / 代替案）の準拠元 |
