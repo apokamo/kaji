@@ -7,6 +7,10 @@ labels:
 - type:feature
 created_at: '2026-05-10T07:09:36Z'
 ---
+> [!NOTE]
+> **Worktree**: `../kaji-feat-local-pc5090-21`
+> **Branch**: `feat/local-pc5090-21`
+
 ## 概要
 
 LocalProvider のコメントファイル命名規則を `<seq>-<machine_id>.md` (例: `0001-pc5090.md`) から **compact ISO 8601 timestamp** ベース (`<YYYYMMDDTHHMMSSZ>-<machine_id>.md`) に変更し、同時に machine_id を `pc5090` から `p1` に短縮する。
