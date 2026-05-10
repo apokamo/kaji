@@ -42,7 +42,7 @@ def _ok(stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess[str]:
 
 @pytest.mark.medium
 class TestGitLabIssueDispatch:
-    def test_create_forwards_with_repo_and_hostname(
+    def test_create_forwards_with_repo_and_host_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         repo = _write_gitlab_repo(tmp_path)
@@ -55,9 +55,11 @@ class TestGitLabIssueDispatch:
             rc = _handle_issue(["create", "--title", "T", "--body", "B"])
         assert rc == 0
         cmd = mock_run.call_args[0][0]
-        # glab --hostname gitlab.com issue create --title T --description B --repo g/p
+        # glab issue create --title T --description B --repo g/p (hostname は env で渡る)
         assert cmd[0] == "glab"
-        assert "--hostname" in cmd and "gitlab.com" in cmd
+        assert "--hostname" not in cmd
+        env = mock_run.call_args.kwargs.get("env")
+        assert env is not None and env.get("GITLAB_HOST") == "gitlab.com"
         assert "create" in cmd
         # --body → --description 変換
         assert "--description" in cmd
@@ -121,6 +123,27 @@ class TestGitLabIssueDispatch:
         # gl:42 → 42 に剥がされて glab に渡る
         assert "42" in cmd
         assert "gl:42" not in cmd
+
+    def test_list_rewrites_limit_to_per_page(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue ``local-p1-23`` regression: bare ``kaji issue list --limit N`` は
+        ``glab issue list`` の同義 flag ``--per-page`` に rewrite して渡す（``glab``
+        側に ``--limit`` flag は存在せず ``Unknown flag`` で reject されるため）。
+        """
+        repo = _write_gitlab_repo(tmp_path)
+        monkeypatch.chdir(repo)
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/glab"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            rc = _handle_issue(["list", "--limit", "5"])
+        assert rc == 0
+        cmd = mock_run.call_args[0][0]
+        assert "--limit" not in cmd
+        assert "--per-page" in cmd
+        assert cmd[cmd.index("--per-page") + 1] == "5"
 
     def test_unsupported_sub_rejected(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

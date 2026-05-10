@@ -11,15 +11,18 @@ read 系（view/list/list_labels）は ``glab api projects/<URL-encoded-repo>/..
 details/ids/urls`` のみで構造化 JSON を出さないため）。
 
 host 固定: 本 provider は ``provider.gitlab.repo`` のみで対象 forge を一意に決める
-契約のため、すべての ``glab`` 起動に ``--hostname gitlab.com`` を default 注入する。
-``glab`` の global flag ``--hostname`` は current git directory / login config による
-host 解決を強制 override するため、これにより ``glab api`` / mutating 系の双方で
-self-hosted host への誤送信を防ぐ（self-hosted 非対応は確定事項 #3）。
+契約のため、すべての ``glab`` 起動に ``GITLAB_HOST=gitlab.com`` 環境変数を default 注入する。
+``glab`` の ``--hostname`` は global flag ではなく ``api`` / ``auth`` 系の sub-flag のみで
+あるため（``glab issue`` / ``glab mr`` の parser は知らず ``Unknown flag`` で reject する）、
+subcommand 非依存の ``GITLAB_HOST`` 環境変数経路で hostname を渡す。これにより
+``glab api`` / mutating 系の双方で self-hosted host への誤送信を防ぐ（self-hosted
+非対応は確定事項 #3）。
 """
 
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -44,6 +47,19 @@ class GitLabProviderError(RuntimeError):
 # （current git directory / login config）への暗黙依存を切り、``provider.gitlab.repo``
 # のみで forge が一意に決まることを保証する。
 _GITLAB_HOSTNAME = "gitlab.com"
+
+
+def _glab_env() -> dict[str, str]:
+    """``GITLAB_HOST`` を pin した env を返す。``subprocess.run(..., env=_glab_env())`` で使う。
+
+    ``glab`` の hostname 解決優先順位は git remote > ``GITLAB_HOST`` env > config > default。
+    ``GITLAB_HOST=gitlab.com`` を env として渡すことで、別 host を持つ workstation でも
+    ``provider.gitlab.repo`` が指す project （= gitlab.com）に強制 pin する。引数注入では
+    ``glab issue`` / ``glab mr`` の parser が ``--hostname`` を知らず Unknown flag で reject
+    するため、subcommand 非依存の env 経路を採用する。
+    """
+    return {**os.environ, "GITLAB_HOST": _GITLAB_HOSTNAME}
+
 
 # ``resolve_mr_iid_from_branch`` が「該当 0 件」を表すために raise する
 # ``GitLabProviderError`` のメッセージ prefix。``resolve_pr_context`` が
@@ -78,11 +94,11 @@ class GitLabProvider:
     def _run_glab(self, *args: str, capture: bool = True) -> subprocess.CompletedProcess[str]:
         """``glab`` を subprocess で起動する。
 
-        ``glab`` の global flag ``--hostname gitlab.com`` を全 invocation に default 注入
-        することで、current git directory / login config に基づく host 解決を強制
-        override する（``glab api --help`` / ``glab issue --help`` 参照）。これにより
-        self-hosted GitLab 環境や複数 host を持つ workstation でも、``provider.gitlab.repo``
-        が指す ``gitlab.com`` 上の project だけが対象になることを保証する。
+        ``GITLAB_HOST=gitlab.com`` を環境変数として注入することで、current git directory
+        / login config に基づく host 解決を強制 override する。``--hostname`` は
+        ``glab issue`` / ``glab mr`` の parser に存在しない sub-flag のため引数注入は
+        使えない（``Unknown flag`` で reject される）。env 経路は subcommand 非依存で
+        ``glab api`` / mutating 系の双方を pin する。
 
         ``--repo <repo>`` は呼出側で ``args`` に明示する責務。``glab api`` は
         ``--repo`` を受け付けないため endpoint URL 側に encoded repo を埋める。
@@ -91,13 +107,14 @@ class GitLabProvider:
             raise GitLabProviderError(
                 "'glab' CLI not found in PATH. Install glab to use provider.type='gitlab'."
             )
-        cmd = ["glab", "--hostname", _GITLAB_HOSTNAME, *args]
+        cmd = ["glab", *args]
         try:
             return subprocess.run(
                 cmd,
                 check=False,
                 capture_output=capture,
                 text=True,
+                env=_glab_env(),
             )
         except OSError as exc:
             raise GitLabProviderError(f"failed to invoke 'glab': {exc}") from exc

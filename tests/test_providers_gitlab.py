@@ -299,21 +299,27 @@ class TestRunGlab:
 
 
 @pytest.mark.small
-class TestHostnamePinning:
-    """全 ``glab`` invocation が ``--hostname gitlab.com`` を default 注入することを保証する。
+class TestHostnameEnvPinning:
+    """全 ``glab`` invocation が ``GITLAB_HOST=gitlab.com`` env で hostname pin することを保証する。
 
-    EPIC `local-pc5090-4` 確定事項 #3「self-hosted 非対応 / ``gitlab.com`` 内部固定」と
-    Issue 本文「current project / login に依存しない」要求の回帰防止。``glab`` の
-    host 解決（current git directory / login config）への暗黙依存を切る。
+    Issue ``local-p1-23`` 回帰防止: ``--hostname`` は ``glab issue`` / ``glab mr`` の
+    parser には存在しない（``api`` / ``auth`` 系の sub-flag のみ）ため、引数注入は
+    ``Unknown flag`` で reject される。subcommand 非依存の env 経路で hostname を pin
+    することで、``glab api`` / mutating 系の双方を ``gitlab.com`` に固定する。
+
+    本テストは「``cmd`` に ``--hostname`` が **含まれない**」「``env`` kwarg に
+    ``GITLAB_HOST=gitlab.com`` が **含まれる**」の 2 点を assert する。将来また global
+    位置に ``--hostname`` を生やす回帰を即座に検出するゲート。
     """
 
     def _captured_first(
         self, provider: GitLabProvider, callable_name: str, *args: object, **kwargs: object
-    ) -> list[list[str]]:
-        captured: list[list[str]] = []
+    ) -> list[tuple[list[str], dict[str, str] | None]]:
+        captured: list[tuple[list[str], dict[str, str] | None]] = []
 
         def fake_run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
-            captured.append(cmd)
+            env_kw = kw.get("env")
+            captured.append((cmd, env_kw if isinstance(env_kw, dict) else None))
             endpoint = cmd[-1] if cmd else ""
             # array endpoints
             if "/notes" in endpoint or endpoint.endswith("/labels?per_page=100"):
@@ -343,38 +349,54 @@ class TestHostnamePinning:
             getattr(provider, callable_name)(*args, **kwargs)
         return captured
 
+    @staticmethod
+    def _assert_env_pinned(cmd: list[str], env: dict[str, str] | None) -> None:
+        assert "--hostname" not in cmd
+        assert env is not None
+        assert env.get("GITLAB_HOST") == "gitlab.com"
+
     def test_view_issue_pins_hostname(self, provider: GitLabProvider) -> None:
         captured = self._captured_first(provider, "view_issue", "1")
-        assert captured[0][:3] == ["glab", "--hostname", "gitlab.com"]
+        cmd, env = captured[0]
+        self._assert_env_pinned(cmd, env)
+        assert cmd[0] == "glab"
 
     def test_list_issues_pins_hostname(self, provider: GitLabProvider) -> None:
         captured = self._captured_first(provider, "list_issues")
-        assert captured[0][:3] == ["glab", "--hostname", "gitlab.com"]
+        cmd, env = captured[0]
+        self._assert_env_pinned(cmd, env)
+        assert cmd[0] == "glab"
 
     def test_list_labels_pins_hostname(self, provider: GitLabProvider) -> None:
         captured = self._captured_first(provider, "list_labels")
-        assert captured[0][:3] == ["glab", "--hostname", "gitlab.com"]
+        cmd, env = captured[0]
+        self._assert_env_pinned(cmd, env)
+        assert cmd[0] == "glab"
 
     def test_create_issue_pins_hostname(self, provider: GitLabProvider) -> None:
         captured = self._captured_first(provider, "create_issue", title="t", body="b")
-        assert captured[0][:3] == ["glab", "--hostname", "gitlab.com"]
-        # mutating subcommand follows the global flag
-        assert captured[0][3:5] == ["issue", "create"]
+        cmd, env = captured[0]
+        self._assert_env_pinned(cmd, env)
+        # subcommand directly follows the executable
+        assert cmd[:3] == ["glab", "issue", "create"]
 
     def test_edit_issue_pins_hostname(self, provider: GitLabProvider) -> None:
         captured = self._captured_first(provider, "edit_issue", "1", title="t")
-        assert captured[0][:3] == ["glab", "--hostname", "gitlab.com"]
-        assert captured[0][3:5] == ["issue", "update"]
+        cmd, env = captured[0]
+        self._assert_env_pinned(cmd, env)
+        assert cmd[:3] == ["glab", "issue", "update"]
 
     def test_comment_issue_pins_hostname(self, provider: GitLabProvider) -> None:
         captured = self._captured_first(provider, "comment_issue", "1", "msg")
-        assert captured[0][:3] == ["glab", "--hostname", "gitlab.com"]
-        assert captured[0][3:5] == ["issue", "note"]
+        cmd, env = captured[0]
+        self._assert_env_pinned(cmd, env)
+        assert cmd[:3] == ["glab", "issue", "note"]
 
     def test_close_issue_pins_hostname(self, provider: GitLabProvider) -> None:
         captured = self._captured_first(provider, "close_issue", "1")
-        assert captured[0][:3] == ["glab", "--hostname", "gitlab.com"]
-        assert captured[0][3:5] == ["issue", "close"]
+        cmd, env = captured[0]
+        self._assert_env_pinned(cmd, env)
+        assert cmd[:3] == ["glab", "issue", "close"]
 
 
 @pytest.mark.small
@@ -433,12 +455,12 @@ class TestViewIssue:
             patch("kaji_harness.providers.gitlab.subprocess.run", side_effect=fake_run),
         ):
             provider.view_issue("42")
-        # 1st call: issue body — "glab --hostname gitlab.com api <endpoint>"
-        assert captured[0][:4] == ["glab", "--hostname", "gitlab.com", "api"]
-        assert captured[0][4] == "projects/group%2Fproject/issues/42"
+        # 1st call: issue body — "glab api <endpoint>" (hostname は env で渡る)
+        assert captured[0][:2] == ["glab", "api"]
+        assert captured[0][2] == "projects/group%2Fproject/issues/42"
         # 2nd call: notes
-        assert captured[1][:4] == ["glab", "--hostname", "gitlab.com", "api"]
-        assert captured[1][4].startswith("projects/group%2Fproject/issues/42/notes")
+        assert captured[1][:2] == ["glab", "api"]
+        assert captured[1][2].startswith("projects/group%2Fproject/issues/42/notes")
 
     def test_glab_failure_raises(self, provider: GitLabProvider) -> None:
         with (
@@ -492,8 +514,8 @@ class TestCreateIssue:
 
         def fake_run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
             captured.append(cmd)
-            # mutating: "glab --hostname gitlab.com issue create ..."
-            if cmd[3:5] == ["issue", "create"]:
+            # mutating: "glab issue create ..." (hostname は env で渡る)
+            if cmd[1:3] == ["issue", "create"]:
                 return _ok(stdout="https://gitlab.com/group/project/-/issues/9\n")
             return _ok(
                 stdout=json.dumps(
@@ -509,7 +531,8 @@ class TestCreateIssue:
         ):
             provider.create_issue(title="t", body="b", labels=["a", "b"])
         create_cmd = captured[0]
-        assert create_cmd[:5] == ["glab", "--hostname", "gitlab.com", "issue", "create"]
+        assert create_cmd[:3] == ["glab", "issue", "create"]
+        assert "--hostname" not in create_cmd
         assert "--repo" in create_cmd
         assert create_cmd[create_cmd.index("--repo") + 1] == "group/project"
         # combined label flag
@@ -547,9 +570,9 @@ class TestListIssues:
             patch("kaji_harness.providers.gitlab.subprocess.run", side_effect=fake_run),
         ):
             provider.list_issues(state="open")
-        # ``glab --hostname gitlab.com api <endpoint>``
-        assert captured[0][:4] == ["glab", "--hostname", "gitlab.com", "api"]
-        endpoint = captured[0][4]
+        # ``glab api <endpoint>`` (hostname は env で渡る)
+        assert captured[0][:2] == ["glab", "api"]
+        endpoint = captured[0][2]
         assert endpoint.startswith("projects/group%2Fproject/issues?")
         assert "state=opened" in endpoint
 
@@ -565,7 +588,8 @@ class TestListIssues:
             patch("kaji_harness.providers.gitlab.subprocess.run", side_effect=fake_run),
         ):
             provider.list_issues(limit=500)
-        assert "per_page=100" in captured[0][4]
+        # cmd: ["glab", "api", "<endpoint>"]
+        assert "per_page=100" in captured[0][2]
 
 
 @pytest.mark.small
