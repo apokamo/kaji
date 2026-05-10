@@ -77,10 +77,49 @@ def create_parser() -> argparse.ArgumentParser:
     _register_issue(subparsers)
     _register_pr(subparsers)
     _register_config(subparsers)
+    _register_sync(subparsers)
     from .local_init import register_subcommand as _register_local
 
     _register_local(subparsers)
     return parser
+
+
+def _register_sync(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """``kaji sync`` 系の subcommand 登録 (issue ``local-pc5090-8``)。
+
+    ``from-gitlab``: GitLab project から open Issue を全件 fetch して
+    ``.kaji/cache/gl-<iid>.json`` に atomic write する。
+    ``status``: 最終 sync 時刻 / cache 件数 / 経過時間を表示する。
+
+    ``--include-closed`` / ``--state`` / ``--since`` は将来予約 flag。
+    本 release では受理せず exit 2 で fail-fast する（completion criterion）。
+    """
+    p = subparsers.add_parser("sync", help="Cache synchronization commands")
+    sync_subs = p.add_subparsers(dest="sync_command", required=True)
+
+    fg = sync_subs.add_parser(
+        "from-gitlab",
+        help="Sync open issues from a GitLab project into local cache",
+    )
+    fg.add_argument(
+        "--repo",
+        default=None,
+        type=str,
+        help="GitLab repo (group/project). Defaults to [provider.gitlab].repo.",
+    )
+    fg.add_argument("--quiet", action="store_true", help="Suppress progress logs.")
+    # 将来予約 flag (本 release では fail-fast)
+    fg.add_argument(
+        "--include-closed",
+        dest="include_closed",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    fg.add_argument("--state", dest="state", default=None, type=str, help=argparse.SUPPRESS)
+    fg.add_argument("--since", dest="since", default=None, type=str, help=argparse.SUPPRESS)
+
+    st = sync_subs.add_parser("status", help="Show local cache sync status")
+    st.add_argument("--json", dest="json_mode", action="store_true", help="Output JSON.")
 
 
 def _register_config(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -1100,7 +1139,10 @@ def _local_issue_view(provider: LocalProvider, rest: list[str]) -> int:
     rid = rid_or_rc
 
     if rid.kind == "remote_cache":
-        issue = provider.view_cached_issue(rid.value)
+        if rid.raw.startswith("gl:"):
+            issue = provider.view_cached_gitlab_issue(rid.value)
+        else:
+            issue = provider.view_cached_issue(rid.value)
     else:
         issue = provider.view_issue(rid.value)
 
@@ -1888,6 +1930,111 @@ def cmd_config_provider_type(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_sync_from_gitlab(args: argparse.Namespace) -> int:
+    """``kaji sync from-gitlab`` の dispatcher (issue ``local-pc5090-8``)。
+
+    将来予約 flag（``--include-closed`` / ``--state`` / ``--since``）は exit 2 で
+    fail-fast する。silently ignore は完了条件違反。
+    """
+    from .sync import SyncError, sync_from_gitlab
+
+    if args.include_closed:
+        sys.stderr.write(
+            "error: --include-closed is not implemented in this release; "
+            "reopen tracking issue to add it.\n"
+        )
+        return EXIT_INVALID_INPUT
+    if args.state is not None:
+        sys.stderr.write(
+            "error: --state is not implemented in this release; "
+            "this command always fetches state=opened.\n"
+        )
+        return EXIT_INVALID_INPUT
+    if args.since is not None:
+        sys.stderr.write(
+            "error: --since is not implemented in this release; "
+            "this command always performs a full sync.\n"
+        )
+        return EXIT_INVALID_INPUT
+
+    try:
+        config = KajiConfig.discover(start_dir=Path.cwd())
+    except (ConfigNotFoundError, ConfigLoadError) as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    try:
+        result = sync_from_gitlab(
+            config=config,
+            repo_override=args.repo,
+            quiet=args.quiet,
+        )
+    except SyncError as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return EXIT_INVALID_INPUT
+    except OSError as exc:
+        sys.stderr.write(f"error: cache write failed: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+
+    sys.stdout.write(
+        f"Sync completed at {result.last_sync_at} "
+        f"({result.issue_count} issues, {result.pages_fetched} pages, "
+        f"{result.elapsed_seconds:.1f}s).\n"
+    )
+    return EXIT_OK
+
+
+def cmd_sync_status(args: argparse.Namespace) -> int:
+    """``kaji sync status`` の dispatcher (issue ``local-pc5090-8``)。"""
+    import json as _json
+
+    from .sync import SyncError, format_elapsed_human, read_sync_status
+
+    try:
+        config = KajiConfig.discover(start_dir=Path.cwd())
+    except (ConfigNotFoundError, ConfigLoadError) as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    try:
+        status = read_sync_status(config=config)
+    except SyncError as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    elapsed_human: str | None = (
+        format_elapsed_human(status.elapsed_seconds) if status.elapsed_seconds is not None else None
+    )
+
+    if args.json_mode:
+        payload: dict[str, object] = {
+            "forge": status.forge,
+            "repo": status.repo,
+            "last_sync_at": status.last_sync_at,
+            "elapsed_seconds": (
+                int(status.elapsed_seconds) if status.elapsed_seconds is not None else None
+            ),
+            "elapsed_human": elapsed_human,
+            "issue_count": status.issue_count,
+        }
+        sys.stdout.write(_json.dumps(payload, ensure_ascii=False) + "\n")
+        return EXIT_OK
+
+    forge_disp = status.forge or "(none)"
+    repo_disp = status.repo or "(none)"
+    last_disp = status.last_sync_at or "(never)"
+    if status.elapsed_seconds is None:
+        elapsed_disp = "n/a"
+    else:
+        elapsed_disp = f"{elapsed_human} ({int(status.elapsed_seconds)}s)"
+    sys.stdout.write(f"forge        {forge_disp}\n")
+    sys.stdout.write(f"repo         {repo_disp}\n")
+    sys.stdout.write(f"last_sync    {last_disp}\n")
+    sys.stdout.write(f"elapsed      {elapsed_disp}\n")
+    sys.stdout.write(f"cached       {status.issue_count} (gl-*.json under .kaji/cache/)\n")
+    return EXIT_OK
+
+
 def main(argv: list[str] | None = None) -> int:
     """Main entrypoint."""
     parser = create_parser()
@@ -1904,6 +2051,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "config":
         if args.config_command == "provider-type":
             return cmd_config_provider_type(args)
+        parser.print_help()
+        return EXIT_ABORT
+    if args.command == "sync":
+        if args.sync_command == "from-gitlab":
+            return cmd_sync_from_gitlab(args)
+        if args.sync_command == "status":
+            return cmd_sync_status(args)
         parser.print_help()
         return EXIT_ABORT
     if args.command == "local":

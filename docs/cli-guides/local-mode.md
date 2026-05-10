@@ -194,7 +194,52 @@ GitHub mode に戻したい場合は `.kaji/config.local.toml` の `[provider] t
 ## 9. 既知の制限
 
 - Windows native は現時点では対応対象外。Windows では WSL 上で使う
-- `kaji sync from-github` は残課題（forge 採用先確定時に再評価）。検証期間中は cache 自動 populate を行わないため、必要時のみ `.kaji/cache/issues/N.json` を手動投入する
+- `kaji sync from-gitlab` / `kaji sync status` は実装済（issue `local-pc5090-8`、後述 § 9b）。`provider.type='local'` 配下から `gl:N` で GitLab Issue を参照する経路を提供する
+- `kaji sync from-github` は引き続き残課題（forge 採用先確定時に再評価）。GitHub 由来 cache (`gh:N` / `.kaji/cache/issues/N.json`) は手動投入のみ
+
+## 9b. `kaji sync from-gitlab` / `kaji sync status`（GitLab cache populate）
+
+`provider.type='local'` 配下から `gl:N` で GitLab Issue を参照する場合、
+あらかじめ `kaji sync from-gitlab` で cache を populate する:
+
+```bash
+# 初回 sync（[provider.gitlab].repo を config に書いておく場合）
+$ kaji sync from-gitlab
+Fetching open issues from gitlab.com:owner-group/repo-name ...
+  page 1: 47 issues
+Wrote 47 issues to .kaji/cache/.
+Sync completed at 2026-05-10T08:42:13Z (47 issues, 1 pages, 1.2s).
+
+# repo を CLI 引数で指定する場合
+$ kaji sync from-gitlab --repo owner-group/repo-name
+
+# cache から read
+$ kaji issue view gl:42
+
+# 統合表示
+$ kaji issue list
+local-pc1-1  open    Local issue 1
+gl:42        open    Add foo bar
+gl:43        open    Wire baz
+
+# sync 状態の確認
+$ kaji sync status
+forge        gitlab
+repo         owner-group/repo-name
+last_sync    2026-05-10T08:42:13Z
+elapsed      0h 5m 12s (312s)
+cached       47 (gl-*.json under .kaji/cache/)
+```
+
+**スコープ**:
+
+- 同期対象は **GitLab project の open Issue 全件**（初期実装スコープ）
+- `--include-closed` / `--state` / `--since` 等の追加 flag は本 release では
+  未実装で、指定すると `exit 2` で fail-fast する（silent ignore しない）
+- ローカル cache に存在するが GitLab 側で取得結果に含まれない（= closed 化された）
+  Issue は cache に残り、`kaji_local.is_stale=true` フラグが立つ。`kaji issue list`
+  の既定 (`--state open`) では出ず、`--state closed` または `--state all` で
+  確認できる
 
 ## 9a. 検証期間運用について
 

@@ -1085,7 +1085,8 @@ cache 由来 Issue（GitHub 番号）は **frontmatter を持たない** GitHub 
 >
 > 旧フローを構成していた要素は次のいずれかで扱う：
 >
-> - `kaji sync from-github` / `kaji sync status` / `kaji sync local-to-github-plan` → §残課題（forge 採用先確定後に再評価）
+> - `kaji sync from-gitlab` / `kaji sync status` → **issue `local-pc5090-8` で実装済み**（`provider.type='local'` 配下から `gl:N` で GitLab Issue を読む cache populate 経路を提供）
+> - `kaji sync from-github` / `kaji sync local-to-github-plan` → §残課題（forge 採用先確定後に再評価）
 > - `migrated_to: <gh-number>` frontmatter / `--add-frontmatter` → §残課題
 > - 検証期間中の運用フロー（複数 PC / conflict 解決 / forge 移行判断） → `docs/operations/local-mode-runbook.md`
 >
