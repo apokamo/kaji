@@ -469,3 +469,73 @@ class TestGeminiAdapter:
         """Init event returns None for cost."""
         event = {"type": "init", "session_id": "gem-789"}
         assert adapter.extract_cost(event) is None
+
+
+class TestIsTerminalEvent:
+    """is_terminal_event: session 終端マーカー判定（local-p1-22）。"""
+
+    @pytest.mark.small
+    def test_claude_result_event_is_terminal(self) -> None:
+        adapter = ClaudeAdapter()
+        assert adapter.is_terminal_event(
+            {"type": "result", "subtype": "success", "is_error": False}
+        )
+
+    @pytest.mark.small
+    def test_claude_error_result_is_terminal(self) -> None:
+        adapter = ClaudeAdapter()
+        # success/failure 共に terminal（成功失敗は returncode で判定する責務分離）
+        assert adapter.is_terminal_event({"type": "result", "subtype": "error", "is_error": True})
+
+    @pytest.mark.small
+    def test_claude_assistant_is_not_terminal(self) -> None:
+        adapter = ClaudeAdapter()
+        assert not adapter.is_terminal_event({"type": "assistant", "message": {"content": []}})
+        assert not adapter.is_terminal_event({"type": "system", "subtype": "init"})
+        assert not adapter.is_terminal_event({"type": "user"})
+
+    @pytest.mark.small
+    def test_claude_empty_event_is_not_terminal(self) -> None:
+        adapter = ClaudeAdapter()
+        assert not adapter.is_terminal_event({})
+
+    @pytest.mark.small
+    def test_codex_turn_completed_is_terminal(self) -> None:
+        adapter = CodexAdapter()
+        assert adapter.is_terminal_event({"type": "turn.completed", "usage": {}})
+
+    @pytest.mark.small
+    def test_codex_turn_failed_is_terminal(self) -> None:
+        adapter = CodexAdapter()
+        assert adapter.is_terminal_event({"type": "turn.failed", "error": {"message": "x"}})
+
+    @pytest.mark.small
+    def test_codex_error_event_is_not_terminal(self) -> None:
+        # error は intermediate（後続の turn.failed まで読まないと error_messages が薄くなる）
+        adapter = CodexAdapter()
+        assert not adapter.is_terminal_event({"type": "error", "message": "boom"})
+
+    @pytest.mark.small
+    def test_codex_other_events_are_not_terminal(self) -> None:
+        adapter = CodexAdapter()
+        for ev in (
+            {"type": "thread.started", "thread_id": "t-1"},
+            {"type": "turn.started"},
+            {"type": "item.completed", "item": {}},
+            {"type": "item.started"},
+        ):
+            assert not adapter.is_terminal_event(ev)
+
+    @pytest.mark.small
+    def test_gemini_result_is_terminal(self) -> None:
+        adapter = GeminiAdapter()
+        assert adapter.is_terminal_event({"type": "result", "status": "success", "stats": {}})
+        assert adapter.is_terminal_event({"type": "result", "status": "error", "stats": {}})
+
+    @pytest.mark.small
+    def test_gemini_init_and_message_are_not_terminal(self) -> None:
+        adapter = GeminiAdapter()
+        assert not adapter.is_terminal_event({"type": "init", "session_id": "g-1"})
+        assert not adapter.is_terminal_event(
+            {"type": "message", "role": "assistant", "content": "hi"}
+        )

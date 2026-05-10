@@ -16,6 +16,7 @@ class CLIEventAdapter(Protocol):
     def extract_session_id(self, event: dict[str, Any]) -> str | None: ...
     def extract_text(self, event: dict[str, Any]) -> str | None: ...
     def extract_cost(self, event: dict[str, Any]) -> CostInfo | None: ...
+    def is_terminal_event(self, event: dict[str, Any]) -> bool: ...
 
 
 _TOOL_SUMMARY_LEN = 80
@@ -103,6 +104,9 @@ class ClaudeAdapter:
                 return CostInfo(usd=usd)
         return None
 
+    def is_terminal_event(self, event: dict[str, Any]) -> bool:
+        return event.get("type") == "result"
+
 
 class CodexAdapter:
     """Codex CLI の JSONL イベントアダプタ。"""
@@ -140,6 +144,9 @@ class CodexAdapter:
                 )
         return None
 
+    def is_terminal_event(self, event: dict[str, Any]) -> bool:
+        return event.get("type") in ("turn.completed", "turn.failed")
+
 
 class GeminiAdapter:
     """Gemini CLI の JSONL イベントアダプタ。
@@ -170,6 +177,9 @@ class GeminiAdapter:
                     output_tokens=stats.get("output_tokens"),
                 )
         return None
+
+    def is_terminal_event(self, event: dict[str, Any]) -> bool:
+        return event.get("type") == "result"
 
 
 ADAPTERS: dict[str, CLIEventAdapter] = {

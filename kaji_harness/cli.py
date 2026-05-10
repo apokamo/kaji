@@ -126,12 +126,37 @@ def _execute_cli_once(
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
         result = stream_and_log(process, adapter, step.id, log_dir, verbose)
-        process.wait()
+        if result.terminal_seen:
+            # terminal event を観測した時点で timer を disarm（race 防止の核）。
+            timer.cancel()
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            # 後始末完了後に stderr を読み出す（stream_and_log では blocking を避けるため未読）。
+            if process.stderr:
+                stderr_tail = process.stderr.read()
+                if stderr_tail:
+                    result.stderr = stderr_tail
+                    (log_dir / "stderr.log").write_text(stderr_tail, encoding="utf-8")
+        else:
+            process.wait()
     finally:
         timer.cancel()
 
-    if timed_out.is_set():
+    if timed_out.is_set() and not result.terminal_seen:
         raise StepTimeoutError(step.id, timeout)
+    # terminal event 観測時の成功/失敗判定は error_messages を一次情報とする。
+    # 我々が後始末で SIGTERM した（returncode < 0）後の returncode は失敗根拠にならない。
+    if result.terminal_seen:
+        if result.error_messages:
+            detail = result.stderr or "\n".join(result.error_messages[-3:])
+            rc = process.returncode if process.returncode is not None else -1
+            raise CLIExecutionError(step.id, rc, detail)
+        return result
     if process.returncode != 0:
         detail = result.stderr or "\n".join(result.error_messages[-3:])
         raise CLIExecutionError(step.id, process.returncode, detail)
@@ -150,6 +175,7 @@ def stream_and_log(
     cost: CostInfo | None = None
     texts: list[str] = []
     error_messages: list[str] = []
+    terminal_seen = False
 
     with (
         open(log_dir / "stdout.log", "a", encoding="utf-8") as f_raw,
@@ -201,8 +227,15 @@ def stream_and_log(
                 if msg:
                     error_messages.append(msg)
 
+            if adapter.is_terminal_event(event):
+                terminal_seen = True
+                break
+
+    # terminal_seen で early-break した場合、process がまだ生きているため
+    # process.stderr.read() は EOF を待って blocking する。後始末（terminate）後に
+    # 呼び出し側で stderr を読むため、ここでは EOF 経路でのみ読む。
     stderr = ""
-    if process.stderr:
+    if not terminal_seen and process.stderr:
         stderr = process.stderr.read()
     if stderr:
         (log_dir / "stderr.log").write_text(stderr, encoding="utf-8")
@@ -213,6 +246,7 @@ def stream_and_log(
         cost=cost,
         stderr=stderr,
         error_messages=error_messages,
+        terminal_seen=terminal_seen,
     )
 
 
