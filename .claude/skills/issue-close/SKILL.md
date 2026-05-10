@@ -318,14 +318,27 @@ if [ -n "$DIRTY" ]; then
     }
 fi
 
-# remote 設定がある場合のみ fetch + ff-only merge
+# remote 設定がある場合のみ fetch + ff-only merge。
+# fetch 失敗 (network 断 / 認証エラー / suspended account 等) は WARNING で skip し、
+# local-only で close を完結させる (Step 6 の push も同様に warning で続行する設計と整合)。
+# `kaji run` 非対話モードでは AskUserQuestion 経由のリカバリ不可のため、
+# deterministic に local fallback すること。手動 push は remote 復旧後に実施。
 if git remote get-url origin >/dev/null 2>&1; then
-    git fetch origin [default_branch]
-    git merge --ff-only "origin/[default_branch]" || { echo "ABORT: ff-only merge failed in base worktree"; exit 1; }
+    if git fetch origin [default_branch] 2>&1; then
+        git merge --ff-only "origin/[default_branch]" || { echo "ABORT: ff-only merge failed in base worktree"; exit 1; }
+    else
+        echo "WARNING: git fetch origin [default_branch] failed; proceeding with local-only close (manual push needed after remote recovery)"
+    fi
 fi
 ```
 
-fast-forward できない / base worktree 側に whitelist 外の dirty file が残っている場合は ABORT。
+ABORT 条件:
+- fast-forward できない (ローカル main が origin/main から分岐) → resolve 後に再実行
+- base worktree 側に LocalProvider 永続化 whitelist 外の dirty file が残存 → 手動コミット後に再実行
+
+WARNING 継続条件:
+- `git fetch` 失敗 (remote 到達不可 / 認証失敗) → local merge は実行、push は Step 6 で warning skip
+
 標準動線で各 skill が `kaji issue {comment,edit} --commit` を使っていれば、ここまで到達した時点で
 base worktree は clean のはず。救済 commit は標準動線が機能しなかった場合の安全装置として残す。
 
