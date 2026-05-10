@@ -16,10 +16,24 @@ from __future__ import annotations
 
 import json
 import subprocess
+import warnings
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
 import pytest
+
+
+def _parse_iso8601(value: str) -> datetime:
+    """Parse a GitLab API ISO-8601 timestamp into a tz-aware datetime.
+
+    GitLab returns ``2026-05-10T02:55:45.123Z`` style strings; ``fromisoformat``
+    accepts ``+00:00`` but not ``Z`` until 3.11+, so normalize defensively.
+    """
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    return datetime.fromisoformat(value)
+
 
 pytestmark = [pytest.mark.large, pytest.mark.large_gitlab]
 
@@ -170,6 +184,42 @@ def test_review_approve_with_body_posts_note_and_records_approval(
     assert gitlab_self_username in approved_users, (
         f"expected self ({gitlab_self_username}) in approved_by, got {approved_users!r}"
     )
+
+    # Independent observation 3 (ordering, secondary contract): the matching
+    # note must have been created at-or-before the approval was recorded.
+    # GitLab API timestamps are second-precision, so back-to-back note +
+    # approve calls can land on the same second; in that case downgrade to
+    # a warning so this contract does not become a flake source. A note
+    # whose `created_at` is *after* the approval `updated_at` is a real
+    # ordering violation (approve happened before note) and must fail.
+    note = matching[0]
+    note_created_at_raw = note.get("created_at")
+    approvals_updated_at_raw = approvals.get("updated_at")
+    if isinstance(note_created_at_raw, str) and isinstance(approvals_updated_at_raw, str):
+        note_at = _parse_iso8601(note_created_at_raw)
+        approvals_at = _parse_iso8601(approvals_updated_at_raw)
+        if note_at == approvals_at:
+            warnings.warn(
+                f"note.created_at ({note_created_at_raw}) and approvals.updated_at "
+                f"({approvals_updated_at_raw}) share the same second; ordering "
+                "contract observed only as 'both present'.",
+                stacklevel=2,
+            )
+        else:
+            assert note_at < approvals_at, (
+                f"ordering contract violated: note.created_at ({note_created_at_raw}) "
+                f"must be <= approvals.updated_at ({approvals_updated_at_raw}); "
+                "kaji-pr-mr-bridge.md requires note → approve order so the body "
+                "is visible at-or-before approval is recorded."
+            )
+    else:
+        # Missing timestamp fields would itself be a shape regression worth
+        # surfacing — fail rather than silently drop the ordering check.
+        pytest.fail(
+            f"could not extract timestamps for ordering check: "
+            f"note.created_at={note_created_at_raw!r}, "
+            f"approvals.updated_at={approvals_updated_at_raw!r}"
+        )
 
 
 def test_review_request_changes_is_noop_for_revoke_when_not_approved(

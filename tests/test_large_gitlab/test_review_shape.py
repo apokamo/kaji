@@ -13,9 +13,13 @@ compatible JSON shapes for review surfaces. Specifically:
   posted reply is observable in a subsequent ``review-comments`` call,
   with the discussion thread restored (same ``in_reply_to_id``).
 
-Setup: open a real MR, post a review-comment via the GitLab discussions
-API (``glab api`` direct because ``kaji pr review-comment-create`` is
-not in scope here), then exercise the read / reply shape contracts.
+Setup: open a real MR, post a **positional** review-comment via the
+GitLab discussions API (``glab api`` direct because ``kaji pr review-
+comment-create`` is not in scope here). The positional thread is what
+lets ``test_review_comments_have_github_compatible_shape`` pin
+``path`` / ``line`` — a non-positional discussion would leave both
+fields None and a provider-side regression would slip through (see
+review feedback for issue local-pc5090-10).
 """
 
 from __future__ import annotations
@@ -30,19 +34,29 @@ import pytest
 pytestmark = [pytest.mark.large, pytest.mark.large_gitlab]
 
 
+_DIFF_FILE_PATH_TEMPLATE = "kaji-e2e/{suffix}.txt"
+
+
 def _open_mr_with_diff_thread(
     repo: str,
     base: str,
     suffix: str,
-) -> tuple[int, str, str]:
-    """Open MR with a single-line diff, then post a single non-positional
-    discussion (a free-text discussion is sufficient for shape contract
-    — ``in_reply_to_id`` round-trip is the key check).
+) -> tuple[int, str, str, str, int]:
+    """Open MR with a single-line added file, then post a **positional**
+    diff discussion targeting that line.
 
-    Returns ``(mr_iid, branch, discussion_id)``.
+    A positional discussion is required so the ``review-comments`` shape
+    contract can pin ``path`` / ``line`` (a non-positional discussion has
+    both fields ``None`` and would let provider-side regressions of the
+    diff comment shape pass silently — see review feedback for issue
+    local-pc5090-10).
+
+    Returns ``(mr_iid, branch, discussion_id, new_path, new_line)``.
     """
     branch = f"e2e/{suffix}"
     encoded = quote(repo, safe="")
+    new_path = _DIFF_FILE_PATH_TEMPLATE.format(suffix=suffix)
+    new_line = 1
 
     rc = subprocess.run(
         [
@@ -80,7 +94,7 @@ def _open_mr_with_diff_thread(
             "-f",
             "actions[][action]=create",
             "-f",
-            f"actions[][file_path]=kaji-e2e/{suffix}.txt",
+            f"actions[][file_path]={new_path}",
             "-f",
             "actions[][content]=initial line\n",
             f"projects/{encoded}/repository/commits",
@@ -114,10 +128,44 @@ def _open_mr_with_diff_thread(
     )
     if rc3.returncode != 0:
         pytest.fail(f"mr create: {rc3.stderr.strip()}")
-    iid = json.loads(rc3.stdout)["iid"]
+    mr_payload = json.loads(rc3.stdout)
+    iid = mr_payload["iid"]
 
-    # Open a discussion (non-positional, body-only is sufficient to test
-    # shape + in_reply_to_id round-trip).
+    # Fetch the MR's diff_refs so we can post a *positional* discussion.
+    # `glab api projects/.../merge_requests/<iid>` includes a `diff_refs`
+    # block with `base_sha` / `head_sha` / `start_sha`, which the
+    # discussions API requires for `position[position_type]=text` posts.
+    diff_refs = mr_payload.get("diff_refs") or {}
+    base_sha = diff_refs.get("base_sha")
+    head_sha = diff_refs.get("head_sha")
+    start_sha = diff_refs.get("start_sha")
+    if not (base_sha and head_sha and start_sha):
+        # Some GitLab API responses elide diff_refs at MR-create time
+        # (depending on async pipeline state). Refetch the MR explicitly.
+        rc_refetch = subprocess.run(
+            [
+                "glab",
+                "--hostname",
+                "gitlab.com",
+                "api",
+                f"projects/{encoded}/merge_requests/{iid}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if rc_refetch.returncode != 0:
+            pytest.fail(f"mr refetch for diff_refs: {rc_refetch.stderr.strip()}")
+        diff_refs = json.loads(rc_refetch.stdout).get("diff_refs") or {}
+        base_sha = diff_refs.get("base_sha")
+        head_sha = diff_refs.get("head_sha")
+        start_sha = diff_refs.get("start_sha")
+    if not (base_sha and head_sha and start_sha):
+        pytest.fail(
+            f"MR {iid} has no diff_refs (base/head/start sha all missing); "
+            "cannot post a positional discussion for shape contract"
+        )
+
     rc4 = subprocess.run(
         [
             "glab",
@@ -128,6 +176,18 @@ def _open_mr_with_diff_thread(
             "POST",
             "-f",
             f"body=initial review note for {suffix}",
+            "-f",
+            "position[position_type]=text",
+            "-f",
+            f"position[base_sha]={base_sha}",
+            "-f",
+            f"position[head_sha]={head_sha}",
+            "-f",
+            f"position[start_sha]={start_sha}",
+            "-f",
+            f"position[new_path]={new_path}",
+            "-f",
+            f"position[new_line]={new_line}",
             f"projects/{encoded}/merge_requests/{iid}/discussions",
         ],
         capture_output=True,
@@ -135,9 +195,9 @@ def _open_mr_with_diff_thread(
         timeout=30,
     )
     if rc4.returncode != 0:
-        pytest.fail(f"discussion create: {rc4.stderr.strip()}")
+        pytest.fail(f"positional discussion create: {rc4.stderr.strip()}")
     discussion = json.loads(rc4.stdout)
-    return iid, branch, discussion["id"]
+    return iid, branch, discussion["id"], new_path, new_line
 
 
 def test_review_comments_have_github_compatible_shape(
@@ -148,7 +208,7 @@ def test_review_comments_have_github_compatible_shape(
     created_resources,  # type: ignore[no-untyped-def]
     run_kaji,  # type: ignore[no-untyped-def]
 ) -> None:
-    iid, branch, discussion_id = _open_mr_with_diff_thread(
+    iid, branch, _discussion_id, new_path, new_line = _open_mr_with_diff_thread(
         gitlab_repo, gitlab_default_branch, unique_suffix
     )
     created_resources.add_mr(iid)
@@ -160,14 +220,20 @@ def test_review_comments_have_github_compatible_shape(
     assert isinstance(items, list)
     assert items, "expected at least one review-comment after creating a discussion"
     item = items[0]
-    # GitHub-compatible keys
-    for key in ("id", "user", "body", "created_at"):
+    # GitHub-compatible keys (full diff-comment shape: id / user / body /
+    # path / line / created_at / in_reply_to_id)
+    for key in ("id", "user", "body", "path", "line", "created_at", "in_reply_to_id"):
         assert key in item, f"review-comment missing key {key!r}: {item!r}"
     assert isinstance(item["user"], dict) and "login" in item["user"], (
         f"user should be dict with 'login', got: {item['user']!r}"
     )
-    # in_reply_to_id should be present (None for the discussion head)
-    assert "in_reply_to_id" in item
+    # path / line must reflect the positional discussion we created so the
+    # provider's diff-comment shape regression (e.g. dropping new_path /
+    # new_line during glab discussions → GitHub subset translation) is
+    # caught by this suite. Without a positional thread the helper would
+    # leave both fields None and the contract would not be observable.
+    assert item["path"] == new_path, f"expected path={new_path!r}, got {item['path']!r}"
+    assert item["line"] == new_line, f"expected line={new_line!r}, got {item['line']!r}"
 
 
 def test_reply_to_comment_round_trips_provider_local_id(
@@ -178,7 +244,7 @@ def test_reply_to_comment_round_trips_provider_local_id(
     created_resources,  # type: ignore[no-untyped-def]
     run_kaji,  # type: ignore[no-untyped-def]
 ) -> None:
-    iid, branch, discussion_id = _open_mr_with_diff_thread(
+    iid, branch, _discussion_id, _new_path, _new_line = _open_mr_with_diff_thread(
         gitlab_repo, gitlab_default_branch, unique_suffix
     )
     created_resources.add_mr(iid)
@@ -237,7 +303,9 @@ def test_reviews_emit_github_state_vocabulary(
     run_kaji,  # type: ignore[no-untyped-def]
     tmp_path: Path,
 ) -> None:
-    iid, branch, _ = _open_mr_with_diff_thread(gitlab_repo, gitlab_default_branch, unique_suffix)
+    iid, branch, _discussion_id, _new_path, _new_line = _open_mr_with_diff_thread(
+        gitlab_repo, gitlab_default_branch, unique_suffix
+    )
     created_resources.add_mr(iid)
     created_resources.add_branch(branch)
 
