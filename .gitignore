@@ -69,3 +69,6 @@ Thumbs.db
 # Local tools — CLI markers / standalone binaries dropped at repo root
 .codex
 actionlint
+
+# Claude Code — runtime lock files (session-specific, should not be committed)
+.claude/*.lock
