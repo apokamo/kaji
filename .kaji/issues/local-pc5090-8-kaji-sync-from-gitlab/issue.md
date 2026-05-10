@@ -1,12 +1,15 @@
 ---
 id: local-pc5090-8
 title: kaji sync from-gitlab + sync status + cache 自動 populate
-state: open
+state: closed
 slug: kaji-sync-from-gitlab
 labels:
 - type:feature
 - scope:gitlab-validation
 created_at: '2026-05-09T06:02:13Z'
+closed_at: '2026-05-10T02:02:06Z'
+closed_by: pc5090
+close_reason: completed
 ---
 > [!NOTE]
 > **Worktree**: `../kaji-feat-local-pc5090-8`
