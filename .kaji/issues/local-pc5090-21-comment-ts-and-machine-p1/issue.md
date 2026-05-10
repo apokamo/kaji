@@ -1,11 +1,14 @@
 ---
 id: local-pc5090-21
 title: 'feat: comment ファイル名 timestamp 化 + machine_id pc5090 → p1 への統合移行'
-state: open
+state: closed
 slug: comment-ts-and-machine-p1
 labels:
 - type:feature
 created_at: '2026-05-10T07:09:36Z'
+closed_at: '2026-05-10T11:03:29Z'
+closed_by: p1
+close_reason: completed
 ---
 > [!NOTE]
 > **Worktree**: `../kaji-feat-local-pc5090-21`
