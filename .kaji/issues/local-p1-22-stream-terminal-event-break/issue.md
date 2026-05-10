@@ -1,11 +1,14 @@
 ---
 id: local-p1-22
 title: step runner が claude の result event 後 stdout 閉鎖待ちで step timeout する
-state: open
+state: closed
 slug: stream-terminal-event-break
 labels:
 - type:bug
 created_at: '2026-05-10T11:04:43Z'
+closed_at: '2026-05-10T11:52:08Z'
+closed_by: p1
+close_reason: completed
 ---
 > [!NOTE]
 > **Worktree**: `../kaji-fix-local-p1-22`
