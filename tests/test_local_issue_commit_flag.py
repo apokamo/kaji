@@ -7,6 +7,7 @@ atomicity が肝心。
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -78,7 +79,11 @@ class TestCommentCommitFlag:
         )
         comment_files = [f for f in files if f.startswith(".kaji/issues/") and "/comments/" in f]
         assert len(comment_files) == 1
-        assert comment_files[0].endswith("0001-pc1.md")
+        # Issue local-pc5090-21: filename を <YYYYMMDDTHHMMSSZ>-<machine>.md に変更
+        assert re.match(
+            r".*/comments/\d{8}T\d{6}Z-pc1\.md$",
+            comment_files[0],
+        ), f"unexpected comment filename: {comment_files[0]!r}"
 
     def test_comment_with_commit_excludes_unrelated_staged_files(
         self, provider_with_issue: tuple[LocalProvider, str]

@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -401,17 +402,34 @@ class TestCommentWriteRetry:
         return prov
 
     def test_retries_on_existing_filename(self, provider: LocalProvider) -> None:
-        """``0001-pc1.md`` が既に存在する場合、``0002-pc1.md`` に retry する。"""
+        """同秒衝突時に filename 用 timestamp が ``+1s`` 加算で retry される。"""
+        from datetime import UTC
+        from datetime import datetime as _dt
+
+        from kaji_harness.providers import local as _local_mod
+
         issue_dir = provider._resolve_issue_dir("local-pc1-1")
         cdir = issue_dir / "comments"
-        cdir.mkdir()
-        # 競合を装う: 別 process が seq=1 を先に書いたとして手動配置
-        (cdir / "0001-pc1.md").write_text("---\nauthor: pc1\n---\npre-existing\n")
-        c = provider.comment_issue("local-pc1-1", "second")
-        assert c.seq == "0002"
-        assert (cdir / "0002-pc1.md").is_file()
+        cdir.mkdir(exist_ok=True)
+        fixed = _dt(2026, 5, 10, 14, 25, 36, tzinfo=UTC)
+
+        class FixedDatetime(_dt):
+            @classmethod
+            def now(cls, tz: object = None) -> _dt:  # type: ignore[override]
+                return fixed
+
+        # base_dt 同秒の filename を先に置く（別 process が同一秒で書いた状況）
+        first_name = "20260510T142536Z-pc1.md"
+        (cdir / first_name).write_text(
+            "---\nauthor: pc1\ncreated_at: 2026-05-10T14:25:36Z\n---\npre-existing\n"
+        )
+        with patch.object(_local_mod, "datetime", FixedDatetime):
+            c = provider.comment_issue("local-pc1-1", "second")
+        # +1s で retry → 20260510T142537Z
+        assert c.seq == "20260510T142537Z"
+        assert (cdir / "20260510T142537Z-pc1.md").is_file()
         # 既存ファイルは上書きされていない
-        assert "pre-existing" in (cdir / "0001-pc1.md").read_text()
+        assert "pre-existing" in (cdir / first_name).read_text()
 
     def test_fails_fast_after_retry_limit(self, provider: LocalProvider) -> None:
         """retry 上限を超えると ``LocalProviderError`` で停止する。"""
@@ -513,7 +531,8 @@ class TestCommentValidatesFrontmatter:
         d.mkdir(parents=True)
         (d / "issue.md").write_text("---\nid: local-pc1-1\nstate: open\n---\nbody\n")
         c = provider.comment_issue("local-pc1-1", "hi")
-        assert c.seq == "0001"
+        # Issue local-pc5090-21: seq は <YYYYMMDDTHHMMSSZ> 形式
+        assert re.match(r"^\d{8}T\d{6}Z$", c.seq), f"unexpected seq: {c.seq!r}"
 
 
 @pytest.mark.small

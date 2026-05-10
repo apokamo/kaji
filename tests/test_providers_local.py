@@ -149,14 +149,18 @@ class TestCRUD:
         names = [label.name for label in edited.labels]
         assert names == ["b", "c"]
 
-    def test_comment_seq(self, provider: LocalProvider) -> None:
+    def test_comment_filename_is_timestamp(self, provider: LocalProvider) -> None:
+        """Issue local-pc5090-21: comment filename は <YYYYMMDDTHHMMSSZ>-<machine>.md。"""
+        import re as _re
+
         provider.create_issue(title="t", body="b", slug="x")
         c1 = provider.comment_issue("local-pc1-1", "first")
         c2 = provider.comment_issue("local-pc1-1", "second")
-        assert c1.seq == "0001"
-        assert c2.seq == "0002"
+        assert _re.match(r"^\d{8}T\d{6}Z$", c1.seq), f"unexpected seq: {c1.seq!r}"
+        assert _re.match(r"^\d{8}T\d{6}Z$", c2.seq), f"unexpected seq: {c2.seq!r}"
         assert c1.machine_id == "pc1"
         view = provider.view_issue("local-pc1-1")
+        # ordering の正本は frontmatter created_at（書込順 = 時系列順）
         assert [c.body.rstrip() for c in view.comments] == ["first", "second"]
 
     def test_close(self, provider: LocalProvider) -> None:
@@ -347,3 +351,115 @@ class TestResolvePrContext:
     def test_returns_none_for_any_branch(self, provider: LocalProvider) -> None:
         assert provider.resolve_pr_context("feat/local-pc1-1") is None
         assert provider.resolve_pr_context("does-not-matter") is None
+
+
+# ============================================================
+# Issue local-pc5090-21: comment filename timestamp 化 + ordering 正本
+# ============================================================
+
+
+@pytest.mark.small
+class TestCommentFilenameRegex:
+    """``_COMMENT_FILENAME_RE`` の正例 / 反例。"""
+
+    def test_matches_new_format(self) -> None:
+        from kaji_harness.providers.local import _COMMENT_FILENAME_RE
+
+        m = _COMMENT_FILENAME_RE.match("20260510T142536Z-pc1")
+        assert m is not None
+        assert m["ts"] == "20260510T142536Z"
+        assert m["machine"] == "pc1"
+
+    def test_matches_pc5090_machine(self) -> None:
+        from kaji_harness.providers.local import _COMMENT_FILENAME_RE
+
+        m = _COMMENT_FILENAME_RE.match("20260510T142536Z-pc5090")
+        assert m is not None and m["machine"] == "pc5090"
+
+    def test_rejects_old_seq_format(self) -> None:
+        from kaji_harness.providers.local import _COMMENT_FILENAME_RE
+
+        assert _COMMENT_FILENAME_RE.match("0001-pc1") is None
+        assert _COMMENT_FILENAME_RE.match("0042-pc5090") is None
+
+    def test_rejects_short_or_malformed_ts(self) -> None:
+        from kaji_harness.providers.local import _COMMENT_FILENAME_RE
+
+        assert _COMMENT_FILENAME_RE.match("2026-05-10T14:25:36Z-pc1") is None
+        assert _COMMENT_FILENAME_RE.match("20260510T142536-pc1") is None  # missing Z
+        assert _COMMENT_FILENAME_RE.match("20260510142536Z-pc1") is None  # missing T
+
+    def test_rejects_invalid_machine(self) -> None:
+        from kaji_harness.providers.local import _COMMENT_FILENAME_RE
+
+        assert _COMMENT_FILENAME_RE.match("20260510T142536Z-PC1") is None  # uppercase
+        assert _COMMENT_FILENAME_RE.match("20260510T142536Z-pc-1") is None  # hyphen
+
+
+@pytest.mark.medium
+class TestReadCommentsNewFormat:
+    """``_read_comments`` が新形式を解釈し、frontmatter created_at 順で返す。"""
+
+    @pytest.fixture
+    def issue_dir(self, provider: LocalProvider) -> Path:
+        provider.create_issue(title="t", body="b", slug="x")
+        d = provider._resolve_issue_dir("local-pc1-1")
+        (d / "comments").mkdir(exist_ok=True)
+        return d
+
+    def _write(self, issue_dir: Path, filename: str, created_at: str, body: str) -> None:
+        (issue_dir / "comments" / filename).write_text(
+            f"---\nauthor: pc1\ncreated_at: {created_at}\n---\n{body}\n"
+        )
+
+    def test_reads_pc5090_machine_in_new_format(
+        self, provider: LocalProvider, issue_dir: Path
+    ) -> None:
+        """21 配下の rename 結果（machine 部分が pc5090）も解釈できる。"""
+        self._write(issue_dir, "20260510T142536Z-pc5090.md", "2026-05-10T14:25:36Z", "old")
+        view = provider.view_issue("local-pc1-1")
+        assert len(view.comments) == 1
+        assert view.comments[0].machine_id == "pc5090"
+        assert view.comments[0].seq == "20260510T142536Z"
+
+    def test_orders_by_frontmatter_created_at(
+        self, provider: LocalProvider, issue_dir: Path
+    ) -> None:
+        """ordering の正本は frontmatter created_at。filename ASCII 順とずらしても OK。"""
+        # filename は a (古) < b (新) だが created_at は a (新) > b (古)
+        self._write(issue_dir, "20260510T142536Z-pc1.md", "2026-05-10T20:00:00Z", "later-by-fm")
+        self._write(issue_dir, "20260510T142537Z-pc1.md", "2026-05-10T10:00:00Z", "earlier-by-fm")
+        view = provider.view_issue("local-pc1-1")
+        bodies = [c.body.rstrip() for c in view.comments]
+        assert bodies == ["earlier-by-fm", "later-by-fm"]
+
+    def test_tiebreaker_is_filename(self, provider: LocalProvider, issue_dir: Path) -> None:
+        """同 created_at では filename (= seq) ASCII でタイブレーク。"""
+        self._write(issue_dir, "20260510T142537Z-pc1.md", "2026-05-10T10:00:00Z", "second")
+        self._write(issue_dir, "20260510T142536Z-pc1.md", "2026-05-10T10:00:00Z", "first")
+        view = provider.view_issue("local-pc1-1")
+        bodies = [c.body.rstrip() for c in view.comments]
+        assert bodies == ["first", "second"]
+
+    def test_old_seq_format_fails_fast(self, provider: LocalProvider, issue_dir: Path) -> None:
+        """旧 seq 形式は LocalProviderError で fail-fast（fallback なし）。"""
+        (issue_dir / "comments" / "0001-pc1.md").write_text(
+            "---\nauthor: pc1\ncreated_at: 2026-05-10T10:00:00Z\n---\nx\n"
+        )
+        with pytest.raises(LocalProviderError, match="unrecognized comment filename"):
+            provider.view_issue("local-pc1-1")
+
+    def test_unknown_filename_fails_fast(self, provider: LocalProvider, issue_dir: Path) -> None:
+        (issue_dir / "comments" / "foo-bar.md").write_text(
+            "---\nauthor: pc1\ncreated_at: 2026-05-10T10:00:00Z\n---\nx\n"
+        )
+        with pytest.raises(LocalProviderError, match="unrecognized comment filename"):
+            provider.view_issue("local-pc1-1")
+
+    def test_missing_created_at_fails_fast(self, provider: LocalProvider, issue_dir: Path) -> None:
+        """ordering の正本（created_at）欠落は fail-fast。"""
+        (issue_dir / "comments" / "20260510T142536Z-pc1.md").write_text(
+            "---\nauthor: pc1\n---\nx\n"
+        )
+        with pytest.raises(LocalProviderError, match="missing 'created_at'"):
+            provider.view_issue("local-pc1-1")

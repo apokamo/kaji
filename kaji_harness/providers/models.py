@@ -28,8 +28,12 @@ class Comment:
     author: str
     body: str
     created_at: str  # ISO8601 文字列
-    # local mode 固有: コメントファイル名のシーケンス（``0001`` 等）。
+    # local mode 固有: コメントファイル名の uniqueness 部分。
+    # Issue local-pc5090-21 以降は compact ISO 8601 timestamp
+    # (``YYYYMMDDTHHMMSSZ``、例: ``"20260510T142536Z"``)。
     # GitHub provider では空文字列。
+    # 注: filename の uniqueness 用であり、comment ordering の正本は
+    # frontmatter ``created_at``（同秒衝突 retry で +1s 加算され乖離しうる）。
     seq: str = ""
     # local mode 固有: コメント投稿元の machine_id。GitHub では空。
     machine_id: str = ""

@@ -1285,7 +1285,7 @@ def _local_issue_comment(provider: LocalProvider, rest: list[str]) -> int:
         "--commit",
         action="store_true",
         help=(
-            "Commit the resulting .kaji/issues/<id>/comments/<seq>-<machine>.md "
+            "Commit the resulting .kaji/issues/<id>/comments/<ts>-<machine>.md "
             "atomically after persistence (uses `git commit --only` so other "
             "staged changes are not included in the new commit)."
         ),

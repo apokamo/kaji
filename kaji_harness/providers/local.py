@@ -15,7 +15,7 @@ import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import IO
 
@@ -36,6 +36,10 @@ from .models import Comment, Issue, IssueContext, Label, PRContext
 _MACHINE_ID_RE = re.compile(r"^[a-z0-9]{1,16}$")
 _LOCAL_ID_RE = re.compile(r"^local-([a-z0-9]{1,16})-([1-9]\d*)$")
 _POS_INT_RE = re.compile(r"^[1-9]\d*$")
+# comment filename: <YYYYMMDDTHHMMSSZ>-<machine>.md
+# - timestamp 部 16 文字固定（8 digit date + "T" + 6 digit time + "Z"）
+# - machine 部は validate_machine_id と同じ正規表現
+_COMMENT_FILENAME_RE = re.compile(r"^(?P<ts>\d{8}T\d{6}Z)-(?P<machine>[a-z0-9]{1,16})$")
 _FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n(.*)\Z", re.DOTALL)
 _SUPPRESS_WIN_WARNING_ENV = "KAJI_SUPPRESS_WIN_WARNING"
 _WIN_WARNING_EMITTED = False
@@ -459,38 +463,50 @@ class LocalProvider:
         return out
 
     def _read_comments(self, issue_dir: Path) -> list[Comment]:
+        """``comments/<ts>-<machine>.md`` を読み frontmatter ``created_at`` 順で返す。
+
+        comment ordering の正本は frontmatter ``created_at``（Issue local-pc5090-21
+        設計 § 制約）。filename の timestamp は uniqueness 用であり、同秒衝突
+        retry で +1s ずれた値が入りうるため ordering の正本にはしない。
+
+        既知形式（``<YYYYMMDDTHHMMSSZ>-<machine>``）にマッチしない filename、
+        または frontmatter ``created_at`` 不在は ``LocalProviderError`` で
+        fail-fast する（旧 ``<NNNN>-<machine>`` 形式 fallback は本 issue で削除）。
+        """
         cdir = issue_dir / "comments"
         if not cdir.is_dir():
             return []
         result: list[Comment] = []
-        for path in sorted(cdir.iterdir()):
+        for path in cdir.iterdir():
             if path.suffix != ".md":
                 continue
-            stem = path.stem
-            seq, _, machine = stem.partition("-")
+            m = _COMMENT_FILENAME_RE.match(path.stem)
+            if m is None:
+                raise LocalProviderError(
+                    f"unrecognized comment filename: {path}. "
+                    f"Expected '<YYYYMMDDTHHMMSSZ>-<machine>.md'."
+                )
+            ts, machine = m["ts"], m["machine"]
             meta, body = _parse_frontmatter(path.read_text(encoding="utf-8"))
+            created_at = str(meta.get("created_at", "") or "")
+            if not created_at:
+                raise LocalProviderError(
+                    f"missing 'created_at' in {path}; ordering source must exist."
+                )
             result.append(
                 Comment(
                     author=str(meta.get("author", "") or ""),
                     body=body,
-                    created_at=str(meta.get("created_at", "") or ""),
-                    seq=seq,
+                    created_at=created_at,
+                    seq=ts,
                     machine_id=machine,
                 )
             )
+        # ordering 正本は frontmatter created_at。同 created_at は filename
+        # （= seq フィールド）でタイブレーク。Python sort は stable なので
+        # (created_at, seq) lexicographic で決定的順序になる。
+        result.sort(key=lambda c: (c.created_at, c.seq))
         return result
-
-    @staticmethod
-    def _next_comment_seq(issue_dir: Path) -> str:
-        cdir = issue_dir / "comments"
-        if not cdir.is_dir():
-            return "0001"
-        max_seq = 0
-        for path in cdir.iterdir():
-            m = re.match(r"^(\d+)-", path.stem)
-            if m:
-                max_seq = max(max_seq, int(m.group(1)))
-        return f"{max_seq + 1:04d}"
 
     # -------- CRUD --------
 
@@ -562,12 +578,17 @@ class LocalProvider:
         return self._read_issue(issue_dir)
 
     def comment_issue(self, issue_id: str, body: str) -> Comment:
-        """新しい comment を ``comments/<seq>-<machine>.md`` に書き込む。
+        """新しい comment を ``comments/<ts>-<machine>.md`` に書き込む。
 
-        Phase 3-d preflight § 5: 上書きしない filename 戦略。``O_CREAT | O_EXCL``
-        の atomic create に失敗した場合、seq を再採番して
-        ``MAX_COMMENT_WRITE_RETRIES`` 回まで retry する。並列 comment / 別 process
-        の競合下でも既存 file を上書きしない。
+        Issue local-pc5090-21: filename を seq 採番から compact ISO 8601
+        timestamp (``YYYYMMDDTHHMMSSZ``) ベースに切替。worktree 間の seq race
+        を原理的に解消する。
+
+        ``O_CREAT | O_EXCL`` の atomic create に失敗した場合、filename 用
+        timestamp を ``+1s`` ずつ加算して ``MAX_COMMENT_WRITE_RETRIES`` 回まで
+        retry する。filename の timestamp は uniqueness 用であり、ordering の
+        正本は frontmatter ``created_at`` （retry で乖離しても ordering には
+        波及しない）。
 
         Phase 3-d preflight review Finding 2: write 系の一貫性として、comment
         付与前にも frontmatter validation を通す。slug は comment 自体が消費
@@ -589,14 +610,15 @@ class LocalProvider:
         )
         cdir = issue_dir / "comments"
         cdir.mkdir(exist_ok=True)
-        created_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        now = datetime.now(UTC)
+        created_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
         comment_meta: dict[str, object] = {"author": self.machine_id, "created_at": created_at}
         content = self._build_issue_md(comment_meta, body)
-        last_seq = ""
-        for _ in range(MAX_COMMENT_WRITE_RETRIES):
-            seq = self._next_comment_seq(issue_dir)
-            last_seq = seq
-            path = cdir / f"{seq}-{self.machine_id}.md"
+        last_attempted = ""
+        for attempt in range(MAX_COMMENT_WRITE_RETRIES):
+            ts = (now + timedelta(seconds=attempt)).strftime("%Y%m%dT%H%M%SZ")
+            last_attempted = ts
+            path = cdir / f"{ts}-{self.machine_id}.md"
             try:
                 _atomic_write_new(path, content)
             except FileExistsError:
@@ -609,12 +631,12 @@ class LocalProvider:
                 author=self.machine_id,
                 body=body,
                 created_at=created_at,
-                seq=seq,
+                seq=ts,
                 machine_id=self.machine_id,
             )
         raise LocalProviderError(
             f"failed to allocate unique comment filename in {cdir} after "
-            f"{MAX_COMMENT_WRITE_RETRIES} retries (last attempted seq={last_seq!r}). "
+            f"{MAX_COMMENT_WRITE_RETRIES} retries (last attempted ts={last_attempted!r}). "
             f"Another process may be writing comments concurrently; retry later "
             f"or inspect the directory."
         )
