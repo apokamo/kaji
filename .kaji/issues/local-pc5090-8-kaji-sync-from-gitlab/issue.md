@@ -8,6 +8,10 @@ labels:
 - scope:gitlab-validation
 created_at: '2026-05-09T06:02:13Z'
 ---
+> [!NOTE]
+> **Worktree**: `../kaji-feat-local-pc5090-8`
+> **Branch**: `feat/local-pc5090-8`
+
 ## 概要
 
 `.kaji/cache/` を GitLab Issue から populate する `kaji sync from-gitlab` と、cache 状態を表示する `kaji sync status` を実装する。`kaji issue list` の local + cache 統合表示にも対応する。
