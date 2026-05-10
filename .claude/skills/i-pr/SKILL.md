@@ -234,8 +234,9 @@ fi
 >   (full output captured in pr_output / stderr above)
 > suggestion: |
 >   Re-run after addressing the underlying error (auth / rate limit /
->   pre-existing PR for the branch). Check `gh auth status` (github)
->   or `glab auth status` (gitlab) and `kaji pr list --head <branch>`.
+>   pre-existing PR for the branch). Check the forge CLI auth status
+>   (`gh auth status` for provider.type='github', `glab auth status`
+>   for provider.type='gitlab') and `kaji pr list --head <branch>`.
 > ---END_VERDICT---
 > ```
 

@@ -202,6 +202,11 @@ GitHub mode に戻したい場合は `.kaji/config.local.toml` の `[provider] t
 `provider.type='local'` 配下から `gl:N` で GitLab Issue を参照する場合、
 あらかじめ `kaji sync from-gitlab` で cache を populate する:
 
+> GitLab project を kaji の primary forge として `provider.type='gitlab'` で
+> 運用する場合のセットアップ / 必須前提（merge method / 認証）/ `glab` 認証は
+> [GitLab Mode CLI Guide](gitlab-mode.md) を参照。本節は **`local` mode から
+> read-only で GitLab Issue を参照** するための cache populate 経路のみを扱う。
+
 ```bash
 # 初回 sync（[provider.gitlab].repo を config に書いておく場合）
 $ kaji sync from-gitlab
