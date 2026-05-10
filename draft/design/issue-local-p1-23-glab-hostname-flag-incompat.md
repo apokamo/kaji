@@ -36,14 +36,14 @@ $ glab issue list --hostname gitlab.com --repo apokamo/kaji → ❌ Unknown flag
 
 `provider.type='gitlab'` 配下で `kaji issue {list,create,note,close,edit}` / `kaji pr {create,view,list,merge,note,approve,revoke,...}` が `Unknown flag` を出さずに `glab` を起動でき、`gitlab.com` を target host として API を叩く。
 
-根拠（一次情報）:
+根拠（一次情報）— 詳細は § 参照情報（Primary Sources）の三主張別表を参照:
 
-| 情報源 | 引用/要約 |
-|--------|-----------|
-| `glab --help` (1.95.0 ローカル実行) | global flag 一覧に `--hostname` は存在しない（subcommand 一覧のみ） |
-| `glab api --help` (1.95.0 ローカル実行) | `If the current directory is a Git directory, uses the GitLab authenticated host in the current directory. Otherwise, gitlab.com will be used. To override the GitLab hostname, use --hostname.` — `--hostname` は **`api` の sub-flag 説明** に置かれている |
-| GitLab CLI ドキュメント `glab` 認証 | `GITLAB_HOST` / `GL_HOST` 環境変数で host を指定する。https://docs.gitlab.com/editor_extensions/gitlab_cli/ |
-| 本リポジトリ `docs/cli-guides/gitlab-mode.md` § 1.4 | `provider.type='gitlab'` 配下で `glab issue` / `glab pr` は GitHub mode と同じ skill 互換 contract で動作する（= `Unknown flag` で起動失敗してはならない） |
+| 主張 | 情報源（要約） |
+|------|---------------|
+| `--hostname` は global flag ではない | `glab --help` (v1.95.0)：`FLAGS` 節は `-h --help` / `-v --version` のみ |
+| `--hostname` は `api` の sub-flag | `glab api --help` (v1.95.0)：`To override the GitLab hostname, use --hostname.` を `api` の説明文中に記載 |
+| `GITLAB_HOST` は subcommand 非依存の host 指定手段 | `glab auth status --help` (v1.95.0) + GitLab CLI 公式 docs (https://docs.gitlab.com/cli/) |
+| GitLab mode で `glab issue` / `glab pr` は skill 互換 contract で起動成功する責務 | 本リポジトリ `docs/cli-guides/gitlab-mode.md` § 2 |
 
 ### 再現手順（steps-to-reproduce）
 
@@ -98,9 +98,13 @@ issue 起票時に列挙された 3 箇所と一致。これ以外の `--hostnam
 
 ### なぜ正規仕様（環境変数経路）に揃えるか
 
-- `glab --help` / `glab api --help` の双方で **hostname 切替の正規ルートは `GITLAB_HOST` 環境変数** と明記されている
-- `--hostname` の sub-flag は subcommand ごとに有無が異なる → 全 subcommand 共通の hostname pin を引数で表現する手段は **存在しない**
-- 環境変数経路は subcommand に依存せず effective、`glab` の hostname 解決優先順位（git directory > config > env > default）の中で「config を上書きし、コマンドラインでは見えない pin」として安定に機能する
+3 つの一次情報主張から導かれる:
+
+1. **`--hostname` は subcommand ごとに有無が異なる**（`api` / `auth login` / `auth status` 等にのみ存在し、`issue` / `mr` には存在しない。§ 参照情報の主張 ① + ②）→ 全 subcommand 共通の hostname pin を引数で表現する手段は **存在しない**
+2. **`GITLAB_HOST` は subcommand 非依存の host 指定手段**（§ 参照情報の主張 ③：`glab auth status --help` が `git remote` / `GITLAB_HOST` / config の 3 経路を host 解決要素として明示。GitLab CLI 公式 docs にも `GITLAB_HOST or GL_HOST` 環境変数が記載）
+3. 環境変数経路は `glab` の hostname 解決優先順位の中で「config を上書きし、コマンドラインでは見えない pin」として安定に機能する（subcommand を選ばない）
+
+なお、本セクションは「`glab --help` の global flag 領域に `GITLAB_HOST` が記載されている」とは主張しない。`glab --help` の `FLAGS` 節は `-h --help` / `-v --version` のみで、`GITLAB_HOST` への言及は無い。`GITLAB_HOST` の正当性根拠は `glab auth status --help` の host 解決説明と公式 docs の 2 つに依拠する。
 
 ## インターフェース
 
@@ -235,18 +239,39 @@ assert env is not None and env.get("GITLAB_HOST") == "gitlab.com"
 | docs/ARCHITECTURE.md | なし | アーキテクチャ層構成は不変 |
 | docs/dev/ | なし | ワークフロー・開発手順への影響なし |
 | docs/reference/ | なし | API 仕様は subprocess 起動の内部実装のみ。Provider の Python API は不変 |
-| docs/cli-guides/gitlab-mode.md | **要確認** | § 1.2 `glab auth login --hostname gitlab.com` は `auth login` の正規 sub-flag のため不変。§ 1.4 「self-hosted 非対応」のメカニズム説明に「`--hostname` 注入で pin」のような記述がある場合は「`GITLAB_HOST` env 注入で pin」に書き換える必要がある（実装コミット時に確認） |
+| docs/cli-guides/gitlab-mode.md | **なし** | 全文確認済（本設計時点）。`--hostname` への言及は § 1.2 / § 1.5 / § 5.2 の `glab auth login --hostname gitlab.com` の 3 箇所のみで、すべて `auth login` の正規 sub-flag 用法（修正不要）。§ 1.4 の `hostname フィールドは持たない（gitlab.com 固定。self-hosted 非対応）` は config schema の説明であり、kaji が `glab` に `--hostname` を注入する旨の記述は存在しない。実装メカニズム（引数注入 → env 注入）が変わってもユーザに見える運用手順・config 仕様は不変のため更新不要 |
 | docs/cli-guides/local-mode.md | なし | local mode は本変更と無関係 |
 | CHANGELOG.md | あり | bug fix エントリを追加（`fix:` 区分） |
 | CLAUDE.md | なし | 規約変更なし |
 
 ## 参照情報（Primary Sources）
 
+設計判断は以下 3 つの主張に依拠する。各主張ごとに一次情報を分離して列挙する。
+
+### 主張 ①: `--hostname` は `glab` の global flag ではない
+
 | 情報源 | URL/パス | 根拠（引用/要約） |
 |--------|----------|-------------------|
-| `glab --help`（v1.95.0 ローカル実行出力） | 本設計時点で WSL2 上で実行確認 | global flag 領域に `--hostname` は存在しない。`api` / `auth` / `issue` / `mr` 等の subcommand 一覧のみ |
-| `glab api --help`（v1.95.0 ローカル実行出力） | 同上 | `If the current directory is a Git directory, uses the GitLab authenticated host in the current directory. Otherwise, gitlab.com will be used. To override the GitLab hostname, use --hostname.` — `--hostname` は **`api` の sub-flag** として記載 |
-| GitLab CLI 公式 docs | https://docs.gitlab.com/editor_extensions/gitlab_cli/ | hostname 切替は `GITLAB_HOST` / `GL_HOST` 環境変数で行うのが正規ルート |
-| 実機切り分け（本設計時点で再確認） | コマンド出力上記「OB」セクション | `glab api --hostname X user` → 200 OK / `glab --hostname X api user` → 200 OK / `glab --hostname X issue list --repo R` → ❌ Unknown flag。`--hostname` は subcommand `api` に到達するケースで吸収され、`issue`/`mr` では reject される |
+| `glab --help` (v1.95.0 ローカル実行出力) | 本設計時点で WSL2 上で実行確認（再現コマンド: `glab --help`） | `FLAGS` 節は以下 2 件のみ — `-h --help: Show help for this command.` / `-v --version: Show glab version information.`。`--hostname` は global flag に存在しない。`COMMANDS` 節に `api` / `auth` / `issue` / `mr` 等の subcommand のみ列挙 |
+
+### 主張 ②: `--hostname` は `glab api` (および `glab auth login` / `glab auth status` 等) の sub-flag
+
+| 情報源 | URL/パス | 根拠（引用/要約） |
+|--------|----------|-------------------|
+| `glab api --help` (v1.95.0 ローカル実行出力) | 本設計時点で WSL2 上で実行確認（再現コマンド: `glab api --help`） | `api` subcommand の説明文中に `If the current directory is a Git directory, uses the GitLab authenticated host in the current directory. Otherwise, gitlab.com will be used. To override the GitLab hostname, use --hostname.` と記載 |
+| `glab auth status --help` (v1.95.0 ローカル実行出力) | 同上（再現コマンド: `glab auth status --help`） | `FLAGS` 節に `--hostname    Check a specific instance's authentication status.` が `auth status` の sub-flag として明示 |
+| 実機切り分け（本設計時点で再確認） | 設計書 § OB のコマンド出力 | `glab api --hostname gitlab.com user` → 200 OK / `glab --hostname gitlab.com api user` → 200 OK（`api` に到達するケースのみ吸収）/ `glab --hostname gitlab.com issue list --repo apokamo/kaji` → ❌ Unknown flag（`issue` の parser は `--hostname` を知らない） |
+
+### 主張 ③: `GITLAB_HOST` は subcommand 非依存の host 指定手段（正規ルート）
+
+| 情報源 | URL/パス | 根拠（引用/要約） |
+|--------|----------|-------------------|
+| `glab auth status --help` (v1.95.0 ローカル実行出力) | 本設計時点で WSL2 上で実行確認 | `By default, this command checks the authentication state of the GitLab instance determined by your current context (git remote, GITLAB_HOST environment variable, or configuration).` — host 解決の 3 経路（`git remote` / `GITLAB_HOST` / config）の 1 つとして `GITLAB_HOST` を明示 |
+| GitLab CLI 公式 docs | https://docs.gitlab.com/cli/ | `GITLAB_HOST` / `GL_HOST` 環境変数による host 指定がドキュメント化されている（reviewer 検証済の公開 URL） |
+
+### 補助情報（背景・経緯）
+
+| 情報源 | URL/パス | 根拠（引用/要約） |
+|--------|----------|-------------------|
 | 本リポジトリ過去 commit | `4a89ec8 fix: pin gitlab.com hostname in all glab invocations (local-pc5090-5)` | 本バグの混入元。`--hostname` を 3 サイトに同時注入した review fix |
-| 本リポジトリ既存 docs | `docs/cli-guides/gitlab-mode.md` § 1.2, § 1.4 | `provider.type='gitlab'` 配下で `glab issue` / `glab pr` が GitHub mode 互換で動作することが skill 契約。Unknown flag で起動失敗してはならない |
+| 本リポジトリ既存 docs | `docs/cli-guides/gitlab-mode.md` § 2 | `provider.type='gitlab'` 配下で `kaji issue` / `kaji pr` は GitHub mode と同じ skill 互換 contract で動作する責務（`Unknown flag` で起動失敗してはならない契約の出所） |
