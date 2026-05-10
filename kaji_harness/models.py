@@ -34,6 +34,8 @@ class CLIResult:
     cost: CostInfo | None = None
     stderr: str = ""
     error_messages: list[str] = field(default_factory=list)
+    terminal_seen: bool = False
+    terminal_failure: bool = False
 
 
 @dataclass

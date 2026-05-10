@@ -401,3 +401,278 @@ class TestExecuteCLISuccessFlow:
         assert "output text" in result.full_output
         assert result.cost is not None
         assert result.cost.usd == 0.01
+
+
+@pytest.mark.medium
+class TestTerminalEventBreak:
+    """terminal event 観測時の break + terminate 挙動（local-p1-22）。"""
+
+    def _write_leak_script(self, path: Path, jsonl_lines: list[str], sleep_after: int = 30) -> Path:
+        """terminal event 出力後に stdout fd を保持したまま sleep する fake CLI。"""
+        script = path / "leak_cli.sh"
+        echos = "\n".join(f"echo '{line}'" for line in jsonl_lines)
+        # exec sleep で stdout fd を保持し続ける（fd leak の最小再現）
+        script.write_text(f"#!/bin/bash\n{echos}\nexec sleep {sleep_after}\n")
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        return script
+
+    def test_claude_terminal_event_breaks_before_eof(self, tmp_path: Path) -> None:
+        """fd leak 再現: terminal event 観測直後に break + terminate して timeout を待たない。"""
+        jsonl_lines = [
+            json.dumps({"type": "system", "subtype": "init", "session_id": "sess-leak"}),
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "hello"}]},
+                }
+            ),
+            json.dumps(
+                {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": 0.01}
+            ),
+        ]
+        script = self._write_leak_script(tmp_path, jsonl_lines, sleep_after=30)
+
+        step = Step(id="leak", skill="t", agent="claude", on={"PASS": "end"})
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            import time
+
+            start = time.monotonic()
+            result = execute_cli(
+                step=step,
+                prompt="x",
+                workdir=tmp_path,
+                session_id=None,
+                log_dir=tmp_path / "logs",
+                execution_policy="auto",
+                verbose=False,
+                default_timeout=15,
+            )
+            elapsed = time.monotonic() - start
+
+        # terminate 後の grace 5s 以内に戻る（30s sleep を待たない）
+        assert elapsed < 10, f"expected fast return via terminal event, got {elapsed:.1f}s"
+        assert result.terminal_seen is True
+        assert result.session_id == "sess-leak"
+        assert result.cost is not None and result.cost.usd == 0.01
+
+    def test_terminal_event_observed_does_not_raise_timeout(self, tmp_path: Path) -> None:
+        """terminal event を見た直後に timer が発火する race でも StepTimeoutError を出さない。"""
+        # default_timeout=2: terminal event は echo 直後に観測 → grace wait 中に timer 発火しても
+        # terminal_seen=True により StepTimeoutError は抑制される。
+        jsonl_lines = [
+            json.dumps({"type": "system", "subtype": "init", "session_id": "sess-race"}),
+            json.dumps(
+                {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": 0.0}
+            ),
+        ]
+        script = self._write_leak_script(tmp_path, jsonl_lines, sleep_after=10)
+
+        step = Step(id="race", skill="t", agent="claude", timeout=2, on={"PASS": "end"})
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            result = execute_cli(
+                step=step,
+                prompt="x",
+                workdir=tmp_path,
+                session_id=None,
+                log_dir=tmp_path / "logs",
+                execution_policy="auto",
+                verbose=False,
+                default_timeout=1800,
+            )
+        assert result.terminal_seen is True
+        assert result.session_id == "sess-race"
+
+    def test_codex_turn_failed_is_terminal(self, tmp_path: Path) -> None:
+        """Codex turn.failed で break、error_messages 集約、CLIExecutionError 発火。"""
+        jsonl_lines = [
+            json.dumps({"type": "thread.started", "thread_id": "t-fail"}),
+            json.dumps({"type": "turn.failed", "error": {"message": "capacity"}}),
+        ]
+        # turn.failed 後 sleep して fd 保持 + exit 1
+        script = tmp_path / "codex_fail.sh"
+        echos = "\n".join(f"echo '{line}'" for line in jsonl_lines)
+        script.write_text(f"#!/bin/bash\n{echos}\nsleep 0.2\nexit 1\n")
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
+        step = Step(id="fail", skill="t", agent="codex", on={"PASS": "end"})
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                execute_cli(
+                    step=step,
+                    prompt="x",
+                    workdir=tmp_path,
+                    session_id=None,
+                    log_dir=tmp_path / "logs",
+                    execution_policy="auto",
+                    verbose=False,
+                    default_timeout=10,
+                )
+        assert "capacity" in str(exc_info.value)
+
+    def test_codex_error_event_does_not_break_early(self, tmp_path: Path) -> None:
+        """Codex `error` event 単体では break せず、後続 turn.failed まで読み切る。"""
+        jsonl_lines = [
+            json.dumps({"type": "thread.started", "thread_id": "t-err"}),
+            json.dumps({"type": "error", "message": "transient blip"}),
+            json.dumps({"type": "turn.failed", "error": {"message": "final reason"}}),
+        ]
+        script = _create_mock_cli_script(tmp_path, jsonl_lines, exit_code=1)
+
+        step = Step(id="err", skill="t", agent="codex", on={"PASS": "end"})
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                execute_cli(
+                    step=step,
+                    prompt="x",
+                    workdir=tmp_path,
+                    session_id=None,
+                    log_dir=tmp_path / "logs",
+                    execution_policy="auto",
+                    verbose=False,
+                    default_timeout=10,
+                )
+        # 両方が error_messages に集約されているはず
+        msg = str(exc_info.value)
+        assert "transient blip" in msg or "final reason" in msg
+
+    def test_no_terminal_event_falls_back_to_eof(self, tmp_path: Path) -> None:
+        """terminal event を出さず exit する CLI は EOF 経路で従来通り完了。"""
+        jsonl_lines = [
+            json.dumps({"type": "system", "subtype": "init", "session_id": "sess-eof"}),
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "no result"}]},
+                }
+            ),
+        ]
+        script = _create_mock_cli_script(tmp_path, jsonl_lines, exit_code=0)
+
+        step = Step(id="eof", skill="t", agent="claude", on={"PASS": "end"})
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            result = execute_cli(
+                step=step,
+                prompt="x",
+                workdir=tmp_path,
+                session_id=None,
+                log_dir=tmp_path / "logs",
+                execution_policy="auto",
+                verbose=False,
+                default_timeout=10,
+            )
+        assert result.terminal_seen is False
+        assert result.session_id == "sess-eof"
+        assert "no result" in result.full_output
+
+    def test_claude_failure_terminal_raises_cli_execution_error(self, tmp_path: Path) -> None:
+        """Claude `result` の subtype:error / is_error:true は failure terminal として CLIExecutionError。"""
+        jsonl_lines = [
+            json.dumps({"type": "system", "subtype": "init", "session_id": "sess-fail"}),
+            json.dumps(
+                {
+                    "type": "result",
+                    "subtype": "error",
+                    "is_error": True,
+                    "total_cost_usd": 0.01,
+                }
+            ),
+        ]
+        # terminal event 後 stdout fd を保持して fd leak を再現（exec sleep）。
+        # 我々の terminate 後 returncode は -15 になるが、terminal_failure で失敗判定する。
+        script = tmp_path / "claude_fail.sh"
+        echos = "\n".join(f"echo '{line}'" for line in jsonl_lines)
+        script.write_text(f"#!/bin/bash\n{echos}\nexec sleep 30\n")
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
+        step = Step(id="cfail", skill="t", agent="claude", on={"PASS": "end"})
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                execute_cli(
+                    step=step,
+                    prompt="x",
+                    workdir=tmp_path,
+                    session_id=None,
+                    log_dir=tmp_path / "logs",
+                    execution_policy="auto",
+                    verbose=False,
+                    default_timeout=15,
+                )
+        assert exc_info.value.step_id == "cfail"
+
+    def test_gemini_failure_terminal_raises_cli_execution_error(self, tmp_path: Path) -> None:
+        """Gemini `result` の status:error は failure terminal として CLIExecutionError。"""
+        jsonl_lines = [
+            json.dumps({"type": "init", "session_id": "g-fail", "model": "auto"}),
+            json.dumps(
+                {
+                    "type": "result",
+                    "status": "error",
+                    "stats": {"input_tokens": 10, "output_tokens": 0},
+                }
+            ),
+        ]
+        script = tmp_path / "gemini_fail.sh"
+        echos = "\n".join(f"echo '{line}'" for line in jsonl_lines)
+        script.write_text(f"#!/bin/bash\n{echos}\nexec sleep 30\n")
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
+        step = Step(id="gfail", skill="t", agent="gemini", on={"PASS": "end"})
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                execute_cli(
+                    step=step,
+                    prompt="x",
+                    workdir=tmp_path,
+                    session_id=None,
+                    log_dir=tmp_path / "logs",
+                    execution_policy="auto",
+                    verbose=False,
+                    default_timeout=15,
+                )
+        assert exc_info.value.step_id == "gfail"
+
+    def test_claude_success_terminal_with_self_exit_nonzero_raises(self, tmp_path: Path) -> None:
+        """`result` が success でも CLI が自発的に exit 1 した場合は CLIExecutionError。"""
+        jsonl_lines = [
+            json.dumps({"type": "system", "subtype": "init", "session_id": "sess-sx"}),
+            json.dumps(
+                {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": 0.0}
+            ),
+        ]
+        # exec sleep せず即 exit 1 → process.returncode = 1（自発 exit、SIGTERM ではない）
+        script = _create_mock_cli_script(tmp_path, jsonl_lines, exit_code=1)
+
+        step = Step(id="sx", skill="t", agent="claude", on={"PASS": "end"})
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            with pytest.raises(CLIExecutionError):
+                execute_cli(
+                    step=step,
+                    prompt="x",
+                    workdir=tmp_path,
+                    session_id=None,
+                    log_dir=tmp_path / "logs",
+                    execution_policy="auto",
+                    verbose=False,
+                    default_timeout=10,
+                )
+
+    def test_timer_still_guards_when_no_terminal_event(self, tmp_path: Path) -> None:
+        """terminal event なし & stdout 閉じない場合は最終ガードの timeout が効く。"""
+        script = tmp_path / "stuck.sh"
+        # JSON を一切出さず無限 sleep
+        script.write_text("#!/bin/bash\nsleep 60\n")
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
+        step = Step(id="stuck", skill="t", agent="claude", timeout=2, on={"PASS": "end"})
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            with pytest.raises(StepTimeoutError):
+                execute_cli(
+                    step=step,
+                    prompt="x",
+                    workdir=tmp_path,
+                    session_id=None,
+                    log_dir=tmp_path / "logs",
+                    execution_policy="auto",
+                    verbose=False,
+                    default_timeout=1800,
+                )

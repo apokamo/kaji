@@ -81,6 +81,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`/issue-review-code` / `/issue-fix-code` / `/issue-verify-code` /
   `/issue-close`).
 
+### Fixed
+
+- `kaji run` step が CLI セッションの terminal event（Claude/Gemini
+  `type:"result"` / Codex `turn.completed` / `turn.failed`）受信後も
+  stdout EOF を待ち続けて `default_timeout` まで blocking する不具合を
+  修正。`CLIEventAdapter` に `is_terminal_event` / `is_terminal_failure`
+  を追加し、stream loop が terminal event 観測時に break して
+  `terminate -> wait(5) -> kill` で後始末する。timer は最終ガードとして
+  温存し、`terminal_seen` 観測時は `timer.cancel()` 先行で grace wait
+  中の race を構造的に排除。Claude/Gemini の failure terminal は
+  `is_terminal_failure` で `CLIExecutionError` に伝搬する。
+
 ### Notes
 
 - **Phase 5**: No public CLI / config changes. Updates are limited to
