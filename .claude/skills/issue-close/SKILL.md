@@ -266,7 +266,7 @@ test -n "$BASE_WT" || { echo "ABORT: no worktree has [default_branch] checked ou
 
 cd "$BASE_WT"
 
-# Step 2.1: 3 段ガードによる救済 commit 判定（Issue local-pc5090-16 B）
+# Step 2.1: 3 段ガードによる救済 commit 判定（Issue local-p1-16 B）
 #
 # 標準動線（各 skill での `kaji issue {comment,edit} --commit`）が機能していれば
 # base worktree は clean。蓄積が残っている場合は LocalProvider 永続化由来の path

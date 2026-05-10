@@ -90,10 +90,10 @@ class IssueProvider(Protocol):
     def resolve_pr_context(self, branch_name: str) -> PRContext | None:
         """branch 名から PR/MR を逆引きし `PRContext` を返す。
 
-        Issue ``local-pc5090-7`` で GitLab 側を本実装。GitHub / Local
+        Issue ``local-p1-7`` で GitLab 側を本実装。GitHub / Local
         provider は同じ Issue 内で ``return None`` の no-op を実装する。
         GitHub の本実装は forge 採用後の別 Issue で扱う（bucket
-        ``local-pc5090-1`` Phase 4 申し送り）。
+        ``local-p1-1`` Phase 4 申し送り）。
 
         Returns:
             PRContext: branch に対応する open な PR/MR が一意に存在する場合。

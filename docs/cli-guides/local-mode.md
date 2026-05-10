@@ -194,7 +194,7 @@ GitHub mode に戻したい場合は `.kaji/config.local.toml` の `[provider] t
 ## 9. 既知の制限
 
 - Windows native は現時点では対応対象外。Windows では WSL 上で使う
-- `kaji sync from-gitlab` / `kaji sync status` は実装済（issue `local-pc5090-8`、後述 § 9b）。`provider.type='local'` 配下から `gl:N` で GitLab Issue を参照する経路を提供する
+- `kaji sync from-gitlab` / `kaji sync status` は実装済（issue `local-p1-8`、後述 § 9b）。`provider.type='local'` 配下から `gl:N` で GitLab Issue を参照する経路を提供する
 - `kaji sync from-github` は引き続き残課題（forge 採用先確定時に再評価）。GitHub 由来 cache (`gh:N` / `.kaji/cache/issues/N.json`) は手動投入のみ
 
 ## 9b. `kaji sync from-gitlab` / `kaji sync status`（GitLab cache populate）

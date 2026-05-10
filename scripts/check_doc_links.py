@@ -54,9 +54,7 @@ def main() -> int:
     return 0
 
 
-def collect_from_args(
-    args: list[str], repo_root: Path
-) -> tuple[list[Path], dict[str, int]]:
+def collect_from_args(args: list[str], repo_root: Path) -> tuple[list[Path], dict[str, int]]:
     files: list[Path] = []
     breakdown: dict[str, int] = {}
     for arg in args:
@@ -76,9 +74,7 @@ def collect_from_directory(directory: Path) -> list[Path]:
     if not directory.exists():
         return []
     return sorted(
-        p
-        for p in directory.rglob(f"*{MARKDOWN_EXT}")
-        if not _is_hidden(p.relative_to(directory))
+        p for p in directory.rglob(f"*{MARKDOWN_EXT}") if not _is_hidden(p.relative_to(directory))
     )
 
 
@@ -193,9 +189,7 @@ def _slugify(text: str, slug_counts: dict[str, int]) -> str:
     # Remove control characters
     slug = re.sub(r"[\x00-\x1f]", "", slug)
     # Remove punctuation and symbols
-    slug = "".join(
-        c for c in slug if not unicodedata.category(c).startswith(("P", "S"))
-    )
+    slug = "".join(c for c in slug if not unicodedata.category(c).startswith(("P", "S")))
     slug = re.sub(r"\s+", "-", slug)
     slug = re.sub(r"-+", "-", slug)
     slug = slug.strip("-")

@@ -82,7 +82,7 @@ class ClaudeAdapter:
         return None
 
     def extract_text(self, event: dict[str, Any]) -> str | None:
-        # `result` イベントの text 抽出は廃止（issue local-pc5090-14: assistant
+        # `result` イベントの text 抽出は廃止（issue local-p1-14: assistant
         # 最終 text と二重出力されていた）。cost のみ extract_cost が処理する。
         if event.get("type") != "assistant":
             return None
