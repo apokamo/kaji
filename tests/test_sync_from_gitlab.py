@@ -120,7 +120,7 @@ class TestPagination:
         assert sizes == [100, 30]
 
     def test_max_pages_aborts(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # MAX_PAGES を小さくして検証
+        # MAX_PAGES を小さくして検証 (3 page目もフルなので abort)
         monkeypatch.setattr(sync_mod, "_MAX_PAGES", 2)
         full_page = [{"iid": i} for i in range(1, 101)]
         outputs = iter([full_page, full_page, full_page])
@@ -131,6 +131,24 @@ class TestPagination:
         with _glab_present(), patch("kaji_harness.sync.subprocess.run", side_effect=fake_run):
             with pytest.raises(SyncError, match="aborted after"):
                 _fetch_open_issues_paginated("g/p")
+
+    def test_exactly_max_pages_succeeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """境界条件: ちょうど MAX_PAGES × per_page 件は成功する (regression)。
+
+        以前は ``if page > _MAX_PAGES`` で false positive abort していた。
+        """
+        monkeypatch.setattr(sync_mod, "_MAX_PAGES", 3)
+        full_page = [{"iid": i} for i in range(1, 101)]
+        # 3 page 連続フル → 4 page目空配列 (= 終端確認)
+        outputs = iter([full_page, full_page, full_page, []])
+
+        def fake_run(*_a: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+            return _ok(stdout=json.dumps(next(outputs)))
+
+        with _glab_present(), patch("kaji_harness.sync.subprocess.run", side_effect=fake_run):
+            issues, sizes = _fetch_open_issues_paginated("g/p")
+        assert len(issues) == 300
+        assert sizes == [100, 100, 100]
 
     def test_glab_failure_propagates(self) -> None:
         with (
@@ -623,6 +641,42 @@ class TestCliSyncFromGitLab:
         out = capsys.readouterr().out
         assert "Sync completed at" in out
         assert "1 issues" in out
+
+    def test_wrote_breakdown_matches_design(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """設計書 § インターフェース 1 で定義された出力契約を検証する。
+
+        ``Wrote N issues to .kaji/cache/ (X newly added, Y updated, Z unchanged signature).``
+        の breakdown を出す。ここでは初回 sync (= 全件 newly added) と再 sync
+        (= 全件 unchanged signature + 1 件 updated) で内訳を確認する。
+        """
+        repo_root = _bootstrap_local_repo(tmp_path)
+        monkeypatch.chdir(repo_root)
+        from kaji_harness.cli_main import main
+
+        page1 = [
+            {"iid": 1, "state": "opened", "title": "a", "description": "x"},
+            {"iid": 2, "state": "opened", "title": "b", "description": "y"},
+            {"iid": 3, "state": "opened", "title": "c", "description": "z"},
+        ]
+        with _glab_present(), _patch_glab_pages([page1, []]):
+            assert main(["sync", "from-gitlab"]) == 0
+        out1 = capsys.readouterr().out
+        assert "Wrote 3 issues to .kaji/cache/" in out1
+        assert "(3 newly added, 0 updated, 0 unchanged signature)" in out1
+
+        # 再 sync: iid=1 のみ title 変更 / 残り unchanged
+        page2 = [
+            {"iid": 1, "state": "opened", "title": "a-renamed", "description": "x"},
+            {"iid": 2, "state": "opened", "title": "b", "description": "y"},
+            {"iid": 3, "state": "opened", "title": "c", "description": "z"},
+        ]
+        with _glab_present(), _patch_glab_pages([page2, []]):
+            assert main(["sync", "from-gitlab"]) == 0
+        out2 = capsys.readouterr().out
+        assert "Wrote 3 issues to .kaji/cache/" in out2
+        assert "(0 newly added, 1 updated, 2 unchanged signature)" in out2
 
 
 @pytest.mark.medium

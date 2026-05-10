@@ -133,7 +133,9 @@ def _fetch_open_issues_paginated(
     """GitLab REST ``GET /projects/:id/issues?state=opened`` を全 page 取得する。
 
     ``?per_page=100`` + ``?page=N`` (1-indexed) のオフセット pagination。
-    空配列 / ``< per_page`` 件で終了。``MAX_PAGES`` 超過は暴走防止 ``SyncError``。
+    空配列 / ``< per_page`` 件で終了。``MAX_PAGES`` を「accept する page 上限」として
+    扱い、ちょうど ``MAX_PAGES`` page × ``per_page`` 件は成功扱い。``MAX_PAGES + 1``
+    page目のデータを観測した場合のみ、暴走防止のため ``SyncError`` を投げる。
 
     全 page 完了するまで in-memory に貯める（**all-or-nothing 契約**: 任意 page の
     失敗は呼出側に伝搬し、cache file は一切触らない）。
@@ -145,13 +147,19 @@ def _fetch_open_issues_paginated(
     issues: list[dict[str, object]] = []
     page_sizes: list[int] = []
     page = 1
-    while page <= _MAX_PAGES:
+    while True:
         endpoint = f"projects/{encoded}/issues?state=opened&per_page={_PER_PAGE}&page={page}"
         payload = _glab_api_get(endpoint)
         if not isinstance(payload, list):
             raise SyncError(f"glab api returned non-array JSON for issue list (page {page})")
         if not payload:
             break
+        if page > _MAX_PAGES:
+            # MAX_PAGES + 1 page目に到達してもデータが残っている = 真の上限超過
+            raise SyncError(
+                f"sync aborted after {_MAX_PAGES} pages (>{_MAX_PAGES * _PER_PAGE} issues). "
+                f"Check repo or contact maintainer."
+            )
         for entry in payload:
             if not isinstance(entry, dict):
                 raise SyncError(f"glab api returned non-object element on page {page}")
@@ -160,11 +168,6 @@ def _fetch_open_issues_paginated(
         if len(payload) < _PER_PAGE:
             break
         page += 1
-    if page > _MAX_PAGES:
-        raise SyncError(
-            f"sync aborted after {_MAX_PAGES} pages (>{_MAX_PAGES * _PER_PAGE} issues). "
-            f"Check repo or contact maintainer."
-        )
     return issues, page_sizes
 
 
@@ -178,6 +181,22 @@ def _list_existing_cached_iids(cache_dir: Path) -> set[str]:
         if stem.startswith("gl-") and stem[3:].isdigit():
             iids.add(stem[3:])
     return iids
+
+
+def _read_existing_issue_payload(path: Path) -> dict[str, object] | None:
+    """既存 wrapper から ``issue`` field を取り出す。読めない / 形式異常は ``None``。"""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    issue_obj = payload.get("issue")
+    return issue_obj if isinstance(issue_obj, dict) else None
 
 
 def _write_fresh_cache_file(entry: dict[str, object], cache_dir: Path, now_iso: str) -> None:
@@ -299,7 +318,20 @@ def sync_from_gitlab(
     # phase 3: write
     cache_dir.mkdir(parents=True, exist_ok=True)
     now_iso = _now_iso()
+    newly_added = 0
+    updated = 0
+    unchanged_signature = 0
     for entry in issues:
+        iid = str(entry["iid"])
+        path = cache_dir / f"gl-{iid}.json"
+        if iid not in existing_iids:
+            newly_added += 1
+        else:
+            previous = _read_existing_issue_payload(path)
+            if previous == entry:
+                unchanged_signature += 1
+            else:
+                updated += 1
         _write_fresh_cache_file(entry, cache_dir, now_iso)
     for iid in sorted(stale_iids):
         _mark_cache_stale(cache_dir / f"gl-{iid}.json", now_iso)
@@ -313,7 +345,11 @@ def sync_from_gitlab(
     elapsed = time.monotonic() - started
 
     if not quiet:
-        sys.stdout.write(f"Wrote {len(issues)} issues to .kaji/cache/.\n")
+        sys.stdout.write(
+            f"Wrote {len(issues)} issues to .kaji/cache/ "
+            f"({newly_added} newly added, {updated} updated, "
+            f"{unchanged_signature} unchanged signature).\n"
+        )
 
     return SyncResult(
         issue_count=len(issues),
