@@ -57,6 +57,13 @@ test-artifacts/
 # `kaji local init` で生成され、commit してはいけない。
 .kaji/config.local.toml
 
+# Working scratch space (smoke test logs, ad-hoc experiment artifacts).
+# 作業ローカルの一時ファイルをここに置く。コミット禁止。
+tmp/
+
+# kaji local config backups (smoke test 等でバックアップする時の安全網)
+.kaji/config.local.toml.bak-*
+
 # Environment
 .env
 .env.local
