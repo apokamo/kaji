@@ -1,12 +1,15 @@
 ---
 id: local-pc5090-7
 title: GitLabProvider.resolve_pr_context + prompt 注入経路
-state: open
+state: closed
 slug: gitlab-resolve-pr-context
 labels:
 - type:feature
 - scope:gitlab-validation
 created_at: '2026-05-09T06:02:09Z'
+closed_at: '2026-05-10T01:04:37Z'
+closed_by: pc5090
+close_reason: completed
 ---
 > [!NOTE]
 > **Worktree**: `../kaji-feat-local-pc5090-7`
