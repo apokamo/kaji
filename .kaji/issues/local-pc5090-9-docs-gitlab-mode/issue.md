@@ -1,12 +1,15 @@
 ---
 id: local-pc5090-9
 title: 'docs: gitlab-mode.md 新設 + gh 直接記述の forge-neutral 化'
-state: open
+state: closed
 slug: docs-gitlab-mode
 labels:
 - type:docs
 - scope:gitlab-validation
 created_at: '2026-05-09T06:02:20Z'
+closed_at: '2026-05-10T02:21:19Z'
+closed_by: pc5090
+close_reason: completed
 ---
 > [!NOTE]
 > **Worktree**: `../kaji-docs-local-pc5090-9`
