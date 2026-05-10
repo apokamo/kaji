@@ -7,6 +7,10 @@ labels:
 - type:bug
 created_at: '2026-05-10T11:04:43Z'
 ---
+> [!NOTE]
+> **Worktree**: `../kaji-fix-local-p1-22`
+> **Branch**: `fix/local-p1-22`
+
 ## 概要
 
 `kaji_harness/cli.py:stream_and_log` が Claude Code (stream-json) の `result` イベント受信後も stdout EOF を待ち続けるため、claude セッションが正常完了していてもステップが `default_timeout`（既定 1800s）まで blocking する。adapter に terminal event 検知 IF を追加し、stream loop 側で受信時に break + `process.terminate()` させることで解消する（案 B）。
