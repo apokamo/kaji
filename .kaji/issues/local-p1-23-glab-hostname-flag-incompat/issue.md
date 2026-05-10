@@ -1,11 +1,14 @@
 ---
 id: local-p1-23
 title: gitlab provider が glab の --hostname を全 subcommand に注入し issue/mr 経路が不通
-state: open
+state: closed
 slug: glab-hostname-flag-incompat
 labels:
 - type:bug
 created_at: '2026-05-10T14:25:34Z'
+closed_at: '2026-05-10T16:03:37Z'
+closed_by: p1
+close_reason: completed
 ---
 > [!NOTE]
 > **Worktree**: `../kaji-fix-local-p1-23`
