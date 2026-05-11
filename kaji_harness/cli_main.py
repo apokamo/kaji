@@ -816,20 +816,11 @@ def _handle_issue(raw_args: list[str]) -> int:
 
     # ``context`` subcommand は provider 共通で provider.resolve_issue_context()
     # を呼ぶ helper（issue local-p1-17）。``gh issue context`` は存在しない
-    # ため、GitHub passthrough 前に捕捉する。GitLab 経路は本 Issue 範囲外として
-    # 明示拒否（normalize_id() / dispatcher の GitLab 拡張は別 Issue で対応）。
+    # ため、GitHub passthrough 前に捕捉する。gl:7 で GitLab 拒否 gate を撤去。
     args = list(raw_args)
     if args and args[0] == "--":
         args = args[1:]
     if args and args[0] == "context":
-        if isinstance(provider, GitLabProvider):
-            sys.stderr.write(
-                "Error: 'kaji issue context' is not supported under "
-                "provider.type='gitlab'. GitLab support requires "
-                "normalize_id() and dispatcher extension (tracked separately). "
-                "Use provider.type='local' or 'github'.\n"
-            )
-            return EXIT_INVALID_INPUT
         return _handle_issue_context(provider, args[1:])
 
     if isinstance(provider, GitLabProvider):
@@ -1033,6 +1024,14 @@ def _handle_issue_context(provider: IssueProvider, rest: list[str]) -> int:
         if isinstance(rid_or_rc, int):
             return rid_or_rc
         issue_id_value = rid_or_rc.value
+    elif isinstance(provider, GitLabProvider):
+        # GitLab: 数値 / ``gl:N`` を受理し gitlab の iid に正規化
+        try:
+            rid = normalize_id(ns.issue_id, provider_name="gitlab", machine_id=None)
+        except ValueError as exc:
+            sys.stderr.write(f"Error: {exc}\n")
+            return EXIT_INVALID_INPUT
+        issue_id_value = rid.value
     else:
         # GitHub: 数値 / ``gh:N`` を受理し github の数値 ID に正規化
         try:
@@ -1047,8 +1046,8 @@ def _handle_issue_context(provider: IssueProvider, rest: list[str]) -> int:
     except IssueNotFoundError as exc:
         sys.stderr.write(f"Error: {exc}\n")
         return EXIT_RUNTIME_ERROR
-    except GitHubProviderError as exc:
-        # GitHub 経路の `gh` 不在 / `gh issue view` 非 0 終了 / 不正 JSON 等を
+    except (GitHubProviderError, GitLabProviderError) as exc:
+        # GitHub / GitLab 経路の CLI 不在 / 非 0 終了 / 不正 JSON 等を
         # user-facing なエラー出力 + EXIT_RUNTIME_ERROR に正規化する。
         sys.stderr.write(f"Error: {exc}\n")
         return EXIT_RUNTIME_ERROR

@@ -55,6 +55,40 @@ def test_issue_full_roundtrip(
     iid = _extract_iid(create.stdout + create.stderr)
     created_resources.add_issue(iid)
 
+    # ---- context (gl:7 regression: GitLab provider must accept this sub) ----
+    # type:* label が付与されていない (kaji-e2e のみ) ため、context は ``chore`` に
+    # fallback する。assert は label に依存しない shape のみを検証する。
+    context = run_kaji(
+        kaji_workspace,
+        "issue",
+        "context",
+        str(iid),
+        "--json",
+        "branch_prefix,branch_name,provider_type,issue_ref,branch_prefix_fallback",
+    )
+    assert context.returncode == 0, (
+        f"issue context failed (rc={context.returncode}):\nstderr: {context.stderr}"
+    )
+    ctx_payload = json.loads(context.stdout)
+    assert ctx_payload["provider_type"] == "gitlab"
+    assert ctx_payload["issue_ref"] == f"gl:{iid}"
+    # type:* label 不在 → chore fallback
+    assert ctx_payload["branch_prefix"] == "chore"
+    assert ctx_payload["branch_prefix_fallback"] is True
+    assert ctx_payload["branch_name"] == f"chore/{iid}"
+
+    # Also exercise the gl:N input form with -q raw output
+    context_q = run_kaji(
+        kaji_workspace,
+        "issue",
+        "context",
+        f"gl:{iid}",
+        "-q",
+        ".branch_prefix",
+    )
+    assert context_q.returncode == 0, context_q.stderr
+    assert context_q.stdout.strip() == "chore"
+
     # ---- view (--json title,state,labels) ----
     view = run_kaji(
         kaji_workspace,
