@@ -181,10 +181,18 @@ git stage + commit を **同一 process 内で atomic に** 行う。実装は
 
 挙動の要点:
 
-- commit 対象は当該 Issue 配下のファイルに限定し、他の dirty file は **stage しない**
-  （`git add .kaji/issues/<id>-*/` を明示する）。pre-existing dirty file が
-  あっても本コマンドの commit には混入しない
-- commit message は `chore(local): edit/comment <issue_ref>` 形式
+- commit 対象は CLI が書き換えた path（`issue.md` または新規 comment markdown）
+  のみに限定する。`git add -- <対象 path>` で stage したうえで、
+  `git commit --only -- <対象 path>` を使うことで HEAD に当該 path だけを
+  反映する一時 index を構築して commit する。pre-existing で staged な
+  他のファイルはこの commit には含まれず、ユーザの index に残ったまま保護される
+  （`man git-commit` § `--only` 準拠）
+- commit message は `chore(local): edit for <issue_ref>`
+  または `chore(local): comment for <issue_ref>` 形式
+  （実装: `kaji_harness/cli_main.py` `_commit_local_issue_change`）
+- `kaji issue edit --commit` で実体差分が無い no-op edit の場合は、
+  `git diff --cached --quiet` で staged 差分を確認し、空なら commit を skip する
+  （`nothing to commit` での exit 1 を避けるため）
 - skill が `--commit` を毎呼び出しに付与することで、`/issue-close` の
   base worktree clean 前提（§ 6 Step 2）が成立する
 - `provider.type='github'` / `'gitlab'` 配下では `--commit` は **silent strip**
