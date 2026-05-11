@@ -4,13 +4,13 @@ Issue: gl:6
 
 ## 概要
 
-`.claude/skills/i-pr/SKILL.md` / `.claude/skills/issue-close/SKILL.md` 内 9 箇所の `origin` hardcode を、kaji harness が provider config から解決して prompt 経由で注入する `[git_remote]` placeholder に置換する。あわせて `docs/cli-guides/gitlab-mode.md` § 2 / `docs/cli-guides/local-mode.md` § 9 系へ gl:8 統合分の `--commit` flag semantics 説明を追加する。
+`.claude/skills/i-pr/SKILL.md` / `.claude/skills/issue-close/SKILL.md` 内の `origin` hardcode（コマンド行 + コメント + 説明文 + echo文を含む SKILL 全文、合計 15 箇所）を、kaji harness が provider config から解決して prompt 経由で注入する `[git_remote]` placeholder に置換する。あわせて `docs/cli-guides/gitlab-mode.md` / `local-mode.md` / `github-mode.md` を `git_remote` IF 追加に合わせて更新し、`local-mode.md` には gl:8 統合分の `--commit` flag semantics も追記する。
 
 ## 背景・目的
 
 ### Observed Behavior (OB)
 
-- skill SKILL.md 内に remote 名 `origin` が hardcode されている（合計 9 箇所、Issue 本文 § Observed Behavior の表で全列挙）
+- skill SKILL.md 内に remote 名 `origin` が hardcode されている（Issue 本文 § Observed Behavior の表で初期 9 箇所を列挙。再現手順 § 静的検出 を **SKILL 全文** に広げた本設計時点では合計 15 箇所＝コマンド行 9 + コメント 2 + 説明文 2 + echo文 3）
 - `provider.type='gitlab'` 配下で `origin = git@github.com:...` / `gitlab = git@gitlab.com:...` の hybrid setup を組むと `/i-pr` の `git push -u origin HEAD` が GitHub 側に向かい認証失敗で workflow が ABORT する（Issue 本文 § 動的観測 step 5）
 - `kaji issue` / `kaji pr` 抽象は provider 別 routing が揃っているのに対し、git-native な remote 操作だけが provider 非対応で取り残されている
 - `docs/cli-guides/gitlab-mode.md` / `local-mode.md` には `kaji issue {edit,comment} --commit` flag の semantics（GitHub/GitLab で silent strip / Local で `chore(local)` commit atomic 化）が記載されていない（gl:8 調査 note_3333217711）
@@ -32,7 +32,7 @@ EB の裏付けは以下の一次情報:
 
 Issue 本文 § 再現手順を正本とし、本設計では検証経路のみ要約する。
 
-1. **静的検出**: `grep -nE '\borigin\b' .claude/skills/i-pr/SKILL.md .claude/skills/issue-close/SKILL.md` で 9 箇所の hardcode が列挙される（修正後は 0 箇所、もしくは `[git_remote]` placeholder のみ）
+1. **静的検出**: `grep -nE '\borigin\b' .claude/skills/i-pr/SKILL.md .claude/skills/issue-close/SKILL.md` で 15 箇所（コマンド行 9 + コメント 2 + 説明文 2 + echo文 3。Issue 本文 § Observed Behavior 表に追加 6 箇所を含む）の hardcode が列挙される（修正後は 0 箇所＝SKILL 全文で `\borigin\b` が単語境界マッチしない状態にする）
 2. **動的観測**: `.kaji/config.local.toml` に `provider.type='gitlab'` + `[provider.gitlab]` で `git_remote = "gitlab"` 設定 + `git remote -v` に `gitlab` が存在する状態で `kaji run workflows/feature-development.yaml gl:N` を実行 → `/i-pr` の push が `gitlab` remote に向かい MR 作成まで完走する
 3. **regression**: `provider.type='github'` で `git_remote` 未指定 → 既定値 `origin` で従来通り動作する
 
@@ -130,17 +130,19 @@ git_remote = "origin"     # NEW (任意、default "origin")
 - `kaji_harness/providers/__init__.py` — `IssueContext` に `git_remote` 追加
 - `kaji_harness/providers/github.py` / `gitlab.py` / `local.py` — `resolve_issue_context` で `git_remote` 充填
 - `kaji_harness/prompt.py` — variables dict に追加
-- `.claude/skills/i-pr/SKILL.md` — 1 箇所置換
-- `.claude/skills/issue-close/SKILL.md` — 8 箇所置換
+- `.claude/skills/i-pr/SKILL.md` — コマンド行 1 箇所置換
+- `.claude/skills/issue-close/SKILL.md` — **コマンド行 + コメント + 説明文 + echo文 合計 14 箇所** 置換（§ インターフェース #4 の表で全列挙）。SKILL 全文から `\borigin\b` を 0 件にする
 - `docs/cli-guides/gitlab-mode.md` — § 2 に git remote 前提 + `--commit` silent strip 説明（gl:8 統合）
-- `docs/cli-guides/local-mode.md` — `--commit` flag section 新設（gl:8 統合）
+- `docs/cli-guides/local-mode.md` — § 影響ドキュメント の 4 点を全て更新: (a) § 2 overlay 例に `git_remote = "origin"` 追加、(b) § 6 step 6 の `git push origin [default_branch]` を `git push [git_remote] [default_branch]` に書き換え、(c) `git_remote` 上書き例の追記、(d) gl:8 統合の `--commit` flag section 新設
+- `docs/cli-guides/github-mode.md` — `git_remote` 任意 field の透明化（軽微 1 行 / 1 paragraph）
 - `tests/test_phase4_dispatcher_gitlab.py` 等 — `git_remote` 注入の assertion 追加
+- `tests/test_skill_remote_placeholder.py` (新規) — § テスト戦略の bug 固有 regression test
 
 ### scope 外（変更しない）
 
-- 実 git remote の作成/管理（ユーザ責務）。kaji 側は preflight で `git remote get-url <git_remote>` 解決可能性を検証するに留める
-- skill SKILL.md 内の説明文（コメント・解説）の `origin/main` 表記
-- `docs/guides/git-worktree.md` 等の一般 git 解説
+- 実 git remote の作成/管理（ユーザ責務）。kaji 側は preflight で `git remote get-url <git_remote>` 解決可能性を検証するに留める（preflight 自体も初回 PR では TODO 許容）
+- `docs/guides/git-worktree.md` 等の **一般 git 解説**（kaji 抽象の外、ユーザ向け git 教育文書）
+- skill SKILL.md 外の markdown（`docs/dev/*.md` 等）に登場する `origin` 一般説明（kaji の挙動説明ではなく git 標準用語として用いられている箇所）
 
 ## 方針（修正アプローチ）
 
@@ -149,7 +151,7 @@ git_remote = "origin"     # NEW (任意、default "origin")
 理由:
 
 - 既存 `default_branch` / `branch_name` 等と **同一経路** で対称性が高く、設計負荷が最小
-- skill SKILL.md は markdown 内 placeholder のみの変更で済み、shell escape リスクなし
+- skill SKILL.md は markdown 内 placeholder（コマンド行 + コメント + 説明文 + echo文を含む SKILL 全文）のみの変更で済み、shell escape リスクなし
 - config に `git_remote` を集約することで「remote 名はどこで決まるか」が一次情報として明確（`kaji validate` で型検証も可能）
 
 ### 不採用案
@@ -169,7 +171,7 @@ git_remote = "origin"     # NEW (任意、default "origin")
 2. `IssueContext` に `git_remote: str` 追加（dataclass field、provider 経由で必ず充填）
 3. 各 provider の `resolve_issue_context` で `self.config.<type>.git_remote` を渡す
 4. `prompt.py:variables` に `git_remote` 追加
-5. skill SKILL.md 9 箇所を `[git_remote]` に置換
+5. skill SKILL.md 15 箇所（i-pr 1 + issue-close 14、コマンド行 + コメント + 説明文 + echo文）を `[git_remote]` / `[git_remote]/[default_branch]` に置換し、SKILL 全文で `\borigin\b` を 0 件にする
 6. 既存テストで `IssueContext` 構築箇所 / prompt variables の assertion を更新
 7. 新規 Small テスト: config 読み込みで `git_remote` field が反映されること（3 provider 分）
 8. 新規 Medium テスト: 各 provider の `resolve_issue_context` 結果に `git_remote` が含まれること
