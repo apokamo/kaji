@@ -201,6 +201,44 @@ class TestGitLabIssueDispatch:
         payload = json.loads(out)
         assert payload == {"title": "T", "body": "B"}
 
+    def test_context_dispatches_to_resolve_issue_context(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """gl:7 regression: ``kaji issue context`` が GitLab 経路で受理され、
+        config 読込 → provider 解決 → ``GitLabProvider.view_issue`` → ``IssueContext``
+        JSON 出力までを end-to-end で確認する。
+        """
+        repo = _write_gitlab_repo(tmp_path)
+        monkeypatch.chdir(repo)
+        # provider.view_issue → glab api を 2 回叩く（issue payload + notes）
+        issue_payload = {
+            "iid": 6,
+            "title": "fix gitlab context dispatcher",
+            "description": "body",
+            "state": "opened",
+            "labels": ["type:bug"],
+        }
+        outputs = iter([_ok(stdout=json.dumps(issue_payload)), _ok(stdout="[]")])
+        with (
+            patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
+            patch(
+                "kaji_harness.providers.gitlab.subprocess.run",
+                side_effect=lambda *a, **kw: next(outputs),
+            ),
+        ):
+            rc = _handle_issue(
+                ["context", "6", "--json", "branch_prefix,branch_name,provider_type,issue_ref"]
+            )
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["provider_type"] == "gitlab"
+        assert payload["issue_ref"] == "gl:6"
+        assert payload["branch_prefix"] == "fix"
+        assert payload["branch_name"] == "fix/6"
+
 
 # ============================================================
 # kaji pr (GitLab)
