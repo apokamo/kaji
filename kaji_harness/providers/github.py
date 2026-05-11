@@ -41,11 +41,15 @@ class GitHubProvider:
         default_branch: ``provider.github.default_branch`` config 由来。``main`` 等。
             `IssueContext.default_branch` の source として用いる
             （phase3d-design.md § 2 / § 3）。
+        git_remote: ``provider.github.git_remote`` config 由来。default ``"origin"``。
+            `IssueContext.git_remote` の source。skill 内 ``git push`` / ``git fetch``
+            等の対象 remote 名（gl:6 で導入）。
     """
 
     repo: str
     repo_root: Path
     default_branch: str = "main"
+    git_remote: str = "origin"
 
     @property
     def is_readonly(self) -> bool:
@@ -301,6 +305,7 @@ class GitHubProvider:
             provider_type="github",
             branch_prefix_fallback=fallback,
             default_branch=self.default_branch,
+            git_remote=self.git_remote,
         )
 
     def resolve_pr_context(self, branch_name: str) -> PRContext | None:

@@ -79,11 +79,15 @@ class GitLabProvider:
         repo_root: 設計書 path / worktree path 計算用（GitHubProvider 同形）。
         default_branch: ``provider.gitlab.default_branch`` config 由来。
             ``IssueContext.default_branch`` の source。
+        git_remote: ``provider.gitlab.git_remote`` config 由来。default ``"origin"``。
+            ``IssueContext.git_remote`` の source。skill 内 ``git push`` / ``git fetch``
+            等の対象 remote 名（gl:6 で導入、hybrid setup 対応）。
     """
 
     repo: str
     repo_root: Path
     default_branch: str = "main"
+    git_remote: str = "origin"
 
     @property
     def is_readonly(self) -> bool:
@@ -592,6 +596,7 @@ class GitLabProvider:
             provider_type="gitlab",
             branch_prefix_fallback=fallback,
             default_branch=self.default_branch,
+            git_remote=self.git_remote,
         )
 
 

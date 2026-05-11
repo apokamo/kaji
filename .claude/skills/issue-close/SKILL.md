@@ -124,29 +124,29 @@ git worktree remove "$MAIN_REPO/../kaji-[prefix]-[issue_id]"
 ### Step 4.5: ブランチ削除
 
 worktree 削除後にローカル・リモートブランチを削除する。
-`git fetch origin` で `origin/main` を最新化してから、`merge-base --is-ancestor` でマージ済み判定を行い、安全に削除する。
+`git fetch [git_remote]` で `[git_remote]/[default_branch]` を最新化してから、`merge-base --is-ancestor` でマージ済み判定を行い、安全に削除する。
 ローカル削除とリモート削除は独立して実行し、片方の失敗がもう片方をブロックしない。
 ブランチが既に存在しない場合はスキップする。
 
 ```bash
-# 1. fetch して origin/main を更新
-git fetch origin
+# 1. fetch して [git_remote]/[default_branch] を更新
+git fetch [git_remote]
 
 # 2. ローカルブランチ削除: 存在確認 → マージ済み判定 → 安全な -D
 if git show-ref --verify --quiet refs/heads/[branch_name]; then
-    if git merge-base --is-ancestor [branch_name] origin/main; then
+    if git merge-base --is-ancestor [branch_name] [git_remote]/[default_branch]; then
         git branch -D [branch_name]
     else
-        echo "WARNING: branch not merged into origin/main, skipping local delete"
+        echo "WARNING: branch not merged into [git_remote]/[default_branch], skipping local delete"
     fi
 fi
 
 # 3. リモートブランチ削除（ローカル削除の成否に依存しない）
-git ls-remote --exit-code --heads origin [branch_name] >/dev/null 2>&1
+git ls-remote --exit-code --heads [git_remote] [branch_name] >/dev/null 2>&1
 LS_EXIT=$?
 if [ "$LS_EXIT" -eq 0 ]; then
-    if ! git push origin --delete [branch_name]; then
-        echo "ERROR: git push origin --delete failed"
+    if ! git push [git_remote] --delete [branch_name]; then
+        echo "ERROR: git push [git_remote] --delete failed"
         exit 1
     fi
 elif [ "$LS_EXIT" -eq 2 ]; then
@@ -157,7 +157,7 @@ else
 fi
 
 # 4. stale remote-tracking ref を掃除
-git fetch --prune origin
+git fetch --prune [git_remote]
 ```
 
 > **結果を記録**:
@@ -169,7 +169,7 @@ git fetch --prune origin
 ### Step 5: mainを最新化
 
 ```bash
-git pull origin main
+git pull [git_remote] [default_branch]
 ```
 
 > **結果を記録**: `pull_result` = 「最新化済み」。この値は Step 6 で使用する。
@@ -323,17 +323,17 @@ fi
 # local-only で close を完結させる (Step 6 の push も同様に warning で続行する設計と整合)。
 # `kaji run` 非対話モードでは AskUserQuestion 経由のリカバリ不可のため、
 # deterministic に local fallback すること。手動 push は remote 復旧後に実施。
-if git remote get-url origin >/dev/null 2>&1; then
-    if git fetch origin [default_branch] 2>&1; then
-        git merge --ff-only "origin/[default_branch]" || { echo "ABORT: ff-only merge failed in base worktree"; exit 1; }
+if git remote get-url [git_remote] >/dev/null 2>&1; then
+    if git fetch [git_remote] [default_branch] 2>&1; then
+        git merge --ff-only "[git_remote]/[default_branch]" || { echo "ABORT: ff-only merge failed in base worktree"; exit 1; }
     else
-        echo "WARNING: git fetch origin [default_branch] failed; proceeding with local-only close (manual push needed after remote recovery)"
+        echo "WARNING: git fetch [git_remote] [default_branch] failed; proceeding with local-only close (manual push needed after remote recovery)"
     fi
 fi
 ```
 
 ABORT 条件:
-- fast-forward できない (ローカル main が origin/main から分岐) → resolve 後に再実行
+- fast-forward できない (ローカル [default_branch] が [git_remote]/[default_branch] から分岐) → resolve 後に再実行
 - base worktree 側に LocalProvider 永続化 whitelist 外の dirty file が残存 → 手動コミット後に再実行
 
 WARNING 継続条件:
@@ -376,8 +376,8 @@ git branch -d [branch_name] || echo "WARNING: branch delete failed for [branch_n
 #### Step 6: Push（remote 設定がある場合、base worktree から）
 
 ```bash
-if git remote get-url origin >/dev/null 2>&1; then
-    git push origin [default_branch] || echo "WARNING: push failed; manual push needed"
+if git remote get-url [git_remote] >/dev/null 2>&1; then
+    git push [git_remote] [default_branch] || echo "WARNING: push failed; manual push needed"
 fi
 ```
 

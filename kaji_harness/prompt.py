@@ -52,6 +52,7 @@ def build_prompt(
         "design_path": issue_context.design_path,
         "provider_type": issue_context.provider_type,
         "default_branch": issue_context.default_branch,
+        "git_remote": issue_context.git_remote,
     }
 
     if pr_context is not None:

@@ -307,11 +307,15 @@ class LocalProvider:
         repo_root: repo のルート（``.kaji/`` を含む親）。
         machine_id: 採番に用いる本 PC の machine_id。
         default_branch: ``provider.local.default_branch``。``main`` 等。
+        git_remote: ``provider.local.git_remote``。default ``"origin"``。
+            ``IssueContext.git_remote`` の source。skill 内 ``git push`` / ``git fetch``
+            等の対象 remote 名（gl:6 で導入）。
     """
 
     repo_root: Path
     machine_id: str
     default_branch: str = "main"
+    git_remote: str = "origin"
 
     def __post_init__(self) -> None:
         validate_machine_id(self.machine_id)
@@ -740,6 +744,7 @@ class LocalProvider:
             provider_type="local",
             branch_prefix_fallback=fallback,
             default_branch=self.default_branch,
+            git_remote=self.git_remote,
         )
 
     def resolve_pr_context(self, branch_name: str) -> PRContext | None:
