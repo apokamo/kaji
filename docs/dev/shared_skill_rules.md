@@ -41,3 +41,53 @@ workflow 固有の最終判定は `i-dev-final-check` または `i-doc-final-che
 - 互換導線: `.agents/skills/` の symlink
 
 新規スキル追加や改名時は `.claude/skills/` を先に更新し、必要なら `.agents/skills/` に symlink を追加する。
+
+## GitLab auto-close keyword 回避
+
+`provider.type='gitlab'` 配下で kaji workflow を回す際は、skill が生成する
+commit message / MR description / Issue note に GitLab の auto-close keyword
+（`Closes #N` / `Fix(es) #N` / `Resolves #N` / `Implements #N` 系、大小区別なし、
+部分一致でも有効）を混入させないこと。push / merge 時に当該 GitLab project の
+無関係 issue を自動 close する hazard が発生する（仕様: [GitLab Default closing
+pattern](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#default-closing-pattern)、
+実発生例は [docs/cli-guides/gitlab-mode.md § 5.7](../cli-guides/gitlab-mode.md#57-commit-body-の-fix-n-fix-n-等が無関係-gitlab-issue-を-autoclose-する) 参照）。
+
+### 共通規約（全 skill 共通）
+
+- **commit body / PR(MR) body / `kaji issue comment` 本文に `#N` の生表記を
+  書かない**。review item index を参照する場合は `Must Fix item N` /
+  `Must Fix 指摘 N` / `point N` 等を使う。`Must Fix [N]` 記法は **使用禁止**
+  （`Fix [N]` 部分が auto-close keyword に match する）
+- **close keyword + 数字の組合せ禁止**。例文を書く必要があるときは:
+  - 数字部分を `<N>` placeholder にする（例: `Fix #<N>` / `Closes #<N>`）
+  - もしくは keyword と `#` を文字列リテラルとして分離する
+    （例: `` `Clos``es #1` ``）
+  - GitLab は code fence 内も scan するため、上記置換と併用すること（fence で
+    囲うだけでは不十分）
+- **issue 参照は `gl:N` / `local-pNN-N` を明示する**。`#N` 単独表記を避ける
+- **`draft/design/` 配下の設計書は対象外**（GitLab は default branch の
+  commit / MR / note のみ scan）。ただしその内容を commit body / MR description
+  に引用・要約しない（path だけ書く）
+
+### 影響を受ける skill
+
+`/issue-review-design`, `/issue-review-code`, `/issue-fix-design`,
+`/issue-fix-code`, `/i-doc-review`, `/i-doc-fix`, `/pr-fix`, `/pr-verify`,
+`/i-pr`, `/i-dev-final-check`, `/i-doc-final-check`
+
+### push / push 後の検証
+
+- **push 前**: 該当範囲の commit body を grep し hazard pattern が無いことを
+  確認する:
+  ```bash
+  git log <range> --format='%B' | grep -iE '(clos|fix|resolv|implement)e[sd]?:?\s*#[0-9]'
+  ```
+  1 件でも match したら commit を amend して placeholder 化してから push
+- **push 後**: 意図しない close が発生していないか確認する:
+  ```bash
+  glab issue list --repo <group>/<project> --state opened
+  ```
+  消えた issue があれば即 reopen し、原因 commit を特定する
+
+skill SKILL.md / docs 配下の例文を追加・変更する際も同規約を適用し、placeholder
+形式（`Fix #<N>` / `Closes #<N>` / `Must Fix item N`）に揃える。
