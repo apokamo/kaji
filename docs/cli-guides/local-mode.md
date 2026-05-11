@@ -82,6 +82,7 @@ type = "local"
 [provider.local]
 machine_id = "pc1"
 default_branch = "main"
+git_remote = "origin"     # 任意。default `"origin"`。skill 内 `git push` / `git fetch` の対象 remote 名
 ```
 
 ## 3. provider 切替
@@ -147,10 +148,48 @@ design.md L972-996 に従う 6 step:
 3. Merge 実行（`git merge --no-ff --no-edit`）
 4. Issue frontmatter 更新 + commit（`kaji issue close [issue_id] --reason completed`）
 5. Cleanup（`git worktree remove` → `git branch -d`）
-6. Push（remote ありなら `git push origin [default_branch]`）
+6. Push（remote ありなら `git push [git_remote] [default_branch]`）
 
 Step 4 完了で Issue close は確定し、Step 5/6 の失敗は警告のみ。
 `--reason` 未指定時の default は `completed`（GitHub Issue API の慣行と整合）。
+
+### `git_remote` を上書きする例
+
+skill 内の `git push` / `git fetch` 等の対象 remote 名は
+`provider.local.git_remote` で上書きできる（default `"origin"`）。
+例えば `origin` を GitHub に向けつつ、kaji workflow は外部 mirror `backup` 経由で
+push したい場合:
+
+```toml
+# .kaji/config.local.toml （gitignored）
+[provider.local]
+machine_id = "pc1"
+git_remote = "backup"
+```
+
+`git remote get-url backup` が解決できる前提（事前に `git remote add backup …` で
+登録しておく）。skill prompt の `[git_remote]` placeholder がここで指定した値に
+解決され、`/issue-close` の Step 4.5 / 6 が当該 remote を叩く。
+
+### `kaji issue {edit,comment} --commit` flag（local）
+
+LocalProvider 配下で `kaji issue edit` / `kaji issue comment` に `--commit`
+flag を渡すと、Issue ファイル（`issue.md` / コメントファイル）の書き換えと
+git stage + commit を **同一 process 内で atomic に** 行う。実装は
+`kaji_harness/cli_main.py` の `_commit_local_issue_change` ヘルパ
+（`provider.type='local'` の場合のみ実体動作する）。
+
+挙動の要点:
+
+- commit 対象は当該 Issue 配下のファイルに限定し、他の dirty file は **stage しない**
+  （`git add .kaji/issues/<id>-*/` を明示する）。pre-existing dirty file が
+  あっても本コマンドの commit には混入しない
+- commit message は `chore(local): edit/comment <issue_ref>` 形式
+- skill が `--commit` を毎呼び出しに付与することで、`/issue-close` の
+  base worktree clean 前提（§ 6 Step 2）が成立する
+- `provider.type='github'` / `'gitlab'` 配下では `--commit` は **silent strip**
+  され、CLI 引数として認識されつつ何もしない（passthrough 経路の冪等性のため。
+  詳細は [GitLab Mode CLI Guide § 2](gitlab-mode.md) 参照）
 
 ## 7. ファイル / レイアウト
 

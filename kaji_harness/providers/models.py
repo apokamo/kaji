@@ -92,6 +92,10 @@ class IssueContext:
             ``provider=github`` では ``provider.github.default_branch`` が source。
             Skill prompt の ``[default_branch]`` placeholder で参照される
             （phase3d-design.md § 2）。
+        git_remote: skill 内の ``git push`` / ``git fetch`` 等が対象とする
+            git remote 名。default ``"origin"``。``provider.<type>.git_remote``
+            config が source。Skill prompt の ``[git_remote]`` placeholder で
+            参照される（gl:6 で導入、hybrid setup 対応）。
     """
 
     issue_id: str
@@ -105,6 +109,7 @@ class IssueContext:
     provider_type: str
     branch_prefix_fallback: bool = False
     default_branch: str = "main"
+    git_remote: str = "origin"
 
 
 @dataclass(frozen=True)

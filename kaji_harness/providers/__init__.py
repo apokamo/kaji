@@ -96,6 +96,7 @@ def get_provider(config: KajiConfig) -> IssueProvider:
             repo=config.provider.github.repo,
             repo_root=config.repo_root,
             default_branch=config.provider.github.default_branch,
+            git_remote=config.provider.github.git_remote,
         )
     if config.provider.type == "local":
         local_cfg = config.provider.local
@@ -109,6 +110,7 @@ def get_provider(config: KajiConfig) -> IssueProvider:
             repo_root=config.repo_root,
             machine_id=local_cfg.machine_id,
             default_branch=local_cfg.default_branch,
+            git_remote=local_cfg.git_remote,
         )
     if config.provider.type == "gitlab":
         if not config.provider.gitlab.repo:
@@ -119,6 +121,7 @@ def get_provider(config: KajiConfig) -> IssueProvider:
             repo=config.provider.gitlab.repo,
             repo_root=config.repo_root,
             default_branch=config.provider.gitlab.default_branch,
+            git_remote=config.provider.gitlab.git_remote,
         )
     raise ValueError(f"unknown provider.type: {config.provider.type!r}")
 

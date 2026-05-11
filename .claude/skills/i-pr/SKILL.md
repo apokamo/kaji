@@ -157,7 +157,7 @@ fixup対象がない場合は何も起きません（正常）。
 ### Step 4: プッシュとPR作成
 
 ```bash
-cd [worktree_dir] && git push -u origin HEAD
+cd [worktree_dir] && git push -u [git_remote] HEAD
 ```
 
 ```bash

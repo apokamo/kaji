@@ -35,6 +35,7 @@ class LocalProviderConfig:
 
     machine_id: str = ""
     default_branch: str = "main"
+    git_remote: str = "origin"
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,7 @@ class GitHubProviderConfig:
 
     repo: str = ""
     default_branch: str = "main"
+    git_remote: str = "origin"
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,10 @@ class GitLabProviderConfig:
             利用時は必須（空文字なら ``get_provider()`` が ``ValueError``）。
             ``glab --repo`` および ``glab api projects/<URL-encoded repo>`` に渡す。
         default_branch: ``main`` / ``master`` 等の既定 branch 名。
+        git_remote: skill 内の ``git push`` / ``git fetch`` 等が対象とする
+            git remote 名。default ``"origin"``。``origin = github``（suspended）
+            + ``gitlab = gitlab.com`` の hybrid setup では ``"gitlab"`` を指定する
+            （gl:6 で導入）。
 
     Note:
         ``hostname`` フィールドは持たない。EPIC `local-p1-4` 確定事項 #3
@@ -62,6 +68,7 @@ class GitLabProviderConfig:
 
     repo: str = ""
     default_branch: str = "main"
+    git_remote: str = "origin"
 
 
 @dataclass(frozen=True)
@@ -242,9 +249,13 @@ class KajiConfig:
         gh_default_branch_raw = github_raw.get("default_branch", "main") or "main"
         if not isinstance(gh_default_branch_raw, str):
             raise ConfigLoadError(path, "provider.github.default_branch must be a string")
+        gh_git_remote_raw = github_raw.get("git_remote", "origin") or "origin"
+        if not isinstance(gh_git_remote_raw, str):
+            raise ConfigLoadError(path, "provider.github.git_remote must be a string")
         github_cfg = GitHubProviderConfig(
             repo=str(repo_raw or ""),
             default_branch=gh_default_branch_raw,
+            git_remote=gh_git_remote_raw,
         )
 
         local_raw = merged.get("local") or {}
@@ -279,7 +290,14 @@ class KajiConfig:
         default_branch = local_raw.get("default_branch", "main") or "main"
         if not isinstance(default_branch, str):
             raise ConfigLoadError(path, "provider.local.default_branch must be a string")
-        local_cfg = LocalProviderConfig(machine_id=machine_id, default_branch=default_branch)
+        local_git_remote_raw = local_raw.get("git_remote", "origin") or "origin"
+        if not isinstance(local_git_remote_raw, str):
+            raise ConfigLoadError(path, "provider.local.git_remote must be a string")
+        local_cfg = LocalProviderConfig(
+            machine_id=machine_id,
+            default_branch=default_branch,
+            git_remote=local_git_remote_raw,
+        )
 
         gitlab_raw = merged.get("gitlab") or {}
         if not isinstance(gitlab_raw, dict):
@@ -290,9 +308,13 @@ class KajiConfig:
         gl_default_branch_raw = gitlab_raw.get("default_branch", "main") or "main"
         if not isinstance(gl_default_branch_raw, str):
             raise ConfigLoadError(path, "provider.gitlab.default_branch must be a string")
+        gl_git_remote_raw = gitlab_raw.get("git_remote", "origin") or "origin"
+        if not isinstance(gl_git_remote_raw, str):
+            raise ConfigLoadError(path, "provider.gitlab.git_remote must be a string")
         gitlab_cfg = GitLabProviderConfig(
             repo=str(gl_repo_raw or ""),
             default_branch=gl_default_branch_raw,
+            git_remote=gl_git_remote_raw,
         )
 
         del repo_root  # reserved for future cross-checks

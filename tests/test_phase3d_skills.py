@@ -93,7 +93,7 @@ def test_issue_close_skill_contains_local_six_steps() -> None:
         "merge --no-ff",
         "kaji issue close [issue_id] --reason completed",
         "git worktree remove",
-        "git push origin [default_branch]",
+        "git push [git_remote] [default_branch]",
     ]
     for kw in expected_keywords:
         assert kw in text, f"issue-close SKILL.md missing keyword {kw!r}"

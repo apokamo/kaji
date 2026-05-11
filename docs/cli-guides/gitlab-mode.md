@@ -101,6 +101,7 @@ type = "gitlab"
 [provider.gitlab]
 repo = "<group>/<project>"          # 例: "apokamo/kaji"
 default_branch = "main"             # 既定 "main"
+git_remote = "gitlab"               # 任意。default `"origin"`。hybrid setup での remote 名
 ```
 
 要点:
@@ -111,6 +112,12 @@ default_branch = "main"             # 既定 "main"
   に渡される
 - `hostname` フィールドは持たない（`gitlab.com` 固定。self-hosted 非対応）
 - `default_branch` を省略すると `main`
+- `git_remote` は skill 内の `git push` / `git fetch` 等が対象とする git remote
+  名。**default `"origin"`**。`origin = git@github.com:...`（suspended 等）+
+  `gitlab = git@gitlab.com:...` の hybrid setup では `"gitlab"` を指定する。
+  `git remote get-url <git_remote>` が解決できる必要があり、未登録の場合は
+  `/i-pr` / `/issue-close` 内の push / fetch が失敗する（事前に
+  `git remote add gitlab git@gitlab.com:<group>/<project>.git` で登録すること）
 
 `[provider.gitlab].repo` 未設定で `provider.type = "gitlab"` だと kaji 起動時に:
 
@@ -157,6 +164,17 @@ ssh -T git@gitlab.com
   mode と同じ guard）
 - `glab mr` 固有の sub（`approvers` / `checkout` / `diff` / `for` / `subscribe`
   / `todo` 等）は **silent passthrough せず明示的な未対応エラー** で `EXIT_INVALID_INPUT`
+
+### `kaji issue {edit,comment} --commit` の挙動（GitLab mode）
+
+`provider.type = "gitlab"` 配下では `kaji issue edit` / `kaji issue comment`
+に `--commit` flag が渡されても **silent strip** され、`glab` への passthrough
+は `--commit` 無しで実行される（実装: `kaji_harness/cli_main.py:1452`）。これは
+skill が provider 非依存に `--commit` を常時付与する設計（local mode で
+`chore(local)` commit を生成するための一次接点）と互換性を保つための no-op で
+あり、GitLab 側は Issue / MR が forge 上の正本であるため commit を作る必要が
+ない（local mode の atomic 永続化挙動の詳細は
+[Local Mode CLI Guide § 6](local-mode.md#6-issueclose-の挙動local) 参照）。
 
 ## 3. `kaji sync from-gitlab` の使い方
 
