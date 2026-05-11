@@ -85,20 +85,36 @@ git_remote = "origin"     # NEW (任意、default "origin")
 
 `kaji_harness/prompt.py:43-56` の `variables` dict に `"git_remote": issue_context.git_remote` を追加。skill SKILL.md は `[git_remote]` placeholder で参照する。
 
-#### 4. skill SKILL.md の `origin` → `[git_remote]` 置換
+#### 4. skill SKILL.md の `origin` → `[git_remote]` 置換（**SKILL 本文全箇所**）
 
-| skill | 行 | 変更前 | 変更後 |
-|-------|-----|--------|--------|
-| `i-pr/SKILL.md` | 160 | `git push -u origin HEAD` | `git push -u [git_remote] HEAD` |
-| `issue-close/SKILL.md` | 133 | `git fetch origin` | `git fetch [git_remote]` |
-| 同上 | 137 | `git merge-base --is-ancestor [branch_name] origin/main` | `... [git_remote]/[default_branch]` |
-| 同上 | 145 | `git ls-remote --exit-code --heads origin [branch_name]` | `... [git_remote] [branch_name]` |
-| 同上 | 148 | `git push origin --delete [branch_name]` | `git push [git_remote] --delete [branch_name]` |
-| 同上 | 160 | `git fetch --prune origin` | `git fetch --prune [git_remote]` |
-| 同上 | 172 | `git pull origin main` | `git pull [git_remote] [default_branch]` |
-| 同上 | 326-328 | `git remote get-url origin` / `git fetch origin [default_branch]` / `git merge --ff-only "origin/[default_branch]"` | `[git_remote]` 置換 |
+レビュー指摘（review-design 1st cycle）を受け、**コマンド行 / コメント / 説明文を一括で contract に揃える**。LLM は SKILL 全文をプロンプト文脈として読むため、コマンド行だけ placeholder 化しても説明文に旧契約が残ると半分温存となる。
 
-説明文 / コメント中の `origin/main` 表記 (例: 127行, 336行) はユーザ向け解説のため `[git_remote]/[default_branch]` には置換せず、placeholder 化はコマンド行のみに留める（誤読防止のため、説明文では「（デフォルト `origin/main`）」のように補足する）。
+`i-pr/SKILL.md`:
+
+| 行 | 変更前 | 変更後 |
+|-----|--------|--------|
+| 160 | `git push -u origin HEAD` | `git push -u [git_remote] HEAD` |
+
+`issue-close/SKILL.md`（コマンド行 + 説明文 + コメント、全 13 箇所）:
+
+| 行 | 種別 | 変更前 | 変更後 |
+|-----|------|--------|--------|
+| 127 | 説明文 | `\`git fetch origin\` で \`origin/main\` を最新化してから...` | `\`git fetch [git_remote]\` で \`[git_remote]/[default_branch]\` を最新化してから...` |
+| 132 | コメント | `# 1. fetch して origin/main を更新` | `# 1. fetch して [git_remote]/[default_branch] を更新` |
+| 133 | コマンド | `git fetch origin` | `git fetch [git_remote]` |
+| 137 | コマンド | `git merge-base --is-ancestor [branch_name] origin/main` | `git merge-base --is-ancestor [branch_name] [git_remote]/[default_branch]` |
+| 140 | echo文 | `echo "WARNING: branch not merged into origin/main, ..."` | `echo "WARNING: branch not merged into [git_remote]/[default_branch], ..."` |
+| 145 | コマンド | `git ls-remote --exit-code --heads origin [branch_name]` | `git ls-remote --exit-code --heads [git_remote] [branch_name]` |
+| 148 | コマンド | `git push origin --delete [branch_name]` | `git push [git_remote] --delete [branch_name]` |
+| 149 | echo文 | `echo "ERROR: git push origin --delete failed"` | `echo "ERROR: git push [git_remote] --delete failed"` |
+| 160 | コマンド | `git fetch --prune origin` | `git fetch --prune [git_remote]` |
+| 172 | コマンド | `git pull origin main` | `git pull [git_remote] [default_branch]` |
+| 326-328 | コマンド | `git remote get-url origin` / `git fetch origin [default_branch]` / `git merge --ff-only "origin/[default_branch]"` | `git remote get-url [git_remote]` / `git fetch [git_remote] [default_branch]` / `git merge --ff-only "[git_remote]/[default_branch]"` |
+| 330 | echo文 | `echo "WARNING: git fetch origin [default_branch] failed; ..."` | `echo "WARNING: git fetch [git_remote] [default_branch] failed; ..."` |
+| 336 | 説明文 | `- fast-forward できない (ローカル main が origin/main から分岐) → ...` | `- fast-forward できない (ローカル [default_branch] が [git_remote]/[default_branch] から分岐) → ...` |
+| 379-380 | コマンド | `git remote get-url origin` / `git push origin [default_branch]` | `git remote get-url [git_remote]` / `git push [git_remote] [default_branch]` |
+
+**契約の一貫性**: 修正後の SKILL 本文には `\borigin\b` という単語が **コマンド行・説明文・コメントいずれにも残らない** ことを再現テストの assertion とする（後述 § テスト戦略）。例外: 一般的な git 教育目的の文（あれば）はコードフェンス外の自然言語として残す可能性があるが、本 issue 修正後の grep 結果は 0 件を目標とする。
 
 ### 後方互換性
 
@@ -140,6 +156,12 @@ git_remote = "origin"     # NEW (任意、default "origin")
 
 - **(c) `kaji git push` ラッパー command**: skill 全面書換が必要 + bash パイプ操作との相性が悪い（`git fetch | merge-base` 等の組み合わせを全 wrap するのは過剰）。将来 git 操作の audit が要件化した時点で再検討
 - env (`KAJI_REMOTE`) のみ: skill SKILL.md は markdown 内 `${KAJI_REMOTE:-origin}` のような shell 変数を持つことになり、placeholder 規約（`[name]`）と不整合。env で渡しても結局 placeholder 化が必要
+- **`git_remote` を GitLab provider のみに限定する案**: review-design 1st cycle で代替案として提示された。**不採用**。理由:
+  1. `IssueContext` の field を provider 別に optional 化すると prompt 注入経路で「あるかないか」の分岐が増え、`prompt.py:variables` dict が provider 別に異なる shape を取ることになる（既存の `default_branch` 等が全 provider 必須なのと不整合）
+  2. skill SKILL.md は provider 抽象済みで「どの provider 経由でも同じ template が機能する」設計（`kaji issue` / `kaji pr` が passthrough/local 両方を吸収する設計と対称）。一部 provider のみ placeholder 化されない状態は skill 契約を分断する
+  3. GitHub / Local 経路で `git_remote` を任意 field（default `"origin"`）として持つコストは TOML 1 行 + ProviderConfig 1 field のみで微小
+  4. 将来 GitHub 側でも `origin != github` の hybrid setup (例: `origin = self-hosted` + `github = github.com`) が要件化した際に、再度 IF 変更を強いられる
+  → 3 provider 統一で IF を切る方が長期的に整合が取れる。代償として `local-mode.md` の docs 更新が増えるが、 § 影響ドキュメント で範囲を明示し対応する
 
 ### 実装手順（概略）
 
@@ -177,10 +199,11 @@ git_remote = "origin"     # NEW (任意、default "origin")
 
 OB を assert する再現テストを 1 本以上必須:
 
-- **Red 状態（修正前）**: `tests/test_skill_remote_placeholder.py` (新規) — `.claude/skills/i-pr/SKILL.md` および `.claude/skills/issue-close/SKILL.md` を読み込み、`\borigin\b` の hardcode が **コマンド行に存在しない** ことを assert。修正前は 9 箇所マッチで FAIL、修正後は 0 マッチで PASS
-- 補助 assertion: `[git_remote]` placeholder がコマンド行に少なくとも 9 回出現すること
+- **Red 状態（修正前）**: `tests/test_skill_remote_placeholder.py` (新規) — `.claude/skills/i-pr/SKILL.md` および `.claude/skills/issue-close/SKILL.md` を **ファイル全体** で読み込み、`\borigin\b` の単語が **どこにも残っていない** ことを assert（コマンド行 / コメント / 説明文の全てを対象）。修正前は両ファイル合計 14+ 箇所マッチで FAIL、修正後は 0 マッチで PASS
+- 補助 assertion 1: `[git_remote]` placeholder が `i-pr/SKILL.md` で ≥1 回、`issue-close/SKILL.md` で ≥10 回出現すること
+- 補助 assertion 2: `[git_remote]/[default_branch]` という組み合わせ表記が `issue-close/SKILL.md` で ≥3 回出現すること（旧 `origin/main` の置換完了確認）
 
-このテストは Small 相当（純粋な文字列パターン検査、外部 I/O なし）。
+このテストは Small 相当（純粋な文字列パターン検査、外部 I/O なし）。例外として「git 一般用語としての `origin/<branch>` 説明」を意図的に残す必要が将来生じた場合は、テスト側に明示的な whitelist コメントを追加する規約とする（本 issue 修正時点では 0 件を目標）。
 
 ### Large テスト
 
@@ -204,8 +227,8 @@ OB を assert する再現テストを 1 本以上必須:
 | docs/dev/ | なし | ワークフロー / 開発手順の変更なし |
 | docs/reference/ | なし | API / 規約の新規追加なし |
 | docs/cli-guides/gitlab-mode.md | **あり** | § 2 に git remote 前提（`git_remote` config）追記 + gl:8 統合分の `--commit` silent strip 説明 1 paragraph |
-| docs/cli-guides/local-mode.md | **あり** | gl:8 統合分の `--commit` flag section（LocalProvider の atomic 永続化 + `chore(local)` commit 仕様）追加 |
-| docs/cli-guides/github-mode.md | なし | `git_remote` default `"origin"` で既存挙動と同じため言及不要（必要なら 1 行追記） |
+| docs/cli-guides/local-mode.md | **あり（範囲拡張）** | (a) gl:8 統合分の `--commit` flag section（LocalProvider の atomic 永続化 + `chore(local)` commit 仕様）追加、(b) § 2 overlay 例 (lines 77-85) の `[provider.local]` block に `git_remote = "origin"` を追加（コメントで「任意。default `"origin"`」と注記）、(c) § 6 `/issue-close の挙動（local）` step 6 の `git push origin [default_branch]` を `git push [git_remote] [default_branch]` に書き換え、(d) 同 section 末尾に「`git_remote` を上書きする例（local + 外部 mirror remote 連携）」を 3-5 行で追記 |
+| docs/cli-guides/github-mode.md | **あり（軽微）** | overlay 例があれば `[provider.github]` block に `git_remote = "origin"` の任意 field を 1 行追記（既存挙動の透明化）。なければ「§ X に `git_remote` field 説明」として 1 paragraph 追加。実装範囲は実 docs を見て判断 |
 | CLAUDE.md | なし | 規約変更なし |
 
 ## 参照情報（Primary Sources）
