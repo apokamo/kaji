@@ -4,7 +4,7 @@ Issue: gl:6
 
 ## 概要
 
-`.claude/skills/i-pr/SKILL.md` / `.claude/skills/issue-close/SKILL.md` 内の `origin` hardcode（コマンド行 + コメント + 説明文 + echo文を含む SKILL 全文、**合計 15 箇所 = i-pr 1 + issue-close 14**。§ インターフェース #4 の表 1 行を 1 箇所と数える、複数 file line をまとめた行も 1 箇所と数える）を、kaji harness が provider config から解決して prompt 経由で注入する `[git_remote]` placeholder に置換する。あわせて `docs/cli-guides/gitlab-mode.md` / `local-mode.md` / `github-mode.md` を `git_remote` IF 追加に合わせて更新し、`local-mode.md` には gl:8 統合分の `--commit` flag semantics も追記する。
+`.claude/skills/i-pr/SKILL.md` / `.claude/skills/issue-close/SKILL.md` 内の `origin` hardcode（コマンド行 + コメント + 説明文 + echo文を含む SKILL 全文、**合計 15 箇所 = i-pr 1 + issue-close 14**。§ インターフェース #4 の表 1 行を 1 箇所と数える、複数 file line をまとめた行も 1 箇所と数える）を、kaji harness が provider config から解決して prompt 経由で注入する `[git_remote]` placeholder に置換する。あわせて `docs/cli-guides/gitlab-mode.md` / `local-mode.md` を `git_remote` IF 追加に合わせて更新し、`local-mode.md` には gl:8 統合分の `--commit` flag semantics も追記する（`docs/cli-guides/github-mode.md` は未存在のため記述対象外）。
 
 ## 背景・目的
 
@@ -134,7 +134,6 @@ git_remote = "origin"     # NEW (任意、default "origin")
 - `.claude/skills/issue-close/SKILL.md` — **14 箇所** 置換（コマンド 8 / コメント 1 / 説明文 2 / echo文 3、§ インターフェース #4 の表で全列挙）。SKILL 全文から `\borigin\b` を 0 件にする
 - `docs/cli-guides/gitlab-mode.md` — § 2 に git remote 前提 + `--commit` silent strip 説明（gl:8 統合）
 - `docs/cli-guides/local-mode.md` — § 影響ドキュメント の 4 点を全て更新: (a) § 2 overlay 例に `git_remote = "origin"` 追加、(b) § 6 step 6 の `git push origin [default_branch]` を `git push [git_remote] [default_branch]` に書き換え、(c) `git_remote` 上書き例の追記、(d) gl:8 統合の `--commit` flag section 新設
-- `docs/cli-guides/github-mode.md` — `git_remote` 任意 field の透明化（軽微 1 行 / 1 paragraph）
 - `tests/test_phase4_dispatcher_gitlab.py` 等 — `git_remote` 注入の assertion 追加
 - `tests/test_skill_remote_placeholder.py` (新規) — § テスト戦略の bug 固有 regression test
 
@@ -230,7 +229,7 @@ OB を assert する再現テストを 1 本以上必須:
 | docs/reference/ | なし | API / 規約の新規追加なし |
 | docs/cli-guides/gitlab-mode.md | **あり** | § 2 に git remote 前提（`git_remote` config）追記 + gl:8 統合分の `--commit` silent strip 説明 1 paragraph |
 | docs/cli-guides/local-mode.md | **あり（範囲拡張）** | (a) gl:8 統合分の `--commit` flag section（LocalProvider の atomic 永続化 + `chore(local)` commit 仕様）追加、(b) § 2 overlay 例 (lines 77-85) の `[provider.local]` block に `git_remote = "origin"` を追加（コメントで「任意。default `"origin"`」と注記）、(c) § 6 `/issue-close の挙動（local）` step 6 の `git push origin [default_branch]` を `git push [git_remote] [default_branch]` に書き換え、(d) 同 section 末尾に「`git_remote` を上書きする例（local + 外部 mirror remote 連携）」を 3-5 行で追記 |
-| docs/cli-guides/github-mode.md | **あり（軽微）** | overlay 例があれば `[provider.github]` block に `git_remote = "origin"` の任意 field を 1 行追記（既存挙動の透明化）。なければ「§ X に `git_remote` field 説明」として 1 paragraph 追加。実装範囲は実 docs を見て判断 |
+| docs/cli-guides/github-mode.md | なし | ファイル未存在のため記述対象外（`docs/cli-guides/` には `gitlab-mode.md` / `local-mode.md` のみ存在）。将来 `github-mode.md` を新設する場合は `git_remote` field の説明を追加する想定 |
 | CLAUDE.md | なし | 規約変更なし |
 
 ## 参照情報（Primary Sources）
