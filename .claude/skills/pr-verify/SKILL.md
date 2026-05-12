@@ -19,8 +19,9 @@ PR レビュー修正後の確認を行う。
 |-----------|-----------------|
 | `/pr-fix` 後の修正確認 | ✅ 必須 |
 | 新規レビューが必要な場合 | ❌ PR 上で直接レビューを実施 |
-| `provider.type='local'` 配下 | ❌ Step 0 で ABORT。代替は `/issue-verify-code` |
+| `provider.type='github'` 配下 | ✅ 受理（gh CLI 経由） |
 | `provider.type='gitlab'` 配下 | ✅ 受理（`kaji pr` の写像層が glab 命令を吸収） |
+| `provider.type='local'` 配下 | ❌ Step 0 で ABORT。代替は `/issue-verify-code` |
 
 **ワークフロー内の位置**: i-pr → [PR review] → (pr-fix → **pr-verify**) → close
 
@@ -100,7 +101,7 @@ $ARGUMENTS = <issue_id>
      ---VERDICT---
      status: ABORT
      reason: |
-       pr-verify is a forge-only skill; provider.type='local'.
+       pr-verify is forge-only and cannot run under provider.type='local'.
      evidence: |
        Pull request concept does not exist in local mode (bare provider).
      suggestion: |
