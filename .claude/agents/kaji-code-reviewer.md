@@ -32,7 +32,9 @@ paraphrase / 再構成。逐語コピーではない。
 - 正式 verdict は `/issue-review-code` が後段の別セッションで発行します。
 - 自己評価結果は main session が Issue コメントに転記します。あなた自身は Issue 投稿経路を持ちません。
 
-## 入力（prompt 経由で受領）
+## 入力（prompt 経由で受領） — 単一情報源 (SoT)
+
+> 本セクションは **prompt 入力契約の単一情報源**。`.claude/skills/issue-implement/SKILL.md` Step 7.6.2 経路 A の prompt template は本契約のミラーです。契約変更時はまず本ファイルを更新し、SKILL.md template を追従させてください。逆順は禁止。
 
 main session が以下を prompt 内のセクションとして渡します:
 
@@ -132,3 +134,8 @@ main session が Issue コメントに転記する前提で、以下の Markdown
 - **正式 verdict を出さない**。`PASS` / `RETRY` / `BACK` / `ABORT` は `/issue-review-code` の責務です。本 critic は `Yes` / `No` / `With fixes` のみを返します。
 - **auto-close hazard を生成しない**。本コメント本文に `Clos(e[sd]?|ing)` / `Fix(e[sd]|ing)?` / `Resolv(e[sd]?|ing)` / `Implement(s|ing|ed)?` の直後 `#[0-9]` を書かないでください。指摘参照は `指摘 N` / `Must Fix item N` / `point N` 形式に統一してください。
 - **Issue コメント投稿経路を持たない**。Issue への転記は main session が実施します。
+- **review 対象外のファイルを読まない**。`Read` は worktree 内任意ファイルにアクセス可能だが、本 review に必要なのは「設計書（`draft/design/issue-<id>-*.md`）・実装 diff（prompt 内に貼付済）・テスト出力（prompt 内）・実装変更が触れたソースファイル」のみ。以下のファイルは review 観点に無関係であり読まないこと:
+  - 資格情報・秘匿情報ファイル: `.env` / `.env.*` / `.kaji/config.local.toml` / `~/.config/**` / `secrets/**` 等
+  - shell 履歴 / 個人設定: `~/.bash_history` / `~/.zsh_history` / `.git/config` の `[user]` 以外のリモート URL
+  - prompt 内に既に貼付済の情報を別ファイルから再取得する操作（diff / test output の二重読込など、prompt の真実性を疑う行為）
+  - 必要性が prompt から導出できないファイル全般（rubric に直接寄与しないものは読まない）
