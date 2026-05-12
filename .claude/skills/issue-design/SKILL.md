@@ -257,6 +257,72 @@ Issue: [issue_ref]
 
 不足がある場合は設計書を補完してからコミットする。この段階で確認した条件は、Step 4 の Issue コメントに含めて後段への証跡とする。
 
+### Step 2.6: Self-Check（ハンドオフ前 / MANDATORY）
+
+`/issue-review-design` の rubric と作業中の設計書を突き合わせ、handoff 直前の楽観バイアスを抑止する。**重複チェックリストは作成しない**。review-design SKILL.md を **rubric の単一情報源** として参照し、不足があれば Step 3（コミット）に進む前に設計書を補完する。
+
+#### 参照する review-design rubric の節
+
+`.claude/skills/issue-review-design/SKILL.md` の以下節を **直接読む**:
+
+1. **Step 1.5（一次情報の記載と Gate Check）**
+   - 設計書「参照情報（Primary Sources）」の URL/パスが記載されているか
+   - 一次情報の引用 / 要約が「設計判断の裏付け」として機能しているか
+   - アクセス可能性ルール（公開URL / ログイン必須 / 社内限定）に違反していないか
+2. **Step 2 § type の取得と観点の重み付け**
+   - 採用した type ラベルに対応する重み付け表（feat / bug / refactor / docs）と設計書の重点が整合しているか
+   - **feat**: 代替案 / ユースケース / 使用例の有無
+   - **bug**: OB / EB の 1 次情報裏付け / 再現手順最小 / 根本原因「なぜ」/ 同根の他壊れ箇所の調査
+   - **refactor**: ベースライン計測コマンド / 改善指標の測定可能性 / 公開 IF 不変宣言 / safety net 方針
+3. **Step 2 § レビュー基準 1〜5**
+   - 1. 抽象化と責務の分離（What & Why / Constraints）
+   - 2. インターフェース設計（Usage Sample / Idiomatic / Naming）
+   - 3. 信頼性とエッジケース（Source of Truth / Error Handling / 一次情報との乖離）
+   - 4. 検証可能性（テストサイズ別検証観点 / `docs/dev/testing-convention.md` の 4 条件マッピング / 不正当な省略理由の排除）
+   - 5. 影響ドキュメント
+
+#### Self-Check の実施手順
+
+1. 上記 3 節を順に Read する
+2. 設計書を読み直し、各節の checklist 項目に対する充足度を内部で評価する
+3. 不足が見つかったら **Step 3 に進む前に設計書を補完** する（補完後、本 Step 2.6 を再実行）
+4. 結果（節ごとの判定と不足の有無）を Step 4 の Issue コメント `## Self-Check 結果` セクションに転記する
+
+#### 出力フォーマット（Issue コメントへの転記用、Step 4 で使用）
+
+```markdown
+## Self-Check 結果（design pre-handoff）
+
+- **経路**: main-session self-check
+- **対象 commit**: <git-sha>
+- **参照 rubric**: `/issue-review-design` SKILL.md Step 1.5 / Step 2 § type 重み付け / Step 2 § レビュー基準 1〜5
+
+### Step 1.5: Gate Check（一次情報）
+- 判定: ✅ / ⚠️ / ❌
+- 根拠: 設計書「参照情報（Primary Sources）」セクションの状態
+
+### Step 2 § type 重み付け（type: <採用 type>）
+- 判定: ✅ / ⚠️ / ❌
+- 根拠: 重点観点との整合
+
+### Step 2 § レビュー基準 1〜5
+- 1. 抽象化と責務の分離: ✅ / ⚠️ / ❌
+- 2. インターフェース設計: ✅ / ⚠️ / ❌
+- 3. 信頼性とエッジケース: ✅ / ⚠️ / ❌
+- 4. 検証可能性: ✅ / ⚠️ / ❌
+- 5. 影響ドキュメント: ✅ / ⚠️ / ❌
+
+### 補完した項目
+- （補完前に検出した不足と、補完内容を列挙。なければ「無し」）
+
+### Self-Check Verdict
+- **Yes** — handoff 可（全 ✅ または ⚠️ のみで補完済み）
+- **With fixes** — 補完後に再度本フェーズを実行する必要あり
+- **No** — `/issue-fix-design` 相当の大幅修正が必要（本フェーズで自己解決できない）
+```
+
+> **規約遵守**: 本コメント本文に GitLab auto-close hazard pattern（`Clos(e[sd]?|ing)` / `Fix(e[sd]|ing)?` / `Resolv(e[sd]?|ing)` / `Implement(s|ing|ed)?` の直後 `#[0-9]`）を書かない。指摘参照は `指摘 N` / `Must Fix item N` / `point N` 形式に統一する（参照: [`docs/dev/shared_skill_rules.md`](../../../docs/dev/shared_skill_rules.md) § GitLab auto close keyword 回避規約）。
+
 ### Step 3: コミット
 
 ```bash
@@ -286,6 +352,10 @@ kaji issue comment [issue_id] --commit --body-file - <<'EOF'
 ### テスト戦略
 
 - (主要な検証ポイント)
+
+### Self-Check 結果（design pre-handoff）
+
+(Step 2.6 で生成した「Self-Check 結果」ブロックをそのまま貼り付け。経路 / 対象 commit / 参照 rubric / 5 観点判定 / 補完項目 / Verdict)
 
 ### 完了条件の段階確認
 
