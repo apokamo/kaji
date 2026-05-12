@@ -120,9 +120,15 @@ GitLab spec 側）に揃える。
 
 ### 影響を受ける skill
 
-`/issue-review-design`, `/issue-review-code`, `/issue-fix-design`,
-`/issue-fix-code`, `/i-doc-review`, `/i-doc-fix`, `/pr-fix`, `/pr-verify`,
-`/i-pr`, `/i-dev-final-check`, `/i-doc-final-check`
+`/issue-design`（Step 2.6 design self-check 出力）, `/issue-implement`（Step 7.6
+pre-handoff review 出力）, `/issue-review-design`, `/issue-review-code`,
+`/issue-fix-design`, `/issue-fix-code`, `/i-doc-review`, `/i-doc-fix`, `/pr-fix`,
+`/pr-verify`, `/i-pr`, `/i-dev-final-check`, `/i-doc-final-check`
+
+pre-handoff review で起動する subagent（`.claude/agents/kaji-code-reviewer.md`）
+の system prompt および出力テンプレートも本規約に準拠する。指摘 index は
+`Must Fix item N` / `指摘 N` / `point N` 形式で統一し、`Must Fix #N` / `Fix [N]`
+等の close keyword 隣接表記を生成しない。
 
 ### push / push 後の検証
 

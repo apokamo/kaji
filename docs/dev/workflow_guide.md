@@ -44,6 +44,8 @@ provider 切替の手順は [docs/cli-guides/local-mode.md](../cli-guides/local-
 
 コード変更を伴う Issue のワークフロー。設計 → 設計レビュー → 実装 → コードレビュー → 最終チェック → PR。
 
+各 hand-off 直前（`design → review-design` / `implement → review-code`）には **pre-handoff review** が挟まる（capability-based: Claude Code は `kaji-code-reviewer` subagent、Codex / Gemini は main-session self-check）。詳細は [development_workflow.md § Pre-Handoff Review](development_workflow.md#prehandoff-review) を参照。
+
 詳細: [development_workflow.md](development_workflow.md)
 
 ## docs-maintenance
