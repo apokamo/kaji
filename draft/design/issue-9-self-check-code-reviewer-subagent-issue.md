@@ -378,12 +378,19 @@ Python pytest 化はしないが、Issue 完了条件の「動作検証」セク
 | 検証項目 | 方法 | 合格条件 | 証跡保存先 |
 |---------|------|---------|-----------|
 | 1. `kaji-code-reviewer` が新規セッションで selectable | `.claude/agents/kaji-code-reviewer.md` 追加 commit を含む状態で、新規 Claude Code セッションを起動。Agent tool 起動時に `subagent_type: "kaji-code-reviewer"` が解決すること | 起動応答が得られる | Issue gl:9 コメント（実装フェーズ末） |
-| 2. `/issue-implement` 経由で subagent が実起動 | 検証用 small Issue で `/issue-implement` を実行 | Issue コメントに「経路: subagent」「起動 agent: kaji-code-reviewer」「verdict: Yes/No/With fixes」が記録される | 検証用 Issue コメント |
-| 3. Codex / Gemini での fallback 経路証跡 | Codex / Gemini agent で `/issue-implement` を dry run（または skill markdown を読み込んだ上で main session が fallback ブランチを実行） | Issue コメントに「経路: self-check (subagent unavailable, fallback)」が記録される | 検証用 Issue コメント |
-| 4. `With fixes` ループ動作 | 意図的に設計書から外れた diff を作って実行 | subagent が `With fixes` を返し、main session が修正後に再起動して `Yes` で抜ける（ループ回数を Issue コメントに記載） | 検証用 Issue コメント |
-| 5. auto-close hazard 検査が hazard を検出できること | 意図的に `Fix #99` を含む dry run prompt を投入 | subagent / self-check が auto-close 規約観点で ❌ を返す | 検証用 Issue コメント |
+| 2. `/issue-implement` Step 7.6 経路で subagent が実起動 | `/issue-implement` SKILL.md Step 7.6.2 § 経路 A の prompt template（diff / test output / quality check / baseline）を Agent tool（`subagent_type: "kaji-code-reviewer"`）経由で呼び出す。検証用 Issue は本 Issue（gl:9）と別 Issue のいずれでも可（合否本質は Step 7.6 path 起動成否であって commit holder ではない） | Issue コメントに「経路: subagent」「起動 agent: kaji-code-reviewer」「verdict: Yes/No/With fixes」が記録され、出力 markdown が SKILL.md Step 7.6.4 テンプレートに準拠する | Issue コメント（本 Issue または検証用 Issue） |
+| 3. Codex / Gemini での fallback 経路証跡 | Codex / Gemini agent で `/issue-implement` を dry run（または skill markdown を読み込んだ上で main session が fallback ブランチを実行） | Issue コメントに「経路: self-check (subagent unavailable, fallback)」が記録される | Issue コメント（本 Issue または検証用 Issue） |
+| 4. verdict ループ動作（`With fixes` / `No` の修正→再実行→`Yes` 収束） | 意図的に設計書から外れた diff を作って実行。subagent が `With fixes` または `No` を返した round と、main session が修正後に再実行して `Yes` で抜けた round の 2 round 以上を取得 | subagent が `With fixes` または `No` を返し、main session が修正後に再起動して `Yes` で抜ける（ループ回数を Issue コメントに記載）。SKILL.md `:339-345` で `With fixes` と `No` は同一ループ経路（main session が修正→Step 7a/7b 再実行→Step 7.6 再実行）と定義されているため、いずれの verdict でもループ動作の検証本質を満たす | Issue コメント（本 Issue または検証用 Issue） |
+| 5. auto-close hazard 検査が hazard を検出できること | 意図的に `Fix #99` を含む dry run prompt を投入 | subagent / self-check が auto-close 規約観点で ❌ を返す | Issue コメント（本 Issue または検証用 Issue） |
 
-> 検証用 Issue は本 Issue とは別の small test Issue を用意して実施する。`kaji issue create` で local Issue を作って試験するのが現実的。
+> 検証用 Issue は本 Issue（gl:9）コメント、または `kaji issue create` で別途用意した小規模 test Issue のいずれでも可。Step 7.6 path 起動の verify 本質は「Agent tool 経由で `kaji-code-reviewer` subagent が起動し、SKILL.md Step 7.6.4 テンプレートに準拠した出力を返すこと」であり、出力先 Issue は本質要件ではない。本 Issue 上に証跡を残す場合、Step 7.6 の入力テンプレート（diff / test output / quality check / baseline）と subagent 出力 verbatim を Issue コメントへ転記することで合格条件を満たす。
+
+#### 合格条件改訂理由（Gate 2 / Gate 4）
+
+初版設計時点では「別の小規模 test Issue を用意」「`With fixes` verdict が必須」と限定していたが、実装フェーズ後の verify サイクルで以下が判明したため改訂する:
+
+- **Gate 2**: SKILL.md Step 7.6 が verify する対象は Agent tool 経由の subagent 起動経路 + 出力 markdown 形式であり、出力 Issue が本 Issue か別 Issue かは本質ではない。別 Issue 必須化は本 Issue PR への証跡集約を妨げ、verifier の確認動線も冗長化する。`/issue-implement` Step 7.6 path を実際に通した証跡（subagent 経由の Agent tool 起動 + Step 7.6.4 出力形式準拠）が確認できれば合格と判断する。
+- **Gate 4**: SKILL.md Step 7.6.3（`:339-345`）で `With fixes` と `No` は「main session が修正→Step 7a/7b 再実行→Step 7.6 再実行」の同一ループ経路として定義されており、ループ収束の検証本質に差はない。`With fixes` のみを必須化すると、subagent が指摘の重大度判断で `No` を返したケースを意図的に作り替える必要が生じ、検証コストが増える割に動作確認の価値は変わらない。`With fixes` OR `No` のいずれかで `Yes` 収束する 2 round 以上を確認できれば合格と判断する。
 
 ### 恒久 pytest を追加しない理由（`docs/dev/testing-convention.md` 4 条件マッピング）
 
