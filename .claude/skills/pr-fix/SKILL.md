@@ -35,7 +35,7 @@ $ARGUMENTS = <issue_id>
 | `issue_id` | str | 正規化済み Issue ID（GitHub 数値、または `local-*`） |
 | `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID） |
 | `provider_type` | str | `github` / `gitlab` / `local` のいずれか。Step 0 のガード判定に使用 |
-| `git_remote` | str | git remote 名（`provider.<type>.git_remote` config から解決、default `origin`）。Step 4 の `git push` 引数に使用 |
+| `git_remote` | str | git remote 名（`provider.<type>.git_remote` config から解決。未指定時のフォールバックは `kaji_harness/config.py` 定義）。Step 4 の `git push` 引数に使用 |
 
 ### 解決ルール
 
