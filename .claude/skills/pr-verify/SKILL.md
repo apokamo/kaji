@@ -20,6 +20,7 @@ PR レビュー修正後の確認を行う。
 | `/pr-fix` 後の修正確認 | ✅ 必須 |
 | 新規レビューが必要な場合 | ❌ PR 上で直接レビューを実施 |
 | `provider.type='local'` 配下 | ❌ Step 0 で ABORT。代替は `/issue-verify-code` |
+| `provider.type='gitlab'` 配下 | ✅ 受理（`kaji pr` の写像層が glab 命令を吸収） |
 
 **ワークフロー内の位置**: i-pr → [PR review] → (pr-fix → **pr-verify**) → close
 
@@ -37,7 +38,7 @@ $ARGUMENTS = <issue_id>
 |------|-----|------|
 | `issue_id` | str | 正規化済み Issue ID（GitHub 数値、または `local-*`） |
 | `issue_ref` | str | 人間可読の Issue 参照 |
-| `provider_type` | str | `github` または `local`。Step 0 のガード判定に使用 |
+| `provider_type` | str | `github` / `gitlab` / `local` のいずれか。Step 0 のガード判定に使用 |
 
 ### 解決ルール
 
@@ -74,7 +75,7 @@ $ARGUMENTS = <issue_id>
 ### Step 0: provider check
 
 本 Skill は forge provider 専用。最初に `provider_type` を解決し、
-`github` 以外なら **以降のステップに進まず ABORT verdict を出力して終了** する。
+`github` / `gitlab` 以外なら **以降のステップに進まず ABORT verdict を出力して終了** する。
 
 **手順**:
 
@@ -89,7 +90,9 @@ $ARGUMENTS = <issue_id>
 
 2. **判定と verdict 出力**:
 
-   - `PROVIDER_TYPE` が `github` → Step 1 に進む
+   - `PROVIDER_TYPE` が `github` / `gitlab` → Step 1 に進む（`kaji pr` の
+     写像層が forge 別の引数差異を吸収するため、本 Skill は両 forge で同じ
+     コマンドを使う）
    - `PROVIDER_TYPE` が `local` → 以下の ABORT verdict を **そのまま stdout に
      出力**して以降のステップは実行しない:
 
