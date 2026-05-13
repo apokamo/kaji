@@ -101,8 +101,15 @@ def test_pr_bare_provider_error_keywords() -> None:
 )
 def test_pr_local_provider_blocks_all_subcommands(tmp_path: Path, args: list[str]) -> None:
     _setup_repo(tmp_path, provider="local")
-    # gh / subprocess.run should NEVER be called under provider=local
-    with patch("kaji_harness.cli_main.subprocess.run") as mock_run:
+    # gh / subprocess.run should NEVER be called under provider=local.
+    # gl:21: ``cli_main.subprocess.run`` を patch すると ``_worktree.subprocess.run``
+    # にも波及して ``resolve_main_worktree()`` が壊れるため、provider 種別判定だけが
+    # 関心のこのテストでは ``resolve_main_worktree`` 自体を局所 mock する
+    # （設計書 § 方針 §§ 2 系統 B）。
+    with (
+        patch("kaji_harness.providers.resolve_main_worktree", return_value=tmp_path),
+        patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+    ):
         rc, _, stderr = _run_at(tmp_path, args)
     assert rc == 2
     assert "forge-only" in stderr

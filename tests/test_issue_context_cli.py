@@ -10,6 +10,7 @@ Red → Green の証跡となる。
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,6 +22,7 @@ from kaji_harness.providers.models import IssueContext
 
 
 def _write_local_repo(tmp_path: Path, *, machine_id: str = "pc1") -> Path:
+    """gl:21: ``provider.type='local'`` は git repo を前提とするので git init する。"""
     repo = tmp_path / "repo"
     (repo / ".kaji").mkdir(parents=True)
     (repo / ".kaji" / "config.toml").write_text(
@@ -28,6 +30,10 @@ def _write_local_repo(tmp_path: Path, *, machine_id: str = "pc1") -> Path:
         "[execution]\ndefault_timeout = 1800\n\n"
         '[provider]\ntype = "local"\n\n'
         f'[provider.local]\nmachine_id = "{machine_id}"\n'
+    )
+    subprocess.run(
+        ["git", "init", "-q", "--initial-branch=main", str(repo)],
+        check=True,
     )
     return repo
 

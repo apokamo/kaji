@@ -93,6 +93,8 @@ def workdir(tmp_path: Path) -> Path:
         "[execution]\ndefault_timeout = 1800\n\n"
         '[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
     )
+    # gl:21: provider.type='local' requires a git repo.
+    subprocess.run(["git", "init", "-q", "--initial-branch=main", str(d)], check=True)
     return d
 
 

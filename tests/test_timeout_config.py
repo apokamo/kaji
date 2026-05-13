@@ -40,10 +40,15 @@ from kaji_harness.workflow import load_workflow_from_str, validate_workflow
 
 def _write_config(tmp_path: Path, content: str) -> Path:
     """Write .kaji/config.toml and return the config file path."""
+    import subprocess as _sp
+
     config_dir = tmp_path / ".kaji"
     config_dir.mkdir(exist_ok=True)
     config_file = config_dir / "config.toml"
     config_file.write_text(content)
+    # gl:21: provider.type='local' tests require a git repo for main worktree resolution.
+    if not (tmp_path / ".git").exists():
+        _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
     return config_file
 
 

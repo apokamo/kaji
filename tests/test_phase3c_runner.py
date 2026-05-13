@@ -26,13 +26,19 @@ from kaji_harness.state import SessionState
 
 
 def _write_repo(tmp_path: Path, *, provider_section: str = "") -> Path:
-    """``.kaji/config.toml`` を持つ最小 repo を tmp_path 下に作る。"""
+    """``.kaji/config.toml`` を持つ最小 repo を tmp_path 下に作る。
+
+    gl:21: provider.type='local' は git repo を前提とするので git init する。
+    """
+    import subprocess as _sp
+
     repo = tmp_path / "repo"
     (repo / ".kaji").mkdir(parents=True)
     (repo / ".kaji" / "config.toml").write_text(
         '[paths]\nartifacts_dir = ".kaji-artifacts"\nskill_dir = ".claude/skills"\n\n'
         "[execution]\ndefault_timeout = 1800\n" + provider_section
     )
+    _sp.run(["git", "init", "-q", "--initial-branch=main", str(repo)], check=True)
     return repo
 
 

@@ -110,6 +110,8 @@ def _cycle_workflow() -> Workflow:
 
 def _make_config(tmp_path: Path) -> KajiConfig:
     """Create a minimal KajiConfig for use in tests."""
+    import subprocess as _sp
+
     kaji_dir = tmp_path / ".kaji"
     kaji_dir.mkdir(exist_ok=True)
     config_file = kaji_dir / "config.toml"
@@ -117,6 +119,9 @@ def _make_config(tmp_path: Path) -> KajiConfig:
         config_file.write_text(
             '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
+    # gl:21: provider.type='local' requires a git repo for main worktree resolution.
+    if not (tmp_path / ".git").exists():
+        _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
     return KajiConfig._load(config_file)
 
 

@@ -48,6 +48,9 @@ def _make_config(
     tmp_path: Path, *, repo: str = "group/project", machine_id: str = "pc1"
 ) -> KajiConfig:
     """``provider.type='local'`` 配下で ``[provider.gitlab].repo`` を持つ config 雛形。"""
+    # gl:21: provider.type='local' requires a git repo when get_provider() runs.
+    if not (tmp_path / ".git").exists():
+        subprocess.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
     return KajiConfig(
         repo_root=tmp_path,
         paths=PathsConfig(artifacts_dir=".kaji-artifacts", skill_dir=".claude/skills"),
@@ -598,6 +601,9 @@ class TestReadSyncStatusAfterSync:
 
 def _bootstrap_local_repo(tmp_path: Path, *, repo: str = "group/project") -> Path:
     """``provider.type='local'`` の最小 config を持つ repo_root を作る。"""
+    # gl:21: provider.type='local' requires a git repo.
+    if not (tmp_path / ".git").exists():
+        subprocess.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
     kaji_dir = tmp_path / ".kaji"
     kaji_dir.mkdir()
     (kaji_dir / "config.toml").write_text(

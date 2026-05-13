@@ -493,8 +493,12 @@ class TestRunnerWithConfig:
             ],
         )
 
+        import subprocess as _sp
+
         project_root = tmp_path / "project"
         project_root.mkdir()
+        # gl:21: provider.type='local' requires a git repo.
+        _sp.run(["git", "init", "-q", "--initial-branch=main", str(project_root)], check=True)
         artifacts_dir = tmp_path / "artifacts"
 
         kaji_dir = project_root / ".kaji"
@@ -554,8 +558,12 @@ class TestRunnerWithConfig:
             ],
         )
 
+        import subprocess as _sp
+
         project_root = tmp_path / "project"
         project_root.mkdir()
+        # gl:21: provider.type='local' requires a git repo.
+        _sp.run(["git", "init", "-q", "--initial-branch=main", str(project_root)], check=True)
         artifacts_dir = tmp_path / "artifacts"
 
         kaji_dir = project_root / ".kaji"
@@ -602,11 +610,14 @@ class TestCLIConfigIntegration:
     """CLI cmd_run integrates with config discovery."""
 
     def test_cmd_run_discovers_config(self, tmp_path: Path) -> None:
+        import subprocess as _sp
         from unittest.mock import MagicMock, patch
 
         from kaji_harness.cli_main import cmd_run, create_parser
         from kaji_harness.models import Verdict
 
+        # gl:21: provider.type='local' requires a git repo.
+        _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
         # Create config
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
@@ -705,11 +716,14 @@ class TestCLIConfigIntegration:
         assert "invalid TOML" in captured.err
 
     def test_cmd_run_tilde_artifacts_dir(self, tmp_path: Path) -> None:
+        import subprocess as _sp
         from unittest.mock import MagicMock, patch
 
         from kaji_harness.cli_main import cmd_run, create_parser
         from kaji_harness.models import Verdict
 
+        # gl:21: provider.type='local' requires a git repo.
+        _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
@@ -736,11 +750,14 @@ class TestCLIConfigIntegration:
         assert call_kwargs["artifacts_dir"] == Path("~/.kaji/artifacts").expanduser()
 
     def test_cmd_run_absolute_artifacts_dir_accepted(self, tmp_path: Path) -> None:
+        import subprocess as _sp
         from unittest.mock import MagicMock, patch
 
         from kaji_harness.cli_main import cmd_run, create_parser
         from kaji_harness.models import Verdict
 
+        # gl:21: provider.type='local' requires a git repo.
+        _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         abs_artifacts = tmp_path / "external-artifacts"

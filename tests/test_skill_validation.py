@@ -135,6 +135,7 @@ class TestRunnerSkillDirIntegration:
 
     def test_runner_validates_with_skill_dir(self, tmp_path: Path) -> None:
         """Runner uses config.paths.skill_dir for skill validation."""
+        import subprocess as _sp
         from unittest.mock import patch
 
         from kaji_harness.config import KajiConfig
@@ -149,6 +150,8 @@ class TestRunnerSkillDirIntegration:
         (config_dir / "config.toml").write_text(
             '[paths]\nskill_dir = "my-skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
+        # gl:21: provider.type='local' requires a git repo.
+        _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
         config = KajiConfig._load(config_dir / "config.toml")
 
         workflow = Workflow(
