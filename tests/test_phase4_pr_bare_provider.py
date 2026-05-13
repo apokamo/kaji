@@ -107,7 +107,11 @@ def test_pr_local_provider_blocks_all_subcommands(tmp_path: Path, args: list[str
     assert rc == 2
     assert "forge-only" in stderr
     assert "provider.type='local'" in stderr
-    assert mock_run.call_count == 0, "gh subprocess must not be invoked under provider=local"
+    # gh subprocess must not be invoked under provider=local. ``git worktree list``
+    # may be invoked by ``get_provider()`` to resolve the main worktree (gl:11);
+    # only ``gh`` calls indicate a forge passthrough leak.
+    gh_calls = [c for c in mock_run.call_args_list if c[0] and c[0][0] and c[0][0][0] == "gh"]
+    assert gh_calls == [], f"gh subprocess must not be invoked under provider=local: {gh_calls}"
 
 
 # -------- Medium: provider=github passthrough behaviour preserved --------

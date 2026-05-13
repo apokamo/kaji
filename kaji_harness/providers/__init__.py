@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from ._worktree import resolve_main_worktree
 from .base import IssueProvider
 from .github import GitHubProvider
 from .gitlab import GitLabProvider
@@ -106,8 +107,16 @@ def get_provider(config: KajiConfig) -> IssueProvider:
                 "Run 'kaji local init' or set machine_id in "
                 ".kaji/config.local.toml."
             )
+        # gl:11: cwd 起点 discover では feature worktree が repo_root になりうるため、
+        # LocalProvider の I/O 正本を ``default_branch`` を checkout している worktree
+        # (= main worktree) に固定する。GitHub/GitLab provider は外部 API 経由なので
+        # repo_root は cwd 起点のまま。
+        main_root = resolve_main_worktree(
+            start_dir=config.repo_root,
+            default_branch=local_cfg.default_branch,
+        )
         return LocalProvider(
-            repo_root=config.repo_root,
+            repo_root=main_root,
             machine_id=local_cfg.machine_id,
             default_branch=local_cfg.default_branch,
             git_remote=local_cfg.git_remote,

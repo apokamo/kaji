@@ -199,6 +199,30 @@ git stage + commit を **同一 process 内で atomic に** 行う。実装は
   され、CLI 引数として認識されつつ何もしない（passthrough 経路の冪等性のため。
   詳細は [GitLab Mode CLI Guide § 2](gitlab-mode.md) 参照）
 
+### main worktree への書き込み固定（Issue gl:11）
+
+`provider.type='local'` 配下では、`kaji issue {create,edit,comment,close}` の
+ファイル書き込み・`--commit` 動作は **cwd と無関係に
+`provider.local.default_branch` を checkout している worktree (= main worktree)**
+に向く。feature worktree (`fix/N` 等) に `cd` した状態で
+`kaji issue comment local-pc1-3 --commit` を実行しても、
+コメントファイルと commit は main worktree / `default_branch` に着地する。
+
+実装: `kaji_harness/providers/_worktree.py` の `resolve_main_worktree()` が
+`git worktree list --porcelain` を解析し、`branch refs/heads/<default_branch>`
+に一致する worktree を `LocalProvider.repo_root` として固定する
+(`kaji_harness/providers/__init__.py` `get_provider()` 内で 1 度だけ解決)。
+
+トラブルシュート:
+
+| 症状 | 原因 / 対処 |
+|------|-------------|
+| `LocalProviderError: no worktree found for branch 'main'` | `default_branch` を checkout している worktree が無い。`git worktree add ../main main` を実行するか、`provider.local.default_branch` を実在ブランチに合わせる |
+| `warning: multiple worktrees checking out 'main'` (stderr) | 防御的入力に対する警告。最初に見つかった worktree を採用するが、通常 git 操作では発生しない |
+
+GitHub / GitLab provider の `repo_root` は cwd 起点のまま（`gh` / `glab` CLI が
+cwd に依存しないため、影響なし）。
+
 ## 7. ファイル / レイアウト
 
 ```
