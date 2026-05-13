@@ -2,12 +2,15 @@
 id: local-p1-1
 title: forge 採用先確定後タスク bucket（forge 連携 / PR context / GitLabProvider / Large-forge
   テスト群）
-state: open
+state: closed
 slug: forge-bucket-forge-pr-context-gitlabprov
 labels:
 - type:meta
 - scope:phase6-or-later
 created_at: '2026-05-08T17:26:50Z'
+closed_at: '2026-05-13T11:59:45Z'
+closed_by: p1
+close_reason: completed
 ---
 ## 概要
 

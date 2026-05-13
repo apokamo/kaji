@@ -1,13 +1,16 @@
 ---
 id: local-p1-12
 title: '[deferred] kaji sync from-github 実装（GitHubProvider 対称化）'
-state: open
+state: closed
 slug: deferred-kaji-sync-from-github
 labels:
 - type:feature
 - scope:gitlab-validation
 - priority:low
 created_at: '2026-05-09T06:02:43Z'
+closed_at: '2026-05-13T11:59:45Z'
+closed_by: p1
+close_reason: not-planned
 ---
 ## 概要
 
