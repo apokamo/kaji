@@ -201,10 +201,21 @@ def test_dispatch_logic_isolated(tmp_path, monkeypatch):
 - **`make check` (= `pytest -m "not large_gitlab"`) は refactor 直後に全 pass
   すること**。Red→Green の遷移は「fallback 削除→影響テスト移行→全 pass」の順で
   進める。large_gitlab は本変更スコープに含まれない。
-- **`kaji_harness.providers._worktree` の `subprocess.run` 名前空間 patch は
-  使わない**。production と同じ実 `git` を呼ばせるか、あるいは
-  `kaji_harness.providers.resolve_main_worktree` 自体を mock する。
-  `subprocess` 名前空間 patch は本 Issue が解消したい「暗黙依存」の構造と同型。
+- **`kaji_harness.providers._worktree.subprocess.run` の名前空間 patch スコープ規定**:
+  - **dispatch / provider 結合テスト（`tests/test_phase3c_dispatcher.py` /
+    `tests/test_phase4_pr_bare_provider.py` 等、`get_provider()` / `_handle_issue` /
+    `_handle_pr` 経路を踏むテスト）では使用禁止**。production と同じ実 `git` を
+    呼ばせるか（系統 A: `git init` fixture）、`kaji_harness.providers.resolve_main_worktree`
+    自体を mock する（系統 B）。これらの層で `subprocess` 名前空間 patch を使うと、
+    本 Issue が解消したい「`MagicMock != 0` truthy 評価による fallback 偶発依存」と
+    同型の暗黙依存が再発する。
+  - **`resolve_main_worktree()` 自身の Small unit test
+    （`tests/test_resolve_main_worktree.py`）では許可**。検証対象が
+    `subprocess.run` 呼び出しの戻り値・例外に対する分岐そのもの（`FileNotFoundError`
+    / `returncode != 0` → `LocalProviderError` raise）であり、ここで patch を
+    禁止すると検証経路が成立しない。これは「関数自身の入力境界を mock する」
+    legitimate な unit test であって暗黙依存ではない（mock 対象が検証対象の
+    モジュール内 `subprocess.run` 一点に閉じ、テスト側が依存関係を明示する）。
 - **gl:11 設計書の整合性維持**: fallback 削除に合わせて gl:11 設計書 § 失敗ケース
   表を書き換える。設計書間の参照整合を維持する。
 - **テスト fixture の `git init` は最小限**: `--initial-branch=<default_branch>`
