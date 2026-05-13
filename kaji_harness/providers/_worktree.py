@@ -56,16 +56,15 @@ def resolve_main_worktree(*, start_dir: Path, default_branch: str) -> Path:
             text=True,
         )
     except FileNotFoundError:
-        # git CLI not on PATH. Fall back to start_dir; downstream git ops will fail
-        # with a clearer message if/when they run.
+        # git CLI not on PATH → fallback per design § 失敗ケース表 (gl:11 設計書)。
+        # Downstream git ops surface a clearer "git: command not found" if invoked.
         return start_dir.resolve()
     if proc.returncode != 0:
-        # ``start_dir`` is not a git repo. ``provider.type='local'`` is documented to
-        # require a git repo in production, but kaji harness tests construct configs
-        # against non-git tmp dirs to exercise unrelated code paths (e.g. ``kaji
-        # config provider-type``). Preserve prior behavior in that case by returning
-        # ``start_dir`` unchanged; if the caller then does git operations they will
-        # fail at that point with a clear git error.
+        # 非 git repo → fallback per design § 失敗ケース表 (gl:11 設計書)。
+        # production の provider.type='local' は git repo を前提 (§ 制約・前提条件)
+        # とするため到達しない。kaji harness の medium テスト fixture (config 解析 /
+        # dispatch / preflight など) が非 git tmp_path に対し get_provider() を呼ぶ
+        # 経路を維持するための明示仕様。
         return start_dir.resolve()
     blocks = parse_worktree_porcelain(proc.stdout)
     target = f"refs/heads/{default_branch}"
