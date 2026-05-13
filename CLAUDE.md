@@ -141,5 +141,6 @@ kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
 | PR 作成 | `/i-pr` | コミット整理 + プッシュ + PR 作成 |
 | PR レビュー後 | **`/pr-fix`** / **`/pr-verify`** | PR レビュー指摘対応とレビュー収束 |
 | 完了 | `/issue-close` | PR マージ + worktree 削除 + ブランチ削除 |
+| Release | `/release` | version bump + CHANGELOG + tag + GitLab Release ページ作成（CI 非依存 / maintainer 手元実行） |
 
-詳細: [Workflow Guide](docs/dev/workflow_guide.md) / [Development Workflow](docs/dev/development_workflow.md) / [Docs Maintenance Workflow](docs/dev/docs_maintenance_workflow.md)
+詳細: [Workflow Guide](docs/dev/workflow_guide.md) / [Development Workflow](docs/dev/development_workflow.md) / [Docs Maintenance Workflow](docs/dev/docs_maintenance_workflow.md) / [Release Runbook](docs/operations/release/runbook.md)
