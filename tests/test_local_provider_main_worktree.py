@@ -230,6 +230,40 @@ class TestGetProviderResolution:
         assert isinstance(provider, LocalProvider)
         assert provider.repo_root == feat_wt.resolve()
 
+    def test_get_provider_e2e_redirects_commit_to_main(
+        self, chdir_feature: tuple[Path, Path]
+    ) -> None:
+        """e2e: feature cwd で get_provider() → CLI comment → commit が main に着地する。
+
+        ``TestCommentRedirection.test_comment_commit_lands_on_main_not_feature`` は
+        ``LocalProvider(repo_root=main_wt)`` を直接組み立てて検証している。本ケースは
+        ``get_provider(config)`` 経由の解決まで含めた一連の経路を 1 本で押さえる。
+        """
+        main_wt, feat_wt = chdir_feature
+        issue_id = _seed_issue_on_main(main_wt)
+
+        config = self._make_local_config(feat_wt, "main")
+        provider = get_provider(config)
+        assert isinstance(provider, LocalProvider)
+        assert provider.repo_root == main_wt.resolve()
+
+        main_head_before = _git(main_wt, "rev-parse", "HEAD").stdout.strip()
+        feat_head_before = _git(feat_wt, "rev-parse", "HEAD").stdout.strip()
+
+        rc = _local_issue_comment(provider, [issue_id, "--body", "e2e", "--commit"])
+        assert rc == 0
+
+        main_head_after = _git(main_wt, "rev-parse", "HEAD").stdout.strip()
+        feat_head_after = _git(feat_wt, "rev-parse", "HEAD").stdout.strip()
+
+        assert main_head_after != main_head_before
+        assert feat_head_after == feat_head_before
+
+        main_comments = list((main_wt / ".kaji" / "issues").rglob("comments/*.md"))
+        feat_comments = list((feat_wt / ".kaji" / "issues").rglob("comments/*.md"))
+        assert len(main_comments) == 1
+        assert feat_comments == []
+
 
 class TestForgeProviderRegression:
     """GitHub / GitLab provider の repo_root は cwd 起点のまま（変更なし）."""

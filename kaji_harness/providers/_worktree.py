@@ -61,6 +61,7 @@ def resolve_main_worktree(*, start_dir: Path, default_branch: str) -> Path:
             ["git", "-C", str(start_dir), "worktree", "list", "--porcelain"],
             capture_output=True,
             text=True,
+            check=False,
         )
     except FileNotFoundError:
         # git CLI not on PATH → fallback per design § 失敗ケース表 (gl:11 設計書)。
