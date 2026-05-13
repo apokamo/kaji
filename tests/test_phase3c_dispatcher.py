@@ -236,7 +236,10 @@ class TestHandleIssueDispatch:
         with patch("kaji_harness.cli_main.subprocess.run") as mock_run:
             rc = _handle_issue(["view", "local-pc1-1"])
         assert rc == 0
-        mock_run.assert_not_called()  # gh は叩かれない
+        # gh は叩かれない。``git worktree list`` は ``get_provider()`` の main worktree
+        # 解決経由で呼ばれうる（gl:11）ので、gh のみを assert する。
+        gh_calls = [c for c in mock_run.call_args_list if c[0] and c[0][0] and c[0][0][0] == "gh"]
+        assert gh_calls == [], f"gh must not be invoked: {gh_calls}"
         captured = capsys.readouterr()
         assert "Hello" in captured.out
         assert "body text" in captured.out
