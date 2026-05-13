@@ -30,9 +30,11 @@ forge CI (GitLab CI / GitHub Actions) に依存せず、各 step で user 承認
 
 - 実行場所: kaji 本体の **main worktree** で実行する（release branch は切らない、main 直接 update する運用）
 - `gh` ではなく **`glab`** CLI を使う（GitLab 運用）
-- GitLab を指す git remote が 1 つ存在すること（remote 名は `provider.gitlab.git_remote` config に従う。hybrid setup では `origin`=GitHub, `gitlab`=GitLab の構成になる）。Step 1 で動的に解決する
+- GitLab を指す git remote が 1 つ存在すること。Step 1 で `git remote -v` の URL から動的に抽出する（hybrid setup では `origin`=GitHub, `gitlab`=GitLab の構成）。`.kaji/config.toml` の `provider.gitlab.git_remote` 値と整合する remote 名であることが前提
 - 解決した GitLab remote に対して `git push` できる権限を maintainer が持っていること
 - `uv` / `make check` が走る環境（kaji 開発環境セットアップ済み）
+
+> **Note**: 現状 skill は `git remote -v` の URL grep でのみ remote を解決し、`.kaji/config.toml` の `provider.gitlab.git_remote` は直接読まない。config 値を変えただけでは動作は変わらない点に注意。将来 `kaji config git-remote` 相当の CLI を追加する余地あり。
 
 ## 実行手順
 
@@ -42,8 +44,9 @@ forge CI (GitLab CI / GitHub Actions) に依存せず、各 step で user 承認
 
 ```bash
 # 1-0. GitLab remote 名を解決（hybrid setup 対応）
-#      `provider.gitlab.git_remote` config が解決元。手動実行では
-#      git remote から gitlab.com を指すものを動的抽出する。
+#      `git remote -v` から URL に gitlab.com を含む push remote を動的抽出する。
+#      `.kaji/config.toml` の `provider.gitlab.git_remote` 値と整合する
+#      remote 名であることが前提（skill は config を直接読まない）。
 GITLAB_REMOTE=$(git remote -v | awk '/gitlab\.com.*\(push\)/{print $1; exit}')
 # 上記で見つからない場合、`origin` が GitLab を指していれば fallback
 if [ -z "$GITLAB_REMOTE" ]; then
@@ -107,6 +110,8 @@ git log "${LAST_TAG}..HEAD" --pretty=format:'%H%n%B%n---END---'
 **user 承認待ち**: 提案 version (例: `v0.9.1 → v0.10.0`) と判定根拠を出力し、user の承認を待つ。
 user が異なる version を希望する場合はそちらを採用する（初期運用では Conventional Commits 解釈ミスを警戒し、必ず承認を挟む）。
 
+**release 必要性の追加確認**: 候補 commit が `docs:` / `test:` / `chore:` のみで `feat:` / `fix:` / BREAKING CHANGE を一切含まない場合、patch bump 候補となるが consumer 側 lockfile を無用に更新させるため SemVer 的には冗長になりがち。Step 2 の user 承認時に「今回の bump 候補は docs/test/chore のみ。本当に release するか」と明示的に問いかけ、user 判断で release skip / continue を決める。
+
 ### Step 3: CHANGELOG 生成
 
 `CHANGELOG.md` の `## [Unreleased]` セクションを基に、新 version のエントリを作成する。
@@ -168,17 +173,19 @@ git tag -a vX.Y.Z -m "Release vX.Y.Z"
 
 ### Step 6: Push
 
-Step 1 で解決した `$GITLAB_REMOTE` に対して push する。
+Step 1 で解決した `$GITLAB_REMOTE` に対して、main と tag を **atomic push** する。
 
 ```bash
-git push "$GITLAB_REMOTE" main
-git push "$GITLAB_REMOTE" vX.Y.Z
+# main と tag を 1 トランザクションで push（どちらか失敗すれば両方拒否される）
+git push --atomic "$GITLAB_REMOTE" main vX.Y.Z
 ```
+
+`--atomic` を使うことで、main は push 成功 / tag push 失敗のような **片方だけ remote に反映された中途半端な状態** を防ぐ。
 
 push 失敗時:
 
-- `non-fast-forward` → main が他者 push で進んでいる。**force push は禁止**。一旦 stop し、user に状況を共有 → 必要なら Step 1 から再実行（commit と tag を一度ローカルで rollback、後述）
-- tag push のみ失敗 → main は既に push 済み。再試行で push できれば続行。それでも失敗するなら user に glab / GitLab UI で原因確認を依頼
+- `non-fast-forward` → main が他者 push で進んでいる。`--atomic` のため tag も remote には残らない。**force push は禁止**。一旦 stop し、user に状況を共有 → 必要なら Step 1 から再実行（commit と tag を一度ローカルで rollback、後述）
+- tag 関連で reject（同名 tag が既に存在する等）→ atomic のため main も remote 反映されていない。`git tag -d vX.Y.Z` で local tag を消し、原因確認後に再試行
 
 ### Step 7: GitLab Release ページ作成
 
@@ -207,13 +214,17 @@ dry-run 終了時に skill が必ず提示する内容:
 
 1. **作成された commit と tag**: `git show vX.Y.Z --stat` の要点
 2. **rollback 手順**（dry-run のみ。本番経路では使わない）:
+
+   > ⚠️ 以下は `git reset --hard` を含む破壊操作。skill が自動実行してはならない（ガードレール § も参照）。
+   > **必ず user の明示承認を取ってから実行する**。コピペで一度に流す前提のブロックではない。
+
    ```bash
    git tag -d vX.Y.Z
-   git reset --hard HEAD~1   # release commit を破棄
+   git reset --hard HEAD~1   # release commit を破棄（破壊操作: user 承認後のみ）
    # CHANGELOG.md / pyproject.toml / uv.lock の変更を確認後、必要なら git restore で戻す
    ```
 3. **本番実行への進み方**:
-   - dry-run の結果に問題がなければ `git push "$GITLAB_REMOTE" main && git push "$GITLAB_REMOTE" vX.Y.Z` を手で実行 → Step 7 を手で実行、
+   - dry-run の結果に問題がなければ `git push --atomic "$GITLAB_REMOTE" main vX.Y.Z` を手で実行 → Step 7 を手で実行、
    - または rollback してから `/release`（dry-run なし）で再実行
 
 ## 失敗時の rollback 手順（共通）
@@ -234,8 +245,10 @@ git reset --hard HEAD~1
 
 ### Step 6 (push) で remote 拒否
 
+`git push --atomic` を使うため、reject 時は **main と tag のどちらも remote には反映されていない**。ローカル side だけ巻き戻せばよい。
+
 ```bash
-# main の push が non-fast-forward で拒否されたら
+# 状況確認
 git fetch "$GITLAB_REMOTE"
 git log --oneline "$GITLAB_REMOTE/main"..HEAD       # 自分のローカル commits を確認
 git log --oneline HEAD.."$GITLAB_REMOTE/main"       # 他者の commits を確認
