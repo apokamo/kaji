@@ -4,7 +4,6 @@ description: |
   issue-create / issue-start は事前に手動実行済みであることが前提。
 execution_policy: auto
 requires_provider: gitlab
-# workdir: /home//////
 
 cycles:
   design-review:
@@ -23,7 +22,7 @@ steps:
     skill: issue-design
     agent: claude
     model: opus
-    effort: medium
+    effort: high
     on:
       PASS: review-design
       ABORT: end
@@ -31,7 +30,7 @@ steps:
   - id: review-design
     skill: issue-review-design
     agent: codex
-    model: gpt-5.4
+    model: gpt-5.5
     effort: medium
     on:
       PASS: implement
@@ -42,6 +41,7 @@ steps:
     skill: issue-fix-design
     agent: claude
     model: opus
+    effort: medium
     resume: design
     on:
       PASS: verify-design
@@ -50,7 +50,7 @@ steps:
   - id: verify-design
     skill: issue-verify-design
     agent: codex
-    model: gpt-5.4
+    model: gpt-5.5
     effort: medium
     on:
       PASS: implement
@@ -61,6 +61,7 @@ steps:
     skill: issue-implement
     agent: claude
     model: opus
+    effort: medium
     on:
       PASS: review-code
       RETRY: implement
@@ -70,7 +71,7 @@ steps:
   - id: review-code
     skill: issue-review-code
     agent: codex
-    model: gpt-5.4
+    model: gpt-5.5
     effort: medium
     on:
       PASS: final-check
@@ -82,6 +83,7 @@ steps:
     skill: issue-fix-code
     agent: claude
     model: opus
+    effort: medium
     inject_verdict: true
     on:
       PASS: verify-code
@@ -90,7 +92,7 @@ steps:
   - id: verify-code
     skill: issue-verify-code
     agent: codex
-    model: gpt-5.4
+    model: gpt-5.5
     effort: medium
     on:
       PASS: final-check
@@ -101,6 +103,7 @@ steps:
     skill: i-dev-final-check
     agent: claude
     model: opus
+    effort: medium
     on:
       PASS: pr
       RETRY: final-check
@@ -110,6 +113,7 @@ steps:
     skill: i-pr
     agent: claude
     model: sonnet
+    effort: medium
     on:
       PASS: end
       RETRY: pr
