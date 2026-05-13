@@ -28,7 +28,9 @@ consumer (kamo2 等) が `uv lock --upgrade-package kaji` で新版取得
 ```bash
 # main worktree で skill を起動
 cd /path/to/kaji  # main worktree（feature branch ではない）
-git checkout main && git pull --ff-only origin main
+# GitLab を指す remote 名は `provider.gitlab.git_remote` config に従う
+# （hybrid setup では `gitlab`、単独設定では `origin` 等。skill が Step 1 で動的解決する）
+git checkout main && git pull --ff-only "$GITLAB_REMOTE" main
 
 # 通常実行
 /release
@@ -39,12 +41,12 @@ git checkout main && git pull --ff-only origin main
 
 skill 側で以下を guide する:
 
-1. pre-flight check（main / clean / sync / glab 認証）
+1. pre-flight check（GitLab remote 解決 / main / clean / sync / glab 認証）
 2. 直近 tag からの commit を Conventional Commits で解釈 → 次 version 提案（**user 承認**）
 3. CHANGELOG.md の `[Unreleased]` を新 version section に整える（**user 承認**）
 4. `pyproject.toml` の version を書き換え → `uv lock` → `make check`
 5. `chore(release): vX.Y.Z` で commit + annotated tag
-6. `git push origin main` + `git push origin vX.Y.Z`
+6. `git push "$GITLAB_REMOTE" main` + `git push "$GITLAB_REMOTE" vX.Y.Z`
 7. `glab release create vX.Y.Z --notes "<CHANGELOG 抜粋>"`
 
 詳細は [`.claude/skills/release/SKILL.md`](../../../.claude/skills/release/SKILL.md) を参照。
@@ -93,9 +95,14 @@ skill が Step 1-5 までを実行し、Step 6 (push) と Step 7 (Release ペー
 
 `/release` skill が使えない（claude harness が起動しない等）場合の手動手順。**通常運用では使わない**。
 
+事前に GitLab を指す remote 名を `git remote -v` で確認しておく（hybrid setup では `gitlab`、単独設定では `origin` 等）。以下は `$GITLAB_REMOTE` に解決済み remote 名を入れた前提。
+
 ```bash
+# 0. GitLab remote を特定（hybrid setup 例: GITLAB_REMOTE=gitlab）
+GITLAB_REMOTE=$(git remote -v | awk '/gitlab\.com.*\(push\)/{print $1; exit}')
+
 # 1. main を最新化
-git checkout main && git pull --ff-only origin main
+git checkout main && git pull --ff-only "$GITLAB_REMOTE" main
 
 # 2. CHANGELOG.md と pyproject.toml の version を手で編集
 #    [Unreleased] → [X.Y.Z] - YYYY-MM-DD に整える
@@ -110,20 +117,21 @@ git commit -m "chore(release): vX.Y.Z"
 git tag -a vX.Y.Z -m "Release vX.Y.Z"
 
 # 5. push（force push 禁止）
-git push origin main
-git push origin vX.Y.Z
+git push "$GITLAB_REMOTE" main
+git push "$GITLAB_REMOTE" vX.Y.Z
 
 # 6. GitLab Release ページ
 glab release create vX.Y.Z --name "vX.Y.Z" --notes "<CHANGELOG 抜粋>"
 ```
 
-> **絶対禁止**: `git push --force origin main` / tag の force push。tag を上書きすると consumer 側 lockfile が壊れる。
+> **絶対禁止**: `git push --force "$GITLAB_REMOTE" main` / tag の force push。tag を上書きすると consumer 側 lockfile が壊れる。
 
 ## トラブルシューティング
 
 | 症状 | 対処 |
 |------|------|
-| `/release` が Step 1 で stop（main 以外） | `git checkout main && git pull --ff-only origin main` してから再実行 |
+| `/release` が Step 1 で stop（main 以外） | `git checkout main && git pull --ff-only "$GITLAB_REMOTE" main` してから再実行（`GITLAB_REMOTE` は Step 1 で skill が動的解決する remote 名） |
+| `/release` が Step 1 で stop（GitLab remote 未発見） | `.kaji/config.toml` の `provider.gitlab.git_remote` と `git remote -v` 出力を確認し、必要なら `git remote add gitlab <gitlab-url>` で remote を追加 |
 | Step 1 で working tree dirty | 別 branch / stash で退避してから再実行（skill は破壊操作を一切しない） |
 | Step 2 で commit 0 件 ABORT | 前回 tag 以降に release 対象の変更が無い。merge を待つ |
 | Step 4 で `make check` 失敗 | release を中断し、修正 commit を main に入れてから再実行 |
