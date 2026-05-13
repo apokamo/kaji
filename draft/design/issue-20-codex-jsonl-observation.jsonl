@@ -1,0 +1,32 @@
+# Codex CLI 0.124.0 `codex exec --json` observation (issue gl:20)
+# Captured: 2026-05-14 in /tmp/codex-probe with codex 0.124.0
+# This file is a primary-source observation referenced by
+# draft/design/issue-20-codexadapter-extract-text-interactive-ka.md.
+#
+# === Sample 1: command_execution (success) + file_change + web_search ===
+{"type":"thread.started","thread_id":"019e2256-8cbb-7ee0-a932-bb19b28143e8"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I'll run the requested shell steps in order, then add `demo.py`, then do the web search."}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/bash -lc 'ls -la /tmp && echo hello > sample.txt'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/bash -lc 'ls -la /tmp && echo hello > sample.txt'","aggregated_output":"total 176\ndrwxrwxrwt 19 nobody nogroup 20480 May 14 02:16 .\n... (truncated for brevity in this fixture; original was ~30 lines) ...\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"`sample.txt` is created. I'm adding the small Python file now."}}
+{"type":"item.started","item":{"id":"item_3","type":"file_change","changes":[{"path":"/tmp/codex-probe/demo.py","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_3","type":"file_change","changes":[{"path":"/tmp/codex-probe/demo.py","kind":"add"}],"status":"completed"}}
+{"type":"item.started","item":{"id":"item_4","type":"web_search","id":"ws_096f603e6111ca7a016a04b1e04b48819185cc3048b28a999f","query":"","action":{"type":"other"}}}
+{"type":"item.completed","item":{"id":"item_4","type":"web_search","id":"ws_096f603e6111ca7a016a04b1e04b48819185cc3048b28a999f","query":"OpenAI API","action":{"type":"search","query":"OpenAI API","queries":["OpenAI API"]}}}
+{"type":"item.completed","item":{"id":"item_5","type":"agent_message","text":"Done.\n\nCreated:\n- `sample.txt` with `hello`\n- `demo.py` with `print(42)`\n\nWeb search worked."}}
+{"type":"turn.completed","usage":{"input_tokens":49261,"cached_input_tokens":35968,"output_tokens":419}}
+#
+# === Sample 2: command_execution with non-zero exit_code ===
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/bash -lc \"bash -c 'for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do echo line$i; done; exit 5'\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/bash -lc \"bash -c 'for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do echo line$i; done; exit 5'\"","aggregated_output":"line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\nline11\nline12\nline13\nline14\nline15\nline16\nline17\nline18\nline19\nline20\n","exit_code":5,"status":"failed"}}
+#
+# === Observation summary ===
+# - command_execution: emits item.started (with status="in_progress", exit_code=null, aggregated_output="")
+#   and item.completed (with status="completed"|"failed", exit_code=int, aggregated_output=full text).
+# - file_change: emits both item.started and item.completed with identical `changes` array.
+#   `changes[*]` shape: {"path": str, "kind": "add"|"update"|"delete"} (only "add" observed).
+# - web_search: emits both item.started and item.completed. item.started has empty `query`;
+#   item.completed has populated `query` + nested `action.query`. action.type goes from "other" to "search".
+# - mcp_tool_call (not in this capture but documented in docs/cli-guides/codex-cli-session-guide.md):
+#   emits item.started then item.completed; result.content[*].text already extracted by CodexAdapter.
