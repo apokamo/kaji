@@ -47,14 +47,14 @@ def resolve_main_worktree(*, start_dir: Path, default_branch: str) -> Path:
 
     Returns:
         ``default_branch`` を checkout している worktree の絶対パス。
-        ただし git CLI が PATH 上に無い場合や ``git worktree list`` が exit != 0
-        を返した場合（非 git repo 等）は ``start_dir.resolve()`` を fallback として返す
-        （設計書 § 失敗ケース表 / fallback 採用の根拠）。
 
     Raises:
-        LocalProviderError: ``default_branch`` に一致する worktree が無い場合（=
-            作業者が main worktree を作っていない）。porcelain 出力が parse 不能だった
-            場合も「一致 0 件」経路に合流して同 error を raise する。
+        LocalProviderError: 以下のいずれか。
+            - ``git`` CLI が PATH 上に無い (``FileNotFoundError``)。
+            - ``git worktree list --porcelain`` が exit != 0 を返した（非 git repo 等）。
+            - ``default_branch`` に一致する worktree が無い（= 作業者が main worktree を
+              作っていない）。porcelain 出力が parse 不能だった場合も「一致 0 件」経路に
+              合流して同 error を raise する。
     """
     try:
         proc = subprocess.run(
@@ -63,17 +63,21 @@ def resolve_main_worktree(*, start_dir: Path, default_branch: str) -> Path:
             text=True,
             check=False,
         )
-    except FileNotFoundError:
-        # git CLI not on PATH → fallback per design § 失敗ケース表 (gl:11 設計書)。
-        # Downstream git ops surface a clearer "git: command not found" if invoked.
-        return start_dir.resolve()
+    except FileNotFoundError as exc:
+        raise LocalProviderError(
+            "git CLI not found on PATH. "
+            "provider.type='local' requires git; install git and ensure it is on PATH, "
+            "or switch provider.type to a non-local value."
+        ) from exc
     if proc.returncode != 0:
-        # 非 git repo → fallback per design § 失敗ケース表 (gl:11 設計書)。
-        # production の provider.type='local' は git repo を前提 (§ 制約・前提条件)
-        # とするため到達しない。kaji harness の medium テスト fixture (config 解析 /
-        # dispatch / preflight など) が非 git tmp_path に対し get_provider() を呼ぶ
-        # 経路を維持するための明示仕様。
-        return start_dir.resolve()
+        stderr = proc.stderr.strip() or "(empty)"
+        raise LocalProviderError(
+            f"'git -C {start_dir} worktree list' failed (exit {proc.returncode}). "
+            f"provider.type='local' requires a git repository; "
+            f"run from a git worktree (or 'git init' first), "
+            f"or switch provider.type to a non-local value. "
+            f"stderr: {stderr}"
+        )
     blocks = parse_worktree_porcelain(proc.stdout)
     target = f"refs/heads/{default_branch}"
     matches: list[Path] = [

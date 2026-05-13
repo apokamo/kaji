@@ -783,6 +783,11 @@ class TestTimeoutConfigE2E:
         # Create a project structure with config.toml
         project_dir = tmp_path / "project"
         project_dir.mkdir()
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(project_dir)],
+            check=True,
+        )
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
@@ -832,6 +837,11 @@ class TestTimeoutConfigE2E:
         """kaji validate accepts a workflow YAML without default_timeout (optional)."""
         project_dir = tmp_path / "project"
         project_dir.mkdir()
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(project_dir)],
+            check=True,
+        )
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
@@ -882,6 +892,11 @@ class TestTimeoutConfigE2E:
         """
         project_dir = tmp_path / "project"
         project_dir.mkdir()
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(project_dir)],
+            check=True,
+        )
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
@@ -908,8 +923,12 @@ class TestTimeoutConfigE2E:
         """)
         )
 
-        # Use empty PATH so 'claude' CLI is not found, causing CLINotFoundError
-        env = {"HOME": str(tmp_path), "PATH": ""}
+        # Use minimal PATH (only git) so 'claude' CLI is not found, causing CLINotFoundError.
+        # ``provider.type='local'`` requires git on PATH (gl:21 fail-fast).
+        import shutil
+
+        git_dir = str(Path(shutil.which("git") or "/usr/bin/git").parent)
+        env = {"HOME": str(tmp_path), "PATH": git_dir}
         result = subprocess.run(
             [
                 sys.executable,

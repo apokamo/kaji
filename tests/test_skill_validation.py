@@ -205,6 +205,11 @@ class TestSkillDirE2E:
         import subprocess
         import sys
 
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(tmp_path)],
+            check=True,
+        )
         # Set up project structure
         kaji_dir = tmp_path / ".kaji"
         kaji_dir.mkdir()
@@ -233,7 +238,10 @@ steps:
         )
 
         python_dir = str(Path(sys.executable).parent)
-        env = {**os.environ, "PATH": python_dir}
+        import shutil
+
+        git_dir = str(Path(shutil.which("git") or "/usr/bin/git").parent)
+        env = {**os.environ, "PATH": f"{python_dir}:{git_dir}"}
 
         result = subprocess.run(
             [
@@ -263,6 +271,11 @@ steps:
         import subprocess
         import sys
 
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(tmp_path)],
+            check=True,
+        )
         kaji_dir = tmp_path / ".kaji"
         kaji_dir.mkdir()
         (kaji_dir / "config.toml").write_text(
@@ -288,7 +301,10 @@ steps:
         )
 
         python_dir = str(Path(sys.executable).parent)
-        env = {**os.environ, "PATH": python_dir}
+        import shutil
+
+        git_dir = str(Path(shutil.which("git") or "/usr/bin/git").parent)
+        env = {**os.environ, "PATH": f"{python_dir}:{git_dir}"}
 
         result = subprocess.run(
             [

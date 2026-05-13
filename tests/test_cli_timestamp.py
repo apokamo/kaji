@@ -236,6 +236,11 @@ def _build_e2e_env(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
 
     workdir = tmp_path / "project"
     workdir.mkdir()
+    # gl:21: provider.type='local' requires a git repo (main worktree).
+    subprocess.run(
+        ["git", "init", "-q", "--initial-branch=main", str(workdir)],
+        check=True,
+    )
     config_dir = workdir / ".kaji"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
@@ -295,7 +300,10 @@ class TestKajiRunTimestampLarge:
 
         # Python venv の bin も PATH に含める（kaji モジュール実行のため）
         python_dir = str(Path(sys.executable).parent)
-        env = {**os.environ, "PATH": f"{bin_dir}:{python_dir}"}
+        import shutil
+
+        git_dir = str(Path(shutil.which("git") or "/usr/bin/git").parent)
+        env = {**os.environ, "PATH": f"{bin_dir}:{python_dir}:{git_dir}"}
 
         result = subprocess.run(
             [
@@ -345,7 +353,10 @@ class TestKajiRunTimestampLarge:
         _create_mock_claude_script(bin_dir)
 
         python_dir = str(Path(sys.executable).parent)
-        env = {**os.environ, "PATH": f"{bin_dir}:{python_dir}"}
+        import shutil
+
+        git_dir = str(Path(shutil.which("git") or "/usr/bin/git").parent)
+        env = {**os.environ, "PATH": f"{bin_dir}:{python_dir}:{git_dir}"}
 
         result = subprocess.run(
             [

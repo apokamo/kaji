@@ -837,6 +837,11 @@ class TestConfigE2E:
 
     def test_kaji_run_with_config(self, tmp_path: Path) -> None:
         """kaji run with .kaji/config.toml creates artifacts in correct location."""
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(tmp_path)],
+            check=True,
+        )
         # Create config
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
@@ -866,7 +871,11 @@ class TestConfigE2E:
 
         # Run with restricted PATH so agent CLI is not found (expected exit 3)
         python_dir = str(Path(sys.executable).parent)
-        env = {**__import__("os").environ, "PATH": python_dir}
+        env = {
+            **__import__("os").environ,
+            "PATH": f"{python_dir}:"
+            + str(Path(__import__("shutil").which("git") or "/usr/bin/git").parent),
+        }
 
         result = subprocess.run(
             [
@@ -953,6 +962,11 @@ class TestConfigE2E:
 
     def test_kaji_run_with_absolute_artifacts_dir(self, tmp_path: Path) -> None:
         """kaji run with absolute artifacts_dir places artifacts at specified path."""
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(tmp_path)],
+            check=True,
+        )
         arts_dir = tmp_path / "external-artifacts"
 
         config_dir = tmp_path / ".kaji"
@@ -979,7 +993,11 @@ class TestConfigE2E:
         ensure_local_issue(tmp_path, "999")
 
         python_dir = str(Path(sys.executable).parent)
-        env = {**__import__("os").environ, "PATH": python_dir}
+        env = {
+            **__import__("os").environ,
+            "PATH": f"{python_dir}:"
+            + str(Path(__import__("shutil").which("git") or "/usr/bin/git").parent),
+        }
 
         result = subprocess.run(
             [
@@ -1019,6 +1037,11 @@ class TestConfigE2E:
 
         workdir = tmp_path / "worktree"
         workdir.mkdir()
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(workdir)],
+            check=True,
+        )
         arts_dir = tmp_path / "external-artifacts"
 
         config_dir = workdir / ".kaji"
@@ -1045,7 +1068,11 @@ class TestConfigE2E:
         ensure_local_issue(workdir, "42")
 
         python_dir = str(Path(sys.executable).parent)
-        env = {**__import__("os").environ, "PATH": python_dir}
+        env = {
+            **__import__("os").environ,
+            "PATH": f"{python_dir}:"
+            + str(Path(__import__("shutil").which("git") or "/usr/bin/git").parent),
+        }
 
         result = subprocess.run(
             [
@@ -1121,6 +1148,11 @@ class TestConfigE2E:
 
         repo_dir = tmp_path / "repo"
         repo_dir.mkdir()
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(repo_dir)],
+            check=True,
+        )
 
         config_dir = repo_dir / ".kaji"
         config_dir.mkdir()
@@ -1146,7 +1178,12 @@ class TestConfigE2E:
         ensure_local_issue(repo_dir, "999")
 
         python_dir = str(Path(sys.executable).parent)
-        env = {**__import__("os").environ, "PATH": python_dir, "HOME": str(fake_home)}
+        git_dir = str(Path(__import__("shutil").which("git") or "/usr/bin/git").parent)
+        env = {
+            **__import__("os").environ,
+            "PATH": f"{python_dir}:{git_dir}",
+            "HOME": str(fake_home),
+        }
 
         result = subprocess.run(
             [

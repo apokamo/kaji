@@ -102,6 +102,48 @@ _AUTOCREATE_OPT_OUT_FILES = {
 }
 
 
+_RESOLVE_MAIN_WORKTREE_OPT_OUT_FILES = {
+    # ``resolve_main_worktree`` 本体を検証する file は素の挙動を観測する必要がある。
+    "test_resolve_main_worktree.py",
+}
+
+
+@pytest.fixture(autouse=True)
+def _stub_resolve_main_worktree_for_non_git(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """非 git tmp_path 配下の test fixture 向けに ``resolve_main_worktree`` を stub する。
+
+    gl:21 で production の test-compat fallback (非 git → ``start_dir.resolve()``) を
+    撤去したが、既存テスト群は ``provider.type='local'`` config を非 git tmp_path に
+    書き、``get_provider()`` 経由で worktree 解決を踏む構造になっている。本 fixture は
+    その「テストが暗黙に依存していた fallback 挙動」を明示宣言された test infrastructure
+    へ移管するもので、``resolve_main_worktree`` を「git でなければ ``start_dir.resolve()``
+    を返す、git なら本物を呼ぶ」薄い wrapper に差し替える。
+
+    意図的に opt out する file (``_RESOLVE_MAIN_WORKTREE_OPT_OUT_FILES``):
+    - resolve_main_worktree 本体の検証 / fail-fast 挙動の検証を行う file
+    """
+    if Path(request.node.fspath).name in _RESOLVE_MAIN_WORKTREE_OPT_OUT_FILES:
+        return
+
+    from kaji_harness.providers import _worktree as _wt_module
+
+    real_resolve = _wt_module.resolve_main_worktree
+
+    def stubbed(*, start_dir: Path, default_branch: str) -> Path:
+        # git repo であれば実装どおりの挙動を取らせる
+        if (start_dir / ".git").exists():
+            return real_resolve(start_dir=start_dir, default_branch=default_branch)
+        return start_dir.resolve()
+
+    # provider module 内で再 export されている同名シンボルも差し替える
+    from kaji_harness import providers as _providers_pkg
+
+    monkeypatch.setattr(_wt_module, "resolve_main_worktree", stubbed)
+    monkeypatch.setattr(_providers_pkg, "resolve_main_worktree", stubbed)
+
+
 @pytest.fixture(autouse=True)
 def _autocreate_local_issue_for_runner(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
