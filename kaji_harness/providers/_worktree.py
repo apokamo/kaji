@@ -45,9 +45,16 @@ def resolve_main_worktree(*, start_dir: Path, default_branch: str) -> Path:
         start_dir: ``git -C`` の作業ディレクトリ（``config.repo_root`` を渡す）。
         default_branch: ``provider.local.default_branch`` の値。
 
+    Returns:
+        ``default_branch`` を checkout している worktree の絶対パス。
+        ただし git CLI が PATH 上に無い場合や ``git worktree list`` が exit != 0
+        を返した場合（非 git repo 等）は ``start_dir.resolve()`` を fallback として返す
+        （設計書 § 失敗ケース表 / fallback 採用の根拠）。
+
     Raises:
-        LocalProviderError: ``git worktree list`` が失敗した / 一致 worktree が無い /
-            porcelain 出力が parse 不能だった場合。
+        LocalProviderError: ``default_branch`` に一致する worktree が無い場合（=
+            作業者が main worktree を作っていない）。porcelain 出力が parse 不能だった
+            場合も「一致 0 件」経路に合流して同 error を raise する。
     """
     try:
         proc = subprocess.run(

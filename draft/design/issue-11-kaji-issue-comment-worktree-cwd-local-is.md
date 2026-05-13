@@ -171,15 +171,18 @@ skill 側からは「main worktree に居る／居ない」を意識する必要
 
 ```python
 def resolve_main_worktree(*, start_dir: Path, default_branch: str) -> Path:
-    proc = subprocess.run(
-        ["git", "-C", str(start_dir), "worktree", "list", "--porcelain"],
-        capture_output=True, text=True,
-    )
-    if proc.returncode != 0:
-        raise LocalProviderError(
-            f"git worktree list failed under {start_dir}: {proc.stderr.strip()}. "
-            f"provider.type='local' requires a git repository."
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(start_dir), "worktree", "list", "--porcelain"],
+            capture_output=True, text=True,
         )
+    except FileNotFoundError:
+        # git CLI not on PATH → fallback (§ 失敗ケース表)
+        return start_dir.resolve()
+    if proc.returncode != 0:
+        # 非 git repo → fallback (§ 失敗ケース表)。production の provider.type='local'
+        # は git repo 前提（§ 制約・前提条件）。test fixture 互換のための明示仕様。
+        return start_dir.resolve()
     target = f"refs/heads/{default_branch}"
     current: dict[str, str] = {}
     matches: list[Path] = []
