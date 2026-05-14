@@ -145,6 +145,10 @@ def _bootstrap_local_runner(tmp_path: Path) -> WorkflowRunner:
     ため、Issue dir を事前に作っておく（``test_workflow_execution.py`` の
     ``_ensure_local_issue`` と同パターン）。
     """
+    import subprocess as _sp
+
+    # gl:21: provider.type='local' requires a git repo.
+    _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
     kaji_dir = tmp_path / ".kaji"
     kaji_dir.mkdir(parents=True, exist_ok=True)
     config_file = kaji_dir / "config.toml"

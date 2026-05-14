@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -130,18 +131,51 @@ class TestResolveMainWorktree:
         with pytest.raises(LocalProviderError, match="no worktree found for branch 'release'"):
             resolve_main_worktree(start_dir=main_wt, default_branch="release")
 
-    def test_non_git_dir_falls_back_to_start_dir(self, tmp_path: Path) -> None:
-        """非 git ディレクトリでは fallback として ``start_dir`` を返す。
+    def test_non_git_dir_raises(self, tmp_path: Path) -> None:
+        """非 git ディレクトリでは ``LocalProviderError`` を raise する。
 
-        production の ``provider.type='local'`` 利用者は常に git repo を持つが、
-        テスト fixture が非 git tmp_path に対し ``get_provider()`` を呼ぶ経路の
-        後方互換のため、git でなければ ``start_dir`` を返す。
+        production の ``provider.type='local'`` は git repo + main worktree を
+        前提とするため、非 git ディレクトリでの起動は actionable error として
+        fail-fast させる（gl:21 で fallback を撤去）。
         """
         plain = tmp_path / "plain"
         plain.mkdir()
-        assert resolve_main_worktree(start_dir=plain, default_branch="main") == plain.resolve()
+        with pytest.raises(LocalProviderError, match=r"git repository|not a git"):
+            resolve_main_worktree(start_dir=plain, default_branch="main")
 
     def test_custom_default_branch(self, bare_with_two_worktrees: tuple[Path, Path, Path]) -> None:
         _bare, _main_wt, feat_wt = bare_with_two_worktrees
         result = resolve_main_worktree(start_dir=feat_wt, default_branch="fix/x")
         assert result == feat_wt.resolve()
+
+
+@pytest.mark.small
+class TestResolveMainWorktreeFailFast:
+    """Small: ``subprocess.run`` を patch して fail-fast 経路を検証する (gl:21)."""
+
+    def test_git_cli_missing_raises(self, tmp_path: Path) -> None:
+        """``git`` CLI が PATH 上に無い (``FileNotFoundError``) → ``LocalProviderError``."""
+        with patch(
+            "kaji_harness.providers._worktree.subprocess.run",
+            side_effect=FileNotFoundError("git"),
+        ):
+            with pytest.raises(LocalProviderError, match=r"git CLI|git.*PATH"):
+                resolve_main_worktree(start_dir=tmp_path, default_branch="main")
+
+    def test_worktree_list_nonzero_exit_raises(self, tmp_path: Path) -> None:
+        """``git worktree list`` が exit != 0 → ``LocalProviderError`` (stderr 含む)."""
+        fake = subprocess.CompletedProcess(
+            args=["git", "worktree", "list", "--porcelain"],
+            returncode=128,
+            stdout="",
+            stderr="fatal: not a git repository\n",
+        )
+        with patch(
+            "kaji_harness.providers._worktree.subprocess.run",
+            return_value=fake,
+        ):
+            with pytest.raises(
+                LocalProviderError,
+                match=r"git repository|not a git|exit 128",
+            ):
+                resolve_main_worktree(start_dir=tmp_path, default_branch="main")

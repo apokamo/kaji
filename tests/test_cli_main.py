@@ -93,6 +93,8 @@ def workdir(tmp_path: Path) -> Path:
         "[execution]\ndefault_timeout = 1800\n\n"
         '[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
     )
+    # gl:21: provider.type='local' requires a git repo.
+    subprocess.run(["git", "init", "-q", "--initial-branch=main", str(d)], check=True)
     return d
 
 
@@ -528,6 +530,11 @@ class TestCLILarge:
         # Create project dir with config and skill
         workdir = tmp_path / "project"
         workdir.mkdir()
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(workdir)],
+            check=True,
+        )
         config_dir = workdir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
@@ -547,7 +554,8 @@ class TestCLILarge:
         # Restrict PATH to only the Python executable's directory so that
         # agent CLIs (claude, codex, gemini) are guaranteed not to be found.
         python_dir = str(Path(sys.executable).parent)
-        env = {**__import__("os").environ, "PATH": python_dir}
+        git_dir = str(Path(__import__("shutil").which("git") or "/usr/bin/git").parent)
+        env = {**__import__("os").environ, "PATH": f"{python_dir}:{git_dir}"}
 
         result = subprocess.run(
             [

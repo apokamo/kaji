@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
@@ -350,6 +351,12 @@ def test_get_provider_flows_git_remote_to_gitlab_provider(tmp_path: Path) -> Non
 
 @pytest.mark.medium
 def test_get_provider_flows_git_remote_to_local_provider(tmp_path: Path) -> None:
+    # gl:21: ``get_provider()`` の local 経路は ``resolve_main_worktree()`` を踏むため、
+    # tmp_path を本物の git repo として初期化しておく。
+    subprocess.run(
+        ["git", "init", "-q", "--initial-branch=main", str(tmp_path)],
+        check=True,
+    )
     paths, exec_cfg = _base_paths(tmp_path)
     cfg = KajiConfig(
         repo_root=tmp_path,
