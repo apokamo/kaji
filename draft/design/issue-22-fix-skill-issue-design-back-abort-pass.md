@@ -168,12 +168,13 @@ skill 内部で以下を観測し、初回起動 / BACK 経由再起動を分岐
 |---------|---------|----------|
 | 既存設計書 | `ls <worktree_dir>/draft/design/issue-<issue_id>-*.md` | 1 件以上ヒット |
 | 設計後コミット（実装または skill/doc 改修） | `git -C <worktree_dir> log --oneline <default_branch>..HEAD` の総数、および `':(exclude)draft/design/'` を pathspec とする差分 commit 数 | 総 commit 数が 2 件以上、かつ `draft/design/` 以外を変更する commit が 1 件以上存在 |
-| `BACK` verdict comment（戻し先 `design`） | `kaji issue view <issue_id> --comments` を走査し、本文中に `[x] Changes Requested( / BACK)?` チェック行、または `\| 判定 \|` 表行で `BACK` 表記を持つコメント | 1 件以上ヒット |
+| `BACK` verdict comment（戻し先 `design`） | `kaji issue view <issue_id> --comments` の出力を **コメント単位で分割** し、各コメントの判定セクション（`# コードレビュー結果` / `## 判定` / `i-dev-final-check` 結果コメント等）に `[x] Changes Requested / BACK`（"/ BACK" 必須）または `\| 判定 \|.*BACK` 表記を含むコメントを抽出 | 1 件以上ヒット |
 
 3 観測すべて該当 → BACK 経由再起動と判定。
 
 > **注**: `instruction-only`（`.claude/skills/` のみ変更）/ `docs-only`（`docs/` のみ変更）/ `metadata-only`（`pyproject.toml` 等のみ変更）の Issue でも検出が漏れないよう、pathspec で実装ディレクトリを限定せず、リポジトリ全体の `<default_branch>..HEAD` commit から `draft/design/` を除外する方式を採用する。本 Issue gl:22 自身が dogfood ケースとなり、改修対象が `.claude/skills/issue-design/SKILL.md` のみで `kaji_harness/` を変更しないため、pathspec を Python 実装範囲に限定した旧定義では検出できなかった経緯を踏まえる。
 > verdict コメントの検出は、harness の `---VERDICT---` ブロックが Issue コメント本文には注入されず、人間可読な `[x] Changes Requested / BACK` チェック行や hard gate 結果テーブル `\| 判定 \| BACK \|` の形でしか現れないという実態に合わせる。
+> **BACK 必須化と誤検出防止**: `[x] Changes Requested` 単体（BACK なし）は `/issue-review-design` の `[x] Changes Requested (設計修正が必要)` のような **設計レビューの差し戻し** にも使われるため、戻し先 `design` の **`BACK` verdict 検出には `/ BACK` を必須**とする。さらに、過去の判定コメント本文（例: 本「設計再確認結果」コメント自身）が同じ regex を引用する形で含むことがあるため、**行単位 grep ではなくコメント単位（GitLab の note 単位）に区切って抽出** し、判定セクション本体（`# コードレビュー結果` / `## 判定` / final-check 結果見出し等）の存在も併せて確認する。
 
 ### 使用例（skill markdown レベルの擬似コード）
 
@@ -201,10 +202,14 @@ else:
 - 既存設計書が無い初回起動時の挙動は完全に不変（後方互換）
 - `BACK: design` を発行する step は workflow YAML 側で複数あり得る
   （`review-code` / `i-dev-final-check` 等）。skill 側はどの step からの BACK
-  かを意識せず、Issue コメント本文中の `[x] Changes Requested( / BACK)?`
-  チェック行または hard gate 結果テーブル `| 判定 | BACK |` の表記を検出
-  すれば良い（harness の `---VERDICT---` ブロックは Issue コメントには
-  注入されないため、人間可読な判定マーカーを唯一の検出手段とする）
+  かを意識せず、Issue コメントを **コメント単位** に分割した上で、各コメントの
+  判定セクション（`# コードレビュー結果` / `## 判定` / final-check 結果見出し等）
+  に `[x] Changes Requested / BACK`（"/ BACK" 必須）または
+  `| 判定 | ... BACK ... |` の表記が含まれるコメントを検出すれば良い
+  （harness の `---VERDICT---` ブロックは Issue コメントには注入されないため、
+  人間可読な判定マーカーを唯一の検出手段とする）。`BACK` 無しの `[x] Changes
+  Requested` 単体は `/issue-review-design` の差し戻しでも使われるため、検出
+  条件に **必ず `/ BACK`** を含める
 - 設計起因 / 実装起因の分類は LLM の判断に委ねる（rule-based 自動分類は実装
   しない）が、判定根拠（どの指摘を設計起因と判定したか）はコメントに必ず
   含める
@@ -254,10 +259,24 @@ NON_DESIGN=$(git -C <worktree_dir> log --oneline <default_branch>..HEAD -- ':(ex
 # 3. 直近の戻し先 `design` の `BACK` verdict コメントの有無
 #    review-code / i-dev-final-check 等が投稿する判定コメントは、harness の
 #    `---VERDICT---` ブロックではなく Issue コメント本文中に
-#    `[x] Changes Requested( / BACK)?` チェック行や hard gate 結果テーブル
-#    `| 判定 | BACK |` の形で表現される。skill 側はこのいずれかを検出する。
-kaji issue view <issue_id> --comments | \
-  grep -E '\[x\] Changes Requested( / BACK)?|\| *判定 *\|.*BACK' | tail -10
+#    `[x] Changes Requested / BACK` チェック行や hard gate 結果テーブル
+#    `| 判定 | BACK |` の形で表現される。
+#
+#    厳密化のポイント（dogfood 検証で判明した制約）:
+#      (a) BACK 必須: `[x] Changes Requested` 単体は review-design の差し戻し
+#          にも使われるため、`/ BACK` を必須にする
+#      (b) コメント単位抽出: 過去の判定コメント本文（例: 本「設計再確認結果」
+#          コメントが過去 BACK regex を引用する場合）を行単位 grep が拾うため、
+#          GitLab の note 単位に区切ってから判定セクション本体の有無を確認
+#
+#    実装パターン例（GitLab provider・jq 利用）:
+kaji issue view <issue_id> --comments --output json 2>/dev/null \
+  | jq -r '.[].body' \
+  | awk 'BEGIN{RS="\n# コードレビュー結果\n"} NR>1' \
+  | grep -E '\[x\] Changes Requested / BACK|\| *判定 *\|.*BACK' | head -1
+# 上記が 1 件以上ヒット → 該当
+# `--output json` 非対応の provider では、`kaji issue view ... --comments` の
+# プレーン出力をコメント区切り文字（実装側で provider 別に決定）で分割する。
 ```
 
 `<worktree_dir>` は Step 1 で取得した絶対パスを再利用する（再解決しない）。
