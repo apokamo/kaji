@@ -22,6 +22,8 @@ class CLIEventAdapter(Protocol):
 
 _TOOL_SUMMARY_LEN = 80
 _THINKING_SUMMARY_LEN = 160
+_CMD_OUTPUT_HEAD_LINES = 10
+_CMD_OUTPUT_TAIL_LINES = 5
 
 
 def _truncate(value: str, limit: int) -> str:
@@ -117,6 +119,84 @@ class ClaudeAdapter:
         return event.get("subtype") == "error"
 
 
+def _extract_codex_mcp_tool_call_text(item: dict[str, Any]) -> str | None:
+    # result may be None when the tool call failed (result: null in JSONL)
+    result = item.get("result")
+    if not result:
+        return None
+    contents = result.get("content", [])
+    extracted = [c["text"] for c in contents if c.get("type") == "text" and "text" in c]
+    return "\n".join(extracted) if extracted else None
+
+
+def _render_codex_command_execution_started(item: dict[str, Any]) -> str | None:
+    cmd = item.get("command")
+    if not isinstance(cmd, str) or not cmd:
+        return None
+    cmd_one = cmd.replace("\n", " ")
+    return f"[exec] $ {_truncate(cmd_one, _TOOL_SUMMARY_LEN)}"
+
+
+def _truncate_command_output(output: str) -> str:
+    lines = output.splitlines()
+    total = len(lines)
+    if total <= _CMD_OUTPUT_HEAD_LINES + _CMD_OUTPUT_TAIL_LINES:
+        return "\n".join(lines)
+    omitted = total - _CMD_OUTPUT_HEAD_LINES - _CMD_OUTPUT_TAIL_LINES
+    head = lines[:_CMD_OUTPUT_HEAD_LINES]
+    tail = lines[-_CMD_OUTPUT_TAIL_LINES:]
+    noun = "line" if omitted == 1 else "lines"
+    return "\n".join([*head, f"… ({omitted} more {noun})", *tail])
+
+
+def _render_codex_command_execution_completed(item: dict[str, Any]) -> str | None:
+    cmd = item.get("command")
+    if not isinstance(cmd, str) or not cmd:
+        return None
+    cmd_one = cmd.replace("\n", " ")
+    header = f"[exec] $ {_truncate(cmd_one, _TOOL_SUMMARY_LEN)}"
+
+    output = item.get("aggregated_output")
+    body = _truncate_command_output(output) if isinstance(output, str) and output else ""
+
+    parts = [header]
+    if body:
+        parts.append(body)
+
+    exit_code = item.get("exit_code")
+    if isinstance(exit_code, int) and not isinstance(exit_code, bool) and exit_code != 0:
+        parts.append(f"[exit={exit_code}]")
+
+    return "\n".join(parts)
+
+
+def _render_codex_file_change(item: dict[str, Any]) -> str | None:
+    changes = item.get("changes")
+    if not isinstance(changes, list) or not changes:
+        return None
+    rendered: list[str] = []
+    for ch in changes:
+        if not isinstance(ch, dict):
+            continue
+        path = ch.get("path")
+        if not isinstance(path, str) or not path:
+            continue
+        kind = ch.get("kind", "?")
+        rendered.append(f"[edit] {kind} {path}")
+    return "\n".join(rendered) if rendered else None
+
+
+def _render_codex_web_search(item: dict[str, Any]) -> str | None:
+    query = item.get("query")
+    if not isinstance(query, str) or not query:
+        action = item.get("action")
+        if isinstance(action, dict):
+            query = action.get("query")
+    if not isinstance(query, str) or not query:
+        return None
+    return f"[search] {_truncate(query, _TOOL_SUMMARY_LEN)}"
+
+
 class CodexAdapter:
     """Codex CLI の JSONL イベントアダプタ。"""
 
@@ -126,21 +206,31 @@ class CodexAdapter:
         return None
 
     def extract_text(self, event: dict[str, Any]) -> str | None:
-        if event.get("type") == "item.completed":
-            item = event.get("item", {})
-            item_type = item.get("type")
-            if item_type in ("agent_message", "reasoning"):
+        etype = event.get("type")
+        item = event.get("item")
+        if not isinstance(item, dict):
+            return None
+        itype = item.get("type")
+
+        if etype == "item.completed":
+            if itype in ("agent_message", "reasoning"):
                 text = item.get("text")
-                return text if text else None
-            if item_type == "mcp_tool_call":
-                # V5/V6 restoration: extract text from mcp_tool_call result.content
-                # result may be None when the tool call failed (result: null in JSONL)
-                result = item.get("result")
-                if not result:
-                    return None
-                contents = result.get("content", [])
-                extracted = [c["text"] for c in contents if c.get("type") == "text" and "text" in c]
-                return "\n".join(extracted) if extracted else None
+                return text if isinstance(text, str) and text else None
+            if itype == "mcp_tool_call":
+                return _extract_codex_mcp_tool_call_text(item)
+            if itype == "command_execution":
+                return _render_codex_command_execution_completed(item)
+            if itype == "file_change":
+                return _render_codex_file_change(item)
+            if itype == "web_search":
+                return _render_codex_web_search(item)
+            return None
+
+        if etype == "item.started":
+            if itype == "command_execution":
+                return _render_codex_command_execution_started(item)
+            return None
+
         return None
 
     def extract_cost(self, event: dict[str, Any]) -> CostInfo | None:
