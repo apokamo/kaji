@@ -180,6 +180,206 @@ class TestStreamAndLog:
         assert result.cost is not None
         assert result.cost.input_tokens == 100
 
+    def test_codex_streaming_renders_command_execution(self, tmp_path: Path) -> None:
+        """command_execution started + completed render as [exec] lines."""
+        jsonl_lines = [
+            json.dumps({"type": "thread.started", "thread_id": "thr-cmd"}),
+            json.dumps(
+                {
+                    "type": "item.started",
+                    "item": {"type": "command_execution", "command": "ls -la"},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "command_execution",
+                        "command": "ls -la",
+                        "aggregated_output": "total 0",
+                        "exit_code": 0,
+                        "status": "completed",
+                    },
+                }
+            ),
+            json.dumps({"type": "turn.completed", "usage": {}}),
+        ]
+        script = _create_mock_cli_script(tmp_path, jsonl_lines)
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        process = subprocess.Popen(
+            [str(script)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        adapter = CodexAdapter()
+        result = stream_and_log(process, adapter, "codex", log_dir, verbose=False)
+        process.wait()
+
+        assert "[exec] $ ls -la" in result.full_output
+        assert "total 0" in result.full_output
+        console = (log_dir / "console.log").read_text()
+        assert "[exec] $ ls -la" in console
+        assert "total 0" in console
+
+    def test_codex_streaming_renders_file_change(self, tmp_path: Path) -> None:
+        jsonl_lines = [
+            json.dumps({"type": "thread.started", "thread_id": "thr-fc"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "file_change",
+                        "changes": [{"path": "/tmp/codex-probe/demo.py", "kind": "add"}],
+                    },
+                }
+            ),
+            json.dumps({"type": "turn.completed", "usage": {}}),
+        ]
+        script = _create_mock_cli_script(tmp_path, jsonl_lines)
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        process = subprocess.Popen(
+            [str(script)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        adapter = CodexAdapter()
+        result = stream_and_log(process, adapter, "codex", log_dir, verbose=False)
+        process.wait()
+
+        assert "[edit] add /tmp/codex-probe/demo.py" in result.full_output
+
+    def test_codex_streaming_renders_web_search(self, tmp_path: Path) -> None:
+        jsonl_lines = [
+            json.dumps({"type": "thread.started", "thread_id": "thr-ws"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "web_search", "query": "OpenAI API"},
+                }
+            ),
+            json.dumps({"type": "turn.completed", "usage": {}}),
+        ]
+        script = _create_mock_cli_script(tmp_path, jsonl_lines)
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        process = subprocess.Popen(
+            [str(script)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        adapter = CodexAdapter()
+        result = stream_and_log(process, adapter, "codex", log_dir, verbose=False)
+        process.wait()
+
+        assert "[search] OpenAI API" in result.full_output
+
+    def test_codex_streaming_mixed_events_preserves_order(self, tmp_path: Path) -> None:
+        """Mixed events appear in console.log in JSONL order."""
+        jsonl_lines = [
+            json.dumps({"type": "thread.started", "thread_id": "thr-mix"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": "STARTING"},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.started",
+                    "item": {"type": "command_execution", "command": "mycmd"},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "command_execution",
+                        "command": "mycmd",
+                        "aggregated_output": "OUTPUT_TOKEN",
+                        "exit_code": 0,
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "file_change",
+                        "changes": [{"path": "x.py", "kind": "add"}],
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "web_search", "query": "SEARCH_TOKEN"},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": "DONE"},
+                }
+            ),
+            json.dumps({"type": "turn.completed", "usage": {}}),
+        ]
+        script = _create_mock_cli_script(tmp_path, jsonl_lines)
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        process = subprocess.Popen(
+            [str(script)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        adapter = CodexAdapter()
+        stream_and_log(process, adapter, "codex", log_dir, verbose=False)
+        process.wait()
+
+        console = (log_dir / "console.log").read_text()
+        tokens = [
+            "STARTING",
+            "[exec] $ mycmd",
+            "OUTPUT_TOKEN",
+            "[edit] add x.py",
+            "[search] SEARCH_TOKEN",
+            "DONE",
+        ]
+        positions = [console.index(t) for t in tokens]
+        assert positions == sorted(positions), f"order broken: {positions} for {tokens}"
+
+    def test_codex_streaming_does_not_duplicate_raw_jsonl(self, tmp_path: Path) -> None:
+        """stdout.log raw line count == number of input JSONL lines."""
+        jsonl_lines = [
+            json.dumps({"type": "thread.started", "thread_id": "thr-raw"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "command_execution",
+                        "command": "ls",
+                        "aggregated_output": "x",
+                        "exit_code": 0,
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "file_change",
+                        "changes": [{"path": "y.py", "kind": "add"}],
+                    },
+                }
+            ),
+            json.dumps({"type": "turn.completed", "usage": {}}),
+        ]
+        script = _create_mock_cli_script(tmp_path, jsonl_lines)
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        process = subprocess.Popen(
+            [str(script)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        adapter = CodexAdapter()
+        stream_and_log(process, adapter, "codex", log_dir, verbose=False)
+        process.wait()
+
+        raw = (log_dir / "stdout.log").read_text().splitlines()
+        assert len(raw) == len(jsonl_lines)
+
     def test_gemini_streaming(self, tmp_path: Path) -> None:
         """Gemini JSONL stream extracts session_id, text, and cost from stats."""
         jsonl_lines = [
