@@ -19,7 +19,7 @@ steps:
     skill: i-doc-update
     agent: claude
     model: opus
-    effort: medium
+    effort: xhigh
     on:
       PASS: doc-review
       ABORT: end
@@ -28,7 +28,7 @@ steps:
     skill: i-doc-review
     agent: codex
     model: gpt-5.5
-    effort: medium
+    effort: high
     on:
       PASS: final-check
       RETRY: doc-fix
@@ -38,7 +38,7 @@ steps:
     skill: i-doc-fix
     agent: claude
     model: opus
-    effort: medium
+    effort: high
     inject_verdict: true
     resume: doc-update
     on:
