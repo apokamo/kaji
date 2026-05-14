@@ -218,6 +218,8 @@ git stage + commit を **同一 process 内で atomic に** 行う。実装は
 | 症状 | 原因 / 対処 |
 |------|-------------|
 | `LocalProviderError: no worktree found for branch 'main'` | `default_branch` を checkout している worktree が無い。`git worktree add ../main main` を実行するか、`provider.local.default_branch` を実在ブランチに合わせる |
+| `LocalProviderError: git CLI not found on PATH ...` | `git` コマンドが PATH 上に無い。`git` をインストールして PATH を通すか、`provider.type` を `local` 以外に切り替える（gl:21） |
+| `LocalProviderError: 'git -C ... worktree list' failed (exit ...)` | `provider.type='local'` の設定ディレクトリが git repository でない。対象ディレクトリで `git init` を実行する（または既に init 済みの worktree から起動する）、もしくは `provider.type` を切り替える（gl:21） |
 | `warning: multiple worktrees checking out 'main'` (stderr) | 防御的入力に対する警告。最初に見つかった worktree を採用するが、通常 git 操作では発生しない |
 
 GitHub / GitLab provider の `repo_root` は cwd 起点のまま（`gh` / `glab` CLI が

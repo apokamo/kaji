@@ -165,6 +165,11 @@ def test_get_provider_flows_default_branch_to_github_provider(tmp_path: Path) ->
 
 @pytest.mark.medium
 def test_get_provider_flows_default_branch_to_local_provider(tmp_path: Path) -> None:
+    import subprocess as _sp
+
+    # gl:21: provider.type='local' requires a git repo. Use 'develop' to match
+    # the configured default_branch so resolve_main_worktree finds it.
+    _sp.run(["git", "init", "-q", "--initial-branch=develop", str(tmp_path)], check=True)
     cfg = KajiConfig(
         repo_root=tmp_path,
         paths=PathsConfig(artifacts_dir=".kaji-artifacts", skill_dir=".claude/skills"),

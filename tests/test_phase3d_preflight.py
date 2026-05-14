@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -38,12 +39,20 @@ from kaji_harness.providers.local import (
 
 
 def _write_repo(tmp_path: Path, *, provider_section: str = "") -> Path:
-    """``.kaji/config.toml`` を持つ最小 repo を tmp_path 下に作る。"""
+    """``.kaji/config.toml`` を持つ最小 repo を tmp_path 下に作る。
+
+    gl:21: ``provider.type='local'`` 配下のテストは ``resolve_main_worktree()`` を
+    本物のまま動かすため、``git init`` 済の状態にしておく。
+    """
     repo = tmp_path / "repo"
     (repo / ".kaji").mkdir(parents=True)
     (repo / ".kaji" / "config.toml").write_text(
         '[paths]\nartifacts_dir = ".kaji-artifacts"\nskill_dir = ".claude/skills"\n\n'
         "[execution]\ndefault_timeout = 1800\n" + provider_section
+    )
+    subprocess.run(
+        ["git", "init", "-q", "--initial-branch=main", str(repo)],
+        check=True,
     )
     return repo
 

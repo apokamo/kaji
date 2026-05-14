@@ -16,6 +16,7 @@ phase3-design.md § 4 ロールアウト戦略 PR-3c に対応。
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -35,12 +36,22 @@ from kaji_harness.providers import (
 
 
 def _write_repo(tmp_path: Path, *, provider_section: str = "") -> Path:
-    """``.kaji/config.toml`` を持つ最小 repo を tmp_path 下に作る。"""
+    """``.kaji/config.toml`` を持つ最小 repo を tmp_path 下に作る。
+
+    gl:21: ``provider.type='local'`` は git repo + main worktree を前提とするため、
+    ``get_provider()`` 経由で ``resolve_main_worktree()`` が成功する形で git init
+    しておく。github/gitlab provider テストでも害はない（resolve_main_worktree は
+    local 経路でしか呼ばれない）。
+    """
     repo = tmp_path / "repo"
     (repo / ".kaji").mkdir(parents=True)
     (repo / ".kaji" / "config.toml").write_text(
         '[paths]\nartifacts_dir = ".kaji-artifacts"\nskill_dir = ".claude/skills"\n\n'
         "[execution]\ndefault_timeout = 1800\n" + provider_section
+    )
+    subprocess.run(
+        ["git", "init", "-q", "--initial-branch=main", str(repo)],
+        check=True,
     )
     return repo
 
@@ -232,12 +243,15 @@ class TestHandleIssueDispatch:
         provider.create_issue(
             title="Hello", body="body text", labels=["type:feature"], slug="hello-test"
         )
-        # `kaji issue view local-pc1-1` が gh を呼ばずに local 経由で動く
-        with patch("kaji_harness.cli_main.subprocess.run") as mock_run:
+        # `kaji issue view local-pc1-1` が gh を呼ばずに local 経由で動く。
+        # gl:21: ``cli_main.subprocess.run`` を patch すると同じ subprocess module を
+        # 共有する ``_worktree.subprocess.run`` にも波及して main worktree 解決が壊れる。
+        # 設計書 § 方針 §§ 2 系統 A（実 git 経由）を維持するため、subprocess.run は
+        # passthrough し、gh が呼ばれていないことだけを spy で検証する。
+        real_run = subprocess.run
+        with patch("kaji_harness.cli_main.subprocess.run", side_effect=real_run) as mock_run:
             rc = _handle_issue(["view", "local-pc1-1"])
         assert rc == 0
-        # gh は叩かれない。``git worktree list`` は ``get_provider()`` の main worktree
-        # 解決経由で呼ばれうる（gl:11）ので、gh のみを assert する。
         gh_calls = [c for c in mock_run.call_args_list if c[0] and c[0][0] and c[0][0][0] == "gh"]
         assert gh_calls == [], f"gh must not be invoked: {gh_calls}"
         captured = capsys.readouterr()

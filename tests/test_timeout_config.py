@@ -40,10 +40,15 @@ from kaji_harness.workflow import load_workflow_from_str, validate_workflow
 
 def _write_config(tmp_path: Path, content: str) -> Path:
     """Write .kaji/config.toml and return the config file path."""
+    import subprocess as _sp
+
     config_dir = tmp_path / ".kaji"
     config_dir.mkdir(exist_ok=True)
     config_file = config_dir / "config.toml"
     config_file.write_text(content)
+    # gl:21: provider.type='local' tests require a git repo for main worktree resolution.
+    if not (tmp_path / ".git").exists():
+        _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
     return config_file
 
 
@@ -783,6 +788,11 @@ class TestTimeoutConfigE2E:
         # Create a project structure with config.toml
         project_dir = tmp_path / "project"
         project_dir.mkdir()
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(project_dir)],
+            check=True,
+        )
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
@@ -832,6 +842,11 @@ class TestTimeoutConfigE2E:
         """kaji validate accepts a workflow YAML without default_timeout (optional)."""
         project_dir = tmp_path / "project"
         project_dir.mkdir()
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(project_dir)],
+            check=True,
+        )
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
@@ -882,6 +897,11 @@ class TestTimeoutConfigE2E:
         """
         project_dir = tmp_path / "project"
         project_dir.mkdir()
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(project_dir)],
+            check=True,
+        )
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
@@ -908,8 +928,12 @@ class TestTimeoutConfigE2E:
         """)
         )
 
-        # Use empty PATH so 'claude' CLI is not found, causing CLINotFoundError
-        env = {"HOME": str(tmp_path), "PATH": ""}
+        # Use minimal PATH (only git) so 'claude' CLI is not found, causing CLINotFoundError.
+        # ``provider.type='local'`` requires git on PATH (gl:21 fail-fast).
+        import shutil
+
+        git_dir = str(Path(shutil.which("git") or "/usr/bin/git").parent)
+        env = {"HOME": str(tmp_path), "PATH": git_dir}
         result = subprocess.run(
             [
                 sys.executable,

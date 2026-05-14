@@ -122,6 +122,21 @@ repo にコミットし、今後も継続実行するテスト。以下を満た
 | 「軽微な変更なのでテスト不要」 | 実行時コード変更なら変更の大小だけでは省略できない |
 | 「Large テストはステージング環境で検証」 | 恒久テストなら CI で再現できる構成にすること |
 
+## `subprocess.run` patch スコープ
+
+`kaji_harness.cli_main.subprocess.run` / `kaji_harness.providers._worktree.subprocess.run` の
+名前空間 patch は、テスト対象に応じて以下のスコープで使い分ける。dispatch / provider 結合
+テストで安易に名前空間 patch を当てると、`MagicMock != 0` の truthy 評価などで暗黙の
+分岐依存が忍び込む（gl:21 で fail-fast 化した直前の構造）。
+
+| テスト層 | `subprocess.run` の名前空間 patch | 代替手段 |
+|---------|----------------------------------|---------|
+| dispatch / provider 結合（`get_provider()` / `_handle_issue` / `_handle_pr` 経路） | **禁止** | 系統 A: `git init -q --initial-branch=<default_branch>` fixture / 系統 B: `patch("kaji_harness.providers.resolve_main_worktree", return_value=...)` |
+| `resolve_main_worktree()` 自身の Small unit test | 許可 | （`subprocess.run` の戻り値・例外分岐を検証する経路では mock 必須） |
+
+詳細は gl:21 設計書 [`draft/design/issue-21-refactor-drop-test-compat-fallback-in-re.md`](../../draft/design/issue-21-refactor-drop-test-compat-fallback-in-re.md)
+§ 制約・前提条件 を参照。
+
 ## AI のテスト省略傾向への警告
 
 > **AI には、実行時コード変更でも都合よくテストを減らす傾向がある。**

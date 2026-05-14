@@ -113,13 +113,13 @@ return LocalProvider(
 - **失敗ケース**:
   | 条件 | 振る舞い |
   |------|---------|
-  | `git CLI が PATH 上に無い`（`FileNotFoundError`） | `start_dir.resolve()` を返す（fallback）。downstream の `git add` / `git commit` がより明確な「git: command not found」エラーで失敗する。後方互換のための明示仕様（既存テスト fixture が非 git tmp_path に対し `get_provider()` を呼ぶ経路を維持）|
-  | `git worktree list` が exit != 0（非 git repo） | `start_dir.resolve()` を返す（fallback）。production の `provider.type='local'` 利用では下記「`default_branch` に一致する worktree が無い」のほうが先に hit するため実害が無い。後方互換のための明示仕様 |
+  | `git CLI が PATH 上に無い`（`FileNotFoundError`） | `LocalProviderError` を raise（remediation: `git` をインストールするか PATH を通す、または `provider.type` を切り替える）|
+  | `git worktree list` が exit != 0（非 git repo） | `LocalProviderError` を raise（remediation: `git init` 済みの worktree から実行する、または `provider.type` を切り替える）。stderr / exit code を message に含める |
   | `default_branch` に一致する worktree が無い（=作業者が main worktree を作っていない） | `LocalProviderError` を raise。`git worktree add <path> <default_branch>` を案内 |
   | 同じ branch を複数 worktree が checkout している（git で通常起きないが防御） | 最初に見つかったものを採用。stderr に warning を 1 行出す |
   | porcelain 出力が parse 不能 | 上記 `default_branch` 不一致経路に合流（一致 0 件として `LocalProviderError`） |
 
-  **fallback 採用の根拠**: production の `provider.type='local'` 利用者は git repo + main worktree を必ず持つ前提（§ 制約・前提条件）。一方、kaji harness の medium テストは「config 解析 / dispatch 経路 / preflight」を検証するため非 git tmp_path に対し `get_provider()` を呼ぶ fixture が 20+ ファイル存在する。fail-fast にすると test 側に `git init` + `git worktree add` setup の追加が必要になり、本 Issue scope を超える広域改修になる。git CLI 不在 / 非 git repo は production では到達せず、到達した場合も「main worktree が見つからない」error message のほうが actionable であるため、fallback 採用は機能仕様として正当。
+  **失敗ケース統一の根拠**: production の `provider.type='local'` 利用者は git repo + main worktree を必ず持つ前提（§ 制約・前提条件）。`git CLI 不在` / `非 git repo` は production では到達せず、到達した場合は誤設定（例: `provider.type='local'` を非 git ディレクトリで起動）なので、cwd 起点の暗黙挙動に戻すよりも `LocalProviderError` で fail-fast させて remediation を提示するほうが actionable。テスト側で「非 git tmp_path に対し `get_provider()` を呼ぶ」fixture は、`git init -q` を fixture に追加する、または `kaji_harness.providers.resolve_main_worktree` を局所 mock するかのいずれかで明示宣言する（[gl:21 follow-up](issue-21-refactor-drop-test-compat-fallback-in-re.md) で確定）。
 - **副作用**: stdout / stderr は変えない（warning 経路のみ stderr 1 行）。ファイル書き込み無し
 - **冪等性**: 同じ git 状態に対して呼ぶたびに同じ Path を返す
 
@@ -176,13 +176,17 @@ def resolve_main_worktree(*, start_dir: Path, default_branch: str) -> Path:
             ["git", "-C", str(start_dir), "worktree", "list", "--porcelain"],
             capture_output=True, text=True,
         )
-    except FileNotFoundError:
-        # git CLI not on PATH → fallback (§ 失敗ケース表)
-        return start_dir.resolve()
+    except FileNotFoundError as exc:
+        # git CLI not on PATH → fail-fast (§ 失敗ケース表 / gl:21 follow-up)
+        raise LocalProviderError(
+            "git CLI not found on PATH. provider.type='local' requires git."
+        ) from exc
     if proc.returncode != 0:
-        # 非 git repo → fallback (§ 失敗ケース表)。production の provider.type='local'
-        # は git repo 前提（§ 制約・前提条件）。test fixture 互換のための明示仕様。
-        return start_dir.resolve()
+        # 非 git repo → fail-fast (§ 失敗ケース表 / gl:21 follow-up)
+        raise LocalProviderError(
+            f"'git -C {start_dir} worktree list' failed (exit {proc.returncode}). "
+            f"provider.type='local' requires a git repository."
+        )
     target = f"refs/heads/{default_branch}"
     current: dict[str, str] = {}
     matches: list[Path] = []

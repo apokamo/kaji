@@ -47,6 +47,8 @@ steps:
 
 def _setup(tmp_path: Path, *, provider: str, requires: str) -> Path:
     """Set up tmp repo with config + a single workflow YAML; returns YAML path."""
+    import subprocess as _sp
+
     (tmp_path / ".kaji").mkdir()
     body = {
         "github": _PROVIDER_GH,
@@ -56,6 +58,9 @@ def _setup(tmp_path: Path, *, provider: str, requires: str) -> Path:
     (tmp_path / ".kaji" / "config.toml").write_text(_BASE_CONFIG + body)
     wf_path = tmp_path / "wf.yaml"
     wf_path.write_text(_WORKFLOW_MIN.format(name="test-wf", provider=requires))
+    # gl:21: provider.type='local' requires a git repo.
+    if provider == "local":
+        _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
     return wf_path
 
 

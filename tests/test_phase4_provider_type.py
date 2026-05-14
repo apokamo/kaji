@@ -29,10 +29,15 @@ default_timeout = 600
 
 
 def _write_config(repo_root: Path, *, body: str = "", overlay: str | None = None) -> None:
+    import subprocess as _sp
+
     (repo_root / ".kaji").mkdir(exist_ok=True)
     (repo_root / ".kaji" / "config.toml").write_text(_BASE_CONFIG + body)
     if overlay is not None:
         (repo_root / ".kaji" / "config.local.toml").write_text(overlay)
+    # gl:21: provider.type='local' resolution requires a git repo.
+    if not (repo_root / ".git").exists():
+        _sp.run(["git", "init", "-q", "--initial-branch=main", str(repo_root)], check=True)
 
 
 @pytest.mark.small
