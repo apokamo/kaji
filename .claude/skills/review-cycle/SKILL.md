@@ -28,16 +28,44 @@ PASS なら `/issue-close <issue_id>` を **手動で** 実行する運用とな
 ```
 
 - `$ARGUMENTS = <issue_id>`（Issue 番号のみ。PR ID は workflow 内の `review` skill が逆引きする）
-- 未指定の場合は skill 側で `usage: /review-cycle <issue_id>` を stderr に出して
-  ABORT verdict を返す
+- `docs/dev/skill-authoring.md` § 手動実行 の規約に従い、slash command の引数は
+  `$ARGUMENTS` から取得する（shell の positional parameter `$1` は使わない）
+- 未指定（`$ARGUMENTS` が空）の場合は skill 側で `usage: /review-cycle <issue_id>` を
+  stderr に出し、`kaji run` を実行せずに ABORT verdict を stdout に出力する
 
 ## 実行手順
+
+### Step 1: 引数の解析
+
+`$ARGUMENTS` から第 1 トークンを `issue_id` として取得する。`$ARGUMENTS` が空、または
+第 1 トークンが空文字の場合は **`kaji run` を実行せず**、stderr に usage を出して
+ABORT verdict を返すこと（後述の「未指定時の ABORT 経路」を参照）。
+
+以下の擬似コードは Claude（agent）が実際に Bash 経由で実行する想定。`$ARGUMENTS` は
+slash command の引数文字列（例: `23`）を agent が直接展開する。
 
 ```bash
 set -u  # set -e は外す（exit code を明示的に拾う）
 
 # Step 1: 引数チェック
-ISSUE_ID="${1:?usage: /review-cycle <issue_id>}"
+#   $ARGUMENTS は slash command 引数文字列。第 1 トークンを issue_id として取り出す。
+#   `read -r` で空白区切りの先頭を拾うことで、誤って後続引数を含めないようにする。
+read -r ISSUE_ID _REST <<<"${ARGUMENTS:-}"
+if [ -z "${ISSUE_ID:-}" ]; then
+    echo "usage: /review-cycle <issue_id>" >&2
+    cat <<'VERDICT_EOF'
+---VERDICT---
+status: ABORT
+reason: |
+  Missing required argument: <issue_id>.
+evidence: |
+  $ARGUMENTS was empty or did not contain an issue_id token.
+suggestion: |
+  Re-invoke as /review-cycle <issue_id> (e.g. /review-cycle 23).
+---END_VERDICT---
+VERDICT_EOF
+    exit 2
+fi
 
 # Step 2: kaji run 起動
 #   stdout はそのまま流し、stderr のみ tee で capture して
