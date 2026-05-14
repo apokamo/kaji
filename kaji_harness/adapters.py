@@ -145,7 +145,8 @@ def _truncate_command_output(output: str) -> str:
     omitted = total - _CMD_OUTPUT_HEAD_LINES - _CMD_OUTPUT_TAIL_LINES
     head = lines[:_CMD_OUTPUT_HEAD_LINES]
     tail = lines[-_CMD_OUTPUT_TAIL_LINES:]
-    return "\n".join([*head, f"… ({omitted} more lines)", *tail])
+    noun = "line" if omitted == 1 else "lines"
+    return "\n".join([*head, f"… ({omitted} more {noun})", *tail])
 
 
 def _render_codex_command_execution_completed(item: dict[str, Any]) -> str | None:
@@ -163,7 +164,7 @@ def _render_codex_command_execution_completed(item: dict[str, Any]) -> str | Non
         parts.append(body)
 
     exit_code = item.get("exit_code")
-    if isinstance(exit_code, int) and exit_code != 0:
+    if isinstance(exit_code, int) and not isinstance(exit_code, bool) and exit_code != 0:
         parts.append(f"[exit={exit_code}]")
 
     return "\n".join(parts)

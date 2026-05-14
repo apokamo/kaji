@@ -500,7 +500,7 @@ class TestCodexAdapter:
 
     @pytest.mark.small
     def test_extract_text_command_output_boundary_16_lines(self, adapter: CodexAdapter) -> None:
-        """16 lines (HEAD+TAIL+1) -> head 10 + '… (1 more lines)' + tail 5."""
+        """16 lines (HEAD+TAIL+1) -> head 10 + '… (1 more line)' + tail 5."""
         lines = [f"line{i}" for i in range(1, 17)]
         event = {
             "type": "item.completed",
@@ -514,9 +514,11 @@ class TestCodexAdapter:
         }
         result = adapter.extract_text(event)
         assert result is not None
-        assert "… (1 more lines)" in result
+        assert "… (1 more line)" in result
         assert "line11" not in result
-        assert "line12" in result or "line16" in result  # tail starts at line12
+        # tail is line12..line16 (5 lines)
+        for i in range(12, 17):
+            assert f"line{i}" in result
 
     @pytest.mark.small
     def test_extract_text_command_execution_truncates_long_command(
