@@ -139,24 +139,62 @@ type ラベルの cardinality / canonical 判定（複数付与 / 未付与 / `t
 
 ```bash
 # 1. 既存設計書の有無
-ls <worktree_dir>/draft/design/issue-<issue_id>-*.md 2>/dev/null
+ls <worktree_dir>/draft/design/issue-[issue_id]-*.md 2>/dev/null
 
-# 2. implementation commit の有無
-git -C <worktree_dir> log --oneline -- kaji_harness tests Makefile pyproject.toml
+# 2. 設計後コミット（実装または skill/doc 改修）の有無
+#    fix/[issue_id] ブランチが [default_branch] から枝分かれ後、commit が
+#    2 件以上ある（最初は設計書作成 commit、それ以外に implementation /
+#    skill / doc 改修 commit が存在）。Python 実装範囲（kaji_harness/ tests/
+#    Makefile pyproject.toml）に pathspec を固定すると instruction-only
+#    （.claude/skills/ 改修）/ docs-only Issue を取りこぼすため、
+#    リポジトリ全体 commit から draft/design/ を除外する方式とする。
+TOTAL=$(git -C <worktree_dir> log --oneline [default_branch]..HEAD | wc -l)
+NON_DESIGN=$(git -C <worktree_dir> log --oneline [default_branch]..HEAD -- ':(exclude)draft/design/' | wc -l)
+# 該当条件: TOTAL >= 2 かつ NON_DESIGN >= 1
 
-# 3. 直近の "BACK: design" verdict コメントの有無
-#    （発行元 step は review-code / i-dev-final-check 等を問わない。
-#     戻し先が `design` の `BACK` verdict を 1 件以上見つければよい）
-kaji issue view [issue_id] --comments | \
-  grep -E '^(### Verdict|status:|戻し先:)' | tail -40
+# 3. 直近の戻し先 `design` の `BACK` verdict コメントの有無
+#    review-code / i-dev-final-check 等が投稿する判定コメントは、harness の
+#    `---VERDICT---` ブロックではなく Issue コメント本文中に
+#    `[x] Changes Requested / BACK` チェック行や hard gate 結果テーブル
+#    `| 判定 | BACK |` の形で表現される。
+#
+#    厳密化のポイント（dogfood 検証で判明した制約）:
+#      (a) BACK 必須: `[x] Changes Requested` 単体は review-design の差し戻し
+#          にも使われるため、`/ BACK` を必須にする
+#      (b) コメント単位抽出: 過去の判定コメント本文（例: 設計再確認結果コメント
+#          が過去 BACK regex を引用する場合）を行単位 grep が拾うため、
+#          GitLab の note 単位に区切ってから判定セクション本体の有無を確認
+#
+#    実装パターン例（GitLab provider・jq 利用）:
+#    GitLab の `kaji issue view --comments --output json` 出力は top-level object
+#    で、コメント配列を `.Notes` プロパティに持つ（各要素は GitLab REST API の
+#    Notes リソース。`body` / `system` / `created_at` 等のフィールドあり。
+#    `system: true` は WIP/label change 等の system note でユーザコメントでは
+#    ないため除外）。`.[].body` 形式は型エラーになるため必ず `.Notes[]` を経由
+#    する。
+kaji issue view [issue_id] --comments --output json 2>/dev/null \
+  | jq -r '.Notes[] | select(.system == false) | .body' \
+  | awk 'BEGIN{RS="\n# コードレビュー結果\n"} NR>1' \
+  | grep -E '\[x\] Changes Requested / BACK|\| *判定 *\|.*BACK' | head -1
+# 上記が 1 件以上ヒット → 該当
+#
+# provider 別フォールバック:
+# - GitHub provider: `kaji issue view [issue_id] --comments --output json` は
+#   top-level object で `.comments[].body` を経由する
+# - local provider: `--output json` の構造は別。実装側で provider 別の
+#   抽出器（comment body iterator）を用意する
 ```
+
+`<worktree_dir>` は Step 1 で取得した絶対パスを再利用する（再解決しない）。
 
 #### 分岐判定
 
 | 条件 | 分岐先 |
 |------|--------|
-| 3 観測すべて該当（既存設計書 ∧ implementation commit ∧ `BACK: design` verdict コメント） | BACK 経由再起動 → **Step 1.7** に進む |
+| 3 観測すべて該当（既存設計書 ∧ 設計後コミット ∧ 戻し先 `design` の `BACK` verdict コメント） | BACK 経由再起動 → **Step 1.7** に進む |
 | いずれか欠ける | 初回起動（または近接ケース） → **Step 2** 以降の通常フロー |
+
+> **BACK 必須化と誤検出防止**: `[x] Changes Requested` 単体（BACK なし）は `/issue-review-design` の `[x] Changes Requested (設計修正が必要)` のような **設計レビューの差し戻し** にも使われるため、戻し先 `design` の `BACK` verdict 検出には **`/ BACK` を必須**とする。さらに、過去の判定コメント本文（例: 設計再確認結果コメント自身）が同じ regex を引用する形で含むことがあるため、**行単位 grep ではなくコメント単位（GitLab の note 単位）に区切って抽出** し、判定セクション本体（`# コードレビュー結果` / `## 判定` / final-check 結果見出し等）の存在も併せて確認する。
 
 > **重要**: 「implementation 済みを検出したから ABORT する」という分岐は採用しない。BACK 経由再起動という workflow 仕様上の正当な遷移
 > （`docs/dev/workflow-authoring.md:130` の `BACK = 差し戻し。前段ステップを再実行` 定義）に対しては Step 1.7 で `PASS` を返して通常フローに復帰させる。
@@ -169,8 +207,7 @@ Step 1.6 で BACK 経由再起動と判定された場合のみ実行する。`P
 #### サブステップ
 
 1. **既存設計書の読込**: `<worktree_dir>/draft/design/issue-<issue_id>-*.md` を `Read` で読む
-2. **直近 BACK verdict の特定**: `kaji issue view [issue_id] --comments` を走査し、**直近の `BACK: design` verdict** を含むコメント
-   （発行元 step は `review-code` / `i-dev-final-check` 等を問わない）から指摘リストを抽出する
+2. **直近 BACK verdict の特定**: Step 1.6 と同じ抽出方式（コメント単位分割 → 判定セクション切り出し → `[x] Changes Requested / BACK` または `\| 判定 \|.*BACK` を grep）で **直近の戻し先 `design` の `BACK` verdict** を含むコメントを特定し、そのコメント本文から指摘リストを抽出する。発行元 step（`review-code` / `i-dev-final-check` 等）は問わない
 3. **指摘の分類**: 各指摘を「設計起因」「実装起因」に分類する
    - **設計起因**: 設計書の不備が原因の指摘（IF 設計の漏れ、テスト戦略の未定義、一次情報不足、影響ドキュメント漏れ等）
    - **実装起因**: 設計は正しいが実装が逸脱した指摘（見出し表記、コード品質、テスト失敗等）

@@ -283,8 +283,9 @@ kaji issue view <issue_id> --comments --output json 2>/dev/null \
 # 上記が 1 件以上ヒット → 該当
 #
 # provider 別フォールバック:
-# - GitHub provider: `gh issue view ... --comments --json comments` の出力は
-#   top-level object で `.comments[].body` を経由する
+# - GitHub provider: `kaji issue view [issue_id] --comments --output json` は
+#   top-level object で `.comments[].body` を経由する（kaji CLI が provider
+#   抽象を担うため、skill 側は `gh` 等の provider 固有 CLI に直接依存しない）
 # - local provider: `--output json` の構造は別。実装側で provider 別の
 #   抽出器（comment body iterator）を用意する
 ```
