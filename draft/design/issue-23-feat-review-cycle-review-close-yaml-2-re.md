@@ -201,10 +201,31 @@ validator は既存実装で動作する）。
   - `PASS`: review が Approve（review-cycle 終了 / review-close は close へ進む）
   - `RETRY`: Changes Requested（pr-fix へ）
   - `ABORT`: PR 未存在 / provider mismatch
+- **エージェント**: `codex`（既存 review 系と同じ）
 - **構造**: `pr-verify/SKILL.md` の Step 0（provider check）/ Step 1（PR 解決）構造を
   雛形に流用し、Step 2 を「初回レビュー実施」に置き換える。`issue-review-code` の
   レビュー観点（設計整合 / コード品質 / テスト証跡）を引き継ぐ
-- **エージェント**: `codex`（既存 review 系と同じ）
+- **Step 構成と情報源の責務分担**（実装時のブレを抑える粒度で明示）:
+
+  | Step | 必須 / 任意 | 用途 |
+  |------|-------------|------|
+  | Step 0: provider check（`pr-verify` Step 0 を流用）| 必須 | `github` / `gitlab` 以外なら ABORT |
+  | Step 1: PR 解決（`pr-verify` Step 1.1 を流用：`kaji pr list --search` → `--head` フォールバック）| 必須 | `pr_id` / `pr_ref` 確定。PR 未存在で ABORT |
+  | Step 2: worktree 解決（`_shared/worktree-resolve.md`）| 必須 | 以降の `git diff` / `make check` 実行ディレクトリ確定 |
+  | Step 3a: PR 概要取得 `kaji pr view [pr_id]` | **必須** | タイトル / 説明 / 状態 / linked Issue を読み、PR 目的を把握 |
+  | Step 3b: 差分本体取得 `cd [worktree_dir] && git fetch [git_remote] [default_branch] && git diff [git_remote]/[default_branch]...HEAD` | **必須** | レビュー対象コードの全量。仕様判定の主入力 |
+  | Step 3c: 既存 inline 指摘取得 `kaji pr review-comments [pr_id]` | **必須** | 既に他レビュアーが付けた inline コメントを重複指摘しないため確認 |
+  | Step 3d: 既存 review state 取得 `kaji pr reviews [pr_id]` | 任意 | 過去の Approve / Changes Requested 履歴の確認。重複 Approve や逆転判定の検知用 |
+  | Step 3e: top-level コメント取得 `kaji pr view [pr_id] --comments` | 任意 | 非 inline の議論経緯を補足参照（初回レビューでは差分が情報の中心） |
+  | Step 4: `make check` 実行 `cd [worktree_dir] && source .venv/bin/activate && make check` | **必須** | レビュー判定の基礎ゲート。失敗時は Changes Requested 必至 |
+  | Step 5: レビュー観点評価（設計書整合 / コード品質 / テスト証跡 / docs 更新）| 必須 | `issue-review-code` の観点を引き継ぐ |
+  | Step 6: 正式 review 投稿 `kaji pr review [pr_id] --approve` / `--request-changes` | 必須 | verdict の写像（Approve → PASS / Changes → RETRY）|
+  | Step 7: verdict 出力（`---VERDICT---`）| 必須 | skill-authoring.md § verdict 出力規約に従う |
+
+  > **必須 / 任意の判断基準**: 「初回レビュー判定 (Approve / Changes Requested) を出すために
+  > **必ず読まなければならない情報源**」を必須、「あれば判断の補助になる情報源」を任意とする。
+  > Step 3a / 3b / 3c / 4 を欠いた状態でのレビュー判定は許可しない（実装時に skill 本文で
+  > 明示する）。Step 3d / 3e は過去文脈の補足で、レビュー対象自体ではない。
 
 ### 2. `.kaji/wf/review-cycle.yaml`
 
@@ -324,33 +345,145 @@ steps:
 ### 4. `/review-cycle` skill（新規）
 
 - **責務**: `kaji run .kaji/wf/review-cycle.yaml <issue_id>` を Bash 経由で起動し、
-  完了後に `/issue-close` 実行を促すメッセージを stdout に出す
+  完了後に `/issue-close` 実行案内を含む verdict を stdout に出す
 - **入力**: `$ARGUMENTS = <issue_id>`
-- **出力**: kaji run の終了 verdict に応じた次アクション案内
+- **skill 契約**: 本 skill も `.claude/skills/review-cycle/SKILL.md` として配置される正規 skill
+  のため、`docs/dev/skill-authoring.md` § verdict 出力規約に従い **最終出力に `---VERDICT---`
+  ブロックを stdout に出す**。人間向けの `/issue-close` 案内は `reason` / `suggestion` に
+  埋め込み、verdict ブロック前の通常出力にも併載する
+- **verdict 設計**:
+
+  | 経路 | exit code | stderr / stdout の追加情報 | 出力 verdict |
+  |------|-----------|----------------------------|--------------|
+  | review 即 Approve / cycle 内 verify PASS で正常完了 | `0` (`EXIT_OK`) | — | `PASS` |
+  | 任意 step の ABORT / `on_exhaust: ABORT` 発火 | `1` (`EXIT_ABORT`) | stderr に `Workflow aborted: <reason>`（`kaji_harness/cli_main.py:395-401`）| `ABORT`、reason に「workflow ABORT verdict を確認」 |
+  | 予期しない例外（`cli_main.py` の `except Exception` 経路）| `1` (`EXIT_ABORT`) | stderr に `Workflow aborted:` が**ない** | `ABORT`、reason に「予期しないエラー」、suggestion でログ確認を促す |
+  | 定義エラー（YAML 不正、skill 未検出）| `2` (`EXIT_DEFINITION_ERROR`)| stderr に validate / skill エラー | `ABORT`、suggestion: `kaji validate` を直接実行して原因確認 |
+  | config 未検出 / provider mismatch | `2` (`EXIT_CONFIG_NOT_FOUND` / `EXIT_INVALID_INPUT`)| stderr に設定エラー | `ABORT`、suggestion: `.kaji/config.toml` を確認 |
+  | runtime error | `3` (`EXIT_RUNTIME_ERROR`) | stderr に runtime traceback | `ABORT`、suggestion: stderr の traceback を確認 |
+  | その他（未知の exit code）| ≠ 0/1/2/3 | — | `ABORT`、reason: 「unknown exit code」 |
+
+  > **exit 1 の曖昧性の解消**: `docs/dev/workflow-authoring.md` の終了コード表は `1 = ワークフロー
+  > ABORT または予期しないエラー` と定義しており、`cli_main.py:387-401` の実装でも両経路が
+  > `EXIT_ABORT` に集約される。ただし正規 ABORT verdict のときは `kaji_harness/cli_main.py:398`
+  > の `print(f"Workflow aborted: ...", file=sys.stderr)` が確実に走るため、`stderr` を
+  > capture して `^Workflow aborted:` が含まれるかで区別できる。これにより「正規 ABORT」と
+  > 「予期しないエラー」を verdict の `reason` で書き分け、誤って正規 ABORT と断定しない
+
 - **実装方針**（疑似コード）:
 
   ```bash
-  # Step 1: 引数チェック
-  ISSUE_ID="${1:?issue_id is required}"
+  set -u  # set -e は外す（exit code は明示的に拾う）
 
-  # Step 2: kaji run 起動（前景実行 / stdout/stderr はそのまま流す）
-  kaji run .kaji/wf/review-cycle.yaml "$ISSUE_ID"
+  # Step 1: 引数チェック
+  ISSUE_ID="${1:?usage: /review-cycle <issue_id>}"
+
+  # Step 2: kaji run 起動
+  #   stdout はそのまま流し、stderr のみ tee で capture して
+  #   `Workflow aborted:` シグナルを後で grep する。
+  STDERR_LOG=$(mktemp)
+  trap 'rm -f "$STDERR_LOG"' EXIT
+
+  kaji run .kaji/wf/review-cycle.yaml "$ISSUE_ID" \
+      2> >(tee "$STDERR_LOG" >&2)
   EXIT=$?
 
-  # Step 3: 結果に応じてメッセージ出力
+  HAS_ABORT_MARKER=0
+  if grep -q '^Workflow aborted:' "$STDERR_LOG"; then
+      HAS_ABORT_MARKER=1
+  fi
+
+  # Step 3: 人間向けの先出しメッセージ（verdict ブロック前に出す）
+  case "$EXIT" in
+      0)
+          echo
+          echo "review-cycle 完了（workflow PASS）。次に /issue-close $ISSUE_ID を実行してください。"
+          ;;
+      1)
+          if [ "$HAS_ABORT_MARKER" -eq 1 ]; then
+              echo "review-cycle が ABORT verdict で終了しました。Issue gl:$ISSUE_ID を確認してください。" >&2
+          else
+              echo "review-cycle が exit 1 で終了しましたが、'Workflow aborted:' マーカーが見当たりません。予期しないエラーの可能性があります。stderr を確認してください。" >&2
+          fi
+          ;;
+      2)
+          echo "review-cycle が定義エラー / 設定エラーで終了しました（exit 2）。kaji validate および .kaji/config.toml を確認してください。" >&2
+          ;;
+      3)
+          echo "review-cycle が runtime error で終了しました（exit 3）。stderr の traceback を確認してください。" >&2
+          ;;
+      *)
+          echo "review-cycle が未知の exit code $EXIT で終了しました。" >&2
+          ;;
+  esac
+
+  # Step 4: verdict ブロック出力（必須 / skill-authoring.md § verdict 出力規約）
   if [ "$EXIT" -eq 0 ]; then
-      echo "review-cycle 完了（PASS）。次に /issue-close $ISSUE_ID を実行してください。"
-  elif [ "$EXIT" -eq 1 ]; then
-      echo "review-cycle が ABORT で終了しました。Issue gl:$ISSUE_ID を確認してください。"
+      cat <<VERDICT_EOF
+  ---VERDICT---
+  status: PASS
+  reason: |
+    review-cycle workflow completed successfully (exit 0).
+  evidence: |
+    kaji run .kaji/wf/review-cycle.yaml $ISSUE_ID exited with code 0.
+    Next step: /issue-close $ISSUE_ID
+  suggestion: |
+    Run /issue-close $ISSUE_ID to merge the PR and clean up.
+  ---END_VERDICT---
+  VERDICT_EOF
   else
-      echo "review-cycle が予期しない exit code $EXIT で終了しました。"
+      # exit != 0 はすべて ABORT に倒す。reason / suggestion で原因と次の手を書き分ける
+      case "$EXIT" in
+          1)
+              if [ "$HAS_ABORT_MARKER" -eq 1 ]; then
+                  REASON="workflow ABORT verdict (exit 1, 'Workflow aborted:' marker present in stderr)"
+                  SUGG="Inspect the Issue and Issue comments for the failing step's verdict, then decide whether to /pr-fix manually or close the workflow."
+              else
+                  REASON="exit 1 without 'Workflow aborted:' marker — possibly an unexpected exception in cli_main.py"
+                  SUGG="Check stderr / traceback. Re-run with --quiet off or re-execute the failing step manually for diagnosis."
+              fi
+              ;;
+          2)
+              REASON="definition error / config error (exit 2)"
+              SUGG="Run 'kaji validate .kaji/wf/review-cycle.yaml' to surface the YAML or skill error; verify .kaji/config.toml has [provider]."
+              ;;
+          3)
+              REASON="runtime error in kaji run (exit 3)"
+              SUGG="Inspect stderr traceback. The failing CLI dispatch or verdict parse is logged there."
+              ;;
+          *)
+              REASON="unknown exit code $EXIT"
+              SUGG="Inspect kaji run stdout/stderr. This exit code is not defined in docs/dev/workflow-authoring.md § 終了コード."
+              ;;
+      esac
+      cat <<VERDICT_EOF
+  ---VERDICT---
+  status: ABORT
+  reason: |
+    $REASON
+  evidence: |
+    kaji run .kaji/wf/review-cycle.yaml $ISSUE_ID exited with code $EXIT.
+    Workflow aborted marker in stderr: $HAS_ABORT_MARKER (1 = present, 0 = absent).
+  suggestion: |
+    $SUGG
+  ---END_VERDICT---
+  VERDICT_EOF
   fi
   ```
 
-  - `kaji run` 自身の verdict 解釈・ログ出力はそのまま流れるため、本 skill は exit code に
-    薄く色付けするだけの最小 wrapper とする
+  - `kaji run` の stdout はそのままユーザに流れる（workflow 実行ログ）。本 skill が追加で
+    出すのは「人間向け 1 行サマリ」と「`---VERDICT---` ブロック」のみ
+  - stderr の `Workflow aborted:` シグナル（`kaji_harness/cli_main.py:395-401`）を
+    `grep` で検出し、exit 1 の二重意味（正規 ABORT / 予期しない例外）を verdict の `reason`
+    で区別する
   - `release` skill と同じ「kaji 外部コマンドを Bash で叩く」パターン（`release/SKILL.md`
-    Step 1 と同型）
+    Step 1 と同型）だが、本 skill では exit code の意味解析と verdict 出力が責務に加わる
+
+- **PASS / ABORT verdict の使い分けの根拠**:
+  - `docs/dev/skill-authoring.md` § verdict の選択基準には `PASS` / `RETRY` / `BACK` / `ABORT`
+    の 4 種があるが、本 skill は workflow runner の cycle に組み込まれない top-level slash
+    command として動作するため `RETRY` / `BACK` は意味を持たない。よって `PASS` か `ABORT`
+    の 2 値に縮約する
 
 ### データフロー
 
