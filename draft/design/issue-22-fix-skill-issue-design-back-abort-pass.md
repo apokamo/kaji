@@ -175,7 +175,7 @@ skill 内部で以下を観測し、初回起動 / BACK 経由再起動を分岐
 > **注**: `instruction-only`（`.claude/skills/` のみ変更）/ `docs-only`（`docs/` のみ変更）/ `metadata-only`（`pyproject.toml` 等のみ変更）の Issue でも検出が漏れないよう、pathspec で実装ディレクトリを限定せず、リポジトリ全体の `[default_branch]..HEAD` commit から `draft/design/` を除外する方式を採用する。本 Issue gl:22 自身が dogfood ケースとなり、改修対象が `.claude/skills/issue-design/SKILL.md` のみで `kaji_harness/` を変更しないため、pathspec を Python 実装範囲に限定した旧定義では検出できなかった経緯を踏まえる。
 > verdict コメントの検出は、harness の `---VERDICT---` ブロックが Issue コメント本文には注入されず、人間可読な `[x] Changes Requested / BACK` チェック行や hard gate 結果テーブル `\| 判定 \| BACK \|` の形でしか現れないという実態に合わせる。
 > **BACK 必須化と誤検出防止**: `[x] Changes Requested` 単体（BACK なし）は `/issue-review-design` の `[x] Changes Requested (設計修正が必要)` のような **設計レビューの差し戻し** にも使われるため、戻し先 `design` の **`BACK` verdict 検出には `/ BACK` を必須**とする。さらに、過去の判定コメント本文（例: 本「設計再確認結果」コメント自身）が同じ regex を引用する形で含むことがあるため、**jq `.Notes[]` イテレーションで note 単位にフィルタ** し、判定セクション本体の見出し（`# コードレビュー結果` / `## 最終チェック結果` 等）を持つ note のみを対象とする。新規の判定 step を追加した場合は見出しを OR 列に追記する。
-> **fail-loud**: kaji / jq が失敗した場合は `2>/dev/null` で stderr を握りつぶさず、`$BACK_COUNT` が空文字なら ABORT verdict を出して Step 2 以降に進まない。silent fallthrough は本 Issue が防ぎたかった failure mode を別経路で再発させる。
+> **fail-loud**: kaji / jq が失敗した場合は `2>/dev/null` で stderr を握りつぶさず、`$BACK_COUNT` が空文字なら **`---VERDICT--- status: ABORT ... ---END_VERDICT---` ブロックを stdout に出力した上で** skill を終了し、Step 2 以降に進まない。`exit 1` 単体では workflow runner が `VerdictNotFound` 扱いとなり `on:ABORT` 遷移が成立しないため、verdict block の stdout 出力は必須（Step 0 の provider check ABORT verdict と同じ規約）。silent fallthrough は本 Issue が防ぎたかった failure mode を別経路で再発させる。
 
 ### 使用例（skill markdown レベルの擬似コード）
 
@@ -297,11 +297,28 @@ BACK_COUNT=$(kaji issue view [issue_id] --comments --output json \
       | select(.body | test("\\[x\\] Changes Requested / BACK|\\| *判定 *\\|.*BACK"))
     ] | length')
 
-# (e) fail-loud handler: kaji / jq 失敗時は BACK_COUNT が空文字。silent
-#     に初回フローへ進めず ABORT する（本 Issue が防ぎたかった失敗モード）。
+# (e) fail-loud handler: kaji / jq 失敗時は BACK_COUNT が空文字。silent に
+#     初回フローへ進めず、workflow runner が読める ABORT verdict ブロックを
+#     stdout に出力した上で Step 2 以降には進まない。`exit 1` 単体では
+#     workflow runner が `VerdictNotFound` として扱い `on:ABORT` 遷移が成立
+#     しないため、`---VERDICT--- ... ---END_VERDICT---` ブロックの出力を必須
+#     とする（Step 0 の provider check ABORT verdict と同じ規約）。
 if [ -z "$BACK_COUNT" ]; then
-    exit 1  # status: ABORT — BACK 検出パイプライン失敗。初回フロー silent
-            # fallthrough を抑止する
+    cat <<'VERDICT_BLOCK'
+---VERDICT---
+status: ABORT
+reason: |
+  BACK detection pipeline failed (kaji issue view / jq error).
+evidence: |
+  `kaji issue view [issue_id] --comments --output json | jq ...` の評価に
+  失敗し BACK_COUNT が空文字となった。初回フローへの silent fallthrough は
+  既存設計書の上書きという scope 違反を再発させるため抑止する。
+suggestion: |
+  kaji CLI / GitLab API 接続 / .kaji/config.toml の `[provider]` 設定を
+  確認した上で `/issue-design [issue_id]` を再実行してください。
+---END_VERDICT---
+VERDICT_BLOCK
+    exit 1
 fi
 # BACK_COUNT >= 1 → 該当
 #

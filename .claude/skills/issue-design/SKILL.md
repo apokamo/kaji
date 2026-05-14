@@ -191,11 +191,26 @@ BACK_COUNT=$(kaji issue view [issue_id] --comments --output json \
     ] | length')
 
 # (e) fail-loud handler: kaji / jq 失敗時は BACK_COUNT が空文字。silent
-#     に初回フローへ進めず ABORT する（本 Issue が防ぎたかった失敗モード）。
+#     に初回フローへ進めず、workflow runner が読める ABORT verdict ブロック
+#     を stdout に出力した上で Step 2 以降には進まない。`exit 1` 単体では
+#     workflow runner 側で `VerdictNotFound` 扱いになり on:ABORT 遷移が
+#     成立しないため、必ず `---VERDICT--- ... ---END_VERDICT---` を stdout
+#     に出してから skill を終了する。
 if [ -z "$BACK_COUNT" ]; then
-    # ABORT verdict を stdout に出し、Step 2 以降には進まない
-    # status: ABORT / reason: BACK 検出パイプラインが失敗（kaji or jq error）
-    # 初回フローに silent fallthrough させない
+    cat <<'VERDICT_BLOCK'
+---VERDICT---
+status: ABORT
+reason: |
+  BACK detection pipeline failed (kaji issue view / jq error).
+evidence: |
+  `kaji issue view [issue_id] --comments --output json | jq ...` の評価に
+  失敗し BACK_COUNT が空文字となった。初回フローへの silent fallthrough は
+  既存設計書の上書きという scope 違反を再発させるため抑止する。
+suggestion: |
+  kaji CLI / GitLab API 接続 / .kaji/config.toml の `[provider]` 設定を
+  確認した上で `/issue-design [issue_id]` を再実行してください。
+---END_VERDICT---
+VERDICT_BLOCK
     exit 1
 fi
 # BACK_COUNT >= 1 → 該当
@@ -218,7 +233,7 @@ fi
 
 > **BACK 必須化と誤検出防止**: `[x] Changes Requested` 単体（BACK なし）は `/issue-review-design` の `[x] Changes Requested (設計修正が必要)` のような **設計レビューの差し戻し** にも使われるため、戻し先 `design` の `BACK` verdict 検出には **`/ BACK` を必須**とする。さらに、過去の判定コメント本文（例: 設計再確認結果コメント自身）が同じ regex を引用する形で含むことがあるため、**jq の `.Notes[]` イテレーションで note 単位にフィルタ** し、判定セクション本体の見出し（`# コードレビュー結果` / `## 最終チェック結果` 等）を持つ note のみを対象にする。新規の判定 step を追加した場合は (c) heading gate の OR リストに見出しを追記する。
 
-> **fail-loud**: kaji CLI / GitLab API が失敗した場合に `2>/dev/null` で stderr を握りつぶし「BACK 検出ゼロ → 初回フロー」と silent fallthrough すると、本 Issue が防ぎたかった failure mode（既存設計書を上書きする scope 違反）を別経路で再発させる。観測 3 のパイプラインは stderr 抑止を付けず、`$BACK_COUNT` が空文字なら ABORT verdict を出して Step 2 以降に進まない。
+> **fail-loud**: kaji CLI / GitLab API が失敗した場合に `2>/dev/null` で stderr を握りつぶし「BACK 検出ゼロ → 初回フロー」と silent fallthrough すると、本 Issue が防ぎたかった failure mode（既存設計書を上書きする scope 違反）を別経路で再発させる。観測 3 のパイプラインは stderr 抑止を付けず、`$BACK_COUNT` が空文字なら **`---VERDICT--- status: ABORT ... ---END_VERDICT---` ブロックを stdout に出力した上で** skill を終了し、Step 2 以降に進まない（`exit 1` 単体では workflow runner が `VerdictNotFound` 扱いとなり `on:ABORT` 遷移が成立しないため、verdict block の出力は必須）。
 
 > **重要**: 「implementation 済みを検出したから ABORT する」という分岐は採用しない。BACK 経由再起動という workflow 仕様上の正当な遷移
 > （`docs/dev/workflow-authoring.md:130` の `BACK = 差し戻し。前段ステップを再実行` 定義）に対しては Step 1.7 で `PASS` を返して通常フローに復帰させる。
