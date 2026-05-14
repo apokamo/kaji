@@ -166,15 +166,16 @@ skill 内部で以下を観測し、初回起動 / BACK 経由再起動を分岐
 
 | 観測対象 | 取得方法 | 検出ルール |
 |---------|---------|----------|
-| 既存設計書 | `ls <worktree_dir>/draft/design/issue-<issue_id>-*.md` | 1 件以上ヒット |
-| 設計後コミット（実装または skill/doc 改修） | `git -C <worktree_dir> log --oneline <default_branch>..HEAD` の総数、および `':(exclude)draft/design/'` を pathspec とする差分 commit 数 | 総 commit 数が 2 件以上、かつ `draft/design/` 以外を変更する commit が 1 件以上存在 |
-| `BACK` verdict comment（戻し先 `design`） | `kaji issue view <issue_id> --comments` の出力を **コメント単位で分割** し、各コメントの判定セクション（`# コードレビュー結果` / `## 判定` / `i-dev-final-check` 結果コメント等）に `[x] Changes Requested / BACK`（"/ BACK" 必須）または `\| 判定 \|.*BACK` 表記を含むコメントを抽出 | 1 件以上ヒット |
+| 既存設計書 | `ls [worktree_dir]/draft/design/issue-[issue_id]-*.md` | 1 件以上ヒット |
+| 設計後コミット（実装または skill/doc 改修） | `git -C [worktree_dir] log --oneline [default_branch]..HEAD` の総数、および `':(exclude)draft/design/'` を pathspec とする差分 commit 数 | 総 commit 数が 2 件以上、かつ `draft/design/` 以外を変更する commit が 1 件以上存在 |
+| `BACK` verdict comment（戻し先 `design`） | `kaji issue view [issue_id] --comments --output json` の `.Notes[]` を **note 単位** で iterate し、判定セクション見出し（`# コードレビュー結果` / `## 最終チェック結果`）を持つ note のうち `[x] Changes Requested / BACK`（"/ BACK" 必須）または `\| 判定 \|.*BACK` を含むものを抽出 | 1 件以上ヒット |
 
 3 観測すべて該当 → BACK 経由再起動と判定。
 
-> **注**: `instruction-only`（`.claude/skills/` のみ変更）/ `docs-only`（`docs/` のみ変更）/ `metadata-only`（`pyproject.toml` 等のみ変更）の Issue でも検出が漏れないよう、pathspec で実装ディレクトリを限定せず、リポジトリ全体の `<default_branch>..HEAD` commit から `draft/design/` を除外する方式を採用する。本 Issue gl:22 自身が dogfood ケースとなり、改修対象が `.claude/skills/issue-design/SKILL.md` のみで `kaji_harness/` を変更しないため、pathspec を Python 実装範囲に限定した旧定義では検出できなかった経緯を踏まえる。
+> **注**: `instruction-only`（`.claude/skills/` のみ変更）/ `docs-only`（`docs/` のみ変更）/ `metadata-only`（`pyproject.toml` 等のみ変更）の Issue でも検出が漏れないよう、pathspec で実装ディレクトリを限定せず、リポジトリ全体の `[default_branch]..HEAD` commit から `draft/design/` を除外する方式を採用する。本 Issue gl:22 自身が dogfood ケースとなり、改修対象が `.claude/skills/issue-design/SKILL.md` のみで `kaji_harness/` を変更しないため、pathspec を Python 実装範囲に限定した旧定義では検出できなかった経緯を踏まえる。
 > verdict コメントの検出は、harness の `---VERDICT---` ブロックが Issue コメント本文には注入されず、人間可読な `[x] Changes Requested / BACK` チェック行や hard gate 結果テーブル `\| 判定 \| BACK \|` の形でしか現れないという実態に合わせる。
-> **BACK 必須化と誤検出防止**: `[x] Changes Requested` 単体（BACK なし）は `/issue-review-design` の `[x] Changes Requested (設計修正が必要)` のような **設計レビューの差し戻し** にも使われるため、戻し先 `design` の **`BACK` verdict 検出には `/ BACK` を必須**とする。さらに、過去の判定コメント本文（例: 本「設計再確認結果」コメント自身）が同じ regex を引用する形で含むことがあるため、**行単位 grep ではなくコメント単位（GitLab の note 単位）に区切って抽出** し、判定セクション本体（`# コードレビュー結果` / `## 判定` / final-check 結果見出し等）の存在も併せて確認する。
+> **BACK 必須化と誤検出防止**: `[x] Changes Requested` 単体（BACK なし）は `/issue-review-design` の `[x] Changes Requested (設計修正が必要)` のような **設計レビューの差し戻し** にも使われるため、戻し先 `design` の **`BACK` verdict 検出には `/ BACK` を必須**とする。さらに、過去の判定コメント本文（例: 本「設計再確認結果」コメント自身）が同じ regex を引用する形で含むことがあるため、**jq `.Notes[]` イテレーションで note 単位にフィルタ** し、判定セクション本体の見出し（`# コードレビュー結果` / `## 最終チェック結果` 等）を持つ note のみを対象とする。新規の判定 step を追加した場合は見出しを OR 列に追記する。
+> **fail-loud**: kaji / jq が失敗した場合は `2>/dev/null` で stderr を握りつぶさず、`$BACK_COUNT` が空文字なら ABORT verdict を出して Step 2 以降に進まない。silent fallthrough は本 Issue が防ぎたかった failure mode を別経路で再発させる。
 
 ### 使用例（skill markdown レベルの擬似コード）
 
@@ -202,14 +203,16 @@ else:
 - 既存設計書が無い初回起動時の挙動は完全に不変（後方互換）
 - `BACK: design` を発行する step は workflow YAML 側で複数あり得る
   （`review-code` / `i-dev-final-check` 等）。skill 側はどの step からの BACK
-  かを意識せず、Issue コメントを **コメント単位** に分割した上で、各コメントの
-  判定セクション（`# コードレビュー結果` / `## 判定` / final-check 結果見出し等）
-  に `[x] Changes Requested / BACK`（"/ BACK" 必須）または
-  `| 判定 | ... BACK ... |` の表記が含まれるコメントを検出すれば良い
+  かを意識せず、jq `.Notes[]` で **note 単位** に分割した上で、判定セクション
+  見出し（`# コードレビュー結果`（review-code）/ `## 最終チェック結果`
+  （i-dev-final-check））を持つ note のうち
+  `[x] Changes Requested / BACK`（"/ BACK" 必須）または
+  `| 判定 | ... BACK ... |` を含むものを抽出すれば良い
   （harness の `---VERDICT---` ブロックは Issue コメントには注入されないため、
   人間可読な判定マーカーを唯一の検出手段とする）。`BACK` 無しの `[x] Changes
   Requested` 単体は `/issue-review-design` の差し戻しでも使われるため、検出
-  条件に **必ず `/ BACK`** を含める
+  条件に **必ず `/ BACK`** を含める。新規の判定 step を追加した場合は heading
+  gate の OR リストに見出しを追記する
 - 設計起因 / 実装起因の分類は LLM の判断に委ねる（rule-based 自動分類は実装
   しない）が、判定根拠（どの指摘を設計起因と判定したか）はコメントに必ず
   含める
@@ -238,22 +241,22 @@ else:
 ### A. Step 1.6「BACK 経由再起動の検出と分岐」を Step 1.5 の直後に挿入
 
 Step 1.5（type 判定）の直後に Step 1.6 を挿入し、Step 1 で解決済みの
-`<worktree_dir>` を使って 3 観測を行い、初回起動 / BACK 経由再起動を判定する。
+`[worktree_dir]` を使って 3 観測を行い、初回起動 / BACK 経由再起動を判定する。
 実行コマンドの例:
 
 ```bash
 # 1. 既存設計書の有無
-ls <worktree_dir>/draft/design/issue-<issue_id>-*.md 2>/dev/null
+ls [worktree_dir]/draft/design/issue-[issue_id]-*.md 2>/dev/null
 
 # 2. 設計後コミット（実装または skill/doc 改修）の有無
-#    fix/<issue_id> ブランチが <default_branch> から枝分かれ後、commit が
+#    fix/[issue_id] ブランチが [default_branch] から枝分かれ後、commit が
 #    2 件以上ある（最初は設計書作成 commit、それ以外に implementation /
 #    skill / doc 改修 commit が存在）。Python 実装範囲（kaji_harness/ tests/
 #    Makefile pyproject.toml）に pathspec を固定すると instruction-only
 #    （.claude/skills/ 改修）/ docs-only Issue を取りこぼすため、
 #    リポジトリ全体 commit から draft/design/ を除外する方式とする。
-TOTAL=$(git -C <worktree_dir> log --oneline <default_branch>..HEAD | wc -l)
-NON_DESIGN=$(git -C <worktree_dir> log --oneline <default_branch>..HEAD -- ':(exclude)draft/design/' | wc -l)
+TOTAL=$(git -C [worktree_dir] log --oneline [default_branch]..HEAD | wc -l)
+NON_DESIGN=$(git -C [worktree_dir] log --oneline [default_branch]..HEAD -- ':(exclude)draft/design/' | wc -l)
 # 該当条件: TOTAL >= 2 かつ NON_DESIGN >= 1
 
 # 3. 直近の戻し先 `design` の `BACK` verdict コメントの有無
@@ -262,25 +265,45 @@ NON_DESIGN=$(git -C <worktree_dir> log --oneline <default_branch>..HEAD -- ':(ex
 #    `[x] Changes Requested / BACK` チェック行や hard gate 結果テーブル
 #    `| 判定 | BACK |` の形で表現される。
 #
-#    厳密化のポイント（dogfood 検証で判明した制約）:
+#    検出方針（dogfood 検証で判明した制約の最終形）:
 #      (a) BACK 必須: `[x] Changes Requested` 単体は review-design の差し戻し
-#          にも使われるため、`/ BACK` を必須にする
-#      (b) コメント単位抽出: 過去の判定コメント本文（例: 本「設計再確認結果」
-#          コメントが過去 BACK regex を引用する場合）を行単位 grep が拾うため、
-#          GitLab の note 単位に区切ってから判定セクション本体の有無を確認
+#          にも使われるため `/ BACK` を必須にする
+#      (b) note 単位フィルタ: jq の `.Notes[]` イテレーションで note 境界
+#          を維持し、複数 note を改行連結した stream を grep する誤検出
+#          を排除する。過去の判定コメント本文（例: 「設計再確認結果」
+#          コメントが BACK regex を引用するケース）が前の note の判定
+#          セクションに混入する事故を防ぐ
+#      (c) 判定見出しゲート: 「判定セクション本体を持つ note」だけを対象
+#          にするため、`# コードレビュー結果`（review-code 由来）と
+#          `## 最終チェック結果`（i-dev-final-check 由来）を OR で
+#          列挙する。新しい判定 step を追加した場合はここに見出しを追記
+#          する。skill 側はどの step からの BACK かは意識しない
+#      (d) fail-loud: kaji / jq が失敗した場合に「BACK 検出ゼロ＝初回
+#          起動」と silent fallthrough すると、本 Issue が防ぎたかった
+#          scope 違反を再発する。`2>/dev/null` を付けず、エラー発生時
+#          は BACK_COUNT が空文字となり (e) で ABORT 経路に流す
 #
-#    実装パターン例（GitLab provider・jq 利用）:
-#    GitLab の `kaji issue view --comments --output json` 出力は top-level object
-#    で、コメント配列を `.Notes` プロパティに持つ（各要素は GitLab REST API の
-#    Notes リソース。`body` / `system` / `created_at` 等のフィールドあり。
-#    `system: true` は WIP/label change 等の system note でユーザコメントでは
-#    ないため除外）。`.[].body` 形式は型エラーになるため必ず `.Notes[]` を経由
-#    する。
-kaji issue view <issue_id> --comments --output json 2>/dev/null \
-  | jq -r '.Notes[] | select(.system == false) | .body' \
-  | awk 'BEGIN{RS="\n# コードレビュー結果\n"} NR>1' \
-  | grep -E '\[x\] Changes Requested / BACK|\| *判定 *\|.*BACK' | head -1
-# 上記が 1 件以上ヒット → 該当
+#    GitLab provider の `kaji issue view --comments --output json` は
+#    top-level object で、コメント配列を `.Notes` プロパティに持つ
+#    （各要素は GitLab REST API の Notes リソース。`body` / `system` /
+#    `created_at` 等のフィールドあり。`system: true` は WIP / label
+#    change 等の system note でユーザコメントではないため除外）。
+#    `.[].body` 形式は型エラーになるため必ず `.Notes[]` を経由する。
+BACK_COUNT=$(kaji issue view [issue_id] --comments --output json \
+  | jq '[
+      .Notes[]
+      | select(.system == false)
+      | select(.body | test("^(# コードレビュー結果|## 最終チェック結果)"; "m"))
+      | select(.body | test("\\[x\\] Changes Requested / BACK|\\| *判定 *\\|.*BACK"))
+    ] | length')
+
+# (e) fail-loud handler: kaji / jq 失敗時は BACK_COUNT が空文字。silent
+#     に初回フローへ進めず ABORT する（本 Issue が防ぎたかった失敗モード）。
+if [ -z "$BACK_COUNT" ]; then
+    exit 1  # status: ABORT — BACK 検出パイプライン失敗。初回フロー silent
+            # fallthrough を抑止する
+fi
+# BACK_COUNT >= 1 → 該当
 #
 # provider 別フォールバック:
 # - GitHub provider: `kaji issue view [issue_id] --comments --output json` は
@@ -290,7 +313,7 @@ kaji issue view <issue_id> --comments --output json 2>/dev/null \
 #   抽出器（comment body iterator）を用意する
 ```
 
-`<worktree_dir>` は Step 1 で取得した絶対パスを再利用する（再解決しない）。
+`[worktree_dir]` は Step 1 で取得した絶対パスを再利用する（再解決しない）。
 
 3 つすべて該当 → BACK 経由再起動として Step 1.7 に進む。
 いずれか欠ける → 通常フロー（Step 2 以降）に進む。
@@ -299,8 +322,8 @@ kaji issue view <issue_id> --comments --output json 2>/dev/null \
 
 以下のサブステップを定義する:
 
-1. 既存設計書（`<worktree_dir>/draft/design/issue-<issue_id>-*.md`）を `Read`
-2. `kaji issue view <issue_id> --comments` を走査し、**直近の `BACK: design`
+1. 既存設計書（`[worktree_dir]/draft/design/issue-[issue_id]-*.md`）を `Read`
+2. `kaji issue view [issue_id] --comments` を走査し、**直近の `BACK: design`
    verdict** を含むコメント（発行元 step は `review-code` / `i-dev-final-check`
    等を問わない）から指摘リストを抽出
 3. 各指摘を「設計起因」「実装起因」に分類:
