@@ -161,24 +161,25 @@ skill markdown が再入力を前提にしていないため、LLM session が
 
 ### 内部状態の検出（新規明文化）
 
-skill 内部で以下を観測し、初回起動 / BACK 経由再起動を分岐する:
+skill 内部で以下を観測し、初回起動 / BACK 経由再起動を分岐する。
+**3 観測すべてが worktree resolve 後の絶対パスを前提とする**（次節「方針」参照）。
 
 | 観測対象 | 取得方法 | 検出ルール |
 |---------|---------|----------|
-| 既存設計書 | `ls draft/design/issue-<issue_id>-*.md` | 1 件以上ヒット |
-| implementation commit | `git log --oneline -- kaji_harness tests Makefile pyproject.toml` | 該当 commit が存在 |
-| review-code BACK comment | `kaji issue view <issue_id> --comments` の最新 `### Verdict` 行 | `BACK` を含み戻し先が `design` |
+| 既存設計書 | `ls <worktree_dir>/draft/design/issue-<issue_id>-*.md` | 1 件以上ヒット |
+| implementation commit | `git -C <worktree_dir> log --oneline -- kaji_harness tests Makefile pyproject.toml` | 該当 commit が存在 |
+| `BACK: design` 経路の verdict comment | `kaji issue view <issue_id> --comments` を走査し、戻し先が `design` の直近 `BACK` verdict（発行元 step は `review-code` / `i-dev-final-check` 等を問わない） | 1 件以上ヒット |
 
 3 観測すべて該当 → BACK 経由再起動と判定。
 
-### 使用例（skill markdown レベルの擬似擬似コード）
+### 使用例（skill markdown レベルの擬似コード）
 
 ```text
-# Step 0 として追加（Step 1 の前に実行）
+# Step 1（worktree resolve）と Step 1.5（type 判定）の後、Step 2 の前に挿入
 
-if 既存設計書 ∧ implementation commit ∧ review-code BACK comment:
+if 既存設計書 ∧ implementation commit ∧ "BACK: design" verdict comment:
     既存設計書を Read
-    review-code BACK コメントを取得し設計起因 / 実装起因に分類
+    最新の "BACK: design" verdict コメントを取得し設計起因 / 実装起因に分類
     if 設計起因の指摘あり:
         該当箇所のみ最小修正 → commit
     else:
@@ -186,7 +187,7 @@ if 既存設計書 ∧ implementation commit ∧ review-code BACK comment:
         「設計変更不要」コメントを Issue に投稿
     PASS を返す（Step 2 以降の通常フローは実行しない）
 else:
-    通常フロー（Step 1 → Step 2 → ...）を実行
+    通常フロー（Step 2 → Step 2.5 → ...）を実行
 ```
 
 ## 制約・前提条件
@@ -206,32 +207,56 @@ else:
 
 `.claude/skills/issue-design/SKILL.md` に以下を追加・修正する。
 
-### A. Step 0「BACK 経由再起動の検出と分岐」を Step 1 の前に挿入
+### ステップ挿入位置の原則
 
-Step 1（worktree resolve）の直前に Step 0 を挿入し、3 観測を行って初回起動 /
-BACK 経由再起動を判定する。実行コマンドの例:
+**Step 1（worktree resolve）と Step 1.5（type 判定）は新規分岐より先に必ず
+実行する**:
+
+- worktree 絶対パスは Step 1 で確定する。`[worktree_dir]` を参照する観測コマンド
+  は Step 1 完了後でなければ実行できない（手動実行時は context 変数が無く、
+  Step 1 が `_shared/worktree-resolve.md` の手順で Issue 本文 NOTE ブロックから
+  解決する）
+- type ラベルの cardinality / canonical 判定は再起動経路でも崩せないガード
+  （type 複数付与 / type 未付与 / `type:docs` は再起動でも ABORT 経路）。先に
+  Step 1.5 を通すことで、後段の BACK 分岐は「type 単一 canonical の Issue」
+  という前提で動ける
+
+このため、本改修では新規ステップを **Step 1.5 の直後** に配置する。Step 番号は
+`Step 1.6`（検出）/ `Step 1.7`（修正/再確認）を採用する。
+
+### A. Step 1.6「BACK 経由再起動の検出と分岐」を Step 1.5 の直後に挿入
+
+Step 1.5（type 判定）の直後に Step 1.6 を挿入し、Step 1 で解決済みの
+`<worktree_dir>` を使って 3 観測を行い、初回起動 / BACK 経由再起動を判定する。
+実行コマンドの例:
 
 ```bash
 # 1. 既存設計書の有無
-ls [worktree_dir]/draft/design/issue-[issue_id]-*.md 2>/dev/null
+ls <worktree_dir>/draft/design/issue-<issue_id>-*.md 2>/dev/null
 
 # 2. implementation commit の有無
-git -C [worktree_dir] log --oneline -- kaji_harness tests Makefile pyproject.toml
+git -C <worktree_dir> log --oneline -- kaji_harness tests Makefile pyproject.toml
 
-# 3. 最新の review-code BACK verdict
-kaji issue view [issue_id] --comments | grep -E '^(### Verdict|status:)' | tail -20
+# 3. 直近の "BACK: design" verdict コメントの有無
+#    （発行元は review-code / i-dev-final-check 等を問わない。
+#     `戻し先 design の BACK` を 1 件以上見つければよい）
+kaji issue view <issue_id> --comments | \
+  grep -E '^(### Verdict|status:|戻し先:)' | tail -40
 ```
 
-3 つすべて該当 → BACK 経由再起動として Step 0.5 に進む。
-いずれか欠ける → 通常フロー（Step 1 以降）に進む。
+`<worktree_dir>` は Step 1 で取得した絶対パスを再利用する（再解決しない）。
 
-### B. Step 0.5「BACK 経由再起動時の修正/再確認フロー」を新設
+3 つすべて該当 → BACK 経由再起動として Step 1.7 に進む。
+いずれか欠ける → 通常フロー（Step 2 以降）に進む。
+
+### B. Step 1.7「BACK 経由再起動時の修正/再確認フロー」を新設
 
 以下のサブステップを定義する:
 
-1. 既存設計書を `Read`
-2. `kaji issue view [issue_id] --comments` の最新 review-code BACK コメント
-   から指摘リストを抽出
+1. 既存設計書（`<worktree_dir>/draft/design/issue-<issue_id>-*.md`）を `Read`
+2. `kaji issue view <issue_id> --comments` を走査し、**直近の `BACK: design`
+   verdict** を含むコメント（発行元 step は `review-code` / `i-dev-final-check`
+   等を問わない）から指摘リストを抽出
 3. 各指摘を「設計起因」「実装起因」に分類:
    - 設計起因: 設計書の不備が原因の指摘（IF 設計の漏れ、テスト戦略の未定義、
      一次情報不足、影響ドキュメント漏れ等）
@@ -248,9 +273,9 @@ kaji issue view [issue_id] --comments | grep -E '^(### Verdict|status:)' | tail 
 ```markdown
 ## 設計再確認結果（BACK 経由再起動）
 
-直近の review-code BACK verdict を確認しました。
+直近の `BACK: design` verdict（発行元 step: <review-code | i-dev-final-check 等>）を確認しました。
 
-### review-code BACK の指摘内容
+### 直近 BACK verdict の指摘内容
 
 - 指摘 1: ...
 - 指摘 2: ...
@@ -273,14 +298,14 @@ kaji issue view [issue_id] --comments | grep -E '^(### Verdict|status:)' | tail 
 ```markdown
 ## 設計再確認結果（BACK 経由再起動）
 
-直近の review-code BACK verdict を確認し、設計書の以下箇所を修正しました。
+直近の `BACK: design` verdict（発行元 step: <review-code | i-dev-final-check 等>）を確認し、設計書の以下箇所を修正しました。
 
 ### 修正箇所
 
 - 設計書 X 節: ...
 - 設計書 Y 節: ...
 
-### review-code BACK 指摘の分類
+### 直近 BACK verdict 指摘の分類
 
 | 指摘 | 分類 | 対応 |
 |------|------|------|
@@ -314,9 +339,11 @@ kaji issue view [issue_id] --comments | grep -E '^(### Verdict|status:)' | tail 
 
 ### E. 補足: 初回起動フローへの影響
 
-Step 0 の追加は初回起動時にはノーオペ（3 観測のうち少なくとも 1 つが欠ける）
+Step 1.6 の追加は初回起動時にはノーオペ（3 観測のうち少なくとも 1 つが欠ける）
 で素通りするだけなので、初回起動の挙動は完全に不変。既存テスト・既存
-workflow への波及はない。
+workflow への波及はない。Step 1.6 は Step 1.5（type 判定）の直後に挿入される
+ため、type 複数付与 / type 未付与 / `type:docs` 等の ABORT 経路は新規分岐より
+先に処理され、影響を受けない。
 
 ## テスト戦略
 
@@ -360,16 +387,18 @@ workflow への波及はない。
 | シナリオ | 期待 verdict | 期待 Issue コメント |
 |---------|-------------|--------------------|
 | 初回起動（設計書なし） | PASS | 「設計書作成完了」コメント（現行通り） |
-| 初回起動だが既存設計書あり、implementation 無し、review-code BACK 無し | PASS | 「設計書作成完了」コメント（既存設計書は上書きしないか、最小差分での更新を選択）|
-| BACK 経由再起動、設計起因の指摘あり | PASS | 「設計再確認結果（BACK 経由再起動）」コメント（修正箇所明示）|
-| BACK 経由再起動、設計起因の指摘なし | PASS | 「設計再確認結果（BACK 経由再起動）」コメント（設計変更不要） |
+| 初回起動だが既存設計書あり、implementation 無し、`BACK: design` verdict 無し | PASS | 「設計書作成完了」コメント（既存設計書は上書きしないか、最小差分での更新を選択）|
+| BACK 経由再起動（発行元 `review-code`）、設計起因の指摘あり | PASS | 「設計再確認結果（BACK 経由再起動）」コメント（修正箇所明示）|
+| BACK 経由再起動（発行元 `review-code`）、設計起因の指摘なし | PASS | 「設計再確認結果（BACK 経由再起動）」コメント（設計変更不要） |
+| BACK 経由再起動（発行元 `i-dev-final-check`）、設計起因の指摘あり | PASS | 上記と同等（発行元 step を問わず同一フロー） |
 | BACK 経由再起動、指摘が設計観点で根本修正不能 | ABORT | ABORT 理由を明示するコメント |
 
 検証手順:
 
 1. test fixture として `BACK 経由再起動シナリオ` を再現する Issue を local
-   provider で起票し、設計書 / implementation commit / review-code BACK
-   コメントを意図的に配置する
+   provider で起票し、設計書 / implementation commit / `BACK: design`
+   verdict コメント（発行元 step は `review-code` または `i-dev-final-check`）
+   を意図的に配置する
 2. `/issue-design <test_issue_id>` を手動実行し、skill が PASS を返し
    「設計再確認結果」コメントを投稿することを確認する
 3. local provider で再現できることを優先する（GitLab 実通信は不要）
@@ -387,7 +416,7 @@ workflow への波及はない。
    テスト（`tests/` 配下）でカバー済み。今回の改修は LLM 出力の内容を変える
    ものであり、Python ユニットテストで behavior を assert する手段がない
 3. **新規テストを追加しても回帰検出情報がほとんど増えない** — SKILL.md の
-   markdown 構造（例: `Step 0` 見出しの存在）を assert する snapshot test は
+   markdown 構造（例: `Step 1.6` 見出しの存在）を assert する snapshot test は
    書けるが、それは「指示書の文字列を assert する」だけで、LLM が実際に
    その指示に従って正しい分岐を取ることは保証されない。回帰検出としての
    情報量が低い
@@ -413,7 +442,7 @@ workflow への波及はない。
 | docs/reference/python/ | なし | Python コード変更なし |
 | docs/cli-guides/ | なし | CLI 仕様変更なし |
 | CLAUDE.md | なし | 規約変更なし |
-| `.claude/skills/issue-design/SKILL.md` | **あり（主対象）** | Step 0 / 0.5 追加、verdict 選択表更新 |
+| `.claude/skills/issue-design/SKILL.md` | **あり（主対象）** | Step 1.6 / 1.7 追加（Step 1.5 直後）、verdict 選択表更新 |
 | `.claude/skills/issue-implement/SKILL.md` | 検討対象 | 同様の `BACK: implement` 経路の扱い。本 Issue では別 Issue 化候補として `_shared/report-unrelated-issues.md` に従い起票する（本 Issue では変更しない） |
 | `.claude/skills/issue-review-design/SKILL.md` | なし | review-design 側の rubric は不変。BACK 経由再起動で設計が小修正された場合も既存 rubric で再 review すれば良い |
 
