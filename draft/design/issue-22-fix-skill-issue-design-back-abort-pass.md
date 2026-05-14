@@ -270,13 +270,23 @@ NON_DESIGN=$(git -C <worktree_dir> log --oneline <default_branch>..HEAD -- ':(ex
 #          GitLab の note 単位に区切ってから判定セクション本体の有無を確認
 #
 #    実装パターン例（GitLab provider・jq 利用）:
+#    GitLab の `kaji issue view --comments --output json` 出力は top-level object
+#    で、コメント配列を `.Notes` プロパティに持つ（各要素は GitLab REST API の
+#    Notes リソース。`body` / `system` / `created_at` 等のフィールドあり。
+#    `system: true` は WIP/label change 等の system note でユーザコメントでは
+#    ないため除外）。`.[].body` 形式は型エラーになるため必ず `.Notes[]` を経由
+#    する。
 kaji issue view <issue_id> --comments --output json 2>/dev/null \
-  | jq -r '.[].body' \
+  | jq -r '.Notes[] | select(.system == false) | .body' \
   | awk 'BEGIN{RS="\n# コードレビュー結果\n"} NR>1' \
   | grep -E '\[x\] Changes Requested / BACK|\| *判定 *\|.*BACK' | head -1
 # 上記が 1 件以上ヒット → 該当
-# `--output json` 非対応の provider では、`kaji issue view ... --comments` の
-# プレーン出力をコメント区切り文字（実装側で provider 別に決定）で分割する。
+#
+# provider 別フォールバック:
+# - GitHub provider: `gh issue view ... --comments --json comments` の出力は
+#   top-level object で `.comments[].body` を経由する
+# - local provider: `--output json` の構造は別。実装側で provider 別の
+#   抽出器（comment body iterator）を用意する
 ```
 
 `<worktree_dir>` は Step 1 で取得した絶対パスを再利用する（再解決しない）。
