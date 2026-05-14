@@ -140,6 +140,7 @@ kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
 | 最終チェック | `/i-dev-final-check` / `/i-doc-final-check` | エビデンス集約 + 品質チェック |
 | PR 作成 | `/i-pr` | コミット整理 + プッシュ + PR 作成 |
 | PR レビュー後 | **`/pr-fix`** / **`/pr-verify`** | PR レビュー指摘対応とレビュー収束 |
+| PR レビューサイクル起動 | **`/review-cycle`** | `review-cycle.yaml` を起動し、review → pr-fix → pr-verify ループを 1 コマンドで回す（close は手動。close まで全自動なら `kaji run .kaji/wf/review-close.yaml <id>`） |
 | 完了 | `/issue-close` | PR マージ + worktree 削除 + ブランチ削除 |
 | Release | `/release` | version bump + CHANGELOG + tag + GitLab Release ページ作成（CI 非依存 / maintainer 手元実行） |
 

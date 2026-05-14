@@ -26,6 +26,19 @@
 | `feature-development-local.yaml` | `local` | `issue-close` | local merge (`--no-ff`) 前提 |
 | `docs-maintenance-local.yaml` | `local` | `issue-close` | docs-only / local。Phase 5 追加 |
 | `design-only.yaml` | `any` | `verify-design` | 設計完了で終わるため provider 中立 |
+| `review-cycle.yaml` | `gitlab` | `pr-verify` | PR 作成後のレビューループ。close は本 workflow に含まない（手動で `/issue-close`） |
+| `review-close.yaml` | `gitlab` | `issue-close` | PR レビュー → 修正 → 確認 → close まで全自動。ABORT 時には close を実行しない |
+
+## PR レビュー後フェーズの選択基準
+
+PR 作成後のレビュー対応は手動 (`/review` → `/pr-fix` → `/pr-verify` → `/issue-close`)
+の他に、以下の builtin workflow で自動化できる:
+
+| Workflow / Slash command | close 実行 | 用途 |
+|--------------------------|-----------|------|
+| `kaji run .kaji/wf/review-cycle.yaml <id>` | ❌（手動） | レビュー → 修正 → 確認ループを 1 コマンドで回し、close は別判断ステップで手動実行する |
+| `kaji run .kaji/wf/review-close.yaml <id>` | ✅（自動） | レビューから close（merge + cleanup）まで全自動で完走させる |
+| `/review-cycle <id>` | ❌（手動） | `review-cycle.yaml` を起動する slash command wrapper。終了後に `/issue-close` 案内を出力 |
 
 custom workflow への `requires_provider` 追加は推奨（[workflow-authoring.md](workflow-authoring.md)
 § `requires_provider` 参照）。
