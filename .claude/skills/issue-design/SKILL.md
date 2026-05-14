@@ -122,6 +122,203 @@ kaji issue view [issue_id] --json labels --jq '[.labels[].name] | map(select(sta
 
 読み込んだ type 別ガイドは、Step 2 の設計書セクション構成・必須項目・テスト戦略の判断基準として使う。
 
+### Step 1.6: BACK 経由再起動の検出と分岐
+
+`feature-development` workflow では `review-code` / `i-dev-final-check` 等が `BACK` verdict を返すと、戻し先が `design` の場合に本 skill が再起動される
+（`.kaji/wf/feature-development.yaml:79` の `BACK: design` 等）。この再起動経路では設計書・implementation commit が既に存在するため、初回起動を前提とした
+Step 2 以降の通常フローを素朴に実行すると scope 違反になる。本 Step では Step 1 で解決済みの `[worktree_dir]` を使って内部状態を観測し、初回起動 / BACK
+経由再起動を分岐する。
+
+**ステップ挿入位置の原則**: 本 Step は Step 1（worktree resolve）と Step 1.5（type 判定）の **直後** に位置する。worktree 絶対パスは Step 1 で確定し、
+type ラベルの cardinality / canonical 判定（複数付与 / 未付与 / `type:docs`）は再起動経路でも崩せないガードとして Step 1.5 で先に走らせる。本 Step では
+`[worktree_dir]` は Step 1 で取得した絶対パスを再利用し、再解決しない。
+
+#### 観測コマンド
+
+以下の 3 観測を実施する。すべて Step 1 で解決済みの `[worktree_dir]` を前提とする。
+
+```bash
+# 1. 既存設計書の有無
+ls [worktree_dir]/draft/design/issue-[issue_id]-*.md 2>/dev/null
+
+# 2. 設計後コミット（実装または skill/doc 改修）の有無
+#    fix/[issue_id] ブランチが [default_branch] から枝分かれ後、commit が
+#    2 件以上ある（最初は設計書作成 commit、それ以外に implementation /
+#    skill / doc 改修 commit が存在）。Python 実装範囲（kaji_harness/ tests/
+#    Makefile pyproject.toml）に pathspec を固定すると instruction-only
+#    （.claude/skills/ 改修）/ docs-only Issue を取りこぼすため、
+#    リポジトリ全体 commit から draft/design/ を除外する方式とする。
+TOTAL=$(git -C [worktree_dir] log --oneline [default_branch]..HEAD | wc -l)
+NON_DESIGN=$(git -C [worktree_dir] log --oneline [default_branch]..HEAD -- ':(exclude)draft/design/' | wc -l)
+# 該当条件: TOTAL >= 2 かつ NON_DESIGN >= 1
+
+# 3. 直近の戻し先 `design` の `BACK` verdict コメントの有無
+#    review-code / i-dev-final-check 等が投稿する判定コメントは、harness の
+#    `---VERDICT---` ブロックではなく Issue コメント本文中に
+#    `[x] Changes Requested / BACK` チェック行や hard gate 結果テーブル
+#    `| 判定 | BACK |` の形で表現される。
+#
+#    検出方針（dogfood 検証で判明した制約の最終形）:
+#      (a) BACK 必須: `[x] Changes Requested` 単体は review-design の差し戻し
+#          にも使われるため `/ BACK` を必須にする
+#      (b) note 単位フィルタ: jq の `.Notes[]` イテレーションで note 境界
+#          を維持し、複数 note を改行連結した stream を grep する誤検出
+#          を排除する。過去の判定コメント本文（例: 「設計再確認結果」
+#          コメントが BACK regex を引用するケース）が前の note の判定
+#          セクションに混入する事故を防ぐ
+#      (c) 判定見出しゲート: 「判定セクション本体を持つ note」だけを対象
+#          にするため、`# コードレビュー結果`（review-code 由来）と
+#          `## 最終チェック結果`（i-dev-final-check 由来）を OR で
+#          列挙する。新しい判定 step を追加した場合はここに見出しを追記
+#          する。skill 側はどの step からの BACK かは意識しない
+#      (d) fail-loud: kaji / jq が失敗した場合に「BACK 検出ゼロ＝初回
+#          起動」と silent fallthrough すると、本 Issue が防ぎたかった
+#          scope 違反を再発する。`2>/dev/null` を付けず、エラー発生時
+#          は BACK_COUNT が空文字となり (e) で ABORT 経路に流す
+#
+#    GitLab provider の `kaji issue view --comments --output json` は
+#    top-level object で、コメント配列を `.Notes` プロパティに持つ
+#    （各要素は GitLab REST API の Notes リソース。`body` / `system` /
+#    `created_at` 等のフィールドあり。`system: true` は WIP / label
+#    change 等の system note でユーザコメントではないため除外）。
+#    `.[].body` 形式は型エラーになるため必ず `.Notes[]` を経由する。
+BACK_COUNT=$(kaji issue view [issue_id] --comments --output json \
+  | jq '[
+      .Notes[]
+      | select(.system == false)
+      | select(.body | test("^(# コードレビュー結果|## 最終チェック結果)"; "m"))
+      | select(.body | test("\\[x\\] Changes Requested / BACK|\\| *判定 *\\|.*BACK"))
+    ] | length')
+
+# (e) fail-loud handler: kaji / jq 失敗時は BACK_COUNT が空文字。silent
+#     に初回フローへ進めず、workflow runner が読める ABORT verdict ブロック
+#     を stdout に出力した上で Step 2 以降には進まない。`exit 1` 単体では
+#     workflow runner 側で `VerdictNotFound` 扱いになり on:ABORT 遷移が
+#     成立しないため、必ず `---VERDICT--- ... ---END_VERDICT---` を stdout
+#     に出してから skill を終了する。
+if [ -z "$BACK_COUNT" ]; then
+    cat <<'VERDICT_BLOCK'
+---VERDICT---
+status: ABORT
+reason: |
+  BACK detection pipeline failed (kaji issue view / jq error).
+evidence: |
+  `kaji issue view [issue_id] --comments --output json | jq ...` の評価に
+  失敗し BACK_COUNT が空文字となった。初回フローへの silent fallthrough は
+  既存設計書の上書きという scope 違反を再発させるため抑止する。
+suggestion: |
+  kaji CLI / GitLab API 接続 / .kaji/config.toml の `[provider]` 設定を
+  確認した上で `/issue-design [issue_id]` を再実行してください。
+---END_VERDICT---
+VERDICT_BLOCK
+    exit 1
+fi
+# BACK_COUNT >= 1 → 該当
+#
+# provider 別フォールバック:
+# - GitHub provider: `kaji issue view [issue_id] --comments --output json` は
+#   top-level object で `.comments[].body` を経由する
+# - local provider: `--output json` の構造は別。実装側で provider 別の
+#   抽出器（comment body iterator）を用意する
+```
+
+`[worktree_dir]` は Step 1 で取得した絶対パスを再利用する（再解決しない）。
+
+#### 分岐判定
+
+| 条件 | 分岐先 |
+|------|--------|
+| 3 観測すべて該当（既存設計書 ∧ 設計後コミット ∧ 戻し先 `design` の `BACK` verdict コメント） | BACK 経由再起動 → **Step 1.7** に進む |
+| いずれか欠ける | 初回起動（または近接ケース） → **Step 2** 以降の通常フロー |
+
+> **BACK 必須化と誤検出防止**: `[x] Changes Requested` 単体（BACK なし）は `/issue-review-design` の `[x] Changes Requested (設計修正が必要)` のような **設計レビューの差し戻し** にも使われるため、戻し先 `design` の `BACK` verdict 検出には **`/ BACK` を必須**とする。さらに、過去の判定コメント本文（例: 設計再確認結果コメント自身）が同じ regex を引用する形で含むことがあるため、**jq の `.Notes[]` イテレーションで note 単位にフィルタ** し、判定セクション本体の見出し（`# コードレビュー結果` / `## 最終チェック結果` 等）を持つ note のみを対象にする。新規の判定 step を追加した場合は (c) heading gate の OR リストに見出しを追記する。
+
+> **fail-loud**: kaji CLI / GitLab API が失敗した場合に `2>/dev/null` で stderr を握りつぶし「BACK 検出ゼロ → 初回フロー」と silent fallthrough すると、本 Issue が防ぎたかった failure mode（既存設計書を上書きする scope 違反）を別経路で再発させる。観測 3 のパイプラインは stderr 抑止を付けず、`$BACK_COUNT` が空文字なら **`---VERDICT--- status: ABORT ... ---END_VERDICT---` ブロックを stdout に出力した上で** skill を終了し、Step 2 以降に進まない（`exit 1` 単体では workflow runner が `VerdictNotFound` 扱いとなり `on:ABORT` 遷移が成立しないため、verdict block の出力は必須）。
+
+> **重要**: 「implementation 済みを検出したから ABORT する」という分岐は採用しない。BACK 経由再起動という workflow 仕様上の正当な遷移
+> （`docs/dev/workflow-authoring.md:130` の `BACK = 差し戻し。前段ステップを再実行` 定義）に対しては Step 1.7 で `PASS` を返して通常フローに復帰させる。
+
+### Step 1.7: BACK 経由再起動時の修正/再確認フロー
+
+Step 1.6 で BACK 経由再起動と判定された場合のみ実行する。`PASS` 復帰を原則とし、`ABORT` を返すのは「設計レビュー観点で根本的に修正不能」と判断できる
+場合に限定する。
+
+#### サブステップ
+
+1. **既存設計書の読込**: `[worktree_dir]/draft/design/issue-[issue_id]-*.md` を `Read` で読む
+2. **直近 BACK verdict の特定**: Step 1.6 と同じ jq note-unit + heading gate + BACK marker フィルタを用い、`[x] Changes Requested / BACK` または `\| 判定 \|.*BACK` を含む note のうち **直近のもの** から指摘リストを抽出する。発行元 step（`review-code` / `i-dev-final-check` 等）は問わない
+3. **指摘の分類**: 各指摘を「設計起因」「実装起因」に分類する
+   - **設計起因**: 設計書の不備が原因の指摘（IF 設計の漏れ、テスト戦略の未定義、一次情報不足、影響ドキュメント漏れ等）
+   - **実装起因**: 設計は正しいが実装が逸脱した指摘（見出し表記、コード品質、テスト失敗等）
+4. **分岐実行**:
+   - 設計起因の指摘がある場合 → 該当箇所のみ最小修正 → 設計書を `git commit` → 下記「コメント書式（修正あり）」を投稿 → **`PASS`**
+   - 設計起因の指摘が無い場合 → 設計書未変更 → 下記「コメント書式（修正なし）」を投稿 → **`PASS`**
+   - 設計レビュー観点で根本的に修正不能（例: 一次情報そのものが消失、要件の前提が崩壊） → **`ABORT`**
+
+判定根拠（どの指摘を設計起因と判定したか）はコメントに必ず含める。
+
+#### コメント書式（修正なし: 設計変更不要）
+
+```markdown
+## 設計再確認結果（BACK 経由再起動）
+
+直近の `BACK: design` verdict（発行元 step: <review-code | i-dev-final-check 等>）を確認しました。
+
+### 直近 BACK verdict の指摘内容
+
+- 指摘 1: ...
+- 指摘 2: ...
+
+### 設計起因 / 実装起因の分類
+
+| 指摘 | 分類 | 根拠 |
+|------|------|------|
+| 指摘 1 | 実装起因 | 設計書 X 節で要件は明示済み。実装側の逸脱 |
+| 指摘 2 | 実装起因 | ... |
+
+### 判定
+
+設計起因の指摘は無し → 設計書を変更せず PASS を返します。
+後続フロー（review-design → implement）で実装を修正してください。
+```
+
+#### コメント書式（修正あり: 設計書を更新）
+
+```markdown
+## 設計再確認結果（BACK 経由再起動）
+
+直近の `BACK: design` verdict（発行元 step: <review-code | i-dev-final-check 等>）を確認し、設計書の以下箇所を修正しました。
+
+### 修正箇所
+
+- 設計書 X 節: ...
+- 設計書 Y 節: ...
+
+### 直近 BACK verdict 指摘の分類
+
+| 指摘 | 分類 | 対応 |
+|------|------|------|
+| 指摘 1 | 設計起因 | 設計書 X 節を修正 |
+| 指摘 2 | 実装起因 | 後続 implement フェーズで対応 |
+
+### 判定
+
+設計修正完了 → PASS。
+```
+
+> **規約遵守**: 本コメント本文に GitLab auto-close hazard pattern（`Clos(e[sd]?|ing)` / `Fix(e[sd]|ing)?` / `Resolv(e[sd]?|ing)` / `Implement(s|ing|ed)?`
+> の直後 `#[0-9]`）を書かない。指摘参照は `指摘 N` / `Must Fix item N` / `point N` 形式に統一する
+> （参照: [`docs/dev/shared_skill_rules.md`](../../../docs/dev/shared_skill_rules.md) § GitLab auto close keyword 回避規約）。
+
+#### Step 1.7 終了後の挙動
+
+BACK 経由再起動フローで `PASS` を返した場合、Step 2 以降の通常フローは実行しない。`PASS` で復帰すれば `feature-development.yaml:27` の
+`PASS: review-design` 遷移が機能し、通常フロー（`review-design` → `implement` → `review-code`）が再開する。
+
+#### 初回起動への影響（後方互換）
+
+Step 1.6 の 3 観測のうち少なくとも 1 つが欠ける初回起動時は、Step 1.6 はノーオペとして素通りし Step 2 以降の通常フローに進む。初回起動の挙動は完全に不変。
+
 ### Step 2: 設計書の作成
 
 1. **ディレクトリ作成**（絶対パスを使用）:
@@ -410,5 +607,7 @@ suggestion: |
 
 | status | 条件 |
 |--------|------|
-| PASS | 設計書作成・コミット完了 |
-| ABORT | 設計不可能な要件 |
+| PASS | 設計書作成・コミット完了、または BACK 経由再起動時の設計再確認完了（Step 1.6 / 1.7）|
+| ABORT | 以下のいずれか: (a) Issue 要件が論理的に破綻しており、設計レベルで実現不能 / (b) BACK 経由再起動だが、指摘内容が設計レビュー観点で根本的に修正不能（例: 一次情報そのものが消失、要件の前提が崩壊）|
+
+> **重要**: 「既に implementation commit がある」「BACK 経由で再起動された」ことそれ自体は `ABORT` 条件に **含めない**。BACK 経由再起動は workflow YAML 仕様上の正当な遷移であり、Step 1.6 / 1.7 で `PASS` 復帰させる（`docs/dev/workflow-authoring.md:130` の `BACK = 差し戻し。前段ステップを再実行` 定義との整合）。

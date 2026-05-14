@@ -22,6 +22,7 @@
 - final-check は前段の証跡を集約し、未充足なら `RETRY` または `BACK` を返す
 - `RETRY` は final-check 文脈で閉じる軽微修正に限定する（自己ループ）
 - `BACK` は原因に応じて design / implement / docs の前段に戻す
+  - 戻し先で skill が即 `ABORT` を返してはならない。`design` に戻された場合の skill 側挙動は [`.claude/skills/issue-design/SKILL.md`](../../.claude/skills/issue-design/SKILL.md) Step 1.6 / 1.7（BACK 経由再起動の検出と分岐 / 設計再確認フロー）で `PASS` 復帰させる規約に従う
 
 ## admin 権限を要する検証の扱い
 
