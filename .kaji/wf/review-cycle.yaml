@@ -1,0 +1,45 @@
+name: review-cycle
+description: |
+  PR レビュー → 修正 → 確認ループを 1 コマンドで実行する。
+  close は本 workflow に含まない（手動で /issue-close を実行する）。
+  PR が既に open であることが前提。
+execution_policy: auto
+requires_provider: gitlab
+
+cycles:
+  pr-review:
+    entry: review
+    loop: [pr-fix, pr-verify]
+    max_iterations: 3
+    on_exhaust: ABORT
+
+steps:
+  - id: review
+    skill: review
+    agent: codex
+    model: gpt-5.5
+    effort: medium
+    on:
+      PASS: end
+      RETRY: pr-fix
+      ABORT: end
+
+  - id: pr-fix
+    skill: pr-fix
+    agent: claude
+    model: opus
+    effort: medium
+    inject_verdict: true
+    on:
+      PASS: pr-verify
+      ABORT: end
+
+  - id: pr-verify
+    skill: pr-verify
+    agent: codex
+    model: gpt-5.5
+    effort: medium
+    on:
+      PASS: end
+      RETRY: pr-fix
+      ABORT: end
