@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from kaji_harness.cli_main import _handle_issue, _handle_pr
+from kaji_harness.cli_main import _expand_body_file_in_rest, _handle_issue, _handle_pr
 
 
 def _write_gitlab_repo(tmp_path: Path) -> Path:
@@ -238,6 +238,159 @@ class TestGitLabIssueDispatch:
         assert payload["issue_ref"] == "gl:6"
         assert payload["branch_prefix"] == "fix"
         assert payload["branch_name"] == "fix/6"
+
+    def test_comment_body_file_stdin_maps_to_message(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """gl:24 再現テスト: ``comment --body-file -`` は修正前 ``--body-file`` を
+        flag_map 外で素通しして ``glab`` に到達させていた。修正後は stdin を読み
+        ``--message`` に畳まれ、``--body-file`` が cmd から消える。"""
+        repo = _write_gitlab_repo(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr("sys.stdin", io.StringIO("comment from stdin\n"))
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/glab"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            rc = _handle_issue(["comment", "42", "--body-file", "-"])
+        assert rc == 0
+        cmd = mock_run.call_args[0][0]
+        assert "note" in cmd
+        assert "--body-file" not in cmd
+        assert "--message" in cmd
+        assert cmd[cmd.index("--message") + 1] == "comment from stdin\n"
+
+    def test_create_body_file_path_maps_to_description(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _write_gitlab_repo(tmp_path)
+        monkeypatch.chdir(repo)
+        body_file = tmp_path / "body.md"
+        body_file.write_text("created from file")
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/glab"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            rc = _handle_issue(["create", "--title", "T", "--body-file", str(body_file)])
+        assert rc == 0
+        cmd = mock_run.call_args[0][0]
+        assert "create" in cmd
+        assert "--body-file" not in cmd
+        assert str(body_file) not in cmd
+        assert "--description" in cmd
+        assert cmd[cmd.index("--description") + 1] == "created from file"
+
+    def test_edit_body_file_stdin_maps_to_description(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = _write_gitlab_repo(tmp_path)
+        monkeypatch.chdir(repo)
+        monkeypatch.setattr("sys.stdin", io.StringIO("edited via stdin"))
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/glab"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            rc = _handle_issue(["edit", "42", "--body-file", "-"])
+        assert rc == 0
+        cmd = mock_run.call_args[0][0]
+        assert "update" in cmd
+        assert "--body-file" not in cmd
+        assert "--description" in cmd
+        assert cmd[cmd.index("--description") + 1] == "edited via stdin"
+
+    def test_body_file_multiline_kept_single_argv(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``-`` stdin のマルチライン content が単一 argv 要素として保持される。"""
+        repo = _write_gitlab_repo(tmp_path)
+        monkeypatch.chdir(repo)
+        multiline = "line1\nline2\nline3"
+        monkeypatch.setattr("sys.stdin", io.StringIO(multiline))
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/glab"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            rc = _handle_issue(["comment", "42", "--body-file", "-"])
+        assert rc == 0
+        cmd = mock_run.call_args[0][0]
+        assert cmd[cmd.index("--message") + 1] == multiline
+
+    def test_body_and_body_file_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``--body`` と ``--body-file`` の同時指定は subprocess 起動前に reject。"""
+        repo = _write_gitlab_repo(tmp_path)
+        monkeypatch.chdir(repo)
+        body_file = tmp_path / "b.txt"
+        body_file.write_text("file content")
+        with patch("kaji_harness.cli_main.subprocess.run") as mock_run:
+            rc = _handle_issue(["comment", "42", "--body", "inline", "--body-file", str(body_file)])
+        assert rc == 2
+        mock_run.assert_not_called()
+        assert "mutually exclusive" in capsys.readouterr().err
+
+    def test_body_only_passthrough_unchanged(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``--body`` 単独指定の従来挙動が body-file 展開で退行しないことの回帰。"""
+        repo = _write_gitlab_repo(tmp_path)
+        monkeypatch.chdir(repo)
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/glab"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            rc = _handle_issue(["comment", "42", "--body", "plain body"])
+        assert rc == 0
+        cmd = mock_run.call_args[0][0]
+        assert "--message" in cmd
+        assert cmd[cmd.index("--message") + 1] == "plain body"
+        assert "--body-file" not in cmd
+
+
+@pytest.mark.small
+class TestExpandBodyFileInRest:
+    """``_expand_body_file_in_rest`` の単体検証（gl:24）。"""
+
+    def test_no_body_flag_passthrough(self) -> None:
+        rest = ["42", "--label", "bug"]
+        assert _expand_body_file_in_rest(rest) == rest
+
+    def test_body_only_passthrough(self) -> None:
+        rest = ["42", "--body", "hello"]
+        assert _expand_body_file_in_rest(rest) == rest
+
+    def test_body_and_body_file_raises(self, tmp_path: Path) -> None:
+        body_file = tmp_path / "b.txt"
+        body_file.write_text("file content")
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            _expand_body_file_in_rest(["42", "--body", "x", "--body-file", str(body_file)])
+
+    def test_body_file_stdin(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("sys.stdin", io.StringIO("from stdin body\n"))
+        out = _expand_body_file_in_rest(["42", "--body-file", "-"])
+        assert "--body-file" not in out
+        assert "42" in out
+        assert out[-2:] == ["--body", "from stdin body\n"]
+
+    def test_body_file_space_form_reads_file(self, tmp_path: Path) -> None:
+        body_file = tmp_path / "body.txt"
+        body_file.write_text("file body content")
+        out = _expand_body_file_in_rest(["42", "--body-file", str(body_file)])
+        assert "--body-file" not in out
+        assert str(body_file) not in out
+        assert out[-2:] == ["--body", "file body content"]
+
+    def test_body_file_equals_form_reads_file(self, tmp_path: Path) -> None:
+        body_file = tmp_path / "body.txt"
+        body_file.write_text("eq form content")
+        out = _expand_body_file_in_rest(["42", f"--body-file={body_file}"])
+        assert not any(a.startswith("--body-file") for a in out)
+        assert out[-2:] == ["--body", "eq form content"]
 
 
 # ============================================================

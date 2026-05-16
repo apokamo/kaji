@@ -36,15 +36,17 @@ def test_issue_full_roundtrip(
     """create → view (--json) → edit → comment → list (--label) → close."""
     title = f"issue-roundtrip {unique_suffix}"
 
-    # ---- create ----
+    # ---- create (--body-file FILE: gl:24 exercises file-form body-file) ----
+    create_body = kaji_workspace / "create-body.md"
+    create_body.write_text("round-trip body")
     create = run_kaji(
         kaji_workspace,
         "issue",
         "create",
         "--title",
         title,
-        "--body",
-        "round-trip body",
+        "--body-file",
+        str(create_body),
         "--label",
         "kaji-e2e",
     )
@@ -105,14 +107,15 @@ def test_issue_full_roundtrip(
     label_names = {lbl["name"] for lbl in payload["labels"] if isinstance(lbl, dict)}
     assert "kaji-e2e" in label_names
 
-    # ---- edit (--body) ----
+    # ---- edit (--body-file -: gl:24 exercises stdin-form body-file) ----
     edit = run_kaji(
         kaji_workspace,
         "issue",
         "edit",
         str(iid),
-        "--body",
-        "edited body",
+        "--body-file",
+        "-",
+        stdin_text="edited body",
     )
     assert edit.returncode == 0, edit.stderr
 
@@ -128,14 +131,15 @@ def test_issue_full_roundtrip(
     body_payload = json.loads(view_after_edit.stdout)
     assert "edited body" in body_payload["body"]
 
-    # ---- comment ----
+    # ---- comment (--body-file -: gl:24 exercises stdin-form body-file) ----
     comment = run_kaji(
         kaji_workspace,
         "issue",
         "comment",
         str(iid),
-        "--body",
-        f"comment from {unique_suffix}",
+        "--body-file",
+        "-",
+        stdin_text=f"comment from {unique_suffix}",
     )
     assert comment.returncode == 0, comment.stderr
 

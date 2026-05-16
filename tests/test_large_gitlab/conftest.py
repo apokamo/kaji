@@ -59,11 +59,13 @@ def _run_kaji(
     *args: str,
     timeout: int = 120,
     env: dict[str, str] | None = None,
+    stdin_text: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Invoke the kaji CLI as a subprocess.
 
     ``cwd`` is the repository / workspace; ``env`` overrides specific vars
-    (PATH is preserved by default).
+    (PATH is preserved by default). ``stdin_text`` is fed to the process's
+    stdin (used to exercise ``--body-file -``).
     """
     final_env = {**os.environ, **(env or {})}
     return subprocess.run(
@@ -73,6 +75,7 @@ def _run_kaji(
         text=True,
         timeout=timeout,
         env=final_env,
+        input=stdin_text,
     )
 
 
