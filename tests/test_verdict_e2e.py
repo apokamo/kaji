@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import stat
+import subprocess
 import textwrap
 from pathlib import Path
 
@@ -409,6 +410,8 @@ def _setup_fake_agent_env(
     # Create project directory with config and skill
     workdir = tmp_path / "project"
     workdir.mkdir()
+    # gl:21: provider.type='local' requires a git repo.
+    subprocess.run(["git", "init", "-q", "--initial-branch=main", str(workdir)], check=True)
     config_dir = workdir / ".kaji"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
