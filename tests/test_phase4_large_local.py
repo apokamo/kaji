@@ -59,6 +59,8 @@ def github_repo(tmp_path: Path) -> Path:
 def local_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
+    # gl:21: provider.type='local' requires a git repo.
+    subprocess.run(["git", "init", "-q", "--initial-branch=main", str(repo)], check=True)
     _write_base_config(repo)
     rc = _run_kaji(repo, "local", "init", "--machine-id", "pc1", "--non-interactive")
     assert rc.returncode == 0, rc.stderr

@@ -41,6 +41,8 @@ def fresh_repo(tmp_path: Path) -> Path:
     """
     repo = tmp_path / "repo"
     repo.mkdir()
+    # gl:21: provider.type='local' requires a git repo.
+    subprocess.run(["git", "init", "-q", "--initial-branch=main", str(repo)], check=True)
     kaji_dir = repo / ".kaji"
     kaji_dir.mkdir()
     (kaji_dir / "config.toml").write_text(
