@@ -186,6 +186,15 @@ skill が provider 非依存に `--commit` を常時付与する設計（local m
 ない（local mode の atomic 永続化挙動の詳細は
 [Local Mode CLI Guide § 6](local-mode.md#6-issueclose-の挙動local) 参照）。
 
+### `kaji issue {create,edit,comment} --body-file` の挙動（GitLab mode）
+
+`provider.type = "gitlab"` 配下でも `kaji issue create` / `edit` / `comment` は
+`--body-file PATH`（`-` で stdin）を受理する。kaji 側で内容を読み取り `glab` の
+`--description` / `--message` に展開して渡すため、skill が provider 非依存に採用する
+`--body-file -` heredoc パターンが GitHub / local mode と同じ contract で動作する
+（実装: `kaji_harness/cli_main.py` の `_expand_body_file_in_rest`）。`--body` と
+`--body-file` の同時指定は `EXIT_INVALID_INPUT` で拒否される。
+
 ## 3. `kaji sync from-gitlab` の使い方
 
 `provider.type = "local"` 配下から `gl:N` で GitLab Issue を read-only 参照する

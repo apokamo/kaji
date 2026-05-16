@@ -1419,6 +1419,59 @@ def _rewrite_flags(args: list[str], flag_map: dict[str, str]) -> list[str]:
     return out
 
 
+def _expand_body_file_in_rest(rest: list[str]) -> list[str]:
+    """``--body-file PATH`` (``-`` で stdin) を ``--body <content>`` に展開する。
+
+    GitLab ``kaji issue`` 経路は ``_rewrite_flags`` に ``--body`` のみを map して
+    いるため、``--body-file`` を事前に ``--body`` へ畳み込んで GitHub / Local
+    provider と対称な CLI 契約を回復する。
+
+    Args:
+        rest: ``kaji issue {create,edit,comment}`` の sub 以降の引数列。
+
+    Returns:
+        ``--body-file`` を含まない場合は ``rest`` をそのまま、含む場合は
+        ``--body-file`` トークンを除去し末尾に ``--body <content>`` を足したリスト。
+
+    Raises:
+        ValueError: ``--body`` と ``--body-file`` を同時指定した場合
+            (``_read_body_arg`` 経由)。
+    """
+    body_val: str | None = None
+    body_file_val: str | None = None
+    remaining: list[str] = []
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a == "--body-file" and i + 1 < len(rest):
+            body_file_val = rest[i + 1]
+            i += 2
+            continue
+        if a.startswith("--body-file="):
+            body_file_val = a.partition("=")[2]
+            i += 1
+            continue
+        if a == "--body" and i + 1 < len(rest):
+            body_val = rest[i + 1]
+            remaining.append(a)
+            remaining.append(rest[i + 1])
+            i += 2
+            continue
+        if a.startswith("--body="):
+            body_val = a.partition("=")[2]
+            remaining.append(a)
+            i += 1
+            continue
+        remaining.append(a)
+        i += 1
+    if body_file_val is None:
+        return rest
+    content = _read_body_arg(body_val, body_file_val)
+    # body_file_val が非 None のため _read_body_arg は str を返す（None は両不在時のみ）。
+    assert content is not None
+    return [*remaining, "--body", content]
+
+
 # ---------- kaji issue (GitLab) ----------
 
 _GITLAB_ISSUE_SUB_MAP: dict[str, tuple[str, dict[str, str]]] = {
@@ -1469,6 +1522,13 @@ def _handle_issue_gitlab(provider: GitLabProvider, raw_args: list[str]) -> int:
         return _gitlab_issue_view_or_list_normalized(provider, sub, rest)
 
     # それ以外: id 正規化 + flag rewrite + subprocess 起動
+    # create/edit/comment の --body-file を --body に展開してから rewrite に渡す。
+    if sub in {"create", "edit", "comment"}:
+        try:
+            rest = _expand_body_file_in_rest(rest)
+        except ValueError as exc:
+            sys.stderr.write(f"Error: {exc}\n")
+            return EXIT_INVALID_INPUT
     rewritten = _rewrite_flags(rest, flag_map)
     normalized = _normalize_gitlab_issue_id_in_args(rewritten, sub)
     if isinstance(normalized, int):
