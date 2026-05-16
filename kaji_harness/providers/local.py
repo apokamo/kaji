@@ -770,7 +770,7 @@ class LocalProvider:
         検証期間中は forge 通信を行わない方針のため、本メソッドが呼ばれるのは
         user が手動で JSON を投入した場合に限られる。cache reader 自体は
         Phase 3-c で実装された既存契約として維持される
-        （`tests/test_phase3c_dispatcher.py:329-365` で検証済）。
+        （`tests/test_dispatcher.py:329-365` で検証済）。
 
         ``gl:`` cache reader は :meth:`view_cached_gitlab_issue` を参照
         （cache layout は ``.kaji/cache/gl-<iid>.json``、自動 populate は

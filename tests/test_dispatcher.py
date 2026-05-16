@@ -2,7 +2,7 @@
 
 PR-3c のスコープのうち、``kaji issue`` / ``kaji pr`` の dispatch 経路に
 対応するテスト。``kaji run`` 経由の IssueContext 解決と prompt 注入は
-``tests/test_phase3c_runner.py`` を参照。
+``tests/test_runner.py`` を参照。
 
 カバー範囲:
 

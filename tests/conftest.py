@@ -96,9 +96,9 @@ def ensure_local_issue(repo_root: Path, issue: str, machine_id: str = "pc1") -> 
 
 
 _AUTOCREATE_OPT_OUT_FILES = {
-    "test_phase3c_runner.py",
-    "test_phase3d_preflight.py",
-    "test_phase3e_large_local.py",
+    "test_runner.py",
+    "test_preflight.py",
+    "test_local_cli_large_local.py",
 }
 
 
