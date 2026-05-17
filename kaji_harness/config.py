@@ -90,12 +90,22 @@ class ProviderConfig:
 
 @dataclass(frozen=True)
 class KajiConfig:
-    """Top-level kaji configuration."""
+    """Top-level kaji configuration.
+
+    Attributes:
+        provider_overlay_present: ``True`` if the current worktree's
+            ``.kaji/config.local.toml`` overlay file exists. ``git worktree add``
+            does not copy the gitignored overlay into a new worktree, so a
+            feature worktree typically has this ``False``. Used by
+            ``provider_overlay_divergence_warning`` to detect a silent
+            provider-resolution divergence (Issue gl:28).
+    """
 
     repo_root: Path
     paths: PathsConfig
     execution: ExecutionConfig
     provider: ProviderConfig | None = None
+    provider_overlay_present: bool = False
 
     @property
     def artifacts_dir(self) -> Path:
@@ -169,16 +179,22 @@ class KajiConfig:
         execution = ExecutionConfig(default_timeout=raw_timeout)
 
         repo_root = path.parent.parent
-        provider = cls._parse_provider(path, data, repo_root)
+        provider, overlay_present = cls._parse_provider(path, data, repo_root)
 
-        return cls(repo_root=repo_root, paths=paths, execution=execution, provider=provider)
+        return cls(
+            repo_root=repo_root,
+            paths=paths,
+            execution=execution,
+            provider=provider,
+            provider_overlay_present=overlay_present,
+        )
 
     @staticmethod
     def _parse_provider(
         path: Path,
         data: dict[str, object],
         repo_root: Path,
-    ) -> ProviderConfig | None:
+    ) -> tuple[ProviderConfig | None, bool]:
         """Parse the optional ``[provider]`` section + ``config.local.toml`` overlay.
 
         Phase 3-c: optional. Missing both tracked and overlay → returns ``None``;
@@ -192,6 +208,11 @@ class KajiConfig:
           上書き可能（tracked が ``type=github`` でも overlay で ``type=local``
           に切替えられる）
         - tracked と overlay の双方が無いときのみ ``None`` を返す
+
+        Returns:
+            ``(provider, overlay_present)`` の tuple。``overlay_present`` は
+            現 worktree の ``.kaji/config.local.toml`` が存在したかを表す
+            （`[provider]` セクションの有無は問わない）。Issue gl:28。
         """
         provider_data = data.get("provider")
         if provider_data is not None and not isinstance(provider_data, dict):
@@ -199,8 +220,9 @@ class KajiConfig:
 
         # ---- overlay 読み込み ----
         local_overlay_path = path.parent / "config.local.toml"
+        overlay_present = local_overlay_path.is_file()
         overlay_provider: dict[str, object] | None = None
-        if local_overlay_path.is_file():
+        if overlay_present:
             try:
                 with open(local_overlay_path, "rb") as f:
                     overlay = tomllib.load(f)
@@ -213,7 +235,7 @@ class KajiConfig:
                 overlay_provider = op
 
         if provider_data is None and overlay_provider is None:
-            return None
+            return None, overlay_present
 
         # ---- tracked + overlay の deep-1 merge ----
         merged: dict[str, object] = {}
@@ -318,11 +340,14 @@ class KajiConfig:
         )
 
         del repo_root  # reserved for future cross-checks
-        return ProviderConfig(
-            type=ptype,  # type: ignore[arg-type]
-            local=local_cfg,
-            github=github_cfg,
-            gitlab=gitlab_cfg,
+        return (
+            ProviderConfig(
+                type=ptype,  # type: ignore[arg-type]
+                local=local_cfg,
+                github=github_cfg,
+                gitlab=gitlab_cfg,
+            ),
+            overlay_present,
         )
 
     @staticmethod

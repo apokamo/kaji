@@ -1,0 +1,327 @@
+"""Tests for ``provider_overlay_divergence_warning`` (Issue gl:28).
+
+``git worktree add`` は gitignored な ``.kaji/config.local.toml`` overlay を
+新規 worktree にコピーしない。overlay 不在 worktree から provider 解決が tracked
+``.kaji/config.toml`` の値へ沈黙でフォールバックし、main worktree の overlay と
+食い違うケースを検出して WARN を出す機能の検証。
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from kaji_harness.config import (
+    ExecutionConfig,
+    GitHubProviderConfig,
+    GitLabProviderConfig,
+    KajiConfig,
+    LocalProviderConfig,
+    PathsConfig,
+    ProviderConfig,
+)
+from kaji_harness.providers import (
+    _read_overlay_provider_type as read_overlay_provider_type,
+)
+from kaji_harness.providers import provider_overlay_divergence_warning
+from kaji_harness.providers.local import LocalProviderError
+
+# GitLab auto-close hazard pattern（WARN 文言に含めてはならない）。
+_AUTOCLOSE_HAZARD = re.compile(
+    r"(?i)(clos(e[sd]?|ing)|fix(e[sd]|ing)?|resolv(e[sd]?|ing)|implement(s|ing|ed)?)\s*#\d"
+)
+
+
+def _make_config(
+    repo_root: Path,
+    *,
+    provider_type: str | None = "github",
+    overlay_present: bool = False,
+    linked_worktree: bool = True,
+) -> KajiConfig:
+    """テスト用 ``KajiConfig`` を構築する。
+
+    ``linked_worktree`` が ``True`` のとき ``repo_root/.git`` を *ファイル* として
+    作成し、``git worktree add`` 由来の linked worktree を模擬する。``False`` のとき
+    は ``.git`` ディレクトリを作成し通常 clone / main worktree を模擬する。
+    """
+    if linked_worktree:
+        (repo_root / ".git").write_text("gitdir: /tmp/fake/.bare/worktrees/wt\n")
+    else:
+        (repo_root / ".git").mkdir(exist_ok=True)
+    provider: ProviderConfig | None
+    if provider_type is None:
+        provider = None
+    else:
+        provider = ProviderConfig(
+            type=provider_type,  # type: ignore[arg-type]
+            local=LocalProviderConfig(machine_id="pc1"),
+            github=GitHubProviderConfig(repo="owner/repo"),
+            gitlab=GitLabProviderConfig(repo="group/project"),
+        )
+    return KajiConfig(
+        repo_root=repo_root,
+        paths=PathsConfig(artifacts_dir=".kaji/artifacts", skill_dir=".claude/skills"),
+        execution=ExecutionConfig(default_timeout=1800),
+        provider=provider,
+        provider_overlay_present=overlay_present,
+    )
+
+
+# ============================================================
+# Small tests — 分岐ロジック（resolve_main_worktree / overlay 読取を mock）
+# ============================================================
+
+
+@pytest.mark.small
+class TestProviderOverlayDivergenceWarning:
+    """``provider_overlay_divergence_warning`` の分岐網羅。"""
+
+    def test_provider_none_returns_none(self, tmp_path: Path) -> None:
+        cfg = _make_config(tmp_path, provider_type=None)
+        assert provider_overlay_divergence_warning(cfg) is None
+
+    def test_overlay_present_returns_none_without_subprocess(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """現 worktree 自身に overlay あり → resolve_main_worktree を呼ばず None。"""
+        called = False
+
+        def _spy(**_kwargs: object) -> Path:
+            nonlocal called
+            called = True
+            return tmp_path
+
+        monkeypatch.setattr("kaji_harness.providers.resolve_main_worktree", _spy)
+        cfg = _make_config(tmp_path, overlay_present=True)
+        assert provider_overlay_divergence_warning(cfg) is None
+        assert called is False
+
+    def test_non_linked_worktree_returns_none_without_subprocess(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``.git`` がディレクトリ（通常 clone / main worktree）→ subprocess 起動せず None。"""
+        called = False
+
+        def _spy(**_kwargs: object) -> Path:
+            nonlocal called
+            called = True
+            return tmp_path
+
+        monkeypatch.setattr("kaji_harness.providers.resolve_main_worktree", _spy)
+        cfg = _make_config(tmp_path, linked_worktree=False)
+        assert provider_overlay_divergence_warning(cfg) is None
+        assert called is False
+
+    def test_resolve_main_worktree_error_returns_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """非 git / git CLI 不在 等で LocalProviderError → 握り潰して None。"""
+
+        def _raise(**_kwargs: object) -> Path:
+            raise LocalProviderError("not a git repository")
+
+        monkeypatch.setattr("kaji_harness.providers.resolve_main_worktree", _raise)
+        cfg = _make_config(tmp_path)
+        assert provider_overlay_divergence_warning(cfg) is None
+
+    def test_main_worktree_is_current_returns_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """解決された main worktree が現 worktree と同一 → 自分が main → None。"""
+        monkeypatch.setattr(
+            "kaji_harness.providers.resolve_main_worktree",
+            lambda **_kw: tmp_path,
+        )
+        cfg = _make_config(tmp_path)
+        assert provider_overlay_divergence_warning(cfg) is None
+
+    def test_main_overlay_absent_or_typeless_returns_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """main overlay 不在 / type 無し / parse 失敗（_read が None）→ None。"""
+        monkeypatch.setattr(
+            "kaji_harness.providers.resolve_main_worktree",
+            lambda **_kw: tmp_path / "main",
+        )
+        monkeypatch.setattr(
+            "kaji_harness.providers._read_overlay_provider_type",
+            lambda _p: None,
+        )
+        cfg = _make_config(tmp_path)
+        assert provider_overlay_divergence_warning(cfg) is None
+
+    def test_main_overlay_type_matches_returns_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """main overlay の type が現解決 type と一致 → ズレ無し → None。"""
+        monkeypatch.setattr(
+            "kaji_harness.providers.resolve_main_worktree",
+            lambda **_kw: tmp_path / "main",
+        )
+        monkeypatch.setattr(
+            "kaji_harness.providers._read_overlay_provider_type",
+            lambda _p: "github",
+        )
+        cfg = _make_config(tmp_path, provider_type="github")
+        assert provider_overlay_divergence_warning(cfg) is None
+
+    def test_main_overlay_type_diverges_returns_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """main overlay の type が現解決 type と相違 → WARN を返す。"""
+        monkeypatch.setattr(
+            "kaji_harness.providers.resolve_main_worktree",
+            lambda **_kw: tmp_path / "main",
+        )
+        monkeypatch.setattr(
+            "kaji_harness.providers._read_overlay_provider_type",
+            lambda _p: "gitlab",
+        )
+        cfg = _make_config(tmp_path, provider_type="github")
+        warning = provider_overlay_divergence_warning(cfg)
+        assert warning is not None
+        # 両方の provider.type 値を含む
+        assert "github" in warning
+        assert "gitlab" in warning
+        # 復旧手順を案内する
+        assert "config.local.toml" in warning
+        assert "kaji local init" in warning
+        # GitLab auto-close hazard pattern を含まない
+        assert not _AUTOCLOSE_HAZARD.search(warning)
+
+
+# ============================================================
+# Medium tests — _read_overlay_provider_type（ファイル I/O）
+# ============================================================
+
+
+@pytest.mark.medium
+class TestReadOverlayProviderType:
+    """``_read_overlay_provider_type`` の入力分岐（実ファイル）。"""
+
+    def test_absent_file_returns_none(self, tmp_path: Path) -> None:
+        assert read_overlay_provider_type(tmp_path / "missing.toml") is None
+
+    def test_valid_provider_type(self, tmp_path: Path) -> None:
+        overlay = tmp_path / "config.local.toml"
+        overlay.write_text('[provider]\ntype = "gitlab"\n')
+        assert read_overlay_provider_type(overlay) == "gitlab"
+
+    def test_no_provider_section_returns_none(self, tmp_path: Path) -> None:
+        overlay = tmp_path / "config.local.toml"
+        overlay.write_text('[paths]\nskill_dir = ".claude/skills"\n')
+        assert read_overlay_provider_type(overlay) is None
+
+    def test_provider_section_without_type_returns_none(self, tmp_path: Path) -> None:
+        overlay = tmp_path / "config.local.toml"
+        overlay.write_text('[provider.github]\nrepo = "owner/repo"\n')
+        assert read_overlay_provider_type(overlay) is None
+
+    def test_malformed_toml_returns_none(self, tmp_path: Path) -> None:
+        overlay = tmp_path / "config.local.toml"
+        overlay.write_text("not valid toml [[[\n")
+        assert read_overlay_provider_type(overlay) is None
+
+
+# ============================================================
+# Medium tests — 再現テスト（実 git worktree, Issue gl:28 OB 再現）
+# ============================================================
+
+
+@pytest.fixture()
+def hybrid_worktrees(tmp_path: Path) -> tuple[Path, Path]:
+    """tracked ``config.toml`` (type=github) + main overlay (type=gitlab) の
+    main / feature worktree ペアを作成する（Issue gl:28 の再現環境）。
+
+    Returns:
+        ``(main_worktree, feature_worktree)`` の絶対パス。feature worktree には
+        gitignored な ``config.local.toml`` が存在しない。
+    """
+    bare = tmp_path / "repo.git"
+    subprocess.run(
+        ["git", "init", "-q", "--bare", "--initial-branch=main", str(bare)],
+        check=True,
+    )
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "clone", "-q", str(bare), str(seed)], check=True)
+    for key, value in (
+        ("user.email", "t@t"),
+        ("user.name", "t"),
+        ("commit.gpgsign", "false"),
+    ):
+        subprocess.run(["git", "-C", str(seed), "config", key, value], check=True)
+    kaji_dir = seed / ".kaji"
+    kaji_dir.mkdir()
+    (kaji_dir / "config.toml").write_text(
+        "[paths]\n"
+        'skill_dir = ".claude/skills"\n'
+        'artifacts_dir = ".kaji/artifacts"\n\n'
+        "[execution]\n"
+        "default_timeout = 1800\n\n"
+        "[provider]\n"
+        'type = "github"\n\n'
+        "[provider.github]\n"
+        'repo = "owner/repo"\n\n'
+        "[provider.gitlab]\n"
+        'repo = "group/project"\n'
+    )
+    (seed / ".gitignore").write_text(".kaji/config.local.toml\n")
+    subprocess.run(
+        ["git", "-C", str(seed), "add", ".kaji/config.toml", ".gitignore"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(seed), "commit", "-q", "-m", "init"], check=True)
+    subprocess.run(["git", "-C", str(seed), "push", "-q", "origin", "main"], check=True)
+    main_wt = tmp_path / "main"
+    feat_wt = tmp_path / "feat"
+    subprocess.run(
+        ["git", "-C", str(bare), "worktree", "add", "-q", str(main_wt), "main"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(bare), "worktree", "add", "-q", "-b", "fix/28", str(feat_wt), "main"],
+        check=True,
+    )
+    # overlay は main worktree にのみ置く（gitignored・非 tracked のため
+    # feature worktree には物理的に存在しない）。
+    (main_wt / ".kaji" / "config.local.toml").write_text('[provider]\ntype = "gitlab"\n')
+    return main_wt.resolve(), feat_wt.resolve()
+
+
+@pytest.mark.medium
+class TestProviderOverlayDivergenceReproduction:
+    """Issue gl:28 の OB（沈黙の provider 取り違え）を実 worktree で再現する。"""
+
+    def test_overlay_present_flag_per_worktree(self, hybrid_worktrees: tuple[Path, Path]) -> None:
+        """feature worktree は overlay 不在、main worktree は overlay 在。"""
+        main_wt, feat_wt = hybrid_worktrees
+        feat_cfg = KajiConfig.discover(start_dir=feat_wt)
+        assert feat_cfg.provider_overlay_present is False
+        main_cfg = KajiConfig.discover(start_dir=main_wt)
+        assert main_cfg.provider_overlay_present is True
+
+    def test_feature_worktree_emits_divergence_warning(
+        self, hybrid_worktrees: tuple[Path, Path]
+    ) -> None:
+        """再現テスト本体: overlay 不在 worktree で WARN が両 type を含んで返る。
+
+        修正前は ``provider_overlay_divergence_warning`` 自体が存在せず本 assert
+        が成立しない（Red）。修正後に WARN が返る（Green）。
+        """
+        _main_wt, feat_wt = hybrid_worktrees
+        feat_cfg = KajiConfig.discover(start_dir=feat_wt)
+        warning = provider_overlay_divergence_warning(feat_cfg)
+        assert warning is not None
+        assert "github" in warning  # 現 worktree の解決値（tracked 由来）
+        assert "gitlab" in warning  # main worktree overlay の選択値
+        assert not _AUTOCLOSE_HAZARD.search(warning)
+
+    def test_main_worktree_no_false_positive(self, hybrid_worktrees: tuple[Path, Path]) -> None:
+        """main worktree 起点では WARN を出さない（誤検出しない）。"""
+        main_wt, _feat_wt = hybrid_worktrees
+        main_cfg = KajiConfig.discover(start_dir=main_wt)
+        assert provider_overlay_divergence_warning(main_cfg) is None

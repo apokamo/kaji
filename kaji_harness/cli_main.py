@@ -29,6 +29,7 @@ from .providers import (
     actual_provider_type,
     get_provider,
     normalize_id,
+    provider_overlay_divergence_warning,
 )
 from .providers.github import GitHubProviderError
 from .providers.gitlab import (
@@ -343,6 +344,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_INVALID_INPUT
+
+    _emit_provider_overlay_divergence_warning(config)
 
     project_root = config.repo_root
 
@@ -776,6 +779,18 @@ def _handle_pr(raw_args: list[str]) -> int:
     return _forward_to_gh("pr", raw_args, repo=repo_override)
 
 
+def _emit_provider_overlay_divergence_warning(config: KajiConfig) -> None:
+    """provider overlay の worktree 間ズレを検出したら stderr に WARN を出す（gl:28）。
+
+    overlay が無い feature worktree から provider 解決が tracked 値へ沈黙で
+    フォールバックし、かつ main worktree の overlay と食い違う場合のみ発火する。
+    exit code・標準出力には影響しない。
+    """
+    warning = provider_overlay_divergence_warning(config)
+    if warning is not None:
+        sys.stderr.write(warning + "\n")
+
+
 def _load_config_for_dispatch() -> KajiConfig:
     """Config を読み込む（``kaji issue`` / ``kaji pr`` dispatch 用）。
 
@@ -784,7 +799,9 @@ def _load_config_for_dispatch() -> KajiConfig:
     呼出側 dispatcher で ``ConfigNotFoundError`` / ``ConfigLoadError`` を
     catch して exit 2 を返す契約。
     """
-    return KajiConfig.discover(start_dir=Path.cwd())
+    config = KajiConfig.discover(start_dir=Path.cwd())
+    _emit_provider_overlay_divergence_warning(config)
+    return config
 
 
 def _handle_issue(raw_args: list[str]) -> int:
