@@ -38,7 +38,7 @@ steps:
     skill: i-doc-fix
     agent: claude
     model: opus
-    effort: high
+    effort: medium
     inject_verdict: true
     resume: doc-update
     on:
