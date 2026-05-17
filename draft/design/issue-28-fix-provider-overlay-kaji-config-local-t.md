@@ -5,7 +5,8 @@ Issue: gl:28
 ## 概要
 
 `git worktree add` で作った新規 worktree には gitignored な provider overlay
-(`.kaji/config.local.toml`) が存在せず、`kaji issue` / `kaji pr` / `kaji run` の
+(`.kaji/config.local.toml`) が存在せず、provider 解決を伴う CLI コマンド
+（`kaji issue` / `kaji pr` / `kaji run` / `kaji config provider-type`）の
 provider 解決が tracked `.kaji/config.toml` の `[provider] type` に**沈黙で**
 フォールバックする。本修正は、その沈黙のズレを検出して stderr に WARN を出し、
 worktree 運用 docs に注意書きを加える（Issue 修正方針の **案 D**）。
@@ -132,7 +133,8 @@ bug 修正のため公開インターフェース（CLI 引数、設定ファイ
 
 #### 1. provider 解決のズレ検出時の stderr WARN（新規・主たる成果物）
 
-overlay 不在 worktree から `kaji issue` / `kaji pr` / `kaji run` を実行し、かつ
+overlay 不在 worktree から provider 解決を伴う CLI コマンド（`kaji issue` /
+`kaji pr` / `kaji run` / `kaji config provider-type`）を実行し、かつ
 main worktree の overlay が tracked と異なる provider type を選んでいる場合のみ、
 dispatch 前に stderr へ 1 回 WARN を出す。WARN 文言の要件:
 
@@ -232,13 +234,29 @@ provider_overlay_divergence_warning(config) -> str | None:
 
 ### 3. `cli_main.py`: WARN の発火点
 
-provider 解決を伴う dispatch 経路で、config discover 直後・`get_provider()` 前後に
-上記関数を呼び、戻り値が非 `None` なら `sys.stderr.write(...)` する。
+provider 解決を伴う CLI コマンドで、config discover 直後・`get_provider()` 前後に
+上記関数を呼び、戻り値が非 `None` なら `sys.stderr.write(...)` する。発火点を
+1 つの薄い helper（例: `_emit_provider_overlay_divergence_warning(config)`）に
+集約し、各コマンドはそれを 1 回だけ呼ぶ。
 
 - `kaji issue` / `kaji pr`: 両者が共有する `_load_config_for_dispatch()`
-  （`cli_main.py:779`）が単一の差し込み点になる。
-- `kaji run`: `_handle_run` 系の `KajiConfig.discover()` 呼出（`cli_main.py:330`
-  近傍）直後に同関数を呼ぶ。
+  （`cli_main.py:782-804` 近傍）が単一の差し込み点になる。
+- `kaji run`: `cmd_run` の `KajiConfig.discover()` + `get_provider()` 呼出
+  （`cli_main.py:330-349` 近傍）直後に同 helper を呼ぶ。
+- `kaji config provider-type`: `cmd_config_provider_type`
+  （`cli_main.py:1980-2012` 近傍）の `get_provider()` 成功後・stdout への
+  `actual_provider_type(config)` 出力前に同 helper を呼ぶ。
+
+**`kaji config provider-type` を WARN 対象に含める理由**: Issue gl:28 の再現
+手順 Step 3 はまさに `cd <new-worktree> && kaji config provider-type` で
+provider のズレを観測している。`cmd_config_provider_type` の docstring が明示
+するとおり、このコマンドは `KajiConfig.discover()` と `get_provider()` を通り
+`_handle_pr` / `_handle_issue` / `cmd_run` と同じ config resolution path を
+共有する read-only 診断コマンドである。provider 解決を debug する利用者が最初に
+叩くコマンドであり、ここで WARN を出さないと「沈黙のズレに気付かせる」という
+本修正の主目的が再現手順の入口で達成できない。WARN は stderr に出し、stdout の
+`"github\n"` / `"local\n"` / `"gitlab\n"` 契約は不変なので、stdout をパースする
+スクリプト・skill への影響は無い。
 
 1 コマンド実行につき WARN は最大 1 回。exit code・標準出力には影響しない。
 
@@ -294,15 +312,46 @@ bug 固有ルール（`_shared/design-by-type/bug.md` §8）に従い、**修正
   feature worktree に存在しない）。
 - 検証 1（overlay 存在フラグ）: feature worktree 起点で `KajiConfig.discover()`
   → `provider_overlay_present` が `False`、main worktree 起点では `True`。
-- 検証 2（再現テスト本体）: feature worktree の config に対し
+- 検証 2（関数レベル再現テスト本体）: feature worktree の config に対し
   `provider_overlay_divergence_warning` が `gitlab`（main overlay）/ `github`
   （現解決）双方を含む WARN を返す。**修正前は WARN ロジックが存在せず本 assert
   が FAIL、修正後に PASS** へ遷移することを再現テストの検証とする。
 - 検証 3（誤検出しないこと）: main worktree 起点では WARN が `None`。
 
+### Medium テスト（CLI 発火点の統合検証・必須）
+
+> **追加根拠（設計レビュー Must Fix 1 への対応）**: 本修正の user-visible 成果物は
+> 「CLI 実行時に stderr へ WARN が出ること」である。検証 2/3 の関数直接呼び出し
+> だけでは「`provider_overlay_divergence_warning()` は正しいが `kaji issue` /
+> `kaji pr` / `kaji run` / `kaji config provider-type` から呼ばれていない（発火点
+> の配線抜け）」という回帰を検出できない。発火点の配線そのものをテスト対象にする。
+
+上記と同じ実 git worktree セットアップを使い、overlay 不在 feature worktree を
+cwd（`kaji issue` / `kaji pr`）または `--workdir` 起点として、§3 で定義した 3 つの
+発火経路を CLI 表面から駆動し、stderr を捕捉して検証する。
+
+- 検証 4（`kaji issue` / `kaji pr` 経路）: `_load_config_for_dispatch()` を経由する
+  dispatch 経路を実行し、stderr に WARN が出ること。WARN 文言に現解決 `github` と
+  main overlay の `gitlab`、復旧手順（overlay コピー or `kaji local init`）が
+  含まれること。stdout 契約・exit code が WARN 追加で変わらないこと。
+- 検証 5（`kaji run` 経路）: `cmd_run` を overlay 不在 worktree に対し実行し、
+  stderr に同等の WARN が出ること。
+- 検証 6（`kaji config provider-type` 経路）: `cmd_config_provider_type` を
+  overlay 不在 worktree に対し実行し、stdout は従来どおり `"github\n"` のみ、
+  stderr に WARN が出ること（stdout / stderr の分離契約の確認）。
+- 検証 7（重複しないこと）: 各コマンド 1 回の実行で WARN は **最大 1 回**。
+  発火 helper を二重に呼んでいないことを stderr のマッチ回数で確認する。
+- 検証 8（CLI 表面でも誤検出しないこと）: overlay を持つ main worktree から同じ
+  コマンドを実行した場合、stderr に WARN が出ないこと。
+
+これらの検証は **修正前は発火点が存在せず stderr に WARN が出ないため FAIL、
+修正後に PASS** へ遷移する。発火点の配線抜けに対する恒久的な回帰防御線となる。
+
 `subprocess.run` の名前空間 patch は使わず、`git init` fixture で実 git repo を
 作る方式とする（`docs/dev/testing-convention.md` §`subprocess.run` patch スコープ
-の「系統 A」に整合）。
+の「系統 A」に整合）。CLI 発火点の駆動は、対応するコマンド関数（`cmd_run` /
+`cmd_config_provider_type`）または dispatcher を直接呼び、`capsys` 等で
+stdout / stderr を分離捕捉する方式とする。
 
 ### Large テスト
 
@@ -337,9 +386,10 @@ bug 固有ルール（`_shared/design-by-type/bug.md` §8）に従い、**修正
 
 | 情報源 | URL/パス | 根拠（引用/要約） |
 |--------|----------|-------------------|
-| `kaji_harness/config.py`（本リポジトリ） | `kaji_harness/config.py:200-216` | `local_overlay_path = path.parent / "config.local.toml"`。overlay 探索が discover で見つけた `.kaji/` 直下に閉じる（cwd-local resolution）ことを示す根本原因の一次根拠 |
-| `kaji_harness/providers/_worktree.py`（本リポジトリ） | `kaji_harness/providers/_worktree.py:41-96` | `resolve_main_worktree()` が `git worktree list --porcelain` を解析し `default_branch` checkout の worktree 絶対パスを返す。main worktree 特定に再利用する。git CLI 不在・非 git・main 未構成時は `LocalProviderError` を送出する（best-effort で握る根拠） |
-| `kaji_harness/providers/__init__.py`（本リポジトリ） | `kaji_harness/providers/__init__.py:67-135` | `get_provider()` は Phase 3-e で fallback / WARN を撤去済み。`config.provider is None` で `ValueError`。現状 provider 解決経路に「overlay 不在の沈黙フォールバック」を検出する WARN が無いことの一次根拠 |
+| `kaji_harness/config.py`（本リポジトリ） | `KajiConfig._parse_provider` / `KajiConfig.discover`（`kaji_harness/config.py:200-216` 近傍） | `local_overlay_path = path.parent / "config.local.toml"`。overlay 探索が discover で見つけた `.kaji/` 直下に閉じる（cwd-local resolution）ことを示す根本原因の一次根拠 |
+| `kaji_harness/providers/_worktree.py`（本リポジトリ） | `resolve_main_worktree()`（`kaji_harness/providers/_worktree.py:41-96` 近傍） | `resolve_main_worktree()` が `git worktree list --porcelain` を解析し `default_branch` checkout の worktree 絶対パスを返す。main worktree 特定に再利用する。git CLI 不在・非 git・main 未構成時は `LocalProviderError` を送出する（best-effort で握る根拠） |
+| `kaji_harness/providers/__init__.py`（本リポジトリ） | `get_provider()`（`kaji_harness/providers/__init__.py:67-135` 近傍） | `get_provider()` は Phase 3-e で fallback / WARN を撤去済み。`config.provider is None` で `ValueError`。現状 provider 解決経路に「overlay 不在の沈黙フォールバック」を検出する WARN が無いことの一次根拠 |
+| `kaji_harness/cli_main.py`（本リポジトリ） | `_load_config_for_dispatch()`（`cli_main.py:782-804` 近傍）/ `cmd_run()`（`cli_main.py:303-352` 近傍）/ `cmd_config_provider_type()`（`cli_main.py:1980-2012` 近傍） | WARN 発火点となる 3 経路。`cmd_config_provider_type` の docstring は当該コマンドが `KajiConfig.discover()` + `get_provider()` を通り `_handle_pr` / `_handle_issue` / `cmd_run` と同じ config resolution path を共有することを明示。`kaji config provider-type` を WARN 対象に含める判断（§3）の一次根拠 |
 | `docs/cli-guides/local-mode.md`（本リポジトリ） | `docs/cli-guides/local-mode.md:88-98` | § 3「provider 切替」状態テーブル。「overlay なし → tracked の `[provider]` がそのまま使われる」と記載され、**worktree 切替時に overlay が非継承になる旨は未記載**。docs 加筆対象の一次根拠 |
 | `docs/guides/git-worktree.md`（本リポジトリ） | `docs/guides/git-worktree.md:126-181`（「kaji プロジェクトでの運用」） | worktree 運用ガイド。`.venv` symlink 共有の注意はあるが、provider overlay の worktree 間配布についての記載が無い。docs 加筆対象の一次根拠 |
 | Git 公式 `git-worktree` マニュアル | https://git-scm.com/docs/git-worktree | `git worktree add <path> <commit-ish>` は指定 commit-ish を新規 worktree に checkout する。checkout はコミット済み（tracked）内容を対象とし、ignored / untracked ファイルは新規 worktree に存在しない。`.gitignore` 管理の `config.local.toml` が新規 worktree にコピーされない挙動の一次根拠 |
