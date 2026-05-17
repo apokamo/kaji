@@ -416,6 +416,25 @@ class TestTerminalEventBreak:
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
         return script
 
+    def _write_sigterm_trap_script(
+        self, path: Path, jsonl_lines: list[str], trap_exit: int, sleep_after: int = 30
+    ) -> Path:
+        """terminal event 出力後に SIGTERM を trap し正値で exit する fake CLI。
+
+        kaji が後始末で ``process.terminate()`` を撃つと bash が TERM trap を実行し、
+        shell 慣例の正の終了コード（``128+15=143`` / ``128+9=137`` 等）を返す。
+        Claude Code CLI の SIGTERM ハンドリング（trap して正値 exit）を決定論的に
+        再現するための mock。``sleep & wait`` で background job を待つ間に SIGTERM を
+        受けると ``wait`` が即時 return し、直後に trap が実行される。
+        """
+        script = path / f"trap_cli_{trap_exit}.sh"
+        echos = "\n".join(f"echo '{line}'" for line in jsonl_lines)
+        script.write_text(
+            f"#!/bin/bash\ntrap 'exit {trap_exit}' TERM\n{echos}\nsleep {sleep_after} &\nwait\n"
+        )
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        return script
+
     def test_claude_terminal_event_breaks_before_eof(self, tmp_path: Path) -> None:
         """fd leak 再現: terminal event 観測直後に break + terminate して timeout を待たない。"""
         jsonl_lines = [
@@ -631,8 +650,16 @@ class TestTerminalEventBreak:
                 )
         assert exc_info.value.step_id == "gfail"
 
-    def test_claude_success_terminal_with_self_exit_nonzero_raises(self, tmp_path: Path) -> None:
-        """`result` が success でも CLI が自発的に exit 1 した場合は CLIExecutionError。"""
+    def test_claude_success_terminal_with_self_exit_nonzero_returns_result(
+        self, tmp_path: Path
+    ) -> None:
+        """`result` が success なら CLI が自発的に exit 1 しても CLIResult を返す。
+
+        bc34906 で追加された旧 ``test_claude_success_terminal_with_self_exit_nonzero_raises``
+        の期待値を反転したテスト。terminal success event を観測した後は returncode を
+        失敗根拠にしない（gl:25 設計書 § 既存テストへの影響）。terminal success 後の
+        正の returncode は CLI 側 cleanup のノイズであり、失敗扱いすべきではない。
+        """
         jsonl_lines = [
             json.dumps({"type": "system", "subtype": "init", "session_id": "sess-sx"}),
             json.dumps(
@@ -644,7 +671,139 @@ class TestTerminalEventBreak:
 
         step = Step(id="sx", skill="t", agent="claude", on={"PASS": "end"})
         with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
-            with pytest.raises(CLIExecutionError):
+            result = execute_cli(
+                step=step,
+                prompt="x",
+                workdir=tmp_path,
+                session_id=None,
+                log_dir=tmp_path / "logs",
+                execution_policy="auto",
+                verbose=False,
+                default_timeout=10,
+            )
+        assert result.terminal_seen is True
+        assert result.session_id == "sess-sx"
+
+    def test_claude_success_terminal_with_sigterm_trap_exit_143_passes(
+        self, tmp_path: Path
+    ) -> None:
+        """terminal success 観測後の terminate で SIGTERM trap exit 143 でも CLIResult を返す。
+
+        本 Issue (gl:25) の再現テスト。
+        OB: bc34906 の ``self_exit_failure = (143 > 0) = True`` により、成功した
+        terminal success ステップが ``CLIExecutionError: ... code 143`` で誤って例外化される。
+        EB: terminal success event を真実とし、kaji が後始末で撃った terminate 起因の
+        returncode（143）は失敗根拠から除外する。
+
+        bc34906 直後の cli.py に対しては FAIL する（リグレッション検知）。
+        """
+        jsonl_lines = [
+            json.dumps({"type": "system", "subtype": "init", "session_id": "sess-143"}),
+            json.dumps(
+                {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": 0.01}
+            ),
+        ]
+        script = self._write_sigterm_trap_script(tmp_path, jsonl_lines, trap_exit=143)
+
+        step = Step(id="t143", skill="t", agent="claude", on={"PASS": "end"})
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            result = execute_cli(
+                step=step,
+                prompt="x",
+                workdir=tmp_path,
+                session_id=None,
+                log_dir=tmp_path / "logs",
+                execution_policy="auto",
+                verbose=False,
+                default_timeout=15,
+            )
+        assert result.terminal_seen is True
+        assert result.session_id == "sess-143"
+        assert result.cost is not None and result.cost.usd == 0.01
+
+    def test_claude_success_terminal_with_positive_137_returncode_variant_passes(
+        self, tmp_path: Path
+    ) -> None:
+        """terminal success 観測後の terminate で正の 137 returncode バリアントでも CLIResult を返す。
+
+        137 は shell 慣例の ``128+9`` を模した「正の returncode バリアント」としての検証。
+        Python の ``Popen.kill()`` が直接 SIGKILL した場合の returncode は ``-9`` だが、
+        本テストの主眼は returncode の値に依存せず terminal success event を真実とすること
+        （review-design § 改善提案）。bc34906 直後の cli.py に対しては FAIL する。
+        """
+        jsonl_lines = [
+            json.dumps({"type": "system", "subtype": "init", "session_id": "sess-137"}),
+            json.dumps(
+                {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": 0.0}
+            ),
+        ]
+        script = self._write_sigterm_trap_script(tmp_path, jsonl_lines, trap_exit=137)
+
+        step = Step(id="t137", skill="t", agent="claude", on={"PASS": "end"})
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            result = execute_cli(
+                step=step,
+                prompt="x",
+                workdir=tmp_path,
+                session_id=None,
+                log_dir=tmp_path / "logs",
+                execution_policy="auto",
+                verbose=False,
+                default_timeout=15,
+            )
+        assert result.terminal_seen is True
+        assert result.session_id == "sess-137"
+
+    def test_claude_success_terminal_with_default_sigterm_exit_passes(self, tmp_path: Path) -> None:
+        """trap なしの CLI は SIGTERM 既定で returncode -15。terminal success なら CLIResult を返す。
+
+        ``exec sleep`` で stdout fd を保持する CLI に terminate を撃つと、trap がないため
+        SIGTERM の既定挙動でプロセスが死に returncode は ``-15``（負値）になる。
+        bc34906 直後の cli.py でも ``self_exit_failure = (-15 > 0) = False`` のため例外化
+        されないが、案 B 採用後も returncode 値に依存せず PASS となることを網羅確認する。
+        """
+        jsonl_lines = [
+            json.dumps({"type": "system", "subtype": "init", "session_id": "sess-neg15"}),
+            json.dumps(
+                {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": 0.0}
+            ),
+        ]
+        script = self._write_leak_script(tmp_path, jsonl_lines, sleep_after=30)
+
+        step = Step(id="tneg15", skill="t", agent="claude", on={"PASS": "end"})
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            result = execute_cli(
+                step=step,
+                prompt="x",
+                workdir=tmp_path,
+                session_id=None,
+                log_dir=tmp_path / "logs",
+                execution_policy="auto",
+                verbose=False,
+                default_timeout=15,
+            )
+        assert result.terminal_seen is True
+        assert result.session_id == "sess-neg15"
+
+    def test_claude_success_terminal_with_error_event_still_raises(self, tmp_path: Path) -> None:
+        """terminal が success でも stream 中に error イベントがあれば CLIExecutionError。
+
+        案 B 採用後も ``error_messages`` 経路の失敗判定は保持される（Issue gl:25 完了条件・
+        設計書 § Medium テスト 3）。terminal success event 単独では失敗扱いにならないが、
+        stream 中の ``error`` イベント集約は引き続き例外化の根拠になる。
+        """
+        jsonl_lines = [
+            json.dumps({"type": "system", "subtype": "init", "session_id": "sess-errev"}),
+            json.dumps({"type": "error", "message": "stream-level failure"}),
+            json.dumps(
+                {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": 0.0}
+            ),
+        ]
+        script = _create_mock_cli_script(tmp_path, jsonl_lines, exit_code=0)
+
+        step = Step(id="errev", skill="t", agent="claude", on={"PASS": "end"})
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            with pytest.raises(CLIExecutionError) as exc_info:
                 execute_cli(
                     step=step,
                     prompt="x",
@@ -655,6 +814,40 @@ class TestTerminalEventBreak:
                     verbose=False,
                     default_timeout=10,
                 )
+        assert "stream-level failure" in str(exc_info.value)
+
+    def test_no_terminal_event_nonzero_exit_raises(self, tmp_path: Path) -> None:
+        """terminal event を出さず exit 1 する CLI は従来どおり CLIExecutionError（非 terminal 経路不変）。
+
+        案 B は ``terminal_seen`` 分岐のみを変更する。terminal event 未観測の経路
+        （``cli.py`` の ``if process.returncode != 0:``）は不変であることを確認する
+        （設計書 § Medium テスト 4）。
+        """
+        jsonl_lines = [
+            json.dumps({"type": "system", "subtype": "init", "session_id": "sess-noterm"}),
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "no result event"}]},
+                }
+            ),
+        ]
+        script = _create_mock_cli_script(tmp_path, jsonl_lines, exit_code=1)
+
+        step = Step(id="noterm", skill="t", agent="claude", on={"PASS": "end"})
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                execute_cli(
+                    step=step,
+                    prompt="x",
+                    workdir=tmp_path,
+                    session_id=None,
+                    log_dir=tmp_path / "logs",
+                    execution_policy="auto",
+                    verbose=False,
+                    default_timeout=10,
+                )
+        assert exc_info.value.step_id == "noterm"
 
     def test_timer_still_guards_when_no_terminal_event(self, tmp_path: Path) -> None:
         """terminal event なし & stdout 閉じない場合は最終ガードの timeout が効く。"""
