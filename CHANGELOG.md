@@ -6,6 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-05-18
+
+### Fixed
+
+- `kaji run` の terminal step 後始末で、kaji 自身が撃った
+  `process.terminate()` 起因の returncode を失敗判定から除外。Claude Code
+  CLI は SIGTERM を trap し shell 慣例の正値 143 で exit するため、成功した
+  terminal success ステップが誤って `CLIExecutionError` 化される不具合を
+  修正 (gl:25)。
+
+### Changed
+
+- GitLab を tracked repository の既定 forge に昇格。`.kaji/config.toml` の
+  `provider.type` を `github` → `gitlab`、builtin workflow
+  (`implement-to-pr.yaml` / `feature-development-light.yaml`) の
+  `requires_provider` を `gitlab` に変更。CLAUDE.md の forge ガイダンスも
+  GitLab 前提に更新。
+
+### Internal
+
+- 開発フェーズ番号ベース命名の 15 テストファイル（`test_phaseXX*.py`）を
+  ドメインベース命名に正規化し、命名規約を `testing-convention.md` に明文化。
+  テストロジック・テスト ID・公開 IF は不変 (gl:30)。
+
 ## [0.10.0] - 2026-05-17
 
 This release makes a **multi-provider architecture** the backbone of
