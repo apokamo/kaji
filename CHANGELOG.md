@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-17
+
+This release makes a **multi-provider architecture** the backbone of
+kaji. Issue / PR operations now route through a `Provider` abstraction
+with GitHub, GitLab, and local-filesystem backends, and a `[provider]`
+section is now mandatory in `.kaji/config.toml`. It also adds a GitLab
+provider (`provider.type='gitlab'`) and a `review-cycle` workflow.
+
 ### BREAKING CHANGE
 
 - `[provider]` section is now **required** in `.kaji/config.toml`.
@@ -20,66 +28,94 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   invalid values (`PC1`, `pc-1`, 17+ characters, etc.) now fails fast
   with `ConfigLoadError` instead of crashing later in `kaji issue` /
   `kaji run`.
-- **Phase 4**: `kaji pr ...` (including `pr create` / `pr list` /
-  `pr review-comments` / `pr reviews` / `pr reply-to-comment`) now
-  exits 2 with a `forge-only` error message when run under
-  `provider.type='local'`. Previously, the call was passed through to
-  `gh pr` even in local mode, risking accidental PR creation against the
-  GitHub remote.
-- **Phase 4**: `kaji run` now validates that `workflow.requires_provider`
-  matches `config.provider.type` before dispatching the runner.
-  Mismatches exit 2 with a switching guide (e.g. running
-  `feature-development.yaml` under `provider.type='local'` exits 2 instead
-  of stopping mid-workflow at the `i-pr` step).
-- **Phase 4**: `prompt.build_prompt(...)` requires `issue_context:
-  IssueContext` (no longer Optional). All callers must pass the
-  resolved `IssueContext` from
-  `WorkflowRunner._resolve_run_issue_context()`. The internal `if
-  issue_context is not None:` fallback paths have been removed.
-
-### Changed
-
-- **Phase 5**: Repositioned local-mode from "BCP for GitHub outage"
-  to "primary SoT during validation period". GitHub recovery is no
-  longer a precondition for the project. See
-  `draft/design/local-mode/design.md` (re-organized) and the new
-  `docs/operations/local-mode-runbook.md` for the validation-period
-  operating model.
-- **Phase 5**: Updated `LocalProvider.view_cached_issue()` docstring
-  and `IssueNotFoundError` user-facing message to reframe
-  `kaji sync from-github` and related cache features as "remaining
-  tasks (re-evaluated when forge migration target is decided)" rather
-  than "to be implemented in Phase 5". The cache reader contract
-  itself (Phase 3-c) is preserved.
+- `kaji pr ...` (including `pr create` / `pr list` / `pr review-comments`
+  / `pr reviews` / `pr reply-to-comment`) now exits 2 with a `forge-only`
+  error message when run under `provider.type='local'`. Previously, the
+  call was passed through to `gh pr` even in local mode, risking
+  accidental PR creation against the GitHub remote.
+- `kaji run` now validates that `workflow.requires_provider` matches
+  `config.provider.type` before dispatching the runner. Mismatches exit 2
+  with a switching guide (e.g. running `feature-development.yaml` under
+  `provider.type='local'` exits 2 instead of stopping mid-workflow at the
+  `i-pr` step).
+- `prompt.build_prompt(...)` requires `issue_context: IssueContext` (no
+  longer Optional). All callers must pass the resolved `IssueContext`
+  from `WorkflowRunner._resolve_run_issue_context()`. The internal
+  `if issue_context is not None:` fallback paths have been removed.
 
 ### Added
 
-- **Phase 5**: `.kaji/wf/docs-maintenance-local.yaml` — new workflow
-  that lets `type:docs` issues run under `provider.type='local'`
-  without hitting the bare-provider PR guard. Mirrors
-  `feature-development-local.yaml` but uses `i-doc-*` skills and
-  terminates at `issue-close`.
-- **Phase 5**: `docs/operations/local-mode-runbook.md` — new operations
-  runbook covering single-PC / multi-PC setup, daily Issue lifecycle
-  (including the docs-only manual fallback), code synchronisation
-  strategy (GitLab Cloud / self-host / NAS / bundle), forge migration
-  judgement criteria, and troubleshooting.
-- **Phase 4**: `kaji config provider-type` — read-only subcommand that
-  prints the resolved provider type (`github` / `local`) on stdout. Skill
-  manual-execution paths use this to reconcile `[provider_type]` when the
-  context variable has not been injected by the harness.
-- **Phase 4**: `Workflow.requires_provider` field
-  (`"github"` / `"local"` / `"any"`, default `"any"`). Declares which
-  provider type a workflow expects. Builtin workflows in `.kaji/wf/*.yaml`
-  declare it explicitly: `feature-development.yaml`,
-  `feature-development-light.yaml`, `implement-to-pr.yaml` →
-  `github`; `feature-development-local.yaml` → `local`;
-  `design-only.yaml` → `any`.
-- **Phase 4**: Step 0 provider-check guard added to `pr-fix` /
-  `pr-verify` / `i-pr` SKILL.md. Forge-only skills now ABORT under
-  `provider.type='local'` with guidance toward the bare-mode alternatives
-  (`/issue-review-code` / `/issue-fix-code` / `/issue-verify-code` /
-  `/issue-close`).
+#### Provider abstraction & local mode
+
+- `IssueProvider` Protocol + `IssueContext` providing 9 context variables
+  (`issue_id`, `issue_ref`, `issue_input`, `branch_prefix`,
+  `branch_name`, `worktree_dir`, `design_path`, `provider_type`,
+  `default_branch`; `step_id` continues to come from the step
+  definition).
+- `LocalProvider` for GitHub-independent issue management
+  (`.kaji/issues/<id>-<slug>/issue.md`, file-based CRUD, POSIX flock for
+  the ID counter, atomic frontmatter writes via `os.replace`).
+- `kaji local init` CLI (overlay-only: writes `.kaji/config.local.toml`,
+  never the tracked `.kaji/config.toml`; hostname-based machine_id
+  candidate; `.gitignore` integration).
+- `kaji config provider-type` — read-only subcommand that prints the
+  resolved provider type (`github` / `local` / `gitlab`) on stdout.
+- `Workflow.requires_provider` field (`"github"` / `"local"` /
+  `"gitlab"` / `"any"`, default `"any"`). Declares which provider type a
+  workflow expects; builtin `.kaji/wf/*.yaml` declare it explicitly.
+- `feature-development-local.yaml` workflow (final step is `issue-close`
+  instead of `i-pr`; no PR concept under local mode) and
+  `docs-maintenance-local.yaml` (lets `type:docs` issues run under
+  `provider.type='local'` without hitting the bare-provider PR guard).
+- `kaji_harness/providers/_mappings.py` `LABEL_TO_PREFIX` table —
+  canonical source of `type:* label → branch_prefix` mapping.
+- ID normalization across `local-<machine>-<n>` / `<machine>-<n>` /
+  numeric / `gh:N` / `gl:N` forms.
+- Step 0 provider-check guard in the `pr-fix` / `pr-verify` / `i-pr`
+  skills — forge-only skills ABORT under `provider.type='local'` with
+  guidance toward the bare-mode alternatives.
+- `docs/operations/local-mode-runbook.md` — operations runbook covering
+  single-PC / multi-PC setup, the daily Issue lifecycle, code
+  synchronisation strategy, forge migration judgement criteria, and
+  troubleshooting.
+
+#### GitLab provider
+
+- `GitLabProvider` — `provider.type='gitlab'` backed by the `glab` CLI
+  (mutating ops) and `glab api` (reads). 8-method `IssueProvider`
+  implementation with `GitLabProviderConfig` and config-overlay support.
+- `kaji issue` / `kaji pr` GitLab passthrough with a `gl:N` issue-id
+  form. Skill-facing args stay GitHub-shaped (`--body`, `edit`,
+  `comment`, `--base`, `--head`); the dispatcher rewrites them to `glab`
+  equivalents. Unsupported subcommands are rejected with exit 2 instead
+  of being silently passed through.
+- `GitLabProvider.resolve_pr_context()` + `PRContext` dataclass —
+  resolves the MR for the current branch and injects `pr_id` / `pr_ref`
+  into skill prompts.
+- `kaji sync from-gitlab` / `kaji sync status` — fetch GitLab issues into
+  a local read cache with an all-or-nothing 3-phase contract
+  (fetch → stale check → atomic write) and paginated retrieval.
+
+#### Workflows & skills
+
+- `review-cycle.yaml` / `review-close.yaml` workflows and the
+  `/review-cycle` skill — drive the `review → pr-fix ⇄ pr-verify` loop
+  (and optionally `issue-close`) with a single command.
+
+### Changed
+
+- `kaji issue` / `kaji pr` dispatch now routes through the
+  `get_provider()` factory; `--repo` is auto-injected when
+  `[provider.github] repo` is configured.
+- `cmd_run` validates the provider configuration before constructing the
+  runner; `[provider]` misconfiguration is reported as exit 2 and no
+  longer surfaces as an `IssueContextResolutionError` at exit 3.
+- `LocalProvider.close_issue(reason=None)` now writes
+  `close_reason: "completed"` (was an empty string), aligning with the
+  GitHub Issue API default.
+- Repositioned local-mode from "BCP for GitHub outage" to "primary SoT
+  during validation period"; GitHub recovery is no longer a precondition
+  for the project.
 
 ### Fixed
 
@@ -92,14 +128,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   温存し、`terminal_seen` 観測時は `timer.cancel()` 先行で grace wait
   中の race を構造的に排除。Claude/Gemini の failure terminal は
   `is_terminal_failure` で `CLIExecutionError` に伝搬する。
+- `kaji issue create/edit/comment` now accept `--body-file` (and `-` for
+  stdin) under the GitLab provider; the flag is expanded to `--body`
+  before reaching `glab`, restoring contract parity with the GitHub and
+  local providers.
 
-### Notes
+### Removed
 
-- **Phase 5**: No public CLI / config changes. Updates are limited to
-  docs, in-source comments / docstrings, user-facing error messages,
-  Skill markdown wording, and one new workflow YAML
-  (`.kaji/wf/docs-maintenance-local.yaml`) that mirrors
-  `feature-development-local.yaml` for type:docs Issues.
+- WARN-then-fallback path for a missing `[provider]` section (now
+  fail-fast — see BREAKING CHANGE above).
+- Legacy `kaji issue` / `kaji pr` passthrough outside kaji repositories
+  (now fail-fast — see BREAKING CHANGE above).
+
+### Internal
+
+- Migrated the skill suite from kamo2: `_shared/` rewrite, `docs/dev`
+  workflow-doc renames, lifecycle / readiness / PR-gate skills, and the
+  `i-pr` / `i-dev-final-check` / `i-doc-final-check` skills.
+- Local-mode Phase 1/2 scaffolding: `kaji issue` / `kaji pr` wrappers,
+  str-typed issue ids, and `kaji pr review-comments` / `reviews` /
+  `reply-to-comment`.
+- Hardening: `resolve_main_worktree()` fail-fast, `LocalProvider`
+  `repo_root` pinned to the main worktree, and `large_local` subprocess
+  E2E fixtures (pytest markers `large_local` / `large_forge`, target
+  `make test-large-local`).
+- `CodexAdapter` `command_execution` / `file_change` / `web_search`
+  rendering was merged and then reverted within this release window — no
+  net change in 0.10.0.
 
 ### Migration
 
@@ -130,56 +185,3 @@ The exit-code contract is now:
   (`EXIT_INVALID_INPUT` / `EXIT_CONFIG_NOT_FOUND`)
 - Issue resolution problems (missing local issue dir, agent CLI not
   found, runtime exceptions) → exit 3 (`EXIT_RUNTIME_ERROR`)
-
-## [Phase 3] — kaji local mode
-
-### Added
-
-- `LocalProvider` for GitHub-independent issue management
-  (`.kaji/issues/<id>-<slug>/issue.md`, file-based CRUD, POSIX flock for
-  ID counter, atomic frontmatter writes via `os.replace`).
-- `IssueProvider` Protocol + `IssueContext` providing 9 context variables
-  via `IssueContext` (`issue_id`, `issue_ref`, `issue_input`,
-  `branch_prefix`, `branch_name`, `worktree_dir`, `design_path`,
-  `provider_type`, `default_branch`; `step_id` continues to come from the
-  step definition).
-- `kaji local init` CLI (overlay-only: writes
-  `.kaji/config.local.toml`, never the tracked `.kaji/config.toml`;
-  hostname-based machine_id candidate; `.gitignore` integration).
-- `feature-development-local.yaml` workflow (final step is
-  `issue-close` instead of `i-pr`; no PR concept under local mode).
-- `kaji_harness/providers/_mappings.py` `LABEL_TO_PREFIX` table —
-  canonical source of `type:* label → branch_prefix` mapping;
-  `.claude/skills/` markdown is now documentation only.
-- ID normalization across `local-<machine>-<n>` / `<machine>-<n>` /
-  numeric / `gh:N` forms (read-only `gh:N` for cached GitHub issues
-  under local mode).
-- Skill markdown placeholder unification: `[branch-name]` →
-  `[branch_name]`, `[worktree-absolute-path]` → `[worktree_dir]`,
-  `[design-path]` → `[design_path]`, `[issue-input]` → `[issue_input]`
-  (21 skill files; legacy hyphen / angle-bracket forms grep-asserted to
-  zero).
-- `issue-close` skill provider branching: `provider=local` follows the
-  6-step base-worktree merge flow defined in design.md L972-996.
-- pytest markers `large_local` / `large_forge` and the
-  `make test-large-local` target for subprocess E2E categorization
-  (no external network).
-
-### Changed
-
-- `kaji issue` / `kaji pr` dispatcher routes through `get_provider()`
-  factory; `--repo` is auto-injected when `[provider.github] repo` is
-  configured.
-- `LocalProvider.close_issue(reason=None)` now writes
-  `close_reason: "completed"` (was empty string), aligning with
-  design.md L985 and the GitHub Issue API default.
-- `cmd_run` validates the provider configuration before constructing
-  the runner; `[provider]` misconfiguration is reported as exit 2 and
-  no longer surfaces as an `IssueContextResolutionError` at exit 3.
-
-### Removed
-
-- WARN-then-fallback path for missing `[provider]` section (now
-  fail-fast — see BREAKING CHANGE above).
-- Legacy `kaji issue` / `kaji pr` passthrough outside kaji repositories
-  (now fail-fast — see BREAKING CHANGE above).
