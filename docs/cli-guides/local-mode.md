@@ -97,6 +97,16 @@ git_remote = "origin"     # 任意。default `"origin"`。skill 内 `git push` /
 | overlay の `type = "local"` | LocalProvider 経路 |
 | overlay 削除 | tracked default に戻る |
 
+> **⚠️ overlay は worktree per-instance**: `.kaji/config.local.toml` は `.gitignore`
+> 管理のため、`git worktree add` で作った新規 worktree には**引き継がれない**。新規
+> worktree から provider 解決を伴うコマンドを実行すると tracked `config.toml` の
+> `[provider]` にフォールバックし、意図と異なる provider に routing され得る。
+> kaji はそのズレ（overlay 不在 + メインリポジトリ overlay と `provider.type` が相違）
+> を検出して stderr に WARN を出す。新規 worktree で overlay を使う場合は、メイン
+> リポジトリから `config.local.toml` をコピーするか当該 worktree で `kaji local init`
+> を再実行する。詳細は [`docs/guides/git-worktree.md`](../guides/git-worktree.md)
+> § provider overlay を参照。
+
 ## 4. Issue / Workflow
 
 ```bash

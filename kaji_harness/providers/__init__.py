@@ -9,14 +9,16 @@ Phase 3-c で行う（design.md L226-244 参照）。
 from __future__ import annotations
 
 import re
+import tomllib
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from ._worktree import resolve_main_worktree
 from .base import IssueProvider
 from .github import GitHubProvider
 from .gitlab import GitLabProvider
-from .local import LocalProvider
+from .local import LocalProvider, LocalProviderError
 from .models import Comment, Issue, IssueContext, Label, PRContext
 
 if TYPE_CHECKING:
@@ -36,6 +38,7 @@ __all__ = [
     "actual_provider_type",
     "get_provider",
     "normalize_id",
+    "provider_overlay_divergence_warning",
 ]
 
 
@@ -133,6 +136,90 @@ def get_provider(config: KajiConfig) -> IssueProvider:
             git_remote=config.provider.gitlab.git_remote,
         )
     raise ValueError(f"unknown provider.type: {config.provider.type!r}")
+
+
+def _read_overlay_provider_type(overlay_path: Path) -> str | None:
+    """``config.local.toml`` overlay の ``[provider].type`` を読み出す。
+
+    ファイル不在・読み取り不能・TOML 不正・``[provider]`` テーブル不在・
+    ``type`` が文字列でない場合はいずれも ``None`` を返す（best-effort）。
+
+    Args:
+        overlay_path: 読み出す ``config.local.toml`` の絶対パス。
+
+    Returns:
+        overlay が指定する ``provider.type``。判定不能なら ``None``。
+    """
+    try:
+        with open(overlay_path, "rb") as f:
+            data = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    provider = data.get("provider")
+    if not isinstance(provider, dict):
+        return None
+    ptype = provider.get("type")
+    if not isinstance(ptype, str):
+        return None
+    return ptype.strip() or None
+
+
+def provider_overlay_divergence_warning(config: KajiConfig) -> str | None:
+    """worktree 間で provider overlay が継承されない沈黙のズレを検出する（gl:28）。
+
+    ``git worktree add`` は gitignored な ``.kaji/config.local.toml`` overlay を
+    新規 worktree にコピーしない。現 worktree に overlay が無く、かつ main worktree
+    の overlay が異なる ``provider.type`` を選んでいる場合、provider 解決は tracked
+    ``.kaji/config.toml`` の値に**沈黙で**フォールバックする。本関数はそのケースで
+    WARN 文言を返し、ズレが無ければ ``None`` を返す。
+
+    検出は best-effort。非 git / git CLI 不在 / main worktree 未構成では
+    ``resolve_main_worktree`` が ``LocalProviderError`` を送出するが、握り潰して
+    ``None`` を返す（コマンド自体は壊さない）。
+
+    overlay 非継承は ``git worktree add`` 由来の linked worktree でのみ起きる構造
+    的問題のため、現 worktree が linked worktree でなければ ``resolve_main_worktree``
+    の subprocess を起動せず即 ``None`` を返す（設計「subprocess コストの局所化」）。
+
+    Args:
+        config: 現 worktree から discover 済みの ``KajiConfig``。
+
+    Returns:
+        ズレ検出時は stderr 向け WARN 文言、無ければ ``None``。
+    """
+    if config.provider is None:
+        return None
+    if config.provider_overlay_present:
+        # 現 worktree 自身に overlay あり → per-worktree で意図的に異なる
+        # provider を使う正当な運用。WARN は出さない。
+        return None
+    if not (config.repo_root / ".git").is_file():
+        # linked worktree（`git worktree add` 由来）では `.git` が gitdir を指す
+        # *ファイル*、通常の clone / main worktree では *ディレクトリ*。ファイル
+        # でなければ overlay 非継承は構造的に起きないため、`git worktree list`
+        # subprocess を起動せず即 None を返す。
+        return None
+    current_type = config.provider.type
+    default_branch: str = getattr(config.provider, current_type).default_branch
+    try:
+        main_root = resolve_main_worktree(
+            start_dir=config.repo_root,
+            default_branch=default_branch,
+        )
+    except LocalProviderError:
+        return None
+    if main_root == config.repo_root:
+        return None  # 自分が main worktree
+    main_type = _read_overlay_provider_type(main_root / ".kaji" / "config.local.toml")
+    if main_type is None or main_type == current_type:
+        return None  # main にも overlay 無し / type 上書き無し / type 一致
+    return (
+        "WARNING: this worktree has no .kaji/config.local.toml overlay; "
+        f"provider.type resolved to {current_type!r} from tracked "
+        f".kaji/config.toml, but the main worktree's overlay selects "
+        f"{main_type!r}. Copy .kaji/config.local.toml from the main worktree "
+        "or run 'kaji local init' here. See docs/guides/git-worktree.md."
+    )
 
 
 ResolvedKind = Literal["github", "local", "remote_cache", "gitlab"]
