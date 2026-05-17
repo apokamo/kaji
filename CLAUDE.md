@@ -58,9 +58,10 @@ kaji run <workflow.yaml> <issue> --quiet            # Suppress agent output
 kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
 ```
 
-## Git & GitHub
+## Git & GitLab
 
-- **GitHub CLI**: `gh` available (PR, Issue, API operations)
+- **Forge**: GitLab を正式採用。Issue / MR(PR) 操作は `kaji issue` / `kaji pr`（内部で `glab` CLI へ委譲）を使う。`glab` 直叩きも可
+- **GitLab auto-close**: MR/コミットメッセージに `Closes #N` 等を記載すると merge 時に Issue が自動 close される
 - **Branches / main 直コミット**:
   - **Feature / 実装作業**（`kaji_harness/` / `tests/` / `Makefile` / `pyproject.toml` 等のコード変更）は **必ず feature branch (worktree) → `--no-ff` merge**。main 直コミット禁止
   - 以下は **main 直コミット許容**:
@@ -87,7 +88,7 @@ kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
 - Never trust external input without validation
 
 ## Prohibitions
-1. Never commit **code changes** to main directly（`kaji_harness/` / `tests/` / `Makefile` / `pyproject.toml` 等。例外として markdown / docs / `.kaji/issues/` のみのコミットは main 直可。詳細は § Git & GitHub）
+1. Never commit **code changes** to main directly（`kaji_harness/` / `tests/` / `Makefile` / `pyproject.toml` 等。例外として markdown / docs / `.kaji/issues/` のみのコミットは main 直可。詳細は § Git & GitLab）
 2. Never trust user input without validation
 3. Never hardcode secrets
 4. Never skip pre-commit checks **for commits that include code changes**（markdown / 設計文書のみのコミットは省略可）

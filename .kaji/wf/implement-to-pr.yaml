@@ -4,7 +4,7 @@ description: |
   設計完了（verify-design PASS）済みであることが前提。
   issue-create / issue-start は事前に手動実行済みであることが前提。
 execution_policy: auto
-requires_provider: github
+requires_provider: gitlab
 
 cycles:
   code-review:
