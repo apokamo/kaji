@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from kaji_harness.cli_main import _load_config_for_dispatch
+from kaji_harness.cli_main import main as cli_main
 from kaji_harness.config import (
     ExecutionConfig,
     GitHubProviderConfig,
@@ -325,3 +327,115 @@ class TestProviderOverlayDivergenceReproduction:
         main_wt, _feat_wt = hybrid_worktrees
         main_cfg = KajiConfig.discover(start_dir=main_wt)
         assert provider_overlay_divergence_warning(main_cfg) is None
+
+
+# ============================================================
+# Medium tests — CLI 発火点の統合検証（実 git worktree, 検証 4〜8）
+# ============================================================
+
+# WARN 文言に常に含まれる識別句。1 コマンドあたり 1 回しか現れないため、
+# stderr 内の出現回数を数えれば WARN の重複発火を検出できる（検証 7）。
+_DIVERGENCE_MARKER = "no .kaji/config.local.toml overlay"
+
+
+@pytest.mark.medium
+class TestProviderOverlayDivergenceCliWiring:
+    """検証 4〜8: WARN が CLI 発火点（``kaji issue`` / ``kaji pr`` の dispatch、
+    ``kaji run``、``kaji config provider-type``）から実際に出ることを、CLI 表面を
+    駆動して確認する。
+
+    検証 2/3 の関数直接呼び出しだけでは「``provider_overlay_divergence_warning()``
+    は正しいが CLI コマンドから呼ばれていない（発火点の配線抜け）」回帰を検出
+    できない。本クラスは発火点の配線そのものを保護する（設計レビュー Must Fix 1）。
+    """
+
+    def test_dispatch_path_emits_warning(
+        self,
+        hybrid_worktrees: tuple[Path, Path],
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """検証 4: ``kaji issue`` / ``kaji pr`` が共有する ``_load_config_for_dispatch()``
+        が overlay 不在 worktree で stderr に WARN を出す。config 解決契約は不変で
+        stdout には何も漏らさない。"""
+        _main_wt, feat_wt = hybrid_worktrees
+        monkeypatch.chdir(feat_wt)
+        config = _load_config_for_dispatch()
+        captured = capsys.readouterr()
+        # config 解決契約は不変（例外を出さず provider 付き config を返す）。
+        assert config.provider is not None
+        assert config.provider.type == "github"
+        # WARN は stderr のみ。stdout 契約を壊さない。
+        assert captured.out == ""
+        assert _DIVERGENCE_MARKER in captured.err
+        assert "'github'" in captured.err  # 現 worktree の解決値（tracked 由来）
+        assert "'gitlab'" in captured.err  # main worktree overlay の選択値
+        assert "kaji local init" in captured.err  # 復旧手順
+        assert not _AUTOCLOSE_HAZARD.search(captured.err)
+
+    def test_cmd_run_path_emits_warning(
+        self,
+        hybrid_worktrees: tuple[Path, Path],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """検証 5: ``kaji run`` 経路（``cmd_run``）が overlay 不在 worktree で
+        stderr に WARN を出す。WARN は workflow 読込前に出るため、存在しない
+        workflow を渡しても WARN は観測でき、exit code 契約（workflow 不在 = 2）
+        は WARN 追加で変わらない。"""
+        _main_wt, feat_wt = hybrid_worktrees
+        rc = cli_main(
+            ["run", str(feat_wt / "missing-workflow.yaml"), "28", "--workdir", str(feat_wt)]
+        )
+        captured = capsys.readouterr()
+        assert rc == 2  # workflow 不在 → EXIT_DEFINITION_ERROR（WARN 追加で不変）
+        assert _DIVERGENCE_MARKER in captured.err
+        assert "'github'" in captured.err
+        assert "'gitlab'" in captured.err
+
+    def test_cmd_config_provider_type_path_emits_warning(
+        self,
+        hybrid_worktrees: tuple[Path, Path],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """検証 6: ``kaji config provider-type`` 経路（``cmd_config_provider_type``）。
+        stdout は従来どおり ``"github\\n"`` のみ、stderr に WARN という stdout /
+        stderr 分離契約を保つ。"""
+        _main_wt, feat_wt = hybrid_worktrees
+        rc = cli_main(["config", "provider-type", "--workdir", str(feat_wt)])
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert captured.out == "github\n"  # stdout 契約は不変
+        assert _DIVERGENCE_MARKER in captured.err
+        assert "'gitlab'" in captured.err
+
+    def test_warning_emitted_at_most_once_per_command(
+        self,
+        hybrid_worktrees: tuple[Path, Path],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """検証 7: 1 コマンド実行につき WARN は最大 1 回。発火 helper を二重に
+        呼んでいないことを stderr 内のマーカー出現回数で確認する。"""
+        _main_wt, feat_wt = hybrid_worktrees
+        cli_main(["config", "provider-type", "--workdir", str(feat_wt)])
+        captured = capsys.readouterr()
+        assert captured.err.count(_DIVERGENCE_MARKER) == 1
+
+    def test_main_worktree_no_warning_at_cli_surface(
+        self,
+        hybrid_worktrees: tuple[Path, Path],
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """検証 8: overlay を持つ main worktree からは CLI 表面でも WARN を
+        出さない（誤検出しない）。dispatch 経路と config provider-type 経路の
+        双方を確認する。"""
+        main_wt, _feat_wt = hybrid_worktrees
+        # dispatch 経路（kaji issue / kaji pr 相当）
+        monkeypatch.chdir(main_wt)
+        _load_config_for_dispatch()
+        # kaji config provider-type 経路
+        rc = cli_main(["config", "provider-type", "--workdir", str(main_wt)])
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert captured.out == "gitlab\n"  # main worktree では overlay が効く
+        assert _DIVERGENCE_MARKER not in captured.err

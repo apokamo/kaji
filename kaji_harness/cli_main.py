@@ -2006,6 +2006,7 @@ def cmd_config_provider_type(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return EXIT_INVALID_INPUT
+    _emit_provider_overlay_divergence_warning(config)
     sys.stdout.write(f"{actual_provider_type(config)}\n")
     return EXIT_OK
 
