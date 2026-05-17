@@ -149,18 +149,21 @@ def _execute_cli_once(
 
     if timed_out.is_set() and not result.terminal_seen:
         raise StepTimeoutError(step.id, timeout)
-    # 失敗判定の優先順位:
-    # 1) terminal event 自体の failure シグナル（adapter.is_terminal_failure）
-    # 2) process が自発的に正の終了コードで exit（returncode > 0）
-    # 3) error_messages が集約されている
-    # 我々が後始末で SIGTERM した結果の returncode（< 0）は失敗根拠にしない（terminal event を真実とする）。
-    self_exit_failure = process.returncode is not None and process.returncode > 0
+    # 失敗判定:
+    #  - terminal event を観測したら、その event を真実とする。kaji が後始末で撃った
+    #    terminate の returncode は、CLI の SIGTERM ハンドリング方式（-15 / 143 / 137 等）
+    #    に依らず失敗根拠にしない。Claude Code CLI は SIGTERM を trap し shell 慣例の
+    #    正値（128+15=143）で exit するため、returncode > 0 を失敗根拠にすると成功
+    #    ステップを誤って例外化する（gl:25）。
+    #  - 失敗は terminal event 自体の failure シグナル（adapter.is_terminal_failure）か、
+    #    stream 中の error イベント集約（error_messages）でのみ判定する。
     if result.terminal_seen:
-        if result.terminal_failure or self_exit_failure or result.error_messages:
+        if result.terminal_failure or result.error_messages:
             detail = result.stderr or "\n".join(result.error_messages[-3:]) or "terminal failure"
             rc = process.returncode if process.returncode is not None else -1
             raise CLIExecutionError(step.id, rc, detail)
         return result
+    # terminal event なし: 従来どおり returncode で判定
     if process.returncode != 0:
         detail = result.stderr or "\n".join(result.error_messages[-3:])
         raise CLIExecutionError(step.id, process.returncode, detail)
