@@ -2,7 +2,7 @@
 
 PR-3c のスコープのうち、`kaji run` 経路（IssueContext 解決と Skill への
 prompt 注入）に対応するテスト。`cli_main` 側の dispatcher テストは
-`tests/test_phase3c_dispatcher.py` を参照。
+`tests/test_dispatcher.py` を参照。
 
 phase3-design.md § 4 ロールアウト戦略 PR-3c に対応。
 """
