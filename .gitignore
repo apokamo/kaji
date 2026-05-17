@@ -57,6 +57,10 @@ test-artifacts/
 # `kaji local init` で生成され、commit してはいけない。
 .kaji/config.local.toml
 
+# kaji local mode — provider cache（`kaji sync` 等が書き込む runtime cache）。
+# マシンローカルの一時データなので commit しない。
+.kaji/cache/
+
 # Working scratch space (smoke test logs, ad-hoc experiment artifacts).
 # 作業ローカルの一時ファイルをここに置く。コミット禁止。
 tmp/
