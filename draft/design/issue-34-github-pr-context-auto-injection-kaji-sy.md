@@ -30,7 +30,7 @@ GitHub アカウント復旧 (2026-05-21) を受けて、`GitHubProvider` を Gi
 
 - **Role**: GitHub mode を併用、もしくは `provider.type='local'` 配下から `gh:N` で GitHub Issue を参照する開発者
 - **Goal**: GitHub Issue 本文を AI agent コンテキストにオフライン参照可能な cache に取り込みたい
-- **Action**: `kaji sync from-github [--repo owner/repo]` を実行し、`gh api --paginate repos/<owner>/<repo>/issues?state=open` 経由で Issue データを取得 → atomic write で `.kaji/cache/gh-<n>.json` を populate する
+- **Action**: `kaji sync from-github [--repo owner/repo]` を実行し、`gh api -X GET repos/<owner>/<repo>/issues -F state=open -F per_page=100 -F page=N` の手動 page loop（`from-gitlab` § `_fetch_open_issues_paginated` と対称）で Issue データを取得 → atomic write で `.kaji/cache/gh-<n>.json` を populate する
 - **Value**: `kaji issue view gh:<n>`（cache reader）が GitLab 側の `gl:<iid>` と対称になり、provider 切替時の挙動差がなくなる
 
 #### UC-3: GitHub mode 利用者向けセットアップ手順の参照
@@ -63,8 +63,8 @@ class GitHubProvider:
 | 出力 (成功 1 件) | `PRContext(pr_id="<number>", pr_ref="gh:<number>")` |
 | 出力 (0 件) | `None`（branch 未 push / PR 未作成。skill 側 fallback 経路がそのまま動く） |
 | 出力 (複数件) | `GitHubProviderError("multiple open pull requests found for head branch <branch>: [...]")` を raise |
-| 出力 (`gh` 不在 / 非 0 exit / JSON parse 失敗) | 既存 `_run_gh` / `_run_gh_json` 経由で `GitHubProviderError` を raise |
-| 内部実装 | `gh pr list --head <branch> --state open --json number,headRefName` を `_run_gh_json` で起動 |
+| 出力 (`gh` 不在 / 非 0 exit / JSON parse 失敗) | 既存 `_run_gh` / `_gh_json`（`kaji_harness/providers/github.py:60-90`）経由で `GitHubProviderError` を raise |
+| 内部実装 | `gh pr list --repo <self.repo> --head <branch> --state open --json number,headRefName` を `_gh_json` で起動（`--repo` は既存 CRUD 経路と同様、呼び出し側 args に明示） |
 
 #### `pr_ref` の値: `gh:<n>` を採用する
 
@@ -416,7 +416,7 @@ GitLab 側にあって GitHub 側にないもの:
   - 1 件 → `PRContext(pr_id, pr_ref="gh:<n>")` 構築（`pr_ref` 文字列の正確性を含む）
   - 複数件 → `GitHubProviderError` raise + メッセージに branch 名 / number list を含む
   - `gh` の非配列 JSON / 非 dict 要素 → `GitHubProviderError`
-  - `subprocess.run` の patch スコープは `_run_gh_json` の戻り値 mock に閉じる（dispatcher 経路の名前空間 patch は禁止、`testing-convention.md` § subprocess.run patch スコープ準拠）
+  - `subprocess.run` の patch スコープは `_gh_json`（および間接的に `_run_gh`）の戻り値 mock に閉じる（dispatcher 経路の名前空間 patch は禁止、`testing-convention.md` § subprocess.run patch スコープ準拠）
 - `sync.py` の helper:
   - `_list_existing_cached_numbers(prefix='gh-')` が `gl-*.json` を含めない
   - `_write_sync_meta(forge='github', ...)` の payload 形状（`forge` field の正確性）
@@ -472,7 +472,7 @@ GitLab 側にあって GitHub 側にないもの:
 
 | ドキュメント | 影響の有無 | 理由 |
 |-------------|-----------|------|
-| docs/adr/ | なし | 新規技術選定なし（`gh` CLI / `--paginate` は既存採用済技術） |
+| docs/adr/ | なし | 新規技術選定なし（`gh` CLI / `gh api` の `-F` field 経路は既存採用済技術。`--paginate` は本設計で不採用） |
 | docs/ARCHITECTURE.md | なし | provider 抽象境界は不変、`resolve_pr_context` の本実装化は契約レベルの変更ではない |
 | docs/dev/development_workflow.md | なし | workflow flow / phase 構造に変化なし |
 | docs/dev/shared_skill_rules.md | あり（軽微） | GitLab auto-close keyword 回避規約が GitHub にも適用される旨の脚注追加余地（最小） |
