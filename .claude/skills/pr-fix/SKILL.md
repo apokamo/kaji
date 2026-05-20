@@ -124,9 +124,6 @@ $ARGUMENTS = <issue_id>
    ```bash
    PR_JSON=$(kaji pr list --head "[branch_name]" --json number,title --jq '.[0]')
    pr_id=$(echo "$PR_JSON" | jq -r '.number')
-   # provider に応じた prefix で組み立てる（gitlab → "gl:", github → "gh:"）
-   pr_ref="${provider_type:+${provider_type%%/*}:}${pr_id}"
-   # 簡易: provider_type=github → "gh:<n>" / provider_type=gitlab → "gl:<n>"
    case "$provider_type" in
      github) pr_ref="gh:${pr_id}" ;;
      gitlab) pr_ref="gl:${pr_id}" ;;
