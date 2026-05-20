@@ -213,7 +213,11 @@ if [ -n "$abort_reason" ]; then
 else
     # 成功時のみ pr_id / pr_ref を確定する。
     pr_id="${pr_url##*/}"   # "42"
-    pr_ref="#${pr_id}"      # "#42"
+    case "$provider_type" in
+      github) pr_ref="gh:${pr_id}" ;;
+      gitlab) pr_ref="gl:${pr_id}" ;;
+      *)      pr_ref="${pr_id}" ;;
+    esac
 fi
 ```
 

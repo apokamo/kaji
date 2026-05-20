@@ -16,6 +16,7 @@ phase3-design.md § 4 ロールアウト戦略 PR-3c に対応。
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -366,7 +367,7 @@ class TestLocalDispatcherIdNormalization:
         rc = _handle_issue(["view", "gh:153"])
         assert rc == 3  # IssueNotFoundError → EXIT_RUNTIME_ERROR
         captured = capsys.readouterr()
-        assert "no cached issue" in captured.err.lower() or "cache" in captured.err.lower()
+        assert "no cached" in captured.err.lower() or "cache" in captured.err.lower()
 
     def test_gh_prefix_with_cache_returns_issue(
         self,
@@ -374,12 +375,29 @@ class TestLocalDispatcherIdNormalization:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """cache を投入してから ``gh:N`` が read-only に view される。"""
-        cache_dir = local_repo / ".kaji" / "cache" / "issues"
-        cache_dir.mkdir(parents=True)
-        (cache_dir / "153.json").write_text(
-            '{"number": 153, "title": "Cached", "body": "cached body", '
-            '"state": "open", "labels": [], "comments": []}'
+        """cache を投入してから ``gh:N`` が read-only に view される (issue gl:34 wrapper layout)。"""
+        cache_dir = local_repo / ".kaji" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        (cache_dir / "gh-153.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "forge": "github",
+                    "fetched_at": "2026-05-21T00:00:00Z",
+                    "kaji_local": {
+                        "is_stale": False,
+                        "last_seen_at": "2026-05-21T00:00:00Z",
+                        "staled_at": None,
+                    },
+                    "issue": {
+                        "number": 153,
+                        "title": "Cached",
+                        "body": "cached body",
+                        "state": "open",
+                        "labels": [],
+                    },
+                }
+            )
         )
         monkeypatch.chdir(local_repo)
         rc = _handle_issue(["view", "gh:153"])

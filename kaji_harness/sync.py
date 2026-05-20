@@ -177,14 +177,24 @@ def _fetch_open_issues_paginated(
 
 def _list_existing_cached_iids(cache_dir: Path) -> set[str]:
     """``cache_dir/gl-*.json`` から iid 文字列の集合を返す。"""
+    return _list_existing_cached_numbers(cache_dir, prefix="gl-")
+
+
+def _list_existing_cached_numbers(cache_dir: Path, *, prefix: str) -> set[str]:
+    """``cache_dir/<prefix><n>.json`` から番号文字列の集合を返す。
+
+    ``prefix='gl-'`` で GitLab cache、``prefix='gh-'`` で GitHub cache を取り出す
+    (issue ``gl:34`` § 方針 § 3)。
+    """
     if not cache_dir.is_dir():
         return set()
-    iids: set[str] = set()
-    for path in cache_dir.glob("gl-*.json"):
-        stem = path.stem  # "gl-42"
-        if stem.startswith("gl-") and stem[3:].isdigit():
-            iids.add(stem[3:])
-    return iids
+    numbers: set[str] = set()
+    plen = len(prefix)
+    for path in cache_dir.glob(f"{prefix}*.json"):
+        stem = path.stem
+        if stem.startswith(prefix) and stem[plen:].isdigit():
+            numbers.add(stem[plen:])
+    return numbers
 
 
 def _read_existing_issue_payload(path: Path) -> dict[str, object] | None:
@@ -252,11 +262,17 @@ def _mark_cache_stale(path: Path, now_iso: str) -> None:
 
 
 def _write_sync_meta(
-    *, repo: str, last_sync_at: str, issue_count: int, pages_fetched: int, path: Path
+    *,
+    forge: str = "gitlab",
+    repo: str,
+    last_sync_at: str,
+    issue_count: int,
+    pages_fetched: int,
+    path: Path,
 ) -> None:
     meta = {
         "schema_version": _CACHE_SCHEMA_VERSION,
-        "forge": "gitlab",
+        "forge": forge,
         "repo": repo,
         "last_sync_at": last_sync_at,
         "issue_count": issue_count,
@@ -363,22 +379,239 @@ def sync_from_gitlab(
     )
 
 
+def _resolve_repo_github(config: KajiConfig, override: str | None) -> str:
+    """``--repo`` override > ``[provider.github].repo`` の優先で repo を解決。
+
+    どちらも空なら ``SyncError``。``_resolve_repo`` (GitLab 版) と対称。
+    """
+    if override:
+        return override
+    if (
+        config.provider is not None
+        and config.provider.github is not None
+        and config.provider.github.repo
+    ):
+        return config.provider.github.repo
+    raise SyncError(
+        "'kaji sync from-github' requires a GitHub repo. Either:\n"
+        '  - set [provider.github].repo = "owner/name" in .kaji/config.toml, or\n'
+        "  - pass --repo owner/name on the command line."
+    )
+
+
+def _gh_api_get_issues(repo: str, *, state: str, per_page: int, page: int) -> object:
+    """``gh api -X GET repos/<repo>/issues -F state=... -F per_page=... -F page=...`` を起動。
+
+    ``_glab_api_get`` と対称（provider instance 非依存）。失敗は ``SyncError``。
+    """
+    if shutil.which("gh") is None:
+        raise SyncError("'gh' CLI not found in PATH. Install gh to use 'kaji sync from-github'.")
+    endpoint = f"repos/{repo}/issues"
+    cmd = [
+        "gh",
+        "api",
+        "-X",
+        "GET",
+        endpoint,
+        "-F",
+        f"state={state}",
+        "-F",
+        f"per_page={per_page}",
+        "-F",
+        f"page={page}",
+    ]
+    try:
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    except OSError as exc:
+        raise SyncError(f"failed to invoke 'gh': {exc}") from exc
+    if proc.returncode != 0:
+        raise SyncError(
+            f"gh api failed (exit {proc.returncode}): {proc.stderr.strip() or proc.stdout.strip()}"
+        )
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise SyncError(f"gh returned invalid JSON: {exc}") from exc
+
+
+def _fetch_open_issues_github_paginated(
+    repo: str,
+) -> tuple[list[dict[str, object]], list[int]]:
+    """GitHub REST ``GET /repos/<repo>/issues?state=open`` を全 page 取得する。
+
+    ``_fetch_open_issues_paginated`` (GitLab 版) と同構造。GitHub REST API は
+    ``/issues`` endpoint から PR も返すため、``pull_request`` キーを持つ entry
+    は除外する (issue ``gl:34`` § 方針 § 2)。
+
+    Returns:
+        ``(全 issue list, 各 page の生件数 list)``。``page_sizes`` は PR 除外前の
+        生件数（停止条件判定 / 進捗表示に使う）。
+    """
+    issues: list[dict[str, object]] = []
+    page_sizes: list[int] = []
+    page = 1
+    while True:
+        payload = _gh_api_get_issues(repo, state="open", per_page=_PER_PAGE, page=page)
+        if not isinstance(payload, list):
+            raise SyncError(f"gh api returned non-array JSON for issue list (page {page})")
+        if not payload:
+            break
+        if page > _MAX_PAGES:
+            raise SyncError(
+                f"sync aborted after {_MAX_PAGES} pages (>{_MAX_PAGES * _PER_PAGE} issues). "
+                f"Check repo or contact maintainer."
+            )
+        for entry in payload:
+            if not isinstance(entry, dict):
+                raise SyncError(f"gh api returned non-object element on page {page}")
+            if "pull_request" in entry:
+                continue
+            issues.append(entry)
+        page_sizes.append(len(payload))
+        if len(payload) < _PER_PAGE:
+            break
+        page += 1
+    return issues, page_sizes
+
+
+def _github_cache_path(cache_dir: Path, number: str | int) -> Path:
+    return cache_dir / f"gh-{number}.json"
+
+
+def _read_existing_github_issue_payload(path: Path) -> dict[str, object] | None:
+    """既存 GitHub wrapper から ``issue`` field を取り出す。形式異常は ``None``。"""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    issue_obj = payload.get("issue")
+    return issue_obj if isinstance(issue_obj, dict) else None
+
+
+def _write_fresh_github_cache_file(entry: dict[str, object], cache_dir: Path, now_iso: str) -> None:
+    """fresh GitHub entry の wrapper を atomic write する（既存 wrapper を完全置換）。"""
+    number = entry.get("number")
+    if number is None or not isinstance(number, (int, str)):
+        raise SyncError(f"GitHub issue payload missing 'number' field: {entry!r}")
+    path = _github_cache_path(cache_dir, number)
+    wrapped = {
+        "schema_version": _CACHE_SCHEMA_VERSION,
+        "forge": "github",
+        "fetched_at": now_iso,
+        "kaji_local": {
+            "is_stale": False,
+            "last_seen_at": now_iso,
+            "staled_at": None,
+        },
+        "issue": entry,
+    }
+    _atomic_write(path, json.dumps(wrapped, ensure_ascii=False, indent=2) + "\n")
+
+
+def sync_from_github(
+    *,
+    config: KajiConfig,
+    repo_override: str | None,
+    quiet: bool,
+) -> SyncResult:
+    """GitHub repo から open Issue を全件 fetch して cache を populate する。
+
+    ``sync_from_gitlab`` と対称な 3 phase all-or-nothing 契約 (issue ``gl:34``
+    § 方針 § 2)。GitHub REST ``/issues`` endpoint は PR も返すため、
+    ``pull_request`` キーを持つ entry を除外する。
+    """
+    repo = _resolve_repo_github(config, repo_override)
+    cache_dir = _cache_dir_root(config.repo_root)
+
+    import sys
+
+    started = time.monotonic()
+    if not quiet:
+        sys.stdout.write(f"Fetching open issues from github.com:{repo} ...\n")
+    issues, page_sizes = _fetch_open_issues_github_paginated(repo)
+    pages_fetched = len(page_sizes)
+    if not quiet:
+        for idx, count in enumerate(page_sizes, start=1):
+            sys.stdout.write(f"  page {idx}: {count} issues\n")
+
+    fetched_numbers: set[str] = set()
+    for entry in issues:
+        number = entry.get("number")
+        if number is None:
+            raise SyncError(f"GitHub issue payload missing 'number' field: {entry!r}")
+        fetched_numbers.add(str(number))
+    existing_numbers = _list_existing_cached_numbers(cache_dir, prefix="gh-")
+    stale_numbers = existing_numbers - fetched_numbers
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    now_iso = _now_iso()
+    newly_added = 0
+    updated = 0
+    unchanged_signature = 0
+    for entry in issues:
+        number = str(entry["number"])
+        path = _github_cache_path(cache_dir, number)
+        if number not in existing_numbers:
+            newly_added += 1
+        else:
+            previous = _read_existing_github_issue_payload(path)
+            if previous == entry:
+                unchanged_signature += 1
+            else:
+                updated += 1
+        _write_fresh_github_cache_file(entry, cache_dir, now_iso)
+    for number in sorted(stale_numbers):
+        _mark_cache_stale(_github_cache_path(cache_dir, number), now_iso)
+    _write_sync_meta(
+        forge="github",
+        repo=repo,
+        last_sync_at=now_iso,
+        issue_count=len(issues),
+        pages_fetched=pages_fetched,
+        path=_sync_meta_path(config.repo_root),
+    )
+    elapsed = time.monotonic() - started
+
+    if not quiet:
+        sys.stdout.write(
+            f"Wrote {len(issues)} issues to .kaji/cache/ "
+            f"({newly_added} newly added, {updated} updated, "
+            f"{unchanged_signature} unchanged signature).\n"
+        )
+
+    return SyncResult(
+        issue_count=len(issues),
+        pages_fetched=pages_fetched,
+        elapsed_seconds=elapsed,
+        last_sync_at=now_iso,
+    )
+
+
 def read_sync_status(*, config: KajiConfig) -> SyncStatus:
-    """cache 状態を ``.sync-meta.json`` + ``gl-*.json`` の数から組み立てる。
+    """cache 状態を ``.sync-meta.json`` + ``gl-*.json`` / ``gh-*.json`` の数から組み立てる。
 
     ``.sync-meta.json`` 不在時は ``forge=None / issue_count=0`` を返す
-    （error にしない。未 sync は正常状態の 1 種）。
+    （error にしない。未 sync は正常状態の 1 種）。``forge=None`` のときは
+    ``gl-*.json`` と ``gh-*.json`` の合算件数を返す (issue ``gl:34`` § 方針 § 3)。
     """
     cache_dir = _cache_dir_root(config.repo_root)
     meta_path = _sync_meta_path(config.repo_root)
-    issue_count = len(_list_existing_cached_iids(cache_dir))
+    gl_count = len(_list_existing_cached_numbers(cache_dir, prefix="gl-"))
+    gh_count = len(_list_existing_cached_numbers(cache_dir, prefix="gh-"))
     if not meta_path.is_file():
+        # 未 sync: 両 forge prefix の合算
         return SyncStatus(
             forge=None,
             repo=None,
             last_sync_at=None,
             elapsed_seconds=None,
-            issue_count=issue_count,
+            issue_count=gl_count + gh_count,
         )
     try:
         payload = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -396,6 +629,13 @@ def read_sync_status(*, config: KajiConfig) -> SyncStatus:
             elapsed_seconds = None
     forge = payload.get("forge")
     repo = payload.get("repo")
+    # forge ごとに自身の prefix の count を返す
+    if isinstance(forge, str) and forge == "github":
+        issue_count = gh_count
+    elif isinstance(forge, str) and forge == "gitlab":
+        issue_count = gl_count
+    else:
+        issue_count = gl_count + gh_count
     return SyncStatus(
         forge=str(forge) if isinstance(forge, str) else None,
         repo=str(repo) if isinstance(repo, str) else None,

@@ -309,14 +309,40 @@ class GitHubProvider:
         )
 
     def resolve_pr_context(self, branch_name: str) -> PRContext | None:
-        """no-op 実装。本実装は forge 採用後の別 Issue で扱う。
+        """branch から open PR を 1 件特定し ``PRContext`` を返す。
 
-        本 Issue（``local-p1-7``）では `IssueProvider` Protocol 整合の
-        ため ``return None`` のみ。GitHub 側で本実装すると
-        ``gh pr list --head <branch>`` 等の subprocess hit が増えるが、
-        skill 側暫定運用記述（``kaji pr list --search``）は本 Issue では
-        削除しない（子 Issue ``local-p1-9`` の OUT スコープ）ため、
-        no-op で十分。
+        ``gh pr list --repo <self.repo> --head <branch> --state open
+        --json number,headRefName`` で 1 件特定する (issue ``gl:34``
+        § 方針 § 1)。0 件は ``None``、複数件は ``GitHubProviderError``。
+        ``--repo`` は ``_run_gh`` が自動注入しないため args に明示する
+        （既存 CRUD 経路と同じ規約）。
         """
-        del branch_name
-        return None
+        payload = self._gh_json(
+            "pr",
+            "list",
+            "--repo",
+            self.repo,
+            "--head",
+            branch_name,
+            "--state",
+            "open",
+            "--json",
+            "number,headRefName",
+        )
+        if not isinstance(payload, list):
+            raise GitHubProviderError("gh pr list returned non-array JSON")
+        numbers: list[str] = []
+        for entry in payload:
+            if not isinstance(entry, dict):
+                raise GitHubProviderError("gh pr list returned non-object element")
+            number = entry.get("number")
+            if number is None:
+                raise GitHubProviderError("gh pr list entry missing 'number' field")
+            numbers.append(str(number))
+        if not numbers:
+            return None
+        if len(numbers) > 1:
+            raise GitHubProviderError(
+                f"multiple open pull requests found for head branch {branch_name!r}: {numbers}"
+            )
+        return PRContext(pr_id=numbers[0], pr_ref=f"gh:{numbers[0]}")

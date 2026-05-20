@@ -304,23 +304,26 @@ class TestIssueContext:
 
 class TestRemoteCacheReader:
     def test_view_cached_issue(self, provider: LocalProvider) -> None:
-        cache_dir = provider.repo_root / ".kaji" / "cache" / "issues"
+        cache_dir = provider.repo_root / ".kaji" / "cache"
         cache_dir.mkdir(parents=True)
-        (cache_dir / "153.json").write_text(
+        (cache_dir / "gh-153.json").write_text(
             json.dumps(
                 {
-                    "number": 153,
-                    "title": "GitHub issue",
-                    "body": "remote body",
-                    "state": "OPEN",
-                    "labels": [{"name": "type:feature"}],
-                    "comments": [
-                        {
-                            "author": {"login": "alice"},
-                            "body": "hi",
-                            "createdAt": "2025-01-01T00:00:00Z",
-                        }
-                    ],
+                    "schema_version": 1,
+                    "forge": "github",
+                    "fetched_at": "2026-05-21T00:00:00Z",
+                    "kaji_local": {
+                        "is_stale": False,
+                        "last_seen_at": "2026-05-21T00:00:00Z",
+                        "staled_at": None,
+                    },
+                    "issue": {
+                        "number": 153,
+                        "title": "GitHub issue",
+                        "body": "remote body",
+                        "state": "open",
+                        "labels": [{"name": "type:feature"}],
+                    },
                 }
             )
         )
@@ -329,11 +332,39 @@ class TestRemoteCacheReader:
         assert issue.title == "GitHub issue"
         assert issue.state == "open"
         assert issue.labels[0].name == "type:feature"
-        assert issue.comments[0].author == "alice"
 
     def test_view_cached_issue_missing(self, provider: LocalProvider) -> None:
-        with pytest.raises(IssueNotFoundError, match="no cached issue"):
+        with pytest.raises(IssueNotFoundError, match="no cached GitHub issue"):
             provider.view_cached_issue("999")
+
+    def test_view_cached_issue_legacy_layout_not_supported(self, provider: LocalProvider) -> None:
+        """旧 ``.kaji/cache/issues/<n>.json`` layout は廃止 (issue gl:34)。"""
+        legacy = provider.repo_root / ".kaji" / "cache" / "issues"
+        legacy.mkdir(parents=True)
+        (legacy / "153.json").write_text('{"number": 153, "title": "old"}')
+        with pytest.raises(IssueNotFoundError, match="no cached GitHub issue"):
+            provider.view_cached_issue("153")
+
+    def test_view_cached_issue_stale_normalized_to_closed(self, provider: LocalProvider) -> None:
+        cache_dir = provider.repo_root / ".kaji" / "cache"
+        cache_dir.mkdir(parents=True)
+        (cache_dir / "gh-200.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "forge": "github",
+                    "fetched_at": "2026-05-21T00:00:00Z",
+                    "kaji_local": {
+                        "is_stale": True,
+                        "last_seen_at": "2026-04-01T00:00:00Z",
+                        "staled_at": "2026-05-01T00:00:00Z",
+                    },
+                    "issue": {"number": 200, "title": "Gone", "state": "open"},
+                }
+            )
+        )
+        issue = provider.view_cached_issue("200")
+        assert issue.state == "closed"
 
     def test_is_readonly_id_only_for_remote_cache(self, provider: LocalProvider) -> None:
         assert provider.is_readonly_id("remote_cache") is True
