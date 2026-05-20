@@ -48,7 +48,7 @@ $ARGUMENTS = <issue_id>
 
 `issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
 
-`pr_id` のハーネス自動注入は **`provider.type='gitlab'` 配下のみ**で成立する（`kaji_harness/providers/gitlab.py` の `resolve_pr_context()` が branch 名から MR を逆引きし `PRContext` を返す。`runner.py` の `_resolve_pr_context_safe` がプロンプト変数に展開）。`provider.type='github'` 配下では `kaji_harness/providers/github.py:306-316` の `resolve_pr_context()` が no-op（`None` 返却）なので注入は発生せず、Step 1 内で `kaji pr list --search` から取得して確定する。手動実行時、および GitLab 側 auto-resolve が失敗した（branch 未 push / MR 未作成）場合も同様に `kaji pr list --search` から取得する。`pr_ref` は `pr_id` から provider 別に導出する: `provider.type='github'` なら `#<pr_id>`、`provider.type='gitlab'` なら `gl:<pr_id>`（`kaji_harness/providers/models.py` `PRContext` および `kaji-pr-mr-bridge.md` § 設計原則 1 に準拠）。
+`pr_id` / `pr_ref` はハーネス経由ではプロンプトに自動注入される（`runner.py` の `_resolve_pr_context_safe` が `GitLabProvider.resolve_pr_context()` / `GitHubProvider.resolve_pr_context()` 経由でブランチから PR を逆引きして展開する）。手動実行時、および auto-resolve が失敗した（branch 未 push / PR 未作成）場合は Step 1 で fallback として `kaji pr list --head` から取得する。`pr_ref` は provider 別の prefix で組み立てる: `provider.type='github'` なら `gh:<pr_id>`、`provider.type='gitlab'` なら `gl:<pr_id>`（`kaji_harness/providers/models.py` `PRContext` および `kaji-pr-mr-bridge.md` § 設計原則 1 に準拠）。
 
 ## 前提知識の読み込み
 
@@ -132,20 +132,15 @@ $ARGUMENTS = <issue_id>
 ### Step 1: コンテキスト取得
 
 1. **PR の特定**:
-   Issue 番号から関連 PR を解決し、`pr_id` / `pr_ref` を確定する。
-
-   ```bash
-   PR_JSON=$(kaji pr list --search "[issue_id]" --json number,title,headRefName --jq '.[0]')
-   pr_id=$(echo "$PR_JSON" | jq -r '.number')
-   pr_ref="#${pr_id}"
-   ```
-
-   見つからない場合は Issue 本文の `> **Branch**:` 行からブランチ名を取得し:
+   `pr_id` / `pr_ref` はハーネス注入時にプロンプトへ展開済み（`{{pr_id}}` / `{{pr_ref}}`）。手動実行、または auto-resolve が失敗した場合のみ fallback として Issue 本文の `> **Branch**:` 行からブランチ名を取得し:
 
    ```bash
    PR_JSON=$(kaji pr list --head "[branch_name]" --json number,title --jq '.[0]')
    pr_id=$(echo "$PR_JSON" | jq -r '.number')
-   pr_ref="#${pr_id}"
+   case "$provider_type" in
+     github) pr_ref="gh:${pr_id}" ;;
+     gitlab) pr_ref="gl:${pr_id}" ;;
+   esac
    ```
 
 2. **Worktree パスの解決**:

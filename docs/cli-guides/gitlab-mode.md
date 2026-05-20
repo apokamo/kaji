@@ -199,7 +199,8 @@ skill が provider 非依存に `--commit` を常時付与する設計（local m
 
 `provider.type = "local"` 配下から `gl:N` で GitLab Issue を read-only 参照する
 ための cache populate 経路。`provider.type = "gitlab"` ではこの sync は不要
-（直接 API を叩く）。
+（直接 API を叩く）。GitHub 用の対称コマンドは
+[`kaji sync from-github`](github-mode.md#3-kaji-sync-fromgithub-の使い方)。
 
 ```bash
 # 初回 sync（[provider.gitlab].repo を config に書いておく場合）

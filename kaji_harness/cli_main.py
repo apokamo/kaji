@@ -119,6 +119,26 @@ def _register_sync(subparsers: argparse._SubParsersAction[argparse.ArgumentParse
     fg.add_argument("--state", dest="state", default=None, type=str, help=argparse.SUPPRESS)
     fg.add_argument("--since", dest="since", default=None, type=str, help=argparse.SUPPRESS)
 
+    fh = sync_subs.add_parser(
+        "from-github",
+        help="Sync open issues from a GitHub repo into local cache",
+    )
+    fh.add_argument(
+        "--repo",
+        default=None,
+        type=str,
+        help="GitHub repo (owner/name). Defaults to [provider.github].repo.",
+    )
+    fh.add_argument("--quiet", action="store_true", help="Suppress progress logs.")
+    fh.add_argument(
+        "--include-closed",
+        dest="include_closed",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    fh.add_argument("--state", dest="state", default=None, type=str, help=argparse.SUPPRESS)
+    fh.add_argument("--since", dest="since", default=None, type=str, help=argparse.SUPPRESS)
+
     st = sync_subs.add_parser("status", help="Show local cache sync status")
     st.add_argument("--json", dest="json_mode", action="store_true", help="Output JSON.")
 
@@ -2065,6 +2085,60 @@ def cmd_sync_from_gitlab(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_sync_from_github(args: argparse.Namespace) -> int:
+    """``kaji sync from-github`` の dispatcher (issue ``gl:34``)。
+
+    将来予約 flag（``--include-closed`` / ``--state`` / ``--since``）は exit 2 で
+    fail-fast する（``cmd_sync_from_gitlab`` と対称）。
+    """
+    from .sync import SyncError, sync_from_github
+
+    if args.include_closed:
+        sys.stderr.write(
+            "error: --include-closed is not implemented in this release; "
+            "reopen tracking issue to add it.\n"
+        )
+        return EXIT_INVALID_INPUT
+    if args.state is not None:
+        sys.stderr.write(
+            "error: --state is not implemented in this release; "
+            "this command always fetches state=open.\n"
+        )
+        return EXIT_INVALID_INPUT
+    if args.since is not None:
+        sys.stderr.write(
+            "error: --since is not implemented in this release; "
+            "this command always performs a full sync.\n"
+        )
+        return EXIT_INVALID_INPUT
+
+    try:
+        config = KajiConfig.discover(start_dir=Path.cwd())
+    except (ConfigNotFoundError, ConfigLoadError) as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    try:
+        result = sync_from_github(
+            config=config,
+            repo_override=args.repo,
+            quiet=args.quiet,
+        )
+    except SyncError as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return EXIT_INVALID_INPUT
+    except OSError as exc:
+        sys.stderr.write(f"error: cache write failed: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+
+    sys.stdout.write(
+        f"Sync completed at {result.last_sync_at} "
+        f"({result.issue_count} issues, {result.pages_fetched} pages, "
+        f"{result.elapsed_seconds:.1f}s).\n"
+    )
+    return EXIT_OK
+
+
 def cmd_sync_status(args: argparse.Namespace) -> int:
     """``kaji sync status`` の dispatcher (issue ``local-p1-8``)。"""
     import json as _json
@@ -2112,7 +2186,13 @@ def cmd_sync_status(args: argparse.Namespace) -> int:
     sys.stdout.write(f"repo         {repo_disp}\n")
     sys.stdout.write(f"last_sync    {last_disp}\n")
     sys.stdout.write(f"elapsed      {elapsed_disp}\n")
-    sys.stdout.write(f"cached       {status.issue_count} (gl-*.json under .kaji/cache/)\n")
+    if status.forge == "github":
+        cache_glob = "gh-*.json"
+    elif status.forge == "gitlab":
+        cache_glob = "gl-*.json"
+    else:
+        cache_glob = "gl-*.json + gh-*.json"
+    sys.stdout.write(f"cached       {status.issue_count} ({cache_glob} under .kaji/cache/)\n")
     return EXIT_OK
 
 
@@ -2137,6 +2217,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "sync":
         if args.sync_command == "from-gitlab":
             return cmd_sync_from_gitlab(args)
+        if args.sync_command == "from-github":
+            return cmd_sync_from_github(args)
         if args.sync_command == "status":
             return cmd_sync_status(args)
         parser.print_help()

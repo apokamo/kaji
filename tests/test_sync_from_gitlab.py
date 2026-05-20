@@ -902,16 +902,33 @@ class TestIssueViewIntegration:
         out = capsys.readouterr().out
         assert "Add foo bar" in out
 
-    def test_view_gh_still_reads_legacy_cache(
+    def test_view_gh_reads_wrapper_cache(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # gh: 経路に regression がないか
+        """gh: 経路は ``gh-<n>.json`` wrapper layout を読む (issue gl:34)。"""
         repo_root = _bootstrap_local_repo(tmp_path)
         monkeypatch.chdir(repo_root)
-        gh_cache = repo_root / ".kaji" / "cache" / "issues"
-        gh_cache.mkdir(parents=True, exist_ok=True)
-        (gh_cache / "5.json").write_text(
-            json.dumps({"number": 5, "title": "github cached", "body": "x", "state": "open"})
+        cache = repo_root / ".kaji" / "cache"
+        cache.mkdir(parents=True, exist_ok=True)
+        (cache / "gh-5.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "forge": "github",
+                    "fetched_at": "2026-05-21T00:00:00Z",
+                    "kaji_local": {
+                        "is_stale": False,
+                        "last_seen_at": "2026-05-21T00:00:00Z",
+                        "staled_at": None,
+                    },
+                    "issue": {
+                        "number": 5,
+                        "title": "github cached",
+                        "body": "x",
+                        "state": "open",
+                    },
+                }
+            )
         )
         from kaji_harness.cli_main import main
 

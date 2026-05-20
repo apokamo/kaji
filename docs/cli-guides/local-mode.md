@@ -147,7 +147,7 @@ worktree / branch 名を導出するために使う。
 | `local-pc1-3` | machine_id `pc1` の 3 番目（フル形式） |
 | `pc1-3` | 短縮形。provider=local 時のみ受理 |
 | `3` | provider=local 時は machine_id を補完して `local-<self>-3` に解決 |
-| `gh:153` | GitHub cache 由来の read-only 参照。検証期間中は cache 自動 populate 未実装のため、必要時のみ手動で JSON 投入 |
+| `gh:153` | GitHub cache 由来の read-only 参照。`kaji sync from-github` で `.kaji/cache/gh-<n>.json` を populate して使う（後述 § 9c）|
 
 ## 6. /issue-close の挙動（local）
 
@@ -245,7 +245,8 @@ cwd に依存しないため、影響なし）。
 ├── issues/local-<machine>-<n>-<slug>/
 │   ├── issue.md         (frontmatter + body)
 │   └── comments/<seq>-<machine>.md
-└── cache/issues/<n>.json    (GitHub の read-only キャッシュ。検証期間中は手動投入)
+├── cache/gh-<n>.json       (GitHub Issue read-only cache。`kaji sync from-github` で populate)
+└── cache/gl-<iid>.json     (GitLab Issue read-only cache。`kaji sync from-gitlab` で populate)
 ```
 
 ## 8. `kaji pr` の挙動（Phase 4 以降）
@@ -278,7 +279,7 @@ GitHub mode に戻したい場合は `.kaji/config.local.toml` の `[provider] t
 
 - Windows native は現時点では対応対象外。Windows では WSL 上で使う
 - `kaji sync from-gitlab` / `kaji sync status` は実装済（issue `local-p1-8`、後述 § 9b）。`provider.type='local'` 配下から `gl:N` で GitLab Issue を参照する経路を提供する
-- `kaji sync from-github` は引き続き残課題（forge 採用先確定時に再評価）。GitHub 由来 cache (`gh:N` / `.kaji/cache/issues/N.json`) は手動投入のみ
+- `kaji sync from-github` も実装済（issue `gl:34`、後述 § 9c）。`provider.type='local'` 配下から `gh:N` で GitHub Issue を参照する経路を提供する
 
 ## 9b. `kaji sync from-gitlab` / `kaji sync status`（GitLab cache populate）
 
@@ -328,6 +329,41 @@ cached       47 (gl-*.json under .kaji/cache/)
   Issue は cache に残り、`kaji_local.is_stale=true` フラグが立つ。`kaji issue list`
   の既定 (`--state open`) では出ず、`--state closed` または `--state all` で
   確認できる
+
+## 9c. `kaji sync from-github`（GitHub cache populate）
+
+`provider.type='local'` 配下から `gh:N` で GitHub Issue を参照する場合、
+あらかじめ `kaji sync from-github` で cache を populate する。`from-gitlab` と
+対称な実装で、cache は `.kaji/cache/gh-<n>.json`（schema は `gl-<iid>.json` と
+同形、`forge` field のみ `"github"`）。
+
+> GitHub repo を kaji の primary forge として `provider.type='github'` で運用
+> する場合のセットアップ / 認証は [GitHub Mode CLI Guide](github-mode.md) を
+> 参照。本節は **`local` mode から read-only で GitHub Issue を参照** する
+> ための cache populate 経路のみを扱う。
+
+```bash
+# 初回 sync（[provider.github].repo を config に書いておく場合）
+$ kaji sync from-github
+
+# repo を CLI 引数で指定する場合
+$ kaji sync from-github --repo apokamo/kaji
+
+# cache から read
+$ kaji issue view gh:42
+
+# sync 状態の確認
+$ kaji sync status
+forge        github
+repo         apokamo/kaji
+cached       47 (gh-*.json under .kaji/cache/)
+```
+
+**スコープと前提**:
+
+- 同期対象は **GitHub repo の open Issue 全件**。GitHub REST `/issues` endpoint は PR も返すため、`pull_request` キーを持つ entry は除外される
+- `--include-closed` / `--state` / `--since` 等の追加 flag は本 release では未実装で、指定すると `exit 2` で fail-fast する（silent ignore しない）
+- ローカル cache に存在するが GitHub 側で取得結果に含まれない Issue は cache に残り、`kaji_local.is_stale=true` フラグが立つ（`from-gitlab` と同形）
 
 ## 9a. 検証期間運用について
 

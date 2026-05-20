@@ -182,8 +182,60 @@ class TestIssueContext:
 
 
 class TestResolvePrContext:
-    """Issue local-pc5090-7: GitHub side is a no-op until forge is selected."""
+    """Issue gl:34: `gh pr list --head <branch> --state open --json number,headRefName`."""
 
-    def test_returns_none_for_any_branch(self, provider: GitHubProvider) -> None:
-        assert provider.resolve_pr_context("feat/153") is None
-        assert provider.resolve_pr_context("does-not-matter") is None
+    def _patch(self, stdout: str = "[]", returncode: int = 0) -> object:
+        return patch(
+            "kaji_harness.providers.github.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=[], returncode=returncode, stdout=stdout, stderr=""
+            ),
+        )
+
+    def _gh_present(self) -> object:
+        return patch("kaji_harness.providers.github.shutil.which", return_value="/usr/bin/gh")
+
+    def test_none_when_no_pr(self, provider: GitHubProvider) -> None:
+        with self._gh_present(), self._patch(stdout="[]"):
+            assert provider.resolve_pr_context("feat/153") is None
+
+    def test_single_pr_returns_context(self, provider: GitHubProvider) -> None:
+        payload = [{"number": 42, "headRefName": "feat/153"}]
+        with self._gh_present(), self._patch(stdout=json.dumps(payload)):
+            ctx = provider.resolve_pr_context("feat/153")
+        assert ctx is not None
+        assert ctx.pr_id == "42"
+        assert ctx.pr_ref == "gh:42"
+
+    def test_multiple_prs_raise(self, provider: GitHubProvider) -> None:
+        payload = [
+            {"number": 42, "headRefName": "feat/153"},
+            {"number": 43, "headRefName": "feat/153"},
+        ]
+        with self._gh_present(), self._patch(stdout=json.dumps(payload)):
+            with pytest.raises(GitHubProviderError, match="multiple open pull requests"):
+                provider.resolve_pr_context("feat/153")
+
+    def test_non_array_json_raises(self, provider: GitHubProvider) -> None:
+        with self._gh_present(), self._patch(stdout='{"oops": true}'):
+            with pytest.raises(GitHubProviderError, match="non-array JSON"):
+                provider.resolve_pr_context("feat/153")
+
+    def test_passes_repo_head_state_json_flags(self, provider: GitHubProvider) -> None:
+        captured: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+            captured.append(cmd)
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="[]", stderr="")
+
+        with (
+            self._gh_present(),
+            patch("kaji_harness.providers.github.subprocess.run", side_effect=fake_run),
+        ):
+            provider.resolve_pr_context("feat/153")
+        cmd = captured[0]
+        assert cmd[:4] == ["gh", "pr", "list", "--repo"]
+        assert "owner/name" in cmd
+        assert "--head" in cmd and "feat/153" in cmd
+        assert "--state" in cmd and "open" in cmd
+        assert "--json" in cmd and "number,headRefName" in cmd
