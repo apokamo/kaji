@@ -445,7 +445,26 @@ GitLab 側にあって GitHub 側にないもの:
 
 - 実 GitHub API に対する E2E は **デフォルトで実行しない**。`make test-large-gitlab` と同様に opt-in target を将来追加する余地はあるが、本 Issue では追加しない。
 - 理由: `make check` のデフォルト挙動を変えない（GitLab 側 E2E は `make test-large-gitlab` で opt-in 化されている）。GitHub 側も Phase 2 で独立 target を切る形が望ましいが、`local-p1-10` 同等の trakcing を本 Issue では受け持たない。
-- 代替: `kaji sync from-github --repo apokamo/kaji` を実際の repo で手動実行し、cache populate / `kaji issue view gh:<n>` までを動作確認する手順を `github-mode.md` § 動作確認に記載する。
+- 代替: 以下 2 系統の手動疎通を実 GitHub repo (`apokamo/kaji`) で実施し、`github-mode.md` § 動作確認に手順として記載する。実施結果は本 Issue (`gl:34`) のコメントに証跡として残す（Issue 完了条件 1 / 2 の「実 PR / 実 repo で動作確認」要件を充足させるための単一証跡経路）。
+
+  **A. `kaji sync from-github` 手動疎通（完了条件 2 用）**
+
+  - 手順:
+    1. `cd <repo-root> && kaji sync from-github --repo apokamo/kaji`
+    2. `ls .kaji/cache/gh-*.json .kaji/cache/.sync-meta.json` で atomic write 結果を確認
+    3. 取得した cache の 1 件に対し `kaji issue view gh:<n>` を実行し、title / body / labels が表示されることを確認
+  - 証跡: 上記 3 コマンドの実出力（stdout）を本 Issue コメントに貼り付け。`.sync-meta.json` の `forge='github'` フィールドも併記
+
+  **B. `resolve_pr_context` 経由の prompt 注入手動疎通（完了条件 1 用）**
+
+  - 前提: `apokamo/kaji` 配下に open PR が 1 件以上存在し、当該 PR の head branch に checkout 済みであること。テスト用には `feat/34` ブランチを GitHub 側に push してドラフト PR を 1 件起こす（merge せず確認後 close 可）。
+  - 手順:
+    1. `.kaji/config.toml` の `[provider]` を `type='github'`、`[provider.github]` を `repo='apokamo/kaji'` に切替（または `--workdir` 経由で github mode の test repo を指定）
+    2. test PR の head branch に checkout した状態で `kaji run .kaji/wf/review-cycle.yaml gh:<pr-issue-id> --step pr-fix` を `--quiet` を **付けずに** 実行（prompt 注入結果を stdout に露出させる）
+    3. agent に渡る prompt 中に `pr_id=<実 PR number>` と `pr_ref=gh:<実 PR number>` の両方が含まれていること、および `runner.py` の `_resolve_pr_context_safe` が WARN を出していない（= 1 件特定成功経路）ことを確認
+    4. negative path: 同じ branch に複数 open PR を意図的に作成して再実行し、`GitHubProviderError` が runner で WARN に変換され `pr_id` 注入が skip される（既存 `_resolve_pr_context_safe` 経路）ことを確認
+  - 証跡: harness の prompt dump（または `kaji run` stdout の prompt セクション）から `pr_id` / `pr_ref` 行を抜粋し、本 Issue コメントに貼り付け。negative path 側は WARN 行 (`stderr` 抜粋) を併記
+  - 不可避の制約: 実 PR の number は run のたびに変動するため、証跡には **その時点の PR URL** を必ず併記してレビュワーが対応関係を追跡できるようにする
 
 #### 省略しないサイズ判定
 
