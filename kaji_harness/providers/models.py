@@ -125,7 +125,7 @@ class PRContext:
     Attributes:
         pr_id: provider 内部 ID。github なら ``"42"``、gitlab なら
             project-local ``merge_request_iid`` の文字列（``"42"``）。
-        pr_ref: 人間可読参照。github なら ``"#42"``、gitlab なら
+        pr_ref: 人間可読参照。github なら ``"gh:42"``、gitlab なら
             ``"gl:42"``（`kaji-pr-mr-bridge.md` § 設計原則 1 に準拠）。
     """
 
