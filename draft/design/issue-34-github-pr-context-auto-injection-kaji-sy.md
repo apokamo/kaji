@@ -112,21 +112,33 @@ kaji sync from-github [--repo OWNER/REPO] [--quiet]
     "last_seen_at": "2026-05-21T12:34:56Z",
     "staled_at": null
   },
-  "issue": { /* gh api repos/.../issues/<n> raw payload */ }
+  "issue": { /* gh api repos/.../issues/<n> raw payload (REST 仕様 snake_case) */ }
 }
 ```
 
-### IF-4: `view_cached_issue` の cache layout 移行
+`issue` field の payload は **GitHub REST API `/repos/{owner}/{repo}/issues` の生 JSON**（`number` / `title` / `body` / `state` / `labels[]` / `created_at` / `updated_at` 等）。`gh issue view --json` の camelCase 出力（`createdAt` 等）とは異なる schema。本 Issue では cache 経路で `gh api` を直接叩くため、snake_case 側に揃える。
 
-> **設計判断点**: 現行 `LocalProvider.view_cached_issue` (`kaji_harness/providers/local.py:763-800`) は `.kaji/cache/issues/<n>.json` を読む。Issue 本文「現行 `view_cached_issue` が読む layout を維持」は前提誤りで、現行 layout は `gl-<iid>.json` と非対称である。
+### IF-4: `view_cached_issue` の cache layout + parser 移行
 
-採用案: **`.kaji/cache/gh-<n>.json` への正準化**（GitLab と対称）。
+> **設計判断点（2 段）**:
+>
+> 1. **layout 非対称**: 現行 `LocalProvider.view_cached_issue` (`kaji_harness/providers/local.py:763-800`) は `.kaji/cache/issues/<n>.json` を読む。Issue 本文「現行 `view_cached_issue` が読む layout を維持」は前提誤りで、現行 layout は `gl-<iid>.json` と非対称。
+> 2. **parser schema 非対称**: 現行 parser `_cached_issue_from_payload` (`kaji_harness/providers/local.py:902-943`) は **raw GitHub issue payload を直接読む**（`number` / `title` / `body` / `state` / `labels` / `comments` を payload top-level から取り出す。さらに field 名が `gh issue view --json` 由来の camelCase: `createdAt` を期待）。本設計で `sync_from_github` が書き込む wrapper schema (`payload["issue"]` 配下に gh api raw JSON) と **直接接続できない**。
+
+採用案: **layout / parser を同時に GitLab と対称化** する。
 
 - `view_cached_issue(number)` を `self._cache_dir_root / f"gh-{number}.json"` に変更する。
-- 旧 layout (`.kaji/cache/issues/<n>.json`) のサポートは削除する。検証期間中 (`provider.type='local'`) の手動投入 fixture は廃棄 / 移行が必要。`tests/test_dispatcher.py:329-365` 等の `gh:N` cached read を検証するテストは新 layout (`gh-<n>.json`) に書き換える。
+- 新規 parser `_cached_github_issue_from_payload(wrapper)` を追加し、以下を行う:
+  - `wrapper["issue"]` から GitHub REST snake_case payload を取り出す（`view_cached_gitlab_issue` 経路と対称）
+  - GitHub REST の field 名（`number` / `title` / `body` / `state` / `labels[].name` / `user.login` / `created_at`）に従って `Issue` model を組み立てる
+  - `comments` は cache に含めない（`gh api .../issues` endpoint は comments 配列を返さないため空配列）
+  - `kaji_local.is_stale=true` のときは state を `closed` に正規化（`_cached_gitlab_issue_from_payload` と同形）
+- 旧 parser `_cached_issue_from_payload` は **削除** する。`gh issue view --json` camelCase 経路は `gh:` cached read には登場しない（`gh issue view` の出力を直接 cache に保存する経路は存在せず、cache は常に `sync_from_github` 経由で populate される）。
+- 旧 layout (`.kaji/cache/issues/<n>.json`) のサポートも削除する。
+- `tests/test_dispatcher.py:329-365` 等の `gh:N` cached read を検証するテストは新 layout (`gh-<n>.json`) + 新 parser (wrapper schema) に書き換える。fixture も REST API snake_case payload に差し替える。
 - `_list_existing_cached_iids` / `_list_cached_gitlab_issues` / `read_sync_status` 等の forge 横断 helper は **gl / gh の prefix 分岐** で対称化する（後述 § 方針 § 3）。
 
-> 旧 layout を維持する保守的代替案も検討したが、`sync.py` の forge 分岐コードと、後続「`gh:` / `gl:` 統合 list view」設計の負債が膨らむため不採用。本 Issue 内で `tests/` を一括移行する。
+> 旧 layout / 旧 parser を維持する保守的代替案も検討したが、`sync.py` 側で wrapper を剥がしてから再書き込みする変換層が必要になり、sync 経路と直接 fixture 投入経路で挙動差が生まれる。本 Issue 内で parser とテスト fixture を一括移行する。
 
 ### 使用例
 
@@ -174,10 +186,14 @@ git_remote = "origin"
 
 ## 制約・前提条件
 
-- **対称構造の維持**: `sync_from_github` は `sync_from_gitlab` の構造（3 phase all-or-nothing / `_list_existing_cached_iids` / `_mark_cache_stale` / `_write_sync_meta`）を踏襲する。schema_version は共通の `1` を流用する。
-- **pagination 方式**: `gh api --paginate` を採用する（`from-gitlab` の `?page=N` 手動ループとは異なる）。`gh` 1.14+ は array response を自動連結する。`--paginate` 内部の page 数は最終 array length と `--paginate` の出力から逆算するため、進捗表示の粒度は `from-gitlab` の page 単位に対して 1 page 粒度（または `gh` の rate-limit page 単位）まで落ちる可能性がある。
-- **page 数の安全弁**: `from-gitlab` の `_MAX_PAGES=200` (= 20,000 issues) と同等の上限を `from-github` でも維持する。`--paginate` が暴走しないよう、取得後の array length で `_MAX_PAGES * _PER_PAGE` を超えたら `SyncError` を raise する（pre-flight チェックは不可能なので post-fetch チェック）。
-- **`gh api` の `state=open` filter**: `gh api repos/<owner>/<repo>/issues?state=open` を使う。GitHub REST API は `pull_requests` も `issues` endpoint から返るため、`pull_request` キーを持つ entry は除外する（GitHub 公式仕様）。
+- **対称構造の維持**: `sync_from_github` は `sync_from_gitlab` の構造（3 phase all-or-nothing / forge 横断 helper / `_mark_cache_stale` / `_write_sync_meta`）を踏襲する。schema_version は共通の `1` を流用する。
+- **pagination 方式**: **手動 `?page=N` ループを採用** する（`from-gitlab` § `_fetch_open_issues_paginated` と完全対称）。当初 `gh api --paginate` 案を検討したが、GitHub CLI の `--paginate` は array endpoint と object endpoint で出力連結挙動が異なり、明示的に一貫した単一 JSON array を得るには `--slurp` 追加 + ネスト array 展開が必要（公式 manual `gh api`: "Pass the `--slurp` flag to merge responses into a single JSON array."）。一方 `from-gitlab` は手動 page loop で per-page array を直接 parse する単純な構造であり、forge 間の構造差を最小化するため `from-github` も同経路に揃える。`Link: rel="next"` header 解釈は `gh api` の page 数指定で代用する。
+- **`gh api` 呼び出し形態**: `gh api -X GET repos/<owner>/<repo>/issues -F state=open -F per_page=<_PER_PAGE> -F page=<n>` を `_PER_PAGE=100`、`page=1, 2, ...` で呼ぶ。`payload` が空 array、または `len(payload) < _PER_PAGE` で終了する（`from-gitlab` と同停止条件）。
+- **page 数の安全弁**: `from-gitlab` の `_MAX_PAGES=200`（= 20,000 issues）と同じ上限を `from-github` でも維持する。`_MAX_PAGES + 1` page 目にデータが残っていれば `SyncError` を投げる。
+- **`gh api` の `state=open` filter**: `gh api repos/<owner>/<repo>/issues?state=open` を使う。GitHub REST API は **PR も同 `/issues` endpoint から返る**（公式: "GitHub's REST API considers every pull request an issue"）。`pull_request` キーを持つ entry を除外する。
+- **`--repo` 注入の不在**: 現行 `GitHubProvider._run_gh`（`kaji_harness/providers/github.py:60-78`）は cmd に `--repo` を自動注入しない。既存呼び出し側がすべて明示的に `--repo self.repo` を渡している（`issue create/edit/comment/close/view/list`、`gh label list` 等、`github.py:151 / 174 / 191 / 208 / 218 / 239 / 263`）。本 Issue では:
+  - `resolve_pr_context` の `gh pr list` 呼び出しでも **既存規約に従い `--repo self.repo` を明示的に args に含める**。`_run_gh` 側に repo 注入ロジックを追加しない（既存規約を壊さない）。
+  - `sync_from_github` は `GitHubProvider` instance に依存しない（`provider.type='local'` 配下からも呼ばれる）ため、`_glab_api_get` と同様に **`gh api` を直接 `subprocess.run` で起動** する。`-R <repo>` flag を引数に直接含めるか、endpoint 文字列に `repos/<owner>/<repo>/...` を埋め込む形で repo を明示する（`gh api` の `repos/...` endpoint 経路は cwd 非依存）。
 - **forge 切替時の cache 残骸**: `.sync-meta.json` の `forge` が前回 `gitlab` のときに `from-github` を走らせると、`gl-*.json` を「stale 化対象」と誤判定する。これを防ぐため、stale 判定は **同 forge prefix (`gh-*.json` or `gl-*.json`)** にスコープを絞る（後述 § 方針 § 3）。`.sync-meta.json` 自体は forge 単位で上書きする。
 - **`PRContext` model 変更なし**: 既存 `kaji_harness/providers/models.py` の `PRContext(pr_id, pr_ref)` を流用する。新フィールドは追加しない。
 - **後方互換**: `provider.type='github'` の既存 user は `resolve_pr_context` の no-op 挙動に依存していない（呼び出し経路は runner と一部 skill だけで、いずれも `None` を許容する設計）。skill 側暫定記述切替は本 Issue 内で同時実施するため、`pr_ref` 表記変更による外部影響はない。
@@ -209,8 +225,11 @@ git_remote = "origin"
 
 ```python
 def resolve_pr_context(self, branch_name: str) -> PRContext | None:
-    payload = self._run_gh_json(
+    # `--repo self.repo` を明示的に渡す。既存 issue CRUD 呼び出し
+    # （github.py:151 等）と同じ規約。_run_gh は --repo 自動注入を行わない。
+    payload = self._gh_json(
         "pr", "list",
+        "--repo", self.repo,
         "--head", branch_name,
         "--state", "open",
         "--json", "number,headRefName",
@@ -227,7 +246,7 @@ def resolve_pr_context(self, branch_name: str) -> PRContext | None:
     return PRContext(pr_id=numbers[0], pr_ref=f"gh:{numbers[0]}")
 ```
 
-- `--repo` の自動注入は `_run_gh` 側で `[provider.github].repo` を解決する既存経路を流用する（既存 issue CRUD 経路と同じ）。
+- `--repo self.repo` を明示的に args に含める（既存規約準拠。`_run_gh` に repo 注入ロジックを追加しない）。
 - `gh pr list` は default で open のみ返すが、明示的に `--state open` を付け、将来の `gh` default 変更に耐える形にする。
 
 ### 2. `sync_from_github`
@@ -239,8 +258,8 @@ def sync_from_github(*, config: KajiConfig, repo_override: str | None, quiet: bo
     repo = _resolve_repo_github(config, repo_override)  # provider.github.repo を見る
     cache_dir = _cache_dir_root(config.repo_root)
 
-    issues = _fetch_open_issues_github(repo)        # gh api --paginate
-    pages_fetched = 1  # gh --paginate は内部 page 数を露出しないため "1 (paginated)" 扱い
+    issues, page_sizes = _fetch_open_issues_github_paginated(repo)
+    pages_fetched = len(page_sizes)
 
     # phase 2: stale 判定（forge prefix を gh-*.json にスコープ）
     fetched_numbers = {str(e["number"]) for e in issues}
@@ -256,22 +275,83 @@ def sync_from_github(*, config: KajiConfig, repo_override: str | None, quiet: bo
     return SyncResult(...)
 ```
 
-- `_fetch_open_issues_github(repo)` の擬似コード:
+- `_fetch_open_issues_github_paginated(repo)` は `_fetch_open_issues_paginated`（gitlab 側）と同構造の手動 page loop:
   ```python
-  cmd = ["gh", "api", "--paginate",
-         f"repos/{repo}/issues?state=open&per_page={_PER_PAGE}"]
-  proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
-  if proc.returncode != 0:
-      raise SyncError(f"gh api failed (exit {proc.returncode}): ...")
-  payload = json.loads(proc.stdout)  # gh --paginate concatenates arrays
-  # pull_request key を持つ entry を除外
-  issues = [e for e in payload if isinstance(e, dict) and "pull_request" not in e]
-  if len(issues) > _MAX_PAGES * _PER_PAGE:
-      raise SyncError(f"sync aborted after {len(issues)} issues ...")
-  return issues
+  def _fetch_open_issues_github_paginated(
+      repo: str,
+  ) -> tuple[list[dict[str, object]], list[int]]:
+      issues: list[dict[str, object]] = []
+      page_sizes: list[int] = []
+      page = 1
+      while True:
+          payload = _gh_api_get_issues(
+              repo, state="open", per_page=_PER_PAGE, page=page
+          )
+          if not isinstance(payload, list):
+              raise SyncError(
+                  f"gh api returned non-array JSON for issue list (page {page})"
+              )
+          if not payload:
+              break
+          if page > _MAX_PAGES:
+              raise SyncError(
+                  f"sync aborted after {_MAX_PAGES} pages "
+                  f"(>{_MAX_PAGES * _PER_PAGE} issues). ..."
+              )
+          # PR を除外: GitHub REST は /issues に PR も含めて返す
+          for entry in payload:
+              if not isinstance(entry, dict):
+                  raise SyncError(
+                      f"gh api returned non-object element on page {page}"
+                  )
+              if "pull_request" in entry:
+                  continue  # pull request entry をスキップ
+              issues.append(entry)
+          page_sizes.append(len(payload))
+          if len(payload) < _PER_PAGE:
+              break
+          page += 1
+      return issues, page_sizes
   ```
+- `_gh_api_get_issues(repo, *, state, per_page, page)` の擬似コード（`_glab_api_get` と対称、`gh` 不在チェック込み）:
+  ```python
+  def _gh_api_get_issues(
+      repo: str, *, state: str, per_page: int, page: int
+  ) -> object:
+      if shutil.which("gh") is None:
+          raise SyncError(
+              "'gh' CLI not found in PATH. "
+              "Install gh to use 'kaji sync from-github'."
+          )
+      endpoint = f"repos/{repo}/issues"
+      cmd = [
+          "gh", "api",
+          "-X", "GET",
+          endpoint,
+          "-F", f"state={state}",
+          "-F", f"per_page={per_page}",
+          "-F", f"page={page}",
+      ]
+      try:
+          proc = subprocess.run(
+              cmd, check=False, capture_output=True, text=True
+          )
+      except OSError as exc:
+          raise SyncError(f"failed to invoke 'gh': {exc}") from exc
+      if proc.returncode != 0:
+          raise SyncError(
+              f"gh api failed (exit {proc.returncode}): "
+              f"{proc.stderr.strip() or proc.stdout.strip()}"
+          )
+      try:
+          return json.loads(proc.stdout)
+      except json.JSONDecodeError as exc:
+          raise SyncError(f"gh returned invalid JSON: {exc}") from exc
+  ```
+  `repo` は `endpoint` の文字列に埋め込むため、`-R <repo>` 形式の追加 flag は不要（`repos/<owner>/<repo>/...` 経路は cwd 非依存で repo が一意に決まる）。
 - 共通 helper（`_atomic_write` / `_mark_cache_stale` / `_now_iso` / `_write_sync_meta`）は gitlab 側と同居させる（重複実装を避ける）。`_write_sync_meta` は `forge` を引数化する。
 - `_resolve_repo_github(config, override)` は `from-gitlab` の `_resolve_repo` と同形だが `provider.github.repo` を参照する独立関数とする（型を別 dataclass で持つため共通化は不要）。
+- `_write_fresh_github_cache_file(entry, cache_dir, now_iso)` は `_write_fresh_cache_file`（gitlab 側）と対称。`entry.get("number")` を path 構成に使い、`wrapper["forge"]="github"` を立てる。
 
 ### 3. `_list_existing_cached_iids` の forge 対応
 
@@ -411,13 +491,16 @@ GitLab 側にあって GitHub 側にないもの:
 | 情報源 | URL/パス | 根拠（引用/要約） |
 |--------|----------|-------------------|
 | GitHub CLI `gh pr list` reference | https://cli.github.com/manual/gh_pr_list | `--head <branch>` で head branch 指定の filter、`--state open` で open のみ、`--json number,headRefName` で構造化出力。複数件返却の場合は array length > 1 で識別可能（公式 manual） |
-| GitHub CLI `gh api --paginate` reference | https://cli.github.com/manual/gh_api | `--paginate` flag が複数 page を自動で取得し JSON array を連結する旨を明記。GitHub REST 標準の `Link: rel="next"` を内部で辿る |
+| GitHub CLI `gh api` reference (`--paginate` / `--slurp`) | https://cli.github.com/manual/gh_api | `--paginate`: "Make additional HTTP requests to fetch all pages of results"。array endpoint で page を連結する挙動は明示されているが、object endpoint や混在ケースでは page ごとに separate JSON が並ぶ。`--slurp`: "Use with `--paginate` to return an array of all pages of either JSON arrays or objects"。本設計は forge 間の構造対称性のため `--paginate` を採用せず、手動 `?page=N` ループ（`from-gitlab` と同形）を採用する根拠とする |
+| GitHub CLI `gh api` の `-F` (raw field) | https://cli.github.com/manual/gh_api | "-F, --field <key=value>: Add a typed parameter in `key=value` format"。`-F state=open` で query string を typed 形式で渡す。GET 経路では query string、POST 経路では body field として扱われる |
 | GitHub REST API: List repository issues | https://docs.github.com/en/rest/issues/issues#list-repository-issues | `GET /repos/{owner}/{repo}/issues` は PR も含めて返す。`pull_request` プロパティの存在で PR と issue を区別する旨が公式 description に明記（"Note: GitHub's REST API considers every pull request an issue ... you can identify pull requests by the pull_request key") |
 | GitHub REST API: List pull requests | https://docs.github.com/en/rest/pulls/pulls#list-pull-requests | `head` query param に `branch` を渡すと head branch 指定の絞り込みが効く（`gh pr list --head` の裏側） |
 | Conventional Commits 1.0.0 | https://www.conventionalcommits.org/en/v1.0.0/ | `feat:` prefix の使用根拠（本 Issue は new feature 追加） |
 | 既存実装: `sync_from_gitlab` | `kaji_harness/sync.py:271-363` | 対称実装の構造リファレンス（3 phase all-or-nothing、`_list_existing_cached_iids` / `_mark_cache_stale` / `_write_sync_meta` の利用パターン） |
 | 既存実装: `GitLabProvider.resolve_pr_context` | `kaji_harness/providers/gitlab.py:466-485` | `pr_ref=f"gl:{iid}"` という prefix 形式の前例。本 Issue の `gh:<n>` 採用根拠 |
 | 既存実装: `view_cached_gitlab_issue` | `kaji_harness/providers/local.py:804-826` | `.kaji/cache/gl-<iid>.json` layout のリファレンス。本 Issue で `gh-<n>.json` 化する整合先 |
+| 既存実装: `_cached_issue_from_payload` (旧 parser) | `kaji_harness/providers/local.py:902-943` | 現行 GitHub cache parser は **raw payload を直接読む**（wrapper 非対応、`gh issue view --json` camelCase 想定）。本 Issue で wrapper schema + REST snake_case に対応する新 parser `_cached_github_issue_from_payload` に置換する根拠 |
+| 既存規約: `_run_gh` の `--repo` 非注入 | `kaji_harness/providers/github.py:60-78` / `:151` / `:174` / `:191` / `:208` / `:218` / `:239` / `:263` | `_run_gh` は cmd に `--repo` を自動付与せず、呼び出し側が明示する設計。本 Issue の `resolve_pr_context` も同規約に従い `--repo self.repo` を args に含める |
 | 既存実装: `runner._resolve_pr_context_safe` | `kaji_harness/runner.py:170-189` | `GitHubProviderError` 追加位置と「known provider error は WARN + None」原則 |
 | 既存仕様: GitLab auto-close keyword 回避 | `docs/cli-guides/gitlab-mode.md:273-364` | GitHub mode でも同等の hazard pattern が発生する旨を `github-mode.md` で参照する根拠 |
 | Phase 4 申し送り（PR context 注入） | `.kaji/issues/local-p1-1-*/issue.md` § PR context 注入 | 本 Issue の trigger 文脈。GitHub mode で `resolve_pr_context` の本実装が deferred されていた経緯 |
