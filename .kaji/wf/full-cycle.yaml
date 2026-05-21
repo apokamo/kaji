@@ -4,7 +4,7 @@ description: |
   issue-start は事前に手動実行済みであることが前提。
   review-ready が RETRY の場合は fix-ready で Issue 本文を修正してから再試行する。
 execution_policy: auto
-requires_provider: gitlab
+requires_provider: any
 
 cycles:
   ready-review:

@@ -3,7 +3,7 @@ description: |
   PR レビュー → 修正 → 確認 → close まで 1 コマンドで全自動実行する。
   PR が既に open であることが前提。ABORT 時には close を実行しない。
 execution_policy: auto
-requires_provider: gitlab
+requires_provider: any
 
 cycles:
   pr-review:
