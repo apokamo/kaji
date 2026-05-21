@@ -4,7 +4,7 @@ description: |
   close は本 workflow に含まない（手動で /issue-close を実行する）。
   PR が既に open であることが前提。
 execution_policy: auto
-requires_provider: gitlab
+requires_provider: any
 
 cycles:
   pr-review:
