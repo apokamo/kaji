@@ -88,7 +88,7 @@ $ARGUMENTS = <issue_id>
 
 ### Step 1.4: Pre-Handoff Review 証跡の存在チェック（hard gate）
 
-`/issue-implement` Step 7.6 で生成される `## Pre-Handoff Review` セクション（経路情報を含む）が Issue コメントに存在することを機械的に確認する。**実装側のゲートが Codex / Gemini 等で skill markdown を誤読・省略してサイレントにバイパスされていないか**を、レビュー側でハードチェックする責務。
+`/issue-implement` Step 8.5 で生成される `## Pre-Handoff Review` セクション（経路情報を含む）が Issue コメントに存在することを機械的に確認する。**実装側のゲートが Codex / Gemini 等で skill markdown を誤読・省略してサイレントにバイパスされていないか**を、レビュー側でハードチェックする責務。
 
 ```bash
 PHR_COUNT=$(kaji issue view [issue_id] --comments 2>/dev/null | grep -c '^## Pre-Handoff Review$')
@@ -97,8 +97,8 @@ PHR_ROUTE_COUNT=$(kaji issue view [issue_id] --comments 2>/dev/null | grep -cE '
 
 **判定**:
 
-- `PHR_COUNT == 0` または `PHR_ROUTE_COUNT == 0` → **BACK**。`/issue-implement` Step 7.6 が未実施 / 出力欠落と判断し、以下を Must Fix として投稿してレビューに入らない:
-  - 「Pre-Handoff Review コメントが Issue に存在しない（または `経路:` 行が無い）。`/issue-implement` を再実行し、Step 7.6 を完了してから再度 review に渡すこと。」
+- `PHR_COUNT == 0` または `PHR_ROUTE_COUNT == 0` → **BACK**。`/issue-implement` Step 8.5 が未実施 / 出力欠落と判断し、以下を Must Fix として投稿してレビューに入らない:
+  - 「Pre-Handoff Review コメントが Issue に存在しない（または `経路:` 行が無い）。`/issue-implement` を再実行し、Step 8.5 を完了してから再度 review に渡すこと。」
 - `PHR_COUNT ≥ 1` かつ `PHR_ROUTE_COUNT ≥ 1` → Step 1.5 に進む
 
 > **趣旨**: 本 Issue (gl:9) で導入した pre-handoff review の自己評価バイパスを抑える hard boundary。
