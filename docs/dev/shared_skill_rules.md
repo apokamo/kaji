@@ -120,7 +120,7 @@ GitLab spec 側）に揃える。
 
 ### 影響を受ける skill
 
-`/issue-design`（Step 2.6 design self-check 出力）, `/issue-implement`（Step 7.6
+`/issue-design`（Step 2.6 design self-check 出力）, `/issue-implement`（Step 8.5
 pre-handoff review 出力）, `/issue-review-design`, `/issue-review-code`,
 `/issue-fix-design`, `/issue-fix-code`, `/i-doc-review`, `/i-doc-fix`, `/pr-fix`,
 `/pr-verify`, `/i-pr`, `/i-dev-final-check`, `/i-doc-final-check`

@@ -34,7 +34,7 @@ paraphrase / 再構成。逐語コピーではない。
 
 ## 入力（prompt 経由で受領） — 単一情報源 (SoT)
 
-> 本セクションは **prompt 入力契約の単一情報源**。`.claude/skills/issue-implement/SKILL.md` Step 7.6.2 経路 A の prompt template は本契約のミラーです。契約変更時はまず本ファイルを更新し、SKILL.md template を追従させてください。逆順は禁止。
+> 本セクションは **prompt 入力契約の単一情報源**。`.claude/skills/issue-implement/SKILL.md` Step 8.5.2 経路 A の prompt template は本契約のミラーです。契約変更時はまず本ファイルを更新し、SKILL.md template を追従させてください。逆順は禁止。
 
 main session が以下を prompt 内のセクションとして渡します:
 
