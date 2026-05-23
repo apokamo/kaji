@@ -284,8 +284,6 @@ def _build_claude_args(
         args += ["--effort", step.effort]
     if step.max_budget_usd:
         args += ["--max-budget-usd", str(step.max_budget_usd)]
-    if step.max_turns:
-        args += ["--max-turns", str(step.max_turns)]
     if session_id:
         args += ["--resume", session_id]
     if execution_policy == "auto":

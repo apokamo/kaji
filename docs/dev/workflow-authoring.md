@@ -89,7 +89,6 @@ config 非依存のため）。
 | `model` | str | — | モデル名（省略時は agent デフォルト） |
 | `effort` | str | — | エージェント別の許容値で書く。後述「effort 値」参照 |
 | `max_budget_usd` | float | — | コスト上限（USD） |
-| `max_turns` | int | — | ターン数上限 |
 | `timeout` | int | — | タイムアウト（秒）。フォールバック: step.timeout → workflow.default_timeout → config.execution.default_timeout |
 | `workdir` | str | — | 作業ディレクトリ（絶対パス）。フォールバック: step.workdir → workflow.workdir → project_root |
 | `resume` | str | — | resume するステップ ID（同一 agent のセッション継続） |

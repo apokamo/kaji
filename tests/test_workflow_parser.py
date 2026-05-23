@@ -47,7 +47,6 @@ FULL_WORKFLOW_YAML = dedent("""\
         model: gemini-2.5-pro
         effort: high
         max_budget_usd: 5.0
-        max_turns: 10
         timeout: 600
         on:
           PASS: implement
@@ -120,7 +119,6 @@ class TestWorkflowParsing:
         assert design.model == "gemini-2.5-pro"
         assert design.effort == "high"
         assert design.max_budget_usd == 5.0
-        assert design.max_turns == 10
         assert design.timeout == 600
 
         impl = wf.find_step("implement")
@@ -154,7 +152,6 @@ class TestWorkflowParsing:
         assert step_a.model is None
         assert step_a.effort is None
         assert step_a.max_budget_usd is None
-        assert step_a.max_turns is None
         assert step_a.timeout is None
         assert step_a.resume is None
 
@@ -183,6 +180,32 @@ class TestWorkflowParsing:
         step = wf.find_step("step1")
         assert step is not None
         assert step.on == {"PASS": "end"}
+
+    @pytest.mark.small
+    def test_max_turns_in_yaml_is_silently_ignored(self) -> None:
+        """`max_turns:` in step YAML is parsed without error and does not become a Step attribute.
+
+        Contract: claude `--max-turns` was removed upstream (v2.1.x), so the Step field
+        was deleted. Existing workflow YAML containing `max_turns:` must continue to parse
+        (silent ignore) — this protects against accidental fail-fast regression if a future
+        change adds unknown-key detection to parse_workflow.
+        """
+        yaml_str = dedent("""\
+            name: legacy-wf
+            execution_policy: auto
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+                max_turns: 10
+                on:
+                  PASS: end
+        """)
+        wf = load_workflow_from_str(yaml_str)
+
+        step = wf.find_step("step1")
+        assert step is not None
+        assert not hasattr(step, "max_turns")
 
 
 # ============================================================

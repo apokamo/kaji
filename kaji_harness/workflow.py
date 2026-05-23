@@ -165,7 +165,6 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                 model=step_data.get("model"),
                 effort=raw_effort,
                 max_budget_usd=step_data.get("max_budget_usd"),
-                max_turns=step_data.get("max_turns"),
                 timeout=raw_timeout,
                 workdir=raw_step_workdir,
                 resume=step_data.get("resume"),

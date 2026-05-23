@@ -5,8 +5,8 @@
 Claude Code CLI の包括的なリファレンス。
 セッション管理、Permissions設定、JSON出力、サブエージェント、実践的な使用パターンを記載。
 
-**対象バージョン**: Claude Code v2.1.71+
-**--help 取得日**: 2026-03-09（v2.1.71 のローカル環境で取得）
+**対象バージョン**: Claude Code v2.1.150+
+**--help 取得日**: 2026-05-23（v2.1.150 のローカル環境で取得）
 **公式ドキュメント**: https://docs.anthropic.com/claude-code
 
 ---
@@ -74,7 +74,6 @@ claude -p [OPTIONS] "プロンプト"
 | `--agent` | セッションで使用するエージェントを指定 | `--agent my-custom-agent` |
 | `--agents` | カスタムサブエージェントをJSON定義 | `--agents '{"reviewer":{...}}'` |
 | `--max-budget-usd` | API呼び出しのコスト上限（`-p` 必須） | `--max-budget-usd 5.00` |
-| `--max-turns` | エージェントターン数の上限（`-p` 必須） | `--max-turns 3` |
 | `--json-schema` | 構造化出力のJSONスキーマ（`-p` 必須） | `--json-schema '{"type":"object",...}'` |
 | `--fallback-model` | 過負荷時のフォールバックモデル（`-p` 必須） | `--fallback-model sonnet` |
 | `--worktree` | `-w` | 隔離されたgit worktreeで起動 | `-w feature-auth` |
@@ -88,11 +87,7 @@ claude -p [OPTIONS] "プロンプト"
 | `--no-chrome` | Chrome ブラウザ統合を無効化 | `--no-chrome` |
 | `--ide` | IDE自動接続 | `--ide` |
 | `--betas` | ベータ機能ヘッダー（APIキーユーザーのみ） | `--betas interleaved-thinking` |
-| `--init` | 初期化フックを実行してインタラクティブモード開始 | `--init` |
 | `--init-only` | 初期化フックを実行して終了 | `--init-only` |
-| `--maintenance` | メンテナンスフックを実行して終了 | `--maintenance` |
-| `--remote` | claude.ai でウェブセッション作成 | `--remote "Fix the bug"` |
-| `--teleport` | ウェブセッションをローカルターミナルで再開 | `--teleport` |
 | `--disable-slash-commands` | スキル・コマンドを無効化 | `--disable-slash-commands` |
 | `--strict-mcp-config` | `--mcp-config` のMCPサーバーのみ使用 | `--strict-mcp-config` |
 | `--mcp-config` | MCPサーバー設定ファイル | `--mcp-config ./mcp.json` |
@@ -132,6 +127,7 @@ claude -p [OPTIONS] "プロンプト"
 |-----------|------|
 | `--permission-mode default` | デフォルト（初回使用時に確認） |
 | `--permission-mode acceptEdits` | ファイル編集を自動承認 |
+| `--permission-mode auto` | 自動承認（v2.1.x で追加） |
 | `--permission-mode plan` | プランモード（分析のみ、変更不可） |
 | `--permission-mode dontAsk` | 確認なし（事前許可済みツールのみ実行、他はすべて拒否） |
 | `--permission-mode bypassPermissions` | 全権限チェックをスキップ（コンテナ/VM等の隔離環境のみ） |
@@ -695,26 +691,18 @@ claude -p --model opus --fallback-model sonnet "重要なタスク"
 claude --model opusplan "設計と実装"
 ```
 
-### 8.5 ターン数制限パターン
-
-```bash
-# 最大3ターンで終了（無限ループ防止）
-claude -p --max-turns 3 "簡単な修正"
-```
-
-### 8.6 カスタムエージェントによるCI/CDパイプライン
+### 8.5 カスタムエージェントによるCI/CDパイプライン
 
 ```bash
 # セッション永続化なしでCI実行
 claude -p --no-session-persistence \
   --max-budget-usd 2.00 \
-  --max-turns 5 \
   --output-format json \
   --allowedTools "Bash(npm *)" "Read" "Grep" "Glob" \
   "テストを実行して結果を報告"
 ```
 
-### 8.7 Worktree を使った並列開発
+### 8.6 Worktree を使った並列開発
 
 ```bash
 # 機能A: worktree + tmux
@@ -797,7 +785,6 @@ claude --model sonnet[1m]
 | ツール制御 | `--allowedTools` / `--tools` | MCP設定 |
 | コスト情報 | `total_cost_usd` | `usage.input_tokens` 等 |
 | コスト上限 | `--max-budget-usd` | なし |
-| ターン上限 | `--max-turns` | なし |
 | 作業ディレクトリ | カレント固定 / `--add-dir` | `-C` で指定 |
 | サブエージェント | `--agent` / `--agents` | なし |
 | Worktree統合 | `--worktree` / `-w` | なし |
@@ -885,7 +872,7 @@ claude -p --max-budget-usd 1.00 "タスク"
 
 | 情報 | 一次情報源 | 検証方法 | 検証日 |
 |------|-----------|---------|--------|
-| コマンドオプション | `claude --help` (v2.1.71) | ローカル実行 | 2026-03-09 |
+| コマンドオプション | `claude --help` (v2.1.150) | ローカル実行 | 2026-05-23 |
 | JSON出力フォーマット | 実機検証（v2.0.55時点） | ローカル実行 | 2025-11-27 |
 | stream-json フォーマット | 実機検証（v2.0.55時点） | ローカル実行 | 2025-11-27 |
 | セッション管理 | 実機検証（v2.0.55時点） | ローカル実行 | 2025-11-27 |
@@ -906,6 +893,7 @@ claude -p --max-budget-usd 1.00 "タスク"
 
 | 日付 | 内容 |
 |------|------|
+| 2026-05-23 | v2.1.150 追従: `--max-turns` / `--init` / `--maintenance` / `--remote` / `--teleport` を削除（CLI 側で廃止済）、`--permission-mode auto` choice を追記、対象バージョンを v2.1.150 に更新 |
 | 2026-03-09 | `--file`形式修正、`--effort`/`--debug-file`追加、一次情報セクション追加、公式URLを修正 |
 | 2026-03-09 | v2.1.71+対応: サブエージェント、worktree統合、effort level、1Mコンテキスト、新CLIオプション多数追加、ワイルドカード構文更新、モデル情報更新 |
 | 2025-11-27 | 初版作成 |
