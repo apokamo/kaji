@@ -63,9 +63,9 @@ unknown option エラーは実発火していない潜在バグ。
 #### ハーネス側
 
 - `_build_claude_args()` の出力配列から `--max-turns N` が永久に消える
-- `kaji validate <workflow>.yaml` で `max_turns:` を含む YAML が来た場合 → **WorkflowValidationError**（不明キーとして扱う）。後方互換シムは設けない（実利用ゼロが確認済のため）
+- `kaji validate <workflow>.yaml` で `max_turns:` を含む YAML が来た場合 → **silent ignore（無視）**。エラーにはしない
 
-> **不明キー検証の挙動**: 現状の `workflow.py` パーサは未知キーを silent ignore する設計か、エラーにする設計か実装を確認したうえで実装フェーズで判断する。silent ignore のままなら本変更ではエラー化しない（破壊変更を増やさない）。エラー化する派生改修は別 Issue で起票する。
+> **silent ignore に固定する根拠**: 現状の `workflow.py:parse_workflow` は `step_data.get("max_turns")` で必要なキーだけを読み出す方式で、未知キー検出機構を持たない。よって `max_turns=step_data.get(...)` の 1 行を削除しただけで `max_turns:` キーは自動的に「読まれない＝無視される」状態になる。エラー化するには新たに「不明キーを検出する仕組み」を追加する必要があり、その追加は本 Issue の scope（chore: CLI 追従）を超える。`max_turns:` を YAML に書く実利用ゼロは grep で確認済のため、silent ignore でも実害は発生しない。不明キー一般のバリデーション強化は派生 Issue として別途検討する。
 
 #### docs 側
 
@@ -96,7 +96,7 @@ steps:
 
 ### エラー
 
-- 廃止後に `max_turns:` を含む YAML が読み込まれた場合の挙動は workflow.py の不明キーポリシーに従う。本 Issue では「許容（silent ignore）」「拒否（ValidationError）」のどちらでも構わない（実害ゼロ）。実装フェーズで現行挙動を確認し、最も影響の少ない方を採る
+- 廃止後に `max_turns:` を含む YAML が読み込まれた場合 → **silent ignore**（エラーにならず、`max_turns:` 行はパース時に無視されてそのまま実行される）。これは現行 `workflow.py:parse_workflow` の挙動（必要キーのみ `step_data.get(...)` で読む）の自然な帰結であり、追加の実装不要
 
 ## 制約・前提条件
 
@@ -121,6 +121,7 @@ steps:
 - `tests/test_cli_args.py` の `TestCodexArgs.test_max_turns_ignored` を削除（フィールド廃止に伴い無意味化）
 - `tests/test_cli_args.py` の `_make_step()` ヘルパから `max_turns` 引数を削除
 - `tests/test_workflow_parser.py` の `max_turns: 10` を含む YAML サンプルと assertion を削除
+- `tests/test_workflow_parser.py` に **silent ignore 契約テストを新規追加**: `max_turns: 10` を含む YAML を `parse_workflow` に流して `WorkflowValidationError` を発生させず、`Step` オブジェクトに `max_turns` 属性が無いことを assertion する
 
 ### 3. docs 更新（3 ファイル独立に編集）
 
@@ -153,7 +154,7 @@ steps:
 - `tests/test_cli_args.py`: `_make_step()` から `max_turns` パラメータが削除されてもコンパイル可能（mypy 通過）
 - `tests/test_cli_args.py::TestClaudeArgs::test_basic_new_session` 等の既存 assertion（`--max-turns` を期待しないケース）は不変で通過することを再確認
 - `tests/test_workflow_parser.py`: `max_turns:` を含まない YAML サンプルでパースが通ること（既存テスト維持）
-- **新規追加**: なし。`max_turns` フィールド廃止は「機能の削除」であり、削除後の状態を保護する正の検査は既存テスト（`test_basic_new_session` で `--max-turns` を含まない配列を厳密一致で expect している）で十分カバーされる
+- **新規追加（silent ignore 契約の保護）**: `tests/test_workflow_parser.py` に「`max_turns: 10` を含む YAML を `parse_workflow` で読み込んでも `WorkflowValidationError` を出さず、`Step` オブジェクトが正常に生成されること（生成された `Step` には `max_turns` 属性が存在しない）」を検査するテストを 1 件追加する。これにより、将来誰かが workflow.py に不明キー検出を入れた際に「`max_turns` だけは silent ignore のまま残す」契約を CI が捕捉できる
 
 #### Medium テスト
 
