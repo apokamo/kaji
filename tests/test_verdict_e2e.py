@@ -167,12 +167,8 @@ class TestKajiRunWorkflowExecution:
 
     def test_kaji_validate_workflows(self) -> None:
         """kaji validate succeeds on all workflow files (no agent required)."""
-        import shutil
         import subprocess
-
-        kaji_path = shutil.which("kaji")
-        if kaji_path is None:
-            pytest.skip("kaji CLI not installed")
+        import sys
 
         workflows_dir = Path(__file__).parent.parent / "workflows"
         if not workflows_dir.exists():
@@ -183,7 +179,13 @@ class TestKajiRunWorkflowExecution:
             pytest.skip("No workflow YAML files found")
 
         result = subprocess.run(
-            ["kaji", "validate", *[str(f) for f in yaml_files]],
+            [
+                sys.executable,
+                "-m",
+                "kaji_harness.cli_main",
+                "validate",
+                *[str(f) for f in yaml_files],
+            ],
             capture_output=True,
             text=True,
             timeout=30,
