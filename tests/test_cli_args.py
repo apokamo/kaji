@@ -24,7 +24,6 @@ def _make_step(
     model: str | None = None,
     effort: str | None = None,
     max_budget_usd: float | None = None,
-    max_turns: int | None = None,
 ) -> Step:
     """Helper to create a Step with minimal boilerplate."""
     return Step(
@@ -34,7 +33,6 @@ def _make_step(
         model=model,
         effort=effort,
         max_budget_usd=max_budget_usd,
-        max_turns=max_turns,
     )
 
 
@@ -84,16 +82,6 @@ class TestClaudeArgs:
         )
         assert "--max-budget-usd" in args
         assert "5.0" in args
-
-    @pytest.mark.small
-    def test_with_max_turns(self, workdir: Path) -> None:
-        """Max turns flag is included when step has max_turns."""
-        step = _make_step("claude", max_turns=80)
-        args = build_cli_args(
-            step, "do stuff", workdir, session_id=None, execution_policy="sandbox"
-        )
-        assert "--max-turns" in args
-        assert "80" in args
 
     @pytest.mark.small
     def test_with_session_id_resume(self, workdir: Path) -> None:
@@ -190,16 +178,6 @@ class TestCodexArgs:
         )
         assert "--max-budget-usd" not in args
         assert "5.0" not in args
-
-    @pytest.mark.small
-    def test_max_turns_ignored(self, workdir: Path) -> None:
-        """max_turns is not passed to Codex."""
-        step = _make_step("codex", max_turns=80)
-        args = build_cli_args(
-            step, "do stuff", workdir, session_id=None, execution_policy="sandbox"
-        )
-        assert "--max-turns" not in args
-        assert "80" not in args
 
     @pytest.mark.small
     def test_execution_policy_auto(self, workdir: Path) -> None:
