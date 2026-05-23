@@ -181,6 +181,70 @@ class TestTransitionValidation:
 
         assert any("INVALID_VERDICT" in e for e in exc_info.value.errors)
 
+    @pytest.mark.small
+    def test_back_prefix_verdicts_accepted(self) -> None:
+        """BACK_DESIGN / BACK_IMPLEMENT prefixed verdicts are accepted."""
+        wf = _workflow(
+            steps=[
+                _step("design", agent="claude", on={"PASS": "implement", "ABORT": "end"}),
+                _step("implement", agent="claude", on={"PASS": "final", "ABORT": "end"}),
+                _step(
+                    "final",
+                    agent="claude",
+                    on={
+                        "PASS": "end",
+                        "BACK_DESIGN": "design",
+                        "BACK_IMPLEMENT": "implement",
+                        "ABORT": "end",
+                    },
+                ),
+            ],
+        )
+
+        validate_workflow(wf)
+
+    @pytest.mark.small
+    def test_back_prefix_empty_suffix_rejected(self) -> None:
+        """BACK_ alone (no suffix) is rejected."""
+        wf = _workflow(
+            steps=[
+                _step("step_a", on={"PASS": "end", "BACK_": "end"}),
+            ],
+        )
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            validate_workflow(wf)
+
+        assert any("BACK_" in e for e in exc_info.value.errors)
+
+    @pytest.mark.small
+    def test_back_prefix_unknown_suffix_accepted(self) -> None:
+        """BACK_FOO (unknown root-cause) is formally accepted (prefix-based design)."""
+        wf = _workflow(
+            steps=[
+                _step("step_a", agent="claude", on={"PASS": "step_b", "ABORT": "end"}),
+                _step("step_b", agent="claude", on={"PASS": "end", "BACK_FOO": "step_a"}),
+            ],
+        )
+
+        validate_workflow(wf)
+
+    @pytest.mark.small
+    def test_base_verdicts_still_accepted(self) -> None:
+        """Existing PASS/RETRY/BACK/ABORT continues to be accepted (backward compat)."""
+        wf = _workflow(
+            steps=[
+                _step("step_a", agent="claude", on={"PASS": "step_b", "ABORT": "end"}),
+                _step(
+                    "step_b",
+                    agent="claude",
+                    on={"PASS": "end", "RETRY": "step_b", "BACK": "step_a", "ABORT": "end"},
+                ),
+            ],
+        )
+
+        validate_workflow(wf)
+
 
 # ============================================================
 # Test class: Cycle validation
@@ -321,6 +385,31 @@ class TestCycleValidation:
             validate_workflow(wf)
 
         assert any("nonexistent_step" in e or "on_exhaust" in e for e in exc_info.value.errors)
+
+    @pytest.mark.small
+    def test_cycle_on_exhaust_accepts_back_prefix(self) -> None:
+        """on_exhaust accepts BACK_* prefixed verdicts (shared judgment with step.on)."""
+        wf = _workflow(
+            steps=[
+                _step("impl", agent="claude", on={"PASS": "review", "ABORT": "end"}),
+                _step(
+                    "review",
+                    agent="codex",
+                    on={"PASS": "end", "RETRY": "impl"},
+                ),
+            ],
+            cycles=[
+                CycleDefinition(
+                    name="impl-loop",
+                    entry="impl",
+                    loop=["impl", "review"],
+                    max_iterations=3,
+                    on_exhaust="BACK_DESIGN",
+                ),
+            ],
+        )
+
+        validate_workflow(wf)
 
 
 # ============================================================

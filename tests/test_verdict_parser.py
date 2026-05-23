@@ -234,6 +234,44 @@ class TestBackWithoutSuggestion:
 
 
 # ============================================================
+# 8b. BACK_DESIGN / BACK_IMPLEMENT suggestion requirement
+# ============================================================
+
+
+@pytest.mark.small
+class TestBackPrefixSuggestionRequired:
+    """BACK_* prefixed statuses require non-empty suggestion (same as BACK)."""
+
+    def test_back_design_missing_suggestion_raises(self) -> None:
+        valid = {"PASS", "RETRY", "BACK_DESIGN", "BACK_IMPLEMENT", "ABORT"}
+        body = 'status: BACK_DESIGN\nreason: "設計起因"\nevidence: "影響ドキュメント漏れ"'
+        output = _wrap_verdict(body)
+
+        with pytest.raises(VerdictParseError):
+            parse_verdict(output, valid)
+
+    def test_back_implement_missing_suggestion_raises(self) -> None:
+        valid = {"PASS", "RETRY", "BACK_DESIGN", "BACK_IMPLEMENT", "ABORT"}
+        body = 'status: BACK_IMPLEMENT\nreason: "実装起因"\nevidence: "テスト証跡欠落"'
+        output = _wrap_verdict(body)
+
+        with pytest.raises(VerdictParseError):
+            parse_verdict(output, valid)
+
+    def test_back_design_with_suggestion_succeeds(self) -> None:
+        valid = {"PASS", "RETRY", "BACK_DESIGN", "BACK_IMPLEMENT", "ABORT"}
+        body = (
+            'status: BACK_DESIGN\nreason: "設計起因"\n'
+            'evidence: "影響ドキュメント漏れ"\nsuggestion: "/issue-design に戻る"'
+        )
+        output = _wrap_verdict(body)
+        result = parse_verdict(output, valid)
+
+        assert result.status == "BACK_DESIGN"
+        assert result.suggestion == "/issue-design に戻る"
+
+
+# ============================================================
 # 9. PASS without suggestion → defaults to empty string
 # ============================================================
 

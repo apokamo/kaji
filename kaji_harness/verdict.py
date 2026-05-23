@@ -192,7 +192,7 @@ def _validate(verdict: Verdict, valid_statuses: set[str]) -> None:
             f"'{verdict.status}' not in {valid_statuses}. "
             "This indicates a prompt violation — do not retry."
         )
-    if verdict.status in ("ABORT", "BACK") and not verdict.suggestion:
+    if (verdict.status == "ABORT" or verdict.status.startswith("BACK")) and not verdict.suggestion:
         raise VerdictParseError(f"{verdict.status} verdict requires non-empty suggestion")
 
 

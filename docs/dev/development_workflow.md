@@ -38,9 +38,8 @@ flowchart TB
     d6a -->|Yes| d9["/i-dev-final-check"]
     d9 -->|PASS| pr["/i-pr"]
     d9 -->|RETRY| d9
-    d9 -->|BACK: docs| d5
-    d9 -->|BACK: implement| d5
-    d9 -->|BACK: design| d1
+    d9 -->|BACK_IMPLEMENT| d5
+    d9 -->|BACK_DESIGN| d1
     pr --> close["/issue-close"]
     close --> done([end])
 ```

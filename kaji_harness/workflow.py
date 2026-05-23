@@ -289,7 +289,14 @@ def validate_workflow(workflow: Workflow) -> None:
         WorkflowValidationError: 検証エラーがある場合
     """
     errors: list[str] = []
-    valid_verdicts = {"PASS", "RETRY", "BACK", "ABORT"}
+    base_verdicts = frozenset({"PASS", "RETRY", "BACK", "ABORT"})
+    back_prefix = "BACK_"
+
+    def _is_valid_verdict(value: str) -> bool:
+        if value in base_verdicts:
+            return True
+        return value.startswith(back_prefix) and len(value) > len(back_prefix)
+
     # on が不正な step id を収集。cycle 遷移チェック（.on.get() 呼び出し）から除外するために使用する
     invalid_on_step_ids: set[str] = set()
 
@@ -388,9 +395,9 @@ def validate_workflow(workflow: Workflow) -> None:
                     f"Step '{step.id}' transitions to unknown step '{next_id}' on {verdict}"
                 )
 
-        # 3. verdict 値が有効であること
+        # 3. verdict 値が有効であること（BACK_* プレフィックスを許可）
         for verdict in step.on:
-            if verdict not in valid_verdicts:
+            if not _is_valid_verdict(verdict):
                 errors.append(f"Step '{step.id}' has invalid verdict '{verdict}'")
 
     # サイクルレベルの検証
@@ -454,8 +461,8 @@ def validate_workflow(workflow: Workflow) -> None:
         if not has_exit:
             errors.append(f"Cycle '{cycle.name}' has no exit (PASS never leaves the cycle)")
 
-        # 9. on_exhaust が有効な verdict であること
-        if cycle.on_exhaust not in valid_verdicts:
+        # 9. on_exhaust が有効な verdict であること（BACK_* プレフィックスを許可）
+        if not _is_valid_verdict(cycle.on_exhaust):
             errors.append(f"Cycle '{cycle.name}' on_exhaust '{cycle.on_exhaust}' is invalid")
 
     if errors:
