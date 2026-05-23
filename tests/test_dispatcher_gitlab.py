@@ -862,3 +862,69 @@ class TestGitLabPrTierA:
         assert "POST" in cmd
         assert any("discussions/abc/notes" in str(p) for p in cmd)
         assert "body=reply" in cmd
+
+
+# ============================================================
+# Issue #172: glab インライン形式の二重 --repo 注入回帰テスト
+# ============================================================
+
+
+def _count_repo_tokens_glab(cmd: list[str]) -> tuple[int, int]:
+    repo_tokens = sum(1 for c in cmd if c.startswith("--repo"))
+    r_tokens = sum(1 for c in cmd if c.startswith("-R") and not c.startswith("--repo"))
+    return repo_tokens, r_tokens
+
+
+@pytest.mark.medium
+class TestGitLabForwardRepoInjectionInline:
+    """Issue #172: pflag インライン形式の user `--repo` を尊重する（glab）。"""
+
+    @pytest.fixture()
+    def repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        r = _write_gitlab_repo(tmp_path)
+        monkeypatch.chdir(r)
+        return r
+
+    def test_inline_long_repo_not_double_injected(self, repo: Path) -> None:
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/glab"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            _handle_issue(["view", "42", "--repo=group/explicit"])
+        cmd = mock_run.call_args[0][0]
+        repo_tokens, r_tokens = _count_repo_tokens_glab(cmd)
+        assert repo_tokens == 1
+        assert r_tokens == 0
+        assert "--repo=group/explicit" in cmd
+        assert "--repo" not in cmd
+
+    def test_inline_short_with_equals_not_double_injected(self, repo: Path) -> None:
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/glab"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            _handle_issue(["view", "42", "-R=group/explicit"])
+        cmd = mock_run.call_args[0][0]
+        repo_tokens, r_tokens = _count_repo_tokens_glab(cmd)
+        assert repo_tokens == 0
+        assert r_tokens == 1
+        assert "-R=group/explicit" in cmd
+        assert "-R" not in cmd
+        assert "--repo" not in cmd
+
+    def test_short_concatenated_not_double_injected(self, repo: Path) -> None:
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/glab"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            _handle_issue(["view", "42", "-Rgroup/explicit"])
+        cmd = mock_run.call_args[0][0]
+        repo_tokens, r_tokens = _count_repo_tokens_glab(cmd)
+        assert repo_tokens == 0
+        assert r_tokens == 1
+        assert "-Rgroup/explicit" in cmd
+        assert "-R" not in cmd
+        assert "--repo" not in cmd

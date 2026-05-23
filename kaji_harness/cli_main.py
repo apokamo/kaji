@@ -460,6 +460,27 @@ def _validate_workflow_provider_match(workflow: Workflow, config: KajiConfig) ->
 _FORGE_METHOD_FLAGS = {"--merge", "--squash", "--rebase"}
 
 
+def _user_specified_repo(args: list[str]) -> bool:
+    """argv 内に user 指定の ``--repo`` / ``-R`` 系トークンが含まれるかを返す。
+
+    pflag (gh/glab の flag parser) が受理する以下 5 形式を検出する:
+
+    - 独立トークン long:  ``--repo owner/name``
+    - 独立トークン short: ``-R owner/name``
+    - インライン long:    ``--repo=owner/name``
+    - インライン short=:  ``-R=owner/name``
+    - 短縮連結:           ``-Rowner/name``
+    """
+    for a in args:
+        if a in ("--repo", "-R"):
+            return True
+        if a.startswith("--repo="):
+            return True
+        if a.startswith("-R") and len(a) > 2:
+            return True
+    return False
+
+
 def _forward_to_gh(group: str, raw_args: list[str], *, repo: str | None = None) -> int:
     """`gh <group> ...` に引数を転送する wrapper。
 
@@ -495,7 +516,7 @@ def _forward_to_gh(group: str, raw_args: list[str], *, repo: str | None = None) 
         rest = [a for a in args[1:] if a not in _FORGE_METHOD_FLAGS]
         args = head + rest + ["--merge"]
 
-    if repo and "--repo" not in args and "-R" not in args:
+    if repo and not _user_specified_repo(args):
         # gh は --repo を sub の前後どちらでも受理する。末尾追加で副作用最小
         args = [*args, "--repo", repo]
 
@@ -1417,7 +1438,7 @@ def _forward_to_glab(group: str, raw_args: list[str], *, repo: str) -> int:
     args = list(raw_args)
     if args and args[0] == "--":
         args = args[1:]
-    if "--repo" not in args and "-R" not in args:
+    if not _user_specified_repo(args):
         args = [*args, "--repo", repo]
     cmd = ["glab", group, *args]
     try:
