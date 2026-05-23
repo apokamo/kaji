@@ -23,7 +23,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from kaji_harness.cli_main import _handle_issue
+from kaji_harness.cli_main import _handle_issue, _user_specified_repo
 from kaji_harness.config import KajiConfig
 from kaji_harness.providers import (
     GitHubProvider,
@@ -899,3 +899,112 @@ class TestForwardToGhRepoInjection:
         assert cmd[:3] == ["gh", "api", "repos/kamo/kaji/pulls/153/comments"]
         # spy には override="kamo/kaji" で呼ばれたはず
         spy_detect.assert_called_once_with(override="kamo/kaji")
+
+
+# ============================================================
+# Issue #172: _user_specified_repo helper — pflag 5 形式の検出
+# ============================================================
+
+
+@pytest.mark.small
+class TestUserSpecifiedRepo:
+    """pflag が受理する `--repo` / `-R` の全形式を検出することを確認する。"""
+
+    def test_standalone_long(self) -> None:
+        assert _user_specified_repo(["pr", "list", "--repo", "o/n"]) is True
+
+    def test_standalone_short(self) -> None:
+        assert _user_specified_repo(["pr", "list", "-R", "o/n"]) is True
+
+    def test_inline_long(self) -> None:
+        assert _user_specified_repo(["pr", "list", "--repo=o/n"]) is True
+
+    def test_inline_short_with_equals(self) -> None:
+        assert _user_specified_repo(["pr", "list", "-R=o/n"]) is True
+
+    def test_short_concatenated(self) -> None:
+        assert _user_specified_repo(["pr", "list", "-Ro/n"]) is True
+
+    def test_unspecified(self) -> None:
+        assert _user_specified_repo(["pr", "list"]) is False
+
+    def test_repository_is_not_matched(self) -> None:
+        """`--repository` は `gh`/`glab` が受理しない別フラグ。誤検出しない。"""
+        assert _user_specified_repo(["--repository", "o/n"]) is False
+
+
+# ============================================================
+# Issue #172: gh インライン形式の二重 --repo 注入回帰テスト
+# ============================================================
+
+
+def _count_repo_tokens(cmd: list[str]) -> tuple[int, int]:
+    """(--repo 系の token 総数, -R 系の token 総数) を prefix 集計で返す。
+
+    standalone `--repo` / inline `--repo=...` を区別せず prefix で数え、
+    config 由来注入 (= `--repo` 単独 token 追加) があれば総数が 2 になる。
+    """
+    repo_tokens = sum(1 for c in cmd if c.startswith("--repo"))
+    r_tokens = sum(1 for c in cmd if c.startswith("-R") and not c.startswith("--repo"))
+    return repo_tokens, r_tokens
+
+
+@pytest.mark.medium
+class TestForwardToGhRepoInjectionInline:
+    """Issue #172: pflag インライン形式の user `--repo` を尊重する（gh）。"""
+
+    @pytest.fixture()
+    def repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        r = _write_repo(
+            tmp_path,
+            provider_section=(
+                '\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "kamo/kaji"\n'
+            ),
+        )
+        monkeypatch.chdir(r)
+        return r
+
+    def test_inline_long_repo_not_double_injected(self, repo: Path) -> None:
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            _handle_issue(["view", "42", "--repo=user/explicit"])
+        cmd = mock_run.call_args[0][0]
+        repo_tokens, r_tokens = _count_repo_tokens(cmd)
+        # user の `--repo=user/explicit` のみ。config 由来 standalone `--repo` は追加されない
+        assert repo_tokens == 1
+        assert r_tokens == 0
+        assert "--repo=user/explicit" in cmd
+        assert "--repo" not in cmd  # standalone token は無い
+
+    def test_inline_short_with_equals_not_double_injected(self, repo: Path) -> None:
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            _handle_issue(["view", "42", "-R=user/explicit"])
+        cmd = mock_run.call_args[0][0]
+        repo_tokens, r_tokens = _count_repo_tokens(cmd)
+        assert repo_tokens == 0
+        assert r_tokens == 1
+        assert "-R=user/explicit" in cmd
+        assert "-R" not in cmd
+        assert "--repo" not in cmd
+
+    def test_short_concatenated_not_double_injected(self, repo: Path) -> None:
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            _handle_issue(["view", "42", "-Ruser/explicit"])
+        cmd = mock_run.call_args[0][0]
+        repo_tokens, r_tokens = _count_repo_tokens(cmd)
+        assert repo_tokens == 0
+        assert r_tokens == 1
+        assert "-Ruser/explicit" in cmd
+        assert "-R" not in cmd
+        assert "--repo" not in cmd
