@@ -16,6 +16,8 @@ skill_dir = ".claude/skills"          # 必須: スキルディレクトリ
 default_timeout = 1800               # 必須: タイムアウトのデフォルト値（秒）
 ```
 
+> **`artifacts_dir` の解決基準** (Issue #177): 相対パス指定の場合、`kaji run` は main worktree（`provider.<type>.default_branch` を checkout している worktree）基準で解決する。feature worktree 内で `kaji run` を実行しても artifacts/log は main worktree 配下に集約され、`git worktree remove` でログが消えない。絶対パス指定はそのまま。
+
 ## ファイル配置
 
 ```

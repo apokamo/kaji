@@ -73,41 +73,6 @@ class TestParseWorktreePorcelain:
         assert parse_worktree_porcelain("\n") == []
 
 
-@pytest.fixture()
-def bare_with_two_worktrees(tmp_path: Path) -> tuple[Path, Path, Path]:
-    """bare repo + main worktree + feature worktree を作成して返す。"""
-    bare = tmp_path / "repo.git"
-    subprocess.run(
-        ["git", "init", "-q", "--bare", "--initial-branch=main", str(bare)],
-        check=True,
-    )
-    main_wt = tmp_path / "main"
-    feat_wt = tmp_path / "feat"
-    # seed
-    seed = tmp_path / "seed"
-    subprocess.run(["git", "clone", "-q", str(bare), str(seed)], check=True)
-    subprocess.run(["git", "-C", str(seed), "config", "user.email", "t@t"], check=True)
-    subprocess.run(["git", "-C", str(seed), "config", "user.name", "t"], check=True)
-    subprocess.run(["git", "-C", str(seed), "config", "commit.gpgsign", "false"], check=True)
-    (seed / "README.md").write_text("r\n")
-    subprocess.run(["git", "-C", str(seed), "add", "README.md"], check=True)
-    subprocess.run(
-        ["git", "-C", str(seed), "commit", "-q", "-m", "init"],
-        check=True,
-    )
-    subprocess.run(["git", "-C", str(seed), "push", "-q", "origin", "main"], check=True)
-    # add worktrees on the bare repo
-    subprocess.run(
-        ["git", "-C", str(bare), "worktree", "add", "-q", str(main_wt), "main"],
-        check=True,
-    )
-    subprocess.run(
-        ["git", "-C", str(bare), "worktree", "add", "-q", "-b", "fix/x", str(feat_wt), "main"],
-        check=True,
-    )
-    return bare, main_wt, feat_wt
-
-
 @pytest.mark.medium
 class TestResolveMainWorktree:
     def test_resolve_from_feature_returns_main(
