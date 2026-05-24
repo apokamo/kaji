@@ -12,6 +12,7 @@ import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+from .artifacts import resolve_artifacts_dir
 from .config import KajiConfig
 from .errors import (
     ConfigLoadError,
@@ -397,7 +398,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             workflow=workflow,
             issue_number=args.issue,
             project_root=project_root,
-            artifacts_dir=config.artifacts_dir,
+            artifacts_dir=resolve_artifacts_dir(config),
             config=config,
             from_step=args.from_step,
             single_step=args.single_step,
