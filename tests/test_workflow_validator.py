@@ -218,6 +218,22 @@ class TestTransitionValidation:
         assert any("BACK_" in e for e in exc_info.value.errors)
 
     @pytest.mark.small
+    def test_back_prefix_lowercase_suffix_rejected(self) -> None:
+        """BACK_design (lowercase suffix) is rejected to keep validator aligned with the
+        relaxed verdict parser's uppercase normalization."""
+        wf = _workflow(
+            steps=[
+                _step("step_a", agent="claude", on={"PASS": "step_b", "ABORT": "end"}),
+                _step("step_b", agent="claude", on={"PASS": "end", "BACK_design": "step_a"}),
+            ],
+        )
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            validate_workflow(wf)
+
+        assert any("BACK_design" in e for e in exc_info.value.errors)
+
+    @pytest.mark.small
     def test_back_prefix_unknown_suffix_accepted(self) -> None:
         """BACK_FOO (unknown root-cause) is formally accepted (prefix-based design)."""
         wf = _workflow(

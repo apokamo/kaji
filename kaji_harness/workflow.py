@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -290,12 +291,12 @@ def validate_workflow(workflow: Workflow) -> None:
     """
     errors: list[str] = []
     base_verdicts = frozenset({"PASS", "RETRY", "BACK", "ABORT"})
-    back_prefix = "BACK_"
+    back_suffix_pattern = re.compile(r"^BACK_[A-Z0-9_]+$")
 
     def _is_valid_verdict(value: str) -> bool:
         if value in base_verdicts:
             return True
-        return value.startswith(back_prefix) and len(value) > len(back_prefix)
+        return bool(back_suffix_pattern.match(value))
 
     # on が不正な step id を収集。cycle 遷移チェック（.on.get() 呼び出し）から除外するために使用する
     invalid_on_step_ids: set[str] = set()
