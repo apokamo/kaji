@@ -313,38 +313,90 @@ import 追加。他の `KajiConfig.discover()` callsite には触れない。
      `config.artifacts_dir` だと `feat_wt / ".kaji-artifacts"` が返る）
    - **修正後に PASS**
 
-4. **再現テスト2（run 経路でログ残存・Issue 完了条件のテスト）**: 同 fixture を使い、
-   `WorkflowRunner` 経路で artifacts への実書き込みが main 側に出ること、worktree
-   削除後もファイルが残ることを assert する。
+4. **再現テスト2-A（cmd_run 配線テスト・MUST）**:
+   `cli_main._cmd_run`（または `main(["run", ...])`）を実際に駆動し、
+   `WorkflowRunner` の `__init__` に渡される `artifacts_dir` kwarg が
+   `main_wt / ".kaji-artifacts"` であることを assert する。これは
+   「`cli_main._cmd_run` 内で `config.artifacts_dir` → `resolve_artifacts_dir(config)`
+   への差し替えを忘れた場合に必ず FAIL する」テストで、配線漏れを構造的に検出する。
 
-   実装方針（重い agent 実行を回避するため `SessionState` の直接駆動で代替）:
+   実装方針:
+
+   ```python
+   @pytest.mark.medium
+   def test_cmd_run_passes_main_worktree_artifacts_dir(
+       bare_with_two_worktrees, monkeypatch
+   ):
+       _bare, main_wt, feat_wt = bare_with_two_worktrees
+       # 両 worktree に .kaji/config.toml を配置（[provider] type="local"）
+       _seed_kaji_config(main_wt)
+       _seed_kaji_config(feat_wt)
+       # 最小 workflow YAML（step 0 件でも load_workflow が通る形）
+       workflow_path = feat_wt / "wf.yaml"
+       workflow_path.write_text(_MINIMAL_WORKFLOW_YAML)
+
+       captured: dict[str, Path] = {}
+
+       class _StubRunner:
+           def __init__(self, *, artifacts_dir, **kwargs):
+               captured["artifacts_dir"] = artifacts_dir
+           def run(self):
+               # SessionState を最小限触る fake。run() 戻り値は state 型互換であれば良い
+               return _FakeState()
+
+       monkeypatch.setattr("kaji_harness.cli_main.WorkflowRunner", _StubRunner)
+
+       rc = cli_main.main([
+           "run", str(workflow_path), "test-issue",
+           "--workdir", str(feat_wt),
+       ])
+       assert rc == EXIT_OK
+       assert captured["artifacts_dir"] == main_wt / ".kaji-artifacts"
+   ```
+
+   **このテストが満たす契約**:
+
+   - `cli_main._cmd_run` の差し替え忘れ（`config.artifacts_dir` のまま）であれば
+     captured が `feat_wt / ".kaji-artifacts"` を返し assert FAIL
+   - `resolve_artifacts_dir` の戻り値ロジックが壊れても同様に FAIL
+   - `WorkflowRunner` 本体は stub 化するため LLM subprocess 起動なし。`main()` の
+     CLI parser / config discover / `get_provider` / workflow load / provider match
+     validation は本物で駆動する（実際の production 経路の配線を CR-end-to-end で押さえる）
+
+5. **再現テスト2-B（ログ残存テスト・MUST）**:
+   テスト 4 と同じ fixture / config 配置で `SessionState` を直接駆動し、worktree
+   削除後もログが残ることを assert する。これは Issue #177 完了条件
+   「worktree 内 `kaji run` 実行 → worktree 削除後も `<main>/.kaji-artifacts/`
+   にログが残ることを確認するテスト追加」に直接対応する。
 
    1. feature worktree から `KajiConfig.discover(start_dir=feat_wt)` → `cfg`
-   2. `artifacts_path = resolve_artifacts_dir(cfg)` → `main_wt / ".kaji-artifacts"`
-      を確認（再現テスト1 と同じ assert を兼ねる）
-   3. `WorkflowRunner` に `artifacts_dir=artifacts_path` を渡せばその先は不変なので、
-      runner ではなく `SessionState.load_or_create("test-issue", artifacts_path)` を
-      直接呼んで `state.persist()`（または `save()` 等、`state.py` の I/O API）を実行。
-      これにより `<main_wt>/.kaji-artifacts/test-issue/session-state.json` が作られる
+   2. `artifacts_path = resolve_artifacts_dir(cfg)` →
+      `main_wt / ".kaji-artifacts"` を assert
+   3. `state = SessionState.load_or_create("test-issue", artifacts_path)` →
+      `state.persist()`（`state.py` の I/O API）で
+      `<main_wt>/.kaji-artifacts/test-issue/session-state.json` を生成
    4. `assert (main_wt / ".kaji-artifacts" / "test-issue" / "session-state.json").exists()`
-   5. `assert not (feat_wt / ".kaji-artifacts").exists()`（feature 側には作られない）
+   5. `assert not (feat_wt / ".kaji-artifacts").exists()`
    6. `subprocess.run(["git", "-C", str(bare), "worktree", "remove", "--force", str(feat_wt)], check=True)`
-   7. 削除後も再度 `assert (main_wt / ".kaji-artifacts" / "test-issue" / "session-state.json").exists()`
+   7. 削除後も `assert (main_wt / ".kaji-artifacts" / "test-issue" / "session-state.json").exists()`
 
    **何を mock し何を本物で駆動するか**:
 
-   - 本物: `KajiConfig.discover` / `resolve_artifacts_dir` / `resolve_main_worktree`
-     / `SessionState` の I/O 全経路 / `git worktree` 操作
-   - mock しない: agent / step 実行（WorkflowRunner の step driver は呼ばない。これは
-     LLM subprocess を起動して重く・恒久 CI で不安定なため）
-   - この検証によって「`cmd_run` から WorkflowRunner に渡る artifacts_dir が main 基準
-     になっている」「その artifacts_dir で書かれたファイルが worktree 削除後も残る」
-     という Issue 完了条件 2 つの不具合シグナルを Medium 1 本で押さえる
+   - 本物: テスト 2-A は CLI argparse → `_cmd_run` → `KajiConfig.discover` →
+     `get_provider` → `_validate_workflow_provider_match` → `WorkflowRunner.__init__`
+     の引数受け渡しまで。テスト 2-B は `SessionState` の I/O 全経路 + `git worktree
+     remove` まで
+   - mock: テスト 2-A の `WorkflowRunner` 本体（step driver / agent 起動）。LLM
+     subprocess は恒久 CI で不安定なため
+   - **構造的役割分担**: テスト 2-A は配線レイヤ（`cmd_run` 側の差し替え忘れ検出）、
+     テスト 2-B は永続化レイヤ（ファイル生成位置 + worktree 削除後の残存）。両方
+     合わせて Issue 完了条件と Must Fix 2 の要件「production run 経路に効くことを
+     Medium 以上で押さえる」を満たす
 
-5. **fallback 経路**: 非 git ディレクトリ（`tmp_path` 直下に `.kaji/config.toml` のみ
+6. **fallback 経路**: 非 git ディレクトリ（`tmp_path` 直下に `.kaji/config.toml` のみ
    配置）で `discover()` → `resolve_artifacts_dir(cfg)` を呼び、`_try_resolve_main_worktree`
    が `None` を返して legacy fallback（`tmp_path / "<artifacts_dir>"`）になることを assert
-6. **`provider == None` 経路**: `.kaji/config.toml` に `[provider]` セクションを書かず
+7. **`provider == None` 経路**: `.kaji/config.toml` に `[provider]` セクションを書かず
    discover →（Phase 3-e で `[provider]` 必須化済みのため実装時に `_load()` レベルで弾かれる可能性あり。
    その場合は `KajiConfig` を直接構築して `provider=None` を渡す test として実装。
    `_try_resolve_main_worktree` が早期 `None` を返すことの assert）
