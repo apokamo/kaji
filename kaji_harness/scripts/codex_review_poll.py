@@ -101,13 +101,18 @@ def classify(
 
 
 def _gh_api(path: str) -> list[dict[str, Any]]:
-    """Invoke `gh api <path>` and return parsed JSON list.
+    """Invoke `gh api --paginate <path>` and return parsed JSON list.
+
+    `--paginate` is required so polling sees the bot's latest review/reaction
+    even when the PR has many earlier entries (default page size = 30, reviews
+    are returned in chronological order). gh concatenates page arrays into
+    one JSON array on stdout.
 
     Raises subprocess.CalledProcessError on non-zero exit, propagated to the
     caller so it can count consecutive failures.
     """
     proc = subprocess.run(
-        ["gh", "api", path],
+        ["gh", "api", "--paginate", path],
         capture_output=True,
         text=True,
         check=True,
