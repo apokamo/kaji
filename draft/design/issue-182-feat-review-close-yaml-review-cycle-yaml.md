@@ -106,21 +106,24 @@ $ kaji run .kaji/wf/review-close.yaml 182
 **事前取得（skill 起動時に 1 回だけ実施）**:
 
 - `head_sha` ← `gh pr view <pr_number> --json headRefOid --jq .headRefOid` で workflow 起動時点の PR head commit SHA を取得し、polling loop 全体で固定値として保持する
+- `head_committed_at` ← `gh pr view <pr_number> --json commits --jq '.commits[-1].committedDate'` で head commit の committedDate (ISO8601 UTC) を取得し、`+1` reaction の freshness 判定に使う（後述 Must Fix 1 対応）
 
 各 poll での状態判定:
 
 | 観測 | 判定 |
 |------|------|
 | reactions に bot の `eyes` あり | レビュー進行中 → polling 継続（`IN_PROGRESS_TIMEOUT_SEC` cap） |
-| reactions に bot の `+1` あり | **PASS** → close |
+| reactions に bot の `+1` あり、かつ `+1.created_at >= head_committed_at` | **PASS** → close |
 | reviews に bot からの COMMENTED review (body は `body.lstrip().startswith("### 💡 Codex Review")` で判定) があり、かつ `commit_id == head_sha` | **RETRY** → pr-fix |
-| いずれも無し（NO_REACTION_TIMEOUT_SEC 経過） | **BACK_FALLBACK** → review |
+| いずれも無し（NO_REACTION_TIMEOUT_SEC 経過） | **BACK_FALLBACK** → review（suggestion 必須、後述 § verdict 出力 参照） |
 
 > **完了済み COMMENTED review の検出**: GitHub Pull Request Reviews API は **履歴を返す**（reactions API と違い現在値限定ではない）。workflow 起動前に bot の auto-review が完了して COMMENTED review が投稿済みのケース（reactions は 0 件、reviews API 側に bot review がある状態。PR #176 で実観測）でも、`commit_id == head_sha` を満たす bot review が存在すれば **`RETRY` として扱う**。これにより既存 Codex 指摘を活かして `pr-fix` に直行でき、`/review` 二重起動を回避する。古い commit に対する stale review は `commit_id != head_sha` で自然に除外される。
 
 > **body 判定の lstrip**: 実観測 PR #176 の bot review body は先頭に改行を含む（`\n### 💡 Codex Review\n...`）。`body.startswith(...)` のみだと検出漏れになるため、**`body.lstrip().startswith("### 💡 Codex Review")`** を仕様とする。fixture / small test には先頭改行ありケースを含める。
 
 > **bot 識別**: `chatgpt-codex-connector[bot]` (id `199175422`)。GET reactions / reviews のレスポンス `.user.login` / `.user.id` で identifier 一致を確認する。`login` だけでは prefix `[bot]` の有無差異で誤検出するリスクがあるため、**`id` 一致**を主、`login` を副チェックにする。
+
+> **`+1` reaction の freshness guard (Must Fix 1 対応)**: GitHub Reactions API は issue-level の `content` / `created_at` / `user` のみ返し、PR head commit に紐付く `commit_id` を持たない（一次情報: https://docs.github.com/en/rest/reactions/reactions#list-reactions-for-an-issue）。そのため bot `+1` reaction が存在するだけでは「現在 head への承認」か「過去 head の `+1` が残っているだけ」かを区別できない。`review-close.yaml` では `PASS: close` 直結のため、stale `+1` を拾うと未レビュー head を close する false positive リスクがある。本設計では **bot `+1.created_at >= head_committed_at` を満たす場合のみ PASS** とする freshness guard を必須とする。`head_committed_at` は事前取得で固定し、polling loop 全体で再利用する。実観測 PR #181 では `+1.created_at` (`2026-05-24T08:25:28Z`) > head committedDate (`2026-05-24T08:05:07Z`) でこのガードを通過する。
 
 > **eyes 消失後の race**: `IN_PROGRESS` 状態で `eyes` が消えた直後の 1 poll では結論シグナル（`+1` or COMMENTED review）が GitHub 側に未伝搬の可能性がある。`EYES_GRACE_SEC` (10秒) だけ追加で待ってから再判定する。
 
@@ -133,6 +136,7 @@ $ kaji run .kaji/wf/review-close.yaml 182
 | `provider_type` が `github` 以外 | Step 0 で ABORT（reason: provider mismatch、suggestion: 既存 `/review` skill 直接起動 or skip） |
 | 過去 commit に対する stale な bot review しか存在しない（`commit_id != head_sha`） | RETRY を返さない（`commit_id == head_sha` フィルタで自然除外）。`eyes` または現在 head 向け新規 review を待つ |
 | 現在 head に対する bot COMMENTED review が workflow 起動前から存在（PR #176 シナリオ） | 初回 poll で **RETRY** を即時返却（reactions が 0 件でも reviews API 側で検出可能） |
+| 過去 head の bot `+1` reaction だけが残っている（`+1.created_at < head_committed_at`） | PASS を返さず無視（freshness guard）。`eyes` / 現在 head 向け新規 review / 新しい `+1` を待つ。timeout で `BACK_FALLBACK` |
 
 ### 5. 既存 review skill (`review`) の扱い
 
@@ -194,32 +198,34 @@ $ kaji run .kaji/wf/review-close.yaml 182
 
 ### 実装言語と分担
 
-skill 本体は **bash 主体** で書く（既存 `review-cycle` / `review` skill と同様の流れ）。ただし `gh api` レスポンスの JSON パースと bot identifier 一致判定は **Python 1-liner（`python -c`）** で実行して、`jq` 依存と shell quoting hell を避ける。
+skill 本体は **bash 主体** で書く（既存 `review-cycle` / `review` skill と同様の流れ）。ただし `gh api` レスポンスの JSON パース、bot identifier 一致判定、freshness guard 計算、state machine 駆動は **`python -m kaji_harness.scripts.codex_review_poll` で 1 回呼び出す Python helper** に集約して、`jq` 依存と shell quoting hell を避ける。
 
-理由: bash + jq で `eyes` reaction の bot id フィルタ + 経過時間判定 + state machine を表現すると可読性が落ちる。Python helper を `.claude/skills/review-poll/_poll.py` として置けば small test で直接呼べる。
+理由: bash + jq で `eyes` reaction の bot id フィルタ + 経過時間判定 + ISO8601 timestamp 比較 + state machine を表現すると可読性が落ち、テストも書きにくい。Python helper として `kaji_harness/scripts/codex_review_poll.py` に置けば `tests/test_codex_review_poll.py` から直接 import して `classify()` / `run_polling()` を pytest で検証できる（詳細は後述「Python helper の責務と配置」節）。
 
 ### state machine
 
-`head_sha` は skill 起動時に 1 回 fetch して固定。各 poll での判定は `(reactions, reviews, head_sha, bot_id)` のスナップショットに対して `classify()` を呼ぶ。
+`head_sha` と `head_committed_at` は skill 起動時に 1 回 fetch して固定。各 poll での判定は `(reactions, reviews, head_sha, head_committed_at, bot_id)` のスナップショットに対して `classify()` を呼ぶ。
 
 ```
 START
-  └─ fetch head_sha → INIT
+  └─ fetch head_sha + head_committed_at → INIT
 
 INIT
   ├─ poll() → 現在 head 向け bot COMMENTED review 検出 → DONE_RETRY
-  ├─ poll() → +1 検出 → DONE_PASS
+  ├─ poll() → fresh +1 (created_at >= head_committed_at) 検出 → DONE_PASS
   ├─ poll() → eyes 検出 → IN_PROGRESS
   └─ elapsed > NO_REACTION_TIMEOUT_SEC → DONE_FALLBACK
 
 IN_PROGRESS
   ├─ poll() → 現在 head 向け bot COMMENTED review 検出 → DONE_RETRY
-  ├─ poll() → +1 検出 → DONE_PASS
+  ├─ poll() → fresh +1 (created_at >= head_committed_at) 検出 → DONE_PASS
   ├─ poll() → eyes 消失 → wait(EYES_GRACE_SEC) → 再 poll
   └─ elapsed > IN_PROGRESS_TIMEOUT_SEC → DONE_ABORT
 
 DONE_* → verdict 出力して exit
 ```
+
+> stale `+1` (`created_at < head_committed_at`) は `INIT` / `IN_PROGRESS` のどちらでも DONE_PASS を返さず state 不変。eyes / 新規 review / fresh `+1` を待つ。
 
 > **判定順序の注意**: `INIT` / `IN_PROGRESS` ともに **COMMENTED review (RETRY) を `+1` (PASS) よりも先に評価する**。bot が一度 COMMENTED review を投稿した後に同 commit へ追加で `+1` を付けることは仕様上想定されないが、過去 commit の `+1` が残っている可能性 (stale reaction) を排除するため、結論として強い「指摘あり」を優先する。
 
@@ -254,15 +260,20 @@ def classify(
     reactions_json: list[dict],
     reviews_json: list[dict],
     head_sha: str,
+    head_committed_at: str,  # ISO8601 UTC, freshness guard 用
     bot_id: int = BOT_ID,
     prev_state: Literal["init", "in_progress"] = "init",
 ) -> PollResult:
-    """1 poll 分の状態判定。reviews は `commit_id == head_sha` でフィルタし、
-    body は `lstrip().startswith(CODEX_REVIEW_BODY_MARKER)` で判定する。"""
+    """1 poll 分の状態判定。
+    - reviews は `commit_id == head_sha` でフィルタし、body は
+      `lstrip().startswith(CODEX_REVIEW_BODY_MARKER)` で判定する。
+    - `+1` reaction は `created_at >= head_committed_at` を満たす場合のみ
+      `done_pass` を返す（freshness guard。stale +1 は state 不変）。"""
 
 
 def run_polling(
-    pr_number: int, owner: str, repo: str, head_sha: str, *,
+    pr_number: int, owner: str, repo: str,
+    head_sha: str, head_committed_at: str, *,
     poll_interval_sec: int = 10,
     no_reaction_timeout_sec: int = 60,
     in_progress_timeout_sec: int = 1800,
@@ -272,6 +283,19 @@ def run_polling(
 ```
 
 skill bash は Python helper を `python -m kaji_harness.scripts.codex_review_poll` で起動し、stdout の verdict YAML を直接 stdout に転送する。
+
+### verdict 出力
+
+state machine の終端 `DONE_*` から skill stdout に kaji 標準の `---VERDICT--- ... ---END_VERDICT---` ブロックを出す。`BACK_*` プレフィックス verdict は `kaji_harness/verdict.py` および `docs/dev/workflow-authoring.md` § BACK_* 拡張により **non-empty `suggestion` 必須**。本 skill では以下マッピングで `emit_verdict()` を呼ぶ:
+
+| 終端 state | status | reason 例 | suggestion 例 |
+|------------|--------|-----------|---------------|
+| `done_pass` | `PASS` | `bot +1 reaction (fresh, created_at >= head_committed_at) を検出` | (任意) |
+| `done_retry` | `RETRY` | `bot COMMENTED review (commit_id == head_sha) を検出` | (任意) |
+| `done_fallback` | `BACK_FALLBACK` | `auto-review シグナル未検出 (NO_REACTION_TIMEOUT_SEC=60 経過)` | **必須**: `kaji_harness/scripts/codex_review_poll.py の NO_REACTION_TIMEOUT_SEC を超えても eyes / fresh +1 / 現在 head 向け COMMENTED review が観測できないため、review skill (codex agent) で能動レビューに切替えてください` |
+| `done_abort` | `ABORT` | `gh api 連続失敗` / `IN_PROGRESS_TIMEOUT_SEC 経過` 等 | **必須**: 原因に応じて `gh auth status` 確認 / codex bot 状態確認 等の具体的アクション |
+
+`BACK_FALLBACK` の suggestion 必須要件は `kaji_harness/verdict.py` の parser が enforce する。skill 側で空の suggestion を返すと workflow runner が `VerdictNotFound` 相当で fail-fast するため、上記マッピングで定数として保持する。
 
 ### PR 解決 / Worktree 解決
 
@@ -289,7 +313,9 @@ skill bash は Python helper を `python -m kaji_harness.scripts.codex_review_po
 
 `kaji_harness.scripts.codex_review_poll.classify()` を直接呼ぶ pytest:
 
-- `+1` reaction のみ存在 → `done_pass`
+- `+1` reaction のみ存在、`+1.created_at >= head_committed_at` → `done_pass`
+- `+1` reaction のみ存在、ただし `+1.created_at < head_committed_at` (過去 head の stale `+1`) → state 不変（**Must Fix 1 対応 / freshness guard 検証**）
+- `+1` reaction が head 後の timestamp で複数（古い stale + 新規 fresh が混在） → `done_pass`（fresh な `+1` を優先）
 - `eyes` のみ → `in_progress`
 - `eyes` 消失 + `+1` あり → `done_pass`
 - 現在 head 向け bot COMMENTED review (`### 💡 Codex Review` 始まり、`commit_id == head_sha`、reactions は 0 件) → `done_retry`（**PR #176 シナリオ。Must Fix 1 対応**）
@@ -306,6 +332,8 @@ skill bash は Python helper を `python -m kaji_harness.scripts.codex_review_po
 `kaji_harness.scripts.codex_review_poll.run_polling()` を subprocess monkeypatch で `gh api` をモック化した結合テスト:
 
 - timeout シナリオ: `gh api` が常に空レスポンスを返す環境 → `NO_REACTION_TIMEOUT_SEC` 経過で `done_fallback`
+- stale `+1` のみ存在シナリオ: `+1.created_at < head_committed_at` の reaction だけ → freshness guard で無視、`NO_REACTION_TIMEOUT_SEC` 経過で `done_fallback`（**Must Fix 1 対応**）
+- 起動時 fresh `+1` シナリオ: 初回 poll で `+1.created_at >= head_committed_at` → `done_pass`（PR #181 シナリオ）
 - in-progress → pass シナリオ: 最初 N 回は `eyes` 返却、その後 `+1` → `done_pass`
 - in-progress → retry シナリオ: 最初 N 回は `eyes` 返却、その後現在 head 向け COMMENTED review → `done_retry`
 - 起動時即 retry シナリオ: 初回 poll で reactions 0 件 + 現在 head 向け COMMENTED review あり → `done_retry`（**PR #176 シナリオ**）
@@ -354,7 +382,8 @@ skill bash は Python helper を `python -m kaji_harness.scripts.codex_review_po
 | openai/codex#3808 | https://github.com/openai/codex/issues/3808 | "the looking gets removed and an actual code review happens" — 完了で 👀 が削除される挙動。クレジット不足で auto-review がスキップされるケースの user 報告 |
 | GitHub REST API: List reactions for an issue | https://docs.github.com/en/rest/reactions/reactions#list-reactions-for-an-issue | `GET /repos/{owner}/{repo}/issues/{issue_number}/reactions` — 現在の reactions のみ返却（履歴なし）。`content` フィールドに `+1` / `eyes` 等の reaction 種別 |
 | GitHub REST API: List reviews for a pull request | https://docs.github.com/en/rest/pulls/reviews#list-reviews-for-a-pull-request | `GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews` — `state` (`APPROVED` / `COMMENTED` / `CHANGES_REQUESTED` / `DISMISSED`) と `submitted_at`、`user.login` / `user.id` を返却。`body` でレビュー本文を判定可能 |
-| 実観測 PR (#181) | https://github.com/apokamo/kaji/pull/181 reactions API レスポンス | bot id `199175422`, login `chatgpt-codex-connector[bot]`, content `+1`（PASS シグナル）を実観測（本設計フェーズで gh api で確認）。設計時刻時点での挙動裏付け |
+| 実観測 PR (#181) | https://github.com/apokamo/kaji/pull/181 reactions API + pr view レスポンス | bot id `199175422`, login `chatgpt-codex-connector[bot]`, content `+1`, `created_at = 2026-05-24T08:25:28Z` を実観測。同 PR head commit (`3155f82...`) の `committedDate = 2026-05-24T08:05:07Z`。`+1.created_at > head_committed_at` で freshness guard を通過する裏付け（Must Fix 1 対応） |
+| GitHub REST API: Get a pull request | https://docs.github.com/en/rest/pulls/pulls#get-a-pull-request | `gh pr view --json commits` の `commits[].committedDate` (ISO8601 UTC) で head commit timestamp を取得可能。`+1` reaction の freshness guard の基準値として使用 |
 | 実観測 PR (#176) | https://github.com/apokamo/kaji/pull/176 reviews API レスポンス | bot による COMMENTED review、body は **先頭改行ありの `\n### 💡 Codex Review\n...`**（lstrip 必須）。bot author login `chatgpt-codex-connector` を実観測。reviews API は履歴を返すため、workflow 起動前に完了済の review でも `commit_id == head_sha` で検出可能。同 PR の issue reactions は 0 件（`gh api repos/apokamo/kaji/issues/176/reactions --jq 'length'` → `0`） |
 | Issue #182 コメント 1（仕様確認結果） | `kaji issue view 182 --comments` 抜粋 | 本文の「絵文字なし → 30 秒待機」「眼の絵文字を polling に使わない」両方の訂正、bot identifier の固定、auto-review と ローカル `codex` CLI のクレジット供給源分離 |
 | `docs/dev/workflow-authoring.md` § BACK_* プレフィックス拡張 | `docs/dev/workflow-authoring.md:137-152` | "`BACK_*` の suffix は uppercase 英数字 + アンダースコア (`[A-Z0-9_]+`) に限定" / "suffix の意味は workflow 設計者が定義" — `BACK_FALLBACK` の YAML 採用可否の根拠 |
