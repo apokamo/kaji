@@ -107,6 +107,8 @@ steps:
     on:
       PASS: pr
       RETRY: final-check
+      BACK_DESIGN: design
+      BACK_IMPLEMENT: implement
       ABORT: end
 
   - id: pr
