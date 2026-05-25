@@ -1,0 +1,9 @@
+[
+  {
+    "id": 10,
+    "user": {"id": 199175422, "login": "chatgpt-codex-connector[bot]"},
+    "state": "COMMENTED",
+    "commit_id": "abc123def4567890abc123def4567890abc123de",
+    "body": "\n### 💡 Codex Review\n\nThis function could be simplified..."
+  }
+]
