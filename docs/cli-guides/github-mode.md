@@ -86,6 +86,7 @@ kaji は GitHub project 直下の `.github/labels.yml` を label の正本とし
 
 - `kaji pr create` / `view` / `list` / `comment` / `review` / `merge` / `review-comments` / `reviews` / `reply-to-comment` は GitHub でも同じ呼び出し方が通る
 - `kaji pr merge` は `--squash` / `--rebase` flag を **kaji 側で拒否**（`--no-ff` only の merge 規約。`gh pr merge --merge` 固定で叩く）
+- `kaji pr review <pr> --approve` は self-PR (PR author == authenticated user) を検知すると `<!-- kaji-review: state=APPROVED -->` marker 付き comment を Issue comments API に投稿することで approve シグナルを表現し rc=0 を返す。`gh pr review --approve` は GitHub API が author の APPROVE event を `Can not approve your own pull request` で拒否するため、self-PR では skip される。非 self-PR では従来通り `gh pr review --approve` を委譲する。`--comment` / `--request-changes` / flag 無しは routing 段で `_github_pr_review` に分岐せず従来通り `gh pr review` へ passthrough
 
 ## 3. `kaji sync from-github` の使い方
 

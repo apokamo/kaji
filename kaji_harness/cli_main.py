@@ -767,6 +767,133 @@ def _dispatch_pr_builtin(sub: str, rest: list[str], *, repo_override: str | None
     )
 
 
+def _has_approve_flag(rest: list[str]) -> bool:
+    """``rest`` 中に ``--approve`` / ``--approve=...`` が含まれるかを pre-scan する。
+
+    ``--`` 以降は positional 扱いし無視する（``gh`` の慣習に合わせる）。
+    """
+    for tok in rest:
+        if tok == "--":
+            return False
+        if tok == "--approve" or tok.startswith("--approve="):
+            return True
+    return False
+
+
+def _gh_capture_value(args: list[str]) -> str | None:
+    """``gh <args>`` を ``capture_output=True`` で叩き、rc=0 なら stdout.strip() を返す。
+
+    rc≠0 の場合は stderr を中継して ``None`` を返す（fail-loud。
+    silent fallthrough を回避するため、呼出側で ``EXIT_RUNTIME_ERROR`` に
+    昇格する責務を持つ）。
+    """
+    try:
+        result = subprocess.run(
+            ["gh", *args],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        sys.stderr.write(f"Error: failed to invoke 'gh': {exc}\n")
+        return None
+    if result.returncode != 0:
+        if result.stderr:
+            sys.stderr.write(result.stderr)
+        return None
+    return result.stdout.strip()
+
+
+def _gh_post_issue_comment_silent(*, repo: str, pr_id: str, body: str) -> int:
+    """``gh api --method POST repos/<repo>/issues/<pr>/comments -f body=<body>``.
+
+    ``gh api`` は POST response の JSON を stdout に書く既定挙動だが、
+    本関数は ``capture_output=True`` で stdout を捨て、rc のみを返す
+    （stdout contract は「空 + rc のみ」と定義する）。
+    """
+    cmd = [
+        "gh",
+        "api",
+        "--method",
+        "POST",
+        f"repos/{repo}/issues/{pr_id}/comments",
+        "-f",
+        f"body={body}",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except OSError as exc:
+        sys.stderr.write(f"Error: failed to invoke 'gh': {exc}\n")
+        return EXIT_RUNTIME_ERROR
+    if result.returncode != 0:
+        if result.stderr:
+            sys.stderr.write(result.stderr)
+        return EXIT_RUNTIME_ERROR
+    return EXIT_OK
+
+
+def _github_pr_review(rest: list[str], *, repo_override: str | None) -> int:
+    """``kaji pr review <pr_id> --approve`` 専用 dispatcher（GitHub mode）。
+
+    self-PR (PR author == authenticated user) では ``gh pr review --approve``
+    が GitHub API ``Can not approve your own pull request`` で 422 拒否
+    されるため、 ``<!-- kaji-review: state=APPROVED -->`` marker 付き
+    comment を Issue comments API に投稿することで approve シグナルを表現
+    する（GitLab provider の marker 機構と対称）。
+
+    非 self-PR では従来通り ``gh pr review --approve`` を委譲する。
+    """
+    p = argparse.ArgumentParser(prog="kaji pr review", add_help=True)
+    p.add_argument("pr_id", type=str)
+    p.add_argument("--approve", action="store_true", required=True)
+    p.add_argument("--body", default=None, type=str)
+    p.add_argument("--body-file", dest="body_file", default=None, type=str)
+    ns = p.parse_args(rest)
+
+    if not _is_ascii_decimal(ns.pr_id):
+        sys.stderr.write(f"Error: PR_ID must be ASCII decimal, got: {ns.pr_id}\n")
+        return EXIT_INVALID_INPUT
+    try:
+        body = _read_body_arg(ns.body, ns.body_file)
+    except ValueError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+    if body is None:
+        body = ""
+
+    if shutil.which("gh") is None:
+        sys.stderr.write(_GH_MISSING_GUIDANCE)
+        return EXIT_RUNTIME_ERROR
+    repo = _detect_repo(override=repo_override)
+    if repo is None:
+        sys.stderr.write(
+            "Error: failed to detect current repository.\n"
+            "Run 'gh repo view --json nameWithOwner' in a checked-out repo first.\n"
+        )
+        return EXIT_RUNTIME_ERROR
+
+    pr_author = _gh_capture_value(
+        ["pr", "view", ns.pr_id, "--repo", repo, "--json", "author", "--jq", ".author.login"]
+    )
+    if pr_author is None:
+        return EXIT_RUNTIME_ERROR
+    me = _gh_capture_value(["api", "user", "--jq", ".login"])
+    if me is None:
+        return EXIT_RUNTIME_ERROR
+    is_self = pr_author == me
+
+    marker = build_kaji_review_marker("APPROVED")
+    marked_body = f"{marker}\n{body}"
+
+    if is_self:
+        return _gh_post_issue_comment_silent(repo=repo, pr_id=ns.pr_id, body=marked_body)
+
+    gh_args = ["review", ns.pr_id, "--approve"]
+    if body:
+        gh_args.extend(["--body", body])
+    return _forward_to_gh("pr", gh_args, repo=repo)
+
+
 def _handle_pr(raw_args: list[str]) -> int:
     """Two-stage dispatch for ``kaji pr``.
 
@@ -816,6 +943,8 @@ def _handle_pr(raw_args: list[str]) -> int:
     args = list(raw_args)
     if args and args[0] == "--":
         args = args[1:]
+    if args and args[0] == "review" and _has_approve_flag(args[1:]):
+        return _github_pr_review(args[1:], repo_override=repo_override)
     if args and args[0] in _PR_BUILTIN_SUBCOMMANDS:
         return _dispatch_pr_builtin(args[0], args[1:], repo_override=repo_override)
     return _forward_to_gh("pr", raw_args, repo=repo_override)
