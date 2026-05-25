@@ -26,8 +26,8 @@
 | `feature-development-local.yaml` | `local` | `issue-close` | local merge (`--no-ff`) 前提 |
 | `docs-maintenance-local.yaml` | `local` | `issue-close` | docs-only / local。Phase 5 追加 |
 | `design-only.yaml` | `any` | `verify-design` | 設計完了で終わるため provider 中立 |
-| `review-cycle.yaml` | `gitlab` | `pr-verify` | PR 作成後のレビューループ。close は本 workflow に含まない（手動で `/issue-close`） |
-| `review-close.yaml` | `gitlab` | `issue-close` | PR レビュー → 修正 → 確認 → close まで全自動。ABORT 時には close を実行しない |
+| `review-cycle.yaml` | `github` | `pr-verify` | PR 作成後のレビューループ。`review-poll` で codex auto-review を監視 → 不在時のみ `review` skill (codex agent) に fallback。close は本 workflow に含まない（手動で `/issue-close`） |
+| `review-close.yaml` | `github` | `issue-close` | PR レビュー → 修正 → 確認 → close まで全自動。`review-poll` → `review` (fallback) → `pr-fix` / `pr-verify` → `close`。ABORT 時には close を実行しない |
 
 ## PR レビュー後フェーズの選択基準
 
@@ -36,9 +36,11 @@ PR 作成後のレビュー対応は手動 (`/review` → `/pr-fix` → `/pr-ver
 
 | Workflow / Slash command | close 実行 | 用途 |
 |--------------------------|-----------|------|
-| `kaji run .kaji/wf/review-cycle.yaml <id>` | ❌（手動） | レビュー → 修正 → 確認ループを 1 コマンドで回し、close は別判断ステップで手動実行する |
-| `kaji run .kaji/wf/review-close.yaml <id>` | ✅（自動） | レビューから close（merge + cleanup）まで全自動で完走させる |
+| `kaji run .kaji/wf/review-cycle.yaml <id>` | ❌（手動） | レビュー → 修正 → 確認ループを 1 コマンドで回し、close は別判断ステップで手動実行する。先頭 step `review-poll` が codex auto-review を監視し、不在時のみ `review` skill (codex agent) に fallback する |
+| `kaji run .kaji/wf/review-close.yaml <id>` | ✅（自動） | レビューから close（merge + cleanup）まで全自動で完走させる。同上の `review-poll` → fallback `review` 構成 |
 | `/review-cycle <id>` | ❌（手動） | `review-cycle.yaml` を起動する slash command wrapper。終了後に `/issue-close` 案内を出力 |
+
+> **review-poll の前提**: `review-close.yaml` / `review-cycle.yaml` は `chatgpt-codex-connector[bot]` (id `199175422`) の auto-review が走っている GitHub 環境を前提に設計されている。`requires_provider: github` 固定で、GitLab / local 環境では workflow load 時に exit 2 する。auto-review がクレジット不足等で走らない場合は、`review-poll` が `NO_REACTION_TIMEOUT_SEC` (60s) 経過で `BACK_FALLBACK` を返し、既存 `review` skill (codex agent による能動レビュー) に fallback する。詳細は [`.claude/skills/review-poll/SKILL.md`](../../.claude/skills/review-poll/SKILL.md) を参照。
 
 custom workflow への `requires_provider` 追加は推奨（[workflow-authoring.md](workflow-authoring.md)
 § `requires_provider` 参照）。

@@ -1,5 +1,5 @@
 ---
-description: PR/MR に対し初回コードレビューを実施し、Approve / Changes Requested を投稿する。新規レビュー専用（修正確認は /pr-verify）。
+description: PR/MR に対し初回コードレビューを実施し、Approve / Changes Requested を投稿する。新規レビュー専用（修正確認は /pr-verify）。`review-close` / `review-cycle` workflow では `review-poll` の `BACK_FALLBACK` を受けた fallback step として呼び出される。
 name: review
 ---
 
@@ -16,9 +16,10 @@ Approve / Changes Requested を投稿する。
 
 | タイミング | このスキル |
 |-----------|-----------|
-| PR/MR 作成直後の初回レビュー | ✅ 必須 |
+| PR/MR 作成直後の初回レビュー（GitLab / 単体起動 / `review-poll` の `BACK_FALLBACK` 後の fallback） | ✅ 必須 |
 | `/pr-fix` 後の修正確認 | ❌ `/pr-verify` を使う |
-| `provider.type='github'` 配下 | ✅ 受理（`gh` の写像層経由） |
+| `provider.type='github'` で codex auto-review が走る環境 | ⚠️ workflow からは `review-poll` 経由で fallback 用途のみ |
+| `provider.type='github'` で codex auto-review が走らない環境（クレジット不足等） | ✅ `review-poll` → `BACK_FALLBACK` → 本 skill |
 | `provider.type='gitlab'` 配下 | ✅ 受理（`kaji pr` の写像層が `glab` 命令を吸収） |
 | `provider.type='local'` 配下 | ❌ Step 0 で ABORT。代替は `/issue-review-code` |
 
