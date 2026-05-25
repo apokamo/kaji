@@ -88,7 +88,7 @@ GitLab provider 側は同じ制約を回避するため Phase で marker comment
 | ケース | 既存挙動 (GitHub mode) | 修正後 |
 |--------|----------------------|--------|
 | 非 self-PR で `--approve` | `gh pr review --approve` 委譲 → rc=0 | 委譲前に `gh pr view --json author` + `gh api user` の preflight が走り、両 API 成功 + author≠me で従来 `gh pr review --approve` 委譲。**rc は不変（0 / gh の rc を素通し）だが、新規 preflight 失敗経路が増える**（次行参照） |
-| 非 self-PR で `--approve` の preflight 失敗 | （無し、新規経路） | `gh pr view --json author` または `gh api user` が rc≠0 → `EXIT_RUNTIME_ERROR` (5) を返し `gh pr review` は呼ばない（fail-loud） |
+| 非 self-PR で `--approve` の preflight 失敗 | （無し、新規経路） | `gh pr view --json author` または `gh api user` が rc≠0 → `EXIT_RUNTIME_ERROR` (3) を返し `gh pr review` は呼ばない（fail-loud） |
 | Self-PR で `--approve` | `gh pr review --approve` 委譲 → rc=1 (`Can not approve your own pull request`) | `gh api --method POST repos/<repo>/issues/<pr>/comments -f body=<marker+body>` で marker 付き comment を投稿 → 投稿 rc=0 で `_handle_pr` rc=0。`gh pr review` は呼ばない。投稿 rc≠0 → `EXIT_RUNTIME_ERROR` |
 | `--request-changes` (self / 非 self いずれも) | `gh pr review --request-changes` 委譲 | **完全不変**（routing で `_github_pr_review` に分岐せず従来の `_forward_to_gh` passthrough を維持。本 Issue では self-PR 時の GitHub API 振る舞いを検証せず未検証として扱う。実発生観測時に別 Issue で fallback 追加） |
 | `--comment` | `gh pr review --comment` 委譲 | **不変** |

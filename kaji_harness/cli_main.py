@@ -768,14 +768,16 @@ def _dispatch_pr_builtin(sub: str, rest: list[str], *, repo_override: str | None
 
 
 def _has_approve_flag(rest: list[str]) -> bool:
-    """``rest`` 中に ``--approve`` / ``--approve=...`` が含まれるかを pre-scan する。
+    """``rest`` 中に ``--approve`` / ``--approve=...`` / ``-a`` が含まれるかを pre-scan する。
 
+    ``gh pr review`` の `-a` は ``--approve`` の正式 short alias（``gh pr review --help``）
+    のため、long form と同じく self-PR fallback dispatcher へ振り分ける。
     ``--`` 以降は positional 扱いし無視する（``gh`` の慣習に合わせる）。
     """
     for tok in rest:
         if tok == "--":
             return False
-        if tok == "--approve" or tok.startswith("--approve="):
+        if tok == "--approve" or tok.startswith("--approve=") or tok == "-a":
             return True
     return False
 
@@ -844,15 +846,18 @@ def _github_pr_review(rest: list[str], *, repo_override: str | None) -> int:
     非 self-PR では従来通り ``gh pr review --approve`` を委譲する。
     """
     p = argparse.ArgumentParser(prog="kaji pr review", add_help=True)
-    p.add_argument("pr_id", type=str)
-    p.add_argument("--approve", action="store_true", required=True)
-    p.add_argument("--body", default=None, type=str)
-    p.add_argument("--body-file", dest="body_file", default=None, type=str)
-    ns = p.parse_args(rest)
+    p.add_argument("pr_id", type=str, nargs="?", default=None)
+    p.add_argument("-a", "--approve", action="store_true", required=True)
+    p.add_argument("-b", "--body", default=None, type=str)
+    p.add_argument("-F", "--body-file", dest="body_file", default=None, type=str)
+    ns, unknown = p.parse_known_args(rest)
 
-    if not _is_ascii_decimal(ns.pr_id):
-        sys.stderr.write(f"Error: PR_ID must be ASCII decimal, got: {ns.pr_id}\n")
-        return EXIT_INVALID_INPUT
+    # self-PR fallback は ASCII decimal の PR 番号 + 既知 flag のみで成立する。
+    # URL/branch target、PR 省略（current branch 解決）、未認識 flag (`-R` 等)
+    # の場合は従来契約を保つため `gh pr review` への passthrough にフォールバック
+    # する（self-PR fallback はかけない）。
+    if ns.pr_id is None or not _is_ascii_decimal(ns.pr_id) or unknown:
+        return _forward_to_gh("pr", ["review", *rest], repo=repo_override)
     try:
         body = _read_body_arg(ns.body, ns.body_file)
     except ValueError as exc:

@@ -873,6 +873,21 @@ class TestHasApproveFlag:
 
         assert _has_approve_flag(["185", "--body", "--approve-only-not-real"]) is False
 
+    def test_short_a_flag_returns_true(self) -> None:
+        from kaji_harness.cli_main import _has_approve_flag
+
+        assert _has_approve_flag(["-a"]) is True
+
+    def test_short_a_after_double_dash_returns_false(self) -> None:
+        from kaji_harness.cli_main import _has_approve_flag
+
+        assert _has_approve_flag(["--", "-a"]) is False
+
+    def test_short_a_with_pr_id_returns_true(self) -> None:
+        from kaji_harness.cli_main import _has_approve_flag
+
+        assert _has_approve_flag(["185", "-a"]) is True
+
 
 @pytest.mark.small
 class TestGithubPrReviewHandler:
@@ -976,11 +991,20 @@ class TestGithubPrReviewHandler:
                 if "--method" in cmd:
                     raise AssertionError(f"unexpected POST call: {cmd}")
 
-    def test_non_ascii_pr_id_rejected(self) -> None:
-        from kaji_harness.cli_main import EXIT_INVALID_INPUT, _github_pr_review
+    def test_non_ascii_pr_id_passes_through_to_gh(self) -> None:
+        """ASCII 数値以外の target（branch 名相当）は `gh pr review` に passthrough する。
 
-        rc = _github_pr_review(["１２３", "--approve"], repo_override="owner/repo")
-        assert rc == EXIT_INVALID_INPUT
+        本 dispatcher の self-PR fallback は ASCII decimal の PR 番号で
+        issue comments API を叩く設計のため、それ以外は従来契約を保つ。
+        """
+        from kaji_harness.cli_main import _github_pr_review
+
+        with patch("kaji_harness.cli_main._forward_to_gh") as mock_forward:
+            mock_forward.return_value = 0
+            rc = _github_pr_review(["１２３", "--approve"], repo_override="owner/repo")
+            assert rc == 0
+            mock_forward.assert_called_once()
+            assert mock_forward.call_args[0][1] == ["review", "１２３", "--approve"]
 
     def test_body_and_body_file_mutually_exclusive(self, tmp_path: Path) -> None:
         from kaji_harness.cli_main import EXIT_INVALID_INPUT, _github_pr_review
@@ -1047,6 +1071,102 @@ class TestGithubPrReviewHandler:
             ]
             rc = _github_pr_review(["185", "--approve"], repo_override="owner/repo")
             assert rc == EXIT_RUNTIME_ERROR
+
+    def test_self_pr_approve_short_body_alias(self) -> None:
+        """`-b` 短縮形 body は `--body` と同じく self-PR fallback を成立させる。"""
+        from kaji_harness.cli_main import _github_pr_review
+        from kaji_harness.providers.gitlab import build_kaji_review_marker
+
+        which, detect, run = self._patches()
+        with which, detect, run as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="me\n", stderr=""),
+                MagicMock(returncode=0, stdout="me\n", stderr=""),
+                MagicMock(returncode=0, stdout="", stderr=""),
+            ]
+            rc = _github_pr_review(["185", "--approve", "-b", "LGTM"], repo_override="owner/repo")
+            assert rc == 0
+            third_cmd = mock_run.call_args_list[2][0][0]
+            body_arg = third_cmd[third_cmd.index("-f") + 1]
+            marker = build_kaji_review_marker("APPROVED")
+            assert body_arg == f"body={marker}\nLGTM"
+
+    def test_self_pr_approve_short_a_alias(self) -> None:
+        """`-a` 短縮形 approve は `--approve` と同じ self-PR fallback 経路に入る。"""
+        from kaji_harness.cli_main import _github_pr_review
+
+        which, detect, run = self._patches()
+        with which, detect, run as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="me\n", stderr=""),
+                MagicMock(returncode=0, stdout="me\n", stderr=""),
+                MagicMock(returncode=0, stdout="", stderr=""),
+            ]
+            rc = _github_pr_review(["185", "-a"], repo_override="owner/repo")
+            assert rc == 0
+            third_cmd = mock_run.call_args_list[2][0][0]
+            assert third_cmd[:4] == ["gh", "api", "--method", "POST"]
+
+    def test_self_pr_approve_short_body_file_alias(self, tmp_path: Path) -> None:
+        """`-F` 短縮形 body-file も `--body-file` と同じく self-PR fallback を成立させる。"""
+        from kaji_harness.cli_main import _github_pr_review
+
+        f = tmp_path / "body.txt"
+        f.write_text("from file")
+        which, detect, run = self._patches()
+        with which, detect, run as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="me\n", stderr=""),
+                MagicMock(returncode=0, stdout="me\n", stderr=""),
+                MagicMock(returncode=0, stdout="", stderr=""),
+            ]
+            rc = _github_pr_review(["185", "--approve", "-F", str(f)], repo_override="owner/repo")
+            assert rc == 0
+            third_cmd = mock_run.call_args_list[2][0][0]
+            body_arg = third_cmd[third_cmd.index("-f") + 1]
+            assert body_arg.endswith("from file")
+
+    def test_url_pr_id_passes_through_to_gh(self) -> None:
+        """URL target は self-PR fallback に入れず、従来通り `gh pr review` に passthrough する。"""
+        from kaji_harness.cli_main import _github_pr_review
+
+        with patch("kaji_harness.cli_main._forward_to_gh") as mock_forward:
+            mock_forward.return_value = 0
+            rc = _github_pr_review(
+                ["https://github.com/o/r/pull/185", "--approve"],
+                repo_override="owner/repo",
+            )
+            assert rc == 0
+            mock_forward.assert_called_once()
+            assert mock_forward.call_args[0][0] == "pr"
+            assert mock_forward.call_args[0][1] == [
+                "review",
+                "https://github.com/o/r/pull/185",
+                "--approve",
+            ]
+
+    def test_missing_pr_id_passes_through_to_gh(self) -> None:
+        """pr_id 省略（current branch 解決）は self-PR fallback ではなく `gh` に passthrough する。"""
+        from kaji_harness.cli_main import _github_pr_review
+
+        with patch("kaji_harness.cli_main._forward_to_gh") as mock_forward:
+            mock_forward.return_value = 0
+            rc = _github_pr_review(["--approve"], repo_override="owner/repo")
+            assert rc == 0
+            mock_forward.assert_called_once()
+            assert mock_forward.call_args[0][1] == ["review", "--approve"]
+
+    def test_unknown_flag_passes_through_to_gh(self) -> None:
+        """`-R` 等の本 dispatcher 未認識 flag があれば passthrough にフォールバックする。"""
+        from kaji_harness.cli_main import _github_pr_review
+
+        with patch("kaji_harness.cli_main._forward_to_gh") as mock_forward:
+            mock_forward.return_value = 0
+            rc = _github_pr_review(
+                ["185", "--approve", "-R", "other/repo"], repo_override="owner/repo"
+            )
+            assert rc == 0
+            mock_forward.assert_called_once()
 
 
 @pytest.mark.small
@@ -1117,6 +1237,23 @@ class TestGithubPrReviewRouting:
         assert rc == 0
         assert len(calls) == 1
         assert calls[0][0] == "forward"
+
+    def test_short_a_flag_routes_to_handler(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`kaji pr review 185 -a` も `--approve` と同様に handler に dispatch する。"""
+        from kaji_harness.cli_main import _handle_pr
+
+        calls: list[tuple] = []
+        monkeypatch.setattr(
+            "kaji_harness.cli_main._github_pr_review",
+            lambda rest, *, repo_override: calls.append(("handler", rest, repo_override)) or 0,
+        )
+        monkeypatch.setattr(
+            "kaji_harness.cli_main._forward_to_gh",
+            lambda *a, **kw: calls.append(("forward", a, kw)) or 0,
+        )
+        rc = _handle_pr(["review", "185", "-a"])
+        assert rc == 0
+        assert calls == [("handler", ["185", "-a"], "owner/repo")]
 
     def test_no_flag_routes_to_forward(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from kaji_harness.cli_main import _handle_pr
