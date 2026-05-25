@@ -23,7 +23,7 @@ cycles:
     max_iterations: 3
     on_exhaust: ABORT
   pr-review:
-    entry: pr-review
+    entry: review-poll
     loop: [pr-fix, pr-verify]
     max_iterations: 3
     on_exhaust: ABORT
@@ -157,6 +157,17 @@ steps:
     on:
       PASS: pr-review
       RETRY: pr
+      ABORT: end
+
+  - id: review-poll
+    skill: review-poll
+    agent: claude
+    model: sonnet
+    effort: medium
+    on:
+      PASS: close
+      RETRY: pr-fix
+      BACK_FALLBACK: pr-review
       ABORT: end
 
   - id: pr-review
