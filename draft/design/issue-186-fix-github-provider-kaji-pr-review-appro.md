@@ -36,7 +36,7 @@ $ echo $?
 - `kaji_harness/providers/gitlab.py:636-649` (`_parse_kaji_review_marker`) … note body 先頭行から state を逆引き
 - 既存テスト: `tests/test_dispatcher_gitlab.py:607` / `tests/test_providers_gitlab.py:781-894` で `APPROVED` / `CHANGES_REQUESTED` / `COMMENTED` の round-trip を assert
 
-GitHub 側でも同じ marker を用い、self-PR 検知時には `gh pr review` 呼び出しを skip して marker 付き comment 投稿のみで成功扱いに切り替える。非 self-PR 時は従来通り `gh pr review --approve|--request-changes` を実行し既存挙動を維持する。これにより:
+GitHub 側でも同じ marker を用い、`--approve` flag 時に self-PR を検知した場合のみ `gh pr review` 呼び出しを skip して marker 付き comment 投稿のみで成功扱いに切り替える。非 self-PR の `--approve` は従来通り `gh pr review --approve` を実行し既存挙動を維持。`--request-changes` / `--comment` / flag 無しは routing 段で `_github_pr_review` に分岐せず全経路で完全不変（§ Root Cause § scope 境界 / § 方針 § 1）。これにより:
 
 - `pr-verify` skill (`.claude/skills/pr-verify/SKILL.md:218`) は PASS 経路（`kaji pr review --approve`）の rc=0 だけを依存条件として扱えば良く、skill 側に provider 分岐や self-PR 分岐を持ち込まない
 - `.kaji/wf/review-close.yaml:49-57` の `pr-verify → close` 遷移が author==reviewer な構成でも閉じる
@@ -90,7 +90,7 @@ GitLab provider 側は同じ制約を回避するため Phase で marker comment
 | 非 self-PR で `--approve` | `gh pr review --approve` 委譲 → rc=0 | 委譲前に `gh pr view --json author` + `gh api user` の preflight が走り、両 API 成功 + author≠me で従来 `gh pr review --approve` 委譲。**rc は不変（0 / gh の rc を素通し）だが、新規 preflight 失敗経路が増える**（次行参照） |
 | 非 self-PR で `--approve` の preflight 失敗 | （無し、新規経路） | `gh pr view --json author` または `gh api user` が rc≠0 → `EXIT_RUNTIME_ERROR` (5) を返し `gh pr review` は呼ばない（fail-loud） |
 | Self-PR で `--approve` | `gh pr review --approve` 委譲 → rc=1 (`Can not approve your own pull request`) | `gh api --method POST repos/<repo>/issues/<pr>/comments -f body=<marker+body>` で marker 付き comment を投稿 → 投稿 rc=0 で `_handle_pr` rc=0。`gh pr review` は呼ばない。投稿 rc≠0 → `EXIT_RUNTIME_ERROR` |
-| `--request-changes` (self / 非 self いずれも) | `gh pr review --request-changes` 委譲 | **不変**（passthrough 経路に到達せず routing が `_github_pr_review` を起動しないため、preflight も発生しない。本 Issue scope 外） |
+| `--request-changes` (self / 非 self いずれも) | `gh pr review --request-changes` 委譲 | **完全不変**（routing で `_github_pr_review` に分岐せず従来の `_forward_to_gh` passthrough を維持。本 Issue では self-PR 時の GitHub API 振る舞いを検証せず未検証として扱う。実発生観測時に別 Issue で fallback 追加） |
 | `--comment` | `gh pr review --comment` 委譲 | **不変** |
 
 > **契約差分の明示（レビュー review #1 反映）**: 「非 self-PR で `--approve`」は従来「`gh pr review` 委譲」一段のみだったが、修正後は preflight (`gh pr view --json author -q .author.login` + `gh api user --jq .login`) が先行する。両 API が成功する限り rc は不変 (0 / gh の rc を素通し) だが、**preflight 自体が失敗した場合に `EXIT_RUNTIME_ERROR` を返す新規経路が増える**。これは silent fallthrough 防止のために意図した契約（§ 方針 § 4）であり、回帰テストで明示的に assert する
@@ -143,8 +143,8 @@ kaji pr review 185 --comment --body "merge前の最終確認お願いします"
 # 4. `--request-changes` 経路（本 Issue scope 外、従来通り passthrough）
 kaji pr review 185 --request-changes --body "X を修正してください"
 # → `_handle_pr` は `--approve` flag を含まないため _github_pr_review に分岐せず
-# → `gh pr review --request-changes --body ...` を素通し
-# → self-PR の場合は従来通り gh 側で rc≠0（本 Issue では未対応、別 Issue 追跡）
+# → `gh pr review --request-changes --body ...` を素通し、rc=gh の rc
+# → self-PR 時の GitHub API 側の振る舞いは本 Issue で検証していない（未検証 / 別 Issue 追跡）
 ```
 
 ## 制約・前提条件
@@ -153,7 +153,7 @@ kaji pr review 185 --request-changes --body "X を修正してください"
 - `build_kaji_review_marker` / `_KAJI_REVIEW_MARKER_PREFIX` / `_REVIEW_STATES_VALID` は `kaji_harness/providers/gitlab.py:613-633` に既に存在。本 Issue では **`gitlab.py` から `providers/_review_marker.py` 等の provider 中立モジュールへ移管せず**、`cli_main.py` の既存 import (`cli_main.py:39`) を流用して GitHub dispatcher 側でも参照する。理由: 関数自体は provider 非依存だが、移管はファイル境界を新設する Scope 拡張になるため別 Issue 推奨（参照: bug.md § 「リファクタ混在を避ける」）
 - self-PR 判定は `gh api user --jq .login` (authenticated user) と `gh pr view <pr> --json author --jq .author.login` (PR author) を比較する。両 API は repo 権限以外の追加 scope を要求しない
 - marker comment 投稿は `gh api --method POST repos/<repo>/issues/<pr>/comments -f body=<text>` を使う（PR の「会話」コメントは Issue comments API に統一されている GitHub 仕様）。`gh pr comment <pr> --body <text>` でも等価だが、`_handle_pr` の他 forward 経路が `gh api` ベースで統一されているのに合わせる
-- 本変更は `kaji pr review --approve` / `--request-changes` の rc semantics のみ変更する。stdout 出力は marker comment 投稿レスポンスを抑止し（既存 `_forward_pr_api_list` パターンに準拠して標準出力に GitHub API レスポンスを流す既定との互換性は GitLab dispatcher と同じく "rc のみ意味があり stdout は best-effort" とする）
+- 本変更は `kaji pr review --approve` の rc semantics のみ変更する（`--request-changes` / `--comment` / flag 無しは routing が `_github_pr_review` に分岐しないため挙動完全不変）。stdout 出力は marker comment 投稿レスポンスを抑止し（既存 `_forward_pr_api_list` パターンに準拠して標準出力に GitHub API レスポンスを流す既定との互換性は GitLab dispatcher と同じく "rc のみ意味があり stdout は best-effort" とする）
 - `--body` / `--body-file` 同時指定は既存 `_read_body_arg` 経由で `ValueError` → `EXIT_INVALID_INPUT` 化する（GitLab dispatcher と同じ挙動）
 - 単独開発前提（author == authenticated user）を主シナリオに据えるが、CI から bot が approve するケースとの両立も維持する（authenticated user ≠ PR author → 従来 `gh pr review` 委譲）
 
@@ -466,6 +466,6 @@ def test_approve_flag_routes_to_handler(self, monkeypatch):
 | 6. `review-close` workflow 構造 | `.kaji/wf/review-close.yaml:49-57` | `pr-verify` step の `PASS: close` / `ABORT: end` 遷移。`pr-verify` が ABORT を返すと `close` (= `/issue-close`) は実行されない |
 | 7. 既存 `_handle_pr` GitHub 分岐構造 | `kaji_harness/cli_main.py:770-821` | `_PR_BUILTIN_SUBCOMMANDS = {"review-comments", "reviews", "reply-to-comment"}` の 3 つだけ builtin 化、それ以外は `_forward_to_gh("pr", raw_args, repo=repo_override)` 素通し。`review` を仲間に加える形ではなく専用 dispatcher 関数で受ける根拠 |
 | 8. `_detect_repo` 補助関数 | `kaji_harness/cli_main.py:568-590` | `gh repo view --json nameWithOwner -q .nameWithOwner` を `subprocess.run` で叩いて 1 値抽出する既存パターン。self-PR 判定の `gh pr view --json author` / `gh api user` も同じ形で実装する |
-| 9. testing-convention.md § テスト省略の 4 条件 + § `subprocess.run` patch スコープ | `docs/dev/testing-convention.md` § テスト戦略の原則 / § `subprocess.run` patch スコープ (lines 133-146) | Medium / Large 省略の 4 条件、および `_handle_pr` 経路で `cli_main.subprocess.run` の namespace patch を許容する境界（`_load_config_for_dispatch` を stub し `get_provider()` 経路を bypass するパターン、既存 `tests/test_cli_main.py:670-687` 前例）を本設計書 § テスト戦略で参照 |
+| 9. testing-convention.md § テスト省略の 4 条件 + § `subprocess.run` patch スコープ | `docs/dev/testing-convention.md` § テスト戦略の原則 / § `subprocess.run` patch スコープ (lines 133-146) | Medium / Large 省略の 4 条件、および `_handle_pr` 経路での `cli_main.subprocess.run` namespace patch 禁止規定（例外定義なし）を本設計書 § テスト戦略で参照。本 Issue ではこの禁止規定を遵守し、subprocess 引数 / rc 検証は `_handle_pr` を経由しない `_github_pr_review` 直接呼び出しの handler 単体テストに分離する（§ テスト戦略 § Small クラス 2）。`_handle_pr` 経由の routing 検証は dispatch 先関数自体を stub し subprocess を発生させない設計（§ Small クラス 3）に統一する |
 | 10. GitHub CLI manual: `gh pr review` | https://cli.github.com/manual/gh_pr_review | `--approve` / `--comment` / `--request-changes` の 3 flag を正式 option として定義。`--comment` は author でも GitHub API が許容するため現行 `_handle_pr` passthrough が動作している根拠（review 指摘 #1 反映: 既存 `--comment` contract 保護の一次根拠） |
 | 11. 既存 GitHub builtin dispatch test 構成 | `tests/test_cli_main.py:665-873` (`TestPrReviewCommentsBuiltin` 等) / `tests/test_dispatcher.py:788-901` (`TestForwardToGhRepoInjection`) | 本 Issue の Small テスト追加先と境界差し替えパターンの前例（review 指摘 #3 反映: `tests/test_dispatcher_github.py` という worktree 非実在ファイル名の訂正） |
