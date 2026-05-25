@@ -1157,16 +1157,64 @@ class TestGithubPrReviewHandler:
             assert mock_forward.call_args[0][1] == ["review", "--approve"]
 
     def test_unknown_flag_passes_through_to_gh(self) -> None:
-        """`-R` 等の本 dispatcher 未認識 flag があれば passthrough にフォールバックする。"""
+        """本 dispatcher 未認識 flag があれば passthrough にフォールバックする。"""
         from kaji_harness.cli_main import _github_pr_review
 
         with patch("kaji_harness.cli_main._forward_to_gh") as mock_forward:
             mock_forward.return_value = 0
             rc = _github_pr_review(
-                ["185", "--approve", "-R", "other/repo"], repo_override="owner/repo"
+                ["185", "--approve", "--unknown-flag"], repo_override="owner/repo"
             )
             assert rc == 0
             mock_forward.assert_called_once()
+
+    def test_self_pr_approve_with_explicit_repo_flag(self) -> None:
+        """`-R owner/repo` 明示時も self-PR fallback が成立する（codex P2 指摘）。
+
+        `gh pr review` は `-R/--repo` を inherited flag として受理するため、
+        `kaji pr review 185 --approve -R other/repo` のような呼び出しでも
+        self-PR fallback（marker comment 投稿）が効かなければ
+        `Can not approve your own pull request` が再発する。
+        user 明示 `--repo` は config 由来 `repo_override` より優先する。
+        """
+        from kaji_harness.cli_main import _github_pr_review
+
+        with patch("kaji_harness.cli_main.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="alice\n", stderr=""),
+                MagicMock(returncode=0, stdout="alice\n", stderr=""),
+                MagicMock(returncode=0, stdout="", stderr=""),
+            ]
+            rc = _github_pr_review(
+                ["185", "--approve", "-R", "explicit/repo"],
+                repo_override="config/repo",
+            )
+            assert rc == 0
+            # 1 回目: pr view --repo に user 明示の `explicit/repo` が渡る
+            first_cmd = mock_run.call_args_list[0][0][0]
+            assert "explicit/repo" in first_cmd
+            assert "config/repo" not in first_cmd
+            # 3 回目: marker comment は user 明示の `explicit/repo` 宛て
+            third_cmd = mock_run.call_args_list[2][0][0]
+            assert "repos/explicit/repo/issues/185/comments" in third_cmd
+
+    def test_self_pr_approve_with_long_repo_flag(self) -> None:
+        """`--repo owner/repo` 明示時も self-PR fallback が成立する。"""
+        from kaji_harness.cli_main import _github_pr_review
+
+        with patch("kaji_harness.cli_main.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="alice\n", stderr=""),
+                MagicMock(returncode=0, stdout="alice\n", stderr=""),
+                MagicMock(returncode=0, stdout="", stderr=""),
+            ]
+            rc = _github_pr_review(
+                ["185", "--approve", "--repo", "explicit/repo"],
+                repo_override="config/repo",
+            )
+            assert rc == 0
+            third_cmd = mock_run.call_args_list[2][0][0]
+            assert "repos/explicit/repo/issues/185/comments" in third_cmd
 
 
 @pytest.mark.small

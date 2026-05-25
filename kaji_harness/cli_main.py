@@ -850,14 +850,22 @@ def _github_pr_review(rest: list[str], *, repo_override: str | None) -> int:
     p.add_argument("-a", "--approve", action="store_true", required=True)
     p.add_argument("-b", "--body", default=None, type=str)
     p.add_argument("-F", "--body-file", dest="body_file", default=None, type=str)
+    # `gh pr review` の inherited flag `-R/--repo` を吸収する。user 明示の
+    # `--repo owner/name` は config 由来 `repo_override` より優先する。これを
+    # unknown 扱いにすると self-PR fallback がスキップされ、`Can not approve
+    # your own pull request` が再発するため（codex review 指摘）。
+    p.add_argument("-R", "--repo", dest="repo", default=None, type=str)
     ns, unknown = p.parse_known_args(rest)
 
     # self-PR fallback は ASCII decimal の PR 番号 + 既知 flag のみで成立する。
-    # URL/branch target、PR 省略（current branch 解決）、未認識 flag (`-R` 等)
+    # URL/branch target、PR 省略（current branch 解決）、未認識 flag
     # の場合は従来契約を保つため `gh pr review` への passthrough にフォールバック
     # する（self-PR fallback はかけない）。
     if ns.pr_id is None or not _is_ascii_decimal(ns.pr_id) or unknown:
         return _forward_to_gh("pr", ["review", *rest], repo=repo_override)
+
+    # user 明示 `--repo` を config override より優先する。
+    effective_repo_override = ns.repo if ns.repo else repo_override
     try:
         body = _read_body_arg(ns.body, ns.body_file)
     except ValueError as exc:
@@ -869,7 +877,7 @@ def _github_pr_review(rest: list[str], *, repo_override: str | None) -> int:
     if shutil.which("gh") is None:
         sys.stderr.write(_GH_MISSING_GUIDANCE)
         return EXIT_RUNTIME_ERROR
-    repo = _detect_repo(override=repo_override)
+    repo = _detect_repo(override=effective_repo_override)
     if repo is None:
         sys.stderr.write(
             "Error: failed to detect current repository.\n"
