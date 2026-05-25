@@ -116,7 +116,7 @@ steps:
     on:
       PASS: final-check
       RETRY: fix-code
-      BACK: design
+      BACK: implement
       ABORT: end
 
   - id: fix-code
@@ -155,7 +155,7 @@ steps:
     model: sonnet
     effort: medium
     on:
-      PASS: pr-review
+      PASS: review-poll
       RETRY: pr
       ABORT: end
 
@@ -167,10 +167,10 @@ steps:
     on:
       PASS: close
       RETRY: pr-fix
-      BACK_FALLBACK: pr-review
+      BACK_FALLBACK: review
       ABORT: end
 
-  - id: pr-review
+  - id: review
     skill: review
     agent: codex
     model: gpt-5.5
