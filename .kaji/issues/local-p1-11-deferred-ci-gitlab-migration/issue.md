@@ -1,13 +1,16 @@
 ---
 id: local-p1-11
 title: '[deferred] CI 資産の GitLab 移植（release-please / labels-sync）'
-state: open
+state: closed
 slug: deferred-ci-gitlab-migration
 labels:
 - type:ci
 - scope:gitlab-validation
 - priority:low
 created_at: '2026-05-09T06:02:37Z'
+closed_at: '2026-05-25T00:00:00Z'
+closed_by: kamo
+close_reason: not-planned
 ---
 ## 概要
 
