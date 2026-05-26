@@ -154,7 +154,7 @@ def parse_verdict(
 
 | ファイル | 変更内容 |
 |----------|----------|
-| `kaji_harness/verdict.py` | (a) `_has_verdict_marker()` 補助関数を追加し、Step 3 起動前に input gate を導入。(b) `FORMATTER_PROMPT` を強化し、「verdict 不在」用の sentinel 出力を AI に許可する。(c) `_parse_formatted_output()` で sentinel を検出して `VerdictNotFound` を raise する |
+| `kaji_harness/verdict.py` | (a) `parse_verdict()` の Step 3 起動条件を「`block is None and relaxed_block is None` の場合は `ai_formatter` 提供有無に関わらず `VerdictNotFound` を raise」に厳格化（delimiter-only gate。補助関数は新規追加せず既存ローカル変数で判定）。(b) `FORMATTER_PROMPT` を強化し、delimiter は存在するが内容が verdict として成立しないケース向けの sentinel 出力を AI に許可する。(c) `_parse_formatted_output()` で sentinel を検出して `VerdictNotFound` を raise する |
 | `tests/test_verdict_parser.py` | (a) Small 回帰テスト 7 件を新規追加（後述「テスト戦略」§ Small 新規テスト）。(b) 既存テスト 6 件の入力を marker-less から delimiter-bearing malformed に移行（同 § 既存テストの移行） |
 | `tests/test_verdict_integration.py` | Medium 結合テスト追加（runner 経路で `VerdictNotFound` が `HarnessError` として伝播することを確認） |
 | `docs/ARCHITECTURE.md` | Verdict 判定機構セクションの Step 3 説明に「verdict 不在を AI 捏造で穴埋めしない」入力ゲートを追記 |
@@ -225,19 +225,25 @@ FORMATTER_PROMPT = Template(
     "\n"
     "重要: status 行は必ず $valid_statuses_str のいずれかを出力してください。それ以外の値は使用禁止です。\n"
     "\n"
-    "## 例外: verdict が入力に存在しない場合\n"
-    "入力に verdict ブロックも status キーワードも含まれない場合は、verdict を捏造せず、\n"
-    "以下の sentinel を **単独で** 出力してください。それ以外の本文は付けないでください。\n"
+    "## 例外: 入力の verdict ブロックが空 / 内容不足 / 非 verdict 内容で埋まっている場合\n"
+    "前段の harness gate を通過した入力には `---VERDICT---` delimiter が必ず含まれていますが、\n"
+    "その delimiter 内が以下のいずれかに該当する場合は **verdict を捏造せず**、下記 sentinel を\n"
+    "**単独で** 出力してください。sentinel 以外の本文（推測 status、補足説明、コードブロック等）は\n"
+    "一切付けないでください。\n"
+    "\n"
+    "  (a) delimiter 内が空、または空白 / 改行のみ\n"
+    "  (b) delimiter 内に status / reason / evidence のいずれも明示されていない\n"
+    "  (c) delimiter 内が agent の中間進捗報告（pytest 待ち / 作業継続中 等）であり、\n"
+    "      step 完了の意思表示として読み取れない\n"
     "\n"
     "---NO_VERDICT_FOUND---\n"
     "\n"
-    "agent の中間進捗報告（pytest 待ち / 作業継続中 等）を PASS / ABORT 等の verdict と\n"
-    "解釈してはいけません。verdict ブロックが存在しないことそのものが harness への\n"
-    "正規の応答です。\n"
+    "中間進捗報告を PASS / ABORT 等の verdict と解釈してはいけません。delimiter が形式的に\n"
+    "存在しても、内容が verdict として成立していないことそのものが harness への正規の応答です。\n"
 )
 ```
 
-> 修正点 1 と修正点 2 の関係: 修正点 1（delimiter gate）により「delimiter 完全不在」のケースは Step 3 に到達しないため、prompt の「verdict ブロックも status キーワードも含まれない場合」という文言は、現実には **delimiter は存在するが内容が壊れている / 空である** ケース（例: `---VERDICT---\n\n---END_VERDICT---`、または delimiter + 非関連テキストの組み合わせ）が主に該当する。修正点 1 を通過した後の防衛線として機能させる。
+> 修正点 1 と修正点 2 の関係（sentinel 到達条件の整合）: 修正点 1（delimiter gate）により Step 3 到達時の入力には **必ず delimiter が存在する**。したがって sentinel 起動条件は「delimiter は存在するが、その内部が空 / 内容不足 / 進捗報告のみで verdict として成立しない」ケースに限定される（prompt の (a)(b)(c) に対応）。delimiter 完全不在ケースは修正点 1 で短絡されるため sentinel 経路には到達しない。両者の境界は重ならず、副防御は到達可能な領域でのみ機能する。
 
 そして `_parse_formatted_output()` 冒頭に sentinel 検出を追加する:
 
@@ -255,8 +261,8 @@ def _parse_formatted_output(formatted: str, valid_statuses: set[str]) -> Verdict
 
 ポイント:
 
-- AI の選択肢に「verdict 不在」を明示的に与え、捏造圧力を緩和する。
-- 修正点 1 のゲートを通過しても（marker は存在するが malformed なケース）、AI が「これは verdict ではない / 捏造に値しない」と判断したら sentinel を返せる。
+- AI の選択肢に「verdict として成立していない」を表現するチャネルを与え、delimiter 内が進捗報告のみ等の場合に捏造へ傾く圧力を緩和する。
+- 修正点 1 のゲートを通過した入力（delimiter 存在）に対し、AI が prompt の (a)(b)(c) 条件で「これは verdict ではない」と判断したら sentinel を返せる。delimiter 完全不在ケースは修正点 1 で短絡済みのため、sentinel 経路と重ならない。
 - sentinel 検出は `VerdictNotFound` への分岐であり、parser の他経路への影響なし。
 
 ### 最小侵襲性
