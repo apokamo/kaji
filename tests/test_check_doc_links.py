@@ -352,6 +352,21 @@ class TestStripCodeSegmentsInline:
         out = _strip_code_segments(src)
         assert "[link](b.md)" in out
 
+    def test_escaped_backticks_do_not_form_code_span(self) -> None:
+        # CommonMark §2.4: `\`` is a literal backtick, not a delimiter.
+        # The link between two escaped backticks is real text and must
+        # survive masking.
+        src = "\\`[real](missing.md)\\`\n"
+        out = _strip_code_segments(src)
+        assert "[real](missing.md)" in out
+
+    def test_escaped_backslash_before_delimiter_still_masks_span(self) -> None:
+        # `\\` escapes to a literal backslash; the following backtick is a
+        # real code span delimiter and must still mask its content.
+        src = "x \\\\`[fake](missing.md)` y\n"
+        out = _strip_code_segments(src)
+        assert "[fake](missing.md)" not in out
+
 
 @pytest.mark.small
 class TestStripCodeSegmentsPositionPreserved:
@@ -694,6 +709,23 @@ class TestCodeBlockExclusion:
         result = _run(tmp_path, "docs")
         assert result.returncode == 1
         assert "missing.md" in result.stderr
+
+    def test_escaped_backtick_link_still_detected(self, tmp_path: Path) -> None:
+        # Review feedback (round 8 probe): `\`[real](missing.md)\`` renders to
+        # literal-backtick + real link + literal-backtick. The link is NOT
+        # inside a code span and the broken target must surface.
+        _write(tmp_path / "docs" / "a.md", "\\`[real](missing.md)\\`\n")
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 1
+        assert "missing.md" in result.stderr
+
+    def test_escaped_backslash_before_delimiter_masks_inner_link(self, tmp_path: Path) -> None:
+        # Counterpart of the previous test: `\\` is a literal backslash, and
+        # the following backtick still opens a real code span. The fake link
+        # inside must remain masked.
+        _write(tmp_path / "docs" / "a.md", "x \\\\`[fake](missing.md)` y\n")
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
 
     def test_no_trailing_newline_unclosed_reports_broken_link(self, tmp_path: Path) -> None:
         # MF-1 (round 6→7 probe): no-trailing-newline unclosed fence must NOT

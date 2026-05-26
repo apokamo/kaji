@@ -323,10 +323,20 @@ def _collect_unclosed_fence_line_ranges(content: str) -> list[tuple[int, int]]:
 
 
 def _strip_inline_code_spans(text: str) -> str:
+    # CommonMark §2.4: a backslash before ASCII punctuation produces a literal
+    # character. An escaped backtick (``\\```) is therefore NOT a code span
+    # delimiter. Mask escape sequences before applying the code span regex so
+    # that escaped backticks cannot be paired with subsequent backticks and
+    # silently swallow real links between them. `\\\\` is consumed first so a
+    # literal backslash followed by a delimiter backtick (`\\\\\\``) survives.
+    # Each 2-char escape is replaced by 2 non-backtick chars to preserve
+    # offsets for `_index_to_line`.
+    masked_escapes = text.replace("\\\\", "  ").replace("\\`", "  ")
+
     def _blank(m: re.Match[str]) -> str:
         return "".join(ch if ch == "\n" else " " for ch in m.group(0))
 
-    return _CODE_SPAN_PATTERN.sub(_blank, text)
+    return _CODE_SPAN_PATTERN.sub(_blank, masked_escapes)
 
 
 def _index_to_line(index: int, lines: list[str]) -> int:
