@@ -9,6 +9,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from markdown_it.token import Token
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "check_doc_links.py"
 
@@ -31,7 +32,8 @@ _is_hidden = _mod._is_hidden
 _index_to_line = _mod._index_to_line
 _slugify = _mod._slugify
 _strip_code_segments = _mod._strip_code_segments
-_is_explicit_closing_fence = _mod._is_explicit_closing_fence
+_fence_has_explicit_closing = _mod._fence_has_explicit_closing
+_MD_PARSER = _mod._MD_PARSER
 
 
 def _run(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -234,43 +236,85 @@ class TestStripCodeSegmentsFenced:
         out = _strip_code_segments(src)
         assert "x" not in out
 
+    def test_top_level_four_space_pseudo_close_not_masked(self) -> None:
+        # MF-1 (round 5→6): top-level fence with 4-sp pseudo-close is unclosed
+        # per CommonMark §4.5, so the inner broken link must remain visible.
+        src = "```bash\n[real-broken](missing.md)\n    ```\n"
+        out = _strip_code_segments(src)
+        assert "[real-broken](missing.md)" in out
+
+    def test_no_trailing_newline_unclosed_not_masked(self) -> None:
+        # MF-1 (round 6→7): unclosed fence whose source lacks a trailing
+        # newline must NOT be classified as closed (broken link must remain).
+        src = "```bash\n[real-broken](missing.md)"
+        out = _strip_code_segments(src)
+        assert "[real-broken](missing.md)" in out
+
+
+def _first_fence_token(source: str):
+    """Return the first ``fence`` token from ``source`` (or None if absent)."""
+    for tok in _MD_PARSER.parse(source):
+        if tok.type == "fence":
+            return tok
+    return None
+
 
 @pytest.mark.small
-class TestIsExplicitClosingFence:
-    """_is_explicit_closing_fence: closing-fence shape under container prefixes."""
+class TestFenceHasExplicitClosing:
+    """_fence_has_explicit_closing: token-based closed/unclosed decision."""
 
     @pytest.mark.parametrize(
-        "line",
+        "source",
         [
+            # top-level closed with trailing newline
+            "```\nx\n```\n",
+            # top-level closed without trailing newline
+            "```\nx\n```",
+            # closed with info string
+            "```bash\nx\n```\n",
+            # closed empty body
+            "```\n```\n",
+            # block-quote-nested closed
+            "> ```\n> x\n> ```\n",
+            # list-item content-indent (Example 263) closed
+            "1.  text\n\n    ```\n    x\n    ```\n",
+            # composite container (list + blockquote) closed
+            "1.  > ```\n    > x\n    > ```\n",
+        ],
+    )
+    def test_closed_returns_true(self, source: str) -> None:
+        tok = _first_fence_token(source)
+        assert tok is not None
+        assert _fence_has_explicit_closing(tok) is True
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            # opening only with trailing newline
+            "```\n",
+            # opening only without trailing newline
             "```",
-            "   ```",
-            "```   ",
-            "> ```",
-            ">```",
-            "> ```  ",
-            "> > ```",
-            ">>```",
-            "    ```",
-            "    > ```",
-            "    > > ```",
-            "\t> ```",
+            # open + content, no close, trailing newline
+            "```\nx\ny\n",
+            # round 5→6 transition probe: top-level 4-sp pseudo-close is NOT close
+            "```bash\n[real-broken](missing.md)\n    ```\n",
+            # round 6→7 transition probe: no-trailing-newline unclosed
+            # round 6 `count("\n")` would (incorrectly) return True here.
+            "```bash\n[real-broken](missing.md)",
+            # block-quote opening without close
+            "> ```\n> x\n",
         ],
     )
-    def test_matches_closing(self, line: str) -> None:
-        assert _is_explicit_closing_fence(line, "`", 3) is True
+    def test_unclosed_returns_false(self, source: str) -> None:
+        tok = _first_fence_token(source)
+        assert tok is not None
+        assert _fence_has_explicit_closing(tok) is False
 
-    @pytest.mark.parametrize(
-        "line,fence_char,fence_len",
-        [
-            ("[real-broken](missing.md)", "`", 3),
-            ("some ``` text", "`", 3),
-            ("fake > ```", "`", 3),
-            ("~~~", "`", 3),
-            ("```", "`", 4),
-        ],
-    )
-    def test_rejects_non_closing(self, line: str, fence_char: str, fence_len: int) -> None:
-        assert _is_explicit_closing_fence(line, fence_char, fence_len) is False
+    def test_defensive_fallback_when_map_is_none(self) -> None:
+        tok = Token("fence", "code", 0)
+        tok.map = None
+        tok.content = ""
+        assert _fence_has_explicit_closing(tok) is False
 
 
 @pytest.mark.small
@@ -636,6 +680,27 @@ class TestCodeBlockExclusion:
             tmp_path / "docs" / "a.md",
             "Intro.\n\n```bash\nsome code\n\n[real-broken](missing.md)\n",
         )
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 1
+        assert "missing.md" in result.stderr
+
+    def test_top_level_four_space_pseudo_close_reports_broken_link(self, tmp_path: Path) -> None:
+        # MF-1 (round 5→6 probe): top-level fence + 4-sp pseudo-close must be
+        # treated as unclosed; inner broken link must surface.
+        _write(
+            tmp_path / "docs" / "a.md",
+            "```bash\n[real-broken](missing.md)\n    ```\n",
+        )
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 1
+        assert "missing.md" in result.stderr
+
+    def test_no_trailing_newline_unclosed_reports_broken_link(self, tmp_path: Path) -> None:
+        # MF-1 (round 6→7 probe): no-trailing-newline unclosed fence must NOT
+        # be classified as closed. Write the file WITHOUT a trailing newline.
+        path = tmp_path / "docs" / "a.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"```bash\n[real-broken](missing.md)")
         result = _run(tmp_path, "docs")
         assert result.returncode == 1
         assert "missing.md" in result.stderr
