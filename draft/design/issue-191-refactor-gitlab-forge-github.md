@@ -2,6 +2,8 @@
 
 Issue: #191
 
+> 本設計の意思決定は `docs/adr/004-remove-gitlab-forge.md` に ADR として昇格済み。最新の決定事項はそちらを参照。
+
 ## 概要
 
 `kaji_harness/providers/gitlab.py`（859 行）と関連する provider dispatch / CLI passthrough / sync コマンド / cache reader / E2E テスト / 設計上の「GitLab 互換性検証」契約 / docs / skill 記述を完全撤去し、kaji を GitHub 単独 forge 前提の単一スタックに収束させる。LocalProvider は `kaji sync from-gitlab` 由来の cache 経路も同時に消す（呼出元が消えるため）。
