@@ -277,7 +277,7 @@ cd [worktree_dir] && git add . && git commit -m "feat: implement [feature] for [
 
 ### Step 8.5: Pre-Handoff Review（MANDATORY）
 
-handoff 直前（`/issue-review-code` への進行前）に「設計書整合・テスト証跡・Scope 混在・GitLab auto-close 規約」を第三者視点で検査する。Step 8（コミット）の後に配置されるため、入力に必要な `git diff main...HEAD` と対象 commit hash がいずれも取得可能である。**重複チェックリストは作成しない**。`/issue-review-code` SKILL.md を rubric の単一情報源として参照しつつ、capability に応じて subagent / self-check に分岐する。
+handoff 直前（`/issue-review-code` への進行前）に「設計書整合・テスト証跡・Scope 混在・auto-close 規約」を第三者視点で検査する。Step 8（コミット）の後に配置されるため、入力に必要な `git diff main...HEAD` と対象 commit hash がいずれも取得可能である。**重複チェックリストは作成しない**。`/issue-review-code` SKILL.md を rubric の単一情報源として参照しつつ、capability に応じて subagent / self-check に分岐する。
 
 #### Step 8.5.1: capability 判定と分岐（1 方式に固定）
 
@@ -369,7 +369,7 @@ PHR_COUNT=$(kaji issue view [issue_id] --comments 2>/dev/null | grep -c '^## Pre
 
 - `PHR_COUNT` が 3 未満かつ verdict が `Yes` 以外 → 通常通り Step 7a / 7b に戻ってループを継続
 
-> **趣旨**: ループに陥った当のセッション自身がカウンタを持つと「楽観バイアス」と同型の脆弱性を残す（本 Issue gl:9 の動機）。Issue コメント側を権威ある回数情報源とすることで、main session の自己申告を経由しないカウントに置き換える。
+> **趣旨**: ループに陥った当のセッション自身がカウンタを持つと「楽観バイアス」と同型の脆弱性を残す（過去 Issue: history）。Issue コメント側を権威ある回数情報源とすることで、main session の自己申告を経由しないカウントに置き換える。
 
 | 階層 | verdict | 発行者 |
 |------|---------|--------|
@@ -411,7 +411,7 @@ subagent / self-check 共通の出力は `.claude/agents/kaji-code-reviewer.md` 
 - **Yes** / **No** / **With fixes**
 ```
 
-> **規約遵守**: 本コメント本文に GitLab auto-close hazard pattern（`Clos(e[sd]?|ing)` / `Fix(e[sd]|ing)?` / `Resolv(e[sd]?|ing)` / `Implement(s|ing|ed)?` の直後 `#[0-9]`）を書かない。指摘参照は `指摘 N` / `Must Fix item N` / `point N` 形式に統一する（参照: [`docs/dev/shared_skill_rules.md`](../../../docs/dev/shared_skill_rules.md) § GitLab auto close keyword 回避規約）。
+> **規約遵守**: 本コメント本文に auto-close hazard pattern（`Clos(e[sd]?|ing)` / `Fix(e[sd]|ing)?` / `Resolv(e[sd]?|ing)` / `Implement(s|ing|ed)?` の直後 `#[0-9]`）を書かない。指摘参照は `指摘 N` / `Must Fix item N` / `point N` 形式に統一する（参照: [`docs/dev/shared_skill_rules.md`](../../../docs/dev/shared_skill_rules.md) § auto close keyword 回避規約）。
 
 #### Step 8.5.5: Pre-Handoff Review 証跡投稿（MANDATORY）
 

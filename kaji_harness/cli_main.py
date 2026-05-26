@@ -24,7 +24,6 @@ from .errors import (
 )
 from .models import Workflow
 from .providers import (
-    GitLabProvider,
     IssueProvider,
     ResolvedId,
     actual_provider_type,
@@ -32,12 +31,7 @@ from .providers import (
     normalize_id,
     provider_overlay_divergence_warning,
 )
-from .providers.github import GitHubProviderError
-from .providers.gitlab import (
-    GitLabProviderError,
-    _GitLabPrShape,
-    build_kaji_review_marker,
-)
+from .providers.github import GitHubProviderError, build_kaji_review_marker
 from .providers.local import (
     IssueNotFoundError,
     IssueReadOnlyError,
@@ -87,10 +81,10 @@ def create_parser() -> argparse.ArgumentParser:
 
 
 def _register_sync(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    """``kaji sync`` 系の subcommand 登録 (issue ``local-p1-8``)。
+    """``kaji sync`` 系の subcommand 登録。
 
-    ``from-gitlab``: GitLab project から open Issue を全件 fetch して
-    ``.kaji/cache/gl-<iid>.json`` に atomic write する。
+    ``from-github``: GitHub repo から open Issue を全件 fetch して
+    ``.kaji/cache/gh-<number>.json`` に atomic write する。
     ``status``: 最終 sync 時刻 / cache 件数 / 経過時間を表示する。
 
     ``--include-closed`` / ``--state`` / ``--since`` は将来予約 flag。
@@ -98,27 +92,6 @@ def _register_sync(subparsers: argparse._SubParsersAction[argparse.ArgumentParse
     """
     p = subparsers.add_parser("sync", help="Cache synchronization commands")
     sync_subs = p.add_subparsers(dest="sync_command", required=True)
-
-    fg = sync_subs.add_parser(
-        "from-gitlab",
-        help="Sync open issues from a GitLab project into local cache",
-    )
-    fg.add_argument(
-        "--repo",
-        default=None,
-        type=str,
-        help="GitLab repo (group/project). Defaults to [provider.gitlab].repo.",
-    )
-    fg.add_argument("--quiet", action="store_true", help="Suppress progress logs.")
-    # 将来予約 flag (本 release では fail-fast)
-    fg.add_argument(
-        "--include-closed",
-        dest="include_closed",
-        action="store_true",
-        help=argparse.SUPPRESS,
-    )
-    fg.add_argument("--state", dest="state", default=None, type=str, help=argparse.SUPPRESS)
-    fg.add_argument("--since", dest="since", default=None, type=str, help=argparse.SUPPRESS)
 
     fh = sync_subs.add_parser(
         "from-github",
@@ -155,7 +128,7 @@ def _register_config(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
     config_subs = p.add_subparsers(dest="config_command", required=True)
     pt = config_subs.add_parser(
         "provider-type",
-        help="Print resolved provider.type ('github', 'local', or 'gitlab')",
+        help="Print resolved provider.type ('github' or 'local')",
     )
     pt.add_argument(
         "--workdir",
@@ -464,7 +437,7 @@ _FORGE_METHOD_FLAGS = {"--merge", "--squash", "--rebase"}
 def _user_specified_repo(args: list[str]) -> bool:
     """argv 内に user 指定の ``--repo`` / ``-R`` 系トークンが含まれるかを返す。
 
-    pflag (gh/glab の flag parser) が受理する以下 5 形式を検出する:
+    pflag (gh の flag parser) が受理する以下 5 形式を検出する:
 
     - 独立トークン long:  ``--repo owner/name``
     - 独立トークン short: ``-R owner/name``
@@ -841,7 +814,7 @@ def _github_pr_review(rest: list[str], *, repo_override: str | None) -> int:
     が GitHub API ``Can not approve your own pull request`` で 422 拒否
     されるため、 ``<!-- kaji-review: state=APPROVED -->`` marker 付き
     comment を Issue comments API に投稿することで approve シグナルを表現
-    する（GitLab provider の marker 機構と対称）。
+    する。
 
     非 self-PR では従来通り ``gh pr review --approve`` を委譲する。
     """
@@ -940,9 +913,6 @@ def _handle_pr(raw_args: list[str]) -> int:
         sys.stderr.write(_PR_BARE_PROVIDER_ERROR)
         return EXIT_INVALID_INPUT
 
-    if isinstance(provider, GitLabProvider):
-        return _handle_pr_gitlab(provider, raw_args)
-
     repo_override: str | None = None
     if config.provider is not None and config.provider.type == "github":
         if not config.provider.github.repo:
@@ -964,7 +934,7 @@ def _handle_pr(raw_args: list[str]) -> int:
 
 
 def _emit_provider_overlay_divergence_warning(config: KajiConfig) -> None:
-    """provider overlay の worktree 間ズレを検出したら stderr に WARN を出す（gl:28）。
+    """provider overlay の worktree 間ズレを検出したら stderr に WARN を出す。
 
     overlay が無い feature worktree から provider 解決が tracked 値へ沈黙で
     フォールバックし、かつ main worktree の overlay と食い違う場合のみ発火する。
@@ -1017,15 +987,13 @@ def _handle_issue(raw_args: list[str]) -> int:
 
     # ``context`` subcommand は provider 共通で provider.resolve_issue_context()
     # を呼ぶ helper（issue local-p1-17）。``gh issue context`` は存在しない
-    # ため、GitHub passthrough 前に捕捉する。gl:7 で GitLab 拒否 gate を撤去。
+    # ため、GitHub passthrough 前に捕捉する。
     args = list(raw_args)
     if args and args[0] == "--":
         args = args[1:]
     if args and args[0] == "context":
         return _handle_issue_context(provider, args[1:])
 
-    if isinstance(provider, GitLabProvider):
-        return _handle_issue_gitlab(provider, raw_args)
     if isinstance(provider, LocalProvider):
         return _handle_issue_local(provider, raw_args)
     # GitHubProvider 経路: 設定 repo を --repo で強制注入し cwd 推論を防ぐ。
@@ -1225,14 +1193,6 @@ def _handle_issue_context(provider: IssueProvider, rest: list[str]) -> int:
         if isinstance(rid_or_rc, int):
             return rid_or_rc
         issue_id_value = rid_or_rc.value
-    elif isinstance(provider, GitLabProvider):
-        # GitLab: 数値 / ``gl:N`` を受理し gitlab の iid に正規化
-        try:
-            rid = normalize_id(ns.issue_id, provider_name="gitlab", machine_id=None)
-        except ValueError as exc:
-            sys.stderr.write(f"Error: {exc}\n")
-            return EXIT_INVALID_INPUT
-        issue_id_value = rid.value
     else:
         # GitHub: 数値 / ``gh:N`` を受理し github の数値 ID に正規化
         try:
@@ -1247,8 +1207,8 @@ def _handle_issue_context(provider: IssueProvider, rest: list[str]) -> int:
     except IssueNotFoundError as exc:
         sys.stderr.write(f"Error: {exc}\n")
         return EXIT_RUNTIME_ERROR
-    except (GitHubProviderError, GitLabProviderError) as exc:
-        # GitHub / GitLab 経路の CLI 不在 / 非 0 終了 / 不正 JSON 等を
+    except GitHubProviderError as exc:
+        # GitHub 経路の CLI 不在 / 非 0 終了 / 不正 JSON 等を
         # user-facing なエラー出力 + EXIT_RUNTIME_ERROR に正規化する。
         sys.stderr.write(f"Error: {exc}\n")
         return EXIT_RUNTIME_ERROR
@@ -1339,10 +1299,7 @@ def _local_issue_view(provider: LocalProvider, rest: list[str]) -> int:
     rid = rid_or_rc
 
     if rid.kind == "remote_cache":
-        if rid.raw.startswith("gl:"):
-            issue = provider.view_cached_gitlab_issue(rid.value)
-        else:
-            issue = provider.view_cached_issue(rid.value)
+        issue = provider.view_cached_issue(rid.value)
     else:
         issue = provider.view_issue(rid.value)
 
@@ -1549,620 +1506,8 @@ def _local_issue_list(provider: LocalProvider, rest: list[str]) -> int:
     return EXIT_OK
 
 
-# ============================================================
-# GitLab dispatcher (Issue local-p1-6)
-# ============================================================
-#
-# ``kaji issue`` / ``kaji pr`` の ``provider.type='gitlab'`` 配下処理。
-# skill には GitHub 命名（``--body`` / ``edit`` / ``comment`` / ``--base`` /
-# ``--head`` 等）のまま見せ、glab 命名（``--description`` / ``update`` /
-# ``note`` / ``--target-branch`` / ``--source-branch``）への変換は本層で吸収する。
-# 設計書 § 方針 §2 / §3 を参照。
-
-
-def _forward_to_glab(group: str, raw_args: list[str], *, repo: str) -> int:
-    """``glab <group> ...`` に引数を転送する wrapper（``_forward_to_gh`` の symmetric）。
-
-    ``--repo <group/project>`` を末尾に強制注入し、``GITLAB_HOST=gitlab.com`` を環境
-    変数として渡す（``--hostname`` は ``glab issue`` / ``glab mr`` の parser には存在
-    しないため引数注入は使えない。詳細は ``providers.gitlab._glab_env`` の docstring）。
-    user が ``--repo`` を渡している場合は user 値を尊重して触らない（``_forward_to_gh``
-    と同方針）。
-    """
-    from .providers.gitlab import _glab_env
-
-    if not shutil.which("glab"):
-        print(
-            "Error: 'glab' CLI not found in PATH. "
-            "Install glab to use 'kaji issue' / 'kaji pr' under provider.type='gitlab'.",
-            file=sys.stderr,
-        )
-        return EXIT_RUNTIME_ERROR
-    args = list(raw_args)
-    if args and args[0] == "--":
-        args = args[1:]
-    if not _user_specified_repo(args):
-        args = [*args, "--repo", repo]
-    cmd = ["glab", group, *args]
-    try:
-        result = subprocess.run(cmd, check=False, env=_glab_env())
-    except OSError as exc:
-        print(f"Error: failed to invoke 'glab': {exc}", file=sys.stderr)
-        return EXIT_RUNTIME_ERROR
-    return result.returncode
-
-
-def _rewrite_flags(args: list[str], flag_map: dict[str, str]) -> list[str]:
-    """``--body X`` / ``--body=X`` を flag_map に従って rewrite。
-
-    ``--body``/``--body-file`` の混在 / 同 flag の複数指定は触らず素通しする。
-    flag map に無い flag はそのまま流す。
-    """
-    out: list[str] = []
-    i = 0
-    while i < len(args):
-        a = args[i]
-        # `--key=value` 形式
-        if "=" in a and a.startswith("--"):
-            key, _, val = a.partition("=")
-            if key in flag_map:
-                out.append(f"{flag_map[key]}={val}")
-                i += 1
-                continue
-        # `--key value` 形式
-        if a in flag_map and i + 1 < len(args):
-            out.append(flag_map[a])
-            out.append(args[i + 1])
-            i += 2
-            continue
-        out.append(a)
-        i += 1
-    return out
-
-
-def _expand_body_file_in_rest(rest: list[str]) -> list[str]:
-    """``--body-file PATH`` (``-`` で stdin) を ``--body <content>`` に展開する。
-
-    GitLab ``kaji issue`` 経路は ``_rewrite_flags`` に ``--body`` のみを map して
-    いるため、``--body-file`` を事前に ``--body`` へ畳み込んで GitHub / Local
-    provider と対称な CLI 契約を回復する。
-
-    Args:
-        rest: ``kaji issue {create,edit,comment}`` の sub 以降の引数列。
-
-    Returns:
-        ``--body-file`` を含まない場合は ``rest`` をそのまま、含む場合は
-        ``--body-file`` トークンを除去し末尾に ``--body <content>`` を足したリスト。
-
-    Raises:
-        ValueError: ``--body`` と ``--body-file`` を同時指定した場合
-            (``_read_body_arg`` 経由)。
-    """
-    body_val: str | None = None
-    body_file_val: str | None = None
-    remaining: list[str] = []
-    i = 0
-    while i < len(rest):
-        a = rest[i]
-        if a == "--body-file" and i + 1 < len(rest):
-            body_file_val = rest[i + 1]
-            i += 2
-            continue
-        if a.startswith("--body-file="):
-            body_file_val = a.partition("=")[2]
-            i += 1
-            continue
-        if a == "--body" and i + 1 < len(rest):
-            body_val = rest[i + 1]
-            remaining.append(a)
-            remaining.append(rest[i + 1])
-            i += 2
-            continue
-        if a.startswith("--body="):
-            body_val = a.partition("=")[2]
-            remaining.append(a)
-            i += 1
-            continue
-        remaining.append(a)
-        i += 1
-    if body_file_val is None:
-        return rest
-    content = _read_body_arg(body_val, body_file_val)
-    # body_file_val が非 None のため _read_body_arg は str を返す（None は両不在時のみ）。
-    assert content is not None
-    return [*remaining, "--body", content]
-
-
-# ---------- kaji issue (GitLab) ----------
-
-_GITLAB_ISSUE_SUB_MAP: dict[str, tuple[str, dict[str, str]]] = {
-    "create": ("create", {"--body": "--description"}),
-    "view": ("view", {}),
-    "edit": ("update", {"--body": "--description"}),
-    # ``--limit`` は GitHub ``gh issue list`` の page-size flag。``glab issue list``
-    # は同義 flag を ``--per-page`` として実装しているため、skill 互換のために rewrite。
-    "list": ("list", {"--limit": "--per-page"}),
-    "close": ("close", {}),
-    "comment": ("note", {"--body": "--message"}),
-}
-
-_GITLAB_ISSUE_VIEW_NEEDS_NORMALIZATION = ("--json", "-q", "--jq")
-
-
-def _handle_issue_gitlab(provider: GitLabProvider, raw_args: list[str]) -> int:
-    """``kaji issue`` の GitLab passthrough dispatcher。
-
-    sub 名 / flag 名の写像層。``view`` / ``list`` の ``--json`` / ``--jq`` は
-    既存 ``GitLabProvider.view_issue`` / ``list_issues`` を再利用して GitHub 互換
-    dict に詰め、そこから ``_apply_jq`` で適用する（出力 shape 変換が必要なため）。
-    それ以外（``create`` / ``edit`` / ``close`` / ``comment`` / 素 ``view`` / 素 ``list``）
-    は薄い ``_forward_to_glab`` 経路。
-    """
-    args = list(raw_args)
-    if args and args[0] == "--":
-        args = args[1:]
-    # silent strip --commit (LocalProvider 専用 flag。GitHub mode と同挙動)
-    args = [a for a in args if a != "--commit"]
-    if not args:
-        sys.stderr.write(
-            "Error: 'kaji issue' requires a subcommand under provider.type='gitlab'. "
-            f"Supported: {', '.join(sorted(_GITLAB_ISSUE_SUB_MAP))}.\n"
-        )
-        return EXIT_INVALID_INPUT
-    sub, rest = args[0], args[1:]
-    if sub not in _GITLAB_ISSUE_SUB_MAP:
-        sys.stderr.write(
-            f"Error: 'kaji issue {sub}' is not supported under provider.type='gitlab'. "
-            f"Supported: {', '.join(sorted(_GITLAB_ISSUE_SUB_MAP))}.\n"
-        )
-        return EXIT_INVALID_INPUT
-    glab_sub, flag_map = _GITLAB_ISSUE_SUB_MAP[sub]
-
-    # ``view`` / ``list`` で --json / --jq が指定されたら provider 経由で正規化
-    if sub in {"view", "list"} and any(f in rest for f in _GITLAB_ISSUE_VIEW_NEEDS_NORMALIZATION):
-        return _gitlab_issue_view_or_list_normalized(provider, sub, rest)
-
-    # それ以外: id 正規化 + flag rewrite + subprocess 起動
-    # create/edit/comment の --body-file を --body に展開してから rewrite に渡す。
-    if sub in {"create", "edit", "comment"}:
-        try:
-            rest = _expand_body_file_in_rest(rest)
-        except ValueError as exc:
-            sys.stderr.write(f"Error: {exc}\n")
-            return EXIT_INVALID_INPUT
-    rewritten = _rewrite_flags(rest, flag_map)
-    normalized = _normalize_gitlab_issue_id_in_args(rewritten, sub)
-    if isinstance(normalized, int):
-        return normalized
-    # 非対話実行 (skill 経由) を前提とするため、create に確認 prompt 抑止 flag を注入
-    extra: list[str] = []
-    if sub == "create" and "--yes" not in normalized and "-y" not in normalized:
-        extra.append("--yes")
-    return _forward_to_glab("issue", [glab_sub, *normalized, *extra], repo=provider.repo)
-
-
-def _normalize_gitlab_issue_id_in_args(args: list[str], sub: str) -> list[str] | int:
-    """sub の最初の positional arg を ``normalize_id`` で検証する（``gl:N`` の ``gl:`` 剥がし）。
-
-    ``create`` / ``list`` には id 引数がない。``view`` / ``edit`` / ``close`` /
-    ``comment`` は最初の positional が id。
-    """
-    if sub in {"create", "list"}:
-        return args
-    # 最初の non-flag を id とみなす
-    out: list[str] = []
-    consumed = False
-    i = 0
-    while i < len(args):
-        a = args[i]
-        if not consumed and not a.startswith("-"):
-            try:
-                rid = normalize_id(a, provider_name="gitlab", machine_id=None)
-            except ValueError as exc:
-                sys.stderr.write(f"Error: {exc}\n")
-                return EXIT_INVALID_INPUT
-            out.append(rid.value)
-            consumed = True
-            i += 1
-            continue
-        out.append(a)
-        i += 1
-    return out
-
-
-def _gitlab_issue_view_or_list_normalized(
-    provider: GitLabProvider, sub: str, rest: list[str]
-) -> int:
-    """``view`` / ``list`` の ``--json`` / ``--jq`` 正規化経路。
-
-    既存 `view_issue` / `list_issues` で Issue object を得てから
-    `_issue_to_json_dict` 経由で GitHub `gh issue view --json` 互換 dict を構成し、
-    `_apply_jq` で field/jq projection を適用する。
-    """
-    p = argparse.ArgumentParser(prog=f"kaji issue {sub}", add_help=True)
-    p.add_argument("--json", dest="json_fields", default=None, type=str)
-    p.add_argument("--jq", "-q", dest="jq_expr", default=None, type=str)
-    if sub == "view":
-        p.add_argument("issue_id", type=str)
-        p.add_argument("--comments", action="store_true")
-    else:
-        p.add_argument("--state", default="open", type=str)
-        p.add_argument("--label", action="append", default=[], type=str)
-        p.add_argument("--limit", default=None, type=int)
-    ns = p.parse_args(rest)
-
-    try:
-        if sub == "view":
-            try:
-                rid = normalize_id(ns.issue_id, provider_name="gitlab", machine_id=None)
-            except ValueError as exc:
-                sys.stderr.write(f"Error: {exc}\n")
-                return EXIT_INVALID_INPUT
-            issue = provider.view_issue(rid.value)
-            full = _issue_to_json_dict(issue)
-            if ns.json_fields:
-                fields = [f.strip() for f in ns.json_fields.split(",") if f.strip()]
-                payload: object = {k: full.get(k) for k in fields} if fields else full
-            else:
-                payload = full
-            return _emit_json(payload, jq_expr=ns.jq_expr)
-        # list
-        issues = provider.list_issues(state=ns.state, labels=ns.label or None, limit=ns.limit)
-        items: list[dict[str, object]] = [
-            _issue_to_json_dict(i, include_comments=False) for i in issues
-        ]
-        if ns.json_fields:
-            fields = [f.strip() for f in ns.json_fields.split(",") if f.strip()]
-            if fields:
-                items = [{k: it.get(k) for k in fields} for it in items]
-        return _emit_json(items, jq_expr=ns.jq_expr)
-    except GitLabProviderError as exc:
-        sys.stderr.write(f"Error: {exc}\n")
-        return EXIT_RUNTIME_ERROR
-
-
-# ---------- kaji pr (GitLab) ----------
-
-_GITLAB_PR_TIER_B_SUBS = {"create", "view", "list", "merge", "comment", "review"}
-_GITLAB_PR_TIER_A_SUBS = {"review-comments", "reviews", "reply-to-comment"}
-_GITLAB_PR_SUPPORTED = _GITLAB_PR_TIER_B_SUBS | _GITLAB_PR_TIER_A_SUBS
-
-
-def _handle_pr_gitlab(provider: GitLabProvider, raw_args: list[str]) -> int:
-    """``kaji pr`` の GitLab dispatcher（Tier A + Tier B + 未対応 sub 拒否）。"""
-    args = list(raw_args)
-    if args and args[0] == "--":
-        args = args[1:]
-    if not args:
-        sys.stderr.write(
-            "Error: 'kaji pr' requires a subcommand under provider.type='gitlab'. "
-            f"Supported: {', '.join(sorted(_GITLAB_PR_SUPPORTED))}.\n"
-        )
-        return EXIT_INVALID_INPUT
-    sub, rest = args[0], args[1:]
-    if sub not in _GITLAB_PR_SUPPORTED:
-        sys.stderr.write(
-            f"Error: 'kaji pr {sub}' is not supported under provider.type='gitlab' "
-            f"(only Tier A/B subcommands). Supported: "
-            f"{', '.join(sorted(_GITLAB_PR_SUPPORTED))}.\n"
-        )
-        return EXIT_INVALID_INPUT
-    try:
-        if sub == "create":
-            return _gitlab_pr_create(provider, rest)
-        if sub == "view":
-            return _gitlab_pr_view(provider, rest)
-        if sub == "list":
-            return _gitlab_pr_list(provider, rest)
-        if sub == "merge":
-            return _gitlab_pr_merge(provider, rest)
-        if sub == "comment":
-            return _gitlab_pr_comment(provider, rest)
-        if sub == "review":
-            return _gitlab_pr_review(provider, rest)
-        if sub == "review-comments":
-            return _gitlab_pr_review_comments(provider, rest)
-        if sub == "reviews":
-            return _gitlab_pr_reviews(provider, rest)
-        # reply-to-comment
-        return _gitlab_pr_reply_to_comment(provider, rest)
-    except GitLabProviderError as exc:
-        sys.stderr.write(f"Error: {exc}\n")
-        return EXIT_RUNTIME_ERROR
-
-
-def _resolve_gitlab_iid(raw: str) -> str | int:
-    """``raw`` を ``normalize_id(provider='gitlab')`` 経由で IID 文字列に解決する。"""
-    try:
-        rid = normalize_id(raw, provider_name="gitlab", machine_id=None)
-    except ValueError as exc:
-        sys.stderr.write(f"Error: {exc}\n")
-        return EXIT_INVALID_INPUT
-    return rid.value
-
-
-def _gitlab_pr_create(provider: GitLabProvider, rest: list[str]) -> int:
-    """``kaji pr create --title T --body B --base BR`` → ``glab mr create``。"""
-    p = argparse.ArgumentParser(prog="kaji pr create", add_help=True)
-    p.add_argument("--title", required=True, type=str)
-    p.add_argument("--body", default=None, type=str)
-    p.add_argument("--body-file", dest="body_file", default=None, type=str)
-    p.add_argument("--base", default=None, type=str)
-    p.add_argument("--head", default=None, type=str)
-    p.add_argument("--label", action="append", default=[], type=str)
-    p.add_argument("--assignee", action="append", default=[], type=str)
-    p.add_argument("--draft", action="store_true")
-    ns = p.parse_args(rest)
-    try:
-        body = _read_body_arg(ns.body, ns.body_file)
-    except ValueError as exc:
-        sys.stderr.write(f"Error: {exc}\n")
-        return EXIT_INVALID_INPUT
-    glab_args = ["create", "--title", ns.title]
-    if body is not None:
-        glab_args.extend(["--description", body])
-    if ns.base:
-        glab_args.extend(["--target-branch", ns.base])
-    if ns.head:
-        glab_args.extend(["--source-branch", ns.head])
-    if ns.label:
-        glab_args.extend(["--label", ",".join(ns.label)])
-    if ns.assignee:
-        glab_args.extend(["--assignee", ",".join(ns.assignee)])
-    if ns.draft:
-        glab_args.append("--draft")
-    # 非対話実行を前提とする skill (i-pr) から呼ばれるため確認 prompt を抑止する
-    glab_args.append("--yes")
-    return _forward_to_glab("mr", glab_args, repo=provider.repo)
-
-
-def _gitlab_pr_view(provider: GitLabProvider, rest: list[str]) -> int:
-    """``kaji pr view <iid> [--comments | --json | --jq]`` → ``glab mr view``。
-
-    ``--comments`` flag は人間可読 pass-through、それ以外は ``--output json`` で
-    payload を取得して GitHub 互換 shape に変換し ``_emit_json``。
-    """
-    p = argparse.ArgumentParser(prog="kaji pr view", add_help=True)
-    p.add_argument("pr_id", type=str)
-    p.add_argument("--comments", action="store_true")
-    p.add_argument("--json", dest="json_fields", default=None, type=str)
-    p.add_argument("--jq", "-q", dest="jq_expr", default=None, type=str)
-    ns = p.parse_args(rest)
-    iid_or_rc = _resolve_gitlab_iid(ns.pr_id)
-    if isinstance(iid_or_rc, int):
-        return iid_or_rc
-    iid = iid_or_rc
-
-    if ns.comments:
-        return _forward_to_glab("mr", ["view", iid, "--comments"], repo=provider.repo)
-
-    # JSON 経路: glab mr view は構造化 JSON 出力 flag を持たないため、glab api 経由で
-    # 統一する（issue view/list と同方針）。
-    payload = provider.get_mr_view_payload(iid)
-    full = _GitLabPrShape.to_github(payload)
-    if ns.json_fields:
-        fields = [f.strip() for f in ns.json_fields.split(",") if f.strip()]
-        out: object = {k: full.get(k) for k in fields} if fields else full
-    else:
-        out = full
-    return _emit_json(out, jq_expr=ns.jq_expr)
-
-
-def _gitlab_pr_list(provider: GitLabProvider, rest: list[str]) -> int:
-    """``kaji pr list [--head BR] [--search Q] [--state X]`` → ``glab api .../merge_requests``。
-
-    ``glab mr list`` は構造化 JSON 出力 flag を持たないため、provider の
-    ``list_mrs_payload`` (=``glab api``) 経由で payload を取り、GitHub 互換
-    shape に変換する。
-    """
-    p = argparse.ArgumentParser(prog="kaji pr list", add_help=True)
-    p.add_argument("--head", default=None, type=str)
-    p.add_argument("--base", default=None, type=str)
-    p.add_argument("--search", default=None, type=str)
-    p.add_argument("--state", default="opened", type=str)
-    p.add_argument("--limit", default=None, type=int)
-    p.add_argument("--json", dest="json_fields", default=None, type=str)
-    p.add_argument("--jq", "-q", dest="jq_expr", default=None, type=str)
-    ns = p.parse_args(rest)
-    # GitHub の ``--state open`` を GitLab の ``opened`` に変換
-    state_map = {"open": "opened", "closed": "closed", "merged": "merged", "all": "all"}
-    payload = provider.list_mrs_payload(
-        state=state_map.get(ns.state, ns.state),
-        source_branch=ns.head,
-        target_branch=ns.base,
-        search=ns.search,
-        per_page=min(ns.limit, 100) if ns.limit is not None else 100,
-    )
-    items = _GitLabPrShape.to_github_list(payload)
-    if ns.json_fields:
-        fields = [f.strip() for f in ns.json_fields.split(",") if f.strip()]
-        if fields:
-            items = [{k: it.get(k) for k in fields} for it in items]
-    return _emit_json(items, jq_expr=ns.jq_expr)
-
-
-_GITLAB_MERGE_REJECTED_FLAGS = {"--squash", "--rebase"}
-
-
-def _gitlab_pr_merge(provider: GitLabProvider, rest: list[str]) -> int:
-    """``kaji pr merge <iid_or_branch>`` → ``glab mr merge <iid>``。
-
-    ``--squash`` / ``--rebase`` は subprocess 起動前に reject（CLAUDE.md
-    ``--no-ff only`` 原則）。引数が branch 名なら ``resolve_mr_iid_from_branch``
-    で IID に解決してから glab に渡す。
-    """
-    args = list(rest)
-    if args and args[0] == "--":
-        args = args[1:]
-    rejected = [f for f in _GITLAB_MERGE_REJECTED_FLAGS if f in args]
-    if rejected:
-        sys.stderr.write(
-            f"Error: 'kaji pr merge' rejects {'/'.join(sorted(rejected))} under "
-            f"provider.type='gitlab' (CLAUDE.md '--no-ff only' policy).\n"
-        )
-        return EXIT_INVALID_INPUT
-    if not args:
-        sys.stderr.write("Error: 'kaji pr merge' requires <iid_or_branch>.\n")
-        return EXIT_INVALID_INPUT
-    target = args[0]
-    extra = args[1:]
-    # branch 名 (slash 含む or 数値以外) → resolve_mr_iid_from_branch で IID 取得
-    iid: str
-    try:
-        rid = normalize_id(target, provider_name="gitlab", machine_id=None)
-        iid = rid.value
-    except ValueError:
-        # 数値 / gl:N に該当しない → branch 名として扱う
-        iid = provider.resolve_mr_iid_from_branch(target)
-    return _forward_to_glab("mr", ["merge", iid, *extra], repo=provider.repo)
-
-
-def _gitlab_pr_comment(provider: GitLabProvider, rest: list[str]) -> int:
-    """``kaji pr comment <iid> --body B`` → ``glab mr note <iid> --message B``。"""
-    p = argparse.ArgumentParser(prog="kaji pr comment", add_help=True)
-    p.add_argument("pr_id", type=str)
-    p.add_argument("--body", default=None, type=str)
-    p.add_argument("--body-file", dest="body_file", default=None, type=str)
-    ns = p.parse_args(rest)
-    iid_or_rc = _resolve_gitlab_iid(ns.pr_id)
-    if isinstance(iid_or_rc, int):
-        return iid_or_rc
-    try:
-        body = _read_body_arg(ns.body, ns.body_file)
-    except ValueError as exc:
-        sys.stderr.write(f"Error: {exc}\n")
-        return EXIT_INVALID_INPUT
-    if body is None:
-        sys.stderr.write("Error: 'kaji pr comment' requires --body or --body-file.\n")
-        return EXIT_INVALID_INPUT
-    return _forward_to_glab("mr", ["note", iid_or_rc, "--message", body], repo=provider.repo)
-
-
-def _gitlab_pr_review(provider: GitLabProvider, rest: list[str]) -> int:
-    """``kaji pr review <iid> --approve|--request-changes --body[-file]``。
-
-    - ``--approve``: ``glab mr note --message <marker+body>`` → ``glab mr approve``
-    - ``--request-changes``: ``glab mr note ...`` → 必要なら ``glab mr revoke``
-    """
-    p = argparse.ArgumentParser(prog="kaji pr review", add_help=True)
-    p.add_argument("pr_id", type=str)
-    p.add_argument("--approve", action="store_true")
-    p.add_argument("--request-changes", dest="request_changes", action="store_true")
-    p.add_argument("--body", default=None, type=str)
-    p.add_argument("--body-file", dest="body_file", default=None, type=str)
-    ns = p.parse_args(rest)
-    if ns.approve and ns.request_changes:
-        sys.stderr.write("Error: --approve and --request-changes are mutually exclusive.\n")
-        return EXIT_INVALID_INPUT
-    if not (ns.approve or ns.request_changes):
-        sys.stderr.write(
-            "Error: 'kaji pr review' requires either --approve or --request-changes.\n"
-        )
-        return EXIT_INVALID_INPUT
-    iid_or_rc = _resolve_gitlab_iid(ns.pr_id)
-    if isinstance(iid_or_rc, int):
-        return iid_or_rc
-    iid = iid_or_rc
-    try:
-        body = _read_body_arg(ns.body, ns.body_file)
-    except ValueError as exc:
-        sys.stderr.write(f"Error: {exc}\n")
-        return EXIT_INVALID_INPUT
-    if body is None:
-        body = ""
-    state = "APPROVED" if ns.approve else "CHANGES_REQUESTED"
-    marker = build_kaji_review_marker(state)
-    marked_body = f"{marker}\n{body}"
-
-    # 1. note 投稿（marker 付き）
-    rc_note = _forward_to_glab("mr", ["note", iid, "--message", marked_body], repo=provider.repo)
-    if rc_note != 0:
-        return rc_note
-
-    # 2. approve / revoke
-    if ns.approve:
-        return _forward_to_glab("mr", ["approve", iid], repo=provider.repo)
-    # request-changes: 自分が approve 済か確認 → 済なら revoke、未なら skip
-    try:
-        approvals = provider.get_mr_approval_state(iid)
-    except GitLabProviderError as exc:
-        sys.stderr.write(f"Error: {exc}\n")
-        return EXIT_RUNTIME_ERROR
-    user_has_approved = bool(approvals.get("user_has_approved"))
-    if user_has_approved:
-        return _forward_to_glab("mr", ["revoke", iid], repo=provider.repo)
-    # 未 approve → revoke skip。note は投稿済なので rc=0
-    return EXIT_OK
-
-
-def _gitlab_pr_review_comments(provider: GitLabProvider, rest: list[str]) -> int:
-    """``kaji pr review-comments <iid>`` → discussions API + GitHub subset 変換。"""
-    p = argparse.ArgumentParser(prog="kaji pr review-comments", add_help=True)
-    p.add_argument("pr_id", type=str)
-    p.add_argument("--json", dest="json_fields", default=None, type=str)
-    p.add_argument("--jq", "-q", dest="jq_expr", default=None, type=str)
-    ns = p.parse_args(rest)
-    iid_or_rc = _resolve_gitlab_iid(ns.pr_id)
-    if isinstance(iid_or_rc, int):
-        return iid_or_rc
-    items = provider.list_pr_review_comments(iid_or_rc)
-    if ns.json_fields:
-        fields = [f.strip() for f in ns.json_fields.split(",") if f.strip()]
-        if fields:
-            items = [{k: it.get(k) for k in fields} for it in items]
-    return _emit_json(items, jq_expr=ns.jq_expr)
-
-
-def _gitlab_pr_reviews(provider: GitLabProvider, rest: list[str]) -> int:
-    """``kaji pr reviews <iid>`` → notes + approvals join → GitHub 互換 list。"""
-    p = argparse.ArgumentParser(prog="kaji pr reviews", add_help=True)
-    p.add_argument("pr_id", type=str)
-    p.add_argument("--json", dest="json_fields", default=None, type=str)
-    p.add_argument("--jq", "-q", dest="jq_expr", default=None, type=str)
-    ns = p.parse_args(rest)
-    iid_or_rc = _resolve_gitlab_iid(ns.pr_id)
-    if isinstance(iid_or_rc, int):
-        return iid_or_rc
-    items = provider.list_pr_reviews(iid_or_rc)
-    if ns.json_fields:
-        fields = [f.strip() for f in ns.json_fields.split(",") if f.strip()]
-        if fields:
-            items = [{k: it.get(k) for k in fields} for it in items]
-    return _emit_json(items, jq_expr=ns.jq_expr)
-
-
-def _gitlab_pr_reply_to_comment(provider: GitLabProvider, rest: list[str]) -> int:
-    """``kaji pr reply-to-comment <iid> --to <provider-local-id> --body B``。
-
-    ``provider-local-id`` は ``<discussion_id>:<note_id>`` opaque 形式
-    （``list_pr_review_comments`` が返す ``id`` field と整合）。
-    """
-    p = argparse.ArgumentParser(prog="kaji pr reply-to-comment", add_help=True)
-    p.add_argument("pr_id", type=str)
-    p.add_argument("--to", dest="comment_id", required=True, type=str)
-    p.add_argument("--body", required=True, type=str)
-    ns = p.parse_args(rest)
-    iid_or_rc = _resolve_gitlab_iid(ns.pr_id)
-    if isinstance(iid_or_rc, int):
-        return iid_or_rc
-    if ":" not in ns.comment_id:
-        sys.stderr.write(
-            f"Error: --to COMMENT_ID must be '<discussion_id>:<note_id>' opaque "
-            f"format, got: {ns.comment_id!r}\n"
-        )
-        return EXIT_INVALID_INPUT
-    discussion_id, _, _ = ns.comment_id.partition(":")
-    if not discussion_id:
-        sys.stderr.write(
-            f"Error: --to COMMENT_ID has empty discussion_id, got: {ns.comment_id!r}\n"
-        )
-        return EXIT_INVALID_INPUT
-    provider.reply_to_pr_comment(iid_or_rc, discussion_id=discussion_id, body=ns.body)
-    return EXIT_OK
-
-
 def cmd_config_provider_type(args: argparse.Namespace) -> int:
-    """Print resolved ``provider.type`` ("github" / "local" / "gitlab") to stdout.
+    """Print resolved ``provider.type`` ("github" / "local") to stdout.
 
     Phase 4 で導入。Skill / 自動化スクリプトが overlay 込みの provider type を
     副作用なく取得するための read-only エントリ。``KajiConfig.discover()``
@@ -2170,7 +1515,7 @@ def cmd_config_provider_type(args: argparse.Namespace) -> int:
     / `cmd_run` と同じ config resolution path を共有する。
 
     Exit codes:
-        0: 解決成功（stdout に ``"github\\n"`` / ``"local\\n"`` / ``"gitlab\\n"``）
+        0: 解決成功（stdout に ``"github\\n"`` / ``"local\\n"``）
         2: config 不在 or 不正（stderr に診断メッセージ）
     """
     start_dir = args.workdir.resolve()
@@ -2195,65 +1540,11 @@ def cmd_config_provider_type(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def cmd_sync_from_gitlab(args: argparse.Namespace) -> int:
-    """``kaji sync from-gitlab`` の dispatcher (issue ``local-p1-8``)。
-
-    将来予約 flag（``--include-closed`` / ``--state`` / ``--since``）は exit 2 で
-    fail-fast する。silently ignore は完了条件違反。
-    """
-    from .sync import SyncError, sync_from_gitlab
-
-    if args.include_closed:
-        sys.stderr.write(
-            "error: --include-closed is not implemented in this release; "
-            "reopen tracking issue to add it.\n"
-        )
-        return EXIT_INVALID_INPUT
-    if args.state is not None:
-        sys.stderr.write(
-            "error: --state is not implemented in this release; "
-            "this command always fetches state=opened.\n"
-        )
-        return EXIT_INVALID_INPUT
-    if args.since is not None:
-        sys.stderr.write(
-            "error: --since is not implemented in this release; "
-            "this command always performs a full sync.\n"
-        )
-        return EXIT_INVALID_INPUT
-
-    try:
-        config = KajiConfig.discover(start_dir=Path.cwd())
-    except (ConfigNotFoundError, ConfigLoadError) as exc:
-        sys.stderr.write(f"Error: {exc}\n")
-        return EXIT_INVALID_INPUT
-
-    try:
-        result = sync_from_gitlab(
-            config=config,
-            repo_override=args.repo,
-            quiet=args.quiet,
-        )
-    except SyncError as exc:
-        sys.stderr.write(f"error: {exc}\n")
-        return EXIT_INVALID_INPUT
-    except OSError as exc:
-        sys.stderr.write(f"error: cache write failed: {exc}\n")
-        return EXIT_RUNTIME_ERROR
-
-    sys.stdout.write(
-        f"Sync completed at {result.last_sync_at} "
-        f"({result.issue_count} issues, {result.pages_fetched} pages, "
-        f"{result.elapsed_seconds:.1f}s).\n"
-    )
-    return EXIT_OK
-
-
 def cmd_sync_from_github(args: argparse.Namespace) -> int:
-    """``kaji sync from-github`` の dispatcher (issue ``gl:34``)。
+    """``kaji sync from-github`` の dispatcher。
 
     将来予約 flag（``--include-closed`` / ``--state`` / ``--since``）は exit 2 で
-    fail-fast する（``cmd_sync_from_gitlab`` と対称）。
+    fail-fast する。
     """
     from .sync import SyncError, sync_from_github
 
@@ -2350,12 +1641,7 @@ def cmd_sync_status(args: argparse.Namespace) -> int:
     sys.stdout.write(f"repo         {repo_disp}\n")
     sys.stdout.write(f"last_sync    {last_disp}\n")
     sys.stdout.write(f"elapsed      {elapsed_disp}\n")
-    if status.forge == "github":
-        cache_glob = "gh-*.json"
-    elif status.forge == "gitlab":
-        cache_glob = "gl-*.json"
-    else:
-        cache_glob = "gl-*.json + gh-*.json"
+    cache_glob = "gh-*.json"
     sys.stdout.write(f"cached       {status.issue_count} ({cache_glob} under .kaji/cache/)\n")
     return EXIT_OK
 
@@ -2379,8 +1665,6 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return EXIT_ABORT
     if args.command == "sync":
-        if args.sync_command == "from-gitlab":
-            return cmd_sync_from_gitlab(args)
         if args.sync_command == "from-github":
             return cmd_sync_from_github(args)
         if args.sync_command == "status":

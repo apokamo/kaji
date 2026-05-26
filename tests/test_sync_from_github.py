@@ -1,7 +1,6 @@
 """Tests for ``kaji sync from-github`` (issue ``gl:34``).
 
 ``gh`` CLI を実呼びせず ``subprocess.run`` を mock してロジック検証のみ行う。
-構造は ``test_sync_from_gitlab.py`` と対称。
 """
 
 from __future__ import annotations
@@ -17,7 +16,6 @@ from kaji_harness import sync as sync_mod
 from kaji_harness.config import (
     ExecutionConfig,
     GitHubProviderConfig,
-    GitLabProviderConfig,
     KajiConfig,
     LocalProviderConfig,
     PathsConfig,
@@ -30,7 +28,6 @@ from kaji_harness.sync import (
     _list_existing_cached_numbers,
     _resolve_repo_github,
     _write_fresh_github_cache_file,
-    read_sync_status,
     sync_from_github,
 )
 
@@ -57,7 +54,6 @@ def _make_config(
             type="local",
             local=LocalProviderConfig(machine_id=machine_id),
             github=GitHubProviderConfig(repo=repo),
-            gitlab=GitLabProviderConfig(),
         ),
     )
 
@@ -441,16 +437,6 @@ class TestSyncStatusGitHubRoundTrip:
         assert "forge        github" in out
         assert "repo         owner/name" in out
         assert "gh-*.json" in out
-
-    def test_unsynced_counts_both_forges(self, tmp_path: Path) -> None:
-        cache = tmp_path / ".kaji" / "cache"
-        cache.mkdir(parents=True)
-        (cache / "gl-1.json").write_text("{}")
-        (cache / "gh-2.json").write_text("{}")
-        cfg = _make_config(tmp_path)
-        status = read_sync_status(config=cfg)
-        assert status.forge is None
-        assert status.issue_count == 2
 
 
 @pytest.mark.medium

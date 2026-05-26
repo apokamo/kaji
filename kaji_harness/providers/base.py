@@ -1,8 +1,7 @@
 """IssueProvider Protocol.
 
-Phase 3 では Issue 系 protocol のみを定義する。PR/MR 系（GitHub PR /
-GitLab MR を抽象化する `ReviewRequestProvider` 等）は Phase 4 で追加する
-（phase3-design.md § scope, L292）。
+Phase 3 では Issue 系 protocol のみを定義する。PR 系（GitHub PR を抽象化する
+`ReviewRequestProvider` 等）は Phase 4 で追加する（phase3-design.md § scope, L292）。
 """
 
 from __future__ import annotations
@@ -88,16 +87,13 @@ class IssueProvider(Protocol):
         ...
 
     def resolve_pr_context(self, branch_name: str) -> PRContext | None:
-        """branch 名から PR/MR を逆引きし `PRContext` を返す。
+        """branch 名から PR を逆引きし `PRContext` を返す。
 
-        Issue ``local-p1-7`` で GitLab 側を本実装。GitHub / Local
-        provider は同じ Issue 内で ``return None`` の no-op を実装する。
-        GitHub の本実装は forge 採用後の別 Issue で扱う（bucket
-        ``local-p1-1`` Phase 4 申し送り）。
+        GitHubProvider が本実装、LocalProvider は ``return None`` の no-op。
 
         Returns:
-            PRContext: branch に対応する open な PR/MR が一意に存在する場合。
-            None: PR/MR が存在しない場合（branch 未 push / MR 未作成 等）。
+            PRContext: branch に対応する open な PR が一意に存在する場合。
+            None: PR が存在しない場合（branch 未 push / PR 未作成 等）。
 
         Raises:
             Provider 固有のエラー: 複数該当 / CLI / API 失敗時。

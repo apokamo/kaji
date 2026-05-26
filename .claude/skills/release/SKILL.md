@@ -1,12 +1,12 @@
 ---
-description: kaji の release 作業（version bump / CHANGELOG / tag / GitLab Release ページ）を skill で完結させる。CI を使わず maintainer 手元で対話的に進める。
+description: kaji の release 作業（version bump / CHANGELOG / tag / GitHub Release ページ）を skill で完結させる。CI を使わず maintainer 手元で対話的に進める。
 name: release
 ---
 
 # Release
 
 kaji の release を maintainer の手元で完結させる skill。
-forge CI (GitLab CI / GitHub Actions) に依存せず、各 step で user 承認を挟みながら version bump → CHANGELOG → tag → GitLab Release ページ作成まで進める。
+forge CI (GitHub Actions) に依存せず、各 step で user 承認を挟みながら version bump → CHANGELOG → tag → GitHub Release ページ作成まで進める。
 
 ## いつ使うか
 
@@ -15,13 +15,13 @@ forge CI (GitLab CI / GitHub Actions) に依存せず、各 step で user 承認
 | kaji の release（version bump + tag + Release ページ）を切る | ✅ 必須 |
 | dry-run（push / Release ページ作成手前まで確認したい） | ✅ `--dry-run` 経路 |
 | PyPI publish / dist build | ❌ 対象外（現運用で未使用） |
-| `.github/workflows/release-please.yml` の再有効化 | ❌ 対象外（GitHub 運用は停止中、本 skill は GitLab 前提） |
+| `.github/workflows/release-please.yml` の再有効化 | ❌ 対象外（本 skill は maintainer 手元実行前提） |
 
 ## 入力
 
 ```
 /release            # 通常実行（push と Release ページ作成まで進める）
-/release --dry-run  # ローカル状態のみ更新（push / glab release create はスキップ）
+/release --dry-run  # ローカル状態のみ更新（push / gh release create はスキップ）
 ```
 
 引数なしで起動し、skill 側で git / pyproject の状態を読んで判定する。
@@ -29,12 +29,12 @@ forge CI (GitLab CI / GitHub Actions) に依存せず、各 step で user 承認
 ## 前提
 
 - 実行場所: kaji 本体の **main worktree** で実行する（release branch は切らない、main 直接 update する運用）
-- `gh` ではなく **`glab`** CLI を使う（GitLab 運用）
-- GitLab を指す git remote が 1 つ存在すること。Step 1 で `git remote -v` の URL から動的に抽出する（hybrid setup では `origin`=GitHub, `gitlab`=GitLab の構成）。`.kaji/config.toml` の `provider.gitlab.git_remote` 値と整合する remote 名であることが前提
-- 解決した GitLab remote に対して `git push` できる権限を maintainer が持っていること
+- **`gh`** CLI を使う（GitHub 運用）
+- GitHub を指す git remote が 1 つ存在すること。Step 1 で `git remote -v` の URL から動的に抽出する。`.kaji/config.toml` の `provider.github.git_remote` 値と整合する remote 名であることが前提
+- 解決した GitHub remote に対して `git push` できる権限を maintainer が持っていること
 - `uv` / `make check` が走る環境（kaji 開発環境セットアップ済み）
 
-> **Note**: 現状 skill は `git remote -v` の URL grep でのみ remote を解決し、`.kaji/config.toml` の `provider.gitlab.git_remote` は直接読まない。config 値を変えただけでは動作は変わらない点に注意。将来 `kaji config git-remote` 相当の CLI を追加する余地あり。
+> **Note**: 現状 skill は `git remote -v` の URL grep でのみ remote を解決し、`.kaji/config.toml` の `provider.github.git_remote` は直接読まない。config 値を変えただけでは動作は変わらない点に注意。将来 `kaji config git-remote` 相当の CLI を追加する余地あり。
 
 ## 実行手順
 
@@ -43,21 +43,21 @@ forge CI (GitLab CI / GitHub Actions) に依存せず、各 step で user 承認
 以下を順に確認する。1 つでも失敗した時点で停止し、user に復旧手順を提示する。
 
 ```bash
-# 1-0. GitLab remote 名を解決（hybrid setup 対応）
-#      `git remote -v` から URL に gitlab.com を含む push remote を動的抽出する。
-#      `.kaji/config.toml` の `provider.gitlab.git_remote` 値と整合する
+# 1-0. GitHub remote 名を解決
+#      `git remote -v` から URL に github.com を含む push remote を動的抽出する。
+#      `.kaji/config.toml` の `provider.github.git_remote` 値と整合する
 #      remote 名であることが前提（skill は config を直接読まない）。
-GITLAB_REMOTE=$(git remote -v | awk '/gitlab\.com.*\(push\)/{print $1; exit}')
-# 上記で見つからない場合、`origin` が GitLab を指していれば fallback
-if [ -z "$GITLAB_REMOTE" ]; then
-    if git remote get-url origin 2>/dev/null | grep -q gitlab; then
-        GITLAB_REMOTE=origin
+GITHUB_REMOTE=$(git remote -v | awk '/github\.com.*\(push\)/{print $1; exit}')
+# 上記で見つからない場合、`origin` が GitHub を指していれば fallback
+if [ -z "$GITHUB_REMOTE" ]; then
+    if git remote get-url origin 2>/dev/null | grep -q github; then
+        GITHUB_REMOTE=origin
     else
-        echo "ABORT: no git remote pointing to gitlab.com found"
+        echo "ABORT: no git remote pointing to github.com found"
         exit 1
     fi
 fi
-echo "Resolved GitLab remote: $GITLAB_REMOTE"
+echo "Resolved GitHub remote: $GITHUB_REMOTE"
 
 # 1-1. main checkout 状態
 git rev-parse --abbrev-ref HEAD   # → "main" であること
@@ -66,23 +66,23 @@ git rev-parse --abbrev-ref HEAD   # → "main" であること
 git status --porcelain            # → 空であること
 
 # 1-3. 上流 sync
-git fetch "$GITLAB_REMOTE"
-git rev-list --left-right --count "$GITLAB_REMOTE/main"...HEAD
+git fetch "$GITHUB_REMOTE"
+git rev-list --left-right --count "$GITHUB_REMOTE/main"...HEAD
 # → "0\t0"（ahead/behind ともに 0）であること
 
-# 1-4. 解決した remote が GitLab を指していることを再確認
-git remote get-url "$GITLAB_REMOTE"   # → gitlab.* を含むこと
+# 1-4. 解決した remote が GitHub を指していることを再確認
+git remote get-url "$GITHUB_REMOTE"   # → github.* を含むこと
 
-# 1-5. glab CLI 認証済み
-glab auth status                      # → "Logged in" 表示
+# 1-5. gh CLI 認証済み
+gh auth status                        # → "Logged in" 表示
 ```
 
 **失敗時のガイド例**:
 
-- GitLab remote 未発見 → `.kaji/config.toml` の `provider.gitlab.git_remote` および `git remote -v` 出力を user に提示し、追加方法を相談（`git remote add gitlab <gitlab-url>`）
-- main 以外 → `git checkout main && git pull --ff-only "$GITLAB_REMOTE" main`
+- GitHub remote 未発見 → `.kaji/config.toml` の `provider.github.git_remote` および `git remote -v` 出力を user に提示し、追加方法を相談（`git remote add origin <github-url>`）
+- main 以外 → `git checkout main && git pull --ff-only "$GITHUB_REMOTE" main`
 - dirty tree → user に commit / stash を促す（skill 側では一切触らない）
-- behind → `git pull --ff-only "$GITLAB_REMOTE" main`
+- behind → `git pull --ff-only "$GITHUB_REMOTE" main`
 - ahead → 未 push commit がある旨を user に伝え、release に含めるべきか確認
 - remote 不一致 → 別 remote (`upstream` 等) を見るべきか user に確認
 
@@ -173,11 +173,11 @@ git tag -a vX.Y.Z -m "Release vX.Y.Z"
 
 ### Step 6: Push
 
-Step 1 で解決した `$GITLAB_REMOTE` に対して、main と tag を **atomic push** する。
+Step 1 で解決した `$GITHUB_REMOTE` に対して、main と tag を **atomic push** する。
 
 ```bash
 # main と tag を 1 トランザクションで push（どちらか失敗すれば両方拒否される）
-git push --atomic "$GITLAB_REMOTE" main vX.Y.Z
+git push --atomic "$GITHUB_REMOTE" main vX.Y.Z
 ```
 
 `--atomic` を使うことで、main は push 成功 / tag push 失敗のような **片方だけ remote に反映された中途半端な状態** を防ぐ。
@@ -187,23 +187,23 @@ push 失敗時:
 - `non-fast-forward` → main が他者 push で進んでいる。`--atomic` のため tag も remote には残らない。**force push は禁止**。一旦 stop し、user に状況を共有 → 必要なら Step 1 から再実行（commit と tag を一度ローカルで rollback、後述）
 - tag 関連で reject（同名 tag が既に存在する等）→ atomic のため main も remote 反映されていない。`git tag -d vX.Y.Z` で local tag を消し、原因確認後に再試行
 
-### Step 7: GitLab Release ページ作成
+### Step 7: GitHub Release ページ作成
 
 ```bash
 # CHANGELOG の該当 section を抜粋し、--notes に渡す
-glab release create vX.Y.Z \
-  --name "vX.Y.Z" \
+gh release create vX.Y.Z \
+  --title "vX.Y.Z" \
   --notes "<CHANGELOG.md の [X.Y.Z] section 本文>"
 ```
 
-完了後、`glab release view vX.Y.Z` で URL を取得し user に提示する。
+完了後、`gh release view vX.Y.Z` で URL を取得し user に提示する。
 
 ### Step 8: 完了報告
 
 user に以下を提示して終了:
 
 - 採番した version と tag URL
-- GitLab Release ページ URL
+- GitHub Release ページ URL
 - consumer 側に `uv lock --upgrade-package kaji` を案内する一文（kamo2 等の dependency consumer 向け）
 
 ## Dry-run 経路（`--dry-run`）
@@ -224,7 +224,7 @@ dry-run 終了時に skill が必ず提示する内容:
    # CHANGELOG.md / pyproject.toml / uv.lock の変更を確認後、必要なら git restore で戻す
    ```
 3. **本番実行への進み方**:
-   - dry-run の結果に問題がなければ `git push --atomic "$GITLAB_REMOTE" main vX.Y.Z` を手で実行 → Step 7 を手で実行、
+   - dry-run の結果に問題がなければ `git push --atomic "$GITHUB_REMOTE" main vX.Y.Z` を手で実行 → Step 7 を手で実行、
    - または rollback してから `/release`（dry-run なし）で再実行
 
 ## 失敗時の rollback 手順（共通）
@@ -249,20 +249,20 @@ git reset --hard HEAD~1
 
 ```bash
 # 状況確認
-git fetch "$GITLAB_REMOTE"
-git log --oneline "$GITLAB_REMOTE/main"..HEAD       # 自分のローカル commits を確認
-git log --oneline HEAD.."$GITLAB_REMOTE/main"       # 他者の commits を確認
+git fetch "$GITHUB_REMOTE"
+git log --oneline "$GITHUB_REMOTE/main"..HEAD       # 自分のローカル commits を確認
+git log --oneline HEAD.."$GITHUB_REMOTE/main"       # 他者の commits を確認
 
 # 他者 commits を取り込む必要がある場合（force push 禁止）:
 # 1. tag を一旦削除
 git tag -d vX.Y.Z
 # 2. release commit を一旦巻き戻す
-git reset --hard "$GITLAB_REMOTE/main"
+git reset --hard "$GITHUB_REMOTE/main"
 # 3. main を最新化してから /release を再実行
-git pull --ff-only "$GITLAB_REMOTE" main
+git pull --ff-only "$GITHUB_REMOTE" main
 ```
 
-> **絶対禁止**: `git push --force "$GITLAB_REMOTE" main` / `git push --force "$GITLAB_REMOTE" vX.Y.Z`。
+> **絶対禁止**: `git push --force "$GITHUB_REMOTE" main` / `git push --force "$GITHUB_REMOTE" vX.Y.Z`。
 > tag を上書き push (`--force`) すると consumer 側の lockfile / cache 整合が壊れる。tag は不変前提で運用する。
 
 ### Step 6 まで成功し Step 7 (Release ページ) で失敗
@@ -270,11 +270,11 @@ git pull --ff-only "$GITLAB_REMOTE" main
 tag と main commit は既に push 済み。**rollback ではなく Release ページのみ再試行**する:
 
 ```bash
-glab release view vX.Y.Z 2>/dev/null || \
-  glab release create vX.Y.Z --name "vX.Y.Z" --notes "<本文>"
+gh release view vX.Y.Z 2>/dev/null || \
+  gh release create vX.Y.Z --title "vX.Y.Z" --notes "<本文>"
 ```
 
-それでも作成できない場合、GitLab UI から手動で Release ページを作る選択肢を user に提示する。
+それでも作成できない場合、GitHub UI から手動で Release ページを作る選択肢を user に提示する。
 
 ### 既に push 済みの release を撤回したい（緊急）
 
@@ -282,12 +282,12 @@ glab release view vX.Y.Z 2>/dev/null || \
 
 ```bash
 # tag をリモートから削除
-git push "$GITLAB_REMOTE" --delete vX.Y.Z
+git push "$GITHUB_REMOTE" --delete vX.Y.Z
 # Release ページを削除
-glab release delete vX.Y.Z
+gh release delete vX.Y.Z
 # 必要なら revert commit を main に乗せる（force push はしない）
 git revert <release-commit-sha>
-git push "$GITLAB_REMOTE" main
+git push "$GITHUB_REMOTE" main
 ```
 
 ## ガードレール

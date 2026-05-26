@@ -31,6 +31,31 @@ class GitHubProviderError(RuntimeError):
     """``gh`` CLI 起動失敗 / 戻り値非ゼロ等。"""
 
 
+# kaji marker: review state を comment body 先頭に埋め込む HTML コメント。
+# 1 行目に置き、2 行目以降が user body。GitHub UI 上では HTML コメントとして
+# 不可視のため、UI の review 体験を壊さない。self-PR では ``gh pr review --approve``
+# が GitHub API で 422 拒否されるため、本 marker 付き comment を Issue Comments API
+# に投稿することで approve シグナルを表現する（``cli_main._github_pr_review`` 参照）。
+_KAJI_REVIEW_MARKER_PREFIX = "<!-- kaji-review: state="
+_KAJI_REVIEW_MARKER_SUFFIX = " -->"
+
+_REVIEW_STATES_VALID = {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}
+
+
+def build_kaji_review_marker(state: str) -> str:
+    """``state`` から marker 文字列（先頭行のみ、改行なし）を組み立てる。
+
+    Args:
+        state: ``APPROVED`` / ``CHANGES_REQUESTED`` / ``COMMENTED`` のいずれか。
+
+    Raises:
+        ValueError: 不明な state。
+    """
+    if state not in _REVIEW_STATES_VALID:
+        raise ValueError(f"invalid review state {state!r}: expected one of {_REVIEW_STATES_VALID}")
+    return f"{_KAJI_REVIEW_MARKER_PREFIX}{state}{_KAJI_REVIEW_MARKER_SUFFIX}"
+
+
 @dataclass
 class GitHubProvider:
     """``gh`` CLI を subprocess で叩く provider。
@@ -43,7 +68,7 @@ class GitHubProvider:
             （phase3d-design.md § 2 / § 3）。
         git_remote: ``provider.github.git_remote`` config 由来。default ``"origin"``。
             `IssueContext.git_remote` の source。skill 内 ``git push`` / ``git fetch``
-            等の対象 remote 名（gl:6 で導入）。
+            等の対象 remote 名。
     """
 
     repo: str
@@ -312,8 +337,8 @@ class GitHubProvider:
         """branch から open PR を 1 件特定し ``PRContext`` を返す。
 
         ``gh pr list --repo <self.repo> --head <branch> --state open
-        --json number,headRefName`` で 1 件特定する (issue ``gl:34``
-        § 方針 § 1)。0 件は ``None``、複数件は ``GitHubProviderError``。
+        --json number,headRefName`` で 1 件特定する。
+        0 件は ``None``、複数件は ``GitHubProviderError``。
         ``--repo`` は ``_run_gh`` が自動注入しないため args に明示する
         （既存 CRUD 経路と同じ規約）。
         """

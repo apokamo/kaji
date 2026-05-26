@@ -22,8 +22,6 @@ class ConfigNotFoundError(HarnessError):
             "sections (template in `docs/cli-guides/local-mode.md` § 2),\n"
             "then add a `[provider]` section:\n"
             '  - For GitHub:    type = "github" + [provider.github] repo = "<owner>/<repo>"\n'
-            '  - For GitLab:    type = "gitlab" + [provider.gitlab] repo = "<group>/<project>"\n'
-            "                   (gitlab.com only; see follow-up gitlab-mode docs)\n"
             '  - For local-first: type = "local"  (then run `kaji local init`\n'
             "                    to write the gitignored machine_id overlay)."
         )

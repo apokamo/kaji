@@ -41,7 +41,7 @@ def test_requires_provider_defaults_to_any() -> None:
 
 
 @pytest.mark.small
-@pytest.mark.parametrize("value", ["github", "local", "gitlab", "any"])
+@pytest.mark.parametrize("value", ["github", "local", "any"])
 def test_requires_provider_accepts_valid_enum(value: str) -> None:
     wf = load_workflow_from_str(_yaml_with_requires_provider(value))
     assert wf.requires_provider == value

@@ -161,11 +161,11 @@ NON_DESIGN=$(git -C [worktree_dir] log --oneline [default_branch]..HEAD -- ':(ex
 #    検出方針（dogfood 検証で判明した制約の最終形）:
 #      (a) BACK 必須: `[x] Changes Requested` 単体は review-design の差し戻し
 #          にも使われるため `/ BACK` を必須にする
-#      (b) note 単位フィルタ: jq の `.Notes[]` イテレーションで note 境界
-#          を維持し、複数 note を改行連結した stream を grep する誤検出
-#          を排除する。過去の判定コメント本文（例: 「設計再確認結果」
-#          コメントが BACK regex を引用するケース）が前の note の判定
-#          セクションに混入する事故を防ぐ
+#      (b) comment 単位フィルタ: jq の `.comments[]` イテレーションで
+#          comment 境界を維持し、複数 comment を改行連結した stream を
+#          grep する誤検出を排除する。過去の判定コメント本文（例: 「設計
+#          再確認結果」コメントが BACK regex を引用するケース）が前の
+#          comment の判定セクションに混入する事故を防ぐ
 #      (c) 判定見出しゲート: 「判定セクション本体を持つ note」だけを対象
 #          にするため、`# コードレビュー結果`（review-code 由来）と
 #          `## 最終チェック結果`（i-dev-final-check 由来）を OR で
@@ -176,16 +176,13 @@ NON_DESIGN=$(git -C [worktree_dir] log --oneline [default_branch]..HEAD -- ':(ex
 #          scope 違反を再発する。`2>/dev/null` を付けず、エラー発生時
 #          は BACK_COUNT が空文字となり (e) で ABORT 経路に流す
 #
-#    GitLab provider の `kaji issue view --comments --output json` は
-#    top-level object で、コメント配列を `.Notes` プロパティに持つ
-#    （各要素は GitLab REST API の Notes リソース。`body` / `system` /
-#    `created_at` 等のフィールドあり。`system: true` は WIP / label
-#    change 等の system note でユーザコメントではないため除外）。
-#    `.[].body` 形式は型エラーになるため必ず `.Notes[]` を経由する。
+#    GitHub provider の `kaji issue view --comments --output json` は
+#    top-level object で、コメント配列を `.comments` プロパティに持つ
+#    （各要素は GitHub REST API の Issue Comments リソース。`body` /
+#    `created_at` 等のフィールドあり）。
 BACK_COUNT=$(kaji issue view [issue_id] --comments --output json \
   | jq '[
-      .Notes[]
-      | select(.system == false)
+      .comments[]
       | select(.body | test("^(# コードレビュー結果|## 最終チェック結果)"; "m"))
       | select(.body | test("\\[x\\] Changes Requested / BACK|\\| *判定 *\\|.*BACK"))
     ] | length')
@@ -207,7 +204,7 @@ evidence: |
   失敗し BACK_COUNT が空文字となった。初回フローへの silent fallthrough は
   既存設計書の上書きという scope 違反を再発させるため抑止する。
 suggestion: |
-  kaji CLI / GitLab API 接続 / .kaji/config.toml の `[provider]` 設定を
+  kaji CLI / GitHub API 接続 / .kaji/config.toml の `[provider]` 設定を
   確認した上で `/issue-design [issue_id]` を再実行してください。
 ---END_VERDICT---
 VERDICT_BLOCK
@@ -216,8 +213,6 @@ fi
 # BACK_COUNT >= 1 → 該当
 #
 # provider 別フォールバック:
-# - GitHub provider: `kaji issue view [issue_id] --comments --output json` は
-#   top-level object で `.comments[].body` を経由する
 # - local provider: `--output json` の構造は別。実装側で provider 別の
 #   抽出器（comment body iterator）を用意する
 ```
@@ -231,9 +226,9 @@ fi
 | 3 観測すべて該当（既存設計書 ∧ 設計後コミット ∧ 戻し先 `design` の `BACK` verdict コメント） | BACK 経由再起動 → **Step 1.7** に進む |
 | いずれか欠ける | 初回起動（または近接ケース） → **Step 2** 以降の通常フロー |
 
-> **BACK 必須化と誤検出防止**: `[x] Changes Requested` 単体（BACK なし）は `/issue-review-design` の `[x] Changes Requested (設計修正が必要)` のような **設計レビューの差し戻し** にも使われるため、戻し先 `design` の `BACK` verdict 検出には **`/ BACK` を必須**とする。さらに、過去の判定コメント本文（例: 設計再確認結果コメント自身）が同じ regex を引用する形で含むことがあるため、**jq の `.Notes[]` イテレーションで note 単位にフィルタ** し、判定セクション本体の見出し（`# コードレビュー結果` / `## 最終チェック結果` 等）を持つ note のみを対象にする。新規の判定 step を追加した場合は (c) heading gate の OR リストに見出しを追記する。
+> **BACK 必須化と誤検出防止**: `[x] Changes Requested` 単体（BACK なし）は `/issue-review-design` の `[x] Changes Requested (設計修正が必要)` のような **設計レビューの差し戻し** にも使われるため、戻し先 `design` の `BACK` verdict 検出には **`/ BACK` を必須**とする。さらに、過去の判定コメント本文（例: 設計再確認結果コメント自身）が同じ regex を引用する形で含むことがあるため、**jq の `.comments[]` イテレーションで comment 単位にフィルタ** し、判定セクション本体の見出し（`# コードレビュー結果` / `## 最終チェック結果` 等）を持つ comment のみを対象にする。新規の判定 step を追加した場合は (c) heading gate の OR リストに見出しを追記する。
 
-> **fail-loud**: kaji CLI / GitLab API が失敗した場合に `2>/dev/null` で stderr を握りつぶし「BACK 検出ゼロ → 初回フロー」と silent fallthrough すると、本 Issue が防ぎたかった failure mode（既存設計書を上書きする scope 違反）を別経路で再発させる。観測 3 のパイプラインは stderr 抑止を付けず、`$BACK_COUNT` が空文字なら **`---VERDICT--- status: ABORT ... ---END_VERDICT---` ブロックを stdout に出力した上で** skill を終了し、Step 2 以降に進まない（`exit 1` 単体では workflow runner が `VerdictNotFound` 扱いとなり `on:ABORT` 遷移が成立しないため、verdict block の出力は必須）。
+> **fail-loud**: kaji CLI / GitHub API が失敗した場合に `2>/dev/null` で stderr を握りつぶし「BACK 検出ゼロ → 初回フロー」と silent fallthrough すると、本 Issue が防ぎたかった failure mode（既存設計書を上書きする scope 違反）を別経路で再発させる。観測 3 のパイプラインは stderr 抑止を付けず、`$BACK_COUNT` が空文字なら **`---VERDICT--- status: ABORT ... ---END_VERDICT---` ブロックを stdout に出力した上で** skill を終了し、Step 2 以降に進まない（`exit 1` 単体では workflow runner が `VerdictNotFound` 扱いとなり `on:ABORT` 遷移が成立しないため、verdict block の出力は必須）。
 
 > **重要**: 「implementation 済みを検出したから ABORT する」という分岐は採用しない。BACK 経由再起動という workflow 仕様上の正当な遷移
 > （`docs/dev/workflow-authoring.md:130` の `BACK = 差し戻し。前段ステップを再実行` 定義）に対しては Step 1.7 で `PASS` を返して通常フローに復帰させる。
@@ -246,7 +241,7 @@ Step 1.6 で BACK 経由再起動と判定された場合のみ実行する。`P
 #### サブステップ
 
 1. **既存設計書の読込**: `[worktree_dir]/draft/design/issue-[issue_id]-*.md` を `Read` で読む
-2. **直近 BACK verdict の特定**: Step 1.6 と同じ jq note-unit + heading gate + BACK marker フィルタを用い、`[x] Changes Requested / BACK` または `\| 判定 \|.*BACK` を含む note のうち **直近のもの** から指摘リストを抽出する。発行元 step（`review-code` / `i-dev-final-check` 等）は問わない
+2. **直近 BACK verdict の特定**: Step 1.6 と同じ jq comment-unit + heading gate + BACK marker フィルタを用い、`[x] Changes Requested / BACK` または `\| 判定 \|.*BACK` を含む comment のうち **直近のもの** から指摘リストを抽出する。発行元 step（`review-code` / `i-dev-final-check` 等）は問わない
 3. **指摘の分類**: 各指摘を「設計起因」「実装起因」に分類する
    - **設計起因**: 設計書の不備が原因の指摘（IF 設計の漏れ、テスト戦略の未定義、一次情報不足、影響ドキュメント漏れ等）
    - **実装起因**: 設計は正しいが実装が逸脱した指摘（見出し表記、コード品質、テスト失敗等）
@@ -306,9 +301,9 @@ Step 1.6 で BACK 経由再起動と判定された場合のみ実行する。`P
 設計修正完了 → PASS。
 ```
 
-> **規約遵守**: 本コメント本文に GitLab auto-close hazard pattern（`Clos(e[sd]?|ing)` / `Fix(e[sd]|ing)?` / `Resolv(e[sd]?|ing)` / `Implement(s|ing|ed)?`
+> **規約遵守**: 本コメント本文に auto-close hazard pattern（`Clos(e[sd]?|ing)` / `Fix(e[sd]|ing)?` / `Resolv(e[sd]?|ing)` / `Implement(s|ing|ed)?`
 > の直後 `#[0-9]`）を書かない。指摘参照は `指摘 N` / `Must Fix item N` / `point N` 形式に統一する
-> （参照: [`docs/dev/shared_skill_rules.md`](../../../docs/dev/shared_skill_rules.md) § GitLab auto close keyword 回避規約）。
+> （参照: [`docs/dev/shared_skill_rules.md`](../../../docs/dev/shared_skill_rules.md) § auto close keyword 回避規約）。
 
 #### Step 1.7 終了後の挙動
 
@@ -518,7 +513,7 @@ Issue: [issue_ref]
 - **No** — `/issue-fix-design` 相当の大幅修正が必要（本フェーズで自己解決できない）
 ```
 
-> **規約遵守**: 本コメント本文に GitLab auto-close hazard pattern（`Clos(e[sd]?|ing)` / `Fix(e[sd]|ing)?` / `Resolv(e[sd]?|ing)` / `Implement(s|ing|ed)?` の直後 `#[0-9]`）を書かない。指摘参照は `指摘 N` / `Must Fix item N` / `point N` 形式に統一する（参照: [`docs/dev/shared_skill_rules.md`](../../../docs/dev/shared_skill_rules.md) § GitLab auto close keyword 回避規約）。
+> **規約遵守**: 本コメント本文に auto-close hazard pattern（`Clos(e[sd]?|ing)` / `Fix(e[sd]|ing)?` / `Resolv(e[sd]?|ing)` / `Implement(s|ing|ed)?` の直後 `#[0-9]`）を書かない。指摘参照は `指摘 N` / `Must Fix item N` / `point N` 形式に統一する（参照: [`docs/dev/shared_skill_rules.md`](../../../docs/dev/shared_skill_rules.md) § auto close keyword 回避規約）。
 
 ### Step 3: コミット
 

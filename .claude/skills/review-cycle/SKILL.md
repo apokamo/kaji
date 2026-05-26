@@ -18,7 +18,7 @@ PASS なら `/issue-close <issue_id>` を **手動で** 実行する運用とな
 | PR レビューループを 1 コマンドで自動化したい（close は手動で確認） | ✅ 必須 |
 | close まで全自動で進めたい | ❌ 代わりに `kaji run .kaji/wf/review-close.yaml <id>` |
 | `provider.type='github'` で codex auto-review が走っている環境 | ✅ 前提（`review-poll` step が auto-review シグナルを監視） |
-| `provider.type='github'` 以外（`gitlab` / `local` 等） | ❌ workflow が `requires_provider: github` で exit 2 |
+| `provider.type='github'` 以外（`local` 等） | ❌ workflow が `requires_provider: github` で exit 2 |
 
 **ワークフロー内の位置**: i-pr → [PR 作成] → **/review-cycle** → (PASS なら手動 /issue-close)
 

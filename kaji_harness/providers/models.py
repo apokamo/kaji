@@ -86,7 +86,7 @@ class IssueContext:
         worktree_dir: worktree 絶対パス（``/path/to/kaji-feat-153``）。
             Phase 3 では slug 同梱しない（既存 ``kaji-<prefix>-<id>`` を維持）。
         design_path: 設計書パス（``draft/design/issue-<id>-<slug>.md`` 等）。
-        provider_type: ``"github"`` / ``"local"`` / ``"gitlab"``。
+        provider_type: ``"github"`` / ``"local"``。
         default_branch: provider の default branch。``main`` 等。
             ``provider=local`` では ``provider.local.default_branch``、
             ``provider=github`` では ``provider.github.default_branch`` が source。
@@ -95,7 +95,7 @@ class IssueContext:
         git_remote: skill 内の ``git push`` / ``git fetch`` 等が対象とする
             git remote 名。default ``"origin"``。``provider.<type>.git_remote``
             config が source。Skill prompt の ``[git_remote]`` placeholder で
-            参照される（gl:6 で導入、hybrid setup 対応）。
+            参照される（hybrid setup 対応）。
     """
 
     issue_id: str
@@ -123,10 +123,8 @@ class PRContext:
     追加する。
 
     Attributes:
-        pr_id: provider 内部 ID。github なら ``"42"``、gitlab なら
-            project-local ``merge_request_iid`` の文字列（``"42"``）。
-        pr_ref: 人間可読参照。github なら ``"gh:42"``、gitlab なら
-            ``"gl:42"``（`kaji-pr-mr-bridge.md` § 設計原則 1 に準拠）。
+        pr_id: provider 内部 ID。github なら ``"42"``。
+        pr_ref: 人間可読参照。github なら ``"#42"``（GitHub の PR 番号表記）。
     """
 
     pr_id: str

@@ -1,6 +1,6 @@
 """Resolve the main worktree (``default_branch`` checkout) for LocalProvider.
 
-Issue gl:11: cwd 起点で ``.kaji/config.toml`` を discover すると feature worktree
+cwd 起点で ``.kaji/config.toml`` を discover すると feature worktree
 配下では ``repo_root`` が feature worktree のルートになり、LocalProvider の
 ``.kaji/issues/`` 書き込みと ``git commit`` が feature branch に向かってしまう。
 本 module は ``git worktree list --porcelain`` を解析し、

@@ -4,13 +4,13 @@ provider neutrality (Issue ``local-pc5090-7``).
 The runner is exercised in two slices:
 
 1. ``_resolve_pr_context_safe`` — verifies the helper catches
-   ``GitLabProviderError`` only and re-raises everything else (implementation
+   ``GitHubProviderError`` only and re-raises everything else (implementation
    bugs / signal interrupts) as required by
    ``docs/reference/python/error-handling.md`` § 基本原則 1.
 2. Provider-neutrality grep — ensures ``kaji_harness/prompt.py`` and
-   ``kaji_harness/runner.py`` do not branch on ``provider.type == "gitlab"``
-   (Issue 完了条件「skill のプロンプト注入経路に GitHub/GitLab 分岐が入って
-   いない」).
+   ``kaji_harness/runner.py`` do not branch on ``provider.type == "gitlab"`` /
+   ``"github"`` (Issue 完了条件「skill のプロンプト注入経路に
+   provider-type 分岐が入っていない」).
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import pytest
 from kaji_harness.config import ExecutionConfig, KajiConfig, PathsConfig
 from kaji_harness.models import CLIResult, CostInfo, Step, Verdict, Workflow
 from kaji_harness.providers import LocalProvider, PRContext
-from kaji_harness.providers.gitlab import GitLabProviderError
+from kaji_harness.providers.github import GitHubProviderError
 from kaji_harness.runner import WorkflowRunner
 
 
@@ -58,9 +58,9 @@ class TestResolvePrContextSafe:
 
     def test_returns_pr_context_on_success(self, runner: WorkflowRunner) -> None:
         provider = MagicMock()
-        provider.resolve_pr_context.return_value = PRContext(pr_id="42", pr_ref="gl:42")
+        provider.resolve_pr_context.return_value = PRContext(pr_id="42", pr_ref="#42")
         result = runner._resolve_pr_context_safe(provider, "feat/x")
-        assert result == PRContext(pr_id="42", pr_ref="gl:42")
+        assert result == PRContext(pr_id="42", pr_ref="#42")
         provider.resolve_pr_context.assert_called_once_with("feat/x")
 
     def test_returns_none_passthrough(self, runner: WorkflowRunner) -> None:
@@ -68,9 +68,9 @@ class TestResolvePrContextSafe:
         provider.resolve_pr_context.return_value = None
         assert runner._resolve_pr_context_safe(provider, "feat/x") is None
 
-    def test_gitlab_provider_error_is_caught_and_warned(self, runner: WorkflowRunner) -> None:
+    def test_github_provider_error_is_caught_and_warned(self, runner: WorkflowRunner) -> None:
         provider = MagicMock()
-        provider.resolve_pr_context.side_effect = GitLabProviderError("API down")
+        provider.resolve_pr_context.side_effect = GitHubProviderError("API down")
         buf = io.StringIO()
         with redirect_stderr(buf):
             result = runner._resolve_pr_context_safe(provider, "feat/x")
@@ -193,8 +193,8 @@ class TestRunnerPromptInjectionRoundTrip:
     ``pr_id`` / ``pr_ref`` が自動注入されることの round-trip 検証。
 
     LocalProvider 配下で ``resolve_pr_context`` を patch することで、
-    GitLab 設定なしに「provider が ``PRContext`` を返す経路」を再現する
-    （注入経路は provider 中立: 完了条件 4 で grep 検証済）。
+    「provider が ``PRContext`` を返す経路」を再現する（注入経路は
+    provider 中立: 完了条件 4 で grep 検証済）。
     """
 
     def test_pr_context_present_injects_pr_id_and_pr_ref_into_prompt(self, tmp_path: Path) -> None:
@@ -211,14 +211,14 @@ class TestRunnerPromptInjectionRoundTrip:
             patch.object(
                 LocalProvider,
                 "resolve_pr_context",
-                return_value=PRContext(pr_id="42", pr_ref="gl:42"),
+                return_value=PRContext(pr_id="42", pr_ref="#42"),
             ),
         ):
             runner.run()
 
         prompt = captured["prompt"]
         assert "- pr_id: 42" in prompt
-        assert "- pr_ref: gl:42" in prompt
+        assert "- pr_ref: #42" in prompt
 
     def test_pr_context_none_omits_pr_variables_from_prompt(self, tmp_path: Path) -> None:
         runner = _bootstrap_local_runner(tmp_path)
@@ -244,10 +244,10 @@ class TestRunnerPromptInjectionRoundTrip:
         # （pr_* 不在 = 注入経路全体が壊れた、という誤検出を防ぐ）。
         assert "- issue_id: local-pc1-1" in prompt
 
-    def test_gitlab_provider_error_warns_and_continues_without_pr_variables(
+    def test_github_provider_error_warns_and_continues_without_pr_variables(
         self, tmp_path: Path
     ) -> None:
-        """``GitLabProviderError`` raise 時、workflow は止まらず prompt から
+        """``GitHubProviderError`` raise 時、workflow は止まらず prompt から
         ``pr_*`` を除外する（``_resolve_pr_context_safe`` の WARN + None 経路）。
         """
         runner = _bootstrap_local_runner(tmp_path)
@@ -264,7 +264,7 @@ class TestRunnerPromptInjectionRoundTrip:
             patch.object(
                 LocalProvider,
                 "resolve_pr_context",
-                side_effect=GitLabProviderError("API down"),
+                side_effect=GitHubProviderError("API down"),
             ),
             redirect_stderr(buf),
         ):
@@ -281,7 +281,14 @@ class TestRunnerPromptInjectionRoundTrip:
 
 @pytest.mark.small
 class TestProviderNeutralInjectionPath:
-    """注入経路に GitHub/GitLab 分岐が入っていないことを diff レベルで担保する。"""
+    """注入経路に provider-type 分岐が入っていないことを diff レベルで担保する。
+
+    GitLab forge 撤去後も、注入経路に ``provider.type == "github"`` /
+    ``"gitlab"`` 比較や ``isinstance(..., GitHubProvider)`` 分岐が入って
+    いないことを保証する。`kaji_harness/` 配下に GitLab 言及が残っていない
+    こと自体は § 再計測 で機械検証されるため、本テストは「分岐の不在」を
+    焦点とする。
+    """
 
     @pytest.fixture
     def kaji_root(self) -> Path:
@@ -289,10 +296,10 @@ class TestProviderNeutralInjectionPath:
         return Path(__file__).resolve().parent.parent
 
     @pytest.mark.parametrize("module", ["prompt.py", "runner.py"])
-    def test_no_provider_type_gitlab_branching(self, kaji_root: Path, module: str) -> None:
+    def test_no_provider_type_branching(self, kaji_root: Path, module: str) -> None:
         path = kaji_root / "kaji_harness" / module
         source = path.read_text(encoding="utf-8")
-        # 禁止パターン: provider.type / provider_type の "gitlab" / "github" 文字列比較
+        # 禁止パターン: provider.type / provider_type の "github" / "gitlab" 文字列比較
         forbidden = [
             r'provider\.type\s*==\s*["\']gitlab["\']',
             r'provider\.type\s*==\s*["\']github["\']',

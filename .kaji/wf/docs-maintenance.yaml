@@ -1,7 +1,7 @@
 name: docs-maintenance
 description: |
-  provider=gitlab 用の docs-only 開発 workflow。
-  type:docs Issue を gitlab provider 配下で完走させる。
+  docs-only 開発 workflow（provider 非依存）。
+  type:docs Issue を完走させる。
   issue-create / issue-start は事前に手動実行済みであることが前提。
   最終 step は i-pr（PR 作成）。
 execution_policy: auto

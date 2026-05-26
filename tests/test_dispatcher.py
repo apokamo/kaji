@@ -693,7 +693,12 @@ class TestDispatcherFailFastOnConfig:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """``type=gitlab`` のような明示設定ミスは gh fallback せず exit 2。"""
+        """``type=gitlab`` のような撤去済 / 未知 type は gh fallback せず exit 2。
+
+        bridging test (Issue #191 撤去後): GitLab forge 撤去後、
+        ``provider.type='gitlab'`` 設定値は ConfigLoadError として fail-fast
+        する。silent な GitHub fallback は踏まない。
+        """
         repo = _write_repo(tmp_path, provider_section='\n[provider]\ntype = "gitlab"\n')
         monkeypatch.chdir(repo)
         with patch("kaji_harness.cli_main.subprocess.run") as mock_run:
@@ -929,7 +934,7 @@ class TestUserSpecifiedRepo:
         assert _user_specified_repo(["pr", "list"]) is False
 
     def test_repository_is_not_matched(self) -> None:
-        """`--repository` は `gh`/`glab` が受理しない別フラグ。誤検出しない。"""
+        """`--repository` は `gh` が受理しない別フラグ。誤検出しない。"""
         assert _user_specified_repo(["--repository", "o/n"]) is False
 
 

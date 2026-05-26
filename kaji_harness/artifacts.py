@@ -41,7 +41,7 @@ def resolve_artifacts_dir(config: KajiConfig) -> Path:
 def _try_resolve_main_worktree(config: KajiConfig) -> Path | None:
     """provider 情報から main worktree を best-effort 解決する。失敗時 ``None``。
 
-    ``provider_overlay_divergence_warning`` (gl:28) と同じ best-effort パターン:
+    ``provider_overlay_divergence_warning`` と同じ best-effort パターン:
     git CLI 不在 / ``default_branch`` 未 checkout / ``provider is None`` のいずれも
     raise せず ``None`` を返す。
     """

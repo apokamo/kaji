@@ -20,7 +20,6 @@ PR レビュー修正後の確認を行う。
 | `/pr-fix` 後の修正確認 | ✅ 必須 |
 | 新規レビューが必要な場合 | ❌ PR 上で直接レビューを実施 |
 | `provider.type='github'` 配下 | ✅ 受理（gh CLI 経由） |
-| `provider.type='gitlab'` 配下 | ✅ 受理（`kaji pr` の写像層が glab 命令を吸収） |
 | `provider.type='local'` 配下 | ❌ Step 0 で ABORT。代替は `/issue-verify-code` |
 
 **ワークフロー内の位置**: i-pr → [PR review] → (pr-fix → **pr-verify**) → close
@@ -39,7 +38,7 @@ $ARGUMENTS = <issue_id>
 |------|-----|------|
 | `issue_id` | str | 正規化済み Issue ID（GitHub 数値、または `local-*`） |
 | `issue_ref` | str | 人間可読の Issue 参照 |
-| `provider_type` | str | `github` / `gitlab` / `local` のいずれか。Step 0 のガード判定に使用 |
+| `provider_type` | str | `github` / `local` のいずれか。Step 0 のガード判定に使用 |
 
 ### 解決ルール
 
@@ -48,7 +47,7 @@ $ARGUMENTS = <issue_id>
 
 `issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
 
-`pr_id` / `pr_ref` はハーネス経由ではプロンプトに自動注入される（`runner.py` の `_resolve_pr_context_safe` が `GitLabProvider.resolve_pr_context()` / `GitHubProvider.resolve_pr_context()` 経由でブランチから PR を逆引きして展開する）。手動実行時、および auto-resolve が失敗した（branch 未 push / PR 未作成）場合は Step 1 で fallback として `kaji pr list --head` から取得する。`pr_ref` は provider 別の prefix で組み立てる: `provider.type='github'` なら `gh:<pr_id>`、`provider.type='gitlab'` なら `gl:<pr_id>`（`kaji_harness/providers/models.py` `PRContext` および `kaji-pr-mr-bridge.md` § 設計原則 1 に準拠）。
+`pr_id` / `pr_ref` はハーネス経由ではプロンプトに自動注入される（`runner.py` の `_resolve_pr_context_safe` が `GitHubProvider.resolve_pr_context()` 経由でブランチから PR を逆引きして展開する）。手動実行時、および auto-resolve が失敗した（branch 未 push / PR 未作成）場合は Step 1 で fallback として `kaji pr list --head` から取得する。`pr_ref` は `gh:<pr_id>` 形式で組み立てる（`kaji_harness/providers/models.py` `PRContext` 準拠）。
 
 ## 前提知識の読み込み
 
@@ -76,7 +75,7 @@ $ARGUMENTS = <issue_id>
 ### Step 0: provider check
 
 本 Skill は forge provider 専用。最初に `provider_type` を解決し、
-`github` / `gitlab` 以外なら **以降のステップに進まず ABORT verdict を出力して終了** する。
+`github` 以外なら **以降のステップに進まず ABORT verdict を出力して終了** する。
 
 **手順**:
 
@@ -91,9 +90,7 @@ $ARGUMENTS = <issue_id>
 
 2. **判定と verdict 出力**:
 
-   - `PROVIDER_TYPE` が `github` / `gitlab` → Step 1 に進む（`kaji pr` の
-     写像層が forge 別の引数差異を吸収するため、本 Skill は両 forge で同じ
-     コマンドを使う）
+   - `PROVIDER_TYPE` が `github` → Step 1 に進む
    - `PROVIDER_TYPE` が `local` → 以下の ABORT verdict を **そのまま stdout に
      出力**して以降のステップは実行しない:
 
@@ -137,10 +134,7 @@ $ARGUMENTS = <issue_id>
    ```bash
    PR_JSON=$(kaji pr list --head "[branch_name]" --json number,title --jq '.[0]')
    pr_id=$(echo "$PR_JSON" | jq -r '.number')
-   case "$provider_type" in
-     github) pr_ref="gh:${pr_id}" ;;
-     gitlab) pr_ref="gl:${pr_id}" ;;
-   esac
+   pr_ref="gh:${pr_id}"
    ```
 
 2. **Worktree パスの解決**:
