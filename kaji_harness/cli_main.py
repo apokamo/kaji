@@ -1254,6 +1254,8 @@ def _handle_issue_local(provider: LocalProvider, raw_args: list[str]) -> int:
             f"(Phase 3-c). Supported: {', '.join(sorted(_LOCAL_ISSUE_SUBS))}.\n"
         )
         return EXIT_INVALID_INPUT
+    from .sync import SyncError
+
     try:
         if sub == "view":
             return _local_issue_view(provider, rest)
@@ -1277,6 +1279,12 @@ def _handle_issue_local(provider: LocalProvider, raw_args: list[str]) -> int:
     except IssueNotFoundError as exc:
         sys.stderr.write(f"Error: {exc}\n")
         return EXIT_RUNTIME_ERROR
+    except SyncError as exc:
+        # Issue #191: list_issues / view_cached_issue が legacy forge cache を
+        # 検出した場合の fail-fast 経路。sync コマンド系と同じ contract
+        # (EXIT_INVALID_INPUT) に揃える。
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
     except (LocalProviderError, ValueError) as exc:
         sys.stderr.write(f"Error: {exc}\n")
         return EXIT_INVALID_INPUT

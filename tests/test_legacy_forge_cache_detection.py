@@ -238,3 +238,68 @@ def test_empty_existing_cache_dir_passes(tmp_path: Path) -> None:
     cache_dir = tmp_path / ".kaji" / "cache"
     cache_dir.mkdir(parents=True)
     _detect_legacy_forge_cache(cache_dir)
+
+
+# ---------------------------------------------------------------------------
+# Medium: CLI dispatcher が SyncError を fail-fast exit に翻訳する
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.medium
+def test_handle_issue_local_list_translates_sync_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``kaji issue list`` 経路の SyncError が EXIT_INVALID_INPUT に翻訳される。
+
+    `_handle_issue_local` が `SyncError` を catch しない場合、CLI は uncaught
+    traceback で落ちる（codex PR #194 review P1 指摘）。回帰防止のため、
+    legacy gl-*.json 残置 → `_handle_issue(["list"])` が rc=2 + stderr に
+    'legacy GitLab cache' を出すことを確認する。
+    """
+    from kaji_harness.cli_main import _handle_issue
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "--initial-branch=main", str(repo)], check=True)
+    (repo / ".kaji").mkdir()
+    (repo / ".kaji" / "config.toml").write_text(
+        '[paths]\nartifacts_dir = ".kaji-artifacts"\nskill_dir = ".claude/skills"\n\n'
+        "[execution]\ndefault_timeout = 1800\n\n"
+        '[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\n'
+    )
+    _seed_legacy_gl_file(repo / ".kaji" / "cache", iid=42)
+    monkeypatch.chdir(repo)
+
+    rc = _handle_issue(["list"])
+    captured = capsys.readouterr()
+    # EXIT_INVALID_INPUT (=2): sync コマンド系と同じ contract に揃える
+    assert rc == 2
+    assert "legacy GitLab cache" in captured.err
+    # traceback ではなく "Error: " prefix の user-facing message
+    assert "Traceback" not in captured.err
+
+
+@pytest.mark.medium
+def test_handle_issue_local_view_cached_translates_sync_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``kaji issue view gh:N`` 経路の SyncError も EXIT_INVALID_INPUT に翻訳。"""
+    from kaji_harness.cli_main import _handle_issue
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "--initial-branch=main", str(repo)], check=True)
+    (repo / ".kaji").mkdir()
+    (repo / ".kaji" / "config.toml").write_text(
+        '[paths]\nartifacts_dir = ".kaji-artifacts"\nskill_dir = ".claude/skills"\n\n'
+        "[execution]\ndefault_timeout = 1800\n\n"
+        '[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\n'
+    )
+    _seed_legacy_gl_file(repo / ".kaji" / "cache", iid=42)
+    monkeypatch.chdir(repo)
+
+    rc = _handle_issue(["view", "gh:99"])
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "legacy GitLab cache" in captured.err
+    assert "Traceback" not in captured.err
