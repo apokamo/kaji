@@ -11,9 +11,9 @@ Issue: #191
 1. **撤去される公開機能の外部挙動**: `provider.type='gitlab'` / `kaji sync from-gitlab` / `gl:N` Issue 参照 / `large_gitlab` marker / `test-large-gitlab` Makefile target は `ValueError` または `unknown subcommand` で fail-fast する形に変わる
 2. **永続 cache artifact の扱い**: 既存ユーザーの `.kaji/cache/gl-*.json` および `.sync-meta.json forge="gitlab"` は撤去後、LocalProvider 起動時に明示エラーで案内する（後述）
 
-> **type ラベルの整合性（MF-1 round 2）**: 上記の破壊的変更は `type:refactor` の「外部から観測可能な振る舞いを変えない」絶対要件と論理的に両立しない。本設計書は **本 Issue を `type:refactor` → `type:chore` に relabel して `/issue-review-ready` 再実行する Plan A を採用する**。詳細は § 「MF-1 確定対応: type ラベルの差し戻しを前提とする」を参照。本設計書本文（インターフェース・テスト戦略・移行ステップ等）の technical content は relabel 前後で不変であり、relabel 完了時点で § 概要 / § 制約 の type 整合記述のみ簡素化する。
+> **type ラベルについて**: 本 Issue は `type:chore`（review-ready PASS 済み）。`type:chore` は canonical 外 type で `feat.md` フォールバック適用となり、refactor ガイドの「外部から観測可能な振る舞いを変えない」絶対要件には縛られない（`docs/dev/development_workflow.md:78-79`）。撤去対象 (GitLab 公開 IF) の fail-fast 化は意図された破壊的変更として正規承認される。なお過去の design cycle round 2 までは `type:refactor` 前提で設計を組み、relabel を要求する fix-design verdict を経て review-ready 再実行 PASS に至った経緯がある（履歴参考: round 2 fix-design 報告 / verify-design 報告 Issue コメント）。
 
-**振る舞い非変更保証のスコープ（type を問わず維持）**: 上記の撤去対象以外の経路 — すなわち **(a) GitHubProvider の挙動、(b) LocalProvider の GitHub cache / local-only 経路、(c) `kaji run` workflow runner、(d) `kaji issue` / `kaji pr` の GitHub passthrough、(e) `.kaji/issues/` local Issue ストア** — は IF / 挙動を完全に維持する。これらは relabel の有無にかかわらず本 PR で保護されるべき design contract である。
+**振る舞い非変更保証のスコープ（GitLab 撤去対象外を保護）**: 上記の撤去対象以外の経路 — すなわち **(a) GitHubProvider の挙動、(b) LocalProvider の GitHub cache / local-only 経路、(c) `kaji run` workflow runner、(d) `kaji issue` / `kaji pr` の GitHub passthrough、(e) `.kaji/issues/` local Issue ストア** — は IF / 挙動を完全に維持する。本 PR で保護されるべき design contract。
 
 ## 背景・目的
 
@@ -188,43 +188,18 @@ To recover:
 - `kaji_harness.providers.__init__` の dispatch 関数は `if config.provider.type == "github": ... if config.provider.type == "local": ...` の 2 分岐に縮退。`else: raise ValueError(...)` で `"gitlab"` を含む未知 type を reject
 - `kaji_harness.providers.base.ReviewRequestProvider` 等の抽象 base は GitHub 経路のみが実装を提供する形に縮退（docstring から GitLab 言及を削除）
 
-## MF-1 確定対応: type ラベルの差し戻しを前提とする（round 2 修正）
+## type ラベル変遷の経緯（履歴）
 
-前 round では「`type:refactor` を維持しつつ振る舞い非変更スコープを限定する」「逸脱を明示的に承認する」アプローチを取ったが、レビュワーは「逸脱の明示承認は refactor ガイド絶対要件を満たさない」と判断した。これに従い、**`type:refactor` 維持 + 例外承認のアプローチは撤回する**。
+本設計書は当初 `type:refactor` 前提で起草されたが、Issue 完了条件が「`gitlab.py` が削除されている」等の **削除を絶対要求** していたため、refactor ガイドの「外部から観測可能な振る舞いを変えない」要件と論理レベルで両立しないことが design-review round 2 で判明した。fix-design round 2 verdict / verify-design round 2 verdict（`/issue-verify-design 191` round 2）を経て、Issue は `type:refactor` → `type:chore` に relabel されたうえで `/issue-review-ready 191` 再実行 PASS に到達している。
 
-レビュワーが提示した 2 オプション（型差し戻し再レビュー / 互換期間付き refactor）について、本設計は **Plan A（型差し戻し）を確定方針** として採用する。
+`type:chore` は canonical 外 type のため `_shared/design-by-type/feat.md` フォールバック適用となり、refactor ガイドの非変更要件には縛られない（`docs/dev/development_workflow.md:78-79`）。撤去対象 (GitLab 公開 IF) の fail-fast 化は意図された破壊的変更として正規承認される。
 
-### Plan A（採用）: type ラベルの差し戻し
-
-- **作業内容**: Issue #191 のラベルを `type:refactor` → **`type:chore`** に変更し、`/issue-review-ready` を再実行する。`type:chore` は `docs/dev/development_workflow.md` § type → ラベル マッピング の「雑務・依存の掃除」に対応し、本 Issue の本質（deprecated forge support の撤去）と最も整合する
-- **採用根拠**:
-  - 本 Issue の主成分は「deprecated 機能の **完全撤去**」であり、Issue 完了条件 (`## 完了条件`) も `gitlab.py が削除されている` 等の **削除を絶対要求** している。「振る舞い非変更」を要求する `type:refactor` とは要件レベルで両立しない
-  - `type:chore` は `_shared/design-by-type/feat.md` をフォールバック適用する canonical 外 type であり、refactor ガイドの「外部から観測可能な振る舞いを変えない」要件には縛られない（`docs/dev/development_workflow.md:78-79`）
-  - kaji は pre-1.0 の個人/小チーム開発ツールであり、利用実態は GitHub 単独 + Local provider。GitLab forge 公開 IF の互換期間設計は実利用者が存在しないため過剰対応となる
-- **本設計書の扱い**: type 差し戻し後、本設計書の本文（§ 概要 〜 § 影響ドキュメント）はそのまま actionable。`type:chore` 配下では § 「振る舞い非変更スコープ」「逸脱承認」記述が **不要** になるため、relabel 完了時点で § 概要を簡素化する微修正のみ実施（実装フェーズ冒頭、Step 1 と同タイミング）
-- **直近の手順**:
-  1. 本 fix-design verdict 後、verify-design / レビュワー判断で本方針承認
-  2. Issue maintainer がラベルを `type:refactor` → `type:chore` に変更
-  3. `/issue-review-ready 191` を再実行（chore は feat フォールバックのため、feat 観点で観察）
-  4. PASS なら `/issue-design 191` が本設計書を継承して進行（本設計書を再生成せず、§ 概要から「逸脱承認」記述のみ削除する微修正）
-  5. relabel 拒否（後述）の場合は Plan B に切り替え
-
-### Plan B（フォールバック・採用しない前提）: 互換期間付き refactor
-
-Issue maintainer が `type:refactor` ラベルの維持を強く希望する場合のみのフォールバック。**本設計書では Plan B の詳細設計は行わない**（Plan A 承認を前提とするため）。Plan B が採択される場合は別 Issue として再起票することを推奨する:
-
-- 本 Issue 別 Issue 化（Phase 1）: 全 GitLab 公開 IF パスに `DeprecationWarning` を追加し、機能は完全保持。`provider.type='gitlab'` を load 時に warn、`gl:N` 受理時に warn、`kaji sync from-gitlab` 起動時に warn。Tests も DeprecationWarning が emit されることを保証する形に追加
-- 後続 Issue（Phase 2）: 1 リリース後、Phase 1 で deprecated 済みの全パスを削除（本 Issue 本来の完了条件相当）
-- Plan B 採択時の本 Issue 完了条件は **Phase 1 範囲に限定** されるため、Issue 本文の `## 完了条件` から「`gitlab.py` が削除されている」「`tests/test_large_gitlab/` が削除されている」等の項目を撤去するか、Phase 2 として明示分離する Issue 本文修正が必要
-
-### Plan A 拒否・Plan B も採択しない場合の取扱い
-
-両 Plan が拒否された場合、本 Issue の要件（`type:refactor` 維持 + 公開 IF 完全撤去）は **論理的に充足不可能** であり、設計レベルで実装着手不可。`/issue-fix-design` cycle が枯渇したら BACK / ABORT verdict で `/issue-review-ready` まで戻し、Issue 自体の要件再定義を促す。
+本設計書本文（インターフェース・テスト戦略・移行ステップ・既存テスト棚卸し・safety net 評価表）の technical content は relabel 前後で不変である。
 
 ## 制約・前提条件
 
-- **Plan A 採択を前提とする**（上記）。type 差し戻し後の `type:chore` 配下では、本 Issue は「deprecated 機能の完全撤去」であり、refactor ガイドの「外部から観測可能な振る舞いを変えない」要件は適用されない。撤去対象 (GitLab 公開 IF) の fail-fast 化は意図された破壊的変更として正規承認される
-- **振る舞い非変更スコープ（relabel 後も維持）**: § 概要 § 振る舞い非変更保証のスコープ に列挙した範囲 — GitHubProvider / LocalProvider の GitHub cache・local-only 経路 / workflow runner / `kaji issue`/`kaji pr` の GitHub passthrough / `.kaji/issues/` local Issue ストア — に観測可能な差分を出さない。これは type を問わず維持する design contract
+- **Issue type は `type:chore`**（review-ready PASS 済み）。canonical 外 type のため `feat.md` フォールバックを適用し、refactor ガイドの「外部から観測可能な振る舞いを変えない」要件は適用されない。撤去対象 (GitLab 公開 IF) の fail-fast 化は意図された破壊的変更として正規承認される
+- **振る舞い非変更スコープ（GitLab 撤去対象外を保護）**: § 概要 § 振る舞い非変更保証のスコープ に列挙した範囲 — GitHubProvider / LocalProvider の GitHub cache・local-only 経路 / workflow runner / `kaji issue`/`kaji pr` の GitHub passthrough / `.kaji/issues/` local Issue ストア — に観測可能な差分を出さない。本 PR で保護される design contract
 - **Safety net**: § 「Safety net 評価（refactor 固有・MF-3 対応）」の保護対象 × 既存テスト対応表に従い、`pytest` 実行で baseline PASS / FAIL 集合を記録してから削除に入る。`pytest --collect-only` は coverage 評価ではないため使用しない
 - **Scope 混在禁止**: 本 Issue では GitLab 撤去のみ。GitHub 経路の追加機能・バグ修正・docs 改善は同 PR に含めない（CLAUDE.md § Prohibitions と Issue 本文「対象スコープの明示」を遵守）
 - **Docs と Code を同 PR**: docs だけ先に消すと「GitLab を案内するが実装は無い」、code だけ先に消すと「docs が嘘をつく」time window が発生する。同 PR スコープで両方更新
