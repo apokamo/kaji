@@ -142,16 +142,23 @@ parse_verdict(output, valid_statuses, ai_formatter)
   │   └─ status は valid_statuses で動的に制約（誤検出防止）
   │   └─ reason + evidence が両方取れない場合は Step 3 へ
   │
-  └─ Step 3: AI Formatter Retry（ai_formatter 提供時のみ）
+  └─ Step 3: AI Formatter Retry（ai_formatter 提供 **かつ** delimiter 抽出済み時のみ）
+      └─ 入力ゲート: Step 1 / 2a で `---VERDICT---` delimiter（strict / relaxed）が
+         一切抽出できなかった場合は Step 3 を起動せず `VerdictNotFound` を raise
+         （AI が自然言語進捗報告から PASS を捏造する経路を構造的に閉じる。Issue #193）
       └─ raw output を 8000 文字に head+tail 切り詰め
       └─ エージェント CLI で正規フォーマットへ再整形
       └─ 再整形結果を Step 1 → 2a → 2b で再パース
       └─ 最大 2 回リトライ（各リトライでエージェント API コスト発生）
+      └─ formatter が `---NO_VERDICT_FOUND---` sentinel を返したら即 `VerdictNotFound`
+         （delimiter は存在するが内部が進捗報告のみ等のケース。リトライしない）
 ```
 
 runner は step ごとに `create_verdict_formatter(agent, valid_statuses, model, workdir)` で formatter を生成し、`parse_verdict()` に渡す。formatter は同じエージェント CLI を plain text モードで起動する。
 
 通常の well-formed な出力は Step 1-2 で処理され、Step 3 が起動されるのは delimiter / KV 回復でも扱えない場合に限られる。追加の API コストと遅延は常時ではなく、この最終手段に到達したときだけ発生する。
+
+delimiter-presence-only gate により、verdict 不在の agent セッション（Issue #184 のように `ScheduleWakeup` 待ちでメインセッションが終了したケース等）は AI 捏造で穴埋めされず、`VerdictNotFound` が `HarnessError` 経由で `EXIT_RUNTIME_ERROR (= 3)` にマップされる。
 
 ### 出力収集を含めた判定経路
 

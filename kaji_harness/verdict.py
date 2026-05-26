@@ -37,6 +37,8 @@ RELAXED_PATTERN = re.compile(
 # Step 3: AI Formatter constants
 AI_FORMATTER_MAX_INPUT_CHARS: int = 8000
 
+NO_VERDICT_SENTINEL = "---NO_VERDICT_FOUND---"
+
 FORMATTER_PROMPT = Template(
     "以下の出力から VERDICT を抽出し、正確な YAML フォーマットで出力してください。\n"
     "\n"
@@ -52,6 +54,22 @@ FORMATTER_PROMPT = Template(
     "---END_VERDICT---\n"
     "\n"
     "重要: status 行は必ず $valid_statuses_str のいずれかを出力してください。それ以外の値は使用禁止です。\n"
+    "\n"
+    "## 例外: 入力の verdict ブロックが空 / 内容不足 / 非 verdict 内容で埋まっている場合\n"
+    "前段の harness gate を通過した入力には `---VERDICT---` delimiter が必ず含まれていますが、\n"
+    "その delimiter 内が以下のいずれかに該当する場合は **verdict を捏造せず**、下記 sentinel を\n"
+    "**単独で** 出力してください。sentinel 以外の本文（推測 status、補足説明、コードブロック等）は\n"
+    "一切付けないでください。\n"
+    "\n"
+    "  (a) delimiter 内が空、または空白 / 改行のみ\n"
+    "  (b) delimiter 内に status / reason / evidence のいずれも明示されていない\n"
+    "  (c) delimiter 内が agent の中間進捗報告（pytest 待ち / 作業継続中 等）であり、\n"
+    "      step 完了の意思表示として読み取れない\n"
+    "\n"
+    "---NO_VERDICT_FOUND---\n"
+    "\n"
+    "中間進捗報告を PASS / ABORT 等の verdict と解釈してはいけません。delimiter が形式的に\n"
+    "存在しても、内容が verdict として成立していないことそのものが harness への正規の応答です。\n"
 )
 
 logger = logging.getLogger(__name__)
@@ -268,10 +286,19 @@ def parse_verdict(
     except VerdictParseError as e:
         logger.debug("Step 2b (key-value pattern) failed: %s", e)
 
+    # Step 3 gate: delimiter-presence-only. Step 3 (AI formatter) is invoked
+    # only when a verdict delimiter (strict or relaxed) was extracted. If no
+    # delimiter was found, fail loudly with VerdictNotFound regardless of
+    # whether ai_formatter is provided — the formatter has a fabrication
+    # pathway when given marker-less natural-language input (Issue #193).
+    if block is None and relaxed_block is None:
+        raise VerdictNotFound(
+            "No verdict delimiter found in output. Step 3 (AI formatter) skipped "
+            f"to prevent fabrication. Last 500 chars: {output[-500:]}"
+        )
+
     # Step 3: AI Formatter Retry
     if ai_formatter is None:
-        if block is None and relaxed_block is None:
-            raise VerdictNotFound(f"No verdict block found. Last 500 chars: {output[-500:]}")
         raise VerdictParseError(
             "All parse attempts failed (Step 1-2). Provide ai_formatter for Step 3 retry."
         )
@@ -279,7 +306,7 @@ def parse_verdict(
     logger.info("Step 3 (AI formatter) invoked — Steps 1-2 exhausted")
     truncated_text = _truncate_for_formatter(output)
 
-    last_error: VerdictParseError | VerdictNotFound | None = None
+    last_error: VerdictParseError | None = None
     for attempt in range(max_retries):
         try:
             formatted = ai_formatter(truncated_text)
@@ -287,9 +314,12 @@ def parse_verdict(
             verdict = _parse_formatted_output(formatted, valid_statuses)
             logger.info("Step 3 succeeded on attempt %d/%d", attempt + 1, max_retries)
             return verdict
-        except InvalidVerdictValue:
+        except (InvalidVerdictValue, VerdictNotFound):
+            # VerdictNotFound here originates from NO_VERDICT_SENTINEL — the
+            # formatter explicitly reported "no verdict exists". Retrying
+            # cannot turn that into a verdict, so propagate immediately.
             raise
-        except (VerdictParseError, VerdictNotFound) as e:
+        except VerdictParseError as e:
             logger.debug("Step 3 attempt %d/%d failed: %s", attempt + 1, max_retries, e)
             last_error = e
             continue
@@ -316,7 +346,21 @@ def _truncate_for_formatter(text: str) -> str:
 
 
 def _parse_formatted_output(formatted: str, valid_statuses: set[str]) -> Verdict:
-    """Parse AI formatter output through Step 1 → 2a → 2b."""
+    """Parse AI formatter output through Step 1 → 2a → 2b.
+
+    Recognizes ``NO_VERDICT_SENTINEL`` as the formatter's explicit signal that
+    the agent output contains no real verdict (e.g. delimiter present but body
+    is empty / progress report only). Sentinel detection maps to
+    ``VerdictNotFound`` so the harness fails loudly rather than retrying.
+
+    The sentinel must be the entire formatter response (modulo surrounding
+    whitespace). Substring matching would misclassify otherwise-valid verdicts
+    whose ``reason`` / ``evidence`` happen to quote the literal sentinel string
+    (e.g. docs or logs referencing it).
+    """
+    if formatted.strip() == NO_VERDICT_SENTINEL:
+        raise VerdictNotFound("AI formatter reported no verdict block in agent output")
+
     # Try strict
     block = _extract_block_strict(formatted)
     if block is not None:
