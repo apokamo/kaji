@@ -1,11 +1,11 @@
 ---
-description: PR/MR に対し初回コードレビューを実施し、Approve / Changes Requested を投稿する。新規レビュー専用（修正確認は /pr-verify）。`review-close` / `review-cycle` workflow では `review-poll` の `BACK_FALLBACK` を受けた fallback step として呼び出される。
+description: PR に対し初回コードレビューを実施し、Approve / Changes Requested を投稿する。新規レビュー専用（修正確認は /pr-verify）。`review-close` / `review-cycle` workflow では `review-poll` の `BACK_FALLBACK` を受けた fallback step として呼び出される。
 name: review
 ---
 
 # Review
 
-PR/MR に対する **初回コードレビュー** を実施するスキル。
+PR に対する **初回コードレビュー** を実施するスキル。
 設計書整合 / コード品質 / テスト証跡 / docs 更新を観点に評価し、`kaji pr review` で正式な
 Approve / Changes Requested を投稿する。
 
@@ -16,11 +16,10 @@ Approve / Changes Requested を投稿する。
 
 | タイミング | このスキル |
 |-----------|-----------|
-| PR/MR 作成直後の初回レビュー（GitLab / 単体起動 / `review-poll` の `BACK_FALLBACK` 後の fallback） | ✅ 必須 |
+| PR 作成直後の初回レビュー（単体起動 / `review-poll` の `BACK_FALLBACK` 後の fallback） | ✅ 必須 |
 | `/pr-fix` 後の修正確認 | ❌ `/pr-verify` を使う |
 | `provider.type='github'` で codex auto-review が走る環境 | ⚠️ workflow からは `review-poll` 経由で fallback 用途のみ |
 | `provider.type='github'` で codex auto-review が走らない環境（クレジット不足等） | ✅ `review-poll` → `BACK_FALLBACK` → 本 skill |
-| `provider.type='gitlab'` 配下 | ✅ 受理（`kaji pr` の写像層が `glab` 命令を吸収） |
 | `provider.type='local'` 配下 | ❌ Step 0 で ABORT。代替は `/issue-review-code` |
 
 **ワークフロー内の位置**: i-pr → [PR 作成] → **review** → (pr-fix → pr-verify) → close
@@ -33,7 +32,7 @@ Approve / Changes Requested を投稿する。
 |------|-----|------|
 | `issue_id` | str | 正規化済み Issue ID |
 | `issue_ref` | str | 人間可読の Issue 参照 |
-| `provider_type` | str | `github` / `gitlab` / `local` のいずれか。Step 0 のガード判定に使用 |
+| `provider_type` | str | `github` / `local` のいずれか。Step 0 のガード判定に使用 |
 | `step_id` | str | 現在のステップ ID |
 
 ### 手動実行（スラッシュコマンド）
@@ -80,7 +79,7 @@ $ARGUMENTS = <issue_id>
 
 ### Step 0: provider check
 
-本 Skill は forge provider 専用。最初に `provider_type` を解決し、`github` / `gitlab` 以外なら
+本 Skill は forge provider 専用。最初に `provider_type` を解決し、`github` 以外なら
 **以降のステップに進まず ABORT verdict を出力して終了** する。
 
 1. **`provider_type` の解決**（ハーネス注入 → 手動 fallback の優先順）:
@@ -91,7 +90,7 @@ $ARGUMENTS = <issue_id>
 
 2. **判定と verdict 出力**:
 
-   - `PROVIDER_TYPE` が `github` / `gitlab` → Step 1 に進む
+   - `PROVIDER_TYPE` が `github` → Step 1 に進む
    - `PROVIDER_TYPE` が `local` → 以下を stdout に出力して終了:
 
      ```text
@@ -128,7 +127,7 @@ pr_ref="#${pr_id}"
 ```
 
 両方の経路で PR が見つからない場合は ABORT verdict を出して終了する
-（`reason`: `no open PR/MR found for issue [issue_ref]`、
+（`reason`: `no open PR found for issue [issue_ref]`、
 `suggestion`: `Create a PR via /i-pr [issue_id] first.`）。
 
 ### Step 2: Worktree パスの解決
@@ -288,10 +287,10 @@ kaji pr review [pr_id] --request-changes --body-file - <<'EOF'
 EOF
 ```
 
-> **規約遵守**: GitLab auto-close hazard pattern（`Clos(e[sd]?|ing)` / `Fix(e[sd]|ing)?` /
+> **規約遵守**: auto-close hazard pattern（`Clos(e[sd]?|ing)` / `Fix(e[sd]|ing)?` /
 > `Resolv(e[sd]?|ing)` / `Implement(s|ing|ed)?` の直後 `#[0-9]`）を本文に書かない。
 > 指摘参照は `指摘 N` / `point N` / `Must Fix item N` で統一する
-> （[`docs/dev/shared_skill_rules.md`](../../../docs/dev/shared_skill_rules.md) § GitLab auto close keyword 回避規約）。
+> （[`docs/dev/shared_skill_rules.md`](../../../docs/dev/shared_skill_rules.md) § auto close keyword 回避規約）。
 
 ### Step 7: 完了報告
 

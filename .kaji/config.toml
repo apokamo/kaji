@@ -11,8 +11,8 @@ default_timeout = 2400
 # Repository default. 各 user は `kaji local init` で
 # .kaji/config.local.toml (gitignored) overlay を作って provider 切替できる。
 [provider]
-type = "gitlab"
+type = "github"
 
-[provider.gitlab]
+[provider.github]
 repo = "apokamo/kaji"
 default_branch = "main"

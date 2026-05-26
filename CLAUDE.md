@@ -58,10 +58,10 @@ kaji run <workflow.yaml> <issue> --quiet            # Suppress agent output
 kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
 ```
 
-## Git & GitLab
+## Git
 
-- **Forge**: GitLab を正式採用。Issue / MR(PR) 操作は `kaji issue` / `kaji pr`（内部で `glab` CLI へ委譲）を使う。`glab` 直叩きも可
-- **GitLab auto-close**: MR/コミットメッセージに `Closes #N` 等を記載すると merge 時に Issue が自動 close される
+- **Forge**: GitHub 単独。Issue / PR 操作は `kaji issue` / `kaji pr`（内部で `gh` CLI へ委譲）を使う。`gh` 直叩きも可
+- **GitHub auto-close**: PR description / merge 後の commit message に `Closes #N` 等を記載すると merge 時に Issue が自動 close される
 - **Branches / main 直コミット**:
   - **Feature / 実装作業**（`kaji_harness/` / `tests/` / `Makefile` / `pyproject.toml` 等のコード変更）は **必ず feature branch (worktree) → `--no-ff` merge**。main 直コミット禁止
   - 以下は **main 直コミット許容**:
@@ -88,7 +88,7 @@ kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
 - Never trust external input without validation
 
 ## Prohibitions
-1. Never commit **code changes** to main directly（`kaji_harness/` / `tests/` / `Makefile` / `pyproject.toml` 等。例外として markdown / docs / `.kaji/issues/` のみのコミットは main 直可。詳細は § Git & GitLab）
+1. Never commit **code changes** to main directly（`kaji_harness/` / `tests/` / `Makefile` / `pyproject.toml` 等。例外として markdown / docs / `.kaji/issues/` のみのコミットは main 直可。詳細は § Git）
 2. Never trust user input without validation
 3. Never hardcode secrets
 4. Never skip pre-commit checks **for commits that include code changes**（markdown / 設計文書のみのコミットは省略可）
@@ -143,6 +143,6 @@ kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
 | PR レビュー後 | **`/pr-fix`** / **`/pr-verify`** | PR レビュー指摘対応とレビュー収束 |
 | PR レビューサイクル起動 | **`/review-cycle`** | `review-cycle.yaml` を起動し、review → pr-fix → pr-verify ループを 1 コマンドで回す（close は手動。close まで全自動なら `kaji run .kaji/wf/review-close.yaml <id>`） |
 | 完了 | `/issue-close` | PR マージ + worktree 削除 + ブランチ削除 |
-| Release | `/release` | version bump + CHANGELOG + tag + GitLab Release ページ作成（CI 非依存 / maintainer 手元実行） |
+| Release | `/release` | version bump + CHANGELOG + tag + GitHub Release ページ作成（CI 非依存 / maintainer 手元実行） |
 
 詳細: [Workflow Guide](docs/dev/workflow_guide.md) / [Development Workflow](docs/dev/development_workflow.md) / [Docs Maintenance Workflow](docs/dev/docs_maintenance_workflow.md) / [Release Runbook](docs/operations/release/runbook.md)

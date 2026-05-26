@@ -40,7 +40,7 @@ PR 作成後のレビュー対応は手動 (`/review` → `/pr-fix` → `/pr-ver
 | `kaji run .kaji/wf/review-close.yaml <id>` | ✅（自動） | レビューから close（merge + cleanup）まで全自動で完走させる。同上の `review-poll` → fallback `review` 構成 |
 | `/review-cycle <id>` | ❌（手動） | `review-cycle.yaml` を起動する slash command wrapper。終了後に `/issue-close` 案内を出力 |
 
-> **review-poll の前提**: `review-close.yaml` / `review-cycle.yaml` は `chatgpt-codex-connector[bot]` (id `199175422`) の auto-review が走っている GitHub 環境を前提に設計されている。`requires_provider: github` 固定で、GitLab / local 環境では workflow load 時に exit 2 する。auto-review がクレジット不足等で走らない場合は、`review-poll` が `NO_REACTION_TIMEOUT_SEC` (60s) 経過で `BACK_FALLBACK` を返し、既存 `review` skill (codex agent による能動レビュー) に fallback する。詳細は [`.claude/skills/review-poll/SKILL.md`](../../.claude/skills/review-poll/SKILL.md) を参照。
+> **review-poll の前提**: `review-close.yaml` / `review-cycle.yaml` は `chatgpt-codex-connector[bot]` (id `199175422`) の auto-review が走っている GitHub 環境を前提に設計されている。`requires_provider: github` 固定で、local 環境では workflow load 時に exit 2 する。auto-review がクレジット不足等で走らない場合は、`review-poll` が `NO_REACTION_TIMEOUT_SEC` (60s) 経過で `BACK_FALLBACK` を返し、既存 `review` skill (codex agent による能動レビュー) に fallback する。詳細は [`.claude/skills/review-poll/SKILL.md`](../../.claude/skills/review-poll/SKILL.md) を参照。
 
 custom workflow への `requires_provider` 追加は推奨（[workflow-authoring.md](workflow-authoring.md)
 § `requires_provider` 参照）。

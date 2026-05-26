@@ -2,11 +2,10 @@
 
 > **⚠️ 現状: 非運用 (historical)**
 >
-> kaji の release 運用は gl:19 以降 **`/release` skill ベース（CI 非依存 / GitLab + `glab` / maintainer 手元実行）** に移行している。本ドキュメントが対象とする GitHub release-please フローは **現在使用していない**。
+> kaji の release 運用は **`/release` skill ベース（CI 非依存 / maintainer 手元実行）** に移行している。本ドキュメントが対象とする GitHub release-please フローは **現在使用していない**。
 >
 > - 現行リリース運用: [`runbook.md`](./runbook.md)（`/release` skill ベース）と [`.claude/skills/release/SKILL.md`](../../../.claude/skills/release/SKILL.md)
-> - 本ドキュメントの位置付け: 将来 GitHub 運用を再開する場合の参考資料 / `.github/workflows/release-please.yml` 等の歴史的経緯
-> - GitHub workflow ファイル (`.github/workflows/release-please.yml` / `release-please-lock.yml`) は gl:19 非目的により削除せず保持
+> - 本ドキュメントの位置付け: 将来 release-please ベース運用を再開する場合の参考資料 / `.github/workflows/release-please.yml` 等の歴史的経緯
 >
 > 以下の手順は **当時の release-please 稼働手順** をそのまま残したものであり、`runbook.md` 内の旧 section (通常リリース運用 / 初回リリース前チェックリスト 等) への参照は現行 runbook では存在しない。読み替えながら参照すること。
 

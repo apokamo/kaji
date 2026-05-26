@@ -906,7 +906,7 @@ class TestGithubPrReviewHandler:
 
     def test_self_pr_approve_posts_marker_only(self) -> None:
         from kaji_harness.cli_main import _github_pr_review
-        from kaji_harness.providers.gitlab import build_kaji_review_marker
+        from kaji_harness.providers.github import build_kaji_review_marker
 
         which, detect, run = self._patches()
         with which, detect, run as mock_run:
@@ -949,7 +949,7 @@ class TestGithubPrReviewHandler:
 
     def test_self_pr_approve_empty_body(self) -> None:
         from kaji_harness.cli_main import _github_pr_review
-        from kaji_harness.providers.gitlab import build_kaji_review_marker
+        from kaji_harness.providers.github import build_kaji_review_marker
 
         which, detect, run = self._patches()
         with which, detect, run as mock_run:
@@ -1075,7 +1075,7 @@ class TestGithubPrReviewHandler:
     def test_self_pr_approve_short_body_alias(self) -> None:
         """`-b` 短縮形 body は `--body` と同じく self-PR fallback を成立させる。"""
         from kaji_harness.cli_main import _github_pr_review
-        from kaji_harness.providers.gitlab import build_kaji_review_marker
+        from kaji_harness.providers.github import build_kaji_review_marker
 
         which, detect, run = self._patches()
         with which, detect, run as mock_run:

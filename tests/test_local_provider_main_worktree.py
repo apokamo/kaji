@@ -22,7 +22,6 @@ from kaji_harness.cli_main import (
 from kaji_harness.config import (
     ExecutionConfig,
     GitHubProviderConfig,
-    GitLabProviderConfig,
     KajiConfig,
     LocalProviderConfig,
     PathsConfig,
@@ -266,7 +265,7 @@ class TestGetProviderResolution:
 
 
 class TestForgeProviderRegression:
-    """GitHub / GitLab provider の repo_root は cwd 起点のまま（変更なし）."""
+    """GitHub provider の repo_root は cwd 起点のまま（変更なし）."""
 
     def test_github_provider_repo_root_unchanged(self, tmp_path: Path) -> None:
         from kaji_harness.providers.github import GitHubProvider
@@ -283,22 +282,4 @@ class TestForgeProviderRegression:
         )
         provider = get_provider(config)
         assert isinstance(provider, GitHubProvider)
-        assert provider.repo_root == tmp_path
-
-    def test_gitlab_provider_repo_root_unchanged(self, tmp_path: Path) -> None:
-        from kaji_harness.providers.gitlab import GitLabProvider
-
-        config = KajiConfig(
-            repo_root=tmp_path,
-            paths=PathsConfig(),
-            execution=ExecutionConfig(default_timeout=300),
-            provider=ProviderConfig(
-                type="gitlab",
-                local=LocalProviderConfig(),
-                github=GitHubProviderConfig(),
-                gitlab=GitLabProviderConfig(repo="g/p"),
-            ),
-        )
-        provider = get_provider(config)
-        assert isinstance(provider, GitLabProvider)
         assert provider.repo_root == tmp_path

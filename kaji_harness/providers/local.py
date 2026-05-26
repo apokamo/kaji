@@ -309,7 +309,7 @@ class LocalProvider:
         default_branch: ``provider.local.default_branch``。``main`` 等。
         git_remote: ``provider.local.git_remote``。default ``"origin"``。
             ``IssueContext.git_remote`` の source。skill 内 ``git push`` / ``git fetch``
-            等の対象 remote 名（gl:6 で導入）。
+            等の対象 remote 名。
     """
 
     repo_root: Path
@@ -341,17 +341,12 @@ class LocalProvider:
 
     @property
     def _cache_dir_root(self) -> Path:
-        """``.kaji/cache/`` 直下。``gl-*.json`` / ``gh-*.json`` / ``.sync-meta.json``。
+        """``.kaji/cache/`` 直下。``gh-*.json`` / ``.sync-meta.json``。
 
-        issue ``gl:34`` で旧 ``.kaji/cache/issues/<n>.json`` layout を廃止し、
-        GitHub cache も ``gh-<n>.json`` (`view_cached_gitlab_issue` と対称) に
-        正規化した。
+        旧 ``.kaji/cache/issues/<n>.json`` layout を廃止し、
+        GitHub cache を ``gh-<n>.json`` に正規化した（issue #34）。
         """
         return self.repo_root / ".kaji" / "cache"
-
-    def _gitlab_cache_path(self, iid: str) -> Path:
-        """``.kaji/cache/gl-<iid>.json`` の絶対 path。"""
-        return self._cache_dir_root / f"gl-{iid}.json"
 
     def _github_cache_path(self, number: str) -> Path:
         """``.kaji/cache/gh-<number>.json`` の絶対 path。"""
@@ -671,6 +666,13 @@ class LocalProvider:
         labels: list[str] | None = None,
         limit: int | None = None,
     ) -> list[Issue]:
+        # Issue #191: legacy GitLab cache 残存時は entry 列挙より先に
+        # fail-fast する。local issue 1 件 + gl-*.json で limit=1 を渡されたとき
+        # に early return で guard を bypass する経路を塞ぐ（silent regression
+        # 防止）。詳細は ``sync._detect_legacy_forge_cache`` 参照。
+        from ..sync import _detect_legacy_forge_cache as _detect
+
+        _detect(self._cache_dir_root)
         out: list[Issue] = []
         if self._issues_dir.exists():
             for entry in sorted(self._issues_dir.iterdir()):
@@ -691,10 +693,6 @@ class LocalProvider:
                 out.append(issue)
                 if limit is not None and len(out) >= limit:
                     return out
-        # GitLab cache 由来 entry を末尾に append（issue ``local-p1-8``）。
-        # 表示 state の決定は ``_list_cached_gitlab_issues`` 内で正規化する。
-        out.extend(self._list_cached_gitlab_issues(state, labels))
-        # GitHub cache 由来 entry も併せて append (issue ``gl:34``)。
         out.extend(self._list_cached_github_issues(state, labels))
         if limit is not None:
             out = out[:limit]
@@ -767,10 +765,15 @@ class LocalProvider:
         """``.kaji/cache/gh-<n>.json`` から read-only に Issue を組み立てる。
 
         cache fixture が無ければ ``IssueNotFoundError``（``kaji sync from-github``
-        を案内）。issue ``gl:34`` で旧 ``.kaji/cache/issues/<n>.json`` layout から
-        ``view_cached_gitlab_issue`` と対称な ``gh-<n>.json`` wrapper schema へ
-        移行した。
+        を案内）。旧 ``.kaji/cache/issues/<n>.json`` layout から
+        ``gh-<n>.json`` wrapper schema へ移行した。
+
+        Issue #191 撤去後は legacy cache 残存時に ``SyncError`` で
+        fail-fast する（``_detect_legacy_forge_cache`` 経由）。
         """
+        from ..sync import _detect_legacy_forge_cache as _detect
+
+        _detect(self._cache_dir_root)
         if not _POS_INT_RE.match(number):
             raise ValueError(
                 f"cached issue number must be a positive integer (no leading zero): {number!r}"
@@ -789,101 +792,10 @@ class LocalProvider:
             raise LocalProviderError(f"cache JSON at {path} must be an object")
         return _cached_github_issue_from_payload(payload)
 
-    # -------- remote cache reader (gl:N) --------
-
-    def view_cached_gitlab_issue(self, iid: str) -> Issue:
-        """``.kaji/cache/gl-<iid>.json`` から read-only に Issue を組み立てる。
-
-        cache fixture が無ければ ``IssueNotFoundError``（``kaji sync from-gitlab``
-        を案内するメッセージ）。issue ``local-p1-8`` § インターフェース 3。
-        """
-        if not _POS_INT_RE.match(iid):
-            raise ValueError(
-                f"cached GitLab issue iid must be a positive integer (no leading zero): {iid!r}"
-            )
-        path = self._gitlab_cache_path(iid)
-        if not path.is_file():
-            raise IssueNotFoundError(
-                f"no cached GitLab issue at {path}. "
-                f"Run 'kaji sync from-gitlab' to populate the cache."
-            )
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise LocalProviderError(f"cache JSON malformed at {path}: {exc}") from exc
-        if not isinstance(payload, dict):
-            raise LocalProviderError(f"cache JSON at {path} must be an object")
-        return _cached_gitlab_issue_from_payload(payload)
-
-    def _list_cached_gitlab_issues(self, state: str, labels: list[str] | None) -> list[Issue]:
-        """``.kaji/cache/gl-*.json`` を読み state / labels filter 込みで返す。
-
-        表示 state の決定ルール (issue ``local-p1-8`` 設計 § list_issues):
-
-        - ``kaji_local.is_stale=true`` → 無条件 ``"closed"``（GitLab issue.state に依らない）
-        - ``is_stale=false`` AND ``issue.state="opened"`` → ``"open"``
-        - それ以外 → ``"closed"``
-
-        旧 schema（``kaji_local`` field 不在）は ``is_stale=false`` 扱い（後方互換）。
-        壊れた cache file は stderr に warning を書いて skip する。
-        """
-        cache_dir = self._cache_dir_root
-        if not cache_dir.exists():
-            return []
-        out: list[Issue] = []
-        for path in sorted(cache_dir.glob("gl-*.json")):
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as exc:
-                sys.stderr.write(f"warning: skipping malformed cache entry {path.name}: {exc}\n")
-                continue
-            if not isinstance(payload, dict):
-                sys.stderr.write(
-                    f"warning: skipping malformed cache entry {path.name}: not a JSON object\n"
-                )
-                continue
-            issue_payload = payload.get("issue") or {}
-            if not isinstance(issue_payload, dict):
-                continue
-            kl = payload.get("kaji_local") or {}
-            is_stale = bool(kl.get("is_stale", False)) if isinstance(kl, dict) else False
-            gl_state = str(issue_payload.get("state", "") or "")
-            if is_stale:
-                display_state = "closed"
-            elif gl_state == "opened":
-                display_state = "open"
-            else:
-                display_state = "closed"
-            if state != "all" and display_state != state:
-                continue
-            label_names_raw = issue_payload.get("labels") or []
-            label_names: list[str] = []
-            if isinstance(label_names_raw, list):
-                for entry in label_names_raw:
-                    if isinstance(entry, str):
-                        label_names.append(entry)
-                    elif isinstance(entry, dict):
-                        label_names.append(str(entry.get("name", "") or ""))
-            if labels:
-                if not all(label in label_names for label in labels):
-                    continue
-            iid = issue_payload.get("iid")
-            out.append(
-                Issue(
-                    id=f"gl:{iid}" if iid is not None else "",
-                    title=str(issue_payload.get("title", "") or ""),
-                    body=str(issue_payload.get("description", "") or ""),
-                    state=display_state,
-                    labels=[Label(name=name) for name in label_names if name],
-                    comments=[],
-                )
-            )
-        return out
-
     def _list_cached_github_issues(self, state: str, labels: list[str] | None) -> list[Issue]:
         """``.kaji/cache/gh-*.json`` を読み state / labels filter 込みで返す。
 
-        ``_list_cached_gitlab_issues`` と対称 (issue ``gl:34`` § 方針 § 3)。
+        issue #34 § 方針 § 3 で導入。
         GitHub REST `state` は ``"open"`` / ``"closed"`` の lower-case 直書き。
         Issue id は ``gh:<n>`` 形式。``comments`` は cache に含まれないため空。
         """
@@ -952,14 +864,14 @@ class LocalProvider:
 def _cached_github_issue_from_payload(payload: dict[str, object]) -> Issue:
     """GitHub cache wrapper JSON → Issue に整形（``view_cached_issue`` 用）。
 
-    wrapper schema (issue ``gl:34`` § IF-3):
+    wrapper schema (issue #34 § IF-3):
 
     - ``payload["issue"]``: ``gh api repos/<owner>/<repo>/issues`` の REST 生 JSON
       （snake_case の ``number`` / ``title`` / ``body`` / ``state`` / ``labels`` /
       ``user.login`` / ``created_at`` 等）
     - ``payload["kaji_local"]``: ``is_stale`` / ``last_seen_at`` / ``staled_at``
 
-    state 正規化（``view_cached_gitlab_issue`` と対称）:
+    state 正規化:
 
     - ``kaji_local.is_stale=true`` → ``"closed"``
     - ``is_stale=false`` AND ``issue.state="open"`` → ``"open"``
@@ -992,51 +904,6 @@ def _cached_github_issue_from_payload(payload: dict[str, object]) -> Issue:
         id=str(number) if number is not None else "",
         title=str(issue_payload.get("title", "") or ""),
         body=str(issue_payload.get("body", "") or ""),
-        state=state,
-        labels=labels,
-        comments=[],
-    )
-
-
-def _cached_gitlab_issue_from_payload(payload: dict[str, object]) -> Issue:
-    """GitLab cache wrapper JSON → Issue に整形（``view_cached_gitlab_issue`` 用）。
-
-    wrapper schema (issue ``local-p1-8`` 設計 § cache 配置):
-
-    - ``payload["issue"]``: GitLab REST 由来 issue JSON
-    - ``payload["kaji_local"]``: ``is_stale`` / ``last_seen_at`` / ``staled_at``
-
-    state 正規化:
-
-    - ``kaji_local.is_stale=true`` → ``"closed"``
-    - ``is_stale=false`` AND ``issue.state="opened"`` → ``"open"``
-    - それ以外 → ``"closed"``
-    """
-    issue_payload = payload.get("issue") or {}
-    if not isinstance(issue_payload, dict):
-        return Issue(id="", title="", body="", state="closed", labels=[], comments=[])
-    kl = payload.get("kaji_local") or {}
-    is_stale = bool(kl.get("is_stale", False)) if isinstance(kl, dict) else False
-    gl_state = str(issue_payload.get("state", "") or "")
-    if is_stale:
-        state = "closed"
-    elif gl_state == "opened":
-        state = "open"
-    else:
-        state = "closed"
-    label_names_raw = issue_payload.get("labels") or []
-    labels: list[Label] = []
-    if isinstance(label_names_raw, list):
-        for entry in label_names_raw:
-            if isinstance(entry, str):
-                labels.append(Label(name=entry))
-            elif isinstance(entry, dict):
-                labels.append(Label(name=str(entry.get("name", "") or "")))
-    iid = issue_payload.get("iid")
-    return Issue(
-        id=f"gl:{iid}" if iid is not None else "",
-        title=str(issue_payload.get("title", "") or ""),
-        body=str(issue_payload.get("description", "") or ""),
         state=state,
         labels=labels,
         comments=[],

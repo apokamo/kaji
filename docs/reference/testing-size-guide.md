@@ -74,6 +74,3 @@ def test_cli_end_to_end():
 |----------|------|--------------|
 | `large_local` | subprocess あり / 外部ネットワーク無し（kaji 自身の CLI 等） | `make test-large-local` |
 | `large_forge` | 実 GitHub API 疎通を要する E2E | （現状 `make test-large` 経由） |
-| `large_gitlab` | 実 GitLab API + `glab auth` + `KAJI_TEST_GITLAB_REPO` 必須 | `make test-large-gitlab` |
-
-`large_gitlab` は `make check` のデフォルトテスト実行（`pytest -m "not large_gitlab"`）から除外され、`make test-large-gitlab` を明示的に呼んだときだけ走る。実行前提は [`gitlab-mode.md` § 4](../cli-guides/gitlab-mode.md) を参照。

@@ -5,8 +5,8 @@
 ``IssueContext.git_remote`` を経由して prompt の ``[git_remote]`` に届く本体
 経路は CI で固定されていなかった。本ファイルでその空白を埋める:
 
-- Small: ``IssueContext.git_remote`` field default / explicit、3 ProviderConfig
-  の TOML default、3 Provider class の field default / explicit。
+- Small: ``IssueContext.git_remote`` field default / explicit、2 ProviderConfig
+  の TOML default、2 Provider class の field default / explicit。
 - Medium: TOML から ``provider.<type>.git_remote`` を parse、``get_provider``
   が ``git_remote`` を Provider に渡す、``resolve_issue_context`` が
   ``IssueContext.git_remote`` を埋める、``build_prompt`` が ``[git_remote]``
@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 from pathlib import Path
 from textwrap import dedent
@@ -30,7 +29,6 @@ import pytest
 from kaji_harness.config import (
     ExecutionConfig,
     GitHubProviderConfig,
-    GitLabProviderConfig,
     KajiConfig,
     LocalProviderConfig,
     PathsConfig,
@@ -40,7 +38,6 @@ from kaji_harness.models import Step, Workflow
 from kaji_harness.prompt import build_prompt
 from kaji_harness.providers import (
     GitHubProvider,
-    GitLabProvider,
     LocalProvider,
     get_provider,
 )
@@ -74,17 +71,17 @@ def test_issue_context_git_remote_explicit() -> None:
     """``IssueContext.git_remote`` に値を渡すとそのまま保持される。"""
     ctx = IssueContext(
         issue_id="42",
-        issue_ref="gl:42",
+        issue_ref="#42",
         issue_input="42",
         slug="x",
         branch_prefix="feat",
         branch_name="feat/42",
         worktree_dir="/tmp/wt",
         design_path="draft/design/issue-42-x.md",
-        provider_type="gitlab",
-        git_remote="gitlab",
+        provider_type="github",
+        git_remote="upstream",
     )
-    assert ctx.git_remote == "gitlab"
+    assert ctx.git_remote == "upstream"
 
 
 @pytest.mark.small
@@ -97,18 +94,6 @@ def test_github_provider_config_git_remote_default() -> None:
 def test_github_provider_config_git_remote_explicit() -> None:
     cfg = GitHubProviderConfig(repo="owner/name", git_remote="upstream")
     assert cfg.git_remote == "upstream"
-
-
-@pytest.mark.small
-def test_gitlab_provider_config_git_remote_default() -> None:
-    cfg = GitLabProviderConfig()
-    assert cfg.git_remote == "origin"
-
-
-@pytest.mark.small
-def test_gitlab_provider_config_git_remote_explicit() -> None:
-    cfg = GitLabProviderConfig(repo="group/project", git_remote="gitlab")
-    assert cfg.git_remote == "gitlab"
 
 
 @pytest.mark.small
@@ -133,18 +118,6 @@ def test_github_provider_git_remote_default(tmp_path: Path) -> None:
 def test_github_provider_git_remote_explicit(tmp_path: Path) -> None:
     p = GitHubProvider(repo="owner/name", repo_root=tmp_path, git_remote="upstream")
     assert p.git_remote == "upstream"
-
-
-@pytest.mark.small
-def test_gitlab_provider_git_remote_default(tmp_path: Path) -> None:
-    p = GitLabProvider(repo="group/project", repo_root=tmp_path)
-    assert p.git_remote == "origin"
-
-
-@pytest.mark.small
-def test_gitlab_provider_git_remote_explicit(tmp_path: Path) -> None:
-    p = GitLabProvider(repo="group/project", repo_root=tmp_path, git_remote="gitlab")
-    assert p.git_remote == "gitlab"
 
 
 @pytest.mark.small
@@ -197,31 +170,6 @@ def test_config_parses_provider_github_git_remote(tmp_path: Path) -> None:
 
 
 @pytest.mark.medium
-def test_config_parses_provider_gitlab_git_remote(tmp_path: Path) -> None:
-    _write_config(
-        tmp_path,
-        """
-        [paths]
-        artifacts_dir = ".kaji-artifacts"
-        skill_dir = ".claude/skills"
-
-        [execution]
-        default_timeout = 1800
-
-        [provider]
-        type = "gitlab"
-
-        [provider.gitlab]
-        repo = "group/project"
-        git_remote = "gitlab"
-        """,
-    )
-    cfg = KajiConfig.discover(start_dir=tmp_path)
-    assert cfg.provider is not None
-    assert cfg.provider.gitlab.git_remote == "gitlab"
-
-
-@pytest.mark.medium
 def test_config_parses_provider_local_git_remote(tmp_path: Path) -> None:
     _write_config(
         tmp_path,
@@ -269,7 +217,6 @@ def test_config_provider_git_remote_default_when_omitted(tmp_path: Path) -> None
     cfg = KajiConfig.discover(start_dir=tmp_path)
     assert cfg.provider is not None
     assert cfg.provider.github.git_remote == "origin"
-    assert cfg.provider.gitlab.git_remote == "origin"
     assert cfg.provider.local.git_remote == "origin"
 
 
@@ -331,25 +278,6 @@ def test_get_provider_flows_git_remote_to_github_provider(tmp_path: Path) -> Non
 
 
 @pytest.mark.medium
-def test_get_provider_flows_git_remote_to_gitlab_provider(tmp_path: Path) -> None:
-    paths, exec_cfg = _base_paths(tmp_path)
-    cfg = KajiConfig(
-        repo_root=tmp_path,
-        paths=paths,
-        execution=exec_cfg,
-        provider=ProviderConfig(
-            type="gitlab",
-            local=LocalProviderConfig(),
-            github=GitHubProviderConfig(),
-            gitlab=GitLabProviderConfig(repo="group/project", git_remote="gitlab"),
-        ),
-    )
-    provider = get_provider(cfg)
-    assert isinstance(provider, GitLabProvider)
-    assert provider.git_remote == "gitlab"
-
-
-@pytest.mark.medium
 def test_get_provider_flows_git_remote_to_local_provider(tmp_path: Path) -> None:
     # gl:21: ``get_provider()`` の local 経路は ``resolve_main_worktree()`` を踏むため、
     # tmp_path を本物の git repo として初期化しておく。
@@ -398,36 +326,6 @@ def test_github_provider_resolve_issue_context_flows_git_remote(tmp_path: Path) 
         ctx = provider.resolve_issue_context("153")
     assert ctx.git_remote == "upstream"
     assert ctx.provider_type == "github"
-
-
-@pytest.mark.medium
-def test_gitlab_provider_resolve_issue_context_flows_git_remote(tmp_path: Path) -> None:
-    """GitLabProvider の `IssueContext` に `git_remote` が流れる。"""
-
-    def _ok(stdout: str = "", returncode: int = 0) -> Any:
-        from subprocess import CompletedProcess
-
-        return CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr="")
-
-    provider = GitLabProvider(repo="group/project", repo_root=tmp_path, git_remote="gitlab")
-    issue_payload = {
-        "iid": 42,
-        "title": "Add cool feature",
-        "description": "",
-        "state": "opened",
-        "labels": ["type:feature"],
-    }
-    outputs = iter([_ok(stdout=json.dumps(issue_payload)), _ok(stdout="[]")])
-    with (
-        patch("kaji_harness.providers.gitlab.shutil.which", return_value="/usr/bin/glab"),
-        patch(
-            "kaji_harness.providers.gitlab.subprocess.run",
-            side_effect=lambda *a, **kw: next(outputs),
-        ),
-    ):
-        ctx = provider.resolve_issue_context("42")
-    assert ctx.git_remote == "gitlab"
-    assert ctx.provider_type == "gitlab"
 
 
 @pytest.mark.medium
@@ -521,15 +419,15 @@ def test_build_prompt_injects_git_remote_explicit() -> None:
     """`IssueContext.git_remote` の explicit 値が prompt 行に反映される。"""
     ctx = IssueContext(
         issue_id="42",
-        issue_ref="gl:42",
+        issue_ref="#42",
         issue_input="42",
         slug="x",
         branch_prefix="feat",
         branch_name="feat/42",
         worktree_dir="/p/kaji-feat-42",
         design_path="draft/design/issue-42-x.md",
-        provider_type="gitlab",
-        git_remote="gitlab",
+        provider_type="github",
+        git_remote="upstream",
     )
     prompt = build_prompt(
         _step(),
@@ -538,4 +436,4 @@ def test_build_prompt_injects_git_remote_explicit() -> None:
         workflow=_workflow(),
         issue_context=ctx,
     )
-    assert "- git_remote: gitlab" in prompt
+    assert "- git_remote: upstream" in prompt

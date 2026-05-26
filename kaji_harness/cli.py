@@ -154,7 +154,7 @@ def _execute_cli_once(
     #    terminate の returncode は、CLI の SIGTERM ハンドリング方式（-15 / 143 / 137 等）
     #    に依らず失敗根拠にしない。Claude Code CLI は SIGTERM を trap し shell 慣例の
     #    正値（128+15=143）で exit するため、returncode > 0 を失敗根拠にすると成功
-    #    ステップを誤って例外化する（gl:25）。
+    #    ステップを誤って例外化する。
     #  - 失敗は terminal event 自体の failure シグナル（adapter.is_terminal_failure）か、
     #    stream 中の error イベント集約（error_messages）でのみ判定する。
     if result.terminal_seen:

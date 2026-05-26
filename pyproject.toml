@@ -68,5 +68,4 @@ markers = [
     "large: Large tests - real CLI, E2E",
     "large_local: Large tests with subprocess but no external network (Phase 3-e+)",
     "large_forge: Large tests requiring real GitHub API (post-recovery)",
-    "large_gitlab: Large tests requiring real GitLab API (provider=gitlab E2E)",
 ]

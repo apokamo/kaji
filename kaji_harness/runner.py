@@ -26,7 +26,6 @@ from .models import CostInfo, Verdict, Workflow
 from .prompt import build_prompt
 from .providers import IssueContext, IssueProvider, PRContext, get_provider, normalize_id
 from .providers.github import GitHubProviderError
-from .providers.gitlab import GitLabProviderError
 from .providers.local import LocalProvider
 from .skill import validate_skill_exists
 from .state import SessionState
@@ -173,7 +172,7 @@ class WorkflowRunner:
     ) -> PRContext | None:
         """provider から `PRContext` を解決。known provider error のみ WARN + None。
 
-        catch する範囲は ``GitLabProviderError`` / ``GitHubProviderError`` のみ。
+        catch する範囲は ``GitHubProviderError`` のみ。
         それ以外（``AttributeError`` / ``TypeError`` 等の実装バグ、
         ``KeyboardInterrupt`` 等の signal 系）は raise を継承する。
         ``docs/reference/python/error-handling.md`` § 基本原則 1「握り潰し禁止」
@@ -181,7 +180,7 @@ class WorkflowRunner:
         """
         try:
             return provider.resolve_pr_context(branch_name)
-        except (GitLabProviderError, GitHubProviderError) as exc:
+        except GitHubProviderError as exc:
             sys.stderr.write(
                 f"WARNING: resolve_pr_context for branch {branch_name!r} failed: {exc}\n"
                 f"  pr_id / pr_ref will not be auto-injected; "

@@ -184,7 +184,7 @@ ln -s /home/user/dev/kaji/.venv /home/user/dev/kaji-feat-42/.venv
 
 `.kaji/config.local.toml`（provider overlay）は `.gitignore` 管理されている。`git worktree add` は **コミット済み（tracked）ファイルだけを checkout** するため、gitignored な overlay は新規 worktree にコピーされない。
 
-その結果、overlay でメインリポジトリと異なる provider（例: tracked `config.toml` は `type = "github"`、overlay は `type = "gitlab"`）を選んでいる場合、**新規 worktree では overlay が効かず tracked default にフォールバックする**。`kaji issue` / `kaji pr` / `kaji run` が意図と異なる forge に routing され得る。
+その結果、overlay でメインリポジトリと異なる provider（例: tracked `config.toml` は `type = "github"`、overlay は `type = "local"`）を選んでいる場合、**新規 worktree では overlay が効かず tracked default にフォールバックする**。`kaji issue` / `kaji pr` / `kaji run` が意図と異なる provider に routing され得る。
 
 worktree 作成後に overlay を使う場合は、いずれかで揃える:
 

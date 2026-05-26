@@ -1,8 +1,8 @@
 # GitHub Mode CLI Guide
 
 `kaji` を `provider.type = "github"` で運用するためのセットアップ / 運用 / 前提
-ガイド。`gitlab-mode.md` と対称な構成で、GitHub mode 固有の前提・設定・命名
-規約・トラブルシュートを 1 ファイルで提供する。
+ガイド。GitHub mode 固有の前提・設定・命名規約・トラブルシュートを 1 ファイルで
+提供する。
 
 ## いつ使うか
 
@@ -10,12 +10,12 @@
 - 検証期間中の local-mode（`docs/cli-guides/local-mode.md`）から GitHub を本格 forge として採用する移行段階
 - `kaji sync from-github` で GitHub Issue を local cache に取り込みたい場合
 
-> ⚠️ **auto-close keyword 注意**: GitHub も commit message / PR description
-> 内の `Closes #N` / `Fixes #N` / `Resolves #N` 等を auto-close keyword として
+> ⚠️ **auto-close keyword 注意**: GitHub も PR description 内の
+> `Closes #N` / `Fixes #N` / `Resolves #N` 等を auto-close keyword として
 > 解釈し、default branch への merge で **無関係な issue を自動 close する**。
-> 回避規約は GitLab 用に書かれた
-> [docs/dev/shared_skill_rules.md § GitLab auto close keyword 回避](../dev/shared_skill_rules.md#gitlab-auto-close-keyword-回避)
-> の規則がそのまま適用される（公式: [Closing issues using keywords](https://docs.github.com/en/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue#linking-a-pull-request-to-an-issue-using-a-keyword)）。
+> 回避規約は
+> [docs/dev/shared_skill_rules.md § auto close keyword 回避](../dev/shared_skill_rules.md#auto-close-keyword-回避)
+> を参照（公式: [Closing issues using keywords](https://docs.github.com/en/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue#linking-a-pull-request-to-an-issue-using-a-keyword)）。
 
 ## 1. 前提
 
@@ -73,8 +73,7 @@ git_remote = "origin"               # 任意。default `"origin"`。hybrid setup
 - `gh --repo <owner>/<name>` および `gh api repos/<owner>/<name>/...` に渡される
 - `default_branch` を省略すると `main`
 - `git_remote` は skill 内の `git push` / `git fetch` 等が対象とする git remote
-  名。**default `"origin"`**。hybrid setup（GitLab を origin にしている場合等）
-  では `"github"` 等を指定する
+  名。**default `"origin"`**
 
 ### 1.4 `.github/labels.yml` の連動
 
@@ -82,7 +81,7 @@ kaji は GitHub project 直下の `.github/labels.yml` を label の正本とし
 
 ## 2. `kaji issue` / `kaji pr` の挙動
 
-`provider.type = "github"` 配下では `kaji issue` / `kaji pr` は **GitLab mode と同じ skill 互換 contract** で動作する（skill 側に GitHub/GitLab 分岐を持ち込まない原則）。
+`provider.type = "github"` 配下では `kaji issue` / `kaji pr` は skill 互換 contract で動作する。
 
 - `kaji pr create` / `view` / `list` / `comment` / `review` / `merge` / `review-comments` / `reviews` / `reply-to-comment` は GitHub でも同じ呼び出し方が通る
 - `kaji pr merge` は `--squash` / `--rebase` flag を **kaji 側で拒否**（`--no-ff` only の merge 規約。`gh pr merge --merge` 固定で叩く）
@@ -106,7 +105,7 @@ kaji issue view gh:42
 kaji sync status
 ```
 
-cache layout は `.kaji/cache/gh-<n>.json`（`gitlab-mode.md` § 3 の `gl-<iid>.json` と対称）。schema は wrapper を含む:
+cache layout は `.kaji/cache/gh-<n>.json`。schema は wrapper を含む:
 
 ```json
 {
@@ -167,11 +166,9 @@ kaji sync status            # forge=github / repo=<owner>/<name> / cached=<N>
 
 ### 4.5 commit / PR description の `Fix #N` が無関係 GitHub issue を auto close
 
-GitHub の closing keyword（`Closes` / `Fix(es|ed)` / `Resolves` 等 + `#N`）は default branch への merge で当該 issue を自動 close する（[公式](https://docs.github.com/en/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue#linking-a-pull-request-to-an-issue-using-a-keyword)）。回避規約は [docs/dev/shared_skill_rules.md § GitLab auto close keyword 回避](../dev/shared_skill_rules.md#gitlab-auto-close-keyword-回避) の grep 手順と placeholder 規約が GitHub にもそのまま適用される（hazard pattern / 検出 regex は両 forge で同形）。
+GitHub の closing keyword（`Closes` / `Fix(es|ed)` / `Resolves` 等 + `#N`）は default branch への merge で当該 issue を自動 close する（[公式](https://docs.github.com/en/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue#linking-a-pull-request-to-an-issue-using-a-keyword)）。回避規約は [docs/dev/shared_skill_rules.md § auto close keyword 回避](../dev/shared_skill_rules.md#auto-close-keyword-回避) の grep 手順と placeholder 規約を参照。
 
 ## 5. 参照
 
-- 互換 contract: [draft/lab/gitlab-validation/kaji-pr-mr-bridge.md](../../draft/lab/gitlab-validation/kaji-pr-mr-bridge.md)
-- GitLab mode（対称ガイド）: [docs/cli-guides/gitlab-mode.md](gitlab-mode.md)
 - Local mode: [docs/cli-guides/local-mode.md](local-mode.md)
 - 設計書: `draft/design/issue-34-github-pr-context-auto-injection-kaji-sy.md`

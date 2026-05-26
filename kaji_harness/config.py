@@ -48,30 +48,6 @@ class GitHubProviderConfig:
 
 
 @dataclass(frozen=True)
-class GitLabProviderConfig:
-    """``[provider.gitlab]`` セクション。
-
-    Attributes:
-        repo: ``group/project`` 形式（GitLab namespace path）。``provider.type='gitlab'``
-            利用時は必須（空文字なら ``get_provider()`` が ``ValueError``）。
-            ``glab --repo`` および ``glab api projects/<URL-encoded repo>`` に渡す。
-        default_branch: ``main`` / ``master`` 等の既定 branch 名。
-        git_remote: skill 内の ``git push`` / ``git fetch`` 等が対象とする
-            git remote 名。default ``"origin"``。``origin = github``（suspended）
-            + ``gitlab = gitlab.com`` の hybrid setup では ``"gitlab"`` を指定する
-            （gl:6 で導入）。
-
-    Note:
-        ``hostname`` フィールドは持たない。EPIC `local-p1-4` 確定事項 #3
-        「self-hosted 非対応 / ``gitlab.com`` 前提」の論理的帰結。
-    """
-
-    repo: str = ""
-    default_branch: str = "main"
-    git_remote: str = "origin"
-
-
-@dataclass(frozen=True)
 class ProviderConfig:
     """``[provider]`` 設定（Phase 3-c で導入、optional）。
 
@@ -79,13 +55,9 @@ class ProviderConfig:
     fallback）。Phase 3-e で必須化される（fail-fast）。
     """
 
-    type: Literal["github", "local", "gitlab"]
+    type: Literal["github", "local"]
     local: LocalProviderConfig
     github: GitHubProviderConfig
-    # ``GitLabProviderConfig`` は frozen=True で mutable state を持たないため、
-    # shared default インスタンスでも問題ない。既存 callsite（``ProviderConfig(type=..., local=..., github=...)``）
-    # の互換性を保つため default を持つ。
-    gitlab: GitLabProviderConfig = GitLabProviderConfig()
 
 
 @dataclass(frozen=True)
@@ -98,7 +70,7 @@ class KajiConfig:
             does not copy the gitignored overlay into a new worktree, so a
             feature worktree typically has this ``False``. Used by
             ``provider_overlay_divergence_warning`` to detect a silent
-            provider-resolution divergence (Issue gl:28).
+            provider-resolution divergence.
     """
 
     repo_root: Path
@@ -212,7 +184,7 @@ class KajiConfig:
         Returns:
             ``(provider, overlay_present)`` の tuple。``overlay_present`` は
             現 worktree の ``.kaji/config.local.toml`` が存在したかを表す
-            （`[provider]` セクションの有無は問わない）。Issue gl:28。
+            （`[provider]` セクションの有無は問わない）。
         """
         provider_data = data.get("provider")
         if provider_data is not None and not isinstance(provider_data, dict):
@@ -243,7 +215,7 @@ class KajiConfig:
             merged = dict(provider_data)
         if overlay_provider is not None:
             for k, v in overlay_provider.items():
-                if k in {"github", "local", "gitlab"} and isinstance(v, dict):
+                if k in {"github", "local"} and isinstance(v, dict):
                     base_sub = merged.get(k) or {}
                     if not isinstance(base_sub, dict):
                         base_sub = {}
@@ -256,10 +228,10 @@ class KajiConfig:
         if ptype_raw is None or not isinstance(ptype_raw, str):
             raise ConfigLoadError(path, "provider.type is required (string)")
         ptype = ptype_raw.strip()
-        if ptype not in {"github", "local", "gitlab"}:
+        if ptype not in {"github", "local"}:
             raise ConfigLoadError(
                 path,
-                f"provider.type must be 'github', 'local', or 'gitlab', got {ptype!r}",
+                f"provider.type must be 'github' or 'local', got {ptype!r}",
             )
 
         github_raw = merged.get("github") or {}
@@ -321,31 +293,12 @@ class KajiConfig:
             git_remote=local_git_remote_raw,
         )
 
-        gitlab_raw = merged.get("gitlab") or {}
-        if not isinstance(gitlab_raw, dict):
-            raise ConfigLoadError(path, "[provider.gitlab] must be a table")
-        gl_repo_raw = gitlab_raw.get("repo")
-        if gl_repo_raw is not None and not isinstance(gl_repo_raw, str):
-            raise ConfigLoadError(path, "provider.gitlab.repo must be a string")
-        gl_default_branch_raw = gitlab_raw.get("default_branch", "main") or "main"
-        if not isinstance(gl_default_branch_raw, str):
-            raise ConfigLoadError(path, "provider.gitlab.default_branch must be a string")
-        gl_git_remote_raw = gitlab_raw.get("git_remote", "origin") or "origin"
-        if not isinstance(gl_git_remote_raw, str):
-            raise ConfigLoadError(path, "provider.gitlab.git_remote must be a string")
-        gitlab_cfg = GitLabProviderConfig(
-            repo=str(gl_repo_raw or ""),
-            default_branch=gl_default_branch_raw,
-            git_remote=gl_git_remote_raw,
-        )
-
         del repo_root  # reserved for future cross-checks
         return (
             ProviderConfig(
                 type=ptype,  # type: ignore[arg-type]
                 local=local_cfg,
                 github=github_cfg,
-                gitlab=gitlab_cfg,
             ),
             overlay_present,
         )

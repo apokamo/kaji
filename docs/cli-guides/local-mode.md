@@ -5,7 +5,7 @@
 
 ## いつ使うか
 
-- GitHub 不通 / 個人開発で issue / PR を立てたくない / GitLab 移行検討中
+- GitHub 不通 / 個人開発で issue / PR を立てたくない
 - 数週間〜数ヶ月の長期 local 運用も想定
 
 ## 1. インストール
@@ -133,7 +133,7 @@ kaji run .kaji/wf/feature-development-local.yaml local-pc1-1
 
 `kaji issue context` は frontmatter `branch_prefix` 優先 → `type:*` ラベル
 mapping → `chore` fallback の優先順で context を解決する（`provider.type='local'`
-/ `'github'` / `'gitlab'` のいずれでも利用可能）。`/issue-start` skill が
+/ `'github'` のいずれでも利用可能）。`/issue-start` skill が
 worktree / branch 名を導出するために使う。
 
 `feature-development-local.yaml` は `feature-development.yaml` の最終 step
@@ -205,11 +205,10 @@ git stage + commit を **同一 process 内で atomic に** 行う。実装は
   （`nothing to commit` での exit 1 を避けるため）
 - skill が `--commit` を毎呼び出しに付与することで、`/issue-close` の
   base worktree clean 前提（§ 6 Step 2）が成立する
-- `provider.type='github'` / `'gitlab'` 配下では `--commit` は **silent strip**
-  され、CLI 引数として認識されつつ何もしない（passthrough 経路の冪等性のため。
-  詳細は [GitLab Mode CLI Guide § 2](gitlab-mode.md) 参照）
+- `provider.type='github'` 配下では `--commit` は **silent strip**
+  され、CLI 引数として認識されつつ何もしない（passthrough 経路の冪等性のため）
 
-### main worktree への書き込み固定（Issue gl:11）
+### main worktree への書き込み固定（main worktree redirection）
 
 `provider.type='local'` 配下では、`kaji issue {create,edit,comment,close}` の
 ファイル書き込み・`--commit` 動作は **cwd と無関係に
@@ -228,12 +227,11 @@ git stage + commit を **同一 process 内で atomic に** 行う。実装は
 | 症状 | 原因 / 対処 |
 |------|-------------|
 | `LocalProviderError: no worktree found for branch 'main'` | `default_branch` を checkout している worktree が無い。`git worktree add ../main main` を実行するか、`provider.local.default_branch` を実在ブランチに合わせる |
-| `LocalProviderError: git CLI not found on PATH ...` | `git` コマンドが PATH 上に無い。`git` をインストールして PATH を通すか、`provider.type` を `local` 以外に切り替える（gl:21） |
-| `LocalProviderError: 'git -C ... worktree list' failed (exit ...)` | `provider.type='local'` の設定ディレクトリが git repository でない。対象ディレクトリで `git init` を実行する（または既に init 済みの worktree から起動する）、もしくは `provider.type` を切り替える（gl:21） |
+| `LocalProviderError: git CLI not found on PATH ...` | `git` コマンドが PATH 上に無い。`git` をインストールして PATH を通すか、`provider.type` を `local` 以外に切り替える |
+| `LocalProviderError: 'git -C ... worktree list' failed (exit ...)` | `provider.type='local'` の設定ディレクトリが git repository でない。対象ディレクトリで `git init` を実行する（または既に init 済みの worktree から起動する）、もしくは `provider.type` を切り替える |
 | `warning: multiple worktrees checking out 'main'` (stderr) | 防御的入力に対する警告。最初に見つかった worktree を採用するが、通常 git 操作では発生しない |
 
-GitHub / GitLab provider の `repo_root` は cwd 起点のまま（`gh` / `glab` CLI が
-cwd に依存しないため、影響なし）。
+GitHub provider の `repo_root` は cwd 起点のまま（`gh` CLI が cwd に依存しないため、影響なし）。
 
 ## 7. ファイル / レイアウト
 
@@ -245,8 +243,7 @@ cwd に依存しないため、影響なし）。
 ├── issues/local-<machine>-<n>-<slug>/
 │   ├── issue.md         (frontmatter + body)
 │   └── comments/<seq>-<machine>.md
-├── cache/gh-<n>.json       (GitHub Issue read-only cache。`kaji sync from-github` で populate)
-└── cache/gl-<iid>.json     (GitLab Issue read-only cache。`kaji sync from-gitlab` で populate)
+└── cache/gh-<n>.json       (GitHub Issue read-only cache。`kaji sync from-github` で populate)
 ```
 
 ## 8. `kaji pr` の挙動（Phase 4 以降）
@@ -278,64 +275,13 @@ GitHub mode に戻したい場合は `.kaji/config.local.toml` の `[provider] t
 ## 9. 既知の制限
 
 - Windows native は現時点では対応対象外。Windows では WSL 上で使う
-- `kaji sync from-gitlab` / `kaji sync status` は実装済（issue `local-p1-8`、後述 § 9b）。`provider.type='local'` 配下から `gl:N` で GitLab Issue を参照する経路を提供する
-- `kaji sync from-github` も実装済（issue `gl:34`、後述 § 9c）。`provider.type='local'` 配下から `gh:N` で GitHub Issue を参照する経路を提供する
-
-## 9b. `kaji sync from-gitlab` / `kaji sync status`（GitLab cache populate）
-
-`provider.type='local'` 配下から `gl:N` で GitLab Issue を参照する場合、
-あらかじめ `kaji sync from-gitlab` で cache を populate する:
-
-> GitLab project を kaji の primary forge として `provider.type='gitlab'` で
-> 運用する場合のセットアップ / 必須前提（merge method / 認証）/ `glab` 認証は
-> [GitLab Mode CLI Guide](gitlab-mode.md) を参照。本節は **`local` mode から
-> read-only で GitLab Issue を参照** するための cache populate 経路のみを扱う。
-
-```bash
-# 初回 sync（[provider.gitlab].repo を config に書いておく場合）
-$ kaji sync from-gitlab
-Fetching open issues from gitlab.com:owner-group/repo-name ...
-  page 1: 47 issues
-Wrote 47 issues to .kaji/cache/.
-Sync completed at 2026-05-10T08:42:13Z (47 issues, 1 pages, 1.2s).
-
-# repo を CLI 引数で指定する場合
-$ kaji sync from-gitlab --repo owner-group/repo-name
-
-# cache から read
-$ kaji issue view gl:42
-
-# 統合表示
-$ kaji issue list
-local-pc1-1  open    Local issue 1
-gl:42        open    Add foo bar
-gl:43        open    Wire baz
-
-# sync 状態の確認
-$ kaji sync status
-forge        gitlab
-repo         owner-group/repo-name
-last_sync    2026-05-10T08:42:13Z
-elapsed      0h 5m 12s (312s)
-cached       47 (gl-*.json under .kaji/cache/)
-```
-
-**スコープ**:
-
-- 同期対象は **GitLab project の open Issue 全件**（初期実装スコープ）
-- `--include-closed` / `--state` / `--since` 等の追加 flag は本 release では
-  未実装で、指定すると `exit 2` で fail-fast する（silent ignore しない）
-- ローカル cache に存在するが GitLab 側で取得結果に含まれない（= closed 化された）
-  Issue は cache に残り、`kaji_local.is_stale=true` フラグが立つ。`kaji issue list`
-  の既定 (`--state open`) では出ず、`--state closed` または `--state all` で
-  確認できる
+- `kaji sync from-github` / `kaji sync status` は実装済（後述 § 9c）。`provider.type='local'` 配下から `gh:N` で GitHub Issue を参照する経路を提供する
 
 ## 9c. `kaji sync from-github`（GitHub cache populate）
 
 `provider.type='local'` 配下から `gh:N` で GitHub Issue を参照する場合、
-あらかじめ `kaji sync from-github` で cache を populate する。`from-gitlab` と
-対称な実装で、cache は `.kaji/cache/gh-<n>.json`（schema は `gl-<iid>.json` と
-同形、`forge` field のみ `"github"`）。
+あらかじめ `kaji sync from-github` で cache を populate する。cache は
+`.kaji/cache/gh-<n>.json`。
 
 > GitHub repo を kaji の primary forge として `provider.type='github'` で運用
 > する場合のセットアップ / 認証は [GitHub Mode CLI Guide](github-mode.md) を
@@ -363,7 +309,7 @@ cached       47 (gh-*.json under .kaji/cache/)
 
 - 同期対象は **GitHub repo の open Issue 全件**。GitHub REST `/issues` endpoint は PR も返すため、`pull_request` キーを持つ entry は除外される
 - `--include-closed` / `--state` / `--since` 等の追加 flag は本 release では未実装で、指定すると `exit 2` で fail-fast する（silent ignore しない）
-- ローカル cache に存在するが GitHub 側で取得結果に含まれない Issue は cache に残り、`kaji_local.is_stale=true` フラグが立つ（`from-gitlab` と同形）
+- ローカル cache に存在するが GitHub 側で取得結果に含まれない Issue は cache に残り、`kaji_local.is_stale=true` フラグが立つ
 
 ## 9a. 検証期間運用について
 
