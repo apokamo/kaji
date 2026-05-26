@@ -666,6 +666,13 @@ class LocalProvider:
         labels: list[str] | None = None,
         limit: int | None = None,
     ) -> list[Issue]:
+        # Issue #191: legacy GitLab cache 残存時は entry 列挙より先に
+        # fail-fast する。local issue 1 件 + gl-*.json で limit=1 を渡されたとき
+        # に early return で guard を bypass する経路を塞ぐ（silent regression
+        # 防止）。詳細は ``sync._detect_legacy_forge_cache`` 参照。
+        from ..sync import _detect_legacy_forge_cache as _detect
+
+        _detect(self._cache_dir_root)
         out: list[Issue] = []
         if self._issues_dir.exists():
             for entry in sorted(self._issues_dir.iterdir()):
@@ -686,13 +693,6 @@ class LocalProvider:
                 out.append(issue)
                 if limit is not None and len(out) >= limit:
                     return out
-        # GitHub cache 由来 entry を末尾に append。
-        # Issue #191 で `_detect_legacy_forge_cache()` を冒頭で呼び、legacy
-        # cache 残存時は SyncError で fail-fast する（silent regression
-        # 防止）。詳細は ``sync._detect_legacy_forge_cache`` 参照。
-        from ..sync import _detect_legacy_forge_cache as _detect
-
-        _detect(self._cache_dir_root)
         out.extend(self._list_cached_github_issues(state, labels))
         if limit is not None:
             out = out[:limit]

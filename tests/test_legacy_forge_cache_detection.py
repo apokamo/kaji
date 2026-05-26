@@ -183,6 +183,27 @@ def test_gl_files_only_raises_from_list_issues(tmp_path: Path) -> None:
     assert "legacy GitLab cache" in str(exc_info.value)
 
 
+@pytest.mark.medium
+def test_gl_files_only_raises_from_list_issues_with_limit(tmp_path: Path) -> None:
+    """``list_issues(limit=...)`` 早期 return 経路でも guard を bypass しない。
+
+    local issue が ``limit`` 件以上存在する場合、guard を local 列挙の後ろに
+    置くと early return で legacy cache 検出が skip される。entry 列挙より
+    前に guard を置く契約の regression test。
+    """
+    config = _make_config(tmp_path)
+    # local issue を 1 件作成
+    provider_pre = LocalProvider(repo_root=tmp_path, machine_id=config.provider.local.machine_id)
+    provider_pre.create_issue(title="seed local issue", body="x", labels=[])
+    # legacy gl-*.json を残置
+    cache_dir = tmp_path / ".kaji" / "cache"
+    _seed_legacy_gl_file(cache_dir, iid=42)
+    provider = LocalProvider(repo_root=tmp_path, machine_id=config.provider.local.machine_id)
+    with pytest.raises(SyncError) as exc_info:
+        provider.list_issues(state="open", limit=1)
+    assert "legacy GitLab cache" in str(exc_info.value)
+
+
 # ---------------------------------------------------------------------------
 # Medium: legitimate cache passes through
 # ---------------------------------------------------------------------------

@@ -440,6 +440,28 @@ class TestSyncStatusGitHubRoundTrip:
 
 
 @pytest.mark.medium
+class TestSyncFromGitlabRemoved:
+    """Issue #191 撤去契約の bridging test。
+
+    設計書 § テスト戦略 § Small § 新規 bridging test #3 で要求された
+    ``kaji sync from-gitlab`` の subparser fail-fast を恒久テストとして固定する。
+    """
+
+    def test_from_gitlab_subparser_removed(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo_root = _bootstrap_local_repo(tmp_path)
+        monkeypatch.chdir(repo_root)
+        from kaji_harness.cli_main import main
+
+        with pytest.raises(SystemExit) as exc_info:
+            main(["sync", "from-gitlab"])
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "from-gitlab" in err
+
+
+@pytest.mark.medium
 class TestRunnerResolvePrContextGitHubError:
     """runner._resolve_pr_context_safe catches GitHubProviderError."""
 
