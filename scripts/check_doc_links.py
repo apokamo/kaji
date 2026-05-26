@@ -24,6 +24,21 @@ LINK_PATTERN = re.compile(r"(?<!\!)\[[^\]]*\]\(([^)\s]+(?:\s+\"[^\"]*\")?)\)")
 
 HEADING_PATTERN = re.compile(r"^ {0,3}(#{1,6})\s+(.*)$")
 
+# Fenced code block fences (CommonMark 0.31.2 § 4.5). Indented up to 3 spaces.
+# Backtick opening fences may not contain a backtick in the info string.
+_FENCE_OPEN_BT = re.compile(r"^ {0,3}(`{3,})([^`]*)$")
+_FENCE_OPEN_TILDE = re.compile(r"^ {0,3}(~{3,})(.*)$")
+
+# Inline code span (CommonMark 0.31.2 § 6.1): a backtick string of length N
+# closes with a backtick string of the same length N. Line endings allowed
+# inside (treated like spaces).
+_CODE_SPAN_PATTERN = re.compile(
+    r"(?<!`)(`+)(?!`)"
+    r"(?:(?!\1)[^`]|`+(?!\1))*?"
+    r"(?<!`)\1(?!`)",
+    re.DOTALL,
+)
+
 EXTERNAL_PREFIXES = ("https://", "http://", "mailto:", "tel:", "ftp://")
 
 
@@ -89,8 +104,9 @@ def validate_all(files: list[Path], repo_root: Path) -> list[str]:
     for filepath in files:
         content = filepath.read_text(encoding="utf-8")
         lines = content.split("\n")
+        stripped = _strip_code_segments(content)
 
-        for match in LINK_PATTERN.finditer(content):
+        for match in LINK_PATTERN.finditer(stripped):
             raw_target = match.group(1).split()[0]
             line_num = _index_to_line(match.start(), lines)
             err = validate_link(filepath, raw_target, line_num, repo_root, heading_cache)
@@ -200,6 +216,52 @@ def _slugify(text: str, slug_counts: dict[str, int]) -> str:
     count = slug_counts.get(slug, 0)
     slug_counts[slug] = count + 1
     return slug if count == 0 else f"{slug}-{count}"
+
+
+def _strip_code_segments(content: str) -> str:
+    """Blank out fenced code blocks and inline code spans for link extraction.
+
+    Returns a string of the same length as ``content`` where characters inside
+    Markdown fenced code blocks (CommonMark § 4.5) and inline code spans
+    (CommonMark § 6.1) are replaced with spaces. Newline positions are
+    preserved so that ``_index_to_line`` returns identical results for
+    matches found in the stripped output.
+
+    Indented code blocks (4-space / tab indented) are intentionally out of
+    scope (see Issue #190 design).
+    """
+    lines = content.split("\n")
+    out_lines: list[str] = []
+    fence_char: str | None = None
+    fence_len = 0
+    for line in lines:
+        if fence_char is None:
+            m = _FENCE_OPEN_BT.match(line) or _FENCE_OPEN_TILDE.match(line)
+            if m:
+                fence_char = m.group(1)[0]
+                fence_len = len(m.group(1))
+                out_lines.append(" " * len(line))
+            else:
+                out_lines.append(line)
+        else:
+            out_lines.append(" " * len(line))
+            if _is_closing_fence(line, fence_char, fence_len):
+                fence_char = None
+                fence_len = 0
+    masked = "\n".join(out_lines)
+    return _strip_inline_code_spans(masked)
+
+
+def _is_closing_fence(line: str, fence_char: str, fence_len: int) -> bool:
+    pattern = rf"^ {{0,3}}({re.escape(fence_char)}{{{fence_len},}})[ \t]*$"
+    return re.match(pattern, line) is not None
+
+
+def _strip_inline_code_spans(text: str) -> str:
+    def _blank(m: re.Match[str]) -> str:
+        return "".join(ch if ch == "\n" else " " for ch in m.group(0))
+
+    return _CODE_SPAN_PATTERN.sub(_blank, text)
 
 
 def _index_to_line(index: int, lines: list[str]) -> int:

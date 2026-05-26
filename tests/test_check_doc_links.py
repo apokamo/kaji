@@ -30,6 +30,7 @@ _is_external = _mod._is_external
 _is_hidden = _mod._is_hidden
 _index_to_line = _mod._index_to_line
 _slugify = _mod._slugify
+_strip_code_segments = _mod._strip_code_segments
 
 
 def _run(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -128,6 +129,144 @@ class TestIndexToLine:
     def test_end_of_content(self) -> None:
         lines = ["abc", "def", "ghi"]
         assert _index_to_line(8, lines) == 3
+
+
+@pytest.mark.small
+class TestStripCodeSegmentsFenced:
+    """_strip_code_segments: fenced code block (CommonMark § 4.5)."""
+
+    def test_fenced_block_blanks_fake_link(self) -> None:
+        src = "```\n[link](b.md)\n```\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" not in out
+        assert len(out) == len(src)
+
+    def test_fenced_block_with_info_string(self) -> None:
+        src = "```bash\n[link](b.md)\n```\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" not in out
+
+    def test_fence_char_must_match(self) -> None:
+        # ``` opened block is NOT closed by ~~~
+        src = "```\n[link](b.md)\n~~~\nstill in code\n```\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" not in out
+        assert "still in code" not in out
+
+    def test_fence_length_close_must_be_ge_open(self) -> None:
+        # 4-backtick open NOT closed by 3-backtick line
+        src = "````\n[link](b.md)\n```\nstill\n````\n"
+        out = _strip_code_segments(src)
+        # everything between open fence and matching 4-backtick close is blanked
+        assert "[link](b.md)" not in out
+        assert "still" not in out
+
+    def test_fence_length_5_closes_3_open(self) -> None:
+        # 3-backtick open is closed by 5-backtick line (>= open length)
+        src = "```\n[link](b.md)\n`````\nafter [x](y.md)\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" not in out
+        # after close, content again becomes raw
+        assert "[x](y.md)" in out
+
+    def test_closing_fence_cannot_have_info_string(self) -> None:
+        # Inside a ```bash block, a "``` aaa" line is NOT a close
+        src = "```bash\n[link](b.md)\n``` aaa\n[link2](c.md)\n```\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" not in out
+        assert "[link2](c.md)" not in out
+
+    def test_closing_fence_trailing_spaces_ok(self) -> None:
+        src = "```\n[link](b.md)\n```   \nafter [x](y.md)\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" not in out
+        assert "[x](y.md)" in out
+
+    def test_closing_fence_trailing_tab_ok(self) -> None:
+        src = "```\n[link](b.md)\n```\t\nafter [x](y.md)\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" not in out
+        assert "[x](y.md)" in out
+
+    def test_indented_code_block_not_stripped(self) -> None:
+        # 4-space indented code block is out of scope - links inside remain
+        src = "Para\n\n    [link](b.md)\n\nAfter\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" in out
+
+
+@pytest.mark.small
+class TestStripCodeSegmentsInline:
+    """_strip_code_segments: inline code spans (CommonMark § 6.1)."""
+
+    def test_inline_code_blanks_fake_link(self) -> None:
+        src = "text `[link](b.md)` text\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" not in out
+
+    def test_multiline_code_span(self) -> None:
+        # Code span line endings treated as spaces (CommonMark § 6.1)
+        src = "see `[link]\n(b.md)` here\n"
+        out = _strip_code_segments(src)
+        assert "[link]" not in out
+        assert "(b.md)" not in out
+
+    def test_double_backtick_with_inner_single(self) -> None:
+        # ``code with ` single`` closes at matching `` only
+        src = "x ``code [link](b.md) with ` single`` y\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" not in out
+
+    def test_unmatched_backtick_run_not_a_span(self) -> None:
+        # ` ... `` (lengths differ) is not a code span; content remains
+        src = "`abc`` and [link](b.md)\n"
+        out = _strip_code_segments(src)
+        # The leading backticks are not a valid span (lengths differ),
+        # so the fake link in normal text remains.
+        assert "[link](b.md)" in out
+
+    def test_normal_link_preserved(self) -> None:
+        src = "see [link](b.md) here\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" in out
+
+
+@pytest.mark.small
+class TestStripCodeSegmentsPositionPreserved:
+    """_strip_code_segments invariants for _index_to_line compatibility."""
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            "",
+            "no code\n",
+            "```\nfenced\n```\n",
+            "a `code` b\n",
+            "see `[link]\n(b.md)` after\n",
+            "```bash\n[x](y.md)\n```\nafter\n",
+        ],
+    )
+    def test_length_preserved(self, src: str) -> None:
+        out = _strip_code_segments(src)
+        assert len(out) == len(src)
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            "",
+            "no code\n",
+            "```\nfenced\n```\n",
+            "see `[link]\n(b.md)` after\n",
+            "line1\n```\nline3\n```\nline5\n",
+        ],
+    )
+    def test_newline_positions_preserved(self, src: str) -> None:
+        out = _strip_code_segments(src)
+        for i, ch in enumerate(src):
+            if ch == "\n":
+                assert out[i] == "\n", f"newline at index {i} not preserved"
+            else:
+                assert out[i] != "\n" or src[i] == "\n"
 
 
 # ===========================================================================
@@ -322,6 +461,66 @@ class TestEdgeCases:
         assert result.returncode == 0
 
 
+@pytest.mark.medium
+class TestCodeBlockExclusion:
+    """Issue #190: code block / inline code内の擬似 link は誤検出しない."""
+
+    def test_fenced_block_regex_not_detected_as_link(self, tmp_path: Path) -> None:
+        # The actual review-poll SKILL.md pattern
+        content = (
+            "# Doc\n"
+            "```bash\n"
+            "OWNER=$(echo \"$ORIGIN\" | sed -E 's#.*[:/]([^/]+)/[^/]+(\\.git)?$#\\1#')\n"
+            "```\n"
+        )
+        _write(tmp_path / "docs" / "a.md", content)
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_fenced_block_fake_link_not_detected(self, tmp_path: Path) -> None:
+        _write(tmp_path / "docs" / "a.md", "```\n[link](missing.md)\n```\n")
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_inline_code_fake_link_not_detected(self, tmp_path: Path) -> None:
+        _write(tmp_path / "docs" / "a.md", "use `[link](missing.md)` here\n")
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_multiline_code_span_fake_link_not_detected(self, tmp_path: Path) -> None:
+        _write(tmp_path / "docs" / "a.md", "see `[link]\n(missing.md)` after\n")
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_closing_fence_info_string_not_recognized(self, tmp_path: Path) -> None:
+        # ``` aaa line inside a ```bash block must NOT close the block
+        _write(
+            tmp_path / "docs" / "a.md",
+            "```bash\n[link](missing.md)\n``` aaa\nmore [x](missing2.md)\n```\n",
+        )
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_broken_link_outside_code_block_still_detected(self, tmp_path: Path) -> None:
+        _write(
+            tmp_path / "docs" / "a.md",
+            "[real](missing.md)\n```\n[fake](other.md)\n```\n",
+        )
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 1
+        assert "missing.md" in result.stderr
+        assert "other.md" not in result.stderr
+
+    def test_mixed_code_and_normal_links(self, tmp_path: Path) -> None:
+        _write(
+            tmp_path / "docs" / "a.md",
+            "[ok](b.md)\n```\n[fake](missing.md)\n```\n",
+        )
+        _write(tmp_path / "docs" / "b.md", "# B\n")
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+
 # ===========================================================================
 # Large tests — E2E against real repository docs
 # ===========================================================================
@@ -350,3 +549,24 @@ class TestRealRepo:
             cwd=str(REPO_ROOT),
         )
         assert result.returncode == 0, f"Broken links found in README.md:\n{result.stderr}"
+
+    def test_repo_verify_docs_args_have_no_broken_links(self) -> None:
+        """E2E: check_doc_links.py with the same arguments as `make verify-docs`.
+
+        Covers Issue #190: ensure .claude/skills/ paths (e.g. review-poll/SKILL.md
+        fenced code block regex) do not produce false positives.
+        """
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "docs/",
+                "README.md",
+                "CLAUDE.md",
+                ".claude/skills/",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode == 0, f"Broken links:\n{result.stderr}"
