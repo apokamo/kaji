@@ -581,3 +581,18 @@ class TestRunnerVerdictNotFoundPropagation:
         assert formatter_calls == [], (
             "AI formatter must not be invoked on silent agent exit (delimiter gate)"
         )
+
+        # 設計書 §Medium テスト 8: VerdictNotFound 経路では
+        # state.last_transition_verdict に捏造 PASS が書き込まれないこと。
+        # session_id 保存時に state.json が永続化されるため必ず読み戻して検証する。
+        from kaji_harness.state import SessionState
+
+        reloaded = SessionState.load_or_create("99", tmp_path / ".kaji-artifacts")
+        assert reloaded.last_transition_verdict is None, (
+            "永続化された state に fabricated verdict が残ってはならない: "
+            f"got {reloaded.last_transition_verdict!r}"
+        )
+        assert all(rec.verdict_status != "PASS" for rec in reloaded.step_history), (
+            "step_history に fabricated PASS が記録されてはならない: "
+            f"got {[rec.verdict_status for rec in reloaded.step_history]!r}"
+        )
