@@ -147,13 +147,50 @@ from markdown_it import MarkdownIt
 
 _MD_PARSER = MarkdownIt("commonmark", {"html": False})
 
-# Closing fence パターン (CommonMark §4.5 closing fence + §5.2 container indent):
-# leading whitespace (mixed spaces / tabs allowed, 後段の indent 判定は
-# markdown-it 側で行われるためここでは「leading は空白のみ」を条件に置く) +
-# same fence char run of >= original length + trailing [ \t]* のみ。
+# Block quote prefix (CommonMark §5.1): `[ \t]{0,3}>[ \t]?` repeated for nested quotes.
+# 多層ネスト block quote (`>> ` 等) にも対応するため、prefix が match している
+# 間 strip し続ける。
+_BLOCK_QUOTE_PREFIX = re.compile(r"^[ \t]{0,3}>[ \t]?")
+
+
+def _strip_container_prefixes(line: str) -> str:
+    """Strip leading block quote markers (CommonMark §5.1) from a raw source
+    line, returning the "container content" portion. Repeatedly strips
+    nested `>` markers so that `> > ```` becomes `` ``` ``.
+
+    List item content indent is NOT stripped here — list item content lines
+    just have leading spaces, which are absorbed by the closing fence
+    pattern's `[ \t]*` prefix below.
+    """
+    stripped = line
+    while True:
+        m = _BLOCK_QUOTE_PREFIX.match(stripped)
+        if not m:
+            break
+        stripped = stripped[m.end():]
+    return stripped
+
+
+# Closing fence パターン (CommonMark §4.5 closing fence):
+# leading whitespace (spaces/tabs) + same fence char run of >= original length
+# + trailing [ \t]* のみ。container content から block quote 等の prefix を strip
+# した上で照合する。
 def _is_explicit_closing_fence(line: str, fence_char: str, fence_len: int) -> bool:
+    """True if `line` (raw source line) is an explicit closing fence for a
+    fenced block opened with `fence_char` × `fence_len`.
+
+    Handles container prefixes (block quote markers stripped via
+    `_strip_container_prefixes`). List item content indent is absorbed by
+    the `[ \t]*` leading whitespace allowance — CommonMark §5.2 では fence の
+    leading 0-3 sp は container content indent 基準だが、markdown-it-py が
+    `tok.map` を返している時点で fence は既に正しい container コンテキストで
+    parse されている。最終行が closing fence かどうかの判定だけに使うため
+    permissive な leading whitespace 許容で十分（unclosed 検出の strict 方向
+    にバイアスをかけても、closing fence の確定形は同じ）。
+    """
+    content = _strip_container_prefixes(line)
     pattern = rf"^[ \t]*{re.escape(fence_char)}{{{fence_len},}}[ \t]*$"
-    return re.match(pattern, line) is not None
+    return re.match(pattern, content) is not None
 
 
 def _collect_fenced_block_line_ranges(content: str) -> list[tuple[int, int]]:
@@ -256,7 +293,16 @@ OWNER=$(echo "$ORIGIN" | sed -E 's#.*[:/]([^/]+)/[^/]+(\.git)?$#\1#')
 > [fake](missing.md)
 > ```
 ```
-→ markdown-it-py が blockquote の content に `fence` token を出力、内部 `[fake](missing.md)` は除外。
+→ markdown-it-py が blockquote の content に `fence` token を出力（`map=[0,3)`, `markup="```"`）。soundness guard: 最終行 `> \`\`\`` に対し `_strip_container_prefixes` が `> ` を除去 → 内容 `` ``` `` → `^[ \t]*\`{3,}[ \t]*$` に match → **explicit closing と確定** → mask 適用。`[fake](missing.md)` は除外。
+
+**ケース 4b: 多層ネスト block quote 内 fence**
+
+```
+> > ```text
+> > [fake](missing.md)
+> > ```
+```
+→ 最終行 `> > \`\`\`` に対し `_strip_container_prefixes` が `> ` を 2 回繰り返し strip → 内容 `` ``` `` → match → mask 適用。
 
 **ケース 5: 未閉鎖 fence (soundness guard)**
 
@@ -345,6 +391,15 @@ def _strip_inline_code_spans(text: str) -> str:
 - **多層ネスト container 内 fenced block**: 入力 `` "- outer\n  - inner\n\n    ```\n    [fake](missing.md)\n    ```\n" `` → 内部の `[fake](missing.md)` が空白化される
 - **未閉鎖 fence の soundness guard** (今回の Point 2 対応): 入力 `` "```bash\n\n[real-broken](missing.md)\n" `` (EOF まで closing fence なし) → markdown-it-py は fence token を出力するが、`_is_explicit_closing_fence` の判定で last line が closing fence でないため mask 対象から除外され、`[real-broken](missing.md)` は **空白化されない**（link 抽出対象として残る）。これは link checker の false-negative 回避の核心契約。
 - **closing fence が EOF と一致する場合は閉鎖と認める**: 入力 `` "```bash\nx\n```" `` (末尾改行なし) → 末尾行が `` ``` `` のため閉鎖と認識、内部 mask される
+- **`_is_explicit_closing_fence` の container prefix 対応** (今回の round 3 MF-2 対応): 以下の closing 行が全て True を返すこと
+  - top-level: `` "```" `` / `` "   ```" `` / `` "```   " ``
+  - block quote 1 段: `"> ```"` / `">```"` / `"> ```  "`
+  - block quote 多層: `"> > ```"` / `">>```"`
+  - list item content indent: `"    ```"` (4 sp leading)
+- **`_is_explicit_closing_fence` の偽陽性回避**: 以下が False を返すこと
+  - 通常段落 link 行: `"[real-broken](missing.md)"`
+  - 部分一致行: `"some ``` text"` (前後に non-whitespace)
+  - 文字種不一致: 開行 ` ``` ` のとき `"~~~"` で閉じない
 - **scope-out 確認: インデント済みコードブロック (§4.4)**: 4 スペースインデント行内の `[text](target)` 風文字列は **空白化されず** 抽出対象として残る（Issue 本文 § スコープ外 の確認 negative test）
 
 #### Inline code span
