@@ -31,6 +31,7 @@ _is_hidden = _mod._is_hidden
 _index_to_line = _mod._index_to_line
 _slugify = _mod._slugify
 _strip_code_segments = _mod._strip_code_segments
+_is_explicit_closing_fence = _mod._is_explicit_closing_fence
 
 
 def _run(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -193,6 +194,83 @@ class TestStripCodeSegmentsFenced:
         src = "Para\n\n    [link](b.md)\n\nAfter\n"
         out = _strip_code_segments(src)
         assert "[link](b.md)" in out
+
+    def test_list_item_nested_fence(self) -> None:
+        # CommonMark §5.2: fence opening on a list-item marker line
+        src = "- ```bash\n  [fake](missing.md)\n  ```\n"
+        out = _strip_code_segments(src)
+        assert "[fake](missing.md)" not in out
+
+    def test_list_item_nested_fence_ordered(self) -> None:
+        src = "1. ```text\n   [fake](missing.md)\n   ```\n"
+        out = _strip_code_segments(src)
+        assert "[fake](missing.md)" not in out
+
+    def test_content_indentation_fence_example_263(self) -> None:
+        # CommonMark §5.2 Example 263: fence at content indentation of a list item
+        src = "1.  text\n\n    ```\n    [fake](missing.md)\n    ```\n"
+        out = _strip_code_segments(src)
+        assert "[fake](missing.md)" not in out
+
+    def test_block_quote_fence(self) -> None:
+        src = "> ```text\n> [fake](missing.md)\n> ```\n"
+        out = _strip_code_segments(src)
+        assert "[fake](missing.md)" not in out
+
+    def test_composite_container_fence(self) -> None:
+        # round 5 reviewer probe: list item content indent + block quote
+        src = "1.  > ```text\n    > [fake](missing.md)\n    > ```\n"
+        out = _strip_code_segments(src)
+        assert "[fake](missing.md)" not in out
+
+    def test_unclosed_fence_not_masked(self) -> None:
+        # Soundness guard: unclosed fence leaves following content visible
+        src = "```bash\nsome code\n\n[real-broken](missing.md)\n"
+        out = _strip_code_segments(src)
+        assert "[real-broken](missing.md)" in out
+
+    def test_eof_closing_fence_no_trailing_newline(self) -> None:
+        src = "```bash\nx\n```"
+        out = _strip_code_segments(src)
+        assert "x" not in out
+
+
+@pytest.mark.small
+class TestIsExplicitClosingFence:
+    """_is_explicit_closing_fence: closing-fence shape under container prefixes."""
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "```",
+            "   ```",
+            "```   ",
+            "> ```",
+            ">```",
+            "> ```  ",
+            "> > ```",
+            ">>```",
+            "    ```",
+            "    > ```",
+            "    > > ```",
+            "\t> ```",
+        ],
+    )
+    def test_matches_closing(self, line: str) -> None:
+        assert _is_explicit_closing_fence(line, "`", 3) is True
+
+    @pytest.mark.parametrize(
+        "line,fence_char,fence_len",
+        [
+            ("[real-broken](missing.md)", "`", 3),
+            ("some ``` text", "`", 3),
+            ("fake > ```", "`", 3),
+            ("~~~", "`", 3),
+            ("```", "`", 4),
+        ],
+    )
+    def test_rejects_non_closing(self, line: str, fence_char: str, fence_len: int) -> None:
+        assert _is_explicit_closing_fence(line, fence_char, fence_len) is False
 
 
 @pytest.mark.small
@@ -519,6 +597,48 @@ class TestCodeBlockExclusion:
         _write(tmp_path / "docs" / "b.md", "# B\n")
         result = _run(tmp_path, "docs")
         assert result.returncode == 0, result.stderr
+
+    def test_list_item_nested_fence_not_detected(self, tmp_path: Path) -> None:
+        _write(
+            tmp_path / "docs" / "a.md",
+            "- ```bash\n  [fake](missing.md)\n  ```\n",
+        )
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_content_indentation_fence_not_detected(self, tmp_path: Path) -> None:
+        _write(
+            tmp_path / "docs" / "a.md",
+            "1.  text\n\n    ```\n    [fake](missing.md)\n    ```\n",
+        )
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_block_quote_fence_not_detected(self, tmp_path: Path) -> None:
+        _write(
+            tmp_path / "docs" / "a.md",
+            "> ```text\n> [fake](missing.md)\n> ```\n",
+        )
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_composite_container_fence_not_detected(self, tmp_path: Path) -> None:
+        _write(
+            tmp_path / "docs" / "a.md",
+            "1.  > ```text\n    > [fake](missing.md)\n    > ```\n",
+        )
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_unclosed_fence_still_reports_broken_link(self, tmp_path: Path) -> None:
+        # Soundness: unclosed fence must NOT mask following broken links
+        _write(
+            tmp_path / "docs" / "a.md",
+            "Intro.\n\n```bash\nsome code\n\n[real-broken](missing.md)\n",
+        )
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 1
+        assert "missing.md" in result.stderr
 
 
 # ===========================================================================

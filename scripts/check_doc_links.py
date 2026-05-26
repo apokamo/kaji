@@ -16,6 +16,8 @@ import sys
 import unicodedata
 from pathlib import Path
 
+from markdown_it import MarkdownIt
+
 MARKDOWN_EXT = ".md"
 DEFAULT_TARGET = "docs"
 
@@ -24,10 +26,7 @@ LINK_PATTERN = re.compile(r"(?<!\!)\[[^\]]*\]\(([^)\s]+(?:\s+\"[^\"]*\")?)\)")
 
 HEADING_PATTERN = re.compile(r"^ {0,3}(#{1,6})\s+(.*)$")
 
-# Fenced code block fences (CommonMark 0.31.2 § 4.5). Indented up to 3 spaces.
-# Backtick opening fences may not contain a backtick in the info string.
-_FENCE_OPEN_BT = re.compile(r"^ {0,3}(`{3,})([^`]*)$")
-_FENCE_OPEN_TILDE = re.compile(r"^ {0,3}(~{3,})(.*)$")
+_MD_PARSER = MarkdownIt("commonmark", {"html": False})
 
 # Inline code span (CommonMark 0.31.2 § 6.1): a backtick string of length N
 # closes with a backtick string of the same length N. Line endings allowed
@@ -218,6 +217,47 @@ def _slugify(text: str, slug_counts: dict[str, int]) -> str:
     return slug if count == 0 else f"{slug}-{count}"
 
 
+def _is_explicit_closing_fence(line: str, fence_char: str, fence_len: int) -> bool:
+    """Return True if ``line`` is an explicit CommonMark closing fence.
+
+    Handles container contexts uniformly by allowing any interleaving of
+    whitespace and block-quote markers (``>``) as the leading "scaffolding"
+    before the fence character run. The CommonMark container hierarchy is
+    parsed by markdown-it-py; this helper only checks the closing-fence
+    shape so that unclosed fences can be detected (soundness guard).
+    """
+    pattern = rf"^[ \t>]*{re.escape(fence_char)}{{{fence_len},}}[ \t]*$"
+    return re.match(pattern, line) is not None
+
+
+def _collect_fenced_block_line_ranges(content: str) -> list[tuple[int, int]]:
+    """Collect ``[start, end)`` line ranges of explicitly-closed fenced blocks.
+
+    Unclosed fences (no closing fence before EOF or container end) are
+    excluded so that real broken links after an accidentally-unclosed fence
+    are not silently swallowed. Indented code blocks (§4.4) are also
+    excluded — markdown-it-py emits ``code_block`` tokens for those, which
+    we ignore.
+    """
+    tokens = _MD_PARSER.parse(content)
+    lines = content.split("\n")
+    ranges: list[tuple[int, int]] = []
+    for tok in tokens:
+        if tok.type != "fence" or tok.map is None:
+            continue
+        start, end = tok.map
+        markup = tok.markup or "```"
+        fence_char = markup[0]
+        fence_len = len(markup)
+        last_idx = end - 1
+        if last_idx < 0 or last_idx >= len(lines):
+            continue
+        if not _is_explicit_closing_fence(lines[last_idx], fence_char, fence_len):
+            continue
+        ranges.append((start, end))
+    return ranges
+
+
 def _strip_code_segments(content: str) -> str:
     """Blank out fenced code blocks and inline code spans for link extraction.
 
@@ -228,33 +268,19 @@ def _strip_code_segments(content: str) -> str:
     matches found in the stripped output.
 
     Indented code blocks (4-space / tab indented) are intentionally out of
-    scope (see Issue #190 design).
+    scope (see Issue #190 design). Unclosed fenced blocks are also left
+    visible so that link checker soundness (false-negative minimization)
+    is preserved.
     """
     lines = content.split("\n")
-    out_lines: list[str] = []
-    fence_char: str | None = None
-    fence_len = 0
-    for line in lines:
-        if fence_char is None:
-            m = _FENCE_OPEN_BT.match(line) or _FENCE_OPEN_TILDE.match(line)
-            if m:
-                fence_char = m.group(1)[0]
-                fence_len = len(m.group(1))
-                out_lines.append(" " * len(line))
-            else:
-                out_lines.append(line)
-        else:
-            out_lines.append(" " * len(line))
-            if _is_closing_fence(line, fence_char, fence_len):
-                fence_char = None
-                fence_len = 0
+    ranges = _collect_fenced_block_line_ranges(content)
+    mask_line = [False] * len(lines)
+    for start, end in ranges:
+        for i in range(start, min(end, len(lines))):
+            mask_line[i] = True
+    out_lines = [" " * len(lines[i]) if mask_line[i] else lines[i] for i in range(len(lines))]
     masked = "\n".join(out_lines)
     return _strip_inline_code_spans(masked)
-
-
-def _is_closing_fence(line: str, fence_char: str, fence_len: int) -> bool:
-    pattern = rf"^ {{0,3}}({re.escape(fence_char)}{{{fence_len},}})[ \t]*$"
-    return re.match(pattern, line) is not None
 
 
 def _strip_inline_code_spans(text: str) -> str:
