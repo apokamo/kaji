@@ -1198,3 +1198,39 @@ class TestFormatterSentinel:
         from kaji_harness.verdict import FORMATTER_PROMPT
 
         assert "---NO_VERDICT_FOUND---" in FORMATTER_PROMPT.template
+
+    def test_formatter_sentinel_with_surrounding_whitespace(self) -> None:
+        """Sentinel surrounded by whitespace/newlines is still treated as sentinel."""
+
+        def mock_formatter(text: str) -> str:
+            return "\n\n---NO_VERDICT_FOUND---\n"
+
+        output = "---VERDICT---\n(progress report only)\n---END_VERDICT---"
+        with pytest.raises(VerdictNotFound):
+            parse_verdict(output, VALID_STATUSES, ai_formatter=mock_formatter)
+
+    def test_valid_verdict_quoting_sentinel_literal_is_not_misclassified(self) -> None:
+        """A valid verdict whose body quotes the sentinel literal must parse normally.
+
+        Regression: previously ``NO_VERDICT_SENTINEL in formatted`` used substring
+        matching, so any verdict referencing the literal sentinel in reason /
+        evidence (e.g. when documenting the failure mode) was misclassified as
+        ``VerdictNotFound``.
+        """
+
+        def mock_formatter(text: str) -> str:
+            return (
+                "---VERDICT---\n"
+                "status: PASS\n"
+                'reason: "documented the ---NO_VERDICT_FOUND--- sentinel handling"\n'
+                'evidence: "tests/test_verdict_parser.py mentions ---NO_VERDICT_FOUND---"\n'
+                'suggestion: ""\n'
+                "---END_VERDICT---\n"
+            )
+
+        # Delimiter present so Step 3 runs; strict/relaxed body parsing fails
+        # (empty body) so the formatter is invoked.
+        output = "---VERDICT---\n\n---END_VERDICT---"
+        result = parse_verdict(output, VALID_STATUSES, ai_formatter=mock_formatter)
+        assert result.status == "PASS"
+        assert "---NO_VERDICT_FOUND---" in result.reason

@@ -352,8 +352,13 @@ def _parse_formatted_output(formatted: str, valid_statuses: set[str]) -> Verdict
     the agent output contains no real verdict (e.g. delimiter present but body
     is empty / progress report only). Sentinel detection maps to
     ``VerdictNotFound`` so the harness fails loudly rather than retrying.
+
+    The sentinel must be the entire formatter response (modulo surrounding
+    whitespace). Substring matching would misclassify otherwise-valid verdicts
+    whose ``reason`` / ``evidence`` happen to quote the literal sentinel string
+    (e.g. docs or logs referencing it).
     """
-    if NO_VERDICT_SENTINEL in formatted:
+    if formatted.strip() == NO_VERDICT_SENTINEL:
         raise VerdictNotFound("AI formatter reported no verdict block in agent output")
 
     # Try strict
