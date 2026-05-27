@@ -60,7 +60,10 @@ Issue #186 で導入した `_github_pr_review` (`kaji_harness/cli_main.py:810-88
 GitHub REST API 仕様の整理:
 
 - public docs ([§ 参照情報 1](#参照情報primary-sources)): `POST /repos/{owner}/{repo}/pulls/{N}/reviews` の `event` parameter は `APPROVE` / `REQUEST_CHANGES` / `COMMENT` を取り、`body` は `event=REQUEST_CHANGES` / `COMMENT` で必須（`event=APPROVE` で optional）。失敗応答は generic `422 Validation failed` まで明記されている
-- 実発生ログ ([§ 参照情報 1b](#参照情報primary-sources)): `APPROVE` / `REQUEST_CHANGES` を author 自身が投げた場合に 422 拒否（self-author の具体的拒否文言 "Can not request changes on your own pull request" は public docs で確認できず、本 Issue § OB が唯一の一次根拠）。`COMMENT` は author でも許容される
+- 実発生ログ・event 個別根拠（self-author 拒否 / 許容の帰属を分離）:
+  - `event=REQUEST_CHANGES` の self-author 拒否: 本 Issue § OB の実発生ログ ([§ 参照情報 1b](#参照情報primary-sources))。public docs で確認できない self-author 拒否文言 "Can not request changes on your own pull request" の唯一の一次根拠
+  - `event=APPROVE` の self-author 拒否: 先行 Issue #186 § OB の実発生ログ ([§ 参照情報 4](#参照情報primary-sources)) — `gh pr review --approve` を author 本人が叩いて 422 (`Can not approve your own pull request`) を確認済み
+  - `event=COMMENT` の author 許容: GitHub CLI manual ([§ 参照情報 3](#参照情報primary-sources)) が `--comment` を author 制約なしの正式 flag として定義しており、現行 `_handle_pr` (`cli_main.py:931-933`) の passthrough 経路が動作している実装事実が裏付け
 
 実発生ログで `REQUEST_CHANGES` の self-author 拒否文言を確定したため、Issue #186 設計書で「公開ページから直接は確認できなかった」と保留していた裏付けは本 Issue で完結した（参照: [Issue #186 設計書 § 参照情報 3](./issue-186-fix-github-provider-kaji-pr-review-appro.md)）。
 
