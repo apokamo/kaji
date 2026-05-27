@@ -51,13 +51,19 @@ logger = RunLogger(log_path=Path(".kaji/run.jsonl"))
 | フィールド | 型 |
 |-----------|-----|
 | `step_id` | `str` |
-| `agent` | `str` |
+| `agent` | `str \| null` |
 | `model` | `str \| null` |
 | `effort` | `str \| null` |
 | `session_id` | `str \| null` |
+| `dispatch` | `str` |
+
+`dispatch` は dispatch 経路の識別子。`"agent"` は LLM 経由（既存）、`"exec_script"` は
+skill frontmatter `exec_script` による subprocess dispatch（Issue #204）。`exec_script`
+経路では `agent` / `model` / `effort` は常に null（LLM 起動なし）。
 
 ```json
-{"ts": "2025-04-22T01:00:01+00:00", "event": "step_start", "step_id": "implement", "agent": "claude", "model": "claude-sonnet-4-6", "effort": null, "session_id": null}
+{"ts": "2025-04-22T01:00:01+00:00", "event": "step_start", "step_id": "implement", "agent": "claude", "model": "claude-sonnet-4-6", "effort": null, "session_id": null, "dispatch": "agent"}
+{"ts": "2025-04-22T01:00:01+00:00", "event": "step_start", "step_id": "poll-review", "agent": null, "model": null, "effort": null, "session_id": null, "dispatch": "exec_script"}
 ```
 
 #### `step_end`
@@ -70,6 +76,10 @@ logger = RunLogger(log_path=Path(".kaji/run.jsonl"))
 | `verdict` | `dict` |
 | `duration_ms` | `int` |
 | `cost` | `dict \| null` |
+| `dispatch` | `str` |
+
+`dispatch` は `step_start` と同じ意味（`"agent"` / `"exec_script"`）。`exec_script` では
+`cost` も常に null（LLM 課金なし）。
 
 `verdict` の構造:
 
@@ -124,8 +134,8 @@ logger = RunLogger(log_path=Path(".kaji/run.jsonl"))
 | メソッド | いつ呼ぶか |
 |---------|-----------|
 | `log_workflow_start(issue, workflow)` | ワークフロー開始直後 |
-| `log_step_start(step_id, agent, model, effort, session_id)` | CLI 実行前 |
-| `log_step_end(step_id, verdict, duration_ms, cost)` | CLI 終了・verdict 解析後 |
+| `log_step_start(step_id, agent, model, effort, session_id, dispatch="agent")` | CLI / subprocess 実行前。`exec_script` 経路では `dispatch="exec_script"` + `agent=model=effort=None` |
+| `log_step_end(step_id, verdict, duration_ms, cost, dispatch="agent")` | CLI / subprocess 終了・verdict 解析後 |
 | `log_cycle_iteration(cycle_name, iteration, max_iter)` | サイクル内の各反復開始時 |
 | `log_workflow_end(status, cycle_counts, total_duration_ms, total_cost, error)` | ワークフロー終了時（正常・異常問わず） |
 

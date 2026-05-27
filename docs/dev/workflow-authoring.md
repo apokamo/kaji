@@ -46,11 +46,38 @@ cycles:                            # 省略可: ループサイクル定義
 steps:                             # 必須: ステップ一覧（上から順に実行）
   - id: <step-id>
     skill: <skill-name>
-    agent: claude                  # claude / codex / gemini
+    agent: claude                  # claude / codex / gemini（exec_script skill のみ省略可）
     on:
       PASS: <next-step-id>
       RETRY: <step-id>
 ```
+
+### `agent` の省略条件 (exec_script skill)
+
+skill の SKILL.md frontmatter に `exec_script` が宣言されている場合、その skill を呼ぶ step
+では `agent` / `model` / `effort` を省略できる。harness は agent を起動せず、`exec_script` に
+指定された Python module を ``python -m <module>`` として直接 subprocess 実行する
+(`docs/dev/skill-authoring.md` § exec_script 参照)。
+
+```yaml
+# OK: review-poll skill (frontmatter に exec_script を持つ) は agent 省略可
+- id: review-poll
+  skill: review-poll
+  on:
+    PASS: close
+    RETRY: pr-fix
+    BACK_FALLBACK: review
+    ABORT: end
+```
+
+検証層 (`docs/dev/skill-authoring.md` の exec_script 仕様と整合):
+
+| 層 | 場所 | 内容 |
+|----|------|------|
+| L1: YAML schema | `kaji_harness/workflow.py` | `agent` は任意。型のみ `str | None` で検証 |
+| L2: runner preflight | `kaji_harness/runner.py:run()` 起動時 | 全 step に対し skill metadata を解決し、`agent is None` かつ `exec_script` も無いケースを `WorkflowValidationError` で fail-fast。`exec_script` 経路では `agent` / `model` / `effort` が指定されても WARN ログを出して無視する |
+| L3: `kaji validate` CLI | `kaji_harness/cli_main.py:validate` | `paths.skill_dir` が解決できる場合のみ L2 と同等の skill 整合 check を実施。解決不能なら skip |
+
 
 ### `requires_provider`
 

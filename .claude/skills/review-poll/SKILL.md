@@ -1,6 +1,7 @@
 ---
 description: codex auto-review (chatgpt-codex-connector[bot]) の reactions / reviews を polling して PASS / RETRY / BACK_FALLBACK を判定する。GitHub 限定。
 name: review-poll
+exec_script: kaji_harness.scripts.review_poll_entry
 ---
 
 # Review Poll
@@ -9,94 +10,33 @@ GitHub `chatgpt-codex-connector[bot]` (id `199175422`) の auto-review シグナ
 verdict を出力する skill。`review` skill との二重起動を避け、auto-review クレジット不足時のみ
 `BACK_FALLBACK` 経由で既存 `review` skill (codex agent) に fallback させる。
 
-実装は **`kaji_harness.scripts.codex_review_poll`** に集約しており、本 skill は薄い bash
-wrapper として PR 情報 / head SHA を解決して Python helper を起動する。
+本 skill は **`exec_script` 経路** で動作する deterministic skill。harness は LLM agent を起動せず、
+`kaji_harness.scripts.review_poll_entry` module を ``python -m`` で直接 subprocess 実行する。
+entry module が env から PR 情報を解決し、polling 本体 `kaji_harness.scripts.codex_review_poll`
+に委譲する。
 
 ## いつ使うか
 
 | タイミング | このスキル |
 |-----------|-----------|
 | PR 作成後、codex auto-review が走っている GitHub 環境 | ✅ 必須 |
-| `provider.type='local'` 配下 | ❌ Step 0 で ABORT |
+| `provider.type='local'` 配下 | ❌ ABORT verdict |
 | `review-poll` で `BACK_FALLBACK` を受けた場合 | 既存 `review` skill (codex agent) に進む |
 
 **ワークフロー内の位置**: i-pr → [PR 作成] → **review-poll** → (PASS=close / RETRY=pr-fix / BACK_FALLBACK=review fallback)
 
-## 入力（context 変数）
+## 入力（harness が env として注入）
 
-| 変数 | 型 | 説明 |
-|------|-----|------|
-| `issue_id` | str | PR 解決の検索キー |
-| `issue_ref` | str | 人間可読の Issue 参照（コメント用） |
-| `provider_type` | str | `github` 必須。それ以外は ABORT |
-| `git_remote` | str | PR の owner/repo 解決 |
-| `default_branch` | str | branch fallback |
+| env 変数 | 必須 | 説明 |
+|---------|------|------|
+| `KAJI_ISSUE_ID` | ✅ | PR 解決の検索キー |
+| `KAJI_PROVIDER_TYPE` | ✅ | `github` 以外は ABORT |
+| `KAJI_GIT_REMOTE` | ✅ | owner/repo 解決 (`git remote get-url`) |
+| `KAJI_WORKTREE_DIR` | ✅ | `git remote get-url` 実行 cwd |
+| `KAJI_PR_ID` | 任意 | harness 側で解決済みの場合のみ。未設定なら `kaji pr list` で取得 |
 
-## 実行手順
-
-### Step 0: provider check
-
-```bash
-PROVIDER_TYPE="${provider_type:-$(kaji config provider-type 2>/dev/null || true)}"
-if [ "$PROVIDER_TYPE" != "github" ]; then
-    cat <<'VERDICT_EOF'
----VERDICT---
-status: ABORT
-reason: |
-  review-poll requires provider.type='github' (codex auto-review is GitHub-only).
-evidence: |
-  provider_type was not 'github'.
-suggestion: |
-  Run /review directly instead, or set provider.type to github.
----END_VERDICT---
-VERDICT_EOF
-    exit 0
-fi
-```
-
-### Step 1: PR の解決と head 情報の取得
-
-`review` skill Step 1 と同型に PR を解決し、加えて **head commit の committedDate** を取得する
-（`+1` reaction の freshness guard 用、polling loop 全体で固定値として利用）。
-
-```bash
-PR_JSON=$(kaji pr list --search "[issue_id]" --json number,headRefName,headRefOid --jq '.[0]')
-pr_id=$(echo "$PR_JSON" | jq -r '.number')
-head_sha=$(echo "$PR_JSON" | jq -r '.headRefOid')
-head_committed_at=$(kaji pr view "$pr_id" --json commits --jq '.commits[-1].committedDate')
-```
-
-`headRefOid` が空文字 / null の場合は `kaji pr view <pr_id> --json headRefOid --jq .headRefOid` で
-明示再取得する。`head_committed_at` が空の場合も同様に ABORT。両経路で PR が解決できない場合は
-ABORT。
-
-### Step 2: Worktree パスの解決
-
-[_shared/worktree-resolve.md](../_shared/worktree-resolve.md) の手順に従う。
-
-### Step 3: owner / repo の解決
-
-```bash
-ORIGIN=$(cd "[worktree_dir]" && git remote get-url "[git_remote]")
-# git@github.com:owner/repo.git or https://github.com/owner/repo[.git]
-OWNER=$(echo "$ORIGIN" | sed -E 's#.*[:/]([^/]+)/[^/]+(\.git)?$#\1#')
-REPO=$(echo "$ORIGIN" | sed -E 's#.*[:/][^/]+/([^/]+?)(\.git)?$#\1#')
-```
-
-### Step 4: polling 起動
-
-```bash
-cd "[worktree_dir]" && source .venv/bin/activate
-python -m kaji_harness.scripts.codex_review_poll \
-    --pr "$pr_id" \
-    --owner "$OWNER" \
-    --repo "$REPO" \
-    --head-sha "$head_sha" \
-    --head-committed-at "$head_committed_at"
-```
-
-Python helper が verdict ブロックを stdout に出力する。skill は exit code を観察せず stdout
-をそのまま流す。
+`exec_script` 経路では workflow YAML 側で `agent` / `model` / `effort` を指定する必要はない
+（指定しても無視され harness が WARN を出す）。
 
 ## 検出ロジック（仕様）
 
@@ -126,14 +66,18 @@ bot 識別は **id 一致**（`199175422`）を主、login を副チェックに
 
 ## Verdict 出力
 
-Python helper が `---VERDICT---` ブロックを stdout に出力する:
+entry module / polling 本体が `---VERDICT---` ブロックを stdout に出力する:
 
 | status | 条件 |
 |--------|------|
 | PASS | bot `+1` reaction を観測 |
 | RETRY | 現在 head に対する bot COMMENTED review を観測 |
 | BACK_FALLBACK | timeout までいずれも観測されず → `review` step に fallback |
-| ABORT | provider mismatch / PR 未解決 / GitHub API 連続失敗 / IN_PROGRESS_TIMEOUT 超過 |
+| ABORT | provider mismatch / PR 未解決 / head 情報欠落 / remote url parse 失敗 / GitHub API 連続失敗 / IN_PROGRESS_TIMEOUT 超過 |
+
+deterministic script のため verdict 出力後は **必ず `return 0`** で終了する。catastrophic 失敗
+（`gh` CLI 不在 / 通信不能等）は raise させ、harness が `ScriptExecutionError` で fail-loud
+扱いとする（Issue #204 設計書 § exit code と verdict の優先順位）。
 
 > **規約**: 本 skill 出力に auto-close hazard pattern（`Clos(e[sd]?|ing)` /
 > `Fix(e[sd]|ing)?` / `Resolv(e[sd]?|ing)` / `Implement(s|ing|ed)?` の直後 `#[0-9]`）を
