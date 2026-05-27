@@ -101,7 +101,7 @@ exec_script: kaji_harness.scripts.review_poll_entry
     ABORT: end
 ```
 
-`agent` 未指定 step が `exec_script` を持たない skill を参照していたら、`workflow load` 時に `WorkflowValidationError`（fail-fast）。
+`agent` 未指定 step が `exec_script` を持たない skill を参照していたら、**runner preflight (L2)** で `WorkflowValidationError`（fail-fast）。skill metadata に依存する判定のため L1 (YAML schema) では検出せず、後述 § validate_workflow の L1/L2/L3 責務表に従う。
 
 ### 出力
 
@@ -145,7 +145,7 @@ verdict = parse_verdict(
 | subprocess timeout | 既存 `StepTimeoutError` を流用 |
 | subprocess は exit 0 だが stdout に verdict delimiter なし | `VerdictNotFound`（既存）。`exec_script` 経路では **AI formatter fallback を呼ばない**（fabrication 防止と決定論性の維持） |
 | subprocess が **non-zero exit**（stdout の verdict 有無を問わず） | `ScriptExecutionError` を raise（stderr を detail に含める）。**verdict があっても採用しない**（MF-2 対応） |
-| skill が `agent` 未指定なのに `exec_script` も持たない | workflow load 時 + runner preflight の 2 段で `WorkflowValidationError`（SF-2 対応、後述 § validate_workflow 参照） |
+| skill が `agent` 未指定なのに `exec_script` も持たない | **runner preflight (L2)** で `WorkflowValidationError`（skill metadata 依存のため L1 schema では検出不可。`kaji validate` (L3) で skill_dir が解決できれば同等 check を任意実施。SF-2 対応、後述 § validate_workflow の L1/L2/L3 責務表が正本） |
 
 #### exit code と verdict の優先順位（MF-2 対応・正本）
 
