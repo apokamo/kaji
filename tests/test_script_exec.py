@@ -84,6 +84,63 @@ class TestExecuteScriptDispatch:
         # os.environ も merge されていること（PATH 等の一般的 env が残る）
         assert "PATH" in env
 
+    def test_stale_optional_reserved_env_is_stripped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # parent shell に残った KAJI_PR_ID は、現在 step の env に含まれない限り
+        # subprocess へ伝播してはならない（skill-authoring.md の env 契約）。
+        monkeypatch.setenv("KAJI_PR_ID", "999")
+        monkeypatch.setenv("KAJI_PR_REF", "gh:999")
+
+        captured: dict[str, Any] = {}
+
+        def fake_popen(args: list[str], **kwargs: Any) -> MagicMock:
+            captured["env"] = kwargs.get("env")
+            return _mock_popen(stdout_lines=[])
+
+        with patch("kaji_harness.script_exec.subprocess.Popen", side_effect=fake_popen):
+            execute_script(
+                step=_make_step(),
+                module="m",
+                env={"KAJI_ISSUE_ID": "204"},
+                workdir=tmp_path,
+                log_dir=tmp_path / "log",
+                timeout=60,
+                verbose=False,
+            )
+
+        env = captured["env"]
+        assert "KAJI_PR_ID" not in env
+        assert "KAJI_PR_REF" not in env
+
+    def test_optional_reserved_env_passes_when_provided(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 現在 step の env に明示注入された場合は parent shell の値ではなく
+        # step 値が subprocess へ届くこと。
+        monkeypatch.setenv("KAJI_PR_ID", "999")
+
+        captured: dict[str, Any] = {}
+
+        def fake_popen(args: list[str], **kwargs: Any) -> MagicMock:
+            captured["env"] = kwargs.get("env")
+            return _mock_popen(stdout_lines=[])
+
+        with patch("kaji_harness.script_exec.subprocess.Popen", side_effect=fake_popen):
+            execute_script(
+                step=_make_step(),
+                module="m",
+                env={"KAJI_PR_ID": "207", "KAJI_PR_REF": "gh:207"},
+                workdir=tmp_path,
+                log_dir=tmp_path / "log",
+                timeout=60,
+                verbose=False,
+            )
+
+        env = captured["env"]
+        assert env["KAJI_PR_ID"] == "207"
+        assert env["KAJI_PR_REF"] == "gh:207"
+
     def test_returncode_zero_with_verdict_returns_cli_result(self, tmp_path: Path) -> None:
         lines = [
             "---VERDICT---\n",

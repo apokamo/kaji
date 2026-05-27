@@ -25,6 +25,12 @@ from pathlib import Path
 from .errors import CLINotFoundError, ScriptExecutionError, StepTimeoutError
 from .models import CLIResult, Step
 
+# skill-authoring.md の env 契約上「未解決なら未注入」となる reserved 変数。
+# parent process に古い値が残っていた場合に subprocess へ漏れて
+# review_poll_entry 等が無関係 PR を polling する事故を防ぐため、
+# 現在 step の env に含まれない限り os.environ からも除外する。
+_OPTIONAL_RESERVED_ENV = frozenset({"KAJI_PR_ID", "KAJI_PR_REF"})
+
 
 def _now_stamp() -> str:
     return datetime.now().isoformat(timespec="seconds")
@@ -58,7 +64,8 @@ def execute_script(
             を問わない）
     """
     args = [sys.executable, "-m", module]
-    full_env = {**os.environ, **env}
+    base_env = {k: v for k, v in os.environ.items() if k not in _OPTIONAL_RESERVED_ENV or k in env}
+    full_env = {**base_env, **env}
 
     log_dir.mkdir(parents=True, exist_ok=True)
 
