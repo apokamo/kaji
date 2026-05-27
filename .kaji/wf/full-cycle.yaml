@@ -52,7 +52,7 @@ steps:
   - id: start
     skill: issue-start
     agent: claude
-    model: sonnet
+    model: haiku
     effort: medium
     on:
       PASS: design
@@ -82,7 +82,6 @@ steps:
     agent: claude
     model: opus
     effort: medium
-    resume: design
     on:
       PASS: verify-design
       ABORT: end
