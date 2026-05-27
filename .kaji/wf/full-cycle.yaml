@@ -160,9 +160,6 @@ steps:
 
   - id: review-poll
     skill: review-poll
-    agent: claude
-    model: sonnet
-    effort: medium
     on:
       PASS: close
       RETRY: pr-fix

@@ -74,6 +74,28 @@ class CLINotFoundError(HarnessError):
     """CLI コマンドが見つからない（FileNotFoundError をラップ）。"""
 
 
+class ScriptExecutionError(HarnessError):
+    """exec_script の subprocess が非ゼロ終了。verdict 有無を問わず fail-loud。"""
+
+    def __init__(self, step_id: str, module: str, returncode: int, stderr: str):
+        self.step_id = step_id
+        self.module = module
+        self.returncode = returncode
+        self.stderr = stderr
+        super().__init__(
+            f"Step '{step_id}' exec_script '{module}' exited with code {returncode}: {stderr[:200]}"
+        )
+
+
+class SkillFrontmatterError(HarnessError):
+    """SKILL.md frontmatter のパース / 検証エラー。"""
+
+    def __init__(self, skill_name: str, reason: str):
+        self.skill_name = skill_name
+        self.reason = reason
+        super().__init__(f"Skill '{skill_name}' frontmatter invalid: {reason}")
+
+
 class StepTimeoutError(HarnessError):
     """ステップがタイムアウト。SIGTERM → SIGKILL 後に raise。"""
 
