@@ -755,6 +755,21 @@ def _has_approve_flag(rest: list[str]) -> bool:
     return False
 
 
+def _has_request_changes_flag(rest: list[str]) -> bool:
+    """``rest`` 中に ``--request-changes`` / ``--request-changes=...`` / ``-r`` が含まれるかを pre-scan する。
+
+    ``gh pr review`` の ``-r`` は ``--request-changes`` の正式 short alias
+    （``gh pr review --help``）。``--`` 以降は positional 扱いし無視する。
+    ``_has_approve_flag`` と完全対称の構造。
+    """
+    for tok in rest:
+        if tok == "--":
+            return False
+        if tok == "--request-changes" or tok.startswith("--request-changes=") or tok == "-r":
+            return True
+    return False
+
+
 def _gh_capture_value(args: list[str]) -> str | None:
     """``gh <args>`` を ``capture_output=True`` で叩き、rc=0 なら stdout.strip() を返す。
 
@@ -808,19 +823,27 @@ def _gh_post_issue_comment_silent(*, repo: str, pr_id: str, body: str) -> int:
 
 
 def _github_pr_review(rest: list[str], *, repo_override: str | None) -> int:
-    """``kaji pr review <pr_id> --approve`` 専用 dispatcher（GitHub mode）。
+    """``kaji pr review <pr_id> --approve|--request-changes`` 専用 dispatcher（GitHub mode）。
 
     self-PR (PR author == authenticated user) では ``gh pr review --approve``
-    が GitHub API ``Can not approve your own pull request`` で 422 拒否
-    されるため、 ``<!-- kaji-review: state=APPROVED -->`` marker 付き
-    comment を Issue comments API に投稿することで approve シグナルを表現
-    する。
+    / ``--request-changes`` が GitHub API ``Can not approve your own pull
+    request`` / ``Can not request changes on your own pull request`` で 422
+    拒否されるため、 ``<!-- kaji-review: state=APPROVED|CHANGES_REQUESTED -->``
+    marker 付き comment を Issue comments API に投稿することで review シグナル
+    を表現する。
 
-    非 self-PR では従来通り ``gh pr review --approve`` を委譲する。
+    非 self-PR では従来通り ``gh pr review --approve|--request-changes`` を委譲する。
     """
     p = argparse.ArgumentParser(prog="kaji pr review", add_help=True)
     p.add_argument("pr_id", type=str, nargs="?", default=None)
-    p.add_argument("-a", "--approve", action="store_true", required=True)
+    state_group = p.add_mutually_exclusive_group(required=True)
+    state_group.add_argument("-a", "--approve", action="store_true")
+    state_group.add_argument(
+        "-r",
+        "--request-changes",
+        dest="request_changes",
+        action="store_true",
+    )
     p.add_argument("-b", "--body", default=None, type=str)
     p.add_argument("-F", "--body-file", dest="body_file", default=None, type=str)
     # `gh pr review` の inherited flag `-R/--repo` を吸収する。user 明示の
@@ -847,6 +870,18 @@ def _github_pr_review(rest: list[str], *, repo_override: str | None) -> int:
     if body is None:
         body = ""
 
+    # body 必須契約: --request-changes は self / 非 self 一貫で body 必須
+    # （GitHub REST API event=REQUEST_CHANGES の body parameter requirement）。
+    # subprocess 呼び出し前に fail-fast することで `gh api user` / `gh pr view`
+    # を無駄に叩かない。--approve は GitHub API 側で body optional のため
+    # 本 validation を適用せず、Issue #186 の既存契約「--approve + 空 body は
+    # marker のみで rc=0」を維持する。
+    if ns.request_changes and not body.strip():
+        sys.stderr.write(
+            "Error: --request-changes requires --body or --body-file with non-empty content.\n"
+        )
+        return EXIT_INVALID_INPUT
+
     if shutil.which("gh") is None:
         sys.stderr.write(_GH_MISSING_GUIDANCE)
         return EXIT_RUNTIME_ERROR
@@ -868,13 +903,15 @@ def _github_pr_review(rest: list[str], *, repo_override: str | None) -> int:
         return EXIT_RUNTIME_ERROR
     is_self = pr_author == me
 
-    marker = build_kaji_review_marker("APPROVED")
+    state = "APPROVED" if ns.approve else "CHANGES_REQUESTED"
+    marker = build_kaji_review_marker(state)
     marked_body = f"{marker}\n{body}"
 
     if is_self:
         return _gh_post_issue_comment_silent(repo=repo, pr_id=ns.pr_id, body=marked_body)
 
-    gh_args = ["review", ns.pr_id, "--approve"]
+    flag = "--approve" if ns.approve else "--request-changes"
+    gh_args = ["review", ns.pr_id, flag]
     if body:
         gh_args.extend(["--body", body])
     return _forward_to_gh("pr", gh_args, repo=repo)
@@ -926,7 +963,11 @@ def _handle_pr(raw_args: list[str]) -> int:
     args = list(raw_args)
     if args and args[0] == "--":
         args = args[1:]
-    if args and args[0] == "review" and _has_approve_flag(args[1:]):
+    if (
+        args
+        and args[0] == "review"
+        and (_has_approve_flag(args[1:]) or _has_request_changes_flag(args[1:]))
+    ):
         return _github_pr_review(args[1:], repo_override=repo_override)
     if args and args[0] in _PR_BUILTIN_SUBCOMMANDS:
         return _dispatch_pr_builtin(args[0], args[1:], repo_override=repo_override)
