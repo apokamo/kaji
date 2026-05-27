@@ -29,16 +29,6 @@ HEADING_PATTERN = re.compile(r"^ {0,3}(#{1,6})\s+(.*)$")
 
 _MD_PARSER = MarkdownIt("commonmark", {"html": False})
 
-# Inline code span (CommonMark 0.31.2 § 6.1): a backtick string of length N
-# closes with a backtick string of the same length N. Line endings allowed
-# inside (treated like spaces).
-_CODE_SPAN_PATTERN = re.compile(
-    r"(?<!`)(`+)(?!`)"
-    r"(?:(?!\1)[^`]|`+(?!\1))*?"
-    r"(?<!`)\1(?!`)",
-    re.DOTALL,
-)
-
 EXTERNAL_PREFIXES = ("https://", "http://", "mailto:", "tel:", "ftp://")
 
 
@@ -323,20 +313,70 @@ def _collect_unclosed_fence_line_ranges(content: str) -> list[tuple[int, int]]:
 
 
 def _strip_inline_code_spans(text: str) -> str:
-    # CommonMark §2.4: a backslash before ASCII punctuation produces a literal
-    # character. An escaped backtick (``\\```) is therefore NOT a code span
-    # delimiter. Mask escape sequences before applying the code span regex so
-    # that escaped backticks cannot be paired with subsequent backticks and
-    # silently swallow real links between them. `\\\\` is consumed first so a
-    # literal backslash followed by a delimiter backtick (`\\\\\\``) survives.
-    # Each 2-char escape is replaced by 2 non-backtick chars to preserve
-    # offsets for `_index_to_line`.
-    masked_escapes = text.replace("\\\\", "  ").replace("\\`", "  ")
+    """Blank inline code spans (CommonMark § 6.1) preserving char offsets.
 
-    def _blank(m: re.Match[str]) -> str:
-        return "".join(ch if ch == "\n" else " " for ch in m.group(0))
+    Walks ``text`` left-to-right tracking text vs. code-span context so that
+    CommonMark backslash escape rules are honored correctly:
 
-    return _CODE_SPAN_PATTERN.sub(_blank, masked_escapes)
+    - In text mode, a backslash before any char consumes both as literal text,
+      so ``\\``` is NOT a code-span delimiter (CommonMark § 2.4).
+    - Inside a code span, backslashes are literal — the only thing that closes
+      the span is the next backtick run of the same length as the opener
+      (CommonMark § 6.1). Escape preprocessing must not run inside a span.
+
+    The previous global ``text.replace("\\`", "  ")`` preprocessing violated
+    the second rule: it dropped backticks that were actually closing
+    delimiters of real code spans (creating false-positive broken links) and
+    fabricated paired delimiters where the source had only an unmatched
+    backtick run (silently masking real broken links — a soundness regression).
+
+    Non-newline characters within a recognized span are replaced with spaces;
+    newlines are preserved so ``_index_to_line`` keeps reporting the original
+    line numbers.
+    """
+    n = len(text)
+    out = list(text)
+    i = 0
+    while i < n:
+        ch = text[i]
+        if ch == "\\" and i + 1 < n:
+            # Text-mode backslash escape: skip the backslash + next char as
+            # literal. This makes `\`` a non-delimiter and `\\` consume both
+            # backslashes so a literal-backslash + delimiter-backtick (`\\` `)
+            # still opens a real span.
+            i += 2
+            continue
+        if ch == "`":
+            j = i
+            while j < n and text[j] == "`":
+                j += 1
+            run_len = j - i
+            # Search for a closing backtick run of equal length. Inside the
+            # span, backslashes are literal — do NOT escape-skip while scanning.
+            k = j
+            close_end = -1
+            while k < n:
+                if text[k] == "`":
+                    m = k
+                    while m < n and text[m] == "`":
+                        m += 1
+                    if m - k == run_len:
+                        close_end = m
+                        break
+                    k = m
+                else:
+                    k += 1
+            if close_end == -1:
+                # No matching close; opener is literal text.
+                i = j
+            else:
+                for p in range(i, close_end):
+                    if text[p] != "\n":
+                        out[p] = " "
+                i = close_end
+            continue
+        i += 1
+    return "".join(out)
 
 
 def _index_to_line(index: int, lines: list[str]) -> int:

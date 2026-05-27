@@ -367,6 +367,26 @@ class TestStripCodeSegmentsInline:
         out = _strip_code_segments(src)
         assert "[fake](missing.md)" not in out
 
+    def test_backslash_inside_span_is_literal_closing_backtick_closes(self) -> None:
+        # Review round 9 probe (case 1): inside a code span, backslashes are
+        # literal (CommonMark § 6.1) — the trailing single backtick after `\`
+        # closes the span. The pseudo-link must be masked. The old global
+        # `replace("\\`", "  ")` preprocessing dropped that closing backtick
+        # and surfaced the fake link as a false-positive broken link.
+        src = "` A [fake](missing.md) B \\`\n"
+        out = _strip_code_segments(src)
+        assert "[fake](missing.md)" not in out
+
+    def test_unmatched_backtick_runs_around_escaped_backtick_preserve_link(self) -> None:
+        # Review round 9 probe (case 2): a single-backtick opener cannot be
+        # closed by a two-backtick run, so no code span exists and the real
+        # link must survive masking. The old preprocessing fabricated a
+        # length-1 closer by consuming the `\` + first trailing backtick,
+        # which silently swallowed the real broken link (soundness regression).
+        src = "` A [real](missing.md) B \\``\n"
+        out = _strip_code_segments(src)
+        assert "[real](missing.md)" in out
+
 
 @pytest.mark.small
 class TestStripCodeSegmentsPositionPreserved:
@@ -726,6 +746,24 @@ class TestCodeBlockExclusion:
         _write(tmp_path / "docs" / "a.md", "x \\\\`[fake](missing.md)` y\n")
         result = _run(tmp_path, "docs")
         assert result.returncode == 0, result.stderr
+
+    def test_backslash_inside_span_does_not_surface_fake_link(self, tmp_path: Path) -> None:
+        # Review round 9 probe (case 1, subprocess): the fake link is inside
+        # a real code span closed by the backtick after `\`. CLI must exit 0.
+        _write(tmp_path / "docs" / "a.md", "` A [fake](missing.md) B \\`\n")
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_unmatched_run_around_escaped_backtick_reports_broken_link(
+        self, tmp_path: Path
+    ) -> None:
+        # Review round 9 probe (case 2, subprocess): single-backtick opener
+        # with two-backtick "closer" forms no span. The real broken link must
+        # surface as a soundness guarantee.
+        _write(tmp_path / "docs" / "a.md", "` A [real](missing.md) B \\``\n")
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 1
+        assert "missing.md" in result.stderr
 
     def test_no_trailing_newline_unclosed_reports_broken_link(self, tmp_path: Path) -> None:
         # MF-1 (round 6→7 probe): no-trailing-newline unclosed fence must NOT

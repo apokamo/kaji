@@ -113,7 +113,7 @@ link checker の役割は **broken link を見逃さない**こと（false-negat
   - `uv.lock` — `uv sync` による自動更新
 - スコープ外:
   - インデント済みコードブロック (CommonMark §4.4) の除外（理由は EB § scope-out 参照。Issue 本文の明示 scope-out）
-  - inline code の解析を markdown-it-py に切り替えること。inline code span は既存の content 全体走査 regex (`_strip_inline_code_spans`) を継続利用する（複数行 code span 対応済み、回帰なし）
+  - inline code の解析を markdown-it-py token tree に切り替えること。`_strip_inline_code_spans` は round 9 で escape-aware の手書きスキャナに更新済みで、§6.1 の delimiter / §2.4 の escape を直接実装する（round 9 で発覚した round 8 pre-pass の double-violation を恒久解消）
   - `Makefile` の `verify-docs` ターゲット定義（修正不要）
   - 既存 link 検証ロジック（anchor / repo 外 / image link skip 等）の挙動変更
 
@@ -126,7 +126,7 @@ link checker の役割は **broken link を見逃さない**こと（false-negat
 本 round では実装基盤を **`markdown-it-py`（純 Python 製の CommonMark 0.31 準拠 parser）** に切り替え、token-level の line range 情報を用いて fenced code block の領域を mask する。これにより:
 
 - list item / block quote / 多層 container 内の fenced block を正確に検出（CommonMark spec 準拠）
-- inline code spans の解析は既存 regex を継続利用（複数行対応の `_strip_inline_code_spans` は round 2 で検証済み、parser に置換するメリット薄）
+- inline code spans の解析は escape-aware 手書きスキャナで実装（round 9 修正。§6 参照）。CommonMark §6.1 の「code span 内では backslash は literal」要件を pre-pass では満たせないため、開閉判定と同時に escape を解釈する 1-pass scanner に切り替え
 - 未閉鎖 fence は **mask 対象から除外** することで soundness を保証
 
 ### 1. dev dependency 追加
@@ -387,36 +387,81 @@ something incomplete
 - 特に `test_image_links_skipped` / `test_self_anchor` / `test_link_to_nonexistent_file` 等の link 検出の中核挙動が回帰しないこと
 - round 1 / round 2 で追加した Small / Medium テストも全て green を維持
 
-### 6. Inline code span の検出（CommonMark § 6.1 準拠 / 複数行対応）
+### 6. Inline code span の検出（CommonMark § 6.1 / § 2.4 準拠・round 9 修正版）
 
-`_strip_inline_code_spans` は round 1/2 から継続利用する（markdown-it-py に置換せず regex のまま）。理由: 複数行 code span を含む既存仕様は round 1/2 の Small テストで検証済みで、parser 置換のメリット薄。
+`_strip_inline_code_spans` は **round 9 で regex+前処理から手書きスキャナへ切り替え**た。
 
-CommonMark 0.31.2 § 6.1 の以下規定に厳密に従う:
+#### round 8 までの実装と欠陥
 
-- code span は **同じ長さ N の backtick string** で開閉する
-- **line ending は内部に許容される**（"Line endings are treated like spaces."）→ **行単位処理ではなく content 全体に対する処理が必須**
-- 開閉のため、Pass 2 は Pass 1 でマスク済みの全 content（複数行を含む単一文字列）に対し regex を適用する
+round 1/2 で導入した regex (`_CODE_SPAN_PATTERN`) は CommonMark § 6.1 の「同じ長さ N の backtick string で開閉」を表現していた。round 8 で「`\`` は code span delimiter ではない」（§ 2.4）を扱うため、regex を当てる前に `text.replace("\\\\", "  ").replace("\\`", "  ")` で escape 配列を空白化する pre-pass を追加した。
 
-擬似コード（content 全体走査による複数行対応）:
+しかしこの pre-pass は **delimiter の文脈識別を完全に無視する** ため、reviewer round 9 probe で 2 種類の重大な不整合が再現した:
+
+| 入力 | CommonMark 解釈 | round 8 実装の挙動 | 障害 |
+|------|----------------|--------------------|------|
+| `` ` A [fake](missing.md) B \` `` | `code_inline` 内に擬似 link（最後の `` ` `` は span 内の literal `\` の直後に続く真の closing delimiter） | `\`` を空白化したことで closing backtick が消失 → opener が unmatched 扱い → 擬似 link が link 抽出に流れる | false-positive: 存在しないリンクを broken と報告 |
+| `` ` A [real](missing.md) B \`` `` | 単一 backtick opener と二重 backtick run は length 不一致 → code span は成立せず、`[real](missing.md)` は本物のリンク | `\`` を空白化したことで二重 backtick run の先頭 1 個が消失 → 残った長さ 1 の closing と pair 成立 → 内部全体が mask | false-negative: 本物の broken link を silent に隠蔽（**soundness 違反**） |
+
+第二パターンは link checker の存在意義（broken link を見逃さない）に反するため、設計書の Soundness 要件と完了条件 2 に直接抵触する。
+
+#### round 9 の解決方針: 文脈認識スキャナ
+
+CommonMark § 2.4 の backslash escape は **inline text モードでのみ** 適用され、code span 内では適用されない（§ 6.1: "Backslash escapes do not work in code spans"）。よって escape の解釈は code span 開閉判定と **同時** に行う必要があり、pre-pass による前処理では原理的に解決できない。
+
+実装は左から右への 1 パス走査でモード遷移を持つ:
 
 ```python
-# N 個 backtick 開 → 同 N 個 backtick 閉 まで（内部に \n を許容、ただし short run は許容）
-# CommonMark の "backtick string" は前後が backtick でない連続列。lookaround で境界を確保。
-CODE_SPAN_PATTERN = re.compile(
-    r"(?<!`)(`+)(?!`)"            # opening run (length N), not preceded/followed by `
-    r"(?:(?!\1)[^`]|`+(?!\1))*?"  # content: non-backtick or backtick-run of length != N
-    r"(?<!`)\1(?!`)",             # closing run of same length N
-    re.DOTALL,                    # `.` を使わないが、内部の改行を許容するために DOTALL
-)
-
 def _strip_inline_code_spans(text: str) -> str:
-    def _blank(m: re.Match[str]) -> str:
-        # 改行は保持し、それ以外を空白化（line 番号互換性のため）
-        return "".join(ch if ch == "\n" else " " for ch in m.group(0))
-    return CODE_SPAN_PATTERN.sub(_blank, text)
+    n = len(text)
+    out = list(text)
+    i = 0
+    while i < n:
+        ch = text[i]
+        if ch == "\\" and i + 1 < n:
+            # text-mode escape: \X は 2 文字消費。\` は delimiter ではない。
+            # \\ も 2 文字消費するので \\` の ` は真の delimiter として残る。
+            i += 2
+            continue
+        if ch == "`":
+            j = i
+            while j < n and text[j] == "`":
+                j += 1
+            run_len = j - i  # opener run length
+            k = j
+            close_end = -1
+            while k < n:
+                if text[k] == "`":
+                    m = k
+                    while m < n and text[m] == "`":
+                        m += 1
+                    if m - k == run_len:
+                        close_end = m
+                        break
+                    # span 内では backslash は literal → escape skip しない
+                    k = m
+                else:
+                    k += 1
+            if close_end == -1:
+                i = j  # unmatched opener は literal text
+            else:
+                for p in range(i, close_end):
+                    if text[p] != "\n":
+                        out[p] = " "
+                i = close_end
+            continue
+        i += 1
+    return "".join(out)
 ```
 
-> `_blank` は改行を `\n` のまま残し、それ以外を空白化することで、複数行 code span を空白化しても `_index_to_line()` が元 content と同じ line 番号を返すよう位置を保つ。
+挙動の鍵:
+
+- **text-mode の escape skip**: `\X` を 2 文字単位で読み飛ばすことで、`\`` が code span opener にも closer にもならない（round 8 の主目的は維持）
+- **`\\` 優先**: 連続する 2 文字単位 skip により `\\` を 1 つの escape として消費し、続く `` ` `` は真の delimiter として残る（既存テスト `test_escaped_backslash_before_delimiter_still_masks_span` が回帰しない）
+- **code span 内の literal backslash**: opener を見つけた後の close 探索ループは escape skip を行わず、`\` を literal として扱う（CommonMark § 6.1 準拠）。round 9 probe ケース 1 はこのループで `\` の直後の `` ` `` が真の closing として認識され、擬似 link が mask される
+- **長さ不一致の run は close ではない**: 二重 backtick run は単一 backtick opener を close しない（round 9 probe ケース 2 で `[real](missing.md)` が link 抽出に流れる）
+- **オフセット保持**: mask は改行以外を空白化するだけなので、`_index_to_line()` の line 番号互換性は不変
+
+旧 `_CODE_SPAN_PATTERN` 定数および `text.replace("\\\\", "  ").replace("\\`", "  ")` の pre-pass は削除する。`re` モジュール自体は `LINK_PATTERN` / `HEADING_PATTERN` で引き続き使用する。
 
 ## テスト戦略
 
@@ -476,6 +521,10 @@ def _strip_inline_code_spans(text: str) -> str:
 - **同長 backtick run でのみ閉じる**: ` ``code with ` single`` ` のように内部に短い run を含む二重 backtick span を正しく検出
 - **不揃いな run は code span にならない**: `` `abc`` `` のような不一致は span として消費されず、`[...](...)` がそのまま残る
 - **通常段落の link は残る**: 入力 `"see [link](b.md) here"` → 出力でも `[link](b.md)` が残る
+- **エスケープされた backtick は delimiter にならない**: 入力 `` "\`[real](missing.md)\`\n" `` → `\`` は literal backtick として扱われ code span を構成しない。`[real](missing.md)` は link 抽出に流れる（既存 `test_escaped_backticks_do_not_form_code_span`）
+- **エスケープされた backslash の直後の backtick は真の delimiter**: 入力 `` "x \\\\`[fake](missing.md)` y\n" `` → `\\` は literal backslash として 2 文字消費され、続く `` ` `` は本物の opener。span 内の擬似 link は空白化される（既存 `test_escaped_backslash_before_delimiter_still_masks_span`）
+- **round 9 probe ケース 1: span 内 literal backslash の直後の backtick が close する**: 入力 `` "` A [fake](missing.md) B \\`\n" `` → opener `` ` `` の後、span 内の `\` は literal、続く `` ` `` が真の closing → 擬似 link が空白化される。round 8 までの pre-pass 実装ではこの `\`` を空白化したことで closer が消失し false-positive を出していた
+- **round 9 probe ケース 2: 長さ不一致の backtick run は close にならない**: 入力 `` "` A [real](missing.md) B \\``\n" `` → 単一 backtick opener と二重 backtick run は length 不一致のため code span 不成立。`[real](missing.md)` は link 抽出に流れる。round 8 までの pre-pass 実装ではこの `\`` を空白化したことで二重 run が長さ 1 に縮み false-negative（soundness 違反）を出していた
 
 #### 位置保持の不変条件（実装契約の明示検証）
 
@@ -504,6 +553,8 @@ bug 規定（`design-by-type/bug.md` § 8）の **再現テスト** および Re
 - **CommonMark §5.2 Example 263 の subprocess 回帰テスト** (今回の MF-1 対応 / Red 証跡用): `` "1.  text\n\n    ```\n    [fake](missing.md)\n    ```\n" `` を含む `.md` を `_run` 経由で検査 → 修正前は `returncode=1` + stderr に `broken link: missing.md`、修正後は `returncode=0`
 - **block quote 内 fenced block の subprocess 回帰テスト** (round 3 MF-2 + MF-3 対応): `` "> ```text\n> [fake](missing.md)\n> ```\n" `` を含む `.md` を `_run` 経由で検査 → 修正前は `returncode=1`、修正後は `returncode=0`
 - **list item content indent + block quote の複合 container** (round 5 reviewer probe 対応): `` "1.  > ```text\n    > [fake](missing.md)\n    > ```\n" `` を含む `.md` を `_run` 経由で検査 → 修正前は `returncode=1`、修正後は `returncode=0`。round 6 では line ベースの `_is_explicit_closing_fence` 判定を廃止したため、本ケースの単体検証は **Small テストの `_fence_has_explicit_closing` 複合 container True 系** に移行し、subprocess 側は CLI 全体の振る舞いのみを assert する
+- **round 9 probe ケース 1 の subprocess 回帰テスト** (false-positive 対応 / 新規): `` "` A [fake](missing.md) B \\`\n" `` を含む `.md` を `_run` 経由で検査 → **修正後は `returncode=0`**。round 8 までの pre-pass 実装ではこの入力で擬似 link が抽出され `returncode=1` + `broken link: missing.md` を出すため、本ケースが round 8 と round 9 を分ける subprocess Red 証跡となる
+- **round 9 probe ケース 2 の subprocess 回帰テスト** (soundness 違反対応 / 最重要 / 新規): `` "` A [real](missing.md) B \\``\n" `` を含む `.md` を `_run` 経由で検査 → **修正後は `returncode=1` + stderr に `broken link: missing.md`**。round 8 までの pre-pass 実装ではこの入力で本物の broken link が silent に隠れて `returncode=0` を返すため、本ケースが false-negative（soundness 違反）の Red 証跡となる
 - **round 6 MF-1 probe: top-level 4-sp pseudo-close の subprocess 回帰テスト** (今回の MF-1 対応 / 最重要): `` "```bash\n[real-broken](missing.md)\n    ```\n" `` (top-level fence + 4 sp 字下げ pseudo-close) を含む `.md` を `_run` 経由で検査 → **修正後も `returncode=1` を返し、`broken link: missing.md` を stderr に出力する**。round 5 までの実装ではこの入力で `[real-broken](missing.md)` が silent に隠れて exit 0 になるため、本ケースが round 5 と round 6 を分ける subprocess Red 証跡となる
 - **未閉鎖 fence の soundness 回帰テスト** (今回の Point 2 対応 / 最重要): `` "Intro.\n\n```bash\nsome code\n\n[real-broken](missing.md)\n" `` (closing fence なし、末尾改行あり) を含む `.md` を `_run` 経由で検査 → **修正後も `returncode=1` を返し、`broken link: missing.md` を stderr に出力する**（false-negative を防ぐ safety guard の動作確認）
 - **round 7 no-trailing-newline 未閉鎖 fence の subprocess 回帰テスト** (今回の round 7 修正核心): `` "```bash\n[real-broken](missing.md)" `` (末尾改行なし、closing fence なし) を含む `.md` を `_run` 経由で検査 → **修正後も `returncode=1` を返し、`broken link: missing.md` を stderr に出力する**。round 6 実装ではこの入力で broken link が silent に隠れ exit 0 になるため、本ケースが round 6 と round 7 を分ける subprocess Red 証跡となる。`.md` ファイルは `pathlib.Path.write_text()` を `newline=""` 相当（末尾改行を付加しない書き出し）で生成すること
