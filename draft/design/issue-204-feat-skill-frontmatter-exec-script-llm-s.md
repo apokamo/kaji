@@ -407,10 +407,11 @@ def main() -> int:
 |-------------|------|------|
 | `docs/dev/skill-authoring.md` | **あり** | `exec_script` frontmatter 仕様を追記（決定論的 skill の書き方、env 変数仕様、verdict 出力責務） |
 | `docs/dev/workflow-authoring.md` | **あり** | `agent` 任意化条件（exec_script skill のみ）と validation 動作を追記 |
-| `docs/ARCHITECTURE.md` | なし | dispatch レイヤの拡張だが、verdict 判定機構の根本構造は不変 |
+| `docs/ARCHITECTURE.md` | **あり** | WorkflowRunner シーケンス図に exec_script / agent の分岐と RunLogger の `dispatch` field を追記（dispatch レイヤ拡張の図解化） |
 | `docs/adr/` | なし | 既存方針（skill = 1 step の作業資産、verdict は stdout 経由）の延長であり、新規 ADR 不要 |
 | `docs/dev/development_workflow.md` | なし | 開発ワークフローのフロー定義は不変 |
-| `docs/reference/python/` | なし | コーディング規約 / 命名 / 型 hint に影響なし |
+| `docs/reference/python/logging.md` | **あり** | `step_start` / `step_end` の `agent` を nullable 化、`dispatch` field（`"agent"` / `"exec_script"`）を追記。exec_script 経路では `agent`/`model`/`effort` が常に null である旨を明記 |
+| `docs/reference/python/` (logging.md 以外) | なし | コーディング規約 / 命名 / 型 hint に影響なし |
 | `docs/cli-guides/` | なし | `kaji run` / `kaji validate` の CLI シグネチャ不変 |
 | `CLAUDE.md` | なし | プロジェクト規約に影響なし |
 | `.claude/skills/review-poll/SKILL.md` | **あり** | コード変更そのものではないが、frontmatter / Step 構成を同 PR で更新 |
