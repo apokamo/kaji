@@ -890,6 +890,71 @@ class TestHasApproveFlag:
 
 
 @pytest.mark.small
+class TestHasRequestChangesFlag:
+    """`_has_request_changes_flag` 純粋関数の単体テスト（``_has_approve_flag`` と対称形）."""
+
+    def test_request_changes_long_flag(self) -> None:
+        from kaji_harness.cli_main import _has_request_changes_flag
+
+        assert _has_request_changes_flag(["--request-changes"]) is True
+
+    def test_request_changes_with_value(self) -> None:
+        from kaji_harness.cli_main import _has_request_changes_flag
+
+        assert _has_request_changes_flag(["--request-changes=true"]) is True
+
+    def test_approve_returns_false(self) -> None:
+        from kaji_harness.cli_main import _has_request_changes_flag
+
+        assert _has_request_changes_flag(["--approve"]) is False
+
+    def test_comment_returns_false(self) -> None:
+        from kaji_harness.cli_main import _has_request_changes_flag
+
+        assert _has_request_changes_flag(["--comment"]) is False
+
+    def test_empty_returns_false(self) -> None:
+        from kaji_harness.cli_main import _has_request_changes_flag
+
+        assert _has_request_changes_flag([]) is False
+
+    def test_double_dash_ignores_following_request_changes(self) -> None:
+        from kaji_harness.cli_main import _has_request_changes_flag
+
+        assert _has_request_changes_flag(["--", "--request-changes"]) is False
+
+    def test_position_independent(self) -> None:
+        from kaji_harness.cli_main import _has_request_changes_flag
+
+        assert _has_request_changes_flag(["199", "--request-changes", "--body", "x"]) is True
+
+    def test_substring_match_not_accepted(self) -> None:
+        from kaji_harness.cli_main import _has_request_changes_flag
+
+        assert _has_request_changes_flag(["199", "--body", "--request-changes-not-real"]) is False
+
+    def test_short_r_flag_returns_true(self) -> None:
+        from kaji_harness.cli_main import _has_request_changes_flag
+
+        assert _has_request_changes_flag(["-r"]) is True
+
+    def test_short_r_after_double_dash_returns_false(self) -> None:
+        from kaji_harness.cli_main import _has_request_changes_flag
+
+        assert _has_request_changes_flag(["--", "-r"]) is False
+
+    def test_short_r_with_pr_id_returns_true(self) -> None:
+        from kaji_harness.cli_main import _has_request_changes_flag
+
+        assert _has_request_changes_flag(["199", "-r"]) is True
+
+    def test_short_bundle_not_accepted(self) -> None:
+        from kaji_harness.cli_main import _has_request_changes_flag
+
+        assert _has_request_changes_flag(["199", "-rx"]) is False
+
+
+@pytest.mark.small
 class TestGithubPrReviewHandler:
     """`_github_pr_review` を `_handle_pr` 非経由で直接呼ぶ handler 単体テスト。
 
@@ -1216,6 +1281,314 @@ class TestGithubPrReviewHandler:
             third_cmd = mock_run.call_args_list[2][0][0]
             assert "repos/explicit/repo/issues/185/comments" in third_cmd
 
+    # ------------------------------------------------------------
+    # --request-changes 系（Issue #199）
+    # ------------------------------------------------------------
+
+    def test_self_pr_request_changes_posts_marker_only(self) -> None:
+        """self-PR + --request-changes は marker comment を POST して rc=0（gh pr review は呼ばない）."""
+        from kaji_harness.cli_main import _github_pr_review
+        from kaji_harness.providers.github import build_kaji_review_marker
+
+        which, detect, run = self._patches()
+        with which, detect, run as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="apokamo\n", stderr=""),
+                MagicMock(returncode=0, stdout="apokamo\n", stderr=""),
+                MagicMock(returncode=0, stdout="", stderr=""),
+            ]
+            rc = _github_pr_review(
+                ["199", "--request-changes", "--body", "Must Fix items"],
+                repo_override="owner/repo",
+            )
+            assert rc == 0
+            assert mock_run.call_count == 3
+            third_cmd = mock_run.call_args_list[2][0][0]
+            assert third_cmd[:4] == ["gh", "api", "--method", "POST"]
+            assert third_cmd[4] == "repos/owner/repo/issues/199/comments"
+            body_arg = third_cmd[third_cmd.index("-f") + 1]
+            marker = build_kaji_review_marker("CHANGES_REQUESTED")
+            assert body_arg == f"body={marker}\nMust Fix items"
+            # gh pr review は呼ばれていない
+            for call in mock_run.call_args_list:
+                cmd = call[0][0]
+                if len(cmd) >= 3:
+                    assert not (cmd[1] == "pr" and cmd[2] == "review")
+
+    def test_self_pr_request_changes_marker_observation_path(self) -> None:
+        """marker prefix + user body の構造保証（pr-fix が kaji pr view --comments 経由で読み取れる契約)."""
+        from kaji_harness.cli_main import _github_pr_review
+
+        which, detect, run = self._patches()
+        with which, detect, run as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="apokamo\n", stderr=""),
+                MagicMock(returncode=0, stdout="apokamo\n", stderr=""),
+                MagicMock(returncode=0, stdout="", stderr=""),
+            ]
+            user_body = "## 指摘事項\n- point 1: foo\n- point 2: bar"
+            rc = _github_pr_review(
+                ["199", "--request-changes", "--body", user_body],
+                repo_override="owner/repo",
+            )
+            assert rc == 0
+            third_cmd = mock_run.call_args_list[2][0][0]
+            body_arg = third_cmd[third_cmd.index("-f") + 1]
+            # marker prefix + user body の構造を assert
+            assert body_arg.startswith("body=<!-- kaji-review: state=CHANGES_REQUESTED -->\n")
+            assert body_arg.endswith(user_body)
+
+    def test_self_pr_request_changes_stdout_suppressed_via_capture_output(self) -> None:
+        from kaji_harness.cli_main import _github_pr_review
+
+        which, detect, run = self._patches()
+        with which, detect, run as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="apokamo\n", stderr=""),
+                MagicMock(returncode=0, stdout="apokamo\n", stderr=""),
+                MagicMock(returncode=0, stdout="", stderr=""),
+            ]
+            _github_pr_review(
+                ["199", "--request-changes", "--body", "x"],
+                repo_override="owner/repo",
+            )
+            third_kwargs = mock_run.call_args_list[2][1]
+            assert third_kwargs.get("capture_output") is True
+
+    def test_non_self_pr_request_changes_forwards_to_gh(self) -> None:
+        """非 self-PR + --request-changes は gh pr review --request-changes 委譲、POST しない."""
+        from kaji_harness.cli_main import _github_pr_review
+
+        which, detect, run = self._patches()
+        with which, detect, run as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="alice\n", stderr=""),
+                MagicMock(returncode=0, stdout="bob\n", stderr=""),
+                MagicMock(returncode=0),
+            ]
+            rc = _github_pr_review(
+                ["199", "--request-changes", "--body", "needs work"],
+                repo_override="owner/repo",
+            )
+            assert rc == 0
+            assert mock_run.call_count == 3
+            third_cmd = mock_run.call_args_list[2][0][0]
+            assert third_cmd[:2] == ["gh", "pr"]
+            assert "review" in third_cmd
+            assert "--request-changes" in third_cmd
+            assert "199" in third_cmd
+            for call in mock_run.call_args_list:
+                cmd = call[0][0]
+                if "--method" in cmd:
+                    raise AssertionError(f"unexpected POST call: {cmd}")
+
+    def test_short_r_alias_request_changes_self_pr(self) -> None:
+        """`-r` 短縮形 --request-changes も self-PR fallback 経路に入る."""
+        from kaji_harness.cli_main import _github_pr_review
+
+        which, detect, run = self._patches()
+        with which, detect, run as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="me\n", stderr=""),
+                MagicMock(returncode=0, stdout="me\n", stderr=""),
+                MagicMock(returncode=0, stdout="", stderr=""),
+            ]
+            rc = _github_pr_review(["199", "-r", "--body", "fix it"], repo_override="owner/repo")
+            assert rc == 0
+            third_cmd = mock_run.call_args_list[2][0][0]
+            assert third_cmd[:4] == ["gh", "api", "--method", "POST"]
+
+    def test_request_changes_missing_body_fails_fast(self) -> None:
+        """--request-changes で body 未指定 → EXIT_INVALID_INPUT、subprocess 呼び出し 0 回."""
+        from kaji_harness.cli_main import EXIT_INVALID_INPUT, _github_pr_review
+
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.cli_main._detect_repo", return_value="owner/repo"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            rc = _github_pr_review(["199", "--request-changes"], repo_override="owner/repo")
+            assert rc == EXIT_INVALID_INPUT
+            assert mock_run.call_count == 0
+
+    def test_request_changes_whitespace_body_fails_fast(self) -> None:
+        """--request-changes で空白のみ body → EXIT_INVALID_INPUT、subprocess 呼び出し 0 回."""
+        from kaji_harness.cli_main import EXIT_INVALID_INPUT, _github_pr_review
+
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.cli_main._detect_repo", return_value="owner/repo"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            rc = _github_pr_review(
+                ["199", "--request-changes", "--body", "   \n  "],
+                repo_override="owner/repo",
+            )
+            assert rc == EXIT_INVALID_INPUT
+            assert mock_run.call_count == 0
+
+    def test_request_changes_empty_body_file_fails_fast(self, tmp_path: Path) -> None:
+        """--request-changes で空 body-file → EXIT_INVALID_INPUT、subprocess 呼び出し 0 回."""
+        from kaji_harness.cli_main import EXIT_INVALID_INPUT, _github_pr_review
+
+        f = tmp_path / "empty.txt"
+        f.write_text("")
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.cli_main._detect_repo", return_value="owner/repo"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            rc = _github_pr_review(
+                ["199", "--request-changes", "--body-file", str(f)],
+                repo_override="owner/repo",
+            )
+            assert rc == EXIT_INVALID_INPUT
+            assert mock_run.call_count == 0
+
+    def test_request_changes_missing_body_fails_fast_for_non_self_pr(self) -> None:
+        """body 必須 validation は preflight より先に走る（self / 非 self に依存しない fail-fast)."""
+        from kaji_harness.cli_main import EXIT_INVALID_INPUT, _github_pr_review
+
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.cli_main._detect_repo", return_value="owner/repo"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            # mock があっても呼ばれない（validation 段で停止）
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="alice\n", stderr=""),
+                MagicMock(returncode=0, stdout="bob\n", stderr=""),
+            ]
+            rc = _github_pr_review(["199", "--request-changes"], repo_override="owner/repo")
+            assert rc == EXIT_INVALID_INPUT
+            assert mock_run.call_count == 0
+
+    def test_approve_empty_body_still_allowed_regression(self) -> None:
+        """Issue #186 契約維持: --approve + 空 body は marker のみで rc=0（body 必須 validation は --request-changes 限定)."""
+        from kaji_harness.cli_main import _github_pr_review
+        from kaji_harness.providers.github import build_kaji_review_marker
+
+        which, detect, run = self._patches()
+        with which, detect, run as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="me\n", stderr=""),
+                MagicMock(returncode=0, stdout="me\n", stderr=""),
+                MagicMock(returncode=0, stdout="", stderr=""),
+            ]
+            rc = _github_pr_review(["185", "--approve"], repo_override="owner/repo")
+            assert rc == 0
+            third_cmd = mock_run.call_args_list[2][0][0]
+            body_arg = third_cmd[third_cmd.index("-f") + 1]
+            marker = build_kaji_review_marker("APPROVED")
+            assert body_arg == f"body={marker}\n"
+
+    def test_approve_and_request_changes_mutually_exclusive(self) -> None:
+        """--approve と --request-changes 同時指定は argparse mutex で SystemExit(2)."""
+        from kaji_harness.cli_main import _github_pr_review
+
+        with pytest.raises(SystemExit) as exc:
+            _github_pr_review(
+                ["199", "--approve", "--request-changes", "--body", "x"],
+                repo_override="owner/repo",
+            )
+        assert exc.value.code == 2
+
+    def test_request_changes_pr_view_failure_returns_runtime_error(self) -> None:
+        from kaji_harness.cli_main import EXIT_RUNTIME_ERROR, _github_pr_review
+
+        which, detect, run = self._patches()
+        with which, detect, run as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=1, stdout="", stderr="not found\n"),
+            ]
+            rc = _github_pr_review(
+                ["199", "--request-changes", "--body", "x"], repo_override="owner/repo"
+            )
+            assert rc == EXIT_RUNTIME_ERROR
+            assert mock_run.call_count == 1
+
+    def test_request_changes_api_user_failure_returns_runtime_error(self) -> None:
+        from kaji_harness.cli_main import EXIT_RUNTIME_ERROR, _github_pr_review
+
+        which, detect, run = self._patches()
+        with which, detect, run as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="alice\n", stderr=""),
+                MagicMock(returncode=1, stdout="", stderr="auth error\n"),
+            ]
+            rc = _github_pr_review(
+                ["199", "--request-changes", "--body", "x"], repo_override="owner/repo"
+            )
+            assert rc == EXIT_RUNTIME_ERROR
+            assert mock_run.call_count == 2
+
+    def test_request_changes_self_post_failure_returns_runtime_error(self) -> None:
+        from kaji_harness.cli_main import EXIT_RUNTIME_ERROR, _github_pr_review
+
+        which, detect, run = self._patches()
+        with which, detect, run as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="me\n", stderr=""),
+                MagicMock(returncode=0, stdout="me\n", stderr=""),
+                MagicMock(returncode=1, stdout="", stderr="API error\n"),
+            ]
+            rc = _github_pr_review(
+                ["199", "--request-changes", "--body", "x"], repo_override="owner/repo"
+            )
+            assert rc == EXIT_RUNTIME_ERROR
+
+    def test_request_changes_missing_body_file_returns_invalid_input(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--request-changes で `--body-file` 不在の場合は traceback ではなく
+        EXIT_INVALID_INPUT + stderr 診断で fail-fast する（subprocess 0 回）。
+
+        Regression: passthrough 時代は `gh pr review` が同等のエラーを返していた
+        が、self-PR fallback への routing で `Path.read_text()` の
+        ``FileNotFoundError`` traceback が露出していた。
+        """
+        from kaji_harness.cli_main import EXIT_INVALID_INPUT, _github_pr_review
+
+        missing = tmp_path / "does-not-exist.md"
+        assert not missing.exists()
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.cli_main._detect_repo", return_value="owner/repo"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            rc = _github_pr_review(
+                ["199", "--request-changes", "--body-file", str(missing)],
+                repo_override="owner/repo",
+            )
+        assert rc == EXIT_INVALID_INPUT
+        assert mock_run.call_count == 0
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert str(missing) in captured.err
+
+    def test_approve_missing_body_file_returns_invalid_input(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--approve でも `--body-file` 不在は traceback ではなく
+        EXIT_INVALID_INPUT に変換される（同根欠陥の波及修正)."""
+        from kaji_harness.cli_main import EXIT_INVALID_INPUT, _github_pr_review
+
+        missing = tmp_path / "does-not-exist.md"
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.cli_main._detect_repo", return_value="owner/repo"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            rc = _github_pr_review(
+                ["185", "--approve", "--body-file", str(missing)],
+                repo_override="owner/repo",
+            )
+        assert rc == EXIT_INVALID_INPUT
+        assert mock_run.call_count == 0
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert str(missing) in captured.err
+
 
 @pytest.mark.small
 class TestGithubPrReviewRouting:
@@ -1269,7 +1642,8 @@ class TestGithubPrReviewRouting:
         assert calls[0][1][0] == "pr"
         assert calls[0][1][1] == ["review", "185", "--comment", "--body", "x"]
 
-    def test_request_changes_routes_to_forward(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_request_changes_routes_to_handler(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Issue #199: --request-changes も `_github_pr_review` に dispatch する."""
         from kaji_harness.cli_main import _handle_pr
 
         calls: list[tuple] = []
@@ -1281,10 +1655,45 @@ class TestGithubPrReviewRouting:
             "kaji_harness.cli_main._forward_to_gh",
             lambda *a, **kw: calls.append(("forward", a, kw)) or 0,
         )
-        rc = _handle_pr(["review", "185", "--request-changes", "--body", "y"])
+        rc = _handle_pr(["review", "199", "--request-changes", "--body", "y"])
         assert rc == 0
-        assert len(calls) == 1
-        assert calls[0][0] == "forward"
+        assert calls == [("handler", ["199", "--request-changes", "--body", "y"], "owner/repo")]
+
+    def test_short_r_flag_routes_to_handler(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`kaji pr review 199 -r` も handler に dispatch する."""
+        from kaji_harness.cli_main import _handle_pr
+
+        calls: list[tuple] = []
+        monkeypatch.setattr(
+            "kaji_harness.cli_main._github_pr_review",
+            lambda rest, *, repo_override: calls.append(("handler", rest, repo_override)) or 0,
+        )
+        monkeypatch.setattr(
+            "kaji_harness.cli_main._forward_to_gh",
+            lambda *a, **kw: calls.append(("forward", a, kw)) or 0,
+        )
+        rc = _handle_pr(["review", "199", "-r", "--body", "y"])
+        assert rc == 0
+        assert calls == [("handler", ["199", "-r", "--body", "y"], "owner/repo")]
+
+    def test_approve_and_request_changes_both_route_to_handler(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """両 flag 同時指定でも routing 層では handler 側 mutex error に委ねる."""
+        from kaji_harness.cli_main import _handle_pr
+
+        calls: list[tuple] = []
+        monkeypatch.setattr(
+            "kaji_harness.cli_main._github_pr_review",
+            lambda rest, *, repo_override: calls.append(("handler", rest, repo_override)) or 0,
+        )
+        monkeypatch.setattr(
+            "kaji_harness.cli_main._forward_to_gh",
+            lambda *a, **kw: calls.append(("forward", a, kw)) or 0,
+        )
+        rc = _handle_pr(["review", "199", "--approve", "--request-changes", "--body", "x"])
+        assert rc == 0
+        assert calls[0][0] == "handler"
 
     def test_short_a_flag_routes_to_handler(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """`kaji pr review 185 -a` も `--approve` と同様に handler に dispatch する。"""
