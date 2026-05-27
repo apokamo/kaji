@@ -19,6 +19,7 @@ from .errors import (
     ConfigNotFoundError,
     HarnessError,
     SecurityError,
+    SkillFrontmatterError,
     SkillNotFound,
     WorkflowValidationError,
 )
@@ -39,7 +40,7 @@ from .providers.local import (
     LocalProviderError,
 )
 from .runner import WorkflowRunner
-from .skill import validate_skill_exists
+from .skill import load_skill_metadata, validate_skill_exists
 from .state import _format_issue_ref
 from .workflow import load_workflow, validate_workflow
 
@@ -257,13 +258,26 @@ def cmd_validate(args: argparse.Namespace) -> int:
             project_root = _resolve_project_root_for_validate(args.project_root, path)
             config = KajiConfig.discover(start_dir=project_root)
             skill_dir = config.paths.skill_dir
+            agent_omission_errors: list[str] = []
             for step in wf.steps:
                 validate_skill_exists(step.skill, project_root, skill_dir)
+                # L3 任意: skill_dir が解決できているのでメタデータも check
+                metadata = load_skill_metadata(step.skill, project_root, skill_dir)
+                if step.agent is None and metadata.exec_script is None:
+                    agent_omission_errors.append(
+                        f"Step '{step.id}' omits 'agent' but skill "
+                        f"'{step.skill}' has no 'exec_script' frontmatter"
+                    )
+            if agent_omission_errors:
+                raise WorkflowValidationError(agent_omission_errors)
             _print_success(path)
         except WorkflowValidationError as e:
             _print_error(path, e.errors)
             failed += 1
         except (SkillNotFound, SecurityError) as e:
+            _print_error(path, [str(e)])
+            failed += 1
+        except SkillFrontmatterError as e:
             _print_error(path, [str(e)])
             failed += 1
         except (ConfigNotFoundError, ConfigLoadError) as e:
@@ -379,7 +393,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             verbose=not args.quiet,
         )
         state = runner.run()
-    except (WorkflowValidationError, SkillNotFound, SecurityError) as e:
+    except (WorkflowValidationError, SkillNotFound, SecurityError, SkillFrontmatterError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_DEFINITION_ERROR
     except HarnessError as e:

@@ -41,10 +41,11 @@ class RunLogger:
     def log_step_start(
         self,
         step_id: str,
-        agent: str,
+        agent: str | None,
         model: str | None,
         effort: str | None,
         session_id: str | None,
+        dispatch: str = "agent",
     ) -> None:
         """ステップ開始イベントを記録。"""
         self._write(
@@ -54,6 +55,7 @@ class RunLogger:
             model=model,
             effort=effort,
             session_id=session_id,
+            dispatch=dispatch,
         )
 
     def log_step_end(
@@ -62,6 +64,7 @@ class RunLogger:
         verdict: Verdict,
         duration_ms: int,
         cost: CostInfo | None,
+        dispatch: str = "agent",
     ) -> None:
         """ステップ終了イベントを記録。"""
         self._write(
@@ -70,6 +73,7 @@ class RunLogger:
             verdict=asdict(verdict),
             duration_ms=duration_ms,
             cost=asdict(cost) if cost else None,
+            dispatch=dispatch,
         )
 
     def log_cycle_iteration(self, cycle_name: str, iteration: int, max_iter: int) -> None:

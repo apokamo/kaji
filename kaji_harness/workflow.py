@@ -53,7 +53,7 @@ def load_workflow_from_str(yaml_str: str) -> Workflow:
 VALID_EXECUTION_POLICIES = {"auto", "sandbox", "interactive"}
 VALID_REQUIRES_PROVIDER = {"github", "local", "any"}
 
-_STEP_REQUIRED_KEYS = ("id", "skill", "agent")
+_STEP_REQUIRED_KEYS = ("id", "skill")
 
 # Agent ごとの effort 許容値。CLI 仕様の一次情報:
 #   claude: `claude --help` の `--effort` 列挙 (low/medium/high/xhigh/max)
@@ -132,6 +132,13 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                 )
             raw_step_workdir = str(expanded_step_workdir)
 
+        raw_agent = step_data.get("agent")
+        if raw_agent is not None and not isinstance(raw_agent, str):
+            raise WorkflowValidationError(
+                f"Step '{step_data['id']}' 'agent' must be a string or null, "
+                f"got {type(raw_agent).__name__}"
+            )
+
         raw_effort = step_data.get("effort")
         if raw_effort is not None:
             if not isinstance(raw_effort, str):
@@ -139,11 +146,14 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                     f"Step '{step_data['id']}' 'effort' must be a string, "
                     f"got {type(raw_effort).__name__}"
                 )
-            allowed = _AGENT_EFFORT_ALLOWED.get(step_data["agent"])
+            # agent が省略された step では effort の agent 別検証は skip
+            # （exec_script 経路では effort は無視される。runner preflight (L2)
+            # で warning を出す）。
+            allowed = _AGENT_EFFORT_ALLOWED.get(raw_agent) if raw_agent is not None else None
             if allowed is not None and raw_effort not in allowed:
                 raise WorkflowValidationError(
                     f"Step '{step_data['id']}' effort '{raw_effort}' is not valid for "
-                    f"agent '{step_data['agent']}' (allowed: {sorted(allowed)})"
+                    f"agent '{raw_agent}' (allowed: {sorted(allowed)})"
                 )
 
         raw_timeout = step_data.get("timeout")
@@ -162,7 +172,7 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
             Step(
                 id=step_data["id"],
                 skill=step_data["skill"],
-                agent=step_data["agent"],
+                agent=raw_agent,
                 model=step_data.get("model"),
                 effort=raw_effort,
                 max_budget_usd=step_data.get("max_budget_usd"),

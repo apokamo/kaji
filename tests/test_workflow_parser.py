@@ -360,17 +360,20 @@ class TestParsingErrors:
             load_workflow_from_str(yaml_str)
 
     @pytest.mark.small
-    def test_step_missing_agent_raises_validation_error(self) -> None:
-        """Step missing 'agent' raises WorkflowValidationError."""
+    def test_step_without_agent_is_allowed(self) -> None:
+        """Issue #204: ``agent`` becomes optional at L1 (schema); skill metadata
+        L2 preflight decides whether the omission is valid (exec_script skill)."""
         yaml_str = dedent("""\
             name: test
+            execution_policy: auto
             steps:
               - id: step1
                 skill: s
+                on:
+                  PASS: end
         """)
-
-        with pytest.raises(WorkflowValidationError, match="missing required key.*agent"):
-            load_workflow_from_str(yaml_str)
+        wf = load_workflow_from_str(yaml_str)
+        assert wf.steps[0].agent is None
 
     @pytest.mark.small
     def test_step_missing_multiple_keys_reports_all(self) -> None:
@@ -378,10 +381,11 @@ class TestParsingErrors:
         yaml_str = dedent("""\
             name: test
             steps:
-              - skill: s
+              - on:
+                  PASS: end
         """)
 
-        with pytest.raises(WorkflowValidationError, match="id.*agent"):
+        with pytest.raises(WorkflowValidationError, match="missing required key"):
             load_workflow_from_str(yaml_str)
 
     @pytest.mark.small

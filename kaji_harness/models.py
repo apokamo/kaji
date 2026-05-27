@@ -44,7 +44,7 @@ class Step:
 
     id: str
     skill: str
-    agent: str
+    agent: str | None = None
     model: str | None = None
     effort: str | None = None
     max_budget_usd: float | None = None

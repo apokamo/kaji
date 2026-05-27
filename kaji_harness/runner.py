@@ -27,7 +27,8 @@ from .prompt import build_prompt
 from .providers import IssueContext, IssueProvider, PRContext, get_provider, normalize_id
 from .providers.github import GitHubProviderError
 from .providers.local import LocalProvider
-from .skill import validate_skill_exists
+from .script_exec import execute_script
+from .skill import SkillMetadata, load_skill_metadata, validate_skill_exists
 from .state import SessionState
 from .verdict import create_verdict_formatter, parse_verdict
 from .workflow import validate_workflow
@@ -220,9 +221,29 @@ class WorkflowRunner:
         """
         execution_policy = self.workflow.execution_policy
 
-        # 0. 全ステップのスキル存在を事前検証
+        # 0. 全ステップのスキル存在を事前検証 + skill metadata 整合チェック (L2)
+        skill_metadata: dict[str, SkillMetadata] = {}
         for step in self.workflow.steps:
             validate_skill_exists(step.skill, self.project_root, self.config.paths.skill_dir)
+            metadata = load_skill_metadata(
+                step.skill, self.project_root, self.config.paths.skill_dir
+            )
+            skill_metadata[step.id] = metadata
+            # L2 preflight: agent 省略の妥当性は metadata 依存
+            if step.agent is None and metadata.exec_script is None:
+                raise WorkflowValidationError(
+                    f"Step '{step.id}' omits 'agent' but skill '{step.skill}' does "
+                    "not declare 'exec_script' in its frontmatter; either set "
+                    "'agent' on the step or add 'exec_script' to the skill"
+                )
+            # exec_script 経路では agent / model / effort は無視される（warning）
+            if metadata.exec_script is not None and (
+                step.agent is not None or step.model is not None or step.effort is not None
+            ):
+                sys.stderr.write(
+                    f"WARNING: Step '{step.id}' uses exec_script skill "
+                    f"'{step.skill}'; 'agent' / 'model' / 'effort' are ignored.\n"
+                )
 
         # 1. ワークフロー定義のバリデーション
         validate_workflow(self.workflow)
@@ -289,6 +310,8 @@ class WorkflowRunner:
 
                 start_time = time.monotonic()
                 cycle = self.workflow.find_cycle_for_step(current_step.id)
+                step_metadata = skill_metadata[current_step.id]
+                is_exec_script = step_metadata.exec_script is not None
 
                 # サイクル上限チェック
                 if cycle and state.cycle_iterations(cycle.name) >= cycle.max_iterations:
@@ -300,21 +323,13 @@ class WorkflowRunner:
                     )
                     cost: CostInfo | None = None
                 else:
+                    metadata = step_metadata
+
                     # PR context は step ごとに最新状態を見る（`i-pr` step 実行後など、
                     # workflow 中に MR が新規作成されるケースを反映するため）。
                     pr_context = self._resolve_pr_context_safe(provider, issue_context.branch_name)
 
-                    # プロンプト構築（canonical id を渡す）
-                    prompt = build_prompt(
-                        current_step,
-                        run_ctx.canonical_id,
-                        state,
-                        self.workflow,
-                        issue_context=issue_context,
-                        pr_context=pr_context,
-                    )
-
-                    # セッション ID の取得
+                    # セッション ID の取得（exec_script では使わない）
                     session_id = (
                         state.get_session_id(current_step.resume) if current_step.resume else None
                     )
@@ -331,6 +346,7 @@ class WorkflowRunner:
                         current_step.model,
                         current_step.effort,
                         session_id,
+                        dispatch="exec_script" if is_exec_script else "agent",
                     )
 
                     # タイムアウト解決: workflow.default_timeout → config.execution.default_timeout
@@ -339,6 +355,11 @@ class WorkflowRunner:
                         if self.workflow.default_timeout is not None
                         else self.config.execution.default_timeout
                     )
+                    resolved_timeout = (
+                        current_step.timeout
+                        if current_step.timeout is not None
+                        else default_timeout
+                    )
 
                     # workdir 解決: step.workdir → workflow.workdir → project_root
                     raw_workdir = current_step.workdir or self.workflow.workdir
@@ -346,31 +367,75 @@ class WorkflowRunner:
                     if not effective_workdir.is_dir():
                         raise WorkdirNotFoundError(current_step.id, effective_workdir)
 
-                    # CLI 実行
-                    result = execute_cli(
-                        step=current_step,
-                        prompt=prompt,
-                        workdir=effective_workdir,
-                        session_id=session_id,
-                        log_dir=step_log_dir,
-                        execution_policy=execution_policy,
-                        verbose=self.verbose,
-                        default_timeout=default_timeout,
-                    )
+                    if is_exec_script:
+                        assert metadata.exec_script is not None
+                        # context env 注入。canonical_id / step_id / worktree
+                        # 関連を script に渡す。
+                        context_env: dict[str, str] = {
+                            "KAJI_ISSUE_ID": run_ctx.canonical_id,
+                            "KAJI_ISSUE_REF": run_ctx.issue_ref,
+                            "KAJI_STEP_ID": current_step.id,
+                            "KAJI_WORKTREE_DIR": issue_context.worktree_dir,
+                            "KAJI_BRANCH_NAME": issue_context.branch_name,
+                            "KAJI_PROVIDER_TYPE": issue_context.provider_type,
+                            "KAJI_DEFAULT_BRANCH": issue_context.default_branch,
+                        }
+                        context_env["KAJI_GIT_REMOTE"] = issue_context.git_remote
+                        if pr_context is not None:
+                            context_env["KAJI_PR_ID"] = str(pr_context.pr_id)
+                            context_env["KAJI_PR_REF"] = pr_context.pr_ref
+
+                        result = execute_script(
+                            step=current_step,
+                            module=metadata.exec_script,
+                            env=context_env,
+                            workdir=effective_workdir,
+                            log_dir=step_log_dir,
+                            timeout=resolved_timeout,
+                            verbose=self.verbose,
+                        )
+                    else:
+                        # プロンプト構築（canonical id を渡す）
+                        prompt = build_prompt(
+                            current_step,
+                            run_ctx.canonical_id,
+                            state,
+                            self.workflow,
+                            issue_context=issue_context,
+                            pr_context=pr_context,
+                        )
+
+                        # CLI 実行
+                        result = execute_cli(
+                            step=current_step,
+                            prompt=prompt,
+                            workdir=effective_workdir,
+                            session_id=session_id,
+                            log_dir=step_log_dir,
+                            execution_policy=execution_policy,
+                            verbose=self.verbose,
+                            default_timeout=default_timeout,
+                        )
 
                     # セッション ID を保存
                     if result.session_id:
                         state.save_session_id(current_step.id, result.session_id)
                     cost = result.cost
 
-                    # verdict をパース (3-stage fallback: strict → relaxed → AI formatter)
+                    # verdict をパース
                     valid = set(current_step.on.keys())
-                    formatter = create_verdict_formatter(
-                        agent=current_step.agent,
-                        valid_statuses=valid,
-                        model=current_step.model,
-                        workdir=effective_workdir,
-                    )
+                    if is_exec_script:
+                        # exec_script 経路では AI formatter fallback を呼ばない
+                        # (fabrication 防止 + 決定論性維持)
+                        formatter = None
+                    else:
+                        assert current_step.agent is not None  # L2 で確定
+                        formatter = create_verdict_formatter(
+                            agent=current_step.agent,
+                            valid_statuses=valid,
+                            model=current_step.model,
+                            workdir=effective_workdir,
+                        )
                     verdict = parse_verdict(
                         result.full_output,
                         valid_statuses=valid,
@@ -379,7 +444,13 @@ class WorkflowRunner:
 
                 # ログ記録 + 状態更新
                 duration_ms = int((time.monotonic() - start_time) * 1000)
-                logger.log_step_end(current_step.id, verdict, duration_ms, cost)
+                logger.log_step_end(
+                    current_step.id,
+                    verdict,
+                    duration_ms,
+                    cost,
+                    dispatch="exec_script" if is_exec_script else "agent",
+                )
                 state.record_step(current_step.id, verdict)
                 last_verdict = verdict
                 step_dispatched = True

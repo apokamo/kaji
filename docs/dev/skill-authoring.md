@@ -58,6 +58,56 @@ suggestion: ""
 ---END_VERDICT---
 ```
 
+### exec_script: LLM 中継なしの deterministic skill
+
+LLM の判断を必要としない決定論的 skill（GitHub API polling、固定アルゴリズム計算など）は、
+frontmatter に `exec_script` フィールドを追加することで agent spawn を skip し、harness が
+直接 `python -m <module>` として subprocess 実行する経路を選択できる。
+
+```markdown
+---
+name: review-poll
+description: codex auto-review polling
+exec_script: kaji_harness.scripts.review_poll_entry
+---
+```
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| `exec_script` | str | 任意 | Python module dotted path。`python -m <value>` で実行される |
+
+**制約**:
+- 値は Python identifier の `.` 区切り表記（`[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*`）のみ。
+  違反は skill load 時に `SkillFrontmatterError` で fail-fast（path traversal / shell metachar を
+  構文段階で遮断）。
+- 設定された skill を呼ぶ step では workflow YAML の `agent` / `model` / `effort` が無視される
+  （harness が WARN を出す）。step 側で `agent` を省略してよい。
+
+**入力（harness が env として注入）**:
+
+| env 変数 | 説明 |
+|----------|------|
+| `KAJI_ISSUE_ID` | canonical issue id |
+| `KAJI_ISSUE_REF` | 人間可読の Issue 参照 |
+| `KAJI_STEP_ID` | 実行中の step id |
+| `KAJI_WORKTREE_DIR` | Issue worktree の絶対パス |
+| `KAJI_BRANCH_NAME` | Issue branch 名 |
+| `KAJI_PROVIDER_TYPE` | `github` / `local` |
+| `KAJI_GIT_REMOTE` | git remote 名（既定 `origin`） |
+| `KAJI_DEFAULT_BRANCH` | default branch 名 |
+| `KAJI_PR_ID` | PR 解決済みなら数値文字列、未解決なら未注入 |
+| `KAJI_PR_REF` | `#<n>` 形式の PR 参照 |
+
+**出力契約**:
+- verdict ブロックを stdout に出力する責務は script 側にある（既存 `kaji_harness.scripts.codex_review_poll.emit_verdict()` 同型）。
+- exec_script 経路では **AI formatter fallback は呼ばれない**（fabrication 防止 + 決定論性維持）。
+  delimiter 不在は `VerdictNotFound` で fail-loud。
+- script は verdict を emit したら **必ず `return 0`** で終了する。ABORT / RETRY 等の業務失敗は
+  verdict status で表現し、`sys.exit(1)` で表現してはならない。
+- catastrophic 失敗（依存 CLI 不在、import エラー等）は raise させてよい。harness が
+  `ScriptExecutionError` として ERROR 扱いする（non-zero exit は stdout の verdict 有無を
+  問わず常に fail-loud）。
+
 ## verdict 出力規約
 
 すべてのスキルは最終出力として以下の形式の verdict ブロックを含めなければならない。

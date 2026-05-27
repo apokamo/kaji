@@ -141,6 +141,27 @@ _AUTOCREATE_OPT_OUT_FILES = {
 
 
 @pytest.fixture(autouse=True)
+def _default_skill_metadata_for_runner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #204: ``WorkflowRunner.run()`` の L2 preflight が全 step について
+    ``load_skill_metadata`` を呼ぶようになった。既存テストの多くは
+    ``validate_skill_exists`` のみ mock していたため、本 fixture で
+    runner namespace の ``load_skill_metadata`` を benign default
+    （``exec_script=None``、agent 経路を継続）に置き換えて autouse する。
+
+    テスト側で ``patch("kaji_harness.runner.load_skill_metadata", ...)`` を
+    明示的に張ると本 monkeypatch の上にスタックされ、``with`` ブロック内で
+    そちらが優先される（monkeypatch は fixture teardown まで残る）。
+    """
+    from kaji_harness import runner as _runner
+    from kaji_harness.skill import SkillMetadata
+
+    def _fake(skill_name: str, *args: object, **kwargs: object) -> SkillMetadata:
+        return SkillMetadata(name=skill_name, description="", exec_script=None)
+
+    monkeypatch.setattr(_runner, "load_skill_metadata", _fake)
+
+
+@pytest.fixture(autouse=True)
 def _autocreate_local_issue_for_runner(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ) -> None:

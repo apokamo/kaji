@@ -109,6 +109,8 @@ def _execute_cli_once(
     default_timeout: int,
 ) -> CLIResult:
     """CLI を 1 回実行する（リトライなし）。"""
+    # execute_cli は agent 必須 step 専用。exec_script 経路は execute_script を使う。
+    assert step.agent is not None, f"execute_cli requires step.agent (step={step.id})"
     args = build_cli_args(step, prompt, workdir, session_id, execution_policy)
     adapter = ADAPTERS[step.agent]
     timeout = step.timeout if step.timeout is not None else default_timeout
