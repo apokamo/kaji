@@ -16,6 +16,9 @@ import sys
 import unicodedata
 from pathlib import Path
 
+from markdown_it import MarkdownIt
+from markdown_it.token import Token
+
 MARKDOWN_EXT = ".md"
 DEFAULT_TARGET = "docs"
 
@@ -23,6 +26,8 @@ DEFAULT_TARGET = "docs"
 LINK_PATTERN = re.compile(r"(?<!\!)\[[^\]]*\]\(([^)\s]+(?:\s+\"[^\"]*\")?)\)")
 
 HEADING_PATTERN = re.compile(r"^ {0,3}(#{1,6})\s+(.*)$")
+
+_MD_PARSER = MarkdownIt("commonmark", {"html": False})
 
 EXTERNAL_PREFIXES = ("https://", "http://", "mailto:", "tel:", "ftp://")
 
@@ -89,8 +94,9 @@ def validate_all(files: list[Path], repo_root: Path) -> list[str]:
     for filepath in files:
         content = filepath.read_text(encoding="utf-8")
         lines = content.split("\n")
+        stripped = _strip_code_segments(content)
 
-        for match in LINK_PATTERN.finditer(content):
+        for match in LINK_PATTERN.finditer(stripped):
             raw_target = match.group(1).split()[0]
             line_num = _index_to_line(match.start(), lines)
             err = validate_link(filepath, raw_target, line_num, repo_root, heading_cache)
@@ -200,6 +206,177 @@ def _slugify(text: str, slug_counts: dict[str, int]) -> str:
     count = slug_counts.get(slug, 0)
     slug_counts[slug] = count + 1
     return slug if count == 0 else f"{slug}-{count}"
+
+
+def _fence_has_explicit_closing(tok: Token) -> bool:
+    """Return True iff a markdown-it-py ``fence`` token has an explicit closing.
+
+    Compare the fence token's source line span (``tok.map``) against the
+    logical line count of ``tok.content``. A closed fence accounts for an
+    open line + content lines + close line, so ``span == content + 2``.
+    Anything else (including open + content with no close) is treated as
+    unclosed, which keeps the link checker scanning subsequent paragraphs
+    (soundness > spec purity).
+
+    ``len(tok.content.splitlines())`` is used rather than
+    ``tok.content.count("\\n")`` because markdown-it-py does not guarantee
+    a trailing newline on ``tok.content`` when the source itself has none
+    (e.g. ``"```bash\\n[broken](missing.md)"``). ``splitlines()`` returns
+    the logical line count regardless of trailing-newline presence, which
+    CommonMark 0.31.2 §4.5 permits.
+    """
+    if tok.map is None:
+        return False
+    span_lines = tok.map[1] - tok.map[0]
+    content_lines = len(tok.content.splitlines())
+    return span_lines == content_lines + 2
+
+
+def _collect_fenced_block_line_ranges(content: str) -> list[tuple[int, int]]:
+    """Collect ``[start, end)`` line ranges of explicitly-closed fenced blocks.
+
+    Unclosed fences (no closing fence before EOF or container end) are
+    excluded so that real broken links after an accidentally-unclosed fence
+    are not silently swallowed. Indented code blocks (§4.4) are also
+    excluded — markdown-it-py emits ``code_block`` tokens for those, which
+    we ignore.
+    """
+    tokens = _MD_PARSER.parse(content)
+    ranges: list[tuple[int, int]] = []
+    for tok in tokens:
+        if tok.type != "fence" or tok.map is None:
+            continue
+        if not _fence_has_explicit_closing(tok):
+            continue
+        ranges.append((tok.map[0], tok.map[1]))
+    return ranges
+
+
+def _strip_code_segments(content: str) -> str:
+    """Blank out fenced code blocks and inline code spans for link extraction.
+
+    Returns a string of the same length as ``content`` where characters inside
+    Markdown fenced code blocks (CommonMark § 4.5) and inline code spans
+    (CommonMark § 6.1) are replaced with spaces. Newline positions are
+    preserved so that ``_index_to_line`` returns identical results for
+    matches found in the stripped output.
+
+    Indented code blocks (4-space / tab indented) are intentionally out of
+    scope (see Issue #190 design). Unclosed fenced blocks are also left
+    visible so that link checker soundness (false-negative minimization)
+    is preserved. Within unclosed fence regions, backtick characters are
+    blanked so the inline code span pattern cannot stitch the opening fence
+    marker to a similarly-shaped run later in the source (which would
+    silently swallow real broken links).
+    """
+    lines = content.split("\n")
+    closed_ranges = _collect_fenced_block_line_ranges(content)
+    unclosed_ranges = _collect_unclosed_fence_line_ranges(content)
+    mask_line = [False] * len(lines)
+    for start, end in closed_ranges:
+        for i in range(start, min(end, len(lines))):
+            mask_line[i] = True
+    blank_backticks = [False] * len(lines)
+    for start, end in unclosed_ranges:
+        for i in range(start, min(end, len(lines))):
+            if not mask_line[i]:
+                blank_backticks[i] = True
+    out_lines: list[str] = []
+    for i, line in enumerate(lines):
+        if mask_line[i]:
+            out_lines.append(" " * len(line))
+        elif blank_backticks[i]:
+            out_lines.append(line.replace("`", " "))
+        else:
+            out_lines.append(line)
+    masked = "\n".join(out_lines)
+    return _strip_inline_code_spans(masked)
+
+
+def _collect_unclosed_fence_line_ranges(content: str) -> list[tuple[int, int]]:
+    """Collect ``[start, end)`` line ranges of unclosed fenced blocks.
+
+    Counterpart to ``_collect_fenced_block_line_ranges``: returns the spans
+    that the closed-fence collector skips. Used by ``_strip_code_segments``
+    to neutralize backticks within unclosed fences so they cannot trigger
+    false inline-code-span matches against later backtick runs.
+    """
+    tokens = _MD_PARSER.parse(content)
+    ranges: list[tuple[int, int]] = []
+    for tok in tokens:
+        if tok.type != "fence" or tok.map is None:
+            continue
+        if _fence_has_explicit_closing(tok):
+            continue
+        ranges.append((tok.map[0], tok.map[1]))
+    return ranges
+
+
+def _strip_inline_code_spans(text: str) -> str:
+    """Blank inline code spans (CommonMark § 6.1) preserving char offsets.
+
+    Walks ``text`` left-to-right tracking text vs. code-span context so that
+    CommonMark backslash escape rules are honored correctly:
+
+    - In text mode, a backslash before any char consumes both as literal text,
+      so ``\\``` is NOT a code-span delimiter (CommonMark § 2.4).
+    - Inside a code span, backslashes are literal — the only thing that closes
+      the span is the next backtick run of the same length as the opener
+      (CommonMark § 6.1). Escape preprocessing must not run inside a span.
+
+    The previous global ``text.replace("\\`", "  ")`` preprocessing violated
+    the second rule: it dropped backticks that were actually closing
+    delimiters of real code spans (creating false-positive broken links) and
+    fabricated paired delimiters where the source had only an unmatched
+    backtick run (silently masking real broken links — a soundness regression).
+
+    Non-newline characters within a recognized span are replaced with spaces;
+    newlines are preserved so ``_index_to_line`` keeps reporting the original
+    line numbers.
+    """
+    n = len(text)
+    out = list(text)
+    i = 0
+    while i < n:
+        ch = text[i]
+        if ch == "\\" and i + 1 < n:
+            # Text-mode backslash escape: skip the backslash + next char as
+            # literal. This makes `\`` a non-delimiter and `\\` consume both
+            # backslashes so a literal-backslash + delimiter-backtick (`\\` `)
+            # still opens a real span.
+            i += 2
+            continue
+        if ch == "`":
+            j = i
+            while j < n and text[j] == "`":
+                j += 1
+            run_len = j - i
+            # Search for a closing backtick run of equal length. Inside the
+            # span, backslashes are literal — do NOT escape-skip while scanning.
+            k = j
+            close_end = -1
+            while k < n:
+                if text[k] == "`":
+                    m = k
+                    while m < n and text[m] == "`":
+                        m += 1
+                    if m - k == run_len:
+                        close_end = m
+                        break
+                    k = m
+                else:
+                    k += 1
+            if close_end == -1:
+                # No matching close; opener is literal text.
+                i = j
+            else:
+                for p in range(i, close_end):
+                    if text[p] != "\n":
+                        out[p] = " "
+                i = close_end
+            continue
+        i += 1
+    return "".join(out)
 
 
 def _index_to_line(index: int, lines: list[str]) -> int:
