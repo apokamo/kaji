@@ -340,11 +340,13 @@ class WorkflowRunner:
                     step_log_dir = run_dir / current_step.id
                     step_log_dir.mkdir(parents=True, exist_ok=True)
 
+                    # exec_script では agent / model / effort を null として記録する
+                    # （設計書 § 副作用: ignored fields を null 化して経路判別を明示）。
                     logger.log_step_start(
                         current_step.id,
-                        current_step.agent,
-                        current_step.model,
-                        current_step.effort,
+                        None if is_exec_script else current_step.agent,
+                        None if is_exec_script else current_step.model,
+                        None if is_exec_script else current_step.effort,
                         session_id,
                         dispatch="exec_script" if is_exec_script else "agent",
                     )

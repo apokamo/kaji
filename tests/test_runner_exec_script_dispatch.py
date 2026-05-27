@@ -177,6 +177,61 @@ class TestExecScriptDispatch:
         mock_exec.assert_not_called()
         assert state.last_completed_step == "s"
 
+    def test_runlog_nulls_agent_fields_on_exec_script(self, tmp_path: Path) -> None:
+        """exec_script では指定された agent/model/effort も run.log では null になる
+        (Issue #204 MF-2: 設計書 § 副作用 L111 の正本契約)。
+        review-cycle.yaml / review-close.yaml の互換ケースで起動しない値を残さない。
+        """
+        import json
+
+        workflow = Workflow(
+            name="t",
+            description="",
+            execution_policy="auto",
+            steps=[
+                # 互換ケース: agent/model/effort が指定されているが exec_script 経路。
+                Step(
+                    id="poll",
+                    skill="rp",
+                    agent="claude",
+                    model="sonnet",
+                    effort="medium",
+                    on={"PASS": "end"},
+                ),
+            ],
+        )
+        config = _make_config(tmp_path)
+        runner = WorkflowRunner(
+            workflow=workflow,
+            issue_number=99,
+            project_root=tmp_path,
+            artifacts_dir=tmp_path / ".kaji-artifacts",
+            config=config,
+        )
+        metadata = SkillMetadata(name="rp", description="", exec_script="m")
+
+        with (
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.runner.load_skill_metadata", return_value=metadata),
+            patch(
+                "kaji_harness.runner.execute_script",
+                return_value=CLIResult(full_output=_verdict("PASS")),
+            ),
+        ):
+            runner.run()
+
+        # run.log から step_start を確認
+        run_logs = list((tmp_path / ".kaji-artifacts").rglob("run.log"))
+        assert run_logs, "run.log was not written"
+        events = [json.loads(line) for line in run_logs[0].read_text().splitlines() if line]
+        starts = [e for e in events if e["event"] == "step_start" and e["step_id"] == "poll"]
+        assert starts, "step_start event missing"
+        ev = starts[0]
+        assert ev["dispatch"] == "exec_script"
+        assert ev["agent"] is None
+        assert ev["model"] is None
+        assert ev["effort"] is None
+
     def test_cost_and_session_none_for_exec_script(self, tmp_path: Path) -> None:
         workflow = Workflow(
             name="t",

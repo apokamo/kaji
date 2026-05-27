@@ -25,8 +25,9 @@ def _mock_popen(
 ) -> MagicMock:
     proc = MagicMock()
     proc.stdout = iter(stdout_lines)
-    proc.stderr = MagicMock()
-    proc.stderr.read.return_value = stderr
+    # script_exec は stderr を並行 drain するため、iterable として返す。
+    stderr_lines = [stderr] if stderr else []
+    proc.stderr = iter(stderr_lines)
     proc.wait.return_value = None
     proc.returncode = returncode
     return proc

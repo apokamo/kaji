@@ -94,6 +94,31 @@ class TestRealSubprocess:
                 ai_formatter=None,
             )
 
+    def test_large_stderr_does_not_block_stdout_verdict(self, tmp_path: Path) -> None:
+        """Regression: stderr pipe を並行に drain しないと verdict 前で child が
+        block して StepTimeoutError になる (Issue #204 MF-1)。
+        """
+        log_dir = tmp_path / "log"
+        result = execute_script(
+            step=_step(),
+            module=_module_for("dummy_stderr_volume"),
+            env={},
+            workdir=Path.cwd(),
+            log_dir=log_dir,
+            timeout=30,
+            verbose=False,
+        )
+        verdict = parse_verdict(
+            result.full_output,
+            valid_statuses={"PASS", "ABORT"},
+            ai_formatter=None,
+        )
+        assert verdict.status == "PASS"
+        # stderr が確実に drain され、ログとして残されている
+        stderr_log = log_dir / "stderr.log"
+        assert stderr_log.exists()
+        assert stderr_log.stat().st_size >= 1024 * 1024
+
     def test_env_propagates_to_subprocess(self, tmp_path: Path) -> None:
         result = execute_script(
             step=_step(),

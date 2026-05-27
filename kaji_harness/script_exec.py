@@ -89,6 +89,24 @@ def execute_script(
     timer.start()
 
     texts: list[str] = []
+    stderr_chunks: list[str] = []
+
+    def _drain_stderr() -> None:
+        # stdout 読了を待たずに stderr pipe を逐次消費する。
+        # 大量の stderr (>OS pipe capacity, 通常 64 KiB) を出す script で
+        # child が stderr write でブロックされ、stdout verdict に到達できず
+        # timeout する事故を防ぐ。
+        assert process.stderr is not None
+        try:
+            for line in process.stderr:
+                stderr_chunks.append(line)
+        except ValueError:
+            # pipe が timeout の kill により閉じられた場合
+            pass
+
+    stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+    stderr_thread.start()
+
     try:
         assert process.stdout is not None
         with (
@@ -105,7 +123,8 @@ def execute_script(
                 if verbose:
                     print(f"[{_now_stamp()}] [{step.id}] {stripped}")
         process.wait()
-        stderr = process.stderr.read() if process.stderr else ""
+        stderr_thread.join(timeout=5)
+        stderr = "".join(stderr_chunks)
         if stderr:
             (log_dir / "stderr.log").write_text(stderr, encoding="utf-8")
     finally:

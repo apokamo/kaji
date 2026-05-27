@@ -105,20 +105,34 @@ WorkflowRunner.run()
   │
   └─ while current_step != "end":
        │
-       ├─ build_prompt(step, state)     # コンテキスト変数を注入
+       ├─ load_skill_metadata(step.skill)  # frontmatter (`exec_script`) を解決
        │
-       ├─ execute_cli(step, prompt)     # CLI をサブプロセスで実行
-       │   └─ CLIEventAdapter           # stream-json → text/session_id/cost に変換
+       ├─ if metadata.exec_script:        # ── exec_script 経路（決定論的 dispatch） ──
+       │   │
+       │   ├─ execute_script(module=...)  # `python -m <module>` を subprocess 実行
+       │   │   └─ context env 注入 (KAJI_ISSUE_ID 等)
+       │   │
+       │   └─ parse_verdict(stdout, ai_formatter=None)  # AI fallback を使わない
        │
-       ├─ parse_verdict(output)         # 3段階フォールバックで verdict を抽出
-       │   ├─ Step 1: Strict Parse     # 厳密な delimiter + YAML
-       │   ├─ Step 2: Relaxed Parse    # 揺れ許容 delimiter + KV パターン
-       │   └─ Step 3: AI Formatter     # エージェント再整形 → 再パース
+       │  else:                            # ── agent 経路（既存・LLM dispatch） ──
+       │   │
+       │   ├─ build_prompt(step, state)   # コンテキスト変数を注入
+       │   │
+       │   ├─ execute_cli(step, prompt)   # CLI をサブプロセスで実行
+       │   │   └─ CLIEventAdapter         # stream-json → text/session_id/cost に変換
+       │   │
+       │   └─ parse_verdict(output)       # 3段階フォールバック（AI Formatter 含む）
        │
-       ├─ state.record_step()           # 状態を永続化
+       ├─ logger.log_step_{start,end}(..., dispatch="exec_script"|"agent")
        │
-       └─ next_step = step.on[verdict]  # 遷移先を決定
+       ├─ state.record_step()             # 状態を永続化
+       │
+       └─ next_step = step.on[verdict]    # 遷移先を決定
 ```
+
+`exec_script` frontmatter を持つ skill は LLM を起動せず subprocess で実行される（Issue #204）。
+RunLogger は両経路を `dispatch` field で区別する。詳細は
+[ロギング規約](./reference/python/logging.md) を参照。
 
 ---
 
