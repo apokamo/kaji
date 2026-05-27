@@ -57,7 +57,12 @@ skill / workflow 契約上の整合性:
 
 Issue #186 で導入した `_github_pr_review` (`kaji_harness/cli_main.py:810-880`) は `--approve` 専用 dispatcher として設計され、`_handle_pr` の routing (`cli_main.py:929-930`) は `_has_approve_flag(args[1:])` で `--approve` 経路のみを奪う。`--request-changes` 経路は routing 段でフィルタされず `_forward_to_gh("pr", raw_args, repo=repo_override)` 経由で素通しになるため、self-PR 検出が走らず GitHub API の 422 拒否 (`Can not request changes on your own pull request`) がそのまま rc=1 として伝播する。
 
-GitHub REST API 仕様（`POST /repos/{owner}/{repo}/pulls/{N}/reviews` の `event` parameter [§ 参照情報 1](#参照情報primary-sources)）は `APPROVE` / `REQUEST_CHANGES` / `COMMENT` を取り、`APPROVE` / `REQUEST_CHANGES` を author 自身が投げた場合に 422 を返す。`COMMENT` は author でも許容される。実発生ログ（§ OB）で `REQUEST_CHANGES` の self-author 拒否文言を確定したため、Issue #186 設計書で「公開ページから直接は確認できなかった」と保留していた裏付けは本 Issue で完結した（参照: [Issue #186 設計書 § 参照情報 3](./issue-186-fix-github-provider-kaji-pr-review-appro.md)）。
+GitHub REST API 仕様の整理:
+
+- public docs ([§ 参照情報 1](#参照情報primary-sources)): `POST /repos/{owner}/{repo}/pulls/{N}/reviews` の `event` parameter は `APPROVE` / `REQUEST_CHANGES` / `COMMENT` を取り、`body` は `event=REQUEST_CHANGES` / `COMMENT` で必須（`event=APPROVE` で optional）。失敗応答は generic `422 Validation failed` まで明記されている
+- 実発生ログ ([§ 参照情報 1b](#参照情報primary-sources)): `APPROVE` / `REQUEST_CHANGES` を author 自身が投げた場合に 422 拒否（self-author の具体的拒否文言 "Can not request changes on your own pull request" は public docs で確認できず、本 Issue § OB が唯一の一次根拠）。`COMMENT` は author でも許容される
+
+実発生ログで `REQUEST_CHANGES` の self-author 拒否文言を確定したため、Issue #186 設計書で「公開ページから直接は確認できなかった」と保留していた裏付けは本 Issue で完結した（参照: [Issue #186 設計書 § 参照情報 3](./issue-186-fix-github-provider-kaji-pr-review-appro.md)）。
 
 同根の他壊れ箇所と scope 境界:
 
@@ -143,14 +148,14 @@ self-PR + `--request-changes` で投稿される marker comment は GitHub の *
 | `--comment` | `gh pr review --comment` 委譲 | **不変**（routing で `_github_pr_review` に分岐せず passthrough） |
 | flag 無し / その他 | passthrough | **不変** |
 
-side effect として self-PR + `--request-changes` 経路では Issue/PR 上に以下の comment が 1 件追加される（GitLab side / `--approve` 経路と完全に同形式の marker）:
+side effect として self-PR + `--request-changes` 経路では Issue/PR 上に以下の comment が 1 件追加される（GitLab side / `--approve` 経路と同形式の marker。ただし `--request-changes` では body 必須契約により user-supplied body は非空が保証される）:
 
 ```
 <!-- kaji-review: state=CHANGES_REQUESTED -->
-<user-supplied body, 空可>
+<user-supplied body, 非空が保証される（body 必須契約）>
 ```
 
-`<!-- ... -->` HTML コメントは GitHub UI 上で不可視のため、PR 体験を壊さない。
+`<!-- ... -->` HTML コメントは GitHub UI 上で不可視のため、PR 体験を壊さない。`--approve` 経路の marker comment は Issue #186 の既存契約により body 任意（空 body 可）であり、本 Issue では touch しない。
 
 ### 後方互換性
 
@@ -224,7 +229,7 @@ kaji pr review 199 --request-changes
   - 関数 docstring を `--approve` 専用 → `--approve` / `--request-changes` 兼用に更新
 - `tests/test_cli_main.py`:
   - 既存 `TestHasApproveFlag` 隣に新規 `TestHasRequestChangesFlag` クラスを追加（純粋関数の単体テスト、subprocess 不要）
-  - 既存 `TestGithubPrReviewHandler` に `--request-changes` 系の test method を追加（self-PR で marker post / 非 self-PR で `gh pr review --request-changes` 委譲 / preflight 失敗 / 空 body marker / `--approve` + `--request-changes` 同時指定エラー）
+  - 既存 `TestGithubPrReviewHandler` に `--request-changes` 系の test method を追加（self-PR で marker post / 非 self-PR で `gh pr review --request-changes` 委譲 / preflight 失敗 / body 未指定・空白のみ body の `EXIT_INVALID_INPUT` fail-fast / `--approve` の空 body 許容（Issue #186 契約維持）/ `--approve` + `--request-changes` 同時指定エラー / marker comment observation path 構造保証）
   - 既存 `TestGithubPrReviewRouting` に `--request-changes` 経路の routing test を追加（`_github_pr_review` に dispatch / `--comment` は passthrough のまま）
 - `docs/cli-guides/github-mode.md`: `kaji pr review` セクションで `--approve` self-PR fallback の記述に `--request-changes` を併記。`--comment` は引き続き passthrough である旨を明示
 - GitLab provider / Local provider / skill / workflow YAML: **無改修**
@@ -373,7 +378,7 @@ def _github_pr_review(rest: list[str], *, repo_override: str | None) -> int:
 | `gh pr view --json author` が rc≠0 | stderr 中継、`EXIT_RUNTIME_ERROR`（preflight 失敗 fail-loud、--approve 経路と同一） |
 | `gh api user --jq .login` が rc≠0 | 同上 |
 | Self-PR + `--request-changes` の `gh api POST issues/<N>/comments` が rc≠0 | stderr 中継、`EXIT_RUNTIME_ERROR`（marker 投稿失敗は Changes Requested 不成立として扱う） |
-| 非 self-PR + `--request-changes` の `gh pr review --request-changes` が rc≠0 | 既存挙動と同じく rc をそのまま返す（body 空による 422 もここに含む） |
+| 非 self-PR + `--request-changes` の `gh pr review --request-changes` が rc≠0 | 既存挙動と同じく rc をそのまま返す（body 空ケースは kaji 側 fail-fast で先に `EXIT_INVALID_INPUT` を返すため、本行で到達するのは body 非空かつ別要因で `gh` が失敗するケースに限る） |
 
 self-PR 判定で「どちらかの取得に失敗 → 安全側に倒して non-self として扱い `gh pr review` 委譲」のような silent fallthrough は採用しない（`--approve` 経路と同一規約）。
 
