@@ -155,10 +155,18 @@ def _execute_cli_once(
     #    に依らず失敗根拠にしない。Claude Code CLI は SIGTERM を trap し shell 慣例の
     #    正値（128+15=143）で exit するため、returncode > 0 を失敗根拠にすると成功
     #    ステップを誤って例外化する。
-    #  - 失敗は terminal event 自体の failure シグナル（adapter.is_terminal_failure）か、
-    #    stream 中の error イベント集約（error_messages）でのみ判定する。
+    #  - 失敗は (1) terminal event 自体の failure シグナル
+    #    (`adapter.is_terminal_failure`) または (2) adapter が
+    #    `treats_stream_error_as_failure()=True` を返す場合の `error_messages` non-empty
+    #    で判定する。Codex は (2) を False とし、stream-level `error` event は
+    #    recoverable 通知（reconnection 等）として扱う (Issue #196)。
+    #    `error_messages` は detail メッセージのフォールバック材料としては全 adapter で
+    #    利用する。
     if result.terminal_seen:
-        if result.terminal_failure or result.error_messages:
+        fail = result.terminal_failure
+        if not fail and adapter.treats_stream_error_as_failure():
+            fail = bool(result.error_messages)
+        if fail:
             detail = result.stderr or "\n".join(result.error_messages[-3:]) or "terminal failure"
             rc = process.returncode if process.returncode is not None else -1
             raise CLIExecutionError(step.id, rc, detail)

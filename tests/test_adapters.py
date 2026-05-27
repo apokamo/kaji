@@ -600,3 +600,21 @@ class TestIsTerminalFailure:
         adapter = GeminiAdapter()
         assert not adapter.is_terminal_failure({"type": "init"})
         assert not adapter.is_terminal_failure({"type": "message"})
+
+
+class TestTreatsStreamErrorAsFailure:
+    """Issue #196: adapter ごとの stream-level error event の致死性契約。"""
+
+    @pytest.mark.small
+    def test_claude_treats_stream_error_as_failure(self) -> None:
+        assert ClaudeAdapter().treats_stream_error_as_failure() is True
+
+    @pytest.mark.small
+    def test_codex_does_not_treat_stream_error_as_failure(self) -> None:
+        # Codex の stream-level `type:"error"` event は recoverable 通知を含むため
+        # 失敗根拠としない (Issue #196)。fatal は `turn.failed` で表現される。
+        assert CodexAdapter().treats_stream_error_as_failure() is False
+
+    @pytest.mark.small
+    def test_gemini_treats_stream_error_as_failure(self) -> None:
+        assert GeminiAdapter().treats_stream_error_as_failure() is True

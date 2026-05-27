@@ -791,6 +791,11 @@ class TestTerminalEventBreak:
         案 B 採用後も ``error_messages`` 経路の失敗判定は保持される（Issue gl:25 完了条件・
         設計書 § Medium テスト 3）。terminal success event 単独では失敗扱いにならないが、
         stream 中の ``error`` イベント集約は引き続き例外化の根拠になる。
+
+        Issue #196 注: 本 Issue では Claude を変更しない。
+        ``ClaudeAdapter.treats_stream_error_as_failure()`` は ``True`` を返すため、
+        既存契約は維持される。Claude の stream-level ``error`` event の recoverable /
+        fatal 区別に関する一次情報が得られるまで現契約を続ける。
         """
         jsonl_lines = [
             json.dumps({"type": "system", "subtype": "init", "session_id": "sess-errev"}),
