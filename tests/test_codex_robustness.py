@@ -312,8 +312,44 @@ class TestStreamAndLogErrorMessages:
 
         assert any("at capacity" in m.lower() for m in result.error_messages)
 
+    def test_codex_recoverable_error_then_terminal_success_returns(self, tmp_path: Path) -> None:
+        """Issue #196: Codex stream-level `type:"error"` (Reconnecting...) followed by
+        `turn.completed` must NOT raise. `treats_stream_error_as_failure()=False` で
+        recoverable 通知を成功扱いに戻す。`error_messages` は観測性のため収集を維持。
+        """
+        jsonl_lines = [
+            json.dumps({"type": "thread.started", "thread_id": "thr-x"}),
+            json.dumps({"type": "error", "message": "Reconnecting... 2/5"}),
+            json.dumps({"type": "turn.completed", "usage": {}}),
+        ]
+        script = _create_mock_cli_script(tmp_path, jsonl_lines, exit_code=0)
+
+        step = Step(id="verify-design", skill="test-skill", agent="codex", on={"PASS": "end"})
+
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            with patch("kaji_harness.cli.time.sleep"):
+                result = execute_cli(
+                    step=step,
+                    prompt="test",
+                    workdir=tmp_path,
+                    session_id=None,
+                    log_dir=tmp_path / "logs",
+                    execution_policy="auto",
+                    verbose=False,
+                    default_timeout=1800,
+                )
+
+        assert result.terminal_seen is True
+        assert result.terminal_failure is False
+        # 観測性維持: error_messages は引き続き収集される
+        assert result.error_messages == ["Reconnecting... 2/5"]
+
     def test_error_messages_in_cli_execution_error(self, tmp_path: Path) -> None:
-        """CLIExecutionError message includes stdout error events when stderr is empty."""
+        """CLIExecutionError message includes stdout error events when stderr is empty.
+
+        Issue #196 注: Codex は `treats_stream_error_as_failure()=False` だが、
+        `turn.failed` 経路は引き続き raise する（terminal_failure=True）。
+        """
         jsonl_lines = [
             json.dumps({"type": "error", "message": "Selected model is at capacity."}),
             json.dumps(

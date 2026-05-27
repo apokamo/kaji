@@ -18,6 +18,18 @@ class CLIEventAdapter(Protocol):
     def extract_cost(self, event: dict[str, Any]) -> CostInfo | None: ...
     def is_terminal_event(self, event: dict[str, Any]) -> bool: ...
     def is_terminal_failure(self, event: dict[str, Any]) -> bool: ...
+    def treats_stream_error_as_failure(self) -> bool:
+        """Stream-level `type:"error"` event を terminal-seen 分岐の失敗根拠とするか。
+
+        - True (Claude / Gemini): 既存契約。terminal が success でも
+          `error_messages` が non-empty なら `CLIExecutionError` を raise する
+        - False (Codex): `error` event は recoverable 通知（Reconnecting 等）を
+          含むため失敗根拠としない。`turn.failed` のみで失敗判定する
+
+        `error_messages` の収集自体および `CLIExecutionError` detail のフォールバック
+        利用は本フラグに依らず常に行う（観測性維持）。
+        """
+        ...
 
 
 _TOOL_SUMMARY_LEN = 80
@@ -116,6 +128,9 @@ class ClaudeAdapter:
             return True
         return event.get("subtype") == "error"
 
+    def treats_stream_error_as_failure(self) -> bool:
+        return True
+
 
 class CodexAdapter:
     """Codex CLI の JSONL イベントアダプタ。"""
@@ -159,6 +174,12 @@ class CodexAdapter:
     def is_terminal_failure(self, event: dict[str, Any]) -> bool:
         return event.get("type") == "turn.failed"
 
+    def treats_stream_error_as_failure(self) -> bool:
+        # Codex の stream-level `type:"error"` event は recoverable 通知
+        # (`Reconnecting...` 等) を含むため失敗根拠としない。fatal は `turn.failed`
+        # event で表現される (adapters.py の is_terminal_failure 契約)。Issue #196。
+        return False
+
 
 class GeminiAdapter:
     """Gemini CLI の JSONL イベントアダプタ。
@@ -199,6 +220,9 @@ class GeminiAdapter:
             return False
         status = event.get("status")
         return status is not None and status != "success"
+
+    def treats_stream_error_as_failure(self) -> bool:
+        return True
 
 
 ADAPTERS: dict[str, CLIEventAdapter] = {
