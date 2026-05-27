@@ -1537,6 +1537,58 @@ class TestGithubPrReviewHandler:
             )
             assert rc == EXIT_RUNTIME_ERROR
 
+    def test_request_changes_missing_body_file_returns_invalid_input(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--request-changes で `--body-file` 不在の場合は traceback ではなく
+        EXIT_INVALID_INPUT + stderr 診断で fail-fast する（subprocess 0 回）。
+
+        Regression: passthrough 時代は `gh pr review` が同等のエラーを返していた
+        が、self-PR fallback への routing で `Path.read_text()` の
+        ``FileNotFoundError`` traceback が露出していた。
+        """
+        from kaji_harness.cli_main import EXIT_INVALID_INPUT, _github_pr_review
+
+        missing = tmp_path / "does-not-exist.md"
+        assert not missing.exists()
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.cli_main._detect_repo", return_value="owner/repo"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            rc = _github_pr_review(
+                ["199", "--request-changes", "--body-file", str(missing)],
+                repo_override="owner/repo",
+            )
+        assert rc == EXIT_INVALID_INPUT
+        assert mock_run.call_count == 0
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert str(missing) in captured.err
+
+    def test_approve_missing_body_file_returns_invalid_input(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--approve でも `--body-file` 不在は traceback ではなく
+        EXIT_INVALID_INPUT に変換される（同根欠陥の波及修正)."""
+        from kaji_harness.cli_main import EXIT_INVALID_INPUT, _github_pr_review
+
+        missing = tmp_path / "does-not-exist.md"
+        with (
+            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.cli_main._detect_repo", return_value="owner/repo"),
+            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        ):
+            rc = _github_pr_review(
+                ["185", "--approve", "--body-file", str(missing)],
+                repo_override="owner/repo",
+            )
+        assert rc == EXIT_INVALID_INPUT
+        assert mock_run.call_count == 0
+        captured = capsys.readouterr()
+        assert "Error:" in captured.err
+        assert str(missing) in captured.err
+
 
 @pytest.mark.small
 class TestGithubPrReviewRouting:

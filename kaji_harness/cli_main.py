@@ -867,6 +867,15 @@ def _github_pr_review(rest: list[str], *, repo_override: str | None) -> int:
     except ValueError as exc:
         sys.stderr.write(f"Error: {exc}\n")
         return EXIT_INVALID_INPUT
+    except OSError as exc:
+        # `--body-file` の不在 / 読取不能 (`FileNotFoundError` /
+        # `PermissionError` 等) を未処理例外として露出させず、制御された
+        # 診断 + `EXIT_INVALID_INPUT` に変換する。`--request-changes` を
+        # `_github_pr_review` に routing したことで、従来 `gh pr review`
+        # passthrough が返していた制御エラーが traceback に置き換わる回帰を
+        # 防ぐ（Issue #199 review feedback）。
+        sys.stderr.write(f"Error: cannot read --body-file {ns.body_file!r}: {exc}\n")
+        return EXIT_INVALID_INPUT
     if body is None:
         body = ""
 
