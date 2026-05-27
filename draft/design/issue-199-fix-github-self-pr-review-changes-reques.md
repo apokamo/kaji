@@ -60,16 +60,16 @@ Issue #186 で導入した `_github_pr_review` (`kaji_harness/cli_main.py:810-88
 GitHub REST API 仕様の整理:
 
 - public docs ([§ 参照情報 1](#参照情報primary-sources)): `POST /repos/{owner}/{repo}/pulls/{N}/reviews` の `event` parameter は `APPROVE` / `REQUEST_CHANGES` / `COMMENT` を取り、`body` は `event=REQUEST_CHANGES` / `COMMENT` で必須（`event=APPROVE` で optional）。失敗応答は generic `422 Validation failed` まで明記されている
-- 実発生ログ・event 個別根拠（self-author 拒否 / 許容の帰属を分離）:
+- 実発生ログ・event 個別根拠（self-author 拒否の帰属を分離）:
   - `event=REQUEST_CHANGES` の self-author 拒否: 本 Issue § OB の実発生ログ ([§ 参照情報 1b](#参照情報primary-sources))。public docs で確認できない self-author 拒否文言 "Can not request changes on your own pull request" の唯一の一次根拠
   - `event=APPROVE` の self-author 拒否: 先行 Issue #186 § OB の実発生ログ ([§ 参照情報 4](#参照情報primary-sources)) — `gh pr review --approve` を author 本人が叩いて 422 (`Can not approve your own pull request`) を確認済み
-  - `event=COMMENT` の author 許容: GitHub CLI manual ([§ 参照情報 3](#参照情報primary-sources)) が `--comment` を author 制約なしの正式 flag として定義しており、現行 `_handle_pr` (`cli_main.py:931-933`) の passthrough 経路が動作している実装事実が裏付け
+  - `event=COMMENT`: 本 Issue では `--comment` routing を変更せず現行 `_handle_pr` (`cli_main.py:931-933`) の passthrough を維持する（scope 境界として扱う）。self-author での API 受理に関する一次観測証跡は本 Issue では収集していないため、Root Cause 上は受理是非に言及しない
 
 実発生ログで `REQUEST_CHANGES` の self-author 拒否文言を確定したため、Issue #186 設計書で「公開ページから直接は確認できなかった」と保留していた裏付けは本 Issue で完結した（参照: [Issue #186 設計書 § 参照情報 3](./issue-186-fix-github-provider-kaji-pr-review-appro.md)）。
 
 同根の他壊れ箇所と scope 境界:
 
-- **`--comment`**: GitHub API は author の `COMMENT` event を許容する（[`gh pr review` manual](#参照情報primary-sources) § 参照情報 6 / Issue #186 § 参照情報 10）。現行 `_handle_pr` (`cli_main.py:931-933`) は `--comment` を `_forward_to_gh` 経由で素通すため正しく動作する。**本 Issue では `--comment` 経路を改修しない**（routing 上 `_github_pr_review` に分岐しないため挙動完全不変）
+- **`--comment`**: 本 Issue では routing を変更しない。現行 `_handle_pr` (`cli_main.py:931-933`) は `--comment` を `_forward_to_gh` 経由で素通すため、挙動は完全不変（`_github_pr_review` に分岐しない）。self-author での `event=COMMENT` 受理是非に関する一次観測証跡は本 Issue では収集しておらず、その API 挙動を主張する範囲は scope 外。万一 self-PR + `--comment` で upstream が失敗するケースが将来観測された場合は別 Issue で扱う
 - **`--approve`**: Issue #186 で実装済み。本 Issue では `_github_pr_review` 内部の state 切替で `--request-changes` を追加するが、`--approve` 経路の挙動 / 出力契約 / preflight は完全不変
 - **`gh pr review` の `--approve` と `--request-changes` 同時指定**: `gh pr review` は両 flag を mutually exclusive として扱う（同時指定で usage error）。本 Issue でも argparse の `mutually_exclusive_group(required=True)` で `--approve` または `--request-changes` のいずれか必須として `EXIT_INVALID_INPUT` を返す（既存 `--approve` 単独契約は `parse_known_args` の `required=True` から `mutually_exclusive_group(required=True)` への移行で維持される。詳細は § 方針 § 2）
 
@@ -492,7 +492,7 @@ Issue #186 設計書 § 5 で確立したテスト境界（`TestHasApproveFlag` 
 | 1. GitHub REST API: Create / Submit a review for a pull request | https://docs.github.com/en/rest/pulls/reviews?apiVersion=2022-11-28#create-a-review-for-a-pull-request | `POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews` の "event" parameter は `APPROVE` / `REQUEST_CHANGES` / `COMMENT` を取る。**`body` parameter は `event=REQUEST_CHANGES` / `COMMENT` で必須**（`event=APPROVE` では optional）。public docs に記載される失敗応答は generic `422 Validation failed` まで。self-author への拒否文言（"Can not request changes on your own pull request"）は public docs では確認できず、本 Issue § OB の実発生ログを観測根拠とする（一次情報と実発生ログを分離して記録） |
 | 1b. 実発生ログ（self-PR + `--request-changes`） | 本 Issue § Observed Behavior (PR #198 / Issue #190、2026-05-27 JST) | `gh pr review --request-changes` を PR author 本人が叩いた際の stderr: `failed to create review: GraphQL: Review Can not request changes on your own pull request (addPullRequestReview)` および rc=1。public docs に明文化されていない self-author 拒否の唯一の一次根拠 |
 | 2. GitHub REST API: Create an issue comment | https://docs.github.com/en/rest/issues/comments?apiVersion=2022-11-28#create-an-issue-comment | `POST /repos/{owner}/{repo}/issues/{issue_number}/comments`。PR の会話 comment は Issue comments API を共有する仕様。author 制約はなく self-PR でも POST 可能。本 Issue の marker fallback はこの endpoint を使用（Issue #186 の `--approve` 経路と同一） |
-| 3. GitHub CLI manual: `gh pr review` | https://cli.github.com/manual/gh_pr_review | `--approve` / `--comment` / `--request-changes` の 3 flag を正式 option として定義。short alias は `-a` / `-c` / `-r`。`--comment` は author でも GitHub API が許容するため現行 `_handle_pr` passthrough が動作している根拠。`-r` short alias を `_has_request_changes_flag` で検出する根拠 |
+| 3. GitHub CLI manual: `gh pr review` | https://cli.github.com/manual/gh_pr_review | `--approve` / `--comment` / `--request-changes` の 3 flag を正式 option として定義。short alias は `-a` / `-c` / `-r`。`-r` short alias を `_has_request_changes_flag` で検出する根拠（self-author での `--comment` API 受理に関する記述は manual には含まれず、本表でも主張しない） |
 | 4. Issue #186 設計書（先行 Issue） | [`draft/design/issue-186-fix-github-provider-kaji-pr-review-appro.md`](./issue-186-fix-github-provider-kaji-pr-review-appro.md) | 本 Issue が拡張する `_github_pr_review` / `_has_approve_flag` の設計根拠と、`--request-changes` を scope 外とした明示的な保留判断（§ Root Cause § scope 境界 / § 方針 § 1）。本 Issue はその保留を実発生ログで解除し対称ケースを追加 |
 | 5. marker 仕様 `build_kaji_review_marker` | `kaji_harness/providers/github.py:39-56` | `_KAJI_REVIEW_MARKER_PREFIX = "<!-- kaji-review: state="` / `_REVIEW_STATES_VALID = {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}` / `f"{prefix}{state}{suffix}"`。本 Issue では `state="CHANGES_REQUESTED"` を渡して同関数を再利用 |
 | 6. 既存 `_github_pr_review` / `_has_approve_flag` 実装 | `kaji_harness/cli_main.py:743-880` / `cli_main.py:929-933` | 本 Issue が拡張する関数と routing 行の現行コード。新規 `_has_request_changes_flag` の対称性、`mutually_exclusive_group(required=True)` への移行、state 分岐の追加箇所を本実装に対する diff として記述する根拠 |
