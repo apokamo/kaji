@@ -170,6 +170,8 @@ kaji issue view [issue_id] --json labels --jq '[.labels[].name] | map(select(sta
 | E. **改善指標の達成** — ベースライン計測値 / 改修後計測値が Issue コメントに含まれ、設計書「改善指標」を達成しているか | — | — | ✅ | — |
 | F. **Scope 混在禁止** — type の責任範囲を超える変更が混入していないか（feat に fix/refactor、bug に feat/refactor、refactor に feat/fix 等） | ✅ | ✅ | ✅ | — |
 
+> **観点 B の escape clause（実ログによる実装前 Red 代替）**: bug Issue 本文またはリンク先に OB を直接示す実世界障害ログ（失敗コマンド・エラー文言・exit code・API 応答・関連 Issue/PR の実行ログ等）が存在し、恒久回帰テストがその OB に対応する EB を検証している場合、その実ログを実装前 Red 証跡の代替として扱う。この場合、実装前 FAIL ログが実装完了報告に無いことのみを理由に観点 B を ❌ としてはならない（合成 Red 欠如だけを理由に差し戻さない）。ただし修正後の回帰テスト Green・影響範囲の品質ゲート（観点 F 等）・同根欠陥確認（観点 C）は免除しない。実ログが OB と対応しない場合、単なる省力化・実行時間短縮・後付け都合を理由とする場合は代替不可。
+
 **type=docs の扱い**: docs-only の review は `/i-doc-review` が正本。本スキルに来るのは誤経路 → `/i-doc-review` への差し戻しを検討。
 
 **type 判定不能の場合**: 上記「判定の優先順」で配列要素数 ≥ 2 または空だった場合、レビューに入らず `/issue-review-ready` への差し戻しを求める。
@@ -239,7 +241,7 @@ kaji issue comment [issue_id] --commit --body "$(cat <<'EOF'
 | 観点 | 該当 | 判定 | 根拠 |
 |------|:---:|:---:|------|
 | A. IF 契約の忠実性 | feat | ✅ / ❌ / — | (根拠) |
-| B. 再現テスト Red→Green | bug | ✅ / ❌ / — | (根拠) |
+| B. 再現テスト Red→Green | bug | ✅ / ❌ / — | (根拠。実ログ代替を適用した場合はその旨と OB を示す実ログの所在を明記) |
 | C. 同根欠陥の波及修正 | bug | ✅ / ❌ / — | (根拠) |
 | D. 振る舞い非変更の保証 | refactor | ✅ / ❌ / — | (根拠) |
 | E. 改善指標の達成 | refactor | ✅ / ❌ / — | (根拠) |
