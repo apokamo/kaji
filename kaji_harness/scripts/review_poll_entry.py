@@ -47,11 +47,26 @@ def parse_remote_url(url: str) -> tuple[str, str]:
 
 
 def _gh_json(args: list[str], cwd: str | None = None) -> Any:
-    """``gh`` / ``kaji`` CLI を実行し JSON を返す。失敗は raise（catastrophic）。"""
+    """``gh`` / ``kaji`` CLI を実行し JSON を返す。失敗は raise（catastrophic）。
+
+    `--jq` で object/array を抽出する用途専用。``--jq`` のスカラー（string）抽出は
+    クォートなし生文字列を出力するため json.loads に渡せない。スカラーは
+    ``_gh_raw`` を使うこと。
+    """
     result = subprocess.run(args, check=True, capture_output=True, text=True, cwd=cwd)
     if not result.stdout.strip():
         return None
     return json.loads(result.stdout)
+
+
+def _gh_raw(args: list[str], cwd: str | None = None) -> str:
+    """CLI を実行し ``--jq`` スカラーの生 stdout を返す（json.loads しない）。
+
+    ``gh`` / ``kaji pr view --jq '.headRefOid'`` 等は string scalar を
+    クォートなし生文字列で出力する。失敗は raise（catastrophic）。
+    """
+    result = subprocess.run(args, check=True, capture_output=True, text=True, cwd=cwd)
+    return result.stdout.strip()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -146,9 +161,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         head_sha = ""
 
-    # head_sha 補完
+    # head_sha 補完（--jq .headRefOid は生 SHA 文字列。json.loads 不可）
     if not head_sha:
-        pr_view = _gh_json(
+        head_sha = _gh_raw(
             [
                 "kaji",
                 "pr",
@@ -161,7 +176,6 @@ def main(argv: list[str] | None = None) -> int:
             ],
             cwd=worktree_dir or None,
         )
-        head_sha = (pr_view or "").strip() if isinstance(pr_view, str) else ""
 
     if not head_sha:
         return _abort(
@@ -169,8 +183,8 @@ def main(argv: list[str] | None = None) -> int:
             f"pr_id={pr_id}",
         )
 
-    # head committed_at を取得
-    head_committed_at_raw = _gh_json(
+    # head committed_at を取得（--jq スカラーは生日付文字列。json.loads 不可）
+    head_committed_at = _gh_raw(
         [
             "kaji",
             "pr",
@@ -182,9 +196,6 @@ def main(argv: list[str] | None = None) -> int:
             ".commits[-1].committedDate",
         ],
         cwd=worktree_dir or None,
-    )
-    head_committed_at = (
-        head_committed_at_raw.strip() if isinstance(head_committed_at_raw, str) else ""
     )
     if not head_committed_at:
         return _abort(
