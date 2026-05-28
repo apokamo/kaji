@@ -6,6 +6,62 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-29
+
+GitLab forge 対応を撤去し GitHub 単独運用へ回帰したリリース。あわせて
+skill frontmatter の `exec_script` による LLM 中継なし script step、codex
+auto-review polling 用の `review-poll` skill、final-check / review-code の
+BACK verdict 分割など workflow 周りの改善を含む。
+
+### Added
+
+- `exec_script` skill frontmatter — LLM 中継を挟まず deterministic に script
+  step を dispatch する仕組み (#204)。
+- `review-poll` skill — codex auto-review (chatgpt-codex-connector[bot]) の
+  reactions / reviews を polling し PASS / RETRY / BACK_FALLBACK を判定する
+  (#182)。
+- final-check の `BACK` verdict を `BACK_DESIGN` / `BACK_IMPLEMENT` に分割し、
+  差し戻し先（design / implement）を verdict 自体で表現できるようにした
+  (#158)。
+- github PR auto-injection と `kaji sync from-github`（gl:34）。
+
+### Changed
+
+- GitLab forge 対応を完全撤去し GitHub 単独運用に切り替え。`glab` 依存・
+  GitLab provider・関連 workflow の `requires_provider: gitlab` を削除
+  (#191)。
+- release-please 資産を削除し、release 運用を `/release` skill 単独に統一
+  (#195)。
+- `Step.max_turns` を廃止し、CLI guide を追従更新 (#167)。
+- forge workflow の `requires_provider` を `any` に緩和 (#169)。
+
+### Fixed
+
+- `issue-review-code` Step 1.4 hard gate の `BACK` が approve 済み設計を
+  再起動して ABORT する意味衝突を、専用 verdict `BACK_IMPLEMENT` の導入で
+  解消 (#192)。
+- `verify-docs` がコードブロック内の正規表現を broken link と誤検出する
+  欠陥を、escape-aware scanner + markdown-it-py への切り替えで修正 (#190)。
+- verdict 不在時に AI formatter が PASS を捏造する問題を、delimiter 存在を
+  gate にすることで抑止 (#193)。
+- Codex の stream-level error event を recoverable として扱い、失敗判定から
+  除外 (#196)。
+- GitHub self-PR で `kaji pr review --request-changes` / `--approve` を
+  marker comment fallback で成立させる (#199, #186)。
+- `review-poll` の `exec_script` が `--jq` スカラー出力を JSON parse して
+  失敗する問題を、生文字列解決で修正 (#209)。
+- `artifacts_dir` を main worktree 基準で解決 (#177)。
+- `_forward_to_gh` / `_forward_to_glab` が inline `--repo` / `-R` 形式を
+  検出できない欠陥を修正 (#172)。
+- `issue-implement` Step 7.6 Pre-Handoff Review の順序矛盾を修正（commit
+  step の後段へ移動）(#171)。
+- linked worktree での provider overlay 乖離を WARN するよう修正（gl:28）。
+
+### Docs
+
+- bug 証跡 rubric に、実世界障害ログによる実装前 Red 代替の escape clause を
+  追加 (#211)。
+
 ## [0.10.1] - 2026-05-18
 
 ### Fixed
