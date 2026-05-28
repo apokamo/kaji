@@ -97,7 +97,7 @@ PHR_ROUTE_COUNT=$(kaji issue view [issue_id] --comments 2>/dev/null | grep -cE '
 
 **判定**:
 
-- `PHR_COUNT == 0` または `PHR_ROUTE_COUNT == 0` → **BACK**。`/issue-implement` Step 8.5 が未実施 / 出力欠落と判断し、以下を Must Fix として投稿してレビューに入らない:
+- `PHR_COUNT == 0` または `PHR_ROUTE_COUNT == 0` → **BACK_IMPLEMENT**（→ implement step）。`/issue-implement` Step 8.5 が未実施 / 出力欠落と判断し、以下を Must Fix として投稿してレビューに入らない:
   - 「Pre-Handoff Review コメントが Issue に存在しない（または `経路:` 行が無い）。`/issue-implement` を再実行し、Step 8.5 を完了してから再度 review に渡すこと。」
 - `PHR_COUNT ≥ 1` かつ `PHR_ROUTE_COUNT ≥ 1` → Step 1.5 に進む
 
@@ -314,5 +314,8 @@ suggestion: |
 |--------|------|
 | PASS | Approve |
 | RETRY | Changes Requested |
-| BACK | 設計に問題 |
+| BACK | コードレビューで設計レベルの問題を発見（→ design）。**ただし当該 workflow の `review-code.on` に `BACK` key がある場合のみ発行可** |
+| BACK_IMPLEMENT | Step 1.4 hard gate 発火（Pre-Handoff Review 証跡欠落）。implement Step 8.5 未実施（→ implement） |
 | ABORT | 重大な問題（type ラベル未付与・複数付与等） |
+
+> **valid_statuses の権威**: 発行可能な status は prompt 注入の `valid_statuses`（= 当該 workflow の `step.on.keys()`）が単一情報源。YAML の `on:` に存在しない status は返さないこと（参照: [`docs/dev/workflow-authoring.md`](../../../docs/dev/workflow-authoring.md) § `BACK_*` プレフィックス拡張）。`BACK` と `BACK_IMPLEMENT` は差し戻し先（design / implement）が異なるため、Step 1.4 の証跡欠落は必ず `BACK_IMPLEMENT` を用い、bare `BACK` は流用しない。
