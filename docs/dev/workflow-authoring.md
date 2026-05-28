@@ -274,6 +274,8 @@ steps:
     on:
       PASS: final-check
       RETRY: fix-code
+      BACK: design
+      BACK_IMPLEMENT: implement
       ABORT: end
 
   - id: fix-code
