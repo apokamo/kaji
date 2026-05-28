@@ -55,15 +55,34 @@ class TestRemoteUrlParse:
 
 
 def _fake_subprocess_run_factory(
-    *, remote_url: str | None = "git@github.com:owner/repo.git"
+    *,
+    remote_url: str | None = "git@github.com:owner/repo.git",
+    pr_list_stdout: str | None = '{"number": 42, "headRefName": "feat/x"}',
+    head_ref_oid_stdout: str = "4c212ed7f6b886c110d116be714e134e99f79cf0\n",
+    committed_date_stdout: str = "2026-05-28T01:58:57Z\n",
 ) -> Any:
-    """git remote get-url 用 subprocess.run の fake。"""
+    """subprocess.run の fake。
+
+    `_gh_json` / `_gh_raw` の継ぎ目（生 CLI stdout → Python 値変換）を実際に
+    通すため、CLI 呼び出しごとに **生 stdout 文字列** を返す。``pr view --jq``
+    のスカラー抽出は gh/kaji が返すクォートなし生文字列をそのまま流す。
+    """
 
     def _fake(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         if args[:2] == ["git", "remote"]:
             if remote_url is None:
                 raise subprocess.CalledProcessError(1, args, output="", stderr="no such remote")
             return subprocess.CompletedProcess(args, 0, stdout=remote_url + "\n", stderr="")
+        if args[:3] == ["kaji", "pr", "list"]:
+            if pr_list_stdout is None:
+                return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(args, 0, stdout=pr_list_stdout, stderr="")
+        if args[:3] == ["kaji", "pr", "view"]:
+            jq = args[args.index("--jq") + 1]
+            if jq == ".headRefOid":
+                return subprocess.CompletedProcess(args, 0, stdout=head_ref_oid_stdout, stderr="")
+            if jq == ".commits[-1].committedDate":
+                return subprocess.CompletedProcess(args, 0, stdout=committed_date_stdout, stderr="")
         raise AssertionError(f"unexpected subprocess.run call: {args}")
 
     return _fake
@@ -74,12 +93,9 @@ class TestPrResolution:
     def test_pr_list_empty_returns_abort(
         self, base_env: None, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        with (
-            patch(
-                "kaji_harness.scripts.review_poll_entry.subprocess.run",
-                side_effect=_fake_subprocess_run_factory(),
-            ),
-            patch("kaji_harness.scripts.review_poll_entry._gh_json", return_value=None),
+        with patch(
+            "kaji_harness.scripts.review_poll_entry.subprocess.run",
+            side_effect=_fake_subprocess_run_factory(pr_list_stdout=None),
         ):
             rc = review_poll_entry.main()
         out = capsys.readouterr().out
@@ -90,26 +106,12 @@ class TestPrResolution:
     def test_head_sha_empty_returns_abort(
         self, base_env: None, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        calls: list[Any] = []
-
-        def fake_gh_json(args: list[str], cwd: str | None = None) -> Any:
-            calls.append(args)
-            # 1st call: pr list -> dict with number but empty headRefOid
-            if "list" in args:
-                return {"number": 99, "headRefName": "feat/x", "headRefOid": ""}
-            # 2nd call: pr view --jq .headRefOid -> empty
-            if "headRefOid" in args:
-                return ""
-            return None
-
-        with (
-            patch(
-                "kaji_harness.scripts.review_poll_entry.subprocess.run",
-                side_effect=_fake_subprocess_run_factory(),
-            ),
-            patch(
-                "kaji_harness.scripts.review_poll_entry._gh_json",
-                side_effect=fake_gh_json,
+        # pr list に headRefOid を含めず、pr view --jq .headRefOid を空文字で返す。
+        with patch(
+            "kaji_harness.scripts.review_poll_entry.subprocess.run",
+            side_effect=_fake_subprocess_run_factory(
+                pr_list_stdout='{"number": 99, "headRefName": "feat/x"}',
+                head_ref_oid_stdout="\n",
             ),
         ):
             rc = review_poll_entry.main()
@@ -120,20 +122,11 @@ class TestPrResolution:
     def test_committed_at_empty_returns_abort(
         self, base_env: None, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        def fake_gh_json(args: list[str], cwd: str | None = None) -> Any:
-            if "list" in args:
-                return {"number": 99, "headRefOid": "abc123"}
-            # committedDate jq returns empty
-            return ""
-
-        with (
-            patch(
-                "kaji_harness.scripts.review_poll_entry.subprocess.run",
-                side_effect=_fake_subprocess_run_factory(),
-            ),
-            patch(
-                "kaji_harness.scripts.review_poll_entry._gh_json",
-                side_effect=fake_gh_json,
+        with patch(
+            "kaji_harness.scripts.review_poll_entry.subprocess.run",
+            side_effect=_fake_subprocess_run_factory(
+                pr_list_stdout='{"number": 99, "headRefOid": "abc123"}',
+                committed_date_stdout="\n",
             ),
         ):
             rc = review_poll_entry.main()
@@ -155,23 +148,105 @@ class TestPrResolution:
 
 
 @pytest.mark.small
-class TestArgvDelegation:
-    def test_full_flow_delegates_argv_to_codex_review_poll(self, base_env: None) -> None:
-        def fake_gh_json(args: list[str], cwd: str | None = None) -> Any:
-            if "list" in args:
-                return {"number": 42, "headRefOid": "deadbeef"}
-            if "headRefOid" in args:
-                return "deadbeef"
-            return "2026-05-28T00:00:00Z"
+class TestScalarRawResolution:
+    """`--jq` スカラー抽出は生文字列（クォートなし）で解決する契約をピン留めする。
+
+    Issue #209 回帰防止: `_gh_json` が生 SHA / 生日付を json.loads して
+    `JSONDecodeError` でクラッシュしていたバグの再現テスト。
+    """
+
+    def test_raw_sha_and_date_delegate_without_json_parse(self, base_env: None) -> None:
+        # pr list に headRefOid を含めない → line 150 分岐に入り pr view --jq
+        # .headRefOid（生 SHA）が必ず呼ばれる。committedDate も別経路で常に呼ばれる。
+        with (
+            patch(
+                "kaji_harness.scripts.review_poll_entry.subprocess.run",
+                side_effect=_fake_subprocess_run_factory(
+                    pr_list_stdout='{"number": 42, "headRefName": "feat/x"}',
+                    head_ref_oid_stdout="4c212ed7f6b886c110d116be714e134e99f79cf0\n",
+                    committed_date_stdout="2026-05-28T01:58:57Z\n",
+                ),
+            ),
+            patch(
+                "kaji_harness.scripts.review_poll_entry.codex_review_poll.main",
+                return_value=0,
+            ) as mock_main,
+        ):
+            rc = review_poll_entry.main()
+        assert rc == 0
+        call_argv = mock_main.call_args[0][0]
+        assert call_argv == [
+            "--pr",
+            "42",
+            "--owner",
+            "owner",
+            "--repo",
+            "repo",
+            "--head-sha",
+            "4c212ed7f6b886c110d116be714e134e99f79cf0",
+            "--head-committed-at",
+            "2026-05-28T01:58:57Z",
+        ]
+
+    def test_head_sha_from_pr_list_skips_pr_view(self, base_env: None) -> None:
+        # pr list の JSON object から headRefOid を解決 → pr view --jq .headRefOid
+        # はスキップされる従来分岐。.[0] object 抽出が JSON parse されデグレ無し。
+        def _fake(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            if args[:2] == ["git", "remote"]:
+                return subprocess.CompletedProcess(
+                    args, 0, stdout="git@github.com:owner/repo.git\n", stderr=""
+                )
+            if args[:3] == ["kaji", "pr", "list"]:
+                return subprocess.CompletedProcess(
+                    args,
+                    0,
+                    stdout='{"number": 7, "headRefName": "feat/x", "headRefOid": "cafef00d"}',
+                    stderr="",
+                )
+            if args[:3] == ["kaji", "pr", "view"]:
+                jq = args[args.index("--jq") + 1]
+                if jq == ".headRefOid":
+                    raise AssertionError("pr view --jq .headRefOid must be skipped")
+                return subprocess.CompletedProcess(
+                    args, 0, stdout="2026-05-28T00:00:00Z\n", stderr=""
+                )
+            raise AssertionError(f"unexpected subprocess.run call: {args}")
 
         with (
             patch(
                 "kaji_harness.scripts.review_poll_entry.subprocess.run",
-                side_effect=_fake_subprocess_run_factory(),
+                side_effect=_fake,
             ),
             patch(
-                "kaji_harness.scripts.review_poll_entry._gh_json",
-                side_effect=fake_gh_json,
+                "kaji_harness.scripts.review_poll_entry.codex_review_poll.main",
+                return_value=0,
+            ) as mock_main,
+        ):
+            rc = review_poll_entry.main()
+        assert rc == 0
+        call_argv = mock_main.call_args[0][0]
+        assert call_argv[:8] == [
+            "--pr",
+            "7",
+            "--owner",
+            "owner",
+            "--repo",
+            "repo",
+            "--head-sha",
+            "cafef00d",
+        ]
+
+
+@pytest.mark.small
+class TestArgvDelegation:
+    def test_full_flow_delegates_argv_to_codex_review_poll(self, base_env: None) -> None:
+        with (
+            patch(
+                "kaji_harness.scripts.review_poll_entry.subprocess.run",
+                side_effect=_fake_subprocess_run_factory(
+                    pr_list_stdout='{"number": 42, "headRefOid": "deadbeef"}',
+                    committed_date_stdout="2026-05-28T00:00:00Z\n",
+                ),
             ),
             patch(
                 "kaji_harness.scripts.review_poll_entry.codex_review_poll.main",
@@ -195,18 +270,16 @@ class TestArgvDelegation:
         ]
 
     def test_gh_called_process_error_propagates(self, base_env: None) -> None:
-        def fake_gh_json(args: list[str], cwd: str | None = None) -> Any:
+        def _fake(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            if args[:2] == ["git", "remote"]:
+                return subprocess.CompletedProcess(
+                    args, 0, stdout="git@github.com:owner/repo.git\n", stderr=""
+                )
             raise subprocess.CalledProcessError(1, args, stderr="gh not found")
 
-        with (
-            patch(
-                "kaji_harness.scripts.review_poll_entry.subprocess.run",
-                side_effect=_fake_subprocess_run_factory(),
-            ),
-            patch(
-                "kaji_harness.scripts.review_poll_entry._gh_json",
-                side_effect=fake_gh_json,
-            ),
+        with patch(
+            "kaji_harness.scripts.review_poll_entry.subprocess.run",
+            side_effect=_fake,
         ):
             with pytest.raises(subprocess.CalledProcessError):
                 review_poll_entry.main()
