@@ -4,8 +4,10 @@
 >
 > kaji の release 運用は **`/release` skill ベース（CI 非依存 / maintainer 手元実行）** に移行している。本ドキュメントが対象とする GitHub release-please フローは **現在使用していない**。
 >
+> **`.github/workflows/release-please.yml` / `release-please-lock.yml` / `.github/release-please-config.json` / `.release-please-manifest.json` は #195 で削除済み**。本ドキュメントは将来 release-please ベース運用を再開する場合の参考資料として残置する。
+>
 > - 現行リリース運用: [`runbook.md`](./runbook.md)（`/release` skill ベース）と [`.claude/skills/release/SKILL.md`](../../../.claude/skills/release/SKILL.md)
-> - 本ドキュメントの位置付け: 将来 release-please ベース運用を再開する場合の参考資料 / `.github/workflows/release-please.yml` 等の歴史的経緯
+> - 本ドキュメントの位置付け: 将来 release-please ベース運用を再開する場合の参考資料 / 歴史的経緯
 >
 > 以下の手順は **当時の release-please 稼働手順** をそのまま残したものであり、`runbook.md` 内の旧 section (通常リリース運用 / 初回リリース前チェックリスト 等) への参照は現行 runbook では存在しない。読み替えながら参照すること。
 
