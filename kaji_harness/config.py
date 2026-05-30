@@ -6,6 +6,7 @@ The directory containing .kaji/ is the repo root.
 
 from __future__ import annotations
 
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,7 @@ class PathsConfig:
 
     artifacts_dir: str = ""  # Required. Empty string = not set.
     skill_dir: str = ""  # Required. Empty string = not set.
+    worktree_prefix: str = ""  # Optional. Empty string = not set (→ "kaji" fallback).
 
 
 @dataclass(frozen=True)
@@ -127,6 +129,13 @@ class KajiConfig:
                 path, f"paths.skill_dir must be a string, got {type(skill_dir_raw).__name__}"
             )
         cls._validate_skill_dir(path, skill_dir_raw)
+        wt_prefix_raw = paths_data.get("worktree_prefix", "")
+        if not isinstance(wt_prefix_raw, str):
+            raise ConfigLoadError(
+                path,
+                f"paths.worktree_prefix must be a string, got {type(wt_prefix_raw).__name__}",
+            )
+        cls._validate_worktree_prefix(path, wt_prefix_raw)
         paths = PathsConfig(
             **{k: v for k, v in paths_data.items() if k in PathsConfig.__dataclass_fields__}
         )
@@ -340,4 +349,22 @@ class KajiConfig:
             raise ConfigLoadError(
                 config_path,
                 f"paths.skill_dir must not contain '..': {skill_dir}",
+            )
+
+    @staticmethod
+    def _validate_worktree_prefix(config_path: Path, worktree_prefix: str) -> None:
+        """Validate worktree_prefix: empty = unset; non-empty must be a single safe segment.
+
+        ``worktree_prefix`` は worktree dir 名の先頭 path segment として
+        ``f"{prefix}-{branch_prefix}-{issue_id}"`` に展開される（Issue #215）。
+        separator / whitespace / ``..`` / absolute を含むと worktree 算出規約を壊す
+        ため、単一の安全な segment（``[A-Za-z0-9._-]+``）のみ許可する。
+        """
+        if not worktree_prefix:
+            return  # 未設定（"kaji" fallback）
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", worktree_prefix) or worktree_prefix in {".", ".."}:
+            raise ConfigLoadError(
+                config_path,
+                f"paths.worktree_prefix must be a single safe path segment "
+                f"([A-Za-z0-9._-], no separators/whitespace/'..'): {worktree_prefix!r}",
             )

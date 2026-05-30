@@ -310,12 +310,16 @@ class LocalProvider:
         git_remote: ``provider.local.git_remote``。default ``"origin"``。
             ``IssueContext.git_remote`` の source。skill 内 ``git push`` / ``git fetch``
             等の対象 remote 名。
+        worktree_prefix: ``[paths].worktree_prefix`` config 由来。worktree dir 名の
+            先頭 segment。空文字（無設定）なら ``build_worktree_dir`` 側で ``"kaji"``
+            にフォールバックする（Issue #215）。
     """
 
     repo_root: Path
     machine_id: str
     default_branch: str = "main"
     git_remote: str = "origin"
+    worktree_prefix: str = ""
 
     def __post_init__(self) -> None:
         validate_machine_id(self.machine_id)
@@ -740,7 +744,7 @@ class LocalProvider:
             slug=slug,
             branch_prefix=prefix,
             branch_name=build_branch_name(prefix, issue_id),
-            worktree_dir=build_worktree_dir(prefix, issue_id, self.repo_root),
+            worktree_dir=build_worktree_dir(prefix, issue_id, self.repo_root, self.worktree_prefix),
             design_path=build_design_path(issue_id, slug),
             provider_type="local",
             branch_prefix_fallback=fallback,

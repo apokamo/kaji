@@ -72,13 +72,26 @@ def build_branch_name(branch_prefix: str, issue_id: str) -> str:
     return f"{branch_prefix}/{issue_id}"
 
 
-def build_worktree_dir(branch_prefix: str, issue_id: str, repo_root: Path) -> str:
+def build_worktree_dir(
+    branch_prefix: str,
+    issue_id: str,
+    repo_root: Path,
+    worktree_prefix: str = "",
+) -> str:
     """worktree 絶対パス文字列を返す。
 
-    既存規約: ``<repo_parent>/kaji-<prefix>-<issue_id>``
+    規約: ``<repo_parent>/<worktree_prefix>-<prefix>-<issue_id>``
     （`.claude/skills/issue-start/SKILL.md:33`）。Phase 3 では slug 同梱しない。
+
+    Args:
+        branch_prefix: type label 由来の branch prefix（``feat`` / ``fix`` 等）。
+        issue_id: 正規化済み Issue ID。
+        repo_root: repo のルート。worktree は ``repo_root.parent`` 直下に作る。
+        worktree_prefix: worktree dir 名の先頭 segment。空文字（無設定）の場合は
+            後方互換で ``"kaji"`` にフォールバックする。consumer ごとに
+            ``[paths].worktree_prefix`` で上書きできる（Issue #215）。
     """
-    return str(repo_root.parent / f"kaji-{branch_prefix}-{issue_id}")
+    return str(repo_root.parent / f"{worktree_prefix or 'kaji'}-{branch_prefix}-{issue_id}")
 
 
 def build_design_path(issue_id: str, slug: str) -> str:
