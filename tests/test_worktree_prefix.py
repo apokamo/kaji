@@ -17,13 +17,22 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
+from textwrap import dedent
 
 import pytest
 
-from kaji_harness.config import KajiConfig
+from kaji_harness.config import (
+    ExecutionConfig,
+    GitHubProviderConfig,
+    KajiConfig,
+    LocalProviderConfig,
+    PathsConfig,
+    ProviderConfig,
+)
 from kaji_harness.errors import ConfigLoadError
-from kaji_harness.providers import get_provider
+from kaji_harness.providers import LocalProvider, get_provider
 from kaji_harness.providers.context import build_worktree_dir
 from kaji_harness.providers.github import GitHubProvider
 from kaji_harness.providers.models import Issue, Label
@@ -155,6 +164,37 @@ def test_get_provider_propagates_worktree_prefix_github(tmp_path: Path) -> None:
     assert provider.worktree_prefix == "kamo2"
 
 
+@pytest.mark.medium
+def test_get_provider_propagates_worktree_prefix_local(tmp_path: Path) -> None:
+    """get_provider が config.paths.worktree_prefix を LocalProvider へ注入する。
+
+    gl:21 / git_remote 伝搬テストと同様、local 経路は ``resolve_main_worktree()``
+    を踏むため tmp_path を本物の git repo として初期化する（``subprocess.run`` の
+    名前空間 patch は dispatch/provider 結合では禁止 — testing-convention § patch スコープ）。
+    """
+    subprocess.run(
+        ["git", "init", "-q", "--initial-branch=main", str(tmp_path)],
+        check=True,
+    )
+    config = KajiConfig(
+        repo_root=tmp_path,
+        paths=PathsConfig(
+            artifacts_dir=".kaji-artifacts",
+            skill_dir=".claude/skills",
+            worktree_prefix="kamo2",
+        ),
+        execution=ExecutionConfig(default_timeout=1800),
+        provider=ProviderConfig(
+            type="local",
+            local=LocalProviderConfig(machine_id="pc1"),
+            github=GitHubProviderConfig(),
+        ),
+    )
+    provider = get_provider(config)
+    assert isinstance(provider, LocalProvider)
+    assert provider.worktree_prefix == "kamo2"
+
+
 # --------------------------------------------------------------------------- #
 # Medium M-2: provider → build_worktree_dir 反映（GitHub）
 # --------------------------------------------------------------------------- #
@@ -191,3 +231,43 @@ def test_github_resolve_issue_context_uses_worktree_prefix(
     # ことを検証する（build_worktree_dir と同一規約で期待値を組み立てる）。
     assert ctx.worktree_dir == str(tmp_path / f"kamo2-{ctx.branch_prefix}-1159")
     assert ctx.worktree_dir.startswith(str(tmp_path / "kamo2-"))
+
+
+@pytest.mark.medium
+def test_local_resolve_issue_context_uses_worktree_prefix(tmp_path: Path) -> None:
+    """LocalProvider.resolve_issue_context の worktree_dir が worktree_prefix を反映する。
+
+    ファイル I/O のみ（外部 API / subprocess 非疎通）。ディスク上に issue.md を配置し、
+    build_worktree_dir(..., worktree_prefix=self.worktree_prefix) 経路を通す。
+    """
+    issues_dir = tmp_path / ".kaji" / "issues"
+    issues_dir.mkdir(parents=True)
+    issue_dir = issues_dir / "local-pc1-1-some-bug"
+    issue_dir.mkdir()
+    (issue_dir / "issue.md").write_text(
+        dedent(
+            """
+            ---
+            id: local-pc1-1
+            title: Some bug
+            state: open
+            slug: some-bug
+            branch_prefix: feat
+            labels: []
+            ---
+            body
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    provider = LocalProvider(
+        repo_root=tmp_path,
+        machine_id="pc1",
+        worktree_prefix="kamo2",
+    )
+
+    ctx = provider.resolve_issue_context("local-pc1-1")
+    # worktree_dir は repo_root.parent 基準（build_worktree_dir と同一規約）。
+    assert ctx.worktree_dir == str(tmp_path.parent / "kamo2-feat-local-pc1-1")
+    assert ctx.provider_type == "local"
