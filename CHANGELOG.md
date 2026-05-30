@@ -6,6 +6,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-05-31
+
+`paths.worktree_prefix` config option を追加し、consumer プロジェクトの
+worktree ディレクトリ prefix が `kaji-` 以外の場合に `build_worktree_dir()`
+が FileNotFoundError を起こす問題を修正したパッチリリース。
+
+### Fixed
+
+- `build_worktree_dir()` が worktree prefix を `kaji-` でハードコードしていた
+  問題を修正。`[paths].worktree_prefix` config option として外部化し、
+  デフォルト値 `kaji-` で後方互換を維持 (#215, #216)。
+
+### Internal
+
+- `PathsConfig` に `worktree_prefix: str = "kaji-"` フィールドを追加。値は
+  安全な単一パスセグメントとして validation 済み (#215)。
+- local provider M-1/M-2 worktree_prefix plumbing テストを追加 (#215)。
+
 ## [0.11.0] - 2026-05-29
 
 GitLab forge 対応を撤去し GitHub 単独運用へ回帰したリリース。あわせて
