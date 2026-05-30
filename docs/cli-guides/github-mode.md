@@ -54,6 +54,7 @@ CI / 無人スクリプトでは `GH_TOKEN` 環境変数で PAT を渡す。PAT 
 [paths]
 artifacts_dir = ".kaji-artifacts"
 skill_dir = ".claude/skills"
+# worktree_prefix = "kaji"          # 任意。worktree dir 名の先頭 segment（<prefix>-<branch_prefix>-<id>）。未設定時は "kaji"。issue-start skill が別 prefix で worktree を作る consumer のみ設定し、harness の算出値を実体に一致させる
 
 [execution]
 default_timeout = 1800

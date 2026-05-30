@@ -31,6 +31,7 @@ overlay 生成より前に最低限の base config を 1 度だけ commit する
 [paths]
 artifacts_dir = ".kaji-artifacts"
 skill_dir = ".claude/skills"
+# worktree_prefix = "kaji"          # 任意。worktree dir 名の先頭 segment（<prefix>-<branch_prefix>-<id>）。未設定時は "kaji"。issue-start skill が別 prefix で worktree を作る consumer のみ設定し、harness の算出値を実体に一致させる
 
 [execution]
 default_timeout = 1800
