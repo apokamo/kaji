@@ -351,6 +351,10 @@ class WorkflowRunner:
             )
             last_verdict = ambiguous_abort
             end_status = "ABORT"
+            # cli_main は state.last_transition_verdict.status == "ABORT" を見て
+            # EXIT_ABORT を返すため、main loop 未到達でもここで反映する。
+            state.last_transition_verdict = ambiguous_abort
+            state._persist()
             total_duration_ms = int((time.monotonic() - workflow_start) * 1000)
             logger.log_workflow_end(
                 end_status,

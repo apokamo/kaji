@@ -235,7 +235,7 @@ class TestRunnerBackfillAndOverride:
             patch("kaji_harness.runner.load_skill_metadata", return_value=metadata),
             patch("kaji_harness.runner.execute_script", side_effect=fake_exec),
         ):
-            runner.run()
+            returned_state = runner.run()
 
         out = capsys.readouterr()
         assert "status: ABORT" in out.out
@@ -243,6 +243,15 @@ class TestRunnerBackfillAndOverride:
         assert f"kaji-chore-{issue_id}" in out.err or f"kaji-chore-{issue_id}" in out.out
         assert "git worktree remove" in out.err
         assert exec_called is False
+
+        # cli_main は state.last_transition_verdict.status == "ABORT" を見て
+        # EXIT_ABORT を返す。返却 state と再 load 双方で ABORT が永続化されていること。
+        assert returned_state.last_transition_verdict is not None
+        assert returned_state.last_transition_verdict.status == "ABORT"
+        assert "multiple worktrees match" in returned_state.last_transition_verdict.reason
+        reloaded = SessionState.load_or_create(issue_id, artifacts_dir=repo / ".kaji" / "artifacts")
+        assert reloaded.last_transition_verdict is not None
+        assert reloaded.last_transition_verdict.status == "ABORT"
 
     def test_capture_at_dispatch_when_worktree_appears(self, tmp_path: Path) -> None:
         """新規 run で worktree が physical 存在すれば dispatch 直前に capture される。"""
@@ -297,3 +306,63 @@ class TestRunnerBackfillAndOverride:
         state = SessionState.load_or_create(issue_id, artifacts_dir=artifacts_dir)
         assert state.worktree_dir == str(wt)
         assert state.branch_name == f"feat/{issue_id}"
+
+    def test_ambiguous_worktree_causes_cli_exit_abort(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """多重候補 ABORT が cmd_run 経由で EXIT_ABORT (=1) を返すこと。"""
+        from kaji_harness.cli_main import cmd_run, create_parser
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        issue_id = _init_local_repo_with_issue(repo, labels=["type:feature"])
+        _make_config(repo)
+
+        # 多重候補 worktree を作る
+        for prefix in ("chore", "feat"):
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(repo),
+                    "worktree",
+                    "add",
+                    "-b",
+                    f"{prefix}/{issue_id}",
+                    str(tmp_path / f"kaji-{prefix}-{issue_id}"),
+                ],
+                check=True,
+            )
+
+        # workflow validation 通過用に最小 skill を作る（conftest autouse fixture が
+        # load_skill_metadata を fake 化し exec_script=None を返すため、step に
+        # agent を明示して L2 preflight を通す）
+        skill_dir = repo / ".claude" / "skills" / "rp"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("---\nname: rp\n---\nbody\n")
+
+        wf_path = repo / "wf.yaml"
+        wf_path.write_text(
+            "name: t\n"
+            "description: ''\n"
+            "execution_policy: auto\n"
+            "requires_provider: any\n"
+            "steps:\n"
+            "  - id: poll\n"
+            "    skill: rp\n"
+            "    agent: claude\n"
+            "    on: {PASS: end, ABORT: end}\n"
+        )
+
+        parser = create_parser()
+        parsed = parser.parse_args(
+            ["run", str(wf_path), str(issue_id), "--workdir", str(repo), "--quiet"]
+        )
+        exit_code = cmd_run(parsed)
+
+        assert exit_code == 1  # EXIT_ABORT
+        captured = capsys.readouterr()
+        assert "ABORT" in captured.err or "aborted" in captured.err.lower()
+        assert (
+            "multiple worktrees match" in captured.err or "multiple worktrees match" in captured.out
+        )
