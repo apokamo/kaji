@@ -6,6 +6,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- resumed workflow が Issue の現在ラベルから毎回 `worktree_dir` / `branch_name`
+  を再合成していたため、`review-ready` 等で `type:*` ラベルが workflow 途中に
+  追加されると `exec_script` step（例: `review-poll`）の cwd が `issue-start`
+  で作成された worktree から乖離し `FileNotFoundError` で workflow が ERROR
+  終了していた問題を修正。`SessionState` に「初めて physical に存在を確認した
+  worktree/branch」を構造化保存し、以降の run/step ではそちらを `IssueContext`
+  の正本として override する。旧 kaji 版で作られた `session-state.json` に対しては
+  `git worktree list --porcelain` から backfill で救済する (#218)。
+- `review_poll_entry` が `KAJI_WORKTREE_DIR` 不存在時に Python traceback で
+  死んでいた問題を修正。存在検査を追加し ABORT verdict として診断可能にする (#218)。
+
+### Internal
+
+- `kaji_harness/worktree_discovery.py` を追加: `discover_existing_worktree()` /
+  `AmbiguousWorktreeError`。known prefix + 規約準拠 basename + physical
+  existence の 3 条件 AND で SessionState backfill 候補を発見する (#218)。
+- `SessionState` に `worktree_dir` / `branch_name` の Optional フィールドと
+  `capture_worktree()` 冪等 helper を追加。既存 state JSON は新規 key 不在でも
+  load 可能（後方互換） (#218)。
+
 ## [0.11.1] - 2026-05-31
 
 `paths.worktree_prefix` config option を追加し、consumer プロジェクトの
