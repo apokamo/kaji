@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 from . import codex_review_poll
@@ -92,6 +93,12 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     worktree_dir = os.environ.get("KAJI_WORKTREE_DIR", "")
+    # Issue #218: worktree dir 不存在を Python traceback ではなく ABORT verdict に変換
+    if worktree_dir and not Path(worktree_dir).is_dir():
+        return _abort(
+            "worktree directory does not exist.",
+            f"KAJI_WORKTREE_DIR={worktree_dir!r}",
+        )
     git_remote = os.environ.get("KAJI_GIT_REMOTE", "origin")
 
     # owner / repo を git remote から解決

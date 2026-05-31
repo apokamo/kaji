@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -32,6 +32,7 @@ from .skill import SkillMetadata, load_skill_metadata, validate_skill_exists
 from .state import SessionState
 from .verdict import create_verdict_formatter, parse_verdict
 from .workflow import validate_workflow
+from .worktree_discovery import AmbiguousWorktreeError, discover_existing_worktree
 
 
 @dataclass(frozen=True)
@@ -268,6 +269,44 @@ class WorkflowRunner:
         # 3. issue-scoped な状態をロード（canonical id ベース）
         state = SessionState.load_or_create(run_ctx.canonical_id, self.artifacts_dir)
 
+        # Issue #218: backfill → override 経路。
+        # 旧 kaji 版で作られた state file には worktree_dir / branch_name が無いため、
+        # ``git worktree list --porcelain`` から既存 worktree を発見して state に
+        # 焼き込み、以降は state を正本として label 由来 path を override する。
+        ambiguous_abort: Verdict | None = None
+        if state.worktree_dir is None:
+            try:
+                discovered = discover_existing_worktree(
+                    self.project_root,
+                    run_ctx.canonical_id,
+                    self.config.paths.worktree_prefix,
+                )
+            except AmbiguousWorktreeError as exc:
+                cand_str = "\n  ".join(f"{p} ({b})" for p, b in exc.candidates)
+                sys.stderr.write(
+                    f"ERROR: multiple worktrees match issue {run_ctx.canonical_id!r}:\n"
+                    f"  {cand_str}\n"
+                    f"  Resolve with `git worktree remove <path>` and re-run.\n"
+                )
+                ambiguous_abort = Verdict(
+                    status="ABORT",
+                    reason=f"multiple worktrees match issue {run_ctx.canonical_id}",
+                    evidence="candidates:\n  " + cand_str,
+                    suggestion="Resolve the conflict with `git worktree remove <path>` and re-run.",
+                )
+                discovered = None
+            if discovered is not None:
+                state.capture_worktree(discovered[0], discovered[1])
+
+        if state.worktree_dir and state.branch_name:
+            prefix = state.branch_name.split("/", 1)[0]
+            issue_context = replace(
+                issue_context,
+                worktree_dir=state.worktree_dir,
+                branch_name=state.branch_name,
+                branch_prefix=prefix,
+            )
+
         # 4. run ログディレクトリを作成（canonical id ベース）
         run_dir = (
             self.artifacts_dir
@@ -299,6 +338,29 @@ class WorkflowRunner:
         barrier_hit = False
         step_dispatched = False
 
+        # Issue #218: backfill 段階で多重候補 ABORT を検出していたら、
+        # main loop に入らず ABORT verdict を emit して run 全体を停止する。
+        if ambiguous_abort is not None:
+            sys.stdout.write(
+                "---VERDICT---\n"
+                "status: ABORT\n"
+                f"reason: |\n  {ambiguous_abort.reason}\n"
+                f"evidence: |\n  {ambiguous_abort.evidence}\n"
+                f"suggestion: |\n  {ambiguous_abort.suggestion}\n"
+                "---END_VERDICT---\n"
+            )
+            last_verdict = ambiguous_abort
+            end_status = "ABORT"
+            total_duration_ms = int((time.monotonic() - workflow_start) * 1000)
+            logger.log_workflow_end(
+                end_status,
+                state.cycle_counts,
+                total_duration_ms=total_duration_ms,
+                total_cost=total_cost if total_cost > 0 else None,
+                error=None,
+            )
+            return state
+
         # 5. メインループ
         try:
             while current_step and current_step.id != "end":
@@ -307,6 +369,18 @@ class WorkflowRunner:
                     logger.log_barrier_hit(self.before_step)
                     barrier_hit = True
                     break
+
+                # Issue #218: physical worktree が確定した瞬間に state へ capture。
+                # 同一 run 内で issue-start が新規作成した worktree を捕捉する経路
+                # （backfill は旧 state file の救済、こちらは新規 run の確定）。
+                if state.worktree_dir is None and Path(issue_context.worktree_dir).is_dir():
+                    state.capture_worktree(issue_context.worktree_dir, issue_context.branch_name)
+                    # capture 後は state を正本として context を override
+                    prefix = issue_context.branch_name.split("/", 1)[0]
+                    issue_context = replace(
+                        issue_context,
+                        branch_prefix=prefix,
+                    )
 
                 start_time = time.monotonic()
                 cycle = self.workflow.find_cycle_for_step(current_step.id)

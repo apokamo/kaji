@@ -51,6 +51,10 @@ class SessionState:
     cycle_counts: dict[str, int] = field(default_factory=dict)
     last_completed_step: str | None = None
     last_transition_verdict: Verdict | None = None
+    # Issue #218: 初めて物理的に存在を確認した worktree/branch を構造化保存する。
+    # mutable label からの再合成を避けるため、確定後は state を正本として override する。
+    worktree_dir: str | None = None
+    branch_name: str | None = None
 
     def __post_init__(self) -> None:
         # 既存呼び出しが int を渡してきても受理する（境界で str に正規化）
@@ -96,6 +100,18 @@ class SessionState:
         self.cycle_counts[cycle_name] = self.cycle_iterations(cycle_name) + 1
         self._persist()
 
+    def capture_worktree(self, worktree_dir: str, branch_name: str) -> None:
+        """worktree/branch を構造化保存する（冪等。既に保存済みなら no-op）。
+
+        Issue #218: mutable label からの再合成を避けるため、
+        ``issue-start`` が確定した worktree/branch を 1 度だけ state に焼き込む。
+        """
+        if self.worktree_dir is not None and self.branch_name is not None:
+            return
+        self.worktree_dir = worktree_dir
+        self.branch_name = branch_name
+        self._persist()
+
     def record_step(self, step_id: str, verdict: Verdict) -> None:
         """ステップ実行結果を記録し、永続化する。"""
         self.step_history.append(
@@ -125,6 +141,8 @@ class SessionState:
             "last_transition_verdict": asdict(self.last_transition_verdict)
             if self.last_transition_verdict
             else None,
+            "worktree_dir": self.worktree_dir,
+            "branch_name": self.branch_name,
         }
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         self._write_progress_md()

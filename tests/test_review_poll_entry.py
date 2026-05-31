@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -12,10 +13,12 @@ from kaji_harness.scripts import review_poll_entry
 
 
 @pytest.fixture
-def base_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def base_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("KAJI_PROVIDER_TYPE", "github")
     monkeypatch.setenv("KAJI_ISSUE_ID", "204")
-    monkeypatch.setenv("KAJI_WORKTREE_DIR", "/tmp/worktree")
+    # Issue #218: review_poll_entry が worktree dir 存在検査を追加したため、
+    # base_env では実在する tmp_path を使う。
+    monkeypatch.setenv("KAJI_WORKTREE_DIR", str(tmp_path))
     monkeypatch.setenv("KAJI_GIT_REMOTE", "origin")
     monkeypatch.delenv("KAJI_PR_ID", raising=False)
 
@@ -283,3 +286,46 @@ class TestArgvDelegation:
         ):
             with pytest.raises(subprocess.CalledProcessError):
                 review_poll_entry.main()
+
+
+@pytest.mark.small
+class TestWorktreeDirExistence:
+    """Issue #218: KAJI_WORKTREE_DIR 不存在を ABORT verdict に変換する。"""
+
+    def test_nonexistent_worktree_returns_abort(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setenv("KAJI_PROVIDER_TYPE", "github")
+        monkeypatch.setenv("KAJI_ISSUE_ID", "218")
+        bogus = tmp_path / "kaji-feat-218-missing"
+        monkeypatch.setenv("KAJI_WORKTREE_DIR", str(bogus))
+        monkeypatch.setenv("KAJI_GIT_REMOTE", "origin")
+        rc = review_poll_entry.main()
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "status: ABORT" in out
+        assert "worktree directory does not exist" in out
+        assert str(bogus) in out
+
+    def test_empty_worktree_skips_check(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """空文字 KAJI_WORKTREE_DIR は existence check を skip して既存経路へ進む。"""
+        monkeypatch.setenv("KAJI_PROVIDER_TYPE", "github")
+        monkeypatch.setenv("KAJI_ISSUE_ID", "218")
+        monkeypatch.setenv("KAJI_WORKTREE_DIR", "")
+        monkeypatch.setenv("KAJI_GIT_REMOTE", "origin")
+        # subprocess を mock し、git remote まで到達することを確認
+        with (
+            patch(
+                "kaji_harness.scripts.review_poll_entry.subprocess.run",
+                side_effect=_fake_subprocess_run_factory(),
+            ),
+            patch(
+                "kaji_harness.scripts.review_poll_entry.codex_review_poll.main",
+                return_value=0,
+            ),
+        ):
+            rc = review_poll_entry.main()
+        assert rc == 0
