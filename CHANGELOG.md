@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-06-01
+
 ### Fixed
 
 - resumed workflow が Issue の現在ラベルから毎回 `worktree_dir` / `branch_name`
@@ -27,6 +29,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `SessionState` に `worktree_dir` / `branch_name` の Optional フィールドと
   `capture_worktree()` 冪等 helper を追加。既存 state JSON は新規 key 不在でも
   load 可能（後方互換） (#218)。
+- `release` skill を `.agents/skills` からも参照できるよう symlink を追加。
 
 ## [0.11.1] - 2026-05-31
 
