@@ -19,6 +19,11 @@ Treat the user as an equal partner. Goal: clarity, traction, and progress.
 - **Philosophy**: TDD-first, Docs-as-Code
 - **Workflows**: design, implement, bugfix
 
+## Claude Code Memory
+
+Claude Code の auto-memory 機能は、このリポジトリでは使用しない。
+`~/.claude/settings.json` の `autoMemoryEnabled: false` を維持し、memory file を再作成しない。
+
 ## ⚠️ Pre-Commit (REQUIRED)
 ```bash
 source .venv/bin/activate
