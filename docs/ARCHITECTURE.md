@@ -138,7 +138,33 @@ RunLogger は両経路を `dispatch` field で区別する。詳細は
 
 ## Verdict 判定機構
 
-エージェント出力から verdict を抽出する 3 段階フォールバック。V5/V6 の運用知見に基づく設計であり、V7 で復元（#77）。
+### verdict source 解決順（artifact → comment → stdout）
+
+Issue #220 以降、runner は各 step dispatch ごとに verdict を以下の順で解決する（`resolve_verdict()`）。
+
+```
+resolve_verdict(attempt_dir, full_output, valid_statuses, attempt_started_at, comment_loader, ai_formatter)
+  │
+  ├─ 1. artifact: attempt_dir/verdict.yaml が存在 → load_verdict_yaml（pure YAML）
+  │       存在するが壊れている → fail-loud（comment / stdout へ落ちない）。source="artifact"
+  │
+  ├─ 2. comment: artifact 不在時のみ comment_loader() を遅延呼び出し
+  │       created_at >= attempt_started_at の作業報告コメントのみを newest-first で走査し、
+  │       末尾の ---VERDICT--- block を採用。source="comment"
+  │       provider 取得失敗は WARN して stdout へ fallthrough
+  │
+  └─ 3. stdout: full_output に対する 3 段階フォールバック（後述）。source="stdout"
+```
+
+- **artifact primary**: 解決対象は常に「今 dispatch した attempt の dir」であり、`verdict.yaml` が存在すれば comment / stdout は **見ない**。stale comment が fresh artifact を上書きしない核心の不変条件。
+- **comment fallback の attempt scoping**: `attempt_started_at`（dispatch 直前に harness が記録するローカル時刻）を下限に、`created_at >= attempt_started_at` のコメントのみ対象にする。retry / resume で当該 attempt が verdict を出さなかった場合に、前 attempt の作業報告コメントを誤採用しない。下限を満たすコメントが無ければ古いコメントを拾わず stdout / `VerdictNotFound` へ落とす（false verdict より解決失敗を優先する fail-safe）。
+- **source != "artifact" の正規化保存**: comment / stdout で解決した場合、harness は同じ verdict を `attempt_dir/verdict.yaml` へ正規化保存する。未移行スキルが stdout しか出さなくても attempt 単位の `verdict.yaml` が必ず残る。解決経路は `run.log` の `verdict_source` イベントに記録される。
+
+artifact / log の layout は attempt 単位（`runs/<run_id>/steps/<step_id>/attempt-NNN/`、詳細は § 実行アーティファクトの layout）。
+
+### stdout フォールバック戦略
+
+エージェント stdout から verdict を抽出する 3 段階フォールバック。V5/V6 の運用知見に基づく設計であり、V7 で復元（#77）。上記解決順の Step 3（stdout 経路）にあたる。
 
 ### フォールバック戦略
 
@@ -259,6 +285,29 @@ kaji run workflows/feature-development.yaml 57 --from fix-code
 ```
 
 `--from` で指定したステップから再開し、`session-state.json` の `session_id` を使って CLI セッションを復元する。
+
+### 実行アーティファクトの layout
+
+run / step / attempt の成果物は attempt 単位で分離される（Issue #220）。
+
+```text
+<artifacts_dir>/<issue>/
+  session-state.json
+  progress.md
+  runs/<run_id>/
+    run.log                       # workflow 全体ログ
+    steps/<step_id>/
+      attempt-001/
+        prompt.txt                # agent step の build_prompt 結果（再現用）
+        stdout.log / console.log / stderr.log
+        verdict.yaml              # resolve 後に harness が正規化保存
+      attempt-002/ ...            # cycle / retry / resume の再 dispatch ごとに採番
+      latest -> attempt-002       # 最新 attempt への convenience symlink（best-effort）
+```
+
+- `run_id` は分（minute）精度（`%y%m%d%H%M`）。同一 step が同一 run 内で複数回 dispatch されても `attempt-NNN` で prompt / logs / verdict の対応が一意になる。
+- `latest` symlink は人間 / 外部ツール向けの利便性。harness の verdict 解決は in-memory で保持した attempt path を使い `latest` に依存しない（symlink 非対応 FS でも壊れない）。
+- 新規 run は新 layout を正とする。旧 `runs/<run_id>/<step_id>/`（attempt なしの flat 構造）が残っていても新 run はそれを温存したまま新 layout で完了する（migration は必須としない）。
 
 ---
 

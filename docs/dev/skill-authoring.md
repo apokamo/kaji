@@ -110,7 +110,7 @@ exec_script: kaji_harness.scripts.review_poll_entry
 
 ## verdict 出力規約
 
-すべてのスキルは最終出力として以下の形式の verdict ブロックを含めなければならない。
+すべてのスキルは作業完了時に、以下の verdict を **3 経路** で残さなければならない（Issue #220）。
 
 ```
 ---VERDICT---
@@ -124,11 +124,24 @@ suggestion: |
 ---END_VERDICT---
 ```
 
-verdict ブロックは **stdout にそのまま出力** すること。ハーネスは CLI の標準出力から verdict を抽出するため、`kaji issue comment --body` の引数や別コマンドの入力にだけ verdict を埋めても判定されない。
+1. **artifact `verdict.yaml`（primary）**: コンテキスト変数 `verdict_path`（exec_script では env `KAJI_VERDICT_PATH`）が指す絶対パスへ、`status` / `reason` / `evidence` / `suggestion` の **pure YAML**（`---VERDICT---` delimiter なし）を保存する。
+2. **作業報告 Issue comment 末尾（fallback）**: 作業報告コメントの末尾に、上記 `---VERDICT---` block をそのまま追記する。verdict 専用コメントを新設せず、既存の作業報告コメントの末尾に足すだけでよい。
+3. **stdout（互換 fallback）**: 同じ `---VERDICT---` block を stdout にも出力する。
 
-Issue コメントや Issue 本文更新は別途行ってよいが、それは verdict 出力の代替ではない。コメント投稿を行う場合でも、最終的な verdict ブロックは stdout に残すこと。
+ハーネスはこの 3 経路を **artifact → comment → stdout** の順で解決する（詳細は [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) § Verdict 判定機構）。`verdict_path` への保存が primary 経路であり、`kaji issue comment --body` の引数や別コマンドの入力にだけ verdict を埋めても、artifact / 作業報告コメント末尾 / stdout のいずれにも残っていなければ判定されない。
 
-**verdict 不在は fail-loud** (Issue #193): `---VERDICT---` delimiter が一切出力されないままセッションが終了した場合、ハーネスは AI formatter で穴埋めせず `VerdictNotFound` を `HarnessError` として raise する（`EXIT_RUNTIME_ERROR (= 3)` にマップ）。`ScheduleWakeup` 等で再起動を期待する場合でも、メインセッション終了時点で verdict ブロックを stdout に出力する責務はスキル側にある。詳細は [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) § Verdict 判定機構 を参照。
+`verdict.yaml` の例（pure YAML）:
+
+```yaml
+status: PASS
+reason: 設計書と整合し品質基準を満たす
+evidence: ruff / mypy / pytest すべて pass
+suggestion: ""
+```
+
+**verdict 不在は fail-loud** (Issue #193 / #220): artifact `verdict.yaml` も、現在 attempt 以降の作業報告コメント末尾 block も、stdout の `---VERDICT---` delimiter も一切無いままセッションが終了した場合、ハーネスは AI formatter で穴埋めせず `VerdictNotFound` を `HarnessError` として raise する（`EXIT_RUNTIME_ERROR (= 3)` にマップ）。逆に `verdict.yaml` が「存在するが壊れている / 必須欠落 / invalid status」場合も fail-loud（comment / stdout へは fallthrough しない）。`ScheduleWakeup` 等で再起動を期待する場合でも、メインセッション終了時点で verdict を上記 3 経路に残す責務はスキル側にある。
+
+> **stdout 経路の段階廃止方針**: stdout への verdict 出力は、未移行スキル・stdout ベースの既存テストとの互換のための fallback として当面残す。全スキルが `verdict.yaml` を書く運用に移行した後、stdout 経路の段階廃止を別 Issue で検討する。
 
 ### verdict の選択基準
 
@@ -172,6 +185,7 @@ suggestion: |
 | `issue_id` | str | 正規化済み Issue ID（GitHub 数値または local ID。例: `"153"` / `"local-pc1-1"`） |
 | `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID。例: `"#153"` / `"local-pc1-1"`） |
 | `step_id` | str | 現在のステップ ID |
+| `verdict_path` | str | 当該 attempt の `verdict.yaml` 絶対パス（Issue #220）。スキルはここへ pure YAML の verdict を保存する。exec_script 経路では env `KAJI_VERDICT_PATH` として注入される |
 | `previous_verdict` | str | 前ステップの verdict 要約（resume ステップ等） |
 | `cycle_count` | int | 現在のサイクルイテレーション（サイクル内ステップのみ） |
 | `max_iterations` | int | サイクルの上限回数（サイクル内ステップのみ） |

@@ -139,8 +139,6 @@ class TestCanonicalIssueId:
 
     def test_run_persists_state_under_canonical_dir(self, tmp_path: Path) -> None:
         """``run()`` 完了後、state / progress.md は canonical id directory に書かれる。"""
-        from kaji_harness.models import Verdict
-
         repo = _write_repo(
             tmp_path,
             provider_section=(
@@ -150,7 +148,9 @@ class TestCanonicalIssueId:
         provider = LocalProvider(repo_root=repo, machine_id="pc1")
         provider.create_issue(title="x", body="b", slug="x", labels=["type:feature"])
         runner = _make_runner(repo, "1")  # raw 入力
-        # CLI 実行を mock：1 step 走らせて即 PASS で終了
+        # CLI 実行を mock：1 step 走らせて即 PASS で終了。Issue #220 以降 runner は
+        # parse_verdict を直接呼ばず resolve_verdict 経由で artifact→comment→stdout を
+        # 解決するため、stdout に valid な PASS block を含めて stdout 経路で解決させる。
         from kaji_harness.models import CLIResult
 
         with patch("kaji_harness.runner.execute_cli") as mock_exec:
@@ -160,10 +160,8 @@ class TestCanonicalIssueId:
                 session_id=None,
                 cost=None,
             )
-            with patch("kaji_harness.runner.parse_verdict") as mock_v:
-                mock_v.return_value = Verdict("PASS", "ok", "ok", "ok")
-                with patch("kaji_harness.runner.validate_skill_exists"):
-                    runner.run()
+            with patch("kaji_harness.runner.validate_skill_exists"):
+                runner.run()
         assert runner.canonical_issue_id == "local-pc1-1"
         assert runner.canonical_issue_ref == "local-pc1-1"
         # canonical dir に state が書かれる、raw dir には書かれない

@@ -12,10 +12,11 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from string import Template
-from typing import Any
+from typing import Any, Protocol
 
 import yaml
 
@@ -470,3 +471,204 @@ def create_verdict_formatter(
         return result.stdout
 
     return formatter
+
+
+# ============================================================
+# Issue #220: artifact verdict.yaml + comment fallback resolution
+# ============================================================
+
+
+class CommentLike(Protocol):
+    """`resolve_verdict` の comment fallback が必要とする最小 interface。
+
+    provider 層の ``Comment`` (``providers.models.Comment``) と構造的に互換。
+    verdict.py を provider 実装へ依存させないため Protocol で受ける。
+    属性は read-only property として宣言し、frozen dataclass である
+    ``Comment`` と構造的に一致させる。
+    """
+
+    @property
+    def body(self) -> str: ...
+
+    @property
+    def created_at(self) -> str: ...
+
+
+def load_verdict_yaml(path: Path, valid_statuses: set[str]) -> Verdict:
+    """artifact の ``verdict.yaml`` (delimiter 無しの pure YAML) を読み込む。
+
+    既存 stdout verdict と同じ検証規則（``_parse_yaml_fields`` + ``_validate``）を
+    通す。``verdict.yaml`` が「存在するが壊れている」場合は fail-loud（呼び出し側
+    の ``resolve_verdict`` は comment / stdout へ fallthrough しない）。
+
+    Args:
+        path: ``verdict.yaml`` の絶対パス。存在前提（存在確認は呼び出し側）。
+        valid_statuses: 当該 step の ``on:`` キー集合。
+
+    Returns:
+        検証済み ``Verdict``。
+
+    Raises:
+        VerdictParseError: YAML parse 失敗 / 必須欠落 / ABORT・BACK で suggestion 空。
+        InvalidVerdictValue: status が ``valid_statuses`` 外。
+    """
+    text = path.read_text(encoding="utf-8")
+    verdict = _parse_yaml_fields(text)
+    _validate(verdict, valid_statuses)
+    return verdict
+
+
+def write_verdict_yaml(path: Path, verdict: Verdict) -> None:
+    """``Verdict`` を ``status/reason/evidence/suggestion`` の pure YAML で書き出す。
+
+    ``load_verdict_yaml`` と round-trip 可能。run_id / step_id / attempt_id は
+    保存しない（attempt path 自体が現在の run / step / attempt を表す）。
+
+    Args:
+        path: 書き込み先（親ディレクトリは必要なら作成する）。
+        verdict: 直列化する ``Verdict``。
+    """
+    data = {
+        "status": verdict.status,
+        "reason": verdict.reason,
+        "evidence": verdict.evidence,
+        "suggestion": verdict.suggestion,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        yaml.safe_dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def parse_verdict_block(text: str, valid_statuses: set[str]) -> Verdict | None:
+    """comment 本文から末尾の ``---VERDICT---`` block を抽出して検証する。
+
+    作業報告 comment の契約は「本文末尾に verdict block を追記」であるため、
+    引用・過去ログ中の古い block を誤採用しないよう **本文中で成立する最後（末尾）
+    の block** を採用する。STRICT delimiter を優先し、無ければ RELAXED を見る。
+
+    Args:
+        text: comment 本文。
+        valid_statuses: 当該 step の ``on:`` キー集合。
+
+    Returns:
+        末尾 block の ``Verdict``。block が 1 つも無ければ ``None``。
+
+    Raises:
+        VerdictParseError: block は在るが YAML / 必須フィールドが不正。
+        InvalidVerdictValue: status が ``valid_statuses`` 外（prompt 違反）。
+    """
+    matches = list(STRICT_PATTERN.finditer(text))
+    if not matches:
+        matches = list(RELAXED_PATTERN.finditer(text))
+    if not matches:
+        return None
+    block = matches[-1].group(1)
+    verdict = _parse_yaml_fields(block)
+    _validate(verdict, valid_statuses)
+    return verdict
+
+
+def _parse_comment_timestamp(created_at: str) -> datetime | None:
+    """comment の ISO8601 ``created_at`` を timezone-aware datetime に変換する。
+
+    GitHub / local とも ``%Y-%m-%dT%H:%M:%SZ`` 形式。parse 不能なら ``None`` を
+    返し、呼び出し側は fail-safe（現在 attempt 判定から除外）に倒す。
+    """
+    try:
+        dt = datetime.fromisoformat(created_at)
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt
+
+
+def _is_current_comment(comment: CommentLike, attempt_started_at: datetime) -> bool:
+    """comment が現在 attempt の dispatch 以降に投稿されたかを判定する。
+
+    ``created_at >= attempt_started_at`` を満たす comment のみ現在 attempt 由来と
+    みなす。parse 不能な ``created_at`` は fail-safe で除外する（古い comment を
+    誤採用するより解決失敗を選ぶ）。
+
+    比較の lower bound は **秒に切り捨てて** から用いる。``attempt_started_at`` は
+    ``datetime.now(UTC)`` 由来でマイクロ秒精度を持つ一方、local comment / GitHub
+    ``createdAt`` の timestamp は秒精度（``%Y-%m-%dT%H:%M:%SZ``）で保存される。
+    dispatch と同一秒に投稿された fresh comment（例: dispatch ``12:00:00.5``、
+    comment ``12:00:00Z``）が、マイクロ秒差だけで stale 扱いされ取りこぼされるのを
+    防ぐ。
+    """
+    ts = _parse_comment_timestamp(comment.created_at)
+    if ts is None:
+        return False
+    return ts >= attempt_started_at.replace(microsecond=0)
+
+
+def resolve_verdict(
+    *,
+    attempt_dir: Path,
+    full_output: str,
+    valid_statuses: set[str],
+    attempt_started_at: datetime,
+    comment_loader: Callable[[], Sequence[CommentLike]] | None,
+    ai_formatter: Callable[[str], str] | None = None,
+    max_retries: int = 2,
+) -> tuple[Verdict, str]:
+    """verdict を artifact → comment → stdout の順で解決する。
+
+    1. ``attempt_dir/verdict.yaml`` が存在 → ``load_verdict_yaml``（壊れていれば
+       fail-loud。comment / stdout へは落ちない）。``source="artifact"``。
+    2. else ``comment_loader()`` を呼び、``created_at >= attempt_started_at`` の
+       comment **のみ** を newest-first で走査し、最初に成立した末尾 block を採用。
+       ``source="comment"``。provider 取得失敗時は WARN して stdout へ。
+    3. else stdout の ``parse_verdict``（既存 3 段 fallback まるごと）。
+       ``source="stdout"``。
+
+    artifact が存在する間は comment / stdout を **見ない**ため、stale comment が
+    fresh artifact を上書きすることはない。comment fallback は
+    ``attempt_started_at`` を lower bound にすることで、retry / resume で当該
+    attempt が verdict.yaml も stdout verdict も出さなかった場合に前 attempt の
+    作業報告 comment を誤採用しない（Issue #220 完了条件）。
+
+    Args:
+        attempt_dir: 当該 attempt のディレクトリ（``verdict.yaml`` の親）。
+        full_output: CLI / script の stdout 全文（stdout fallback 用）。
+        valid_statuses: 当該 step の ``on:`` キー集合。
+        attempt_started_at: dispatch 直前に記録した timezone-aware 時刻。
+            comment fallback の lower bound。
+        comment_loader: artifact 不在時のみ呼ぶ遅延 callable。comment 列を返す。
+            ``None`` の場合 comment fallback を行わず stdout へ進む。
+        ai_formatter: stdout 経路の Step 3（AI formatter）。exec_script では
+            ``None``（formatter fallback を呼ばない）。
+        max_retries: stdout 経路の AI formatter retry 回数。
+
+    Returns:
+        ``(Verdict, source)``。source は ``"artifact"`` / ``"comment"`` / ``"stdout"``。
+
+    Raises:
+        VerdictNotFound: 全 source で verdict が成立しない。
+        VerdictParseError / InvalidVerdictValue: artifact が壊れている / status 不正。
+    """
+    artifact_path = attempt_dir / "verdict.yaml"
+    if artifact_path.exists():
+        return load_verdict_yaml(artifact_path, valid_statuses), "artifact"
+
+    if comment_loader is not None:
+        try:
+            comments: Sequence[CommentLike] = comment_loader()
+        except Exception as exc:  # noqa: BLE001 — provider 取得失敗は stdout へ fallthrough
+            logger.warning("comment fallback loader failed: %s; falling through to stdout", exc)
+            comments = []
+        current = [c for c in comments if _is_current_comment(c, attempt_started_at)]
+        for comment in reversed(current):  # newest-first
+            verdict = parse_verdict_block(comment.body, valid_statuses)
+            if verdict is not None:
+                return verdict, "comment"
+
+    return (
+        parse_verdict(
+            full_output, valid_statuses, ai_formatter=ai_formatter, max_retries=max_retries
+        ),
+        "stdout",
+    )
