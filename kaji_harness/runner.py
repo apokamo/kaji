@@ -6,10 +6,12 @@ manages state transitions, and handles cycle limits.
 
 from __future__ import annotations
 
+import logging
+import os
 import sys
 import time
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .cli import execute_cli
@@ -30,9 +32,55 @@ from .providers.local import LocalProvider
 from .script_exec import execute_script
 from .skill import SkillMetadata, load_skill_metadata, validate_skill_exists
 from .state import SessionState
-from .verdict import create_verdict_formatter, parse_verdict
+from .verdict import create_verdict_formatter, resolve_verdict, write_verdict_yaml
 from .workflow import validate_workflow
 from .worktree_discovery import AmbiguousWorktreeError, discover_existing_worktree
+
+# module-level stdlib logger. ``run()`` 内のローカル ``logger`` (RunLogger) と
+# 名前衝突しないよう underscore 付きで分離する（runner.py は RunLogger を
+# ``logger`` という名でローカル束縛する既存規約を持つため）。
+_logger = logging.getLogger(__name__)
+
+
+def allocate_attempt_dir(run_dir: Path, step_id: str) -> Path:
+    """Issue #220: 当該 step の次の attempt ディレクトリを採番して作成する。
+
+    layout は ``run_dir/steps/<step_id>/attempt-NNN/``。``steps/<step_id>/`` 配下に
+    既存の ``attempt-*`` がある場合はその数 + 1 を採番する（cycle / retry / resume で
+    同一 step が複数回 dispatch されても prompt / logs / verdict の対応関係を一意に
+    保つ）。``latest`` symlink は最新 attempt を指す convenience（symlink 非対応 FS
+    でも採番が壊れないよう best-effort で張り替える）。
+
+    Args:
+        run_dir: ``runs/<run_id>/``（``run.log`` と同階層）。
+        step_id: step ID。
+
+    Returns:
+        作成済みの attempt ディレクトリ絶対パス。
+    """
+    steps_dir = run_dir / "steps" / step_id
+    steps_dir.mkdir(parents=True, exist_ok=True)
+    existing = [p for p in steps_dir.glob("attempt-*") if p.is_dir()]
+    attempt_no = len(existing) + 1
+    attempt_name = f"attempt-{attempt_no:03d}"
+    attempt_dir = steps_dir / attempt_name
+    attempt_dir.mkdir(parents=True, exist_ok=True)
+    _update_latest_symlink(steps_dir, attempt_name)
+    return attempt_dir
+
+
+def _update_latest_symlink(steps_dir: Path, attempt_name: str) -> None:
+    """``steps/<step_id>/latest`` を最新 attempt に張り替える（best-effort）。
+
+    symlink 非対応 FS / 権限不足では例外を握り潰して採番を継続する。
+    """
+    latest = steps_dir / "latest"
+    try:
+        if latest.is_symlink() or latest.exists():
+            latest.unlink()
+        os.symlink(attempt_name, latest)
+    except OSError as exc:
+        _logger.debug("latest symlink update skipped (%s): %s", steps_dir, exc)
 
 
 @dataclass(frozen=True)
@@ -414,9 +462,11 @@ class WorkflowRunner:
                     if current_step.resume and session_id is None:
                         raise MissingResumeSessionError(current_step.id, current_step.resume)
 
-                    # ログディレクトリ
-                    step_log_dir = run_dir / current_step.id
-                    step_log_dir.mkdir(parents=True, exist_ok=True)
+                    # Issue #220: attempt 単位の log/verdict ディレクトリを採番。
+                    # cycle / retry / resume で同一 step が複数回 dispatch されても
+                    # prompt / logs / verdict を attempt-NNN で分離する。
+                    attempt_dir = allocate_attempt_dir(run_dir, current_step.id)
+                    verdict_yaml_path = attempt_dir / "verdict.yaml"
 
                     # exec_script では agent / model / effort を null として記録する
                     # （設計書 § 副作用: ignored fields を null 化して経路判別を明示）。
@@ -459,23 +509,27 @@ class WorkflowRunner:
                             "KAJI_BRANCH_NAME": issue_context.branch_name,
                             "KAJI_PROVIDER_TYPE": issue_context.provider_type,
                             "KAJI_DEFAULT_BRANCH": issue_context.default_branch,
+                            # Issue #220: script は verdict.yaml をここへ保存する
+                            "KAJI_VERDICT_PATH": str(verdict_yaml_path),
                         }
                         context_env["KAJI_GIT_REMOTE"] = issue_context.git_remote
                         if pr_context is not None:
                             context_env["KAJI_PR_ID"] = str(pr_context.pr_id)
                             context_env["KAJI_PR_REF"] = pr_context.pr_ref
 
+                        # comment fallback の lower bound（dispatch 直前に記録）
+                        attempt_started_at = datetime.now(UTC)
                         result = execute_script(
                             step=current_step,
                             module=metadata.exec_script,
                             env=context_env,
                             workdir=effective_workdir,
-                            log_dir=step_log_dir,
+                            log_dir=attempt_dir,
                             timeout=resolved_timeout,
                             verbose=self.verbose,
                         )
                     else:
-                        # プロンプト構築（canonical id を渡す）
+                        # プロンプト構築（canonical id + verdict_path を渡す）
                         prompt = build_prompt(
                             current_step,
                             run_ctx.canonical_id,
@@ -483,15 +537,20 @@ class WorkflowRunner:
                             self.workflow,
                             issue_context=issue_context,
                             pr_context=pr_context,
+                            verdict_path=str(verdict_yaml_path),
                         )
+                        # 生成済み prompt を attempt に保存（再現性・調査用）
+                        (attempt_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
 
+                        # comment fallback の lower bound（dispatch 直前に記録）
+                        attempt_started_at = datetime.now(UTC)
                         # CLI 実行
                         result = execute_cli(
                             step=current_step,
                             prompt=prompt,
                             workdir=effective_workdir,
                             session_id=session_id,
-                            log_dir=step_log_dir,
+                            log_dir=attempt_dir,
                             execution_policy=execution_policy,
                             verbose=self.verbose,
                             default_timeout=default_timeout,
@@ -502,7 +561,7 @@ class WorkflowRunner:
                         state.save_session_id(current_step.id, result.session_id)
                     cost = result.cost
 
-                    # verdict をパース
+                    # Issue #220: verdict 解決順 artifact → comment → stdout。
                     valid = set(current_step.on.keys())
                     if is_exec_script:
                         # exec_script 経路では AI formatter fallback を呼ばない
@@ -516,11 +575,20 @@ class WorkflowRunner:
                             model=current_step.model,
                             workdir=effective_workdir,
                         )
-                    verdict = parse_verdict(
-                        result.full_output,
+                    verdict, verdict_source = resolve_verdict(
+                        attempt_dir=attempt_dir,
+                        full_output=result.full_output,
                         valid_statuses=valid,
+                        attempt_started_at=attempt_started_at,
+                        # comment fallback は artifact 不在時のみ遅延呼び出し。
+                        comment_loader=lambda: provider.view_issue(run_ctx.canonical_id).comments,
                         ai_formatter=formatter,
                     )
+                    logger.log_verdict_source(current_step.id, verdict_source, attempt_dir.name)
+                    # 解決 source が artifact 以外なら正規化保存（legacy skill が
+                    # stdout しか出さなくても attempt-NNN/verdict.yaml を必ず残す）。
+                    if verdict_source != "artifact":
+                        write_verdict_yaml(verdict_yaml_path, verdict)
 
                 # ログ記録 + 状態更新
                 duration_ms = int((time.monotonic() - start_time) * 1000)

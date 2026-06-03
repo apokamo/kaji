@@ -76,6 +76,14 @@ class RunLogger:
             dispatch=dispatch,
         )
 
+    def log_verdict_source(self, step_id: str, source: str, attempt: str) -> None:
+        """verdict 解決経路（artifact / comment / stdout）と attempt を記録する。
+
+        Issue #220: artifact-primary 解決の追跡性確保。``attempt`` は
+        ``attempt-NNN`` ディレクトリ名。
+        """
+        self._write("verdict_source", step_id=step_id, source=source, attempt=attempt)
+
     def log_cycle_iteration(self, cycle_name: str, iteration: int, max_iter: int) -> None:
         """サイクルイテレーションイベントを記録。"""
         self._write(

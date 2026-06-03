@@ -18,6 +18,7 @@ def build_prompt(
     issue_context: IssueContext,
     *,
     pr_context: PRContext | None = None,
+    verdict_path: str | None = None,
 ) -> str:
     """ステップ実行用のプロンプトを構築する。
 
@@ -36,6 +37,9 @@ def build_prompt(
         pr_context: provider が解決した `PRContext`。``None`` の場合
             ``pr_id`` / ``pr_ref`` は variables に含まれない（branch 未 push /
             MR 未作成 / GitHub・Local provider の no-op 実装等）。
+        verdict_path: Issue #220。当該 attempt の ``verdict.yaml`` 絶対パス。
+            runner は常に渡す。``None`` の場合は ``[verdict_path]`` placeholder で
+            出力要件をレンダリングする（直接呼び出し / legacy 互換）。
 
     Returns:
         CLI に渡すプロンプト文字列
@@ -59,6 +63,9 @@ def build_prompt(
         variables["pr_id"] = pr_context.pr_id
         variables["pr_ref"] = pr_context.pr_ref
 
+    if verdict_path is not None:
+        variables["verdict_path"] = verdict_path
+
     # サイクル変数（サイクル内ステップのみ）
     cycle = workflow.find_cycle_for_step(step.id)
     if cycle:
@@ -74,6 +81,8 @@ def build_prompt(
 
     valid_statuses = list(step.on.keys())
     header = "\n".join(f"- {k}: {v}" for k, v in variables.items())
+    status_choices = " | ".join(valid_statuses)
+    verdict_target = verdict_path if verdict_path is not None else "[verdict_path]"
 
     return f"""スキル `{step.skill}` を実行してください。
 
@@ -87,10 +96,18 @@ def build_prompt(
 {header}
 
 ## 出力要件
-実行完了後、以下の YAML 形式で verdict を出力してください:
+作業完了後、以下を必ず実施してください:
+
+1. 次の YAML を `{verdict_target}` に保存する（pure YAML。`---VERDICT---` delimiter は付けない）:
+   status: {status_choices} のいずれか
+   reason: 判定理由
+   evidence: 具体的根拠（複数行可。抽象表現禁止）
+   suggestion: 次のアクション提案（ABORT/BACK 時必須）
+2. 作業報告 Issue comment の末尾に、同じ内容を次の `---VERDICT---` block として追記する。
+3. 互換のため、同じ block を stdout にも出力する:
 
 ---VERDICT---
-status: {" | ".join(valid_statuses)}
+status: {status_choices}
 reason: "判定理由"
 evidence: |
   具体的根拠（複数行可。抽象表現禁止）

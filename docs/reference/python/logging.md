@@ -111,6 +111,20 @@ skill frontmatter `exec_script` による subprocess dispatch（Issue #204）。
 {"ts": "2025-04-22T01:10:00+00:00", "event": "cycle_iteration", "cycle_name": "review_fix_loop", "iteration": 2, "max_iterations": 5}
 ```
 
+#### `verdict_source`
+
+各 step の verdict 解決経路を記録（Issue #220）。`resolve_verdict()` 直後に呼ぶ。
+
+| フィールド | 型 | 備考 |
+|-----------|-----|------|
+| `step_id` | `str` | |
+| `source` | `str` | `"artifact"` / `"comment"` / `"stdout"` |
+| `attempt` | `str` | `attempt-NNN` ディレクトリ名 |
+
+```json
+{"ts": "2025-04-22T01:05:00+00:00", "event": "verdict_source", "step_id": "implement", "source": "artifact", "attempt": "attempt-001"}
+```
+
 #### `workflow_end`
 
 ワークフロー終了時に記録。
@@ -135,8 +149,11 @@ skill frontmatter `exec_script` による subprocess dispatch（Issue #204）。
 |---------|-----------|
 | `log_workflow_start(issue, workflow)` | ワークフロー開始直後 |
 | `log_step_start(step_id, agent, model, effort, session_id, dispatch="agent")` | CLI / subprocess 実行前。`exec_script` 経路では `dispatch="exec_script"` + `agent=model=effort=None` |
+| `log_verdict_source(step_id, source, attempt)` | `resolve_verdict()` 直後（verdict 解決経路の記録、Issue #220） |
 | `log_step_end(step_id, verdict, duration_ms, cost, dispatch="agent")` | CLI / subprocess 終了・verdict 解析後 |
 | `log_cycle_iteration(cycle_name, iteration, max_iter)` | サイクル内の各反復開始時 |
+
+> **step log の出力先（Issue #220）**: `stdout.log` / `console.log` / `stderr.log` / `run.log` 以外の step 単位ログ（`prompt.txt` 等）と verdict は、従来の `runs/<run_id>/<step_id>/` ではなく `runs/<run_id>/steps/<step_id>/attempt-NNN/` 配下に出力される。`run.log` は従来どおり `runs/<run_id>/` 直下。詳細は [`docs/ARCHITECTURE.md`](../../ARCHITECTURE.md) § 実行アーティファクトの layout。
 | `log_workflow_end(status, cycle_counts, total_duration_ms, total_cost, error)` | ワークフロー終了時（正常・異常問わず） |
 
 ```python

@@ -560,3 +560,55 @@ class TestPrContextInjection:
         )
 
         assert "- issue_id: 42" in prompt
+
+
+# ============================================================
+# 16. verdict_path injection + 出力要件契約 (Issue #220)
+# ============================================================
+
+
+@pytest.mark.small
+class TestVerdictPathInjection:
+    """Issue #220: verdict_path 注入と verdict.yaml 保存 + comment 末尾追記契約。"""
+
+    def test_verdict_path_present_injects_variable_and_contract(self) -> None:
+        step = _make_step()
+        workflow = _make_workflow(steps=[step])
+        state = _make_state(issue="42")
+
+        path = "/abs/.kaji-artifacts/42/runs/2606041200/steps/implement/attempt-001/verdict.yaml"
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+            verdict_path=path,
+        )
+
+        # context 変数として注入される
+        assert f"- verdict_path: {path}" in prompt
+        # 出力要件に保存先 path と comment 末尾追記契約が含まれる
+        assert f"`{path}`" in prompt
+        assert "作業報告 Issue comment の末尾" in prompt
+        # stdout 互換 block も残る
+        assert "---VERDICT---" in prompt
+        assert "---END_VERDICT---" in prompt
+
+    def test_verdict_path_none_uses_placeholder_and_omits_variable(self) -> None:
+        step = _make_step()
+        workflow = _make_workflow(steps=[step])
+        state = _make_state(issue="42")
+
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+        )
+
+        # 注入されない（context header に出ない）
+        assert "- verdict_path:" not in prompt
+        # placeholder で契約はレンダリングされる
+        assert "[verdict_path]" in prompt
