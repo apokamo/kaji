@@ -591,11 +591,18 @@ def _is_current_comment(comment: CommentLike, attempt_started_at: datetime) -> b
     ``created_at >= attempt_started_at`` を満たす comment のみ現在 attempt 由来と
     みなす。parse 不能な ``created_at`` は fail-safe で除外する（古い comment を
     誤採用するより解決失敗を選ぶ）。
+
+    比較の lower bound は **秒に切り捨てて** から用いる。``attempt_started_at`` は
+    ``datetime.now(UTC)`` 由来でマイクロ秒精度を持つ一方、local comment / GitHub
+    ``createdAt`` の timestamp は秒精度（``%Y-%m-%dT%H:%M:%SZ``）で保存される。
+    dispatch と同一秒に投稿された fresh comment（例: dispatch ``12:00:00.5``、
+    comment ``12:00:00Z``）が、マイクロ秒差だけで stale 扱いされ取りこぼされるのを
+    防ぐ。
     """
     ts = _parse_comment_timestamp(comment.created_at)
     if ts is None:
         return False
-    return ts >= attempt_started_at
+    return ts >= attempt_started_at.replace(microsecond=0)
 
 
 def resolve_verdict(

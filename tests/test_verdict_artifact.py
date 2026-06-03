@@ -226,6 +226,22 @@ class TestResolveVerdict:
         assert source == "comment"
         assert verdict.status == "PASS"
 
+    def test_same_second_comment_adopted(self, tmp_path: Path) -> None:
+        # dispatch はマイクロ秒精度（12:00:00.5）、comment は秒精度（12:00:00Z）。
+        # 同一秒投稿の fresh comment がマイクロ秒差で取りこぼされないこと。
+        started = self._started().replace(microsecond=500_000)
+        same_second = self._started().strftime("%Y-%m-%dT%H:%M:%SZ")
+        comment = _FakeComment(body="作業報告\n\n" + _block(status="PASS"), created_at=same_second)
+        verdict, source = resolve_verdict(
+            attempt_dir=tmp_path,
+            full_output="",
+            valid_statuses=VALID,
+            attempt_started_at=started,
+            comment_loader=lambda: [comment],
+        )
+        assert source == "comment"
+        assert verdict.status == "PASS"
+
     def test_old_comment_only_no_stdout_raises_not_found(self, tmp_path: Path) -> None:
         started = self._started()
         older = (started - timedelta(seconds=300)).strftime("%Y-%m-%dT%H:%M:%SZ")
