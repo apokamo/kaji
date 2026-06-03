@@ -120,16 +120,19 @@ harness は解決した `Verdict` で従来どおり workflow 遷移する。解
 ```python
 # runner 内部（擬似コード）
 attempt_dir = allocate_attempt_dir(run_dir, step.id)   # steps/<step_id>/attempt-NNN/
-write_prompt_txt(attempt_dir, prompt)                  # agent step のみ
-# build_prompt に verdict_path を渡し、出力要件に保存先を埋め込む
+# build_prompt に verdict_path を渡し、出力要件に保存先を埋め込む（prompt 生成が先）
 prompt = build_prompt(step, ..., verdict_path=str(attempt_dir / "verdict.yaml"))
+write_prompt_txt(attempt_dir, prompt)                  # 生成済み prompt を保存（agent step のみ）
+
+attempt_started_at = now()   # dispatch 直前に記録。comment fallback の lower bound
 result = execute_cli(step=step, prompt=prompt, log_dir=attempt_dir, ...)
 
 verdict, source = resolve_verdict(
     attempt_dir=attempt_dir,
     full_output=result.full_output,
     valid_statuses=set(step.on.keys()),
-    comment_loader=lambda: _load_comment_bodies(provider, issue_id),  # 遅延。artifact 不在時のみ呼ぶ
+    attempt_started_at=attempt_started_at,   # comment を現在 attempt 以降に scope
+    comment_loader=lambda: _load_comments(provider, issue_id),  # 遅延。artifact 不在時のみ呼ぶ。body+created_at を返す
     ai_formatter=formatter,
 )
 if source != "artifact":
@@ -151,7 +154,7 @@ if source != "artifact":
 
 - 既存 `kaji_harness/verdict.py` の parser（STRICT / RELAXED パターン、`_parse_yaml_fields`、`_validate`）を再利用し、新規 parser を作らない。
 - comment 取得は既存 `provider.view_issue(issue_id).comments` を再利用する。comment 投稿・metadata 詳細保存・代理投稿の新規実装はしない（Issue § 認識違いを避けるための明確化）。
-- comment は GitHub（`gh issue view --json comments`）/ local（comment ファイル）ともに **投稿順（時系列昇順）** で返る前提。resolver は newest-first に走査する。
+- comment は GitHub（`gh issue view --json comments`）/ local（comment ファイル）ともに **投稿順（時系列昇順）** で返る前提。resolver は `created_at >= attempt_started_at` の comment に絞った上で newest-first に走査する（comment fallback の attempt scoping。詳細は § 方針 2）。
 - artifact path 解決は既存 `resolve_artifacts_dir(config)`（main worktree 基準）を変えない。
 - run layout 参照は `runner.py` に限局している（`grep` で確認済。`workflow.py:75` の `steps` は workflow YAML 用で無関係）。layout 変更の影響範囲は runner と runner 系テストに収まる。
 - `run_id` の minute 精度衝突は本 Issue の scope 外（既存制約）。同一 run_id 内でも attempt-NNN で step 実行ごとに分離されるため、本機能の正しさには影響しない。
@@ -166,9 +169,9 @@ if source != "artifact":
 | ファイル | 変更内容 |
 |----------|----------|
 | `kaji_harness/verdict.py` | `load_verdict_yaml()` / `write_verdict_yaml()` / `parse_verdict_block()`（delimiter 抽出のみ、AI formatter 無し）を追加 |
-| `kaji_harness/runner.py` | attempt dir 採番 / prompt.txt 保存 / verdict 解決順（artifact→comment→stdout）/ 正規化保存 / layout を `steps/<step_id>/attempt-NNN/` へ |
+| `kaji_harness/runner.py` | attempt dir 採番 / prompt.txt 保存（build_prompt 後）/ dispatch 直前の `attempt_started_at` 記録 / verdict 解決順（artifact→comment→stdout）/ 正規化保存 / layout を `steps/<step_id>/attempt-NNN/` へ |
 | `kaji_harness/prompt.py` | `verdict_path` 引数追加。`## 出力要件` を「verdict.yaml 保存 + comment 末尾追記 + stdout 互換出力」に書き換え。`## コンテキスト変数` に `verdict_path` 追加 |
-| （新規 or runner 内） verdict resolver | `resolve_verdict()` と attempt 採番 helper。runner に閉じてよいが、単体テスト容易性のため純関数として切り出す |
+| （新規 or runner 内） verdict resolver | `resolve_verdict(attempt_dir, full_output, valid_statuses, attempt_started_at, comment_loader, ai_formatter)` と attempt 採番 helper。comment fallback を `created_at >= attempt_started_at` に scope。runner に閉じてよいが、単体テスト容易性のため純関数として切り出す |
 | `.claude/skills/` 共通契約 | 個別 skill は編集せず、prompt 注入（`prompt.py`）で契約を一元化。skill-authoring.md に契約を明記 |
 
 > kaji は Python 単一スタック。backend / frontend の scope 分岐は無い。
@@ -179,20 +182,26 @@ if source != "artifact":
 
 - `load_verdict_yaml(path, valid_statuses) -> Verdict`: `path` を読み、`_parse_yaml_fields` + `_validate` を通す（delimiter 無しの pure YAML）。
 - `write_verdict_yaml(path, verdict) -> None`: `Verdict` を `status/reason/evidence/suggestion` の pure YAML（`yaml.safe_dump`、block scalar 許容）で書く。round-trip 可能。
-- `parse_verdict_block(text, valid_statuses) -> Verdict | None`: comment 本文から STRICT→RELAXED delimiter を抽出し `_parse_yaml_fields`+`_validate`。block 不在は `None`（comment fallback は best-effort のため例外にしない）。
+- `parse_verdict_block(text, valid_statuses) -> Verdict | None`: comment 本文から STRICT→RELAXED delimiter を抽出し `_parse_yaml_fields`+`_validate`。comment 契約が「末尾に追記」のため、**本文中で成立する最後（末尾）の block** を採用する（引用・過去ログ中の古い block を誤採用しない）。block 不在は `None`（comment fallback は best-effort のため例外にしない）。
 
 ### 2. verdict 解決順（resolver）
 
 ```text
-resolve_verdict(attempt_dir, full_output, valid_statuses, comment_loader, ai_formatter):
+resolve_verdict(attempt_dir, full_output, valid_statuses, attempt_started_at, comment_loader, ai_formatter):
   1. (attempt_dir/verdict.yaml) が存在 → load_verdict_yaml（壊れていれば raise / fail-loud）, source="artifact"
-  2. else comment_loader() を呼び newest-first で parse_verdict_block → 最初に成立した block, source="comment"
+  2. else comments = comment_loader();
+     current = [c for c in comments if c.created_at >= attempt_started_at]   # 現在 attempt 以降に scope
+     current を newest-first で走査し parse_verdict_block で成立した最初の block, source="comment"
   3. else parse_verdict(full_output, ai_formatter=...)（既存 stdout 経路まるごと）, source="stdout"
 ```
 
-- attempt scoping により「古い attempt の verdict 誤採用」は構造的に起きない（解決対象は常に **今 dispatch した attempt の dir**）。
-- artifact が存在すれば comment / stdout は **見ない**。よって stale comment が fresh artifact を上書きすることはない（核心の不変条件）。
-- comment fallback の stale 可能性（attempt 跨ぎの古い comment を拾う）は best-effort と明記。primary が artifact である限り通常運用では発生しない。
+- **artifact による attempt scoping**: 解決対象は常に **今 dispatch した attempt の dir** であり、artifact が存在すれば comment / stdout は **見ない**。よって stale comment が fresh artifact を上書きすることはない（核心の不変条件）。
+- **comment fallback の attempt scoping（本修正の核心）**: artifact 不在時の comment fallback は、`attempt_started_at`（当該 attempt の dispatch 直前に harness が記録したローカル時刻）を lower bound とし、`Comment.created_at >= attempt_started_at` を満たす comment **のみ** を対象にする。これにより、retry / resume で当該 attempt が verdict.yaml も stdout verdict も出さなかった場合に、**前 attempt の作業報告 comment を誤採用しない**（Issue #220 完了条件「cycle / retry / resume 時に古い step verdict や別 attempt の verdict を誤採用しない」を comment 経路でも満たす）。
+  - 前 attempt の comment は当該 attempt の dispatch 前に投稿済みのため `created_at < attempt_started_at` となり、構造的に対象外になる。
+  - lower bound を満たす comment が 1 件も無ければ comment fallback は成立せず、stdout 経路（無ければ `VerdictNotFound`）へ進む。古い comment を拾うより「解決失敗」を選ぶ fail-safe 方針。
+  - clock skew の扱い: `attempt_started_at` はローカル時刻、`Comment.created_at` は provider（GitHub はサーバ時刻 / local は投稿時刻）。skew により **本来採用すべき現在 comment を取りこぼす**方向のリスクは残るが、その場合も誤った古い verdict を採るのではなく stdout / `VerdictNotFound` へ落ちるため、workflow 遷移の正しさは壊れない。誤った遷移（false verdict）よりも解決失敗（fail-safe）を優先する設計とする。
+  - comment 本文に run/step/attempt marker を埋め込む案は不採用。agent 挙動に依存し、Issue §「認識違いを避けるための明確化」の「comment metadata を増やさない」方針に反するため、harness 制御の `created_at` lower bound を採る。
+- **複数 verdict block の扱い**: 作業報告 comment の契約は「末尾に verdict block を追記」（§ インターフェース）。引用・過去ログを含む comment で誤採用しないよう、`parse_verdict_block` は comment 本文中で成立する **最後（末尾）の block** を採用する（先頭ではない）。stdout 経路の `parse_verdict` は既存挙動を変えない（互換 fallback のため）。
 
 ### 3. runner の layout 変更
 
@@ -237,10 +246,12 @@ stdout parse は当面の互換 fallback として残す。完全移行（全 ag
 
 - `load_verdict_yaml`: 正常 YAML → `Verdict`。必須欠落 / invalid status / ABORT・BACK で suggestion 空 → 各例外。
 - `write_verdict_yaml` → `load_verdict_yaml` の round-trip 一致（複数行 evidence の block scalar 含む）。
-- `parse_verdict_block`: block 有り → `Verdict`、block 無し → `None`、invalid status block → 例外、複数 block → 先頭採用の定義を検証。
+- `parse_verdict_block`: block 有り → `Verdict`、block 無し → `None`、invalid status block → 例外、複数 block → **末尾採用**（引用・過去ログ中の先頭 block を拾わない）の定義を検証。
 - `resolve_verdict` 優先順位:
   - artifact 有り → artifact 採用かつ `comment_loader` が **呼ばれない**（happy path で API hit しない不変条件）。
-  - artifact 無し + comment 有り → comment 採用。
+  - artifact 無し + 現在 attempt 以降の comment 有り（`created_at >= attempt_started_at`）→ comment 採用。
+  - **artifact 無し + 古い comment のみ（`created_at < attempt_started_at`）+ stdout 無し → 古い comment を採用せず `VerdictNotFound`**（comment fallback の attempt scoping 回帰テスト。Issue 完了条件の核心）。
+  - artifact 無し + 古い comment のみ + stdout 有り → stdout 採用（古い comment は無視）。
   - artifact 無し + comment 無し + stdout 有り → stdout 採用。
   - 全滅 → `VerdictNotFound`。
   - artifact が壊れている → fail-loud（comment/stdout に落ちない）。
@@ -251,7 +262,8 @@ stdout parse は当面の互換 fallback として残す。完全移行（全 ag
 - mock CLI が stdout verdict のみ返す（agent は verdict.yaml 未書き込み）→ harness が stdout で解決し `attempt-001/verdict.yaml` を正規化保存、遷移が正しい（= 既存 stdout 挙動の保全確認も兼ねる）。
 - attempt dir に事前 verdict.yaml がある（agent が書いた想定）→ artifact-primary で解決し、stdout と内容が異なっても **artifact を採用**。
 - **cycle / retry**: RETRY で同一 step が 2 回 dispatch → `attempt-001` と `attempt-002` が各々の `verdict.yaml` を持ち、遷移は **2 回目（attempt-002）** の verdict に従う（古い attempt を誤採用しないことの回帰テスト）。
-- comment fallback: mock provider.view_issue が verdict block 付き comment を返し、mock CLI は stdout verdict も verdict.yaml も出さない → comment で解決。
+- comment fallback（正常）: mock provider.view_issue が **現在 attempt 以降（`created_at >= attempt_started_at`）** の verdict block 付き comment を返し、mock CLI は stdout verdict も verdict.yaml も出さない → comment で解決。
+- **comment fallback の stale 防止（resume 含む / 本修正の回帰テスト）**: 前 attempt の verdict block 付き古い comment（`created_at < attempt_started_at`）のみが存在し、当該 attempt は verdict.yaml も stdout verdict も出さない状況で、(a) retry 経由の 2 回目 dispatch、(b) `--from` による resume 経由の dispatch の双方について、**古い comment を採用せず `VerdictNotFound`** になることを確認する（artifact / stdout が無ければ古い comment へ遷移しない）。
 - legacy layout 読み取り互換: `<issue>/runs/<旧run_id>/<step_id>/`（attempt 無し旧構造）が残存していても、新 run（新 run_id）が新 layout で正常完了し crash しない。
 
 ### Large テスト（large_local・real-agent 非依存）
