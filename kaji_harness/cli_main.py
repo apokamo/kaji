@@ -1057,6 +1057,10 @@ def _handle_issue(raw_args: list[str]) -> int:
         args = args[1:]
     if args and args[0] == "context":
         return _handle_issue_context(provider, args[1:])
+    # ``prepend-note`` も ``gh issue`` に存在しない provider 共通 helper のため、
+    # GitHub passthrough 前に捕捉する（Issue #200）。
+    if args and args[0] == "prepend-note":
+        return _handle_issue_prepend_note(provider, args[1:])
 
     if isinstance(provider, LocalProvider):
         return _handle_issue_local(provider, raw_args)
@@ -1229,6 +1233,100 @@ def _emit_json(payload: object, *, jq_expr: str | None) -> int:
         return rc
     # jq は末尾 newline を出すため二重出力を避けて write
     sys.stdout.write(out)
+    return EXIT_OK
+
+
+def build_worktree_note_body(current_body: str, *, worktree: str, branch: str) -> str:
+    """``> [!NOTE]`` メタブロックを ``current_body`` 先頭へ決定的に合成する。
+
+    ``/issue-start`` Step 4 はかつて multi-line bash heredoc でメタブロックと既存
+    本文を結合していたため、エージェントの multi-line 忠実度に依存し、Haiku 等で
+    blockquote と本文 heading の境界 blank line が脱落していた（Issue #200 OB）。
+    本関数は blank line を Python 文字列リテラル ``\\n\\n`` に固定し、モデル非依存に
+    レイアウトを保証する。
+
+    Args:
+        current_body: 現在の Issue 本文。
+        worktree: NOTE に載せる worktree 相対パスの basename（例 ``kaji-fix-200``）。
+        branch: ブランチ名（例 ``fix/200``）。
+
+    Returns:
+        ``> [!NOTE]`` ブロック + 空行ちょうど 1 行 + 正規化済み本文。``current_body``
+        が空（改行のみを含む）の場合は NOTE ブロックのみ（末尾改行 1 つ）。
+    """
+    note = f"> [!NOTE]\n> **Worktree**: `../{worktree}`\n> **Branch**: `{branch}`"
+    # 本文先頭の余分な空行を剥がし、必ず空行 1 行だけを分離子として付与する。
+    body = current_body.lstrip("\n")
+    if not body:
+        return note + "\n"
+    return f"{note}\n\n{body}"
+
+
+def _handle_issue_prepend_note(provider: IssueProvider, rest: list[str]) -> int:
+    """``kaji issue prepend-note <id> --worktree W --branch B [--commit]``。
+
+    provider 共通: ``view_issue`` で現在本文を取得し、``build_worktree_note_body``
+    で NOTE ブロック + blank line + 本文を決定的に合成して ``edit_issue`` で更新する。
+    エージェントが multi-line 本文を組み立てる必要を排し、blank line 脱落
+    （Issue #200）をモデル非依存に防ぐ。
+
+    ``gh issue prepend-note`` は存在しないため、``context`` と同様に ``_handle_issue``
+    の provider 分岐より前で捕捉される。``--commit`` は local provider で ``issue.md``
+    を atomic commit する用途。github では silent に無視する（既存 ``edit`` と同契約）。
+    """
+    p = argparse.ArgumentParser(prog="kaji issue prepend-note", add_help=True)
+    p.add_argument("issue_id", type=str)
+    p.add_argument("--worktree", required=True, type=str)
+    p.add_argument("--branch", required=True, type=str)
+    p.add_argument(
+        "--commit",
+        action="store_true",
+        help=(
+            "Commit the resulting .kaji/issues/<id>/issue.md atomically "
+            "(local provider only; silently ignored for github)."
+        ),
+    )
+    ns = p.parse_args(rest)
+
+    # provider 別 ID 正規化（_handle_issue_context と同じ規則）
+    local_rid: ResolvedId | None = None
+    if isinstance(provider, LocalProvider):
+        rid_or_rc = _resolve_local_id(provider, ns.issue_id, write=True)
+        if isinstance(rid_or_rc, int):
+            return rid_or_rc
+        local_rid = rid_or_rc
+        issue_id_value = local_rid.value
+    else:
+        try:
+            rid = normalize_id(ns.issue_id, provider_name="github", machine_id=None)
+        except ValueError as exc:
+            sys.stderr.write(f"Error: {exc}\n")
+            return EXIT_INVALID_INPUT
+        issue_id_value = rid.value
+
+    try:
+        current = provider.view_issue(issue_id_value)
+        new_body = build_worktree_note_body(current.body, worktree=ns.worktree, branch=ns.branch)
+        provider.edit_issue(issue_id_value, body=new_body)
+    except IssueNotFoundError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+    except GitHubProviderError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+    except (LocalProviderError, ValueError) as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    # local provider の --commit のみ issue.md を atomic commit。github は silent 無視。
+    if ns.commit and isinstance(provider, LocalProvider) and local_rid is not None:
+        issue_dir = provider._resolve_issue_dir(issue_id_value)
+        _commit_local_issue_change(
+            provider=provider,
+            rid=local_rid,
+            action="edit",
+            paths=[issue_dir / "issue.md"],
+        )
     return EXIT_OK
 
 

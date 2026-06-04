@@ -128,9 +128,21 @@ kaji issue list
 kaji issue context local-pc1-1 --json branch_prefix,branch_name,worktree_dir
 # → {"branch_prefix":"feat","branch_name":"feat/local-pc1-1","worktree_dir":"/abs/.../kaji-feat-local-pc1-1"}
 
+# 本文先頭に Worktree メタ情報（> [!NOTE] ブロック）を決定的に追記（/issue-start 用）
+kaji issue prepend-note local-pc1-1 --worktree kaji-feat-local-pc1-1 --branch feat/local-pc1-1 --commit
+
 # workflow 起動（local 専用）
 kaji run .kaji/wf/feature-development-local.yaml local-pc1-1
 ```
+
+`kaji issue prepend-note <id> --worktree <basename> --branch <branch> [--commit]`
+は `> [!NOTE]` メタブロックを本文先頭へ合成する provider 共通 subcommand。
+合成（NOTE ブロック + **空行ちょうど 1 行** + 既存本文）は `kaji` 内部の決定的な
+Python 経路が担うため、エージェントの multi-line 忠実度に依存せず blank line を
+保証する（Issue #200）。`--commit` は local provider で `issue.md` を atomic commit
+する（`gh issue prepend-note` は存在しないため github では `view_issue` /
+`edit_issue` 経路で更新し、`--commit` は silent に無視）。`/issue-start` skill の
+Step 4 がこれを呼ぶ。
 
 `kaji issue context` は frontmatter `branch_prefix` 優先 → `type:*` ラベル
 mapping → `chore` fallback の優先順で context を解決する（`provider.type='local'`
