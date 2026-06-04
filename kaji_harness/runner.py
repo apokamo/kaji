@@ -17,9 +17,12 @@ from pathlib import Path
 from .cli import execute_cli
 from .config import KajiConfig
 from .errors import (
+    CLIExecutionError,
     InvalidTransition,
     IssueContextResolutionError,
     MissingResumeSessionError,
+    ScriptExecutionError,
+    StepTimeoutError,
     WorkdirNotFoundError,
     WorkflowValidationError,
 )
@@ -29,6 +32,7 @@ from .prompt import build_prompt
 from .providers import IssueContext, IssueProvider, PRContext, get_provider, normalize_id
 from .providers.github import GitHubProviderError
 from .providers.local import LocalProvider
+from .result import RESULT_FILE, AttemptResult, derive_signal, write_result_json
 from .script_exec import execute_script
 from .skill import SkillMetadata, load_skill_metadata, validate_skill_exists
 from .state import SessionState
@@ -81,6 +85,71 @@ def _update_latest_symlink(steps_dir: Path, attempt_name: str) -> None:
         os.symlink(attempt_name, latest)
     except OSError as exc:
         _logger.debug("latest symlink update skipped (%s): %s", steps_dir, exc)
+
+
+def _attempt_number(attempt_dir: Path) -> int:
+    """``attempt-NNN`` ディレクトリ名から 1 始まりの attempt 番号を取り出す。"""
+    return int(attempt_dir.name.split("-")[1])
+
+
+def _record_attempt_end(
+    *,
+    attempt_dir: Path,
+    step_id: str,
+    attempt: int,
+    verdict: Verdict,
+    exit_code: int | None,
+    signal: str | None,
+    started_at: datetime,
+    ended_at: datetime,
+    step_duration_ms: int,
+    session_id: str | None,
+    dispatch: str,
+    error: str | None,
+    cost: CostInfo | None,
+    logger: RunLogger,
+    state: SessionState,
+) -> None:
+    """attempt 終了処理（Issue #222）を 1 箇所にまとめる。
+
+    ``result.json`` 書き出し → ``step_end`` ログ → ``record_step``（progress.md
+    更新）を行う。正常終了・異常終了（ABORT）の両方から呼ばれる。
+
+    ``result.json`` 書き出しの ``OSError`` は best-effort で握り（元処理を妨げない）、
+    異常終了経路では呼び出し側が元例外を優先 re-raise するため crash semantics を
+    壊さない。``result.json`` の ``duration_ms`` は ``ended_at - started_at`` の
+    wall-clock 値、``step_end`` の ``duration_ms`` は呼び出し側が計測した
+    ``step_duration_ms``（step iteration 全体）を用いる。
+    """
+    result_duration_ms = int((ended_at - started_at).total_seconds() * 1000)
+    result = AttemptResult(
+        step_id=step_id,
+        attempt=attempt,
+        status=verdict.status,
+        exit_code=exit_code,
+        signal=signal,
+        started_at=started_at.isoformat(),
+        ended_at=ended_at.isoformat(),
+        duration_ms=result_duration_ms,
+        session_id=session_id,
+        dispatch=dispatch,
+        error=error,
+    )
+    try:
+        write_result_json(attempt_dir / RESULT_FILE, result)
+    except OSError as exc:
+        _logger.warning("result.json write failed (%s): %s", attempt_dir, exc)
+    logger.log_step_end(
+        step_id,
+        verdict,
+        step_duration_ms,
+        cost,
+        attempt=attempt,
+        exit_code=exit_code,
+        signal=signal,
+        dispatch=dispatch,
+    )
+    state.record_step(step_id, verdict, attempt=attempt, exit_code=exit_code, signal=signal)
 
 
 @dataclass(frozen=True)
@@ -438,6 +507,16 @@ class WorkflowRunner:
                 cycle = self.workflow.find_cycle_for_step(current_step.id)
                 step_metadata = skill_metadata[current_step.id]
                 is_exec_script = step_metadata.exec_script is not None
+                dispatch_label = "exec_script" if is_exec_script else "agent"
+
+                # Issue #222: attempt 終了情報。dispatch を伴う step でのみ設定し、
+                # cycle 上限 exhaust の合成 verdict（dispatch 無し）では None のまま。
+                attempt_dir: Path | None = None
+                attempt_no: int | None = None
+                attempt_started_at: datetime | None = None
+                exit_code: int | None = None
+                signal_name: str | None = None
+                result_session_id: str | None = None
 
                 # サイクル上限チェック
                 if cycle and state.cycle_iterations(cycle.name) >= cycle.max_iterations:
@@ -466,6 +545,7 @@ class WorkflowRunner:
                     # cycle / retry / resume で同一 step が複数回 dispatch されても
                     # prompt / logs / verdict を attempt-NNN で分離する。
                     attempt_dir = allocate_attempt_dir(run_dir, current_step.id)
+                    attempt_no = _attempt_number(attempt_dir)
                     verdict_yaml_path = attempt_dir / "verdict.yaml"
 
                     # exec_script では agent / model / effort を null として記録する
@@ -476,7 +556,8 @@ class WorkflowRunner:
                         None if is_exec_script else current_step.model,
                         None if is_exec_script else current_step.effort,
                         session_id,
-                        dispatch="exec_script" if is_exec_script else "agent",
+                        attempt=attempt_no,
+                        dispatch=dispatch_label,
                     )
 
                     # タイムアウト解決: workflow.default_timeout → config.execution.default_timeout
@@ -497,109 +578,174 @@ class WorkflowRunner:
                     if not effective_workdir.is_dir():
                         raise WorkdirNotFoundError(current_step.id, effective_workdir)
 
-                    if is_exec_script:
-                        assert metadata.exec_script is not None
-                        # context env 注入。canonical_id / step_id / worktree
-                        # 関連を script に渡す。
-                        context_env: dict[str, str] = {
-                            "KAJI_ISSUE_ID": run_ctx.canonical_id,
-                            "KAJI_ISSUE_REF": run_ctx.issue_ref,
-                            "KAJI_STEP_ID": current_step.id,
-                            "KAJI_WORKTREE_DIR": issue_context.worktree_dir,
-                            "KAJI_BRANCH_NAME": issue_context.branch_name,
-                            "KAJI_PROVIDER_TYPE": issue_context.provider_type,
-                            "KAJI_DEFAULT_BRANCH": issue_context.default_branch,
-                            # Issue #220: script は verdict.yaml をここへ保存する
-                            "KAJI_VERDICT_PATH": str(verdict_yaml_path),
-                        }
-                        context_env["KAJI_GIT_REMOTE"] = issue_context.git_remote
-                        if pr_context is not None:
-                            context_env["KAJI_PR_ID"] = str(pr_context.pr_id)
-                            context_env["KAJI_PR_REF"] = pr_context.pr_ref
+                    # Issue #222: dispatch〜verdict 解決を try/except で囲み、
+                    # timeout / CLI / script の異常終了でも best-effort で attempt
+                    # 終了情報（result.json / step_end / progress.md）を残してから
+                    # 元例外を優先 re-raise する（crash semantics = EXIT_RUNTIME_ERROR
+                    # を維持し、失敗を silent に retry 化しない）。
+                    try:
+                        if is_exec_script:
+                            assert metadata.exec_script is not None
+                            # context env 注入。canonical_id / step_id / worktree
+                            # 関連を script に渡す。
+                            context_env: dict[str, str] = {
+                                "KAJI_ISSUE_ID": run_ctx.canonical_id,
+                                "KAJI_ISSUE_REF": run_ctx.issue_ref,
+                                "KAJI_STEP_ID": current_step.id,
+                                "KAJI_WORKTREE_DIR": issue_context.worktree_dir,
+                                "KAJI_BRANCH_NAME": issue_context.branch_name,
+                                "KAJI_PROVIDER_TYPE": issue_context.provider_type,
+                                "KAJI_DEFAULT_BRANCH": issue_context.default_branch,
+                                # Issue #220: script は verdict.yaml をここへ保存する
+                                "KAJI_VERDICT_PATH": str(verdict_yaml_path),
+                            }
+                            context_env["KAJI_GIT_REMOTE"] = issue_context.git_remote
+                            if pr_context is not None:
+                                context_env["KAJI_PR_ID"] = str(pr_context.pr_id)
+                                context_env["KAJI_PR_REF"] = pr_context.pr_ref
 
-                        # comment fallback の lower bound（dispatch 直前に記録）
-                        attempt_started_at = datetime.now(UTC)
-                        result = execute_script(
-                            step=current_step,
-                            module=metadata.exec_script,
-                            env=context_env,
-                            workdir=effective_workdir,
-                            log_dir=attempt_dir,
-                            timeout=resolved_timeout,
-                            verbose=self.verbose,
-                        )
-                    else:
-                        # プロンプト構築（canonical id + verdict_path を渡す）
-                        prompt = build_prompt(
-                            current_step,
-                            run_ctx.canonical_id,
-                            state,
-                            self.workflow,
-                            issue_context=issue_context,
-                            pr_context=pr_context,
-                            verdict_path=str(verdict_yaml_path),
-                        )
-                        # 生成済み prompt を attempt に保存（再現性・調査用）
-                        (attempt_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
+                            # comment fallback の lower bound（dispatch 直前に記録）
+                            attempt_started_at = datetime.now(UTC)
+                            result = execute_script(
+                                step=current_step,
+                                module=metadata.exec_script,
+                                env=context_env,
+                                workdir=effective_workdir,
+                                log_dir=attempt_dir,
+                                timeout=resolved_timeout,
+                                verbose=self.verbose,
+                            )
+                        else:
+                            # プロンプト構築（canonical id + verdict_path を渡す）
+                            prompt = build_prompt(
+                                current_step,
+                                run_ctx.canonical_id,
+                                state,
+                                self.workflow,
+                                issue_context=issue_context,
+                                pr_context=pr_context,
+                                verdict_path=str(verdict_yaml_path),
+                            )
+                            # 生成済み prompt を attempt に保存（再現性・調査用）
+                            (attempt_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
 
-                        # comment fallback の lower bound（dispatch 直前に記録）
-                        attempt_started_at = datetime.now(UTC)
-                        # CLI 実行
-                        result = execute_cli(
-                            step=current_step,
-                            prompt=prompt,
-                            workdir=effective_workdir,
-                            session_id=session_id,
-                            log_dir=attempt_dir,
-                            execution_policy=execution_policy,
-                            verbose=self.verbose,
-                            default_timeout=default_timeout,
-                        )
+                            # comment fallback の lower bound（dispatch 直前に記録）
+                            attempt_started_at = datetime.now(UTC)
+                            # CLI 実行
+                            result = execute_cli(
+                                step=current_step,
+                                prompt=prompt,
+                                workdir=effective_workdir,
+                                session_id=session_id,
+                                log_dir=attempt_dir,
+                                execution_policy=execution_policy,
+                                verbose=self.verbose,
+                                default_timeout=default_timeout,
+                            )
 
-                    # セッション ID を保存
-                    if result.session_id:
-                        state.save_session_id(current_step.id, result.session_id)
-                    cost = result.cost
+                        # セッション ID を保存
+                        if result.session_id:
+                            state.save_session_id(current_step.id, result.session_id)
+                        cost = result.cost
+                        result_session_id = result.session_id
+                        exit_code = result.exit_code
+                        signal_name = result.signal
 
-                    # Issue #220: verdict 解決順 artifact → comment → stdout。
-                    valid = set(current_step.on.keys())
-                    if is_exec_script:
-                        # exec_script 経路では AI formatter fallback を呼ばない
-                        # (fabrication 防止 + 決定論性維持)
-                        formatter = None
-                    else:
-                        assert current_step.agent is not None  # L2 で確定
-                        formatter = create_verdict_formatter(
-                            agent=current_step.agent,
+                        # Issue #220: verdict 解決順 artifact → comment → stdout。
+                        valid = set(current_step.on.keys())
+                        if is_exec_script:
+                            # exec_script 経路では AI formatter fallback を呼ばない
+                            # (fabrication 防止 + 決定論性維持)
+                            formatter = None
+                        else:
+                            assert current_step.agent is not None  # L2 で確定
+                            formatter = create_verdict_formatter(
+                                agent=current_step.agent,
+                                valid_statuses=valid,
+                                model=current_step.model,
+                                workdir=effective_workdir,
+                            )
+                        verdict, verdict_source = resolve_verdict(
+                            attempt_dir=attempt_dir,
+                            full_output=result.full_output,
                             valid_statuses=valid,
-                            model=current_step.model,
-                            workdir=effective_workdir,
+                            attempt_started_at=attempt_started_at,
+                            # comment fallback は artifact 不在時のみ遅延呼び出し。
+                            comment_loader=lambda: (
+                                provider.view_issue(run_ctx.canonical_id).comments
+                            ),
+                            ai_formatter=formatter,
                         )
-                    verdict, verdict_source = resolve_verdict(
-                        attempt_dir=attempt_dir,
-                        full_output=result.full_output,
-                        valid_statuses=valid,
-                        attempt_started_at=attempt_started_at,
-                        # comment fallback は artifact 不在時のみ遅延呼び出し。
-                        comment_loader=lambda: provider.view_issue(run_ctx.canonical_id).comments,
-                        ai_formatter=formatter,
-                    )
-                    logger.log_verdict_source(current_step.id, verdict_source, attempt_dir.name)
-                    # 解決 source が artifact 以外なら正規化保存（legacy skill が
-                    # stdout しか出さなくても attempt-NNN/verdict.yaml を必ず残す）。
-                    if verdict_source != "artifact":
-                        write_verdict_yaml(verdict_yaml_path, verdict)
+                        logger.log_verdict_source(current_step.id, verdict_source, attempt_dir.name)
+                        # 解決 source が artifact 以外なら正規化保存（legacy skill が
+                        # stdout しか出さなくても attempt-NNN/verdict.yaml を必ず残す）。
+                        if verdict_source != "artifact":
+                            write_verdict_yaml(verdict_yaml_path, verdict)
+                    except (StepTimeoutError, CLIExecutionError, ScriptExecutionError) as exc:
+                        # best-effort で異常終了情報を記録 → 元例外を re-raise。
+                        ended_at = datetime.now(UTC)
+                        exit_code = getattr(exc, "returncode", None)
+                        signal_name = derive_signal(exit_code)
+                        started = attempt_started_at if attempt_started_at is not None else ended_at
+                        abort_verdict = Verdict(
+                            status="ABORT",
+                            reason="step aborted before producing a verdict",
+                            evidence=str(exc)[:500],
+                            suggestion=(
+                                f"Inspect {attempt_dir.name}/result.json and console.log; "
+                                "re-run after addressing the abort cause."
+                            ),
+                        )
+                        _record_attempt_end(
+                            attempt_dir=attempt_dir,
+                            step_id=current_step.id,
+                            attempt=attempt_no,
+                            verdict=abort_verdict,
+                            exit_code=exit_code,
+                            signal=signal_name,
+                            started_at=started,
+                            ended_at=ended_at,
+                            step_duration_ms=int((time.monotonic() - start_time) * 1000),
+                            session_id=result_session_id or session_id,
+                            dispatch=dispatch_label,
+                            error=f"{type(exc).__name__}: {exc}",
+                            cost=None,
+                            logger=logger,
+                            state=state,
+                        )
+                        raise
 
                 # ログ記録 + 状態更新
                 duration_ms = int((time.monotonic() - start_time) * 1000)
-                logger.log_step_end(
-                    current_step.id,
-                    verdict,
-                    duration_ms,
-                    cost,
-                    dispatch="exec_script" if is_exec_script else "agent",
-                )
-                state.record_step(current_step.id, verdict)
+                if (
+                    attempt_dir is not None
+                    and attempt_no is not None
+                    and attempt_started_at is not None
+                ):
+                    # dispatch を伴う step: result.json + step_end + record_step（attempt 付き）
+                    _record_attempt_end(
+                        attempt_dir=attempt_dir,
+                        step_id=current_step.id,
+                        attempt=attempt_no,
+                        verdict=verdict,
+                        exit_code=exit_code,
+                        signal=signal_name,
+                        started_at=attempt_started_at,
+                        ended_at=datetime.now(UTC),
+                        step_duration_ms=duration_ms,
+                        session_id=result_session_id,
+                        dispatch=dispatch_label,
+                        error=None,
+                        cost=cost,
+                        logger=logger,
+                        state=state,
+                    )
+                else:
+                    # cycle 上限 exhaust の合成 verdict: dispatch 無し → result.json 無し。
+                    logger.log_step_end(
+                        current_step.id, verdict, duration_ms, cost, dispatch=dispatch_label
+                    )
+                    state.record_step(current_step.id, verdict)
                 last_verdict = verdict
                 step_dispatched = True
 

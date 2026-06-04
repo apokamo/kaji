@@ -17,6 +17,7 @@ from typing import Any
 from .adapters import ADAPTERS, CLIEventAdapter
 from .errors import CLIExecutionError, CLINotFoundError, StepTimeoutError
 from .models import CLIResult, CostInfo, Step
+from .result import derive_signal
 
 logger = logging.getLogger(__name__)
 
@@ -149,8 +150,14 @@ def _execute_cli_once(
     finally:
         timer.cancel()
 
+    # Issue #222: 終了情報を CLIResult へ運ぶ（terminate 後の 143/137、
+    # 正常 exit いずれもここで確定済み）。失敗経路は CLIExecutionError.returncode
+    # が、timeout 経路は StepTimeoutError.returncode が別途運ぶ。
+    result.exit_code = process.returncode
+    result.signal = derive_signal(process.returncode)
+
     if timed_out.is_set() and not result.terminal_seen:
-        raise StepTimeoutError(step.id, timeout)
+        raise StepTimeoutError(step.id, timeout, returncode=process.returncode)
     # 失敗判定:
     #  - terminal event を観測したら、その event を真実とする。kaji が後始末で撃った
     #    terminate の returncode は、CLI の SIGTERM ハンドリング方式（-15 / 143 / 137 等）

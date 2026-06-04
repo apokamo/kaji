@@ -45,9 +45,16 @@ class RunLogger:
         model: str | None,
         effort: str | None,
         session_id: str | None,
+        *,
+        attempt: int | None = None,
         dispatch: str = "agent",
     ) -> None:
-        """ステップ開始イベントを記録。"""
+        """ステップ開始イベントを記録。
+
+        Issue #222: ``attempt`` は ``attempt-NNN`` の 1 始まり整数。dispatch される
+        step では常に整数。dispatch を伴わない合成 step（cycle 上限 exhaust 等）では
+        ``None``。
+        """
         self._write(
             "step_start",
             step_id=step_id,
@@ -55,6 +62,7 @@ class RunLogger:
             model=model,
             effort=effort,
             session_id=session_id,
+            attempt=attempt,
             dispatch=dispatch,
         )
 
@@ -64,15 +72,28 @@ class RunLogger:
         verdict: Verdict,
         duration_ms: int,
         cost: CostInfo | None,
+        *,
+        attempt: int | None = None,
+        exit_code: int | None = None,
+        signal: str | None = None,
         dispatch: str = "agent",
     ) -> None:
-        """ステップ終了イベントを記録。"""
+        """ステップ終了イベントを記録（正常終了・タイムアウト・エラーを問わず）。
+
+        Issue #222: ``attempt`` / ``exit_code`` / ``signal`` を付与し、step retry の
+        時系列と異常終了の終了コードを run.log から復元可能にする。``exit_code`` は
+        subprocess の returncode（取得不能なら ``None``）、``signal`` はそこから導出
+        した signal 名（clean exit / signal 由来でなければ ``None``）。
+        """
         self._write(
             "step_end",
             step_id=step_id,
             verdict=asdict(verdict),
             duration_ms=duration_ms,
             cost=asdict(cost) if cost else None,
+            attempt=attempt,
+            exit_code=exit_code,
+            signal=signal,
             dispatch=dispatch,
         )
 

@@ -109,6 +109,59 @@ class TestRunLogger:
         assert ev["cost"]["input_tokens"] == 1000
 
     @pytest.mark.small
+    def test_log_step_start_includes_attempt(self, tmp_path: Path) -> None:
+        """Issue #222: step_start に attempt フィールドが付与される。"""
+        logger = RunLogger(log_path=tmp_path / "run.jsonl")
+
+        logger.log_step_start(
+            step_id="implement",
+            agent="claude",
+            model=None,
+            effort=None,
+            session_id=None,
+            attempt=2,
+        )
+
+        ev = _read_events(logger.log_path)[0]
+        assert ev["event"] == "step_start"
+        assert ev["attempt"] == 2
+
+    @pytest.mark.small
+    def test_log_step_end_includes_attempt_exit_code_signal(self, tmp_path: Path) -> None:
+        """Issue #222: step_end に attempt / exit_code / signal が付与される。"""
+        logger = RunLogger(log_path=tmp_path / "run.jsonl")
+        verdict = Verdict(status="RETRY", reason="aborted", evidence="e", suggestion="")
+
+        logger.log_step_end(
+            step_id="implement",
+            verdict=verdict,
+            duration_ms=100,
+            cost=None,
+            attempt=1,
+            exit_code=143,
+            signal="SIGTERM",
+        )
+
+        ev = _read_events(logger.log_path)[0]
+        assert ev["event"] == "step_end"
+        assert ev["attempt"] == 1
+        assert ev["exit_code"] == 143
+        assert ev["signal"] == "SIGTERM"
+
+    @pytest.mark.small
+    def test_log_step_end_attempt_defaults_to_null(self, tmp_path: Path) -> None:
+        """attempt / exit_code / signal を渡さなければ null（cycle exhaust 合成経路）。"""
+        logger = RunLogger(log_path=tmp_path / "run.jsonl")
+        verdict = Verdict(status="ABORT", reason="exhausted", evidence="e", suggestion="s")
+
+        logger.log_step_end(step_id="review", verdict=verdict, duration_ms=1, cost=None)
+
+        ev = _read_events(logger.log_path)[0]
+        assert ev["attempt"] is None
+        assert ev["exit_code"] is None
+        assert ev["signal"] is None
+
+    @pytest.mark.small
     def test_log_cycle_iteration(self, tmp_path: Path) -> None:
         """log_cycle_iteration writes JSONL with cycle_name, iteration, max_iterations."""
         logger = RunLogger(log_path=tmp_path / "run.jsonl")

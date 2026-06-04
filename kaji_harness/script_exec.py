@@ -24,6 +24,7 @@ from pathlib import Path
 
 from .errors import CLINotFoundError, ScriptExecutionError, StepTimeoutError
 from .models import CLIResult, Step
+from .result import derive_signal
 
 # skill-authoring.md の env 契約上「未解決なら未注入」となる reserved 変数。
 # parent process に古い値が残っていた場合に subprocess へ漏れて
@@ -138,14 +139,17 @@ def execute_script(
         timer.cancel()
 
     if timed_out.is_set():
-        raise StepTimeoutError(step.id, timeout)
+        raise StepTimeoutError(step.id, timeout, returncode=process.returncode)
 
     if process.returncode != 0:
         raise ScriptExecutionError(step.id, module, process.returncode, stderr or "(no stderr)")
 
+    # Issue #222: 正常終了の exit_code / signal を CLIResult へ運ぶ。
     return CLIResult(
         full_output="\n".join(texts),
         session_id=None,
         cost=None,
         stderr=stderr,
+        exit_code=process.returncode,
+        signal=derive_signal(process.returncode),
     )

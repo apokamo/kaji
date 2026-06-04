@@ -30,7 +30,13 @@ def _format_issue_ref(issue: str | int) -> str:
 
 @dataclass
 class StepRecord:
-    """ステップ実行記録。"""
+    """ステップ実行記録。
+
+    Issue #222: ``attempt`` / ``exit_code`` / ``signal`` は optional（default
+    ``None``）。旧 ``session-state.json``（これらのキーを持たない）の load
+    （``StepRecord(**r)``）が壊れないよう末尾に追加する。dispatch を伴う step では
+    ``attempt`` に整数が入り、異常終了では ``exit_code`` / ``signal`` が残る。
+    """
 
     step_id: str
     verdict_status: str
@@ -38,6 +44,9 @@ class StepRecord:
     verdict_evidence: str
     verdict_suggestion: str
     timestamp: str
+    attempt: int | None = None
+    exit_code: int | None = None
+    signal: str | None = None
 
 
 @dataclass
@@ -112,8 +121,21 @@ class SessionState:
         self.branch_name = branch_name
         self._persist()
 
-    def record_step(self, step_id: str, verdict: Verdict) -> None:
-        """ステップ実行結果を記録し、永続化する。"""
+    def record_step(
+        self,
+        step_id: str,
+        verdict: Verdict,
+        *,
+        attempt: int | None = None,
+        exit_code: int | None = None,
+        signal: str | None = None,
+    ) -> None:
+        """ステップ実行結果を記録し、永続化する。
+
+        Issue #222: ``attempt`` / ``exit_code`` / ``signal`` を受け取り、failed /
+        aborted attempt を含めて ``progress.md`` に可視化する。dispatch を伴わない
+        合成 verdict（cycle 上限 exhaust 等）では既定の ``None`` で呼ばれる。
+        """
         self.step_history.append(
             StepRecord(
                 step_id=step_id,
@@ -122,6 +144,9 @@ class SessionState:
                 verdict_evidence=verdict.evidence,
                 verdict_suggestion=verdict.suggestion,
                 timestamp=datetime.now(UTC).isoformat(),
+                attempt=attempt,
+                exit_code=exit_code,
+                signal=signal,
             )
         )
         self.last_completed_step = step_id
@@ -152,9 +177,22 @@ class SessionState:
         lines = [f"# Progress: Issue {_format_issue_ref(self.issue_number)}\n"]
         for record in self.step_history:
             mark = "x" if record.verdict_status == "PASS" else " "
-            lines.append(
-                f"- [{mark}] {record.step_id}: {record.verdict_status} — {record.verdict_reason}"
+            label = record.step_id
+            if record.attempt is not None:
+                label += f" (attempt {record.attempt})"
+            line = f"- [{mark}] {label}: {record.verdict_status} — {record.verdict_reason}"
+            # Issue #222: 異常終了 attempt の終了コード / signal を可視化する。
+            # clean exit（exit_code 0 / None かつ signal 無し）は detail を付けない
+            # （設計書 § C の progress.md 例示は正常 PASS 行に exit 情報を出さない）。
+            abnormal = (record.exit_code is not None and record.exit_code != 0) or (
+                record.signal is not None
             )
+            if abnormal:
+                detail = f"exit {record.exit_code}" if record.exit_code is not None else "exit ?"
+                if record.signal is not None:
+                    detail += f", {record.signal}"
+                line += f" ({detail})"
+            lines.append(line)
         if self.cycle_counts:
             lines.append("\n## サイクル")
             for name, count in self.cycle_counts.items():

@@ -301,13 +301,34 @@ run / step / attempt の成果物は attempt 単位で分離される（Issue #2
         prompt.txt                # agent step の build_prompt 結果（再現用）
         stdout.log / console.log / stderr.log
         verdict.yaml              # resolve 後に harness が正規化保存
+        result.json               # attempt 終了情報（Issue #222。下記参照）
       attempt-002/ ...            # cycle / retry / resume の再 dispatch ごとに採番
       latest -> attempt-002       # 最新 attempt への convenience symlink（best-effort）
 ```
 
-- `run_id` は分（minute）精度（`%y%m%d%H%M`）。同一 step が同一 run 内で複数回 dispatch されても `attempt-NNN` で prompt / logs / verdict の対応が一意になる。
+- `run_id` は分（minute）精度（`%y%m%d%H%M`）。同一 step が同一 run 内で複数回 dispatch されても `attempt-NNN` で prompt / logs / verdict / result の対応が一意になる。
 - `latest` symlink は人間 / 外部ツール向けの利便性。harness の verdict 解決は in-memory で保持した attempt path を使い `latest` に依存しない（symlink 非対応 FS でも壊れない）。
 - 新規 run は新 layout を正とする。旧 `runs/<run_id>/<step_id>/`（attempt なしの flat 構造）が残っていても新 run はそれを温存したまま新 layout で完了する（migration は必須としない）。
+
+#### `result.json`（attempt 終了情報, Issue #222）
+
+各 attempt の終了情報を構造化保存する pure JSON（`kaji_harness/result.py` の `AttemptResult`）。dispatch を伴う step で正常終了・異常終了の両方に書かれる。143 / SIGTERM / timeout / interruption のような異常終了でも best-effort で `status` / `exit_code` / `signal` / `error` を残す（書き出し失敗は元例外を握り潰さない）。
+
+| フィールド | 型 | 説明 |
+|-----------|-----|------|
+| `step_id` | `str` | step ID |
+| `attempt` | `int` | 1 始まりの attempt 番号 |
+| `status` | `str` | 正常終了は解決済み verdict.status、異常終了は `"ABORT"` |
+| `exit_code` | `int \| null` | subprocess の `returncode`（取得不能なら null） |
+| `signal` | `str \| null` | `exit_code` から導出した signal 名（clean exit / signal 由来でなければ null） |
+| `started_at` / `ended_at` | `str` | dispatch 直前 / 終了時の UTC ISO 8601 |
+| `duration_ms` | `int` | `ended_at - started_at` の ms |
+| `session_id` | `str \| null` | agent session id（exec_script / 未取得は null） |
+| `dispatch` | `str` | `"agent"` / `"exec_script"` |
+| `error` | `str \| null` | 異常終了時の例外クラス名 + 短いメッセージ（正常時 null） |
+
+- 読み手は `result.json` の **欠落を許容**する（旧 run / best-effort 書き出し前に死んだ attempt）。verdict 解決（`resolve_verdict`）は `result.json` に依存しないため、旧 run に無くても影響しない（migration 不要）。
+- `run.log` の `step_start` / `step_end` には `attempt` が付与され、`step_end` は `exit_code` / `signal` も持つ（異常終了経路でも合成 `ABORT` verdict で発火）。詳細は [`docs/reference/python/logging.md`](reference/python/logging.md)。
 
 ---
 

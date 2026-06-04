@@ -257,3 +257,68 @@ class TestRecordStepSetsLastVerdict:
         assert state.last_transition_verdict.status == "RETRY"
         assert state.last_transition_verdict.reason == "Tests failed"
         assert state.last_transition_verdict.suggestion == "Fix import errors"
+
+
+# ============================================================
+# 12. record_step records attempt / exit_code / signal (Issue #222)
+# ============================================================
+
+
+@pytest.mark.small
+class TestRecordStepAttemptFields:
+    """record_step は attempt / exit_code / signal を StepRecord に記録する。"""
+
+    def test_record_step_with_attempt_fields(self) -> None:
+        state = _make_state()
+        verdict = Verdict(
+            status="ABORT",
+            reason="step aborted",
+            evidence="StepTimeoutError",
+            suggestion="re-run",
+        )
+
+        with patch.object(state, "_persist"):
+            state.record_step("implement", verdict, attempt=1, exit_code=143, signal="SIGTERM")
+
+        record = state.step_history[0]
+        assert record.attempt == 1
+        assert record.exit_code == 143
+        assert record.signal == "SIGTERM"
+
+    def test_record_step_defaults_are_none(self) -> None:
+        """attempt 系を渡さない呼び出し（cycle exhaust 合成）では None。"""
+        state = _make_state()
+        verdict = Verdict(status="PASS", reason="ok", evidence="e", suggestion="")
+
+        with patch.object(state, "_persist"):
+            state.record_step("design", verdict)
+
+        record = state.step_history[0]
+        assert record.attempt is None
+        assert record.exit_code is None
+        assert record.signal is None
+
+
+# ============================================================
+# 13. StepRecord backward-compat: old session-state.json load (Issue #222)
+# ============================================================
+
+
+@pytest.mark.small
+class TestStepRecordBackwardCompat:
+    """新フィールド追加前の StepRecord(**r) load が壊れない。"""
+
+    def test_old_record_without_new_keys_loads(self) -> None:
+        """attempt / exit_code / signal を持たない旧レコード dict から構築できる。"""
+        old_record = {
+            "step_id": "design",
+            "verdict_status": "PASS",
+            "verdict_reason": "ok",
+            "verdict_evidence": "e",
+            "verdict_suggestion": "",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+        }
+        record = StepRecord(**old_record)
+        assert record.attempt is None
+        assert record.exit_code is None
+        assert record.signal is None
