@@ -185,7 +185,7 @@ def execute_interactive_terminal(
 | `kaji_harness/cli_main.py` | 改修 | `kaji run` に 3 CLI option 追加 / `cmd_run` で config override |
 | `kaji_harness/runner.py` | 改修 | agent dispatch を `agent_runner` で分岐 |
 | `kaji_harness/interactive_terminal.py` | 新規 | `execute_interactive_terminal()` + cleanup / session 抽出 |
-| `assets/interactive-terminal/wrapper.sh` | 新規 | `kitty` 上で `claude` / `codex` を起動する wrapper |
+| `kaji_harness/assets/interactive-terminal/wrapper.sh` | 新規 | `kitty` 上で `claude` / `codex` を起動する wrapper（package data として wheel/sdist へ同梱） |
 | `kaji_harness/cli.py` | **変更なし** | headless の `execute_cli` は制約上不変（下記スコープ注記） |
 | `kaji_harness/verdict.py` | **変更なし** | `resolve_verdict()` の artifact-primary 経路を再利用 |
 | `kaji_harness/state.py` | **変更なし** | 既存 session state 管理を再利用 |
@@ -234,7 +234,7 @@ WorkflowRunner._run_step (runner.py, 既存 agent dispatch 箇所 L638 付近)
 execute_interactive_terminal (interactive_terminal.py, 新規)
   a. step.agent ∈ {claude, codex} を検証、prompt.txt 存在確認
   b. kitty を shutil.which で解決（無ければ CLINotFoundError）
-  c. wrapper.sh path を解決（package root / assets/interactive-terminal/wrapper.sh）
+  c. wrapper.sh path を解決（package data: kaji_harness/assets/interactive-terminal/wrapper.sh）
   d. terminal_log = attempt_dir / "terminal.log"
   e. launch_session_id = uuid4()（Claude fresh のみ） / ""（resume / codex）
   f. argv = [kitty, --title, "kaji-<agent>-<step_id>", --hold, wrapper, <9 args>]
@@ -271,7 +271,7 @@ execute_interactive_terminal (interactive_terminal.py, 新規)
 - `interactive_terminal`: 新規 `execute_interactive_terminal(...)` を呼ぶ。
 - `agent_runner` が上記以外: **config load 時点**で `ConfigLoadError`（runner dispatch までに到達しない）。
 
-### Wrapper 契約（`assets/interactive-terminal/wrapper.sh`）
+### Wrapper 契約（`kaji_harness/assets/interactive-terminal/wrapper.sh`）
 
 引数順を固定する（9 個）:
 
@@ -396,7 +396,7 @@ Codex の `minimal` 禁止は runner のハード検証にせず、effort を pa
 
 ### Large テスト（`large_local`）
 
-- fake terminal command（`kitty` の代役）が `assets/interactive-terminal/wrapper.sh` と同じ引数順で
+- fake terminal command（`kitty` の代役）が `kaji_harness/assets/interactive-terminal/wrapper.sh` と同じ引数順で
   起動され、wrapper 経由で `verdict.yaml` を作り、runner が verdict を解決して継続する E2E。
   ネットワーク無し・subprocess ありのため `@pytest.mark.large_local`。
 - real `kitty` + real `claude` / `codex` を使うテストは **自動化しない**（手動検証で担保。§ 手動検証手順）。

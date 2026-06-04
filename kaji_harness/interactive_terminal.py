@@ -17,7 +17,7 @@ import time
 import uuid
 from pathlib import Path
 
-from .errors import CLINotFoundError, StepTimeoutError
+from .errors import CLIExecutionError, CLINotFoundError, StepTimeoutError
 from .models import CLIResult, Step
 
 _CODEX_RESUME_RE = re.compile(
@@ -29,11 +29,26 @@ _CODEX_SESSION_FILE_RE = re.compile(
 _SESSION_ID_GRACE_SECONDS = 5.0
 _CODEX_SESSION_SCAN_LIMIT = 100
 _VERDICT_POLL_INTERVAL_SECONDS = 2
+_TERMINAL_LOG_TAIL_CHARS = 2000
+
+
+def _terminal_exit_detail(terminal_log: Path) -> str:
+    """Build a diagnostic string from the terminal log tail for early exits."""
+    if not terminal_log.is_file():
+        return f"terminal exited before writing verdict.yaml (no {terminal_log.name})"
+    text = terminal_log.read_text(encoding="utf-8", errors="replace").strip()
+    if not text:
+        return f"terminal exited before writing verdict.yaml ({terminal_log.name} empty)"
+    return f"terminal exited before writing verdict.yaml; log tail:\n{text[-_TERMINAL_LOG_TAIL_CHARS:]}"
 
 
 def _wrapper_path() -> Path:
-    """Resolve ``assets/interactive-terminal/wrapper.sh`` next to the package."""
-    return Path(__file__).resolve().parent.parent / "assets" / "interactive-terminal" / "wrapper.sh"
+    """Resolve the packaged ``assets/interactive-terminal/wrapper.sh``.
+
+    The wrapper ships as package data under ``kaji_harness/assets`` so it is
+    available both from a source checkout and from an installed wheel/sdist.
+    """
+    return Path(__file__).resolve().parent / "assets" / "interactive-terminal" / "wrapper.sh"
 
 
 def _build_kitty_argv(
@@ -103,6 +118,7 @@ def execute_interactive_terminal(
 
     Raises:
         CLINotFoundError: ``kitty`` is not on PATH or failed to launch.
+        CLIExecutionError: The terminal exited before writing ``verdict.yaml``.
         StepTimeoutError: ``verdict.yaml`` did not appear before the deadline.
         ValueError: ``step.agent`` is missing or unsupported.
         FileNotFoundError: ``prompt.txt`` or the wrapper script is missing.
@@ -179,6 +195,13 @@ def execute_interactive_terminal(
                     terminal_log, prompt_path=prompt_path, verdict_path=verdict_path
                 )
             return CLIResult(full_output="", session_id=result_session_id)
+        returncode = process.poll()
+        if returncode is not None:
+            # The terminal exited before any verdict appeared (e.g. no
+            # DISPLAY/Wayland session, an unsupported kitty flag, or the agent
+            # failed at launch). Fail loud with the real launch error instead of
+            # silently polling until the much longer step timeout.
+            raise CLIExecutionError(step.id, returncode, _terminal_exit_detail(terminal_log))
         time.sleep(_VERDICT_POLL_INTERVAL_SECONDS)
 
     # Timeout: verdict never appeared. Best-effort cleanup, then fail-loud.

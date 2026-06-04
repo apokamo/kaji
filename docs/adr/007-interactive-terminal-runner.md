@@ -58,8 +58,9 @@ repository config の `[execution] agent_runner`（または `kaji run --agent-r
 - `kaji_harness/cli_main.py`: `kaji run` に `--agent-runner` /
   `--interactive-terminal-close-on-verdict` / `--no-...` を追加（precedence 1）。
 - `kaji_harness/runner.py`: agent dispatch を `agent_runner` で分岐。
-- `kaji_harness/interactive_terminal.py`（新規）+ `assets/interactive-terminal/wrapper.sh`
-  （新規）。
+- `kaji_harness/interactive_terminal.py`（新規）+
+  `kaji_harness/assets/interactive-terminal/wrapper.sh`（新規、package data として
+  wheel/sdist へ同梱）。
 - docs: 本 ADR、`docs/ARCHITECTURE.md` § runner backend dispatch、
   `docs/cli-guides/interactive-terminal-runner.md`（新規）、`github-mode.md` /
   `local-mode.md` の `[execution]` 例。

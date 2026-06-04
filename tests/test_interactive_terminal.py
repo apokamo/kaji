@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 import pytest
 
-from kaji_harness.errors import CLINotFoundError, StepTimeoutError
+from kaji_harness.errors import CLIExecutionError, CLINotFoundError, StepTimeoutError
 from kaji_harness.interactive_terminal import (
     _build_kitty_argv,
     execute_interactive_terminal,
@@ -25,7 +25,13 @@ from kaji_harness.interactive_terminal import (
 from kaji_harness.models import Step
 from kaji_harness.verdict import load_verdict_yaml
 
-WRAPPER = Path(__file__).resolve().parent.parent / "assets" / "interactive-terminal" / "wrapper.sh"
+WRAPPER = (
+    Path(__file__).resolve().parent.parent
+    / "kaji_harness"
+    / "assets"
+    / "interactive-terminal"
+    / "wrapper.sh"
+)
 
 _PASS_VERDICT = "status: PASS\nreason: ok\nevidence: e\nsuggestion: ''\n"
 
@@ -450,6 +456,9 @@ class TestRunnerVerdictAndCleanup:
             def __init__(self, argv: list[str], cwd: Path, start_new_session: bool) -> None:
                 pass  # never writes verdict
 
+            def poll(self) -> None:
+                return None  # still alive: drives the loop to the deadline
+
         with (
             patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/kitty"),
             patch.object(subprocess, "Popen", FakePopen),
@@ -469,6 +478,37 @@ class TestRunnerVerdictAndCleanup:
                     timeout=1,
                 )
         close.assert_called_once()
+
+    def test_early_terminal_exit_fails_loud_before_timeout(self, tmp_path: Path) -> None:
+        prompt = tmp_path / "prompt.txt"
+        prompt.write_text("prompt", encoding="utf-8")
+        terminal_log = prompt.parent / "terminal.log"
+        terminal_log.write_text("kitty: cannot open display\n", encoding="utf-8")
+
+        class FakePopen:
+            pid = 1
+
+            def __init__(self, argv: list[str], cwd: Path, start_new_session: bool) -> None:
+                pass  # never writes verdict; exits immediately
+
+            def poll(self) -> int:
+                return 1  # already exited non-zero before any verdict
+
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/kitty"),
+            patch.object(subprocess, "Popen", FakePopen),
+            patch("kaji_harness.interactive_terminal.time.sleep", return_value=None),
+        ):
+            with pytest.raises(CLIExecutionError) as excinfo:
+                execute_interactive_terminal(
+                    step=_step("claude"),
+                    prompt_path=prompt,
+                    verdict_path=tmp_path / "verdict.yaml",
+                    workdir=tmp_path,
+                    timeout=600,
+                )
+        assert excinfo.value.returncode == 1
+        assert "cannot open display" in excinfo.value.stderr
 
 
 def _fake_bin_with(tmp_path: Path, *tools: str) -> Path:
