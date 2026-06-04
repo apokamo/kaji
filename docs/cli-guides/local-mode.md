@@ -35,10 +35,16 @@ skill_dir = ".claude/skills"
 
 [execution]
 default_timeout = 1800
+# agent_runner = "headless"                      # 任意。"headless"（既定） | "interactive_terminal"
+# interactive_terminal_close_on_verdict = true   # 任意。interactive_terminal で verdict 検知後に terminal を閉じるか
 
 [provider]
 type = "local"
 ```
+
+`agent_runner = "interactive_terminal"` は `kitty` 上で通常 `claude` / `codex` を起動する
+runner backend。設定方法・CLI option・手動検証手順は
+[Interactive Terminal Runner ガイド](./interactive-terminal-runner.md) を参照。
 
 `type = "github"` 運用なら上記 `[provider]` ブロックを以下に差し替える:
 

@@ -118,8 +118,12 @@ WorkflowRunner.run()
        │   │
        │   ├─ build_prompt(step, state)   # コンテキスト変数を注入
        │   │
-       │   ├─ execute_cli(step, prompt)   # CLI をサブプロセスで実行
-       │   │   └─ CLIEventAdapter         # stream-json → text/session_id/cost に変換
+       │   ├─ if config.execution.agent_runner == "interactive_terminal":
+       │   │     execute_interactive_terminal(step, prompt_path, verdict_path, ...)
+       │   │       # kitty 上で通常 CLI を起動し verdict.yaml を polling（Issue #224）
+       │   │   else:
+       │   │     execute_cli(step, prompt)   # 既存 headless CLI をサブプロセスで実行
+       │   │       └─ CLIEventAdapter         # stream-json → text/session_id/cost に変換
        │   │
        │   └─ parse_verdict(output)       # 3段階フォールバック（AI Formatter 含む）
        │
@@ -133,6 +137,24 @@ WorkflowRunner.run()
 `exec_script` frontmatter を持つ skill は LLM を起動せず subprocess で実行される（Issue #204）。
 RunLogger は両経路を `dispatch` field で区別する。詳細は
 [ロギング規約](./reference/python/logging.md) を参照。
+
+### Runner backend dispatch（headless ↔ interactive_terminal）
+
+agent 経路の起動 backend は repository config の `[execution] agent_runner`（または
+`kaji run --agent-runner`）で選ぶ（Issue #224）。
+
+- **`headless`（既定）**: 従来どおり `execute_cli()` が `claude -p --output-format
+  stream-json` / `codex exec --json` を起動し、stdout を読む。
+- **`interactive_terminal`**: `execute_interactive_terminal()` が `kitty` 上で通常の
+  対話 `claude` / `codex` を起動し、stdout を読まずに attempt directory の
+  `verdict.yaml` を polling する。完了判定は artifact-primary 経路（Issue #220）に
+  完全に乗る。`kitty` 不在は fail-fast、`interactive_terminal_close_on_verdict` で
+  verdict 検知後に terminal を閉じるかを制御する。transcript は util-linux `script(1)`
+  がある環境のみ attempt directory の `terminal.log` に best-effort 記録される。
+
+設定方法と手動検証手順は
+[Interactive Terminal Runner ガイド](./cli-guides/interactive-terminal-runner.md) を参照。
+技術選定の経緯は [ADR 007](./adr/007-interactive-terminal-runner.md)。
 
 ---
 
@@ -300,6 +322,7 @@ run / step / attempt の成果物は attempt 単位で分離される（Issue #2
       attempt-001/
         prompt.txt                # agent step の build_prompt 結果（再現用）
         stdout.log / console.log / stderr.log
+        terminal.log              # interactive_terminal runner の transcript（Issue #224。util-linux script 環境のみ）
         verdict.yaml              # resolve 後に harness が正規化保存
         result.json               # attempt 終了情報（Issue #222。下記参照）
       attempt-002/ ...            # cycle / retry / resume の再 dispatch ごとに採番

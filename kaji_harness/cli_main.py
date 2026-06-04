@@ -6,6 +6,7 @@ Provides the `kaji` command with subcommands (e.g., `kaji run`).
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import shutil
 import subprocess
 import sys
@@ -162,6 +163,30 @@ def _register_run(subparsers: argparse._SubParsersAction[argparse.ArgumentParser
         help="Starting directory for config discovery (default: current directory)",
     )
     p.add_argument("--quiet", action="store_true", help="Suppress agent output streaming")
+    # Issue #224: per-run overrides for the [execution] runner backend. These take
+    # precedence over both config.local.toml and config.toml (precedence 1).
+    p.add_argument(
+        "--agent-runner",
+        dest="agent_runner",
+        choices=["headless", "interactive-terminal"],
+        default=None,
+        help="Override the agent runner backend for this run.",
+    )
+    close_group = p.add_mutually_exclusive_group()
+    close_group.add_argument(
+        "--interactive-terminal-close-on-verdict",
+        dest="close_on_verdict",
+        action="store_true",
+        default=None,
+        help="Close the interactive terminal after the verdict is detected.",
+    )
+    close_group.add_argument(
+        "--no-interactive-terminal-close-on-verdict",
+        dest="close_on_verdict",
+        action="store_false",
+        default=None,
+        help="Keep the interactive terminal open after the verdict is detected.",
+    )
 
 
 def _register_issue(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -308,6 +333,30 @@ def _print_error(path: Path, errors: list[str]) -> None:
         print(f"  - {error}", file=sys.stderr)
 
 
+def _apply_execution_overrides(config: KajiConfig, args: argparse.Namespace) -> KajiConfig:
+    """Apply ``kaji run`` CLI overrides onto ``config.execution`` (precedence 1).
+
+    ``--agent-runner interactive-terminal`` is normalized to the config value
+    ``interactive_terminal``. Each option is independent: when an option is
+    unspecified (``None``) the resolved config value is kept. The three-state
+    ``close_on_verdict`` (``None`` / ``True`` / ``False``) distinguishes "not
+    given" from an explicit ``--no-...``.
+    """
+    runner_override = getattr(args, "agent_runner", None)
+    close_override = getattr(args, "close_on_verdict", None)
+    if runner_override is None and close_override is None:
+        return config
+
+    execution = config.execution
+    if runner_override is not None:
+        execution = dataclasses.replace(execution, agent_runner=runner_override.replace("-", "_"))
+    if close_override is not None:
+        execution = dataclasses.replace(
+            execution, interactive_terminal_close_on_verdict=close_override
+        )
+    return dataclasses.replace(config, execution=execution)
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """Execute the `run` subcommand."""
     # Mutual exclusion: --from and --step
@@ -343,6 +392,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     except ConfigLoadError as e:
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_CONFIG_NOT_FOUND
+
+    # Issue #224: CLI option override（agent_runner / close_on_verdict）を
+    # config.local.toml / config.toml より優先して適用する（precedence 1）。
+    config = _apply_execution_overrides(config, args)
 
     # Phase 3-e § 1.5: provider config を runner 起動前に validate し、
     # `[provider]` 不在を `IssueContextResolutionError` 経由 exit 3 に落とさず
@@ -1341,8 +1394,6 @@ def _handle_issue_context(provider: IssueProvider, rest: list[str]) -> int:
     issue local-p1-17 で導入。skill (`/issue-start`) が context 正本と
     同期するために参照する。
     """
-    import dataclasses
-
     p = argparse.ArgumentParser(prog="kaji issue context", add_help=True)
     p.add_argument("issue_id", type=str)
     p.add_argument("--json", dest="json_fields", default=None, type=str)

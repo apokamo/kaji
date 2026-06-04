@@ -1265,3 +1265,134 @@ class TestConfigE2E:
         )
 
         assert result.returncode == 1
+
+
+# ============================================================
+# Small tests — [execution] runner backend (Issue #224)
+# ============================================================
+
+
+def _write_config(tmp_path: Path, *, execution_body: str, local_body: str | None = None) -> Path:
+    """Write a minimal .kaji/config.toml (and optional config.local.toml)."""
+    config_dir = tmp_path / ".kaji"
+    config_dir.mkdir(exist_ok=True)
+    config_file = config_dir / "config.toml"
+    config_file.write_text(
+        '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n'
+        f"[execution]\n{execution_body}\n\n"
+        '[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+    )
+    if local_body is not None:
+        (config_dir / "config.local.toml").write_text(local_body)
+    return config_file
+
+
+@pytest.mark.small
+class TestExecutionRunnerConfig:
+    """ExecutionConfig parses agent_runner / interactive_terminal_close_on_verdict."""
+
+    def test_defaults_when_runner_keys_absent(self, tmp_path: Path) -> None:
+        config = KajiConfig._load(_write_config(tmp_path, execution_body="default_timeout = 1800"))
+        assert config.execution.agent_runner == "headless"
+        assert config.execution.interactive_terminal_close_on_verdict is True
+
+    def test_explicit_interactive_terminal(self, tmp_path: Path) -> None:
+        config = KajiConfig._load(
+            _write_config(
+                tmp_path,
+                execution_body=(
+                    "default_timeout = 2400\n"
+                    'agent_runner = "interactive_terminal"\n'
+                    "interactive_terminal_close_on_verdict = false"
+                ),
+            )
+        )
+        assert config.execution.agent_runner == "interactive_terminal"
+        assert config.execution.interactive_terminal_close_on_verdict is False
+
+    def test_invalid_agent_runner_fails_fast(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigLoadError, match="agent_runner must be"):
+            KajiConfig._load(
+                _write_config(
+                    tmp_path,
+                    execution_body='default_timeout = 1800\nagent_runner = "foo"',
+                )
+            )
+
+    def test_non_bool_close_on_verdict_fails_fast(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigLoadError, match="interactive_terminal_close_on_verdict must be"):
+            KajiConfig._load(
+                _write_config(
+                    tmp_path,
+                    execution_body=(
+                        'default_timeout = 1800\ninteractive_terminal_close_on_verdict = "yes"'
+                    ),
+                )
+            )
+
+    def test_non_string_agent_runner_fails_fast(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigLoadError, match="agent_runner must be a string"):
+            KajiConfig._load(
+                _write_config(
+                    tmp_path,
+                    execution_body="default_timeout = 1800\nagent_runner = 42",
+                )
+            )
+
+
+@pytest.mark.medium
+class TestExecutionOverlay:
+    """config.local.toml [execution] overlays config.toml per key."""
+
+    def test_overlay_overrides_runner_key_only(self, tmp_path: Path) -> None:
+        # Tracked config uses headless; overlay only flips agent_runner.
+        config = KajiConfig._load(
+            _write_config(
+                tmp_path,
+                execution_body='default_timeout = 1800\nagent_runner = "headless"',
+                local_body='[execution]\nagent_runner = "interactive_terminal"\n',
+            )
+        )
+        # default_timeout is kept from tracked; agent_runner comes from overlay.
+        assert config.execution.default_timeout == 1800
+        assert config.execution.agent_runner == "interactive_terminal"
+        assert config.execution.interactive_terminal_close_on_verdict is True
+
+    def test_overlay_overrides_close_on_verdict(self, tmp_path: Path) -> None:
+        config = KajiConfig._load(
+            _write_config(
+                tmp_path,
+                execution_body=(
+                    "default_timeout = 1800\n"
+                    'agent_runner = "interactive_terminal"\n'
+                    "interactive_terminal_close_on_verdict = true"
+                ),
+                local_body="[execution]\ninteractive_terminal_close_on_verdict = false\n",
+            )
+        )
+        assert config.execution.agent_runner == "interactive_terminal"
+        assert config.execution.interactive_terminal_close_on_verdict is False
+
+    def test_overlay_invalid_value_reports_overlay_path(self, tmp_path: Path) -> None:
+        # An invalid runner value coming from the overlay should point at the
+        # overlay file in the error message.
+        with pytest.raises(ConfigLoadError, match="config.local.toml") as exc_info:
+            KajiConfig._load(
+                _write_config(
+                    tmp_path,
+                    execution_body="default_timeout = 1800",
+                    local_body='[execution]\nagent_runner = "bogus"\n',
+                )
+            )
+        assert "agent_runner must be" in str(exc_info.value)
+
+    def test_overlay_without_execution_section_keeps_tracked(self, tmp_path: Path) -> None:
+        # Overlay defines only [provider]; tracked [execution] is untouched.
+        config = KajiConfig._load(
+            _write_config(
+                tmp_path,
+                execution_body='default_timeout = 1800\nagent_runner = "interactive_terminal"',
+                local_body='[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc2"\n',
+            )
+        )
+        assert config.execution.agent_runner == "interactive_terminal"

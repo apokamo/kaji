@@ -29,6 +29,8 @@ class ExecutionConfig:
     """Execution-related configuration."""
 
     default_timeout: int  # Required. No default.
+    agent_runner: Literal["headless", "interactive_terminal"] = "headless"
+    interactive_terminal_close_on_verdict: bool = True
 
 
 @dataclass(frozen=True)
@@ -140,27 +142,16 @@ class KajiConfig:
             **{k: v for k, v in paths_data.items() if k in PathsConfig.__dataclass_fields__}
         )
 
-        # Parse [execution] section (required)
-        execution_data = data.get("execution")
-        if execution_data is None or not isinstance(execution_data, dict):
-            raise ConfigLoadError(path, "[execution] section is required")
-        raw_timeout = execution_data.get("default_timeout")
-        if raw_timeout is None:
-            raise ConfigLoadError(path, "execution.default_timeout is required")
-        if not isinstance(raw_timeout, int) or isinstance(raw_timeout, bool):
-            raise ConfigLoadError(
-                path,
-                f"execution.default_timeout must be an integer, got {type(raw_timeout).__name__}",
-            )
-        if raw_timeout <= 0:
-            raise ConfigLoadError(
-                path,
-                f"execution.default_timeout must be a positive integer, got {raw_timeout}",
-            )
-        execution = ExecutionConfig(default_timeout=raw_timeout)
+        # Read the gitignored ``config.local.toml`` overlay once and share it
+        # between [execution] and [provider] parsing (both overlay top-level
+        # section keys with the same merge granularity).
+        local_overlay_path = path.parent / "config.local.toml"
+        overlay_data, overlay_present = cls._read_overlay(local_overlay_path)
+
+        execution = cls._parse_execution(path, data, overlay_data, local_overlay_path)
 
         repo_root = path.parent.parent
-        provider, overlay_present = cls._parse_provider(path, data, repo_root)
+        provider = cls._parse_provider(path, data, overlay_data, local_overlay_path, repo_root)
 
         return cls(
             repo_root=repo_root,
@@ -171,11 +162,109 @@ class KajiConfig:
         )
 
     @staticmethod
+    def _read_overlay(local_overlay_path: Path) -> tuple[dict[str, object] | None, bool]:
+        """Read ``config.local.toml`` if present.
+
+        Returns:
+            ``(overlay_data, overlay_present)``. ``overlay_data`` is the parsed
+            TOML table (``None`` when the file does not exist); ``overlay_present``
+            mirrors the file's existence regardless of which sections it defines.
+        """
+        if not local_overlay_path.is_file():
+            return None, False
+        try:
+            with open(local_overlay_path, "rb") as f:
+                overlay = tomllib.load(f)
+        except tomllib.TOMLDecodeError as e:
+            raise ConfigLoadError(local_overlay_path, f"invalid TOML: {e}") from e
+        return overlay, True
+
+    @classmethod
+    def _parse_execution(
+        cls,
+        path: Path,
+        data: dict[str, object],
+        overlay_data: dict[str, object] | None,
+        local_overlay_path: Path,
+    ) -> ExecutionConfig:
+        """Parse ``[execution]`` (tracked) overlaid with ``config.local.toml``.
+
+        Merge granularity is per-key inside the ``[execution]`` table: a key set
+        in the overlay's ``[execution]`` overrides the same key in the tracked
+        ``[execution]`` (same precedence as the ``[provider]`` overlay). The
+        merged result is then validated.
+        """
+        execution_data = data.get("execution")
+        if execution_data is None or not isinstance(execution_data, dict):
+            raise ConfigLoadError(path, "[execution] section is required")
+
+        overlay_execution: dict[str, object] | None = None
+        if overlay_data is not None:
+            oe = overlay_data.get("execution")
+            if oe is not None:
+                if not isinstance(oe, dict):
+                    raise ConfigLoadError(local_overlay_path, "[execution] must be a table")
+                overlay_execution = oe
+
+        merged: dict[str, object] = dict(execution_data)
+        if overlay_execution is not None:
+            merged.update(overlay_execution)
+
+        def source(key: str) -> Path:
+            # Point validation errors at the file that actually defined the key.
+            if overlay_execution is not None and key in overlay_execution:
+                return local_overlay_path
+            return path
+
+        raw_timeout = merged.get("default_timeout")
+        if raw_timeout is None:
+            raise ConfigLoadError(path, "execution.default_timeout is required")
+        if not isinstance(raw_timeout, int) or isinstance(raw_timeout, bool):
+            raise ConfigLoadError(
+                source("default_timeout"),
+                f"execution.default_timeout must be an integer, got {type(raw_timeout).__name__}",
+            )
+        if raw_timeout <= 0:
+            raise ConfigLoadError(
+                source("default_timeout"),
+                f"execution.default_timeout must be a positive integer, got {raw_timeout}",
+            )
+
+        raw_agent_runner = merged.get("agent_runner", "headless")
+        if not isinstance(raw_agent_runner, str):
+            raise ConfigLoadError(
+                source("agent_runner"),
+                f"execution.agent_runner must be a string, got {type(raw_agent_runner).__name__}",
+            )
+        if raw_agent_runner not in {"headless", "interactive_terminal"}:
+            raise ConfigLoadError(
+                source("agent_runner"),
+                "execution.agent_runner must be 'headless' or 'interactive_terminal', "
+                f"got {raw_agent_runner!r}",
+            )
+
+        raw_close = merged.get("interactive_terminal_close_on_verdict", True)
+        if not isinstance(raw_close, bool):
+            raise ConfigLoadError(
+                source("interactive_terminal_close_on_verdict"),
+                "execution.interactive_terminal_close_on_verdict must be a boolean, "
+                f"got {type(raw_close).__name__}",
+            )
+
+        return ExecutionConfig(
+            default_timeout=raw_timeout,
+            agent_runner=raw_agent_runner,  # type: ignore[arg-type]
+            interactive_terminal_close_on_verdict=raw_close,
+        )
+
+    @staticmethod
     def _parse_provider(
         path: Path,
         data: dict[str, object],
+        overlay_data: dict[str, object] | None,
+        local_overlay_path: Path,
         repo_root: Path,
-    ) -> tuple[ProviderConfig | None, bool]:
+    ) -> ProviderConfig | None:
         """Parse the optional ``[provider]`` section + ``config.local.toml`` overlay.
 
         Phase 3-c: optional. Missing both tracked and overlay → returns ``None``;
@@ -190,33 +279,29 @@ class KajiConfig:
           に切替えられる）
         - tracked と overlay の双方が無いときのみ ``None`` を返す
 
+        ``overlay_data`` は ``_read_overlay`` が事前に読んだ ``config.local.toml``
+        の全 table（不在なら ``None``）。``[execution]`` overlay と同じ file を
+        二重読みしないよう呼び出し側で読み込んで渡す。
+
         Returns:
-            ``(provider, overlay_present)`` の tuple。``overlay_present`` は
-            現 worktree の ``.kaji/config.local.toml`` が存在したかを表す
-            （`[provider]` セクションの有無は問わない）。
+            解決した ``ProviderConfig``、または tracked / overlay の双方に
+            ``[provider]`` が無い場合は ``None``。
         """
         provider_data = data.get("provider")
         if provider_data is not None and not isinstance(provider_data, dict):
             raise ConfigLoadError(path, "[provider] must be a table")
 
-        # ---- overlay 読み込み ----
-        local_overlay_path = path.parent / "config.local.toml"
-        overlay_present = local_overlay_path.is_file()
+        # ---- overlay 抽出 ----
         overlay_provider: dict[str, object] | None = None
-        if overlay_present:
-            try:
-                with open(local_overlay_path, "rb") as f:
-                    overlay = tomllib.load(f)
-            except tomllib.TOMLDecodeError as e:
-                raise ConfigLoadError(local_overlay_path, f"invalid TOML: {e}") from e
-            op = overlay.get("provider")
+        if overlay_data is not None:
+            op = overlay_data.get("provider")
             if op is not None:
                 if not isinstance(op, dict):
                     raise ConfigLoadError(local_overlay_path, "[provider] must be a table")
                 overlay_provider = op
 
         if provider_data is None and overlay_provider is None:
-            return None, overlay_present
+            return None
 
         # ---- tracked + overlay の deep-1 merge ----
         merged: dict[str, object] = {}
@@ -303,13 +388,10 @@ class KajiConfig:
         )
 
         del repo_root  # reserved for future cross-checks
-        return (
-            ProviderConfig(
-                type=ptype,  # type: ignore[arg-type]
-                local=local_cfg,
-                github=github_cfg,
-            ),
-            overlay_present,
+        return ProviderConfig(
+            type=ptype,  # type: ignore[arg-type]
+            local=local_cfg,
+            github=github_cfg,
         )
 
     @staticmethod

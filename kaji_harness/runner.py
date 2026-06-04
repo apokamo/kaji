@@ -29,6 +29,7 @@ from .errors import (
     WorkdirNotFoundError,
     WorkflowValidationError,
 )
+from .interactive_terminal import execute_interactive_terminal
 from .logger import RunLogger
 from .models import CostInfo, Verdict, Workflow
 from .prompt import build_prompt
@@ -634,17 +635,33 @@ class WorkflowRunner:
 
                             # comment fallback の lower bound（dispatch 直前に記録）
                             attempt_started_at = datetime.now(UTC)
-                            # CLI 実行
-                            result = execute_cli(
-                                step=current_step,
-                                prompt=prompt,
-                                workdir=effective_workdir,
-                                session_id=session_id,
-                                log_dir=attempt_dir,
-                                execution_policy=execution_policy,
-                                verbose=self.verbose,
-                                default_timeout=default_timeout,
-                            )
+                            # Issue #224: runner backend を config.execution.agent_runner
+                            # で分岐。``interactive_terminal`` は kitty 上で通常 CLI を
+                            # 起動し verdict.yaml を待つ（artifact-primary 経路で完了判定）。
+                            # ``headless``（既定）は従来の CLI 起動経路をそのまま使う。
+                            if self.config.execution.agent_runner == "interactive_terminal":
+                                result = execute_interactive_terminal(
+                                    step=current_step,
+                                    prompt_path=attempt_dir / "prompt.txt",
+                                    verdict_path=verdict_yaml_path,
+                                    workdir=effective_workdir,
+                                    timeout=resolved_timeout,
+                                    session_id=session_id,
+                                    close_on_verdict=(
+                                        self.config.execution.interactive_terminal_close_on_verdict
+                                    ),
+                                )
+                            else:
+                                result = execute_cli(
+                                    step=current_step,
+                                    prompt=prompt,
+                                    workdir=effective_workdir,
+                                    session_id=session_id,
+                                    log_dir=attempt_dir,
+                                    execution_policy=execution_policy,
+                                    verbose=self.verbose,
+                                    default_timeout=default_timeout,
+                                )
 
                         # セッション ID を保存
                         if result.session_id:

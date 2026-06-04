@@ -106,6 +106,7 @@ kaji validate <workflow.yaml>...                    # Validate workflow YAML(s)
 | Architecture | docs/ARCHITECTURE.md |
 | ADR | docs/adr/ |
 | CLI Guides | docs/cli-guides/ |
+| Interactive Terminal Runner | docs/cli-guides/interactive-terminal-runner.md |
 | Workflow Overview | docs/dev/workflow_overview.md |
 | Workflow Guide | docs/dev/workflow_guide.md |
 | Development Workflow | docs/dev/development_workflow.md |
