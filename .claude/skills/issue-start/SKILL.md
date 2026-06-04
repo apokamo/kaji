@@ -105,26 +105,20 @@ git worktree list
 
 ### Step 4: Issue本文にメタ情報を追記
 
-Issue本文の先頭にWorktree情報を追記します:
+Issue本文の先頭にWorktree情報を追記します。本文合成は `kaji` 内部の決定的な
+Python 経路（`build_worktree_note_body`）が担うため、エージェントは単一トークン
+引数を 3 つ渡すだけでよい（multi-line 本文を自前で組み立てない）:
 
 ```bash
-# 現在のIssue本文を取得
-CURRENT_BODY=$(kaji issue view [issue_id] --json body -q '.body')
-
-# メタ情報を先頭に追加した新しい本文を作成
 WT_BASENAME=$(basename "$WT")
-NEW_BODY=$(cat <<EOF
-> [!NOTE]
-> **Worktree**: \`../$WT_BASENAME\`
-> **Branch**: \`$BRANCH\`
-
-$CURRENT_BODY
-EOF
-)
-
-# Issue本文を更新
-kaji issue edit [issue_id] --commit --body "$NEW_BODY"
+kaji issue prepend-note [issue_id] --worktree "$WT_BASENAME" --branch "$BRANCH" --commit
 ```
+
+`kaji issue prepend-note` は現在の Issue 本文を取得し、`> [!NOTE]` メタブロックと
+本文の間に **空行ちょうど 1 行** を保証して合成・更新する。blank line がエージェント
+ではなく Python 文字列リテラルに固定されるため、どのモデルでも blockquote と本文
+heading が密着しない（Issue #200）。`--commit` は local provider で `issue.md` を
+atomic commit する（github では silent に無視）。
 
 ### Step 5: セットアップ完了報告
 
