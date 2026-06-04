@@ -158,7 +158,11 @@ def execute_interactive_terminal(
 ## 制約・前提条件
 
 - **依存**: 外部コマンド `kitty`（terminal）、`script(1)`（transcript、任意）、`claude` / `codex`
-  （agent CLI）。`kitty` 不在は fail-fast、`script(1)` 不在は transcript 無しで継続。
+  （agent CLI）。`kitty` 不在は fail-fast。`script(1)` は **util-linux 互換のみ** transcript に使い、
+  不在時・非 util-linux（BSD/macOS native 等で GNU long option 非対応）時は transcript 無しで agent を
+  直接起動して継続する（transcript は best-effort。Linux/util-linux 環境のみ取得）。`script` が PATH に
+  存在するだけでは util-linux 互換とみなさず、`script --version` の `util-linux` 表記で判定する
+  （§ Wrapper 契約）。
 - **cwd 制約**: wrapper / agent の cwd・`--cd` は trusted な project worktree（`kaji run --workdir`
   が指す worktree、または config discovery で得た repository root）に固定する。`/tmp` や attempt
   directory を cwd にすると CLI の trust / permission 確認で停止しうる（PoC 確認済み）。
@@ -288,8 +292,15 @@ wrapper.sh <agent> <prompt_path> <verdict_path> <terminal_log_path> \
   Do not wrap the YAML in Markdown. Use the valid status values described in the prompt.
   ```
 
-- `script(1)` が PATH にあれば `script --quiet --flush --command <cmd> <terminal_log_path>` 経由で
-  agent を起動。無ければ直接起動し、transcript unavailable を runner log（stderr）に残す。
+- `script(1)` は **util-linux 互換のときだけ** transcript に使う。判定は
+  `command -v script` で存在確認した上で `script --version` 出力に `util-linux` を含むか確認する
+  （util-linux は `script from util-linux X.Y` を出力。BSD/macOS native の `script` は GNU long option
+  `--quiet/--flush/--command` を持たず `--version` も非対応のため不一致になる）。
+  - util-linux 互換: `script --quiet --flush --command <cmd> <terminal_log_path>` 経由で agent を起動。
+  - 非互換 / 不在: agent を直接起動し、`transcript unavailable`（util-linux script 不在）を
+    runner log（stderr）に残す。BSD long option を当てて起動前に失敗することは **しない**（fail-soft）。
+  - これにより、`script` は存在するが GNU long option 非対応の環境（macOS native 等）でも
+    wrapper は agent 起動へ進む。
 
 ### Agent Command 契約（Issue 本文どおり）
 
@@ -375,7 +386,13 @@ Codex の `minimal` 禁止は runner のハード検証にせず、effort を pa
   - wrapper が `cd "$workdir"` してから agent を起動する（fake agent が cwd を記録）。
   - 引数順が Wrapper 契約と一致する（fake agent が argv を記録）。
   - Claude fresh / resume・Codex fresh / resume の command line が Agent Command 契約と一致。
-  - `script(1)` がある場合に `terminal.log` path 経由で起動 / 無い場合に直接起動。
+  - transcript 分岐を 3 ケース検証する:
+    - util-linux 互換 `script`（fake `script` が `--version` で `util-linux` を出力）がある場合、
+      `terminal.log` path 経由で起動される。
+    - `script` 不在の場合、agent を直接起動し transcript unavailable warning を出す。
+    - **`script` は存在するが util-linux 非互換**（fake `script` が `--version` で util-linux を出さず、
+      `--quiet/--flush/--command` を渡すと非 0 終了する）の場合、wrapper が long option で fail せず
+      agent を直接起動する（fail-soft。fake agent が起動されたことを記録）。
 
 ### Large テスト（`large_local`）
 
@@ -394,7 +411,7 @@ Codex の `minimal` 禁止は runner のハード検証にせず、effort を pa
 |-------------|-----------|------|
 | `docs/adr/007-interactive-terminal-runner.md`（新規） | あり | runner backend 追加・`kitty` 単独採用・handoff runner / 他 terminal 不採用という技術選定を永続化（feat の技術選定 ADR。proposal の rationale は gitignored tmp/ にしか無いため repo に残す） |
 | `docs/ARCHITECTURE.md` | あり | runner dispatch（`execute_cli` ↔ `execute_interactive_terminal`）と `terminal.log` artifact を追記 |
-| `docs/cli-guides/interactive-terminal-runner.md`（新規） | あり | `[execution]` 設定・CLI option・real kitty + real Claude/Codex の手動検証手順をまとめる（provider 非依存のため dedicated guide） |
+| `docs/cli-guides/interactive-terminal-runner.md`（新規） | あり | `[execution]` 設定・CLI option・real kitty + real Claude/Codex の手動検証手順をまとめる（provider 非依存のため dedicated guide）。`terminal.log` transcript は util-linux/Linux 環境のみの best-effort であり、macOS native では取得されない（手動検証で transcript 有無を OS 別に明記し、macOS では transcript 取得を成功条件に含めない）旨を記載 |
 | `docs/cli-guides/github-mode.md` / `docs/cli-guides/local-mode.md` | あり | § config.toml の `[execution]` 例に `agent_runner` / `close_on_verdict` を追記し、新 guide へ相互リンク |
 | `docs/dev/workflow-authoring.md` | あり（小） | runner backend 選択は repository config（`[execution]`）であり workflow YAML step 責務ではない旨を補足 |
 | `CLAUDE.md` | あり（小） | Documentation Index 表に新 CLI guide / ADR 行を追加 |
@@ -413,7 +430,7 @@ Codex の `minimal` 禁止は runner のハード検証にせず、effort を pa
 | subscription-runner 改修案 | `/home/aki/dev/kaji/tmp/2026-06-kaji-subscription-runner/subscription-runner-proposal.md` | 「`kitty` が見つからない場合は fail-fast する。自動 fallback や terminal 探索は行わない」「未指定時 default: `agent_runner = "headless"`, `interactive_terminal_close_on_verdict = true`」「`reasoning.effort = minimal` は現在の Codex tool 構成で `image_gen` / `web_search` と衝突したため、Codex の実運用上の最小 effort は `low`」 |
 | interactive_terminal PoC 結果 | `/home/aki/dev/kaji/tmp/2026-06-kaji-subscription-runner/interactive-terminal-poc-result.md` | 「agent が `verdict.yaml` を書けば、harness は workflow を継続できる」「verdict 検知後、`kitty` だけでなく `script` / agent process も marker path で探索して cleanup できる」「Codex は…verdict 後すぐ close すると resume line が出ない場合があるため、`~/.codex/sessions/**/*.jsonl` から session ID を fallback 抽出する必要がある」。実 CLI 起動コマンド（Claude/Codex fresh/resume）と通し検証 PASS を確認済み |
 | PoC runner 実装（参照） | `/home/aki/dev/kaji-poc-subscription-runner-real-cli/kaji_harness/interactive_terminal.py` | `execute_interactive_terminal(*, step, prompt_path, verdict_path, workdir, timeout, session_id=None, close_on_verdict=True) -> CLIResult` の構造、`_CODEX_RESUME_RE` / `_CODEX_SESSION_FILE_RE`、`start_new_session=True` + `os.killpg` + `/proc/<pid>/cmdline` marker cleanup を一次情報として踏襲 |
-| PoC wrapper（参照） | `/home/aki/dev/kaji-poc-subscription-runner-real-cli/assets/interactive-terminal/wrapper.sh` | 9 引数の順、`cd "$workdir"`、`script --quiet --flush --command ... <terminal_log>`、Claude/Codex の fresh/resume 分岐の `printf %q` 組み立て |
+| PoC wrapper（参照） | `/home/aki/dev/kaji-poc-subscription-runner-real-cli/assets/interactive-terminal/wrapper.sh` | 9 引数の順、`cd "$workdir"`、`script --quiet --flush --command ... <terminal_log>`、Claude/Codex の fresh/resume 分岐の `printf %q` 組み立て。**ただし PoC の `run_with_transcript` は `command -v script` の有無のみで分岐**しており、BSD/macOS native の `script` を弾けない。本設計はここを意図的に分岐し、`script --version` の util-linux 判定 + 非互換時 fail-soft 直接起動を追加する（§ Wrapper 契約 / 制約・前提条件） |
 | ADR 005（repo 内） | `docs/adr/005-artifact-primary-verdict.md` | 「verdict の受け渡しを artifact `verdict.yaml`（primary）→ … の順で解決」「次の interactive terminal runner は stdout を直接読む必要がない」— 本 runner が stdout を持たずとも成立する前提 |
 | 現行 runner（repo 内） | `kaji_harness/runner.py` L638 付近 | agent dispatch の `execute_cli(...)` 呼び出し箇所。ここを `agent_runner` で分岐させる統合点。session 保存（L650-651）・`resolve_verdict()`（L671）は既存経路を再利用 |
 | 現行 config（repo 内） | `kaji_harness/config.py` L27-31, L143-160, L173-313 | `ExecutionConfig` の現フィールドと `[execution]` 必須検証、`[provider]` overlay（key 単位 merge）の既存実装。`[execution]` overlay はこの provider overlay と同じ粒度で実装する |
