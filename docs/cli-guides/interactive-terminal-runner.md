@@ -25,6 +25,9 @@
 - transcript（`terminal.log`）は **util-linux 互換の `script(1)` がある環境のみ** best-effort で
   記録される。`script` 不在 / 非 util-linux（BSD・macOS native 等で GNU long option 非対応）の
   環境では transcript 無しで agent を直接起動して継続する。
+- wrapper は agent 起動前に `NO_COLOR` を unset し、`COLORTERM=truecolor` を設定する。
+  親 shell に `NO_COLOR=1` があっても、interactive terminal runner 内の Claude / Codex は
+  truecolor 表示を使える。
 
 ## 設定
 
@@ -170,5 +173,6 @@ Codex の `reasoning.effort = minimal` は現 tool 構成（`image_gen` / `web_s
 | `CLI 'kitty' not found` で即終了 | `kitty` を PATH に入れるか `--agent-runner headless` で実行する |
 | step が timeout する | agent が `verdict.yaml` を書いていない。prompt の verdict 書き出し指示と path を確認 |
 | `terminal.log` が空 / 無い | util-linux `script(1)` が無い環境。transcript は best-effort（取得されないのは正常） |
+| 色が出ない | wrapper は `NO_COLOR` unset / `COLORTERM=truecolor` を設定する。端末側の color support と agent 側設定も確認 |
 | Codex resume が効かない | `terminal.log` に resume 行が出ず、session store fallback も marker 不一致。`CODEX_HOME` を確認 |
 | CLI が trust / permission 確認で止まる | cwd が project 外（`/tmp` 等）。workdir を project worktree に固定する |

@@ -614,6 +614,33 @@ class TestInteractiveTerminalWrapper:
         recorded_cwd = Path(cwd_path.read_text(encoding="utf-8").strip())
         assert recorded_cwd.resolve() == workdir.resolve()
 
+    def test_wrapper_enables_truecolor_for_agent(self, tmp_path: Path) -> None:
+        env_path = tmp_path / "claude-env.txt"
+        fake_bin = tmp_path / "bin"
+        fake_bin.mkdir(exist_ok=True)
+        fake_claude = fake_bin / "claude"
+        fake_claude.write_text(
+            "#!/usr/bin/env bash\n"
+            'printf "NO_COLOR=%s\\n" "${NO_COLOR-<unset>}" > "$ENV_PATH"\n'
+            'printf "COLORTERM=%s\\n" "${COLORTERM-<unset>}" >> "$ENV_PATH"\n'
+            'printf "status: PASS\\nreason: ok\\nevidence: e\\nsuggestion: \x27\x27\\n" > "$FAKE_VERDICT_PATH"\n',
+            encoding="utf-8",
+        )
+        fake_claude.chmod(0o755)
+        wrapper_args = self._base_args(tmp_path, "claude")
+        result = self._run_wrapper(
+            tmp_path,
+            "claude",
+            wrapper_args,
+            path_prefix=fake_bin,
+            extra_env={"NO_COLOR": "1", "COLORTERM": "falsecolor", "ENV_PATH": str(env_path)},
+        )
+        assert result.returncode == 0, result.stderr
+        assert env_path.read_text(encoding="utf-8").splitlines() == [
+            "NO_COLOR=<unset>",
+            "COLORTERM=truecolor",
+        ]
+
     def test_claude_fresh_command_matches_contract(self, tmp_path: Path) -> None:
         args_path, _ = self._fake_agent_recording_argv(tmp_path, "claude")
         fake_bin = tmp_path / "bin"

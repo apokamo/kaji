@@ -13,6 +13,9 @@ effort="${9:-}"
 
 cd "$workdir"
 
+unset NO_COLOR
+export COLORTERM=truecolor
+
 echo "kaji interactive terminal runner"
 echo "agent: $agent"
 echo "workdir: $workdir"
