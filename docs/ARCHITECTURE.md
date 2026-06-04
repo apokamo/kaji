@@ -105,9 +105,17 @@ WorkflowRunner.run()
   │
   └─ while current_step != "end":
        │
-       ├─ load_skill_metadata(step.skill)  # frontmatter (`exec_script`) を解決
+       ├─ load_skill_metadata(step.skill)  # skill-step のみ。exec-step は skip
+       │                                   # （frontmatter `exec_script` を解決）
        │
-       ├─ if metadata.exec_script:        # ── exec_script 経路（決定論的 dispatch） ──
+       ├─ if step.exec:                    # ── exec 経路（決定論的 dispatch・Issue #205） ──
+       │   │
+       │   ├─ execute_exec(argv=step.exec) # 任意 argv を shell=False で subprocess 実行
+       │   │   └─ context env 注入 (KAJI_ISSUE_ID 等)
+       │   │
+       │   └─ parse_verdict(stdout, ai_formatter=None)  # AI fallback を使わない
+       │
+       │  elif metadata.exec_script:        # ── exec_script 経路（決定論的 dispatch） ──
        │   │
        │   ├─ execute_script(module=...)  # `python -m <module>` を subprocess 実行
        │   │   └─ context env 注入 (KAJI_ISSUE_ID 等)
@@ -127,15 +135,17 @@ WorkflowRunner.run()
        │   │
        │   └─ parse_verdict(output)       # 3段階フォールバック（AI Formatter 含む）
        │
-       ├─ logger.log_step_{start,end}(..., dispatch="exec_script"|"agent")
+       ├─ logger.log_step_{start,end}(..., dispatch="exec"|"exec_script"|"agent")
        │
        ├─ state.record_step()             # 状態を永続化
        │
        └─ next_step = step.on[verdict]    # 遷移先を決定
 ```
 
-`exec_script` frontmatter を持つ skill は LLM を起動せず subprocess で実行される（Issue #204）。
-RunLogger は両経路を `dispatch` field で区別する。詳細は
+決定論 dispatch は 2 経路ある。workflow.yaml の `exec:` step（任意 argv・Issue #205）と、
+`exec_script` frontmatter を持つ skill（`python -m <module>`・Issue #204）。どちらも LLM を
+起動せず subprocess で実行され、AI formatter fallback を呼ばない。RunLogger は agent / exec /
+exec_script の 3 経路を `dispatch` field で区別する。詳細は
 [ロギング規約](./reference/python/logging.md) を参照。
 
 ### Runner backend dispatch（headless ↔ interactive_terminal）
@@ -346,8 +356,8 @@ run / step / attempt の成果物は attempt 単位で分離される（Issue #2
 | `signal` | `str \| null` | `exit_code` から導出した signal 名（clean exit / signal 由来でなければ null） |
 | `started_at` / `ended_at` | `str` | dispatch 直前 / 終了時の UTC ISO 8601 |
 | `duration_ms` | `int` | `ended_at - started_at` の ms |
-| `session_id` | `str \| null` | agent session id（exec_script / 未取得は null） |
-| `dispatch` | `str` | `"agent"` / `"exec_script"` |
+| `session_id` | `str \| null` | agent session id（exec / exec_script / 未取得は null） |
+| `dispatch` | `str` | `"agent"` / `"exec_script"` / `"exec"`（exec-step・Issue #205） |
 | `error` | `str \| null` | 異常終了時の例外クラス名 + 短いメッセージ（正常時 null） |
 
 - 読み手は `result.json` の **欠落を許容**する（旧 run / best-effort 書き出し前に死んだ attempt）。verdict 解決（`resolve_verdict`）は `result.json` に依存しないため、旧 run に無くても影響しない（migration 不要）。

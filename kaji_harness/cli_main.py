@@ -285,6 +285,12 @@ def cmd_validate(args: argparse.Namespace) -> int:
             skill_dir = config.paths.skill_dir
             agent_omission_errors: list[str] = []
             for step in wf.steps:
+                # exec-step（Issue #205）は skill レイヤを介さないため skill 解決・
+                # agent 省略検証は不要。排他・型・必須検証は load_workflow /
+                # validate_workflow で完結済み（runner Step 0 preflight skip と対称）。
+                if step.exec is not None:
+                    continue
+                assert step.skill is not None  # exactly-one of skill/exec が保証
                 validate_skill_exists(step.skill, project_root, skill_dir)
                 # L3 任意: skill_dir が解決できているのでメタデータも check
                 metadata = load_skill_metadata(step.skill, project_root, skill_dir)

@@ -75,15 +75,23 @@ class CLINotFoundError(HarnessError):
 
 
 class ScriptExecutionError(HarnessError):
-    """exec_script の subprocess が非ゼロ終了。verdict 有無を問わず fail-loud。"""
+    """決定論 command の subprocess が非ゼロ終了。verdict 有無を問わず fail-loud。
 
-    def __init__(self, step_id: str, module: str, returncode: int, stderr: str):
+    ``exec_script`` skill 経路（``execute_script``）と ``exec:`` step 経路
+    （``execute_exec``）の双方で共有する（Issue #205）。``command_label`` は
+    失敗 artifact 上の調査用ラベルで、``execute_script`` は module 名、
+    ``execute_exec`` は ``" ".join(argv)`` を渡す。経路に依存しない中立表現に
+    することで、どちらの dispatch の失敗かを誤解させない。
+    """
+
+    def __init__(self, step_id: str, command_label: str, returncode: int, stderr: str):
         self.step_id = step_id
-        self.module = module
+        self.command_label = command_label
         self.returncode = returncode
         self.stderr = stderr
         super().__init__(
-            f"Step '{step_id}' exec_script '{module}' exited with code {returncode}: {stderr[:200]}"
+            f"Step '{step_id}' deterministic command '{command_label}' exited with "
+            f"code {returncode}: {stderr[:200]}"
         )
 
 

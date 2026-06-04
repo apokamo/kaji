@@ -348,7 +348,11 @@ class TestParsingErrors:
 
     @pytest.mark.small
     def test_step_missing_skill_raises_validation_error(self) -> None:
-        """Step missing 'skill' raises WorkflowValidationError."""
+        """Step with neither 'skill' nor 'exec' raises WorkflowValidationError.
+
+        Issue #205: ``skill`` は単独必須ではなくなり、``skill`` / ``exec`` の
+        どちらか 1 つが必須となった。両方欠落時は exactly-one 違反として fail する。
+        """
         yaml_str = dedent("""\
             name: test
             steps:
@@ -356,7 +360,7 @@ class TestParsingErrors:
                 agent: claude
         """)
 
-        with pytest.raises(WorkflowValidationError, match="missing required key.*skill"):
+        with pytest.raises(WorkflowValidationError, match="exactly one of 'skill' or 'exec'"):
             load_workflow_from_str(yaml_str)
 
     @pytest.mark.small

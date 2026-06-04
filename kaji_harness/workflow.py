@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -53,7 +54,11 @@ def load_workflow_from_str(yaml_str: str) -> Workflow:
 VALID_EXECUTION_POLICIES = {"auto", "sandbox", "interactive"}
 VALID_REQUIRES_PROVIDER = {"github", "local", "any"}
 
-_STEP_REQUIRED_KEYS = ("id", "skill")
+_STEP_REQUIRED_KEYS = ("id",)
+
+# exec-step が拒否する agent 専用フィールド。exec-step は LLM を呼ばないため
+# これらは無意味であり、同時指定は parse 時に fail-fast する（Issue #205）。
+_EXEC_FORBIDDEN_KEYS = ("agent", "model", "effort", "resume", "inject_verdict", "max_budget_usd")
 
 # Agent ごとの effort 許容値。CLI 仕様の一次情報:
 #   claude: `claude --help` の `--effort` 列挙 (low/medium/high/xhigh/max)
@@ -65,6 +70,43 @@ _AGENT_EFFORT_ALLOWED: dict[str, frozenset[str]] = {
     "claude": frozenset({"low", "medium", "high", "xhigh", "max"}),
     "codex": frozenset({"none", "minimal", "low", "medium", "high", "xhigh"}),
 }
+
+
+def _normalize_exec(value: Any, step_id: str) -> list[str]:
+    """``exec:`` の表層値（str / list）を正規化済み argv（list[str]）へ変換する。
+
+    parse 境界で argv に正規化することで、runner / 各 consumer が str と list の
+    二形態を毎回分岐せずに済む（Issue #205 § Step dataclass の表現）。
+
+    - ``str`` → ``shlex.split``（POSIX）で argv に分解。空なら error。
+    - ``list`` → 全要素が非空 ``str`` であることを検証。空なら error。
+    - それ以外の型 → error。
+
+    Raises:
+        WorkflowValidationError: 空 / 型不正 / 非空 str でない要素を含む場合
+    """
+    if isinstance(value, str):
+        try:
+            argv = shlex.split(value)
+        except ValueError as exc:
+            raise WorkflowValidationError(
+                f"Step '{step_id}' 'exec' could not be parsed as a command: {exc}"
+            ) from exc
+        if not argv:
+            raise WorkflowValidationError(f"Step '{step_id}' 'exec' must not be an empty command")
+        return argv
+    if isinstance(value, list):
+        if not value:
+            raise WorkflowValidationError(f"Step '{step_id}' 'exec' must not be an empty list")
+        for elem in value:
+            if not isinstance(elem, str) or not elem:
+                raise WorkflowValidationError(
+                    f"Step '{step_id}' 'exec' list elements must be non-empty strings, got {elem!r}"
+                )
+        return list(value)
+    raise WorkflowValidationError(
+        f"Step '{step_id}' 'exec' must be a string or a list of strings, got {type(value).__name__}"
+    )
 
 
 def _parse_workflow(data: dict[str, Any]) -> Workflow:
@@ -89,6 +131,27 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
             raise WorkflowValidationError(
                 f"Step at index {i} missing required key(s): {', '.join(missing)}"
             )
+
+        sid = step_data["id"]
+        # exactly one of skill / exec（Issue #205）。step 種別は skill を持つか
+        # exec を持つかで一意に決まる。両方 / 両方無しは error。
+        raw_skill = step_data.get("skill")
+        raw_exec = step_data.get("exec")
+        if (raw_skill is None) == (raw_exec is None):
+            raise WorkflowValidationError(
+                f"Step '{sid}' must declare exactly one of 'skill' or 'exec'"
+            )
+        if raw_exec is not None:
+            # exec-step: agent 専用フィールドの同時指定を拒否（exec は LLM 非経路）。
+            for forbidden in _EXEC_FORBIDDEN_KEYS:
+                if forbidden in step_data:
+                    raise WorkflowValidationError(
+                        f"Step '{sid}' with 'exec' must not set '{forbidden}'"
+                    )
+            exec_argv = _normalize_exec(raw_exec, sid)
+        else:
+            exec_argv = None
+
         if "on" in step_data:
             raw_on = step_data["on"]
         elif True in step_data:
@@ -171,7 +234,8 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
         steps.append(
             Step(
                 id=step_data["id"],
-                skill=step_data["skill"],
+                skill=raw_skill,
+                exec=exec_argv,
                 agent=raw_agent,
                 model=step_data.get("model"),
                 effort=raw_effort,
@@ -350,6 +414,30 @@ def validate_workflow(workflow: Workflow) -> None:
 
     # ステップレベルの検証
     for step in workflow.steps:
+        # スキーマ: skill / exec の排他（_parse_workflow() を経由せず手組みした
+        # Workflow でも担保する defense-in-depth ミラー。Issue #205）。
+        if (step.skill is None) == (step.exec is None):
+            errors.append(f"Step '{step.id}' must declare exactly one of 'skill' or 'exec'")
+        elif step.exec is not None:
+            # exec-step は agent 専用フィールドを持てない。
+            if step.agent is not None:
+                errors.append(f"Step '{step.id}' with 'exec' must not set 'agent'")
+            if step.model is not None:
+                errors.append(f"Step '{step.id}' with 'exec' must not set 'model'")
+            if step.effort is not None:
+                errors.append(f"Step '{step.id}' with 'exec' must not set 'effort'")
+            if step.resume is not None:
+                errors.append(f"Step '{step.id}' with 'exec' must not set 'resume'")
+            if step.inject_verdict:
+                errors.append(f"Step '{step.id}' with 'exec' must not set 'inject_verdict'")
+            if step.max_budget_usd is not None:
+                errors.append(f"Step '{step.id}' with 'exec' must not set 'max_budget_usd'")
+            # exec argv は非空 list[str]・全要素非空 str であること。
+            if not isinstance(step.exec, list) or not step.exec:
+                errors.append(f"Step '{step.id}' 'exec' must be a non-empty list of strings")
+            elif any(not isinstance(elem, str) or not elem for elem in step.exec):
+                errors.append(f"Step '{step.id}' 'exec' list elements must be non-empty strings")
+
         # スキーマ: step.timeout の検証（_parse_workflow() を経由しない場合も担保）
         if step.timeout is not None:
             if (
