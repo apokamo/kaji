@@ -31,7 +31,7 @@ kaji のドキュメント一覧。[Diataxis フレームワーク](https://diat
 |-------------|------|
 | [アーキテクチャ](ARCHITECTURE.md) | システム構成・モジュール依存関係 |
 | [テストサイズ判断ガイド](reference/testing-size-guide.md) | S/M/L の境界ケース判断基準 |
-| [CLI ガイド](cli-guides/) | CLI 操作リファレンス（[GitHub Mode](cli-guides/github-mode.md) / [Local Mode](cli-guides/local-mode.md)） |
+| [CLI ガイド](cli-guides/) | CLI 操作リファレンス（[GitHub Mode](cli-guides/github-mode.md) / [Local Mode](cli-guides/local-mode.md) / [Interactive Terminal Runner](cli-guides/interactive-terminal-runner.md)） |
 
 ### Python 品質規約
 

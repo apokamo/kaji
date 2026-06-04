@@ -46,6 +46,9 @@ build-backend = "setuptools.build_meta"
 where = ["."]
 include = ["kaji_harness*"]
 
+[tool.setuptools.package-data]
+kaji_harness = ["assets/interactive-terminal/wrapper.sh"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
