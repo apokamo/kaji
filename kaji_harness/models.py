@@ -45,10 +45,19 @@ class CLIResult:
 
 @dataclass
 class Step:
-    """ワークフロー内の1ステップ定義。"""
+    """ワークフロー内の1ステップ定義。
+
+    step は ``skill`` を持つ skill-step か ``exec`` を持つ exec-step の
+    いずれか「ちょうど 1 つ」でなければならない（排他は parser /
+    ``validate_workflow`` で検証）。``exec`` は YAML 表層では str / list の
+    両形式を受け付けるが、parse 境界で ``shlex.split`` を通して
+    ``list[str]`` に正規化されるため、内部表現は常に正規化済み argv となる
+    （Issue #205 設計 § Step dataclass の表現）。
+    """
 
     id: str
-    skill: str
+    skill: str | None = None
+    exec: list[str] | None = None
     agent: str | None = None
     model: str | None = None
     effort: str | None = None

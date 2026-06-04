@@ -59,8 +59,9 @@ logger = RunLogger(log_path=Path(".kaji/run.jsonl"))
 | `dispatch` | `str` |
 
 `dispatch` は dispatch 経路の識別子。`"agent"` は LLM 経由（既存）、`"exec_script"` は
-skill frontmatter `exec_script` による subprocess dispatch（Issue #204）。`exec_script`
-経路では `agent` / `model` / `effort` は常に null（LLM 起動なし）。
+skill frontmatter `exec_script` による subprocess dispatch（Issue #204）、`"exec"` は
+workflow.yaml の `exec:` step による subprocess dispatch（Issue #205）。決定論経路
+（`"exec"` / `"exec_script"`）では `agent` / `model` / `effort` は常に null（LLM 起動なし）。
 
 `attempt` は `attempt-NNN` の 1 始まり整数（Issue #222）。dispatch される step では常に整数。
 同一 step が cycle / retry / resume で再 dispatch されると `attempt` が増え、step retry の
@@ -69,6 +70,7 @@ skill frontmatter `exec_script` による subprocess dispatch（Issue #204）。
 ```json
 {"ts": "2025-04-22T01:00:01+00:00", "event": "step_start", "step_id": "implement", "agent": "claude", "model": "claude-sonnet-4-6", "effort": null, "session_id": null, "attempt": 1, "dispatch": "agent"}
 {"ts": "2025-04-22T01:00:01+00:00", "event": "step_start", "step_id": "poll-review", "agent": null, "model": null, "effort": null, "session_id": null, "attempt": 1, "dispatch": "exec_script"}
+{"ts": "2025-04-22T01:00:01+00:00", "event": "step_start", "step_id": "collect-metrics", "agent": null, "model": null, "effort": null, "session_id": null, "attempt": 1, "dispatch": "exec"}
 ```
 
 #### `step_end`
@@ -86,8 +88,8 @@ skill frontmatter `exec_script` による subprocess dispatch（Issue #204）。
 | `signal` | `str \| null` |
 | `dispatch` | `str` |
 
-`dispatch` は `step_start` と同じ意味（`"agent"` / `"exec_script"`）。`exec_script` では
-`cost` も常に null（LLM 課金なし）。
+`dispatch` は `step_start` と同じ意味（`"agent"` / `"exec_script"` / `"exec"`）。決定論経路
+（`"exec"` / `"exec_script"`）では `cost` も常に null（LLM 課金なし）。
 
 `attempt` / `exit_code` / `signal` は Issue #222 で追加。`exit_code` は subprocess の
 `returncode`（取得不能なら null）、`signal` はそこから導出した signal 名（clean exit /
@@ -164,7 +166,7 @@ best-effort で記録される。cycle 上限 exhaust の合成 verdict では d
 | メソッド | いつ呼ぶか |
 |---------|-----------|
 | `log_workflow_start(issue, workflow)` | ワークフロー開始直後 |
-| `log_step_start(step_id, agent, model, effort, session_id, *, attempt=None, dispatch="agent")` | CLI / subprocess 実行前。`exec_script` 経路では `dispatch="exec_script"` + `agent=model=effort=None`。`attempt` は attempt-NNN の整数（Issue #222） |
+| `log_step_start(step_id, agent, model, effort, session_id, *, attempt=None, dispatch="agent")` | CLI / subprocess 実行前。決定論経路では `dispatch="exec_script"`（Issue #204）/ `dispatch="exec"`（exec-step・Issue #205）+ `agent=model=effort=None`。`attempt` は attempt-NNN の整数（Issue #222） |
 | `log_verdict_source(step_id, source, attempt)` | `resolve_verdict()` 直後（verdict 解決経路の記録、Issue #220） |
 | `log_step_end(step_id, verdict, duration_ms, cost, *, attempt=None, exit_code=None, signal=None, dispatch="agent")` | CLI / subprocess 終了・verdict 解析後（異常終了でも合成 ABORT で発火、Issue #222） |
 | `log_cycle_iteration(cycle_name, iteration, max_iter)` | サイクル内の各反復開始時 |

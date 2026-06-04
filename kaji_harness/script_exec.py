@@ -1,10 +1,19 @@
 """Deterministic script dispatch for kaji_harness.
 
-`exec_script` を持つ skill を ``python -m <module>`` として subprocess 実行する。
-LLM agent を介さない決定論的 dispatch 経路の核。
+LLM agent を介さない決定論的 dispatch 経路の核。2 つの entrypoint を持つ:
 
-- subprocess は ``shell=False`` で呼び、``exec_script`` 値は呼び出し側で
-  Python identifier 正規表現により validate 済みである前提（``skill.py``）。
+- ``execute_script``: ``exec_script`` を持つ skill を ``python -m <module>`` として
+  実行する（Issue #204）。``exec_script`` 値は呼び出し側で Python identifier
+  正規表現により validate 済みである前提（``skill.py``）。
+- ``execute_exec``: workflow.yaml の ``exec:`` step を任意 argv として実行する
+  （Issue #205）。argv は parse 境界（``workflow.py``）で正規化済み（非空 list[str]、
+  全要素非空 str）である前提。
+
+両者は subprocess 起動 / timeout / stdout・stderr ドレイン / ログ書き出しの本体を
+private helper ``_run_argv`` で共有する。共通の不変条件:
+
+- subprocess は ``shell=False`` で呼ぶ。シェルメタ文字の展開・injection は
+  構造的に発生しない。
 - exit code != 0 は ``ScriptExecutionError`` で fail-loud。stdout の verdict
   有無を問わない（決定論性確保のため、Issue #204 § exit code と verdict の
   優先順位の正本契約）。
@@ -37,34 +46,39 @@ def _now_stamp() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def execute_script(
+def _run_argv(
     *,
     step: Step,
-    module: str,
+    args: list[str],
     env: Mapping[str, str],
     workdir: Path,
     log_dir: Path,
     timeout: int,
-    verbose: bool = True,
+    verbose: bool,
+    command_label: str,
 ) -> CLIResult:
-    """``python -m <module>`` を subprocess 実行し ``CLIResult`` を返す。
+    """任意 argv を ``shell=False`` で subprocess 実行し ``CLIResult`` を返す。
+
+    ``execute_script`` / ``execute_exec`` が共有する subprocess コア。
+    subprocess 起動・timeout・stdout/stderr ドレイン・ログ書き出しの本体を
+    1 箇所に集約する（Issue #205 § 方針 3）。
 
     Args:
         step: 実行対象 step（id をログラベルに使用）
-        module: ``python -m`` の引数。Python identifier dotted path を前提とする
+        args: subprocess に渡す argv（``shell=False``）。非空である前提
         env: context 追加 env（``os.environ`` に merge される）
         workdir: subprocess の cwd
         log_dir: ``stdout.log`` / ``console.log`` / ``stderr.log`` の出力先
         timeout: 秒単位の hard timeout
         verbose: ``True`` で stdout を逐次 console に echo する
+        command_label: 失敗時の ``ScriptExecutionError`` に載せる調査用ラベル
 
     Raises:
-        CLINotFoundError: ``python`` 実行体が見つからない（通常は到達不能）
+        CLINotFoundError: 実行体が見つからない
         StepTimeoutError: timeout 超過
         ScriptExecutionError: subprocess が non-zero exit（stdout の verdict 有無
             を問わない）
     """
-    args = [sys.executable, "-m", module]
     base_env = {k: v for k, v in os.environ.items() if k not in _OPTIONAL_RESERVED_ENV or k in env}
     full_env = {**base_env, **env}
 
@@ -81,7 +95,7 @@ def execute_script(
             shell=False,
         )
     except FileNotFoundError as exc:
-        raise CLINotFoundError(f"python '{args[0]}' not found") from exc
+        raise CLINotFoundError(f"command '{args[0]}' not found") from exc
 
     timed_out = threading.Event()
 
@@ -142,7 +156,9 @@ def execute_script(
         raise StepTimeoutError(step.id, timeout, returncode=process.returncode)
 
     if process.returncode != 0:
-        raise ScriptExecutionError(step.id, module, process.returncode, stderr or "(no stderr)")
+        raise ScriptExecutionError(
+            step.id, command_label, process.returncode, stderr or "(no stderr)"
+        )
 
     # Issue #222: 正常終了の exit_code / signal を CLIResult へ運ぶ。
     return CLIResult(
@@ -152,4 +168,87 @@ def execute_script(
         stderr=stderr,
         exit_code=process.returncode,
         signal=derive_signal(process.returncode),
+    )
+
+
+def execute_script(
+    *,
+    step: Step,
+    module: str,
+    env: Mapping[str, str],
+    workdir: Path,
+    log_dir: Path,
+    timeout: int,
+    verbose: bool = True,
+) -> CLIResult:
+    """``python -m <module>`` を subprocess 実行し ``CLIResult`` を返す。
+
+    Args:
+        step: 実行対象 step（id をログラベルに使用）
+        module: ``python -m`` の引数。Python identifier dotted path を前提とする
+        env: context 追加 env（``os.environ`` に merge される）
+        workdir: subprocess の cwd
+        log_dir: ``stdout.log`` / ``console.log`` / ``stderr.log`` の出力先
+        timeout: 秒単位の hard timeout
+        verbose: ``True`` で stdout を逐次 console に echo する
+
+    Raises:
+        CLINotFoundError: ``python`` 実行体が見つからない（通常は到達不能）
+        StepTimeoutError: timeout 超過
+        ScriptExecutionError: subprocess が non-zero exit（stdout の verdict 有無
+            を問わない）
+    """
+    return _run_argv(
+        step=step,
+        args=[sys.executable, "-m", module],
+        env=env,
+        workdir=workdir,
+        log_dir=log_dir,
+        timeout=timeout,
+        verbose=verbose,
+        command_label=module,
+    )
+
+
+def execute_exec(
+    *,
+    step: Step,
+    argv: list[str],
+    env: Mapping[str, str],
+    workdir: Path,
+    log_dir: Path,
+    timeout: int,
+    verbose: bool = True,
+) -> CLIResult:
+    """workflow.yaml の ``exec:`` step（任意 argv）を subprocess 実行する。
+
+    ``argv`` は parse 境界（``workflow.py`` の ``_normalize_exec``）で
+    非空 list[str]・全要素非空 str に正規化済みである前提。``execute_script`` と
+    subprocess コア（``_run_argv``）を共有し、dispatch 副作用（ログ・timeout・
+    fail-loud）は完全に同等となる（Issue #205）。
+
+    Args:
+        step: 実行対象 step（id をログラベルに使用）
+        argv: subprocess に渡す argv。``shell=False`` で起動する
+        env: context 追加 env（``os.environ`` に merge される）
+        workdir: subprocess の cwd
+        log_dir: ``stdout.log`` / ``console.log`` / ``stderr.log`` の出力先
+        timeout: 秒単位の hard timeout
+        verbose: ``True`` で stdout を逐次 console に echo する
+
+    Raises:
+        CLINotFoundError: argv[0] の実行体が見つからない
+        StepTimeoutError: timeout 超過
+        ScriptExecutionError: subprocess が non-zero exit（stdout の verdict 有無
+            を問わない）
+    """
+    return _run_argv(
+        step=step,
+        args=argv,
+        env=env,
+        workdir=workdir,
+        log_dir=log_dir,
+        timeout=timeout,
+        verbose=verbose,
+        command_label=" ".join(argv),
     )

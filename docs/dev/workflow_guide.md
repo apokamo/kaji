@@ -69,6 +69,22 @@ provider 切替の手順は [docs/cli-guides/local-mode.md](../cli-guides/local-
 
 詳細: [docs_maintenance_workflow.md](docs_maintenance_workflow.md)
 
+## step 種別（agent step / script step）
+
+workflow.yaml の step は、実行経路で 2 種類に分かれる。
+
+| 種別 | 宣言 | 実行経路 | LLM コスト |
+|------|------|---------|-----------|
+| **agent step** | `skill:` + `agent:` | skill を LLM agent で実行 | 発生する |
+| **script step (exec)** | `exec:`（`skill:` と相互排他） | 宣言した command を直接 subprocess 実行（決定論） | 発生しない |
+
+- `exec:` step は skill ファイルを増やさず、その workflow に閉じた決定論処理（metrics 収集・
+  artifact dump・外部 CLI 呼び出し等）を workflow.yaml 1 箇所で宣言できる（Issue #205）。
+- exec-step は `agent:` を持てないため、**`agent:` の有無 = LLM コスト発生の有無** という
+  不変条件が workflow.yaml 単独で成立する。
+- 宣言方法・規約・`exec:` vs `exec_script:`（skill frontmatter）の使い分けは
+  [workflow-authoring.md § exec-step（script step）](workflow-authoring.md) を参照。
+
 ## 関連ドキュメント
 
 - [完了条件](workflow_completion_criteria.md) — フェーズ別の完了条件チェックリスト

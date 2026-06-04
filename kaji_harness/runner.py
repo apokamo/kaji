@@ -37,7 +37,7 @@ from .providers import IssueContext, IssueProvider, PRContext, get_provider, nor
 from .providers.github import GitHubProviderError
 from .providers.local import LocalProvider
 from .result import RESULT_FILE, AttemptResult, derive_signal, write_result_json
-from .script_exec import execute_script
+from .script_exec import execute_exec, execute_script
 from .skill import SkillMetadata, load_skill_metadata, validate_skill_exists
 from .state import SessionState
 from .verdict import create_verdict_formatter, resolve_verdict, write_verdict_yaml
@@ -344,8 +344,14 @@ class WorkflowRunner:
         execution_policy = self.workflow.execution_policy
 
         # 0. 全ステップのスキル存在を事前検証 + skill metadata 整合チェック (L2)
-        skill_metadata: dict[str, SkillMetadata] = {}
+        # exec-step（Issue #205）は skill レイヤを介さないため、skill 解決を skip し
+        # metadata に None を入れる（runner Step 0 preflight の skip。cmd_validate と対称）。
+        skill_metadata: dict[str, SkillMetadata | None] = {}
         for step in self.workflow.steps:
+            if step.exec is not None:
+                skill_metadata[step.id] = None
+                continue
+            assert step.skill is not None  # exactly-one of skill/exec が保証
             validate_skill_exists(step.skill, self.project_root, self.config.paths.skill_dir)
             metadata = load_skill_metadata(
                 step.skill, self.project_root, self.config.paths.skill_dir
@@ -510,8 +516,19 @@ class WorkflowRunner:
                 start_time = time.monotonic()
                 cycle = self.workflow.find_cycle_for_step(current_step.id)
                 step_metadata = skill_metadata[current_step.id]
-                is_exec_script = step_metadata.exec_script is not None
-                dispatch_label = "exec_script" if is_exec_script else "agent"
+                # dispatch 種別を 3 値で確定する（Issue #205）。exec-step は
+                # step.exec を持ち skill metadata は None。exec_script は skill
+                # frontmatter 由来。それ以外は agent（LLM 経路）。
+                if current_step.exec is not None:
+                    dispatch_kind = "exec"
+                elif step_metadata is not None and step_metadata.exec_script is not None:
+                    dispatch_kind = "exec_script"
+                else:
+                    dispatch_kind = "agent"
+                # exec / exec_script は決定論 step として副作用を共有する
+                # （null agent fields / formatter=None / cost None）。
+                is_script_like = dispatch_kind in ("exec", "exec_script")
+                dispatch_label = dispatch_kind
 
                 # Issue #222: attempt 終了情報。dispatch を伴う step でのみ設定し、
                 # cycle 上限 exhaust の合成 verdict（dispatch 無し）では None のまま。
@@ -532,8 +549,6 @@ class WorkflowRunner:
                     )
                     cost: CostInfo | None = None
                 else:
-                    metadata = step_metadata
-
                     # PR context は step ごとに最新状態を見る（`i-pr` step 実行後など、
                     # workflow 中に MR が新規作成されるケースを反映するため）。
                     pr_context = self._resolve_pr_context_safe(provider, issue_context.branch_name)
@@ -552,13 +567,14 @@ class WorkflowRunner:
                     attempt_no = _attempt_number(attempt_dir)
                     verdict_yaml_path = attempt_dir / "verdict.yaml"
 
-                    # exec_script では agent / model / effort を null として記録する
-                    # （設計書 § 副作用: ignored fields を null 化して経路判別を明示）。
+                    # 決定論 step（exec / exec_script）では agent / model / effort を
+                    # null として記録する（設計書 § 副作用: ignored fields を null 化して
+                    # 経路判別を明示。exec-step は LLM 非経路）。
                     logger.log_step_start(
                         current_step.id,
-                        None if is_exec_script else current_step.agent,
-                        None if is_exec_script else current_step.model,
-                        None if is_exec_script else current_step.effort,
+                        None if is_script_like else current_step.agent,
+                        None if is_script_like else current_step.model,
+                        None if is_script_like else current_step.effort,
                         session_id,
                         attempt=attempt_no,
                         dispatch=dispatch_label,
@@ -588,10 +604,9 @@ class WorkflowRunner:
                     # 元例外を優先 re-raise する（crash semantics = EXIT_RUNTIME_ERROR
                     # を維持し、失敗を silent に retry 化しない）。
                     try:
-                        if is_exec_script:
-                            assert metadata.exec_script is not None
-                            # context env 注入。canonical_id / step_id / worktree
-                            # 関連を script に渡す。
+                        if is_script_like:
+                            # context env 注入（exec / exec_script 共通）。
+                            # canonical_id / step_id / worktree 関連を script に渡す。
                             context_env: dict[str, str] = {
                                 "KAJI_ISSUE_ID": run_ctx.canonical_id,
                                 "KAJI_ISSUE_REF": run_ctx.issue_ref,
@@ -610,15 +625,31 @@ class WorkflowRunner:
 
                             # comment fallback の lower bound（dispatch 直前に記録）
                             attempt_started_at = datetime.now(UTC)
-                            result = execute_script(
-                                step=current_step,
-                                module=metadata.exec_script,
-                                env=context_env,
-                                workdir=effective_workdir,
-                                log_dir=attempt_dir,
-                                timeout=resolved_timeout,
-                                verbose=self.verbose,
-                            )
+                            if dispatch_kind == "exec":
+                                # exec-step: 任意 argv を直接 subprocess 実行する。
+                                assert current_step.exec is not None
+                                result = execute_exec(
+                                    step=current_step,
+                                    argv=current_step.exec,
+                                    env=context_env,
+                                    workdir=effective_workdir,
+                                    log_dir=attempt_dir,
+                                    timeout=resolved_timeout,
+                                    verbose=self.verbose,
+                                )
+                            else:
+                                # exec_script: skill frontmatter の python -m <module>。
+                                assert step_metadata is not None
+                                assert step_metadata.exec_script is not None
+                                result = execute_script(
+                                    step=current_step,
+                                    module=step_metadata.exec_script,
+                                    env=context_env,
+                                    workdir=effective_workdir,
+                                    log_dir=attempt_dir,
+                                    timeout=resolved_timeout,
+                                    verbose=self.verbose,
+                                )
                         else:
                             # プロンプト構築（canonical id + verdict_path を渡す）
                             prompt = build_prompt(
@@ -673,9 +704,9 @@ class WorkflowRunner:
 
                         # Issue #220: verdict 解決順 artifact → comment → stdout。
                         valid = set(current_step.on.keys())
-                        if is_exec_script:
-                            # exec_script 経路では AI formatter fallback を呼ばない
-                            # (fabrication 防止 + 決定論性維持)
+                        if is_script_like:
+                            # 決定論 step（exec / exec_script）では AI formatter
+                            # fallback を呼ばない（fabrication 防止 + 決定論性維持）
                             formatter = None
                         else:
                             assert current_step.agent is not None  # L2 で確定
