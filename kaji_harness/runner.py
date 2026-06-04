@@ -19,10 +19,13 @@ from .config import KajiConfig
 from .errors import (
     CLIExecutionError,
     InvalidTransition,
+    InvalidVerdictValue,
     IssueContextResolutionError,
     MissingResumeSessionError,
     ScriptExecutionError,
     StepTimeoutError,
+    VerdictNotFound,
+    VerdictParseError,
     WorkdirNotFoundError,
     WorkflowValidationError,
 )
@@ -681,15 +684,35 @@ class WorkflowRunner:
                         # stdout しか出さなくても attempt-NNN/verdict.yaml を必ず残す）。
                         if verdict_source != "artifact":
                             write_verdict_yaml(verdict_yaml_path, verdict)
-                    except (StepTimeoutError, CLIExecutionError, ScriptExecutionError) as exc:
+                    except (
+                        StepTimeoutError,
+                        CLIExecutionError,
+                        ScriptExecutionError,
+                        VerdictNotFound,
+                        VerdictParseError,
+                        InvalidVerdictValue,
+                    ) as exc:
                         # best-effort で異常終了情報を記録 → 元例外を re-raise。
+                        # 二系統の失敗を 1 箇所で扱う:
+                        #   1. dispatch 失敗（StepTimeoutError / CLIExecutionError /
+                        #      ScriptExecutionError）: result 未取得。exc.returncode を
+                        #      終了コードとして運ぶ（取得不能なら None）。
+                        #   2. verdict 解決失敗（VerdictNotFound / VerdictParseError /
+                        #      InvalidVerdictValue）: dispatch は成功し CLI/script は
+                        #      正常 exit している。L651-652 で result から捕捉済みの
+                        #      exit_code / signal_name を保持する（verdict 例外は
+                        #      returncode を持たないため、ここで無条件に
+                        #      getattr(..., None) で上書きすると正常 exit の終了コードを
+                        #      None で潰してしまう）。
                         ended_at = datetime.now(UTC)
-                        exit_code = getattr(exc, "returncode", None)
-                        signal_name = derive_signal(exit_code)
+                        exc_returncode = getattr(exc, "returncode", None)
+                        if exc_returncode is not None:
+                            exit_code = exc_returncode
+                            signal_name = derive_signal(exit_code)
                         started = attempt_started_at if attempt_started_at is not None else ended_at
                         abort_verdict = Verdict(
                             status="ABORT",
-                            reason="step aborted before producing a verdict",
+                            reason="step aborted without a usable verdict",
                             evidence=str(exc)[:500],
                             suggestion=(
                                 f"Inspect {attempt_dir.name}/result.json and console.log; "

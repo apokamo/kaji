@@ -715,3 +715,45 @@ class TestRunnerAbortBestEffort:
         assert result["exit_code"] == -15
         assert result["signal"] == "SIGTERM"
         assert "StepTimeoutError" in result["error"]
+
+    def test_verdict_not_found_records_abort_result_and_reraises(self, tmp_path: Path) -> None:
+        """codex P2: dispatch は成功し CLI は正常 exit したが ``resolve_verdict`` が
+        ``VerdictNotFound`` を raise する場合も best-effort で result.json / step_end を
+        残す（従来は dispatch 例外のみ捕捉し、verdict 解決失敗は記録なしで run 停止）。
+
+        exit_code は dispatch 成功時に result から捕捉済みの値（0）を保持し、verdict
+        例外には returncode が無いため None で潰さないことを併せて検証する。
+        """
+        workflow = _single_step_workflow()
+
+        # status=None → verdict block 無し。artifact / comment にも verdict が無いため
+        # resolve_verdict は VerdictNotFound を raise する。exit_code=0 で正常 exit。
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            return _cli_result(None, exit_code=0)
+
+        with (
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            pytest.raises(VerdictNotFound),
+        ):
+            _make_runner(tmp_path, workflow).run()
+
+        run_dir = _run_root(tmp_path)
+        result = _result_json(run_dir, "implement", "attempt-001")
+        assert result["status"] == "ABORT"
+        # 正常 exit の exit_code(0) を verdict 例外の returncode(None) で潰さない。
+        assert result["exit_code"] == 0
+        assert result["signal"] is None
+        assert result["attempt"] == 1
+        assert "VerdictNotFound" in result["error"]
+
+        # step_end が verdict 解決失敗でも発火し attempt を識別できる。
+        ends = [e for e in _events(run_dir, "step_end") if e["step_id"] == "implement"]
+        assert len(ends) == 1
+        assert ends[0]["attempt"] == 1
+        assert ends[0]["exit_code"] == 0
+        assert ends[0]["verdict"]["status"] == "ABORT"
+
+        # progress.md に aborted attempt が現れる。
+        progress = (tmp_path / ".kaji-artifacts" / "local-pc1-99" / "progress.md").read_text()
+        assert "implement (attempt 1): ABORT" in progress
