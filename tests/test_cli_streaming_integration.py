@@ -683,6 +683,10 @@ class TestTerminalEventBreak:
             )
         assert result.terminal_seen is True
         assert result.session_id == "sess-sx"
+        # Issue #222 / codex P2: プロセスが自発 exit した場合（kaji terminate 不要）は
+        # その returncode が attempt の真の終了として保持される。
+        assert result.exit_code == 1
+        assert result.signal is None
 
     def test_claude_success_terminal_with_sigterm_trap_exit_143_passes(
         self, tmp_path: Path
@@ -720,6 +724,12 @@ class TestTerminalEventBreak:
         assert result.terminal_seen is True
         assert result.session_id == "sess-143"
         assert result.cost is not None and result.cost.usd == 0.01
+        # Issue #222 / codex P2: terminal success 観測後にプロセスが自発 exit せず
+        # kaji が後始末で terminate した場合、その SIGTERM 起因 returncode(143) は
+        # attempt の終了ではない（routine cleanup）。result.json の exit_code / signal を
+        # 汚さないよう None に縮退させ、成功 attempt を signal 終了に見せない。
+        assert result.exit_code is None
+        assert result.signal is None
 
     def test_claude_success_terminal_with_positive_137_returncode_variant_passes(
         self, tmp_path: Path
@@ -753,6 +763,9 @@ class TestTerminalEventBreak:
             )
         assert result.terminal_seen is True
         assert result.session_id == "sess-137"
+        # harness terminate 起因の returncode は値に依らず attempt 終了に取り込まない。
+        assert result.exit_code is None
+        assert result.signal is None
 
     def test_claude_success_terminal_with_default_sigterm_exit_passes(self, tmp_path: Path) -> None:
         """trap なしの CLI は SIGTERM 既定で returncode -15。terminal success なら CLIResult を返す。
@@ -784,6 +797,9 @@ class TestTerminalEventBreak:
             )
         assert result.terminal_seen is True
         assert result.session_id == "sess-neg15"
+        # 負値 returncode(-15) も harness terminate 起因なら attempt 終了に残さない。
+        assert result.exit_code is None
+        assert result.signal is None
 
     def test_claude_success_terminal_with_error_event_still_raises(self, tmp_path: Path) -> None:
         """terminal が success でも stream 中に error イベントがあれば CLIExecutionError。

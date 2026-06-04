@@ -36,6 +36,11 @@ class CLIResult:
     error_messages: list[str] = field(default_factory=list)
     terminal_seen: bool = False
     terminal_failure: bool = False
+    # Issue #222: subprocess の終了情報を attempt result.json へ運ぶ。
+    # ``exit_code`` は ``process.returncode``（取得不能なら None）、``signal`` は
+    # そこから導出した signal 名（clean exit / signal 由来でなければ None）。
+    exit_code: int | None = None
+    signal: str | None = None
 
 
 @dataclass

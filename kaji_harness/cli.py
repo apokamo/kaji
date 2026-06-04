@@ -17,12 +17,19 @@ from typing import Any
 from .adapters import ADAPTERS, CLIEventAdapter
 from .errors import CLIExecutionError, CLINotFoundError, StepTimeoutError
 from .models import CLIResult, CostInfo, Step
+from .result import derive_signal
 
 logger = logging.getLogger(__name__)
 
 # Retry constants for transient CLI errors (Bug 4)
 _MAX_RETRIES = 3
 _BASE_DELAY = 30.0
+# terminal success event 観測後、プロセスが自発 exit するのを待つ猶予（秒）。
+# stdout EOF と OS によるプロセス reap の間には僅かなラグがあり、EOF 直後に
+# poll() を呼ぶと自発 exit 途中のプロセスを誤って "生存中" と判定しうる。この
+# 猶予内に exit すればその returncode を attempt の真の終了として保持し、超過時は
+# CLI ハングと見なして kaji が terminate する（その returncode は SIGTERM ノイズ）。
+_TERMINAL_SELF_EXIT_GRACE = 2.0
 _TRANSIENT_PATTERNS = ["at capacity", "rate limit", "overloaded", "try again"]
 
 
@@ -125,13 +132,23 @@ def _execute_cli_once(
     timed_out = threading.Event()
     timer = threading.Timer(timeout, _kill_process, args=[process, timed_out])
     timer.start()
+    # terminal event 観測後にプロセスが自発 exit せず、kaji が後始末で terminate した
+    # かを記録する。その場合の returncode は kaji 由来の SIGTERM であって attempt の
+    # 終了コードではない（result.exit_code への取り込みを抑止する根拠）。
+    harness_terminated = False
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
         result = stream_and_log(process, adapter, step.id, log_dir, verbose)
         if result.terminal_seen:
             # terminal event を観測した時点で timer を disarm（race 防止の核）。
             timer.cancel()
-            if process.poll() is None:
+            # 自発 exit の猶予を与えてから生存判定する。poll() を即チェックすると
+            # stdout EOF と reap のラグで自発 exit 途中のプロセスを生存中と誤認し、
+            # 本来保持すべき真の returncode を harness terminate のノイズで潰してしまう。
+            try:
+                process.wait(timeout=_TERMINAL_SELF_EXIT_GRACE)
+            except subprocess.TimeoutExpired:
+                harness_terminated = True
                 process.terminate()
                 try:
                     process.wait(timeout=5)
@@ -149,8 +166,23 @@ def _execute_cli_once(
     finally:
         timer.cancel()
 
+    # Issue #222: 終了情報を CLIResult へ運ぶ。terminal success を観測した後に kaji が
+    # 後始末で terminate した場合（harness_terminated=True）、process.returncode は
+    # kaji 発の SIGTERM 起因（143 / 137 / -15 等）であって attempt の終了ではない。
+    # これは異常終了シグナルではなく routine cleanup なので result.exit_code / signal に
+    # 残さない（result.json の exit_code / signal は timeout / crash 等の真の異常終了を
+    # 表す枠であり、harness cleanup のノイズで成功 attempt を signal 終了に見せない）。
+    # プロセスが自発 exit した場合はその returncode が attempt の真の終了。失敗経路は
+    # CLIExecutionError.returncode が、timeout 経路は StepTimeoutError.returncode が運ぶ。
+    if harness_terminated:
+        result.exit_code = None
+        result.signal = None
+    else:
+        result.exit_code = process.returncode
+        result.signal = derive_signal(process.returncode)
+
     if timed_out.is_set() and not result.terminal_seen:
-        raise StepTimeoutError(step.id, timeout)
+        raise StepTimeoutError(step.id, timeout, returncode=process.returncode)
     # 失敗判定:
     #  - terminal event を観測したら、その event を真実とする。kaji が後始末で撃った
     #    terminate の returncode は、CLI の SIGTERM ハンドリング方式（-15 / 143 / 137 等）

@@ -174,6 +174,101 @@ class TestProgressMd:
         assert "code-review" in content
         assert "1" in content
 
+    def test_progress_md_renders_attempt_and_exit(self, tmp_path: Path) -> None:
+        """Issue #222: failed / aborted attempt が attempt 番号と exit/signal 付きで描画。"""
+        state = SessionState.load_or_create(504, artifacts_dir=tmp_path)
+        # attempt 1: 143 で abort、attempt 2: PASS
+        state.record_step(
+            "implement",
+            Verdict(status="RETRY", reason="tests failed", evidence="e", suggestion=""),
+            attempt=1,
+            exit_code=143,
+            signal="SIGTERM",
+        )
+        state.record_step(
+            "implement",
+            Verdict(status="PASS", reason="done", evidence="ok", suggestion=""),
+            attempt=2,
+        )
+
+        content = (tmp_path / "504" / "progress.md").read_text()
+        # 失敗 attempt と最終 PASS の両方が現れる
+        assert "implement (attempt 1): RETRY" in content
+        assert "(exit 143, SIGTERM)" in content
+        assert "implement (attempt 2): PASS" in content
+        # 正常 attempt は exit/signal を付けない
+        assert "implement (attempt 2): PASS — done" in content
+
+    def test_progress_md_clean_exit_zero_omits_detail(self, tmp_path: Path) -> None:
+        """Issue #222: exit_code=0（clean exit）の正常 attempt は (exit 0) を付けない。"""
+        state = SessionState.load_or_create(505, artifacts_dir=tmp_path)
+        state.record_step(
+            "implement",
+            Verdict(status="PASS", reason="done", evidence="ok", suggestion=""),
+            attempt=1,
+            exit_code=0,
+            signal=None,
+        )
+
+        content = (tmp_path / "505" / "progress.md").read_text()
+        assert "implement (attempt 1): PASS — done" in content
+        assert "(exit 0)" not in content
+        assert "(exit" not in content
+
+
+@pytest.mark.medium
+class TestStepRecordPersistenceBackwardCompat:
+    """旧 session-state.json（新キー無し）の load round-trip（Issue #222）。"""
+
+    def test_load_old_state_without_attempt_keys(self, tmp_path: Path) -> None:
+        """attempt / exit_code / signal を持たない旧 step_history を load できる。"""
+        state_dir = tmp_path / "700"
+        state_dir.mkdir(parents=True)
+        old_state = {
+            "issue_number": "700",
+            "sessions": {},
+            "step_history": [
+                {
+                    "step_id": "design",
+                    "verdict_status": "PASS",
+                    "verdict_reason": "ok",
+                    "verdict_evidence": "e",
+                    "verdict_suggestion": "",
+                    "timestamp": "2026-01-01T00:00:00+00:00",
+                }
+            ],
+            "cycle_counts": {},
+            "last_completed_step": "design",
+            "last_transition_verdict": None,
+            "worktree_dir": None,
+            "branch_name": None,
+        }
+        (state_dir / "session-state.json").write_text(json.dumps(old_state), encoding="utf-8")
+
+        loaded = SessionState.load_or_create(700, artifacts_dir=tmp_path)
+        assert len(loaded.step_history) == 1
+        record = loaded.step_history[0]
+        assert record.attempt is None
+        assert record.exit_code is None
+        assert record.signal is None
+
+    def test_attempt_fields_persist_round_trip(self, tmp_path: Path) -> None:
+        """新フィールドが session-state.json に保存され load で復元される。"""
+        state = SessionState.load_or_create(701, artifacts_dir=tmp_path)
+        state.record_step(
+            "implement",
+            Verdict(status="ABORT", reason="aborted", evidence="e", suggestion="s"),
+            attempt=1,
+            exit_code=143,
+            signal="SIGTERM",
+        )
+
+        loaded = SessionState.load_or_create(701, artifacts_dir=tmp_path)
+        record = loaded.step_history[0]
+        assert record.attempt == 1
+        assert record.exit_code == 143
+        assert record.signal == "SIGTERM"
+
 
 @pytest.mark.medium
 class TestStateJsonStructure:

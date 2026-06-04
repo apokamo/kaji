@@ -97,11 +97,18 @@ class SkillFrontmatterError(HarnessError):
 
 
 class StepTimeoutError(HarnessError):
-    """ステップがタイムアウト。SIGTERM → SIGKILL 後に raise。"""
+    """ステップがタイムアウト。SIGTERM → SIGKILL 後に raise。
 
-    def __init__(self, step_id: str, timeout: int):
+    Issue #222: kill 後に観測した ``process.returncode`` を ``returncode`` として
+    運ぶ（best-effort）。timeout の kill は SIGTERM が初手のため通常 ``-15``、
+    SIGKILL までエスカレートした場合は ``-9``。取得不能なら ``None``。
+    runner はこの値から attempt result.json の ``exit_code`` / ``signal`` を導出する。
+    """
+
+    def __init__(self, step_id: str, timeout: int, returncode: int | None = None):
         self.step_id = step_id
         self.timeout = timeout
+        self.returncode = returncode
         super().__init__(f"Step '{step_id}' timed out after {timeout}s")
 
 

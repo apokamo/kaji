@@ -22,7 +22,7 @@ from unittest.mock import patch
 import pytest
 
 from kaji_harness.config import KajiConfig
-from kaji_harness.errors import VerdictNotFound
+from kaji_harness.errors import CLIExecutionError, StepTimeoutError, VerdictNotFound
 from kaji_harness.models import CLIResult, CostInfo, CycleDefinition, Step, Verdict, Workflow
 from kaji_harness.providers import LocalProvider
 from kaji_harness.providers.models import Comment
@@ -92,10 +92,27 @@ def _verdict_block(status: str, reason: str = "ok", evidence: str = "e") -> str:
     )
 
 
-def _cli_result(status: str | None, session_id: str = "sess") -> CLIResult:
-    """status=None なら verdict block を含まない stdout を返す。"""
+def _cli_result(
+    status: str | None,
+    session_id: str = "sess",
+    *,
+    exit_code: int | None = 0,
+    signal: str | None = None,
+) -> CLIResult:
+    """status=None なら verdict block を含まない stdout を返す。
+
+    Issue #222: ``exit_code`` / ``signal`` を CLIResult に載せ、runner が
+    attempt result.json へ運ぶ経路を検証できるようにする。
+    """
     output = "verdict 無しの作業ログ" if status is None else _verdict_block(status)
-    return CLIResult(full_output=output, session_id=session_id, cost=CostInfo(usd=0.0), stderr="")
+    return CLIResult(
+        full_output=output,
+        session_id=session_id,
+        cost=CostInfo(usd=0.0),
+        stderr="",
+        exit_code=exit_code,
+        signal=signal,
+    )
 
 
 def _make_config(tmp_path: Path) -> KajiConfig:
@@ -221,6 +238,17 @@ def _verdict_sources(run_dir: Path) -> list[dict[str, str]]:
         if entry.get("event") == "verdict_source":
             events.append(entry)
     return events
+
+
+def _events(run_dir: Path, event: str) -> list[dict]:
+    """run.log から指定 event の行を順序保持で抽出する。"""
+    log = run_dir / "run.log"
+    out: list[dict] = []
+    for line in log.read_text(encoding="utf-8").splitlines():
+        entry = json.loads(line)
+        if entry.get("event") == event:
+            out.append(entry)
+    return out
 
 
 @pytest.mark.medium
@@ -501,3 +529,231 @@ class TestRunnerLegacyLayoutCompat:
         new_runs = [p for p in runs.iterdir() if p.is_dir() and p.name != "2401010000"]
         assert len(new_runs) == 1
         assert (new_runs[0] / "steps" / "implement" / "attempt-001" / "verdict.yaml").exists()
+
+
+# ============================================================
+# Medium: Issue #222 — result.json / run.log attempt / abort best-effort
+# ============================================================
+
+
+def _result_json(run_dir: Path, step_id: str, attempt: str) -> dict:
+    """``steps/<step_id>/<attempt>/result.json`` を読む。"""
+    path = run_dir / "steps" / step_id / attempt / "result.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@pytest.mark.medium
+class TestRunnerResultJsonNormal:
+    def test_single_attempt_writes_result_json_and_attempt_in_log(self, tmp_path: Path) -> None:
+        """正常 single-attempt で result.json が書かれ、run.log の step イベントに
+        attempt / exit_code / signal が付く。"""
+        workflow = _single_step_workflow()
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            return _cli_result("PASS", exit_code=0, signal=None)
+
+        with (
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+        ):
+            state = _make_runner(tmp_path, workflow).run()
+
+        assert state.last_completed_step == "implement"
+        run_dir = _run_root(tmp_path)
+        result = _result_json(run_dir, "implement", "attempt-001")
+        assert result["step_id"] == "implement"
+        assert result["attempt"] == 1
+        assert result["status"] == "PASS"
+        assert result["exit_code"] == 0
+        assert result["signal"] is None
+        assert result["dispatch"] == "agent"
+        assert result["error"] is None
+        assert result["session_id"] == "sess"
+        # started_at <= ended_at
+        assert result["started_at"] <= result["ended_at"]
+        assert isinstance(result["duration_ms"], int)
+
+        # run.log: step_start / step_end に attempt 付与、step_end に exit_code/signal
+        starts = _events(run_dir, "step_start")
+        ends = _events(run_dir, "step_end")
+        assert starts[-1]["attempt"] == 1
+        assert ends[-1]["attempt"] == 1
+        assert ends[-1]["exit_code"] == 0
+        assert ends[-1]["signal"] is None
+
+        # progress.md に attempt 番号が出る（正常終了は exit/signal を出さない）
+        progress = (tmp_path / ".kaji-artifacts" / "local-pc1-99" / "progress.md").read_text()
+        assert "implement (attempt 1): PASS" in progress
+        # clean exit は (exit 0) を付けない（設計書 § C の例示と一致）
+        assert "(exit 0)" not in progress
+        assert "(exit" not in progress
+
+
+@pytest.mark.medium
+class TestRunner143RetryRegression:
+    """Issue #222 完了条件: 143 で失敗した attempt → retry で PASS。
+
+    同一 step (verify) が cycle 内で 2 回 dispatch され、attempt-001 が
+    exit_code=143 の RETRY、attempt-002 が PASS。attempt-001/result.json が
+    上書きされず残ることを検証する。"""
+
+    def test_143_retry_then_pass_keeps_failed_attempt_result(self, tmp_path: Path) -> None:
+        workflow = _cycle_workflow()
+        # implement(PASS) → review(RETRY) → fix#1(PASS) → verify#1(RETRY,143)
+        #   → fix#2(PASS) → verify#2(PASS)
+        results = iter(
+            [
+                _cli_result("PASS", "s-impl"),
+                _cli_result("RETRY", "s-rev1"),
+                _cli_result("PASS", "s-fix1"),
+                _cli_result("RETRY", "s-ver1", exit_code=143, signal="SIGTERM"),
+                _cli_result("PASS", "s-fix2"),
+                _cli_result("PASS", "s-ver2"),
+            ]
+        )
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            return next(results)
+
+        with (
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+        ):
+            state = _make_runner(tmp_path, workflow).run()
+
+        assert state.last_completed_step == "verify"
+        run_dir = _run_root(tmp_path)
+
+        # attempt-001: RETRY / 143 / SIGTERM
+        ver1 = _result_json(run_dir, "verify", "attempt-001")
+        assert ver1["status"] == "RETRY"
+        assert ver1["exit_code"] == 143
+        assert ver1["signal"] == "SIGTERM"
+        assert ver1["attempt"] == 1
+
+        # attempt-002: PASS（attempt-001 を上書きしない）
+        ver2 = _result_json(run_dir, "verify", "attempt-002")
+        assert ver2["status"] == "PASS"
+        assert ver2["attempt"] == 2
+        # attempt-001 が retry 後も残存している
+        assert ver1["exit_code"] == 143
+
+        # run.log の時系列: verify の step_start(1) → step_end(1,143) →
+        # step_start(2) → step_end(2)
+        verify_starts = [e for e in _events(run_dir, "step_start") if e["step_id"] == "verify"]
+        verify_ends = [e for e in _events(run_dir, "step_end") if e["step_id"] == "verify"]
+        assert [e["attempt"] for e in verify_starts] == [1, 2]
+        assert verify_ends[0]["attempt"] == 1
+        assert verify_ends[0]["exit_code"] == 143
+        assert verify_ends[0]["signal"] == "SIGTERM"
+        assert verify_ends[1]["attempt"] == 2
+
+        # progress.md に failed attempt（exit 143）と最終 PASS の両方
+        progress = (tmp_path / ".kaji-artifacts" / "local-pc1-99" / "progress.md").read_text()
+        assert "verify (attempt 1): RETRY" in progress
+        assert "(exit 143, SIGTERM)" in progress
+        assert "verify (attempt 2): PASS" in progress
+
+
+@pytest.mark.medium
+class TestRunnerAbortBestEffort:
+    """Issue #222 完了条件: timeout / SIGTERM の異常終了で best-effort 記録。"""
+
+    def test_cli_execution_error_records_abort_result_and_reraises(self, tmp_path: Path) -> None:
+        """CLIExecutionError(143) → result.json(status=ABORT, exit_code=143,
+        signal=SIGTERM, error)、step_end 発火、record_step(ABORT)、元例外 re-raise。"""
+        workflow = _single_step_workflow()
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            raise CLIExecutionError("implement", 143, "terminal failure")
+
+        with (
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            pytest.raises(CLIExecutionError),
+        ):
+            _make_runner(tmp_path, workflow).run()
+
+        run_dir = _run_root(tmp_path)
+        result = _result_json(run_dir, "implement", "attempt-001")
+        assert result["status"] == "ABORT"
+        assert result["exit_code"] == 143
+        assert result["signal"] == "SIGTERM"
+        assert result["attempt"] == 1
+        assert "CLIExecutionError" in result["error"]
+
+        # step_end が異常終了でも発火
+        ends = [e for e in _events(run_dir, "step_end") if e["step_id"] == "implement"]
+        assert len(ends) == 1
+        assert ends[0]["attempt"] == 1
+        assert ends[0]["exit_code"] == 143
+        assert ends[0]["verdict"]["status"] == "ABORT"
+
+        # progress.md に aborted attempt が現れる
+        progress = (tmp_path / ".kaji-artifacts" / "local-pc1-99" / "progress.md").read_text()
+        assert "implement (attempt 1): ABORT" in progress
+        assert "(exit 143, SIGTERM)" in progress
+
+    def test_step_timeout_records_abort_result_and_reraises(self, tmp_path: Path) -> None:
+        """StepTimeoutError(returncode=-15) → result.json(status=ABORT,
+        signal=SIGTERM)、元例外 re-raise（crash semantics 維持）。"""
+        workflow = _single_step_workflow()
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            raise StepTimeoutError("implement", 1800, returncode=-15)
+
+        with (
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            pytest.raises(StepTimeoutError),
+        ):
+            _make_runner(tmp_path, workflow).run()
+
+        run_dir = _run_root(tmp_path)
+        result = _result_json(run_dir, "implement", "attempt-001")
+        assert result["status"] == "ABORT"
+        assert result["exit_code"] == -15
+        assert result["signal"] == "SIGTERM"
+        assert "StepTimeoutError" in result["error"]
+
+    def test_verdict_not_found_records_abort_result_and_reraises(self, tmp_path: Path) -> None:
+        """codex P2: dispatch は成功し CLI は正常 exit したが ``resolve_verdict`` が
+        ``VerdictNotFound`` を raise する場合も best-effort で result.json / step_end を
+        残す（従来は dispatch 例外のみ捕捉し、verdict 解決失敗は記録なしで run 停止）。
+
+        exit_code は dispatch 成功時に result から捕捉済みの値（0）を保持し、verdict
+        例外には returncode が無いため None で潰さないことを併せて検証する。
+        """
+        workflow = _single_step_workflow()
+
+        # status=None → verdict block 無し。artifact / comment にも verdict が無いため
+        # resolve_verdict は VerdictNotFound を raise する。exit_code=0 で正常 exit。
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            return _cli_result(None, exit_code=0)
+
+        with (
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            pytest.raises(VerdictNotFound),
+        ):
+            _make_runner(tmp_path, workflow).run()
+
+        run_dir = _run_root(tmp_path)
+        result = _result_json(run_dir, "implement", "attempt-001")
+        assert result["status"] == "ABORT"
+        # 正常 exit の exit_code(0) を verdict 例外の returncode(None) で潰さない。
+        assert result["exit_code"] == 0
+        assert result["signal"] is None
+        assert result["attempt"] == 1
+        assert "VerdictNotFound" in result["error"]
+
+        # step_end が verdict 解決失敗でも発火し attempt を識別できる。
+        ends = [e for e in _events(run_dir, "step_end") if e["step_id"] == "implement"]
+        assert len(ends) == 1
+        assert ends[0]["attempt"] == 1
+        assert ends[0]["exit_code"] == 0
+        assert ends[0]["verdict"]["status"] == "ABORT"
+
+        # progress.md に aborted attempt が現れる。
+        progress = (tmp_path / ".kaji-artifacts" / "local-pc1-99" / "progress.md").read_text()
+        assert "implement (attempt 1): ABORT" in progress
