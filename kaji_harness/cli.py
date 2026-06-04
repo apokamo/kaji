@@ -24,6 +24,12 @@ logger = logging.getLogger(__name__)
 # Retry constants for transient CLI errors (Bug 4)
 _MAX_RETRIES = 3
 _BASE_DELAY = 30.0
+# terminal success event 観測後、プロセスが自発 exit するのを待つ猶予（秒）。
+# stdout EOF と OS によるプロセス reap の間には僅かなラグがあり、EOF 直後に
+# poll() を呼ぶと自発 exit 途中のプロセスを誤って "生存中" と判定しうる。この
+# 猶予内に exit すればその returncode を attempt の真の終了として保持し、超過時は
+# CLI ハングと見なして kaji が terminate する（その returncode は SIGTERM ノイズ）。
+_TERMINAL_SELF_EXIT_GRACE = 2.0
 _TRANSIENT_PATTERNS = ["at capacity", "rate limit", "overloaded", "try again"]
 
 
@@ -136,7 +142,12 @@ def _execute_cli_once(
         if result.terminal_seen:
             # terminal event を観測した時点で timer を disarm（race 防止の核）。
             timer.cancel()
-            if process.poll() is None:
+            # 自発 exit の猶予を与えてから生存判定する。poll() を即チェックすると
+            # stdout EOF と reap のラグで自発 exit 途中のプロセスを生存中と誤認し、
+            # 本来保持すべき真の returncode を harness terminate のノイズで潰してしまう。
+            try:
+                process.wait(timeout=_TERMINAL_SELF_EXIT_GRACE)
+            except subprocess.TimeoutExpired:
                 harness_terminated = True
                 process.terminate()
                 try:
