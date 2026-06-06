@@ -62,6 +62,7 @@ def _make_fake_tmux(
     version: str = "tmux 3.4\n",
     pane_id: str = "%99",
     pane_dead: str = "0",
+    pipe_returncode: int = 0,
     on_split: object = None,
     calls: list[list[str]] | None = None,
 ):
@@ -81,7 +82,7 @@ def _make_fake_tmux(
                 on_split()  # type: ignore[operator]
             return _completed(stdout=f"{pane_id}\n")
         if argv[:2] == [tmux, "pipe-pane"]:
-            return _completed()
+            return _completed(returncode=pipe_returncode, stderr="can't find pane")
         if argv[:2] == [tmux, "set-option"]:
             return _completed()
         if argv[:2] == [tmux, "display-message"]:
@@ -439,6 +440,71 @@ class TestRunnerPaneLifecycle:
         assert len(pipe_calls) == 1
         assert pipe_calls[0][:5] == ["/usr/bin/tmux", "pipe-pane", "-o", "-t", "%99"]
         assert str(tmp_path / "terminal.log") in pipe_calls[0][-1]
+
+    def test_pipe_pane_failure_with_verdict_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A short-running agent can write verdict.yaml and exit before the pipe
+        # attaches; tmux then rejects pipe-pane. A present verdict must still be
+        # reported as success rather than masked by the transcript setup failure.
+        prompt = tmp_path / "prompt.txt"
+        verdict = tmp_path / "verdict.yaml"
+        prompt.write_text("prompt", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        calls: list[list[str]] = []
+        fake_run = _make_fake_tmux(
+            calls=calls,
+            pipe_returncode=1,
+            on_split=lambda: verdict.write_text(_PASS_VERDICT, encoding="utf-8"),
+        )
+
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "kaji_harness.interactive_terminal.uuid.uuid4",
+                return_value=uuid.UUID("11111111-1111-4111-8111-111111111111"),
+            ),
+            patch.object(subprocess, "run", side_effect=fake_run),
+        ):
+            result = execute_interactive_terminal(
+                step=_step("claude"),
+                prompt_path=prompt,
+                verdict_path=verdict,
+                workdir=tmp_path,
+                timeout=5,
+            )
+
+        assert result.session_id == "11111111-1111-4111-8111-111111111111"
+
+    def test_pipe_pane_failure_without_verdict_fails_loud(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # pipe-pane rejected and no verdict present → genuine launch failure.
+        prompt = tmp_path / "prompt.txt"
+        prompt.write_text("prompt", encoding="utf-8")
+        (tmp_path / "terminal.log").write_text("agent failed at launch\n", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        calls: list[list[str]] = []
+        fake_run = _make_fake_tmux(calls=calls, pipe_returncode=1)
+
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=fake_run),
+        ):
+            with pytest.raises(CLIExecutionError) as excinfo:
+                execute_interactive_terminal(
+                    step=_step("claude"),
+                    prompt_path=prompt,
+                    verdict_path=tmp_path / "verdict.yaml",
+                    workdir=tmp_path,
+                    timeout=5,
+                )
+
+        assert "agent failed at launch" in excinfo.value.stderr
+        # The orphaned pane is cleaned up before failing loud.
+        assert ["/usr/bin/tmux", "kill-pane", "-t", "%99"] in calls
 
     def test_early_pane_exit_fails_loud(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

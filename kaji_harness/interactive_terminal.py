@@ -214,7 +214,21 @@ def execute_interactive_terminal(
         model=step.model or "",
         effort=step.effort or "",
     )
-    _pipe_pane(tmux, pane_id, terminal_log)
+    if not _pipe_pane(tmux, pane_id, terminal_log):
+        # tmux rejected the pipe — most likely the pane already closed because a
+        # short-running agent wrote verdict.yaml and exited before we could
+        # attach the logging pipe. A present verdict means the step succeeded, so
+        # do not let a transcript-only setup failure mask it. Only a missing
+        # verdict is a genuine launch failure.
+        if verdict_path.is_file():
+            return CLIResult(full_output="", session_id=session_id or launch_session_id or None)
+        _kill_pane(tmux, pane_id)
+        raise CLIExecutionError(
+            "interactive_terminal",
+            1,
+            "tmux pipe-pane failed before any verdict appeared: "
+            + _terminal_exit_detail(terminal_log),
+        )
     if not close_on_verdict:
         _set_remain_on_exit(tmux, pane_id)
 
@@ -348,7 +362,15 @@ def _launch_pane(
     return pane_id
 
 
-def _pipe_pane(tmux: str, pane_id: str, terminal_log: Path) -> None:
+def _pipe_pane(tmux: str, pane_id: str, terminal_log: Path) -> bool:
+    """Attach a logging pipe to the pane's output.
+
+    Returns:
+        ``True`` if tmux accepted the pipe; ``False`` if it was rejected (e.g.
+        the pane already closed because a short-running agent exited
+        immediately). The caller decides whether that is fatal based on whether
+        ``verdict.yaml`` is already present.
+    """
     terminal_log.parent.mkdir(parents=True, exist_ok=True)
     command = f"cat >> {shlex.quote(str(terminal_log))}"
     proc = subprocess.run(
@@ -357,9 +379,7 @@ def _pipe_pane(tmux: str, pane_id: str, terminal_log: Path) -> None:
         capture_output=True,
         check=False,
     )
-    if proc.returncode != 0:
-        _kill_pane(tmux, pane_id)
-        raise CLIExecutionError("interactive_terminal", proc.returncode, proc.stderr)
+    return proc.returncode == 0
 
 
 def _set_remain_on_exit(tmux: str, pane_id: str) -> None:
