@@ -42,7 +42,7 @@ default_timeout = 1800
 type = "local"
 ```
 
-`agent_runner = "interactive_terminal"` は `kitty` 上で通常 `claude` / `codex` を起動する
+`agent_runner = "interactive_terminal"` は tmux pane 上で通常 `claude` / `codex` を起動する
 runner backend。設定方法・CLI option・手動検証手順は
 [Interactive Terminal Runner ガイド](./interactive-terminal-runner.md) を参照。
 

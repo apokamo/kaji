@@ -666,8 +666,8 @@ class WorkflowRunner:
 
                             # comment fallback の lower bound（dispatch 直前に記録）
                             attempt_started_at = datetime.now(UTC)
-                            # Issue #224: runner backend を config.execution.agent_runner
-                            # で分岐。``interactive_terminal`` は kitty 上で通常 CLI を
+                            # Issue #224 / #230: runner backend を config.execution.agent_runner
+                            # で分岐。``interactive_terminal`` は tmux pane 上で通常 CLI を
                             # 起動し verdict.yaml を待つ（artifact-primary 経路で完了判定）。
                             # ``headless``（既定）は従来の CLI 起動経路をそのまま使う。
                             if self.config.execution.agent_runner == "interactive_terminal":
