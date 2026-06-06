@@ -1,9 +1,14 @@
 # Interactive Terminal Runner
 
-`kaji run` の agent step を、headless CLI ではなく `kitty` 上の通常 `claude` / `codex`
-対話 CLI で実行する runner backend（Issue #224）。agent が attempt directory の
+`kaji run` の agent step を、headless CLI ではなく **tmux pane 上**の通常 `claude` / `codex`
+対話 CLI で実行する runner backend（Issue #224 / tmux 化は #230）。agent が attempt directory の
 `verdict.yaml` を書いたら、kaji は artifact-primary 経路（[ADR 005](../adr/005-artifact-primary-verdict.md)）
 で verdict を読み、次 step へ進む。
+
+`kaji run` を tmux session 内で起動し、runner が `tmux split-window -h` で現ウィンドウの右に pane を
+追加して agent を起動するため、ディスプレイ無し環境（WSL2 / SSH / headless）でも `kaji run` の出力と
+agent を同一画面で並列に見られる。cleanup は `tmux kill-pane`、transcript は `tmux pipe-pane` で行い、
+`/proc` scan も util-linux `script(1)` 依存も無いため Linux / macOS で同一に動く。
 
 技術選定の経緯は [ADR 007](../adr/007-interactive-terminal-runner.md)、runner dispatch の
 位置づけは [ARCHITECTURE](../ARCHITECTURE.md) § Runner backend dispatch を参照。
@@ -11,20 +16,23 @@
 ## いつ使うか
 
 - 従量課金の headless 経路ではなく、通常コンソール利用に近い形で workflow を進めたいとき。
+- ディスプレイ無し環境（WSL2 / SSH / headless）でも `kaji run` 出力と agent を同一画面で並列に見たいとき。
 - step ごとに Claude / Codex の session を `--resume` / `codex resume` で引き継ぎたいとき。
-- agent の最終状態を verdict 後も terminal に残して確認したいとき（`close_on_verdict = false`）。
+- agent の最終状態を verdict 後も pane に残して確認したいとき（`close_on_verdict = false`）。
 
 `agent_runner` 未指定時は既存の `headless` runner が使われる。既存 workflow / CI の挙動は
 変わらない。
 
 ## 前提
 
-- `kitty` が PATH にあること。**無ければ step failure として fail-fast** する（自動 fallback /
-  他 terminal 探索はしない）。
+- **tmux session 内で `kaji run` していること**。runner は `$TMUX` を検査し、未設定なら step
+  failure として **fail-fast** する（自動 fallback / 他 terminal 探索はしない）。tmux 外で使いたい
+  場合は `--agent-runner headless` に戻す。
+- `$TMUX_PANE`（split の `-t` ターゲット）が設定されていること（tmux pane 内なら自動で入る）。
+- `tmux`（**>= 3.0**）が PATH にあること。pane option（`set-option -p` による per-pane
+  `remain-on-exit`）が tmux 3.0 で追加されたため。無ければ / 古ければ fail-fast。
 - `claude` / `codex` CLI が PATH にあること（runner が起動する agent）。
-- transcript（`terminal.log`）は **util-linux 互換の `script(1)` がある環境のみ** best-effort で
-  記録される。`script` 不在 / 非 util-linux（BSD・macOS native 等で GNU long option 非対応）の
-  環境では transcript 無しで agent を直接起動して継続する。
+- transcript（`terminal.log`）は `tmux pipe-pane` で **常時記録**される（OS 分岐なし）。
 - wrapper は agent 起動前に `NO_COLOR` を unset し、`COLORTERM=truecolor` を設定する。
   親 shell に `NO_COLOR=1` があっても、interactive terminal runner 内の Claude / Codex は
   truecolor 表示を使える。
@@ -52,7 +60,7 @@ interactive_terminal_close_on_verdict = true     # 既定 true
 |-----------|-----|------|------|
 | `default_timeout` | `int` | （必須） | step timeout 秒 |
 | `agent_runner` | `"headless"` \| `"interactive_terminal"` | `"headless"` | runner backend |
-| `interactive_terminal_close_on_verdict` | `bool` | `true` | verdict 検知後に terminal を閉じるか |
+| `interactive_terminal_close_on_verdict` | `bool` | `true` | verdict 検知後に pane を閉じるか |
 
 `agent_runner` が許可値以外なら **config load 時点で `ConfigLoadError`**（fail-fast）。
 
@@ -93,29 +101,46 @@ agent_runner = "interactive_terminal"
 ### 使用例
 
 ```bash
+# 必ず tmux session 内で実行する（$TMUX が無いと fail-fast）
+tmux new-session            # もしくは既存 tmux session 内
+
 # repository config で interactive_terminal を既定にして実行
 kaji run .kaji/wf/feature-development.yaml 224
 
-# この実行だけ interactive terminal + terminal を残す
+# この実行だけ interactive terminal + pane を残す
 kaji run .kaji/wf/feature-development.yaml 224 \
   --agent-runner interactive-terminal \
   --no-interactive-terminal-close-on-verdict
 
-# この実行だけ headless に戻す
+# この実行だけ headless に戻す（tmux 不要）
 kaji run .kaji/wf/feature-development.yaml 224 --agent-runner headless
 ```
 
 ## 振る舞い
 
-1. runner は `kitty --title kaji-<agent>-<step> --hold <wrapper.sh> <9 args>` を起動する。
-2. wrapper は最初に `cd <workdir>`（trusted な project worktree。`/tmp` や attempt directory を
-   cwd にしない）してから通常 `claude` / `codex` を起動する。
-3. wrapper は prompt 全文を埋め込まず、agent に「`prompt.txt` を読み、`verdict.yaml` を pure YAML
+1. runner は `tmux split-window -d -h -P -F '#{pane_id}' -t "$TMUX_PANE" <wrapper.sh + 8 args>` を
+   実行する。`-d` でフォーカスを奪わず、**`-h` で現ウィンドウの右**に pane を追加し、`-P -F '#{pane_id}'`
+   で生成された pane id を回収して以降のライフサイクルハンドルにする。
+2. runner は `tmux pipe-pane -o -t %id 'cat >> terminal.log'` で pane 出力を attempt directory の
+   `terminal.log` に記録する。
+3. wrapper は最初に `cd <workdir>`（trusted な project worktree。`/tmp` や attempt directory を
+   cwd にしない）してから通常 `claude` / `codex` を起動する（Codex には `--cd <workdir>` も渡す）。
+4. wrapper は prompt 全文を埋め込まず、agent に「`prompt.txt` を読み、`verdict.yaml` を pure YAML
    で書く」ことだけを指示する。
-4. runner は `verdict.yaml` を polling し、出現したら artifact-primary 経路で verdict を解決して
-   workflow を継続する。
-5. `interactive_terminal_close_on_verdict = true` なら、verdict 検知後に terminal / wrapper /
-   detached agent を best-effort cleanup する。timeout 経路でも cleanup してから fail-loud する。
+5. runner は `verdict.yaml` を polling し、出現したら artifact-primary 経路で verdict を解決して
+   workflow を継続する。**終了トリガは `verdict.yaml` の出現のみ**で、agent プロセスの自然終了は
+   待たない。pane の存命判定は `#{pane_dead}`（pane lookup 失敗も dead 扱い）で行う。
+6. `interactive_terminal_close_on_verdict = true` なら、verdict 検知後に `tmux kill-pane` で pane を
+   **best-effort cleanup** する。これは cleanup であり「poll≤Ns で kill」のようなレイテンシ契約は持たない
+   （次 step 開始後の kill も許容）。timeout 経路でも best-effort `kill-pane` してから fail-loud する。
+7. `interactive_terminal_close_on_verdict = false` なら、polling 前に
+   `tmux set-option -p -t %id remain-on-exit on` を設定し、verdict 後に `kill-pane` しない。pane は
+   agent 自然終了後も `[dead]`（`#{pane_dead}=1`）として残り、ユーザーが後から内容を確認できる。
+
+> **pane metadata（診断用）**: runner は verdict 検知時点の `#{pane_dead}` 等を
+> attempt directory の `pane-metadata.json` に snapshot 記録する。verdict-trigger 契約のもとでは
+> verdict 時点の agent CLI は生存しているため、この snapshot は通常 `#{pane_dead}=0` になる。
+> `[dead]` への遷移は `remain-on-exit on` が保証する最終状態で、metadata snapshot とは別物。
 
 ### session 継続
 
@@ -124,7 +149,8 @@ kaji run .kaji/wf/feature-development.yaml 224 --agent-runner headless
 - **Codex**: fresh run 後、runner は `terminal.log` の `codex resume <uuid>` を抽出する。取れない
   場合は `CODEX_HOME/sessions/**/*.jsonl` → `~/.codex/sessions/**/*.jsonl` を mtime 降順に走査し、
   当該 attempt の `prompt.txt` / `verdict.yaml` path を含む rollout file の UUID を採用する。
-  resume step では `codex resume <uuid>` で起動する。
+  resume step では `codex resume <uuid>` で起動する。session id 未解決の Codex fresh では、verdict
+  検知後に回収 grace（≤5s）を挟むことを許容する。
 
 ### effort の注意（Codex）
 
@@ -132,13 +158,14 @@ Codex の `reasoning.effort = minimal` は現 tool 構成（`image_gen` / `web_s
 実用最小値は `low`。runner / wrapper は effort を pass-through し、最小値の選択は workflow step /
 手動検証側の責務とする。
 
-## 手動検証手順（real kitty + real Claude / Codex）
+## 手動検証手順（real tmux + real Claude / Codex）
 
-> 自動テストは fake terminal の Large（`large_local`）で振る舞いを担保する。real `kitty` +
-> real `claude` / `codex` は **意図的に自動化しない**（実 API 課金・対話 CLI の自動化困難）ため、
-> 以下を手動で確認する。
+> 自動テストは fake bin + 実 tmux の Large（`large_local`）と fake tmux の Medium で振る舞いを
+> 担保する。real `claude` / `codex` のライブ疎通は **意図的に自動化しない**（実 API 課金・対話 CLI の
+> 自動化困難）ため、以下を手動で確認する。
 
-検証は **project worktree 内**で行う。`/tmp` や attempt directory を cwd にしない。
+検証は **project worktree 内**かつ **tmux session 内**で行う。`/tmp` や attempt directory を cwd に
+しない。
 
 検証 model / effort（安価なもの）:
 
@@ -147,32 +174,29 @@ Codex の `reasoning.effort = minimal` は現 tool 構成（`image_gen` / `web_s
 
 手順:
 
-1. `.kaji/config.local.toml` に `[execution] agent_runner = "interactive_terminal"` を設定する
+1. `tmux` session を起動する（`tmux new-session`、または既存 session 内）。
+2. `.kaji/config.local.toml` に `[execution] agent_runner = "interactive_terminal"` を設定する
    （または `kaji run ... --agent-runner interactive-terminal`）。
-2. 最小 workflow を `kaji run` で起動し、`kitty` が開いて通常 `claude` が起動することを確認する。
-3. agent が `verdict.yaml` を書いたら kaji が次 step へ進むことを確認する（**Claude fresh**）。
-4. resume step が同じ session id（`--resume <uuid>`）で起動されることを確認する（**Claude resume**）。
-5. Codex でも同様に fresh が `verdict.yaml` を書き（**Codex fresh**）、resume が `codex resume` で
+3. 最小 workflow を `kaji run` で起動し、**現ウィンドウの右に pane が開いて**通常 `claude` が起動する
+   ことを確認する。
+4. agent が `verdict.yaml` を書いたら kaji が次 step へ進むことを確認する（**Claude fresh**）。
+5. resume step が同じ session id（`--resume <uuid>`）で起動されることを確認する（**Claude resume**）。
+6. Codex でも同様に fresh が `verdict.yaml` を書き（**Codex fresh**）、resume が `codex resume` で
    起動される（**Codex resume**）ことを確認する。
-6. `interactive_terminal_close_on_verdict = true` で verdict 後に terminal が残らないこと、
-   `false`（`--no-interactive-terminal-close-on-verdict`）で terminal が残ることを確認する。
-7. `terminal.log` が attempt directory に残ることを確認する。
-
-### transcript（`terminal.log`）の OS 別挙動
-
-- **Linux / util-linux `script(1)` 環境**: `terminal.log` に transcript（ANSI 制御文字を含むが
-  検証用途には使える）が記録される。手順 7 の成功条件に含める。
-- **macOS native（util-linux script 非対応）/ `script` 不在**: transcript は記録されない。
-  wrapper は agent を直接起動して継続する。この環境では手順 7（`terminal.log` 取得）を成功条件に
-  **含めない**。
+7. `interactive_terminal_close_on_verdict = true` で verdict 後に pane が消える（`kill-pane`）こと、
+   `false`（`--no-interactive-terminal-close-on-verdict`）で `[dead]` pane が残ることを確認する。
+8. `terminal.log` が attempt directory に記録されることを確認する（OS を問わず常時記録）。
 
 ## トラブルシュート
 
 | 症状 | 原因 / 対処 |
 |------|-------------|
-| `CLI 'kitty' not found` で即終了 | `kitty` を PATH に入れるか `--agent-runner headless` で実行する |
+| `CLI 'tmux' not found` で即終了 | `tmux` を PATH に入れるか `--agent-runner headless` で実行する |
+| `requires tmux. Run kaji run inside tmux` で即終了 | tmux session の外で実行している。`tmux new-session` 内で再実行するか `--agent-runner headless` |
+| `requires tmux >= 3.0` で即終了 | tmux が古い。3.0 以上へ更新する（pane option / `#{pane_dead}` / `split-window -P -F` が 3.0 を要求） |
+| `TMUX_PANE is not set` で即終了 | tmux pane 内で実行していない。通常の tmux session なら自動設定される |
 | step が timeout する | agent が `verdict.yaml` を書いていない。prompt の verdict 書き出し指示と path を確認 |
-| `terminal.log` が空 / 無い | util-linux `script(1)` が無い環境。transcript は best-effort（取得されないのは正常） |
+| pane が verdict 前に消える / `tmux pane exited before writing verdict.yaml` | agent が起動失敗。`terminal.log` の tail（エラー文面に添付）を確認 |
 | 色が出ない | wrapper は `NO_COLOR` unset / `COLORTERM=truecolor` を設定する。端末側の color support と agent 側設定も確認 |
 | Codex resume が効かない | `terminal.log` に resume 行が出ず、session store fallback も marker 不一致。`CODEX_HOME` を確認 |
 | CLI が trust / permission 確認で止まる | cwd が project 外（`/tmp` 等）。workdir を project worktree に固定する |

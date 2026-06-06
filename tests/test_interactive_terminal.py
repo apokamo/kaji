@@ -1,13 +1,15 @@
-"""Tests for the interactive terminal runner (Issue #224).
+"""Tests for the tmux interactive terminal runner (Issue #230).
 
-Covers the runner argv builder, kitty fail-fast, session-id resolution
-(Claude launch UUID / Codex terminal.log + session store fallback), verdict
-polling, close-on-verdict cleanup, timeout, and the wrapper shell contract
-(arg order, cwd, agent command lines, transcript branching).
+Covers the tmux split-window argv builder (``-h`` right split), fail-fast
+validation (``tmux`` / ``$TMUX`` / ``$TMUX_PANE`` / ``tmux -V``), ``#{pane_dead}``
+liveness mapping, verdict polling with ``kill-pane`` / ``remain-on-exit``
+cleanup, pane metadata snapshots, Codex session-id resolution, the wrapper
+shell contract, and a real-tmux end-to-end pass.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -19,7 +21,8 @@ import pytest
 
 from kaji_harness.errors import CLIExecutionError, CLINotFoundError, StepTimeoutError
 from kaji_harness.interactive_terminal import (
-    _build_kitty_argv,
+    _build_tmux_split_argv,
+    _pane_dead,
     execute_interactive_terminal,
 )
 from kaji_harness.models import Step
@@ -34,6 +37,11 @@ WRAPPER = (
 )
 
 _PASS_VERDICT = "status: PASS\nreason: ok\nevidence: e\nsuggestion: ''\n"
+# display-message format response for `_write_pane_metadata` (tab-joined).
+_PANE_METADATA = (
+    "pane_id=%99\tpane_pid=123\tpane_current_command=bash\t"
+    "pane_dead=0\tpane_dead_status=\tpane_dead_signal=\n"
+)
 
 
 def _step(
@@ -42,22 +50,68 @@ def _step(
     return Step(id=step_id, skill="issue-design", agent=agent, model=model, effort=effort)
 
 
-@pytest.mark.small
-class TestBuildKittyArgv:
-    """`_build_kitty_argv` produces the exact argv expected by the wrapper."""
+def _completed(
+    stdout: str = "", stderr: str = "", returncode: int = 0
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
 
-    def test_title_hold_wrapper_and_nine_args_in_order(self, tmp_path: Path) -> None:
+
+def _make_fake_tmux(
+    *,
+    tmux: str = "/usr/bin/tmux",
+    version: str = "tmux 3.4\n",
+    pane_id: str = "%99",
+    pane_dead: str = "0",
+    pipe_returncode: int = 0,
+    on_split: object = None,
+    calls: list[list[str]] | None = None,
+):
+    """Build a ``subprocess.run`` replacement that fakes a tmux server.
+
+    ``on_split`` (a no-arg callable) fires when ``split-window`` is seen so the
+    test can write ``verdict.yaml`` / ``terminal.log`` at pane-launch time.
+    """
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if calls is not None:
+            calls.append(argv)
+        if argv == [tmux, "-V"]:
+            return _completed(stdout=version)
+        if argv[:2] == [tmux, "split-window"]:
+            if on_split is not None:
+                on_split()  # type: ignore[operator]
+            return _completed(stdout=f"{pane_id}\n")
+        if argv[:2] == [tmux, "pipe-pane"]:
+            return _completed(returncode=pipe_returncode, stderr="can't find pane")
+        if argv[:2] == [tmux, "set-option"]:
+            return _completed()
+        if argv[:2] == [tmux, "display-message"]:
+            if argv[-1] == "#{pane_dead}":
+                return _completed(stdout=f"{pane_dead}\n")
+            return _completed(
+                stdout=_PANE_METADATA.replace("pane_dead=0", f"pane_dead={pane_dead}")
+            )
+        if argv[:2] == [tmux, "kill-pane"]:
+            return _completed()
+        raise AssertionError(f"unexpected tmux call: {argv}")
+
+    return fake_run
+
+
+@pytest.mark.small
+class TestBuildTmuxSplitArgv:
+    """tmux ``split-window`` command construction (MF2: right split via ``-h``)."""
+
+    def test_split_window_prefix_includes_dash_h_and_pane_id_format(self, tmp_path: Path) -> None:
         prompt = tmp_path / "prompt.txt"
         verdict = tmp_path / "verdict.yaml"
-        terminal_log = tmp_path / "terminal.log"
-        argv = _build_kitty_argv(
-            "/usr/bin/kitty",
+        argv = _build_tmux_split_argv(
+            "/usr/bin/tmux",
             WRAPPER,
+            target_pane="%7",
             agent="claude",
-            step_id="design",
             prompt_path=prompt,
             verdict_path=verdict,
-            terminal_log=terminal_log,
             workdir=tmp_path,
             resume_session_id="",
             launch_session_id="11111111-1111-4111-8111-111111111111",
@@ -65,53 +119,39 @@ class TestBuildKittyArgv:
             effort="low",
         )
 
-        assert argv[:5] == [
-            "/usr/bin/kitty",
-            "--title",
-            "kaji-claude-design",
-            "--hold",
-            str(WRAPPER),
+        # Exact prefix: `-h` after `-d` puts the new pane to the user's right.
+        assert argv[:9] == [
+            "/usr/bin/tmux",
+            "split-window",
+            "-d",
+            "-h",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-t",
+            "%7",
         ]
-        # The 9 wrapper args follow in Wrapper 契約 order.
-        assert argv[5:] == [
-            "claude",
-            str(prompt),
-            str(verdict),
-            str(terminal_log),
-            str(tmp_path),
-            "",
-            "11111111-1111-4111-8111-111111111111",
-            "haiku",
-            "low",
-        ]
-
-    def test_title_uses_agent_and_step_id(self, tmp_path: Path) -> None:
-        argv = _build_kitty_argv(
-            "kitty",
-            WRAPPER,
-            agent="codex",
-            step_id="review",
-            prompt_path=tmp_path / "prompt.txt",
-            verdict_path=tmp_path / "verdict.yaml",
-            terminal_log=tmp_path / "terminal.log",
-            workdir=tmp_path,
-            resume_session_id="",
-            launch_session_id="",
-            model="",
-            effort="",
-        )
-        assert argv[1:3] == ["--title", "kaji-codex-review"]
+        # The single trailing argument is the shlex-quoted wrapper command.
+        assert len(argv) == 10
+        command = argv[9]
+        assert str(WRAPPER) in command
+        assert "claude" in command
+        assert str(prompt) in command
+        assert str(verdict) in command
+        assert "11111111-1111-4111-8111-111111111111" in command
+        assert "haiku" in command
+        assert "low" in command
 
 
 @pytest.mark.small
 class TestRunnerEntryValidation:
-    """Fail-fast / launch-session-id rules at the runner entry."""
+    """Fail-fast validation before any tmux pane is launched."""
 
-    def test_missing_kitty_fails_loud(self, tmp_path: Path) -> None:
+    def test_missing_tmux_fails_loud(self, tmp_path: Path) -> None:
         prompt = tmp_path / "prompt.txt"
         prompt.write_text("prompt", encoding="utf-8")
         with patch("kaji_harness.interactive_terminal.shutil.which", return_value=None):
-            with pytest.raises(CLINotFoundError, match="kitty"):
+            with pytest.raises(CLINotFoundError, match="tmux"):
                 execute_interactive_terminal(
                     step=_step("claude"),
                     prompt_path=prompt,
@@ -120,10 +160,71 @@ class TestRunnerEntryValidation:
                     timeout=5,
                 )
 
-    def test_rejects_unsupported_agent(self, tmp_path: Path) -> None:
+    def test_requires_running_inside_tmux(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         prompt = tmp_path / "prompt.txt"
         prompt.write_text("prompt", encoding="utf-8")
-        with patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/kitty"):
+        monkeypatch.delenv("TMUX", raising=False)
+        monkeypatch.delenv("TMUX_PANE", raising=False)
+        with patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"):
+            with pytest.raises(CLINotFoundError, match="inside tmux"):
+                execute_interactive_terminal(
+                    step=_step("claude"),
+                    prompt_path=prompt,
+                    verdict_path=tmp_path / "verdict.yaml",
+                    workdir=tmp_path,
+                    timeout=5,
+                )
+
+    def test_requires_tmux_pane(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        prompt = tmp_path / "prompt.txt"
+        prompt.write_text("prompt", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.delenv("TMUX_PANE", raising=False)
+        with patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"):
+            with pytest.raises(CLINotFoundError, match="TMUX_PANE"):
+                execute_interactive_terminal(
+                    step=_step("claude"),
+                    prompt_path=prompt,
+                    verdict_path=tmp_path / "verdict.yaml",
+                    workdir=tmp_path,
+                    timeout=5,
+                )
+
+    def test_tmux_version_below_minimum_fails_loud(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        prompt = tmp_path / "prompt.txt"
+        prompt.write_text("prompt", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+
+        def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            assert argv == ["/usr/bin/tmux", "-V"]
+            return _completed(stdout="tmux 2.9\n")
+
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=fake_run),
+        ):
+            with pytest.raises(CLINotFoundError, match="tmux >= 3.0"):
+                execute_interactive_terminal(
+                    step=_step("claude"),
+                    prompt_path=prompt,
+                    verdict_path=tmp_path / "verdict.yaml",
+                    workdir=tmp_path,
+                    timeout=5,
+                )
+
+    def test_rejects_unsupported_agent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        prompt = tmp_path / "prompt.txt"
+        prompt.write_text("prompt", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        with patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"):
             with pytest.raises(ValueError, match="does not support agent"):
                 execute_interactive_terminal(
                     step=Step(id="s", skill="x", agent="gemini"),
@@ -133,8 +234,12 @@ class TestRunnerEntryValidation:
                     timeout=5,
                 )
 
-    def test_missing_prompt_fails_loud(self, tmp_path: Path) -> None:
-        with patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/kitty"):
+    def test_missing_prompt_fails_loud(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        with patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"):
             with pytest.raises(FileNotFoundError, match="prompt.txt"):
                 execute_interactive_terminal(
                     step=_step("claude"),
@@ -144,32 +249,116 @@ class TestRunnerEntryValidation:
                     timeout=5,
                 )
 
-    def test_claude_fresh_generates_launch_session_id(self, tmp_path: Path) -> None:
+
+@pytest.mark.small
+class TestPaneDeadMapping:
+    """`_pane_dead` maps tmux ``#{pane_dead}`` (and lookup failure) to a bool."""
+
+    def test_pane_dead_true_when_value_is_one(self) -> None:
+        with patch.object(subprocess, "run", return_value=_completed(stdout="1\n")):
+            assert _pane_dead("/usr/bin/tmux", "%99") is True
+
+    def test_pane_dead_false_when_value_is_zero(self) -> None:
+        with patch.object(subprocess, "run", return_value=_completed(stdout="0\n")):
+            assert _pane_dead("/usr/bin/tmux", "%99") is False
+
+    def test_pane_lookup_failure_is_treated_as_dead(self) -> None:
+        with patch.object(
+            subprocess, "run", return_value=_completed(stderr="can't find pane", returncode=1)
+        ):
+            assert _pane_dead("/usr/bin/tmux", "%99") is True
+
+
+@pytest.mark.medium
+class TestSessionIdLaunch:
+    """Resume / launch session-id rules threaded into the wrapper command."""
+
+    def _run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, step: Step, **kwargs: object
+    ) -> tuple[object, list[list[str]]]:
         prompt = tmp_path / "prompt.txt"
         verdict = tmp_path / "verdict.yaml"
         prompt.write_text("prompt", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
         calls: list[list[str]] = []
+        fake_run = _make_fake_tmux(
+            calls=calls, on_split=lambda: verdict.write_text(_PASS_VERDICT, encoding="utf-8")
+        )
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=fake_run),
+        ):
+            result = execute_interactive_terminal(
+                step=step,
+                prompt_path=prompt,
+                verdict_path=verdict,
+                workdir=tmp_path,
+                timeout=5,
+                **kwargs,  # type: ignore[arg-type]
+            )
+        return result, calls
 
-        class FakePopen:
-            pid = 12345
+    def _split_command(self, calls: list[list[str]]) -> str:
+        for call in calls:
+            if call[:2] == ["/usr/bin/tmux", "split-window"]:
+                return call[-1]
+        raise AssertionError("split-window was never called")
 
-            def __init__(self, argv: list[str], cwd: Path, start_new_session: bool) -> None:
-                calls.append(argv)
-                assert cwd == tmp_path
-                assert start_new_session is True
-                verdict.write_text(_PASS_VERDICT, encoding="utf-8")
+    def test_claude_fresh_generates_launch_session_id(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        with patch(
+            "kaji_harness.interactive_terminal.uuid.uuid4",
+            return_value=uuid.UUID("11111111-1111-4111-8111-111111111111"),
+        ):
+            result, calls = self._run(tmp_path, monkeypatch, _step("claude", model="haiku"))
+        assert result.full_output == ""
+        assert result.session_id == "11111111-1111-4111-8111-111111111111"
+        assert "11111111-1111-4111-8111-111111111111" in self._split_command(calls)
 
-            def poll(self) -> int:
-                return 0
+    def test_resume_passes_session_id_without_launch_uuid(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result, calls = self._run(
+            tmp_path, monkeypatch, _step("claude", step_id="fix"), session_id="resume-session"
+        )
+        assert result.session_id == "resume-session"
+        assert "resume-session" in self._split_command(calls)
+
+    def test_codex_fresh_does_not_generate_launch_uuid(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result, calls = self._run(tmp_path, monkeypatch, _step("codex"))
+        # Codex mints its own id; the runner resolves it post-verdict (here the
+        # fake never prints one, so the resolved id is None).
+        assert result.session_id is None
+
+
+@pytest.mark.medium
+class TestRunnerPaneLifecycle:
+    """Pane launch, transcript pipe, verdict polling, and cleanup."""
+
+    def test_verdict_kills_pane_writes_metadata_and_returns_result(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        prompt = tmp_path / "prompt.txt"
+        verdict = tmp_path / "verdict.yaml"
+        prompt.write_text("prompt", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        calls: list[list[str]] = []
+        fake_run = _make_fake_tmux(
+            calls=calls, on_split=lambda: verdict.write_text(_PASS_VERDICT, encoding="utf-8")
+        )
 
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/kitty"),
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
             patch(
                 "kaji_harness.interactive_terminal.uuid.uuid4",
                 return_value=uuid.UUID("11111111-1111-4111-8111-111111111111"),
             ),
-            patch.object(subprocess, "Popen", FakePopen),
-            patch("kaji_harness.interactive_terminal._close_terminal") as close,
+            patch.object(subprocess, "run", side_effect=fake_run),
         ):
             result = execute_interactive_terminal(
                 step=_step("claude", model="haiku", effort="low"),
@@ -181,97 +370,217 @@ class TestRunnerEntryValidation:
 
         assert result.full_output == ""
         assert result.session_id == "11111111-1111-4111-8111-111111111111"
-        close.assert_called_once()
-        # The 9 wrapper args are the kitty argv tail. Last 4 = resume, launch,
-        # model, effort: Claude fresh leaves resume empty and gets the UUID.
-        assert calls[0][-4:] == ["", "11111111-1111-4111-8111-111111111111", "haiku", "low"]
-        assert calls[0][-9:-5] == [
-            "claude",
-            str(prompt),
-            str(verdict),
-            str(tmp_path / "terminal.log"),
-        ]
+        assert any(call[:2] == ["/usr/bin/tmux", "pipe-pane"] for call in calls)
+        assert ["/usr/bin/tmux", "kill-pane", "-t", "%99"] in calls
+        metadata = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
+        assert metadata["pane_id"] == "%99"
+        # Verdict-trigger contract: the agent CLI is still alive at verdict time.
+        assert metadata["pane_dead"] == "0"
 
-    def test_resume_passes_session_id_and_no_launch_uuid(self, tmp_path: Path) -> None:
+    def test_close_on_verdict_false_sets_remain_on_exit_and_skips_kill(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         prompt = tmp_path / "prompt.txt"
         verdict = tmp_path / "verdict.yaml"
         prompt.write_text("prompt", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
         calls: list[list[str]] = []
-
-        class FakePopen:
-            pid = 12345
-
-            def __init__(self, argv: list[str], cwd: Path, start_new_session: bool) -> None:
-                calls.append(argv)
-                verdict.write_text(_PASS_VERDICT, encoding="utf-8")
-
-            def poll(self) -> int:
-                return 0
+        fake_run = _make_fake_tmux(
+            calls=calls, on_split=lambda: verdict.write_text(_PASS_VERDICT, encoding="utf-8")
+        )
 
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/kitty"),
-            patch.object(subprocess, "Popen", FakePopen),
-            patch("kaji_harness.interactive_terminal._close_terminal"),
-        ):
-            result = execute_interactive_terminal(
-                step=_step("claude", step_id="fix"),
-                prompt_path=prompt,
-                verdict_path=verdict,
-                workdir=tmp_path,
-                timeout=5,
-                session_id="resume-session",
-            )
-
-        assert result.session_id == "resume-session"
-        # resume id (7th), launch id (8th, empty), model (empty), effort (empty)
-        assert calls[0][-4:] == ["resume-session", "", "", ""]
-
-    def test_codex_fresh_does_not_generate_launch_uuid(self, tmp_path: Path) -> None:
-        prompt = tmp_path / "prompt.txt"
-        verdict = tmp_path / "verdict.yaml"
-        prompt.write_text("prompt", encoding="utf-8")
-        calls: list[list[str]] = []
-
-        class FakePopen:
-            pid = 12345
-
-            def __init__(self, argv: list[str], cwd: Path, start_new_session: bool) -> None:
-                calls.append(argv)
-                verdict.write_text(_PASS_VERDICT, encoding="utf-8")
-
-            def poll(self) -> int:
-                return 0
-
-        with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/kitty"),
-            patch.object(subprocess, "Popen", FakePopen),
-            patch("kaji_harness.interactive_terminal._close_terminal"),
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=fake_run),
         ):
             execute_interactive_terminal(
-                step=_step("codex"),
+                step=_step("claude"),
+                prompt_path=prompt,
+                verdict_path=verdict,
+                workdir=tmp_path,
+                timeout=5,
+                close_on_verdict=False,
+            )
+
+        assert ["/usr/bin/tmux", "set-option", "-p", "-t", "%99", "remain-on-exit", "on"] in calls
+        assert not any(call[:2] == ["/usr/bin/tmux", "kill-pane"] for call in calls)
+        # metadata records the actual #{pane_dead} value at verdict detection
+        # (0 under the verdict-trigger contract), not the eventual [dead] state.
+        metadata = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
+        assert metadata["pane_dead"] == "0"
+        assert metadata["close_on_verdict"] is False
+
+    def test_pipe_pane_records_transcript(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        prompt = tmp_path / "prompt.txt"
+        verdict = tmp_path / "verdict.yaml"
+        prompt.write_text("prompt", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        calls: list[list[str]] = []
+        fake_run = _make_fake_tmux(
+            calls=calls, on_split=lambda: verdict.write_text(_PASS_VERDICT, encoding="utf-8")
+        )
+
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=fake_run),
+        ):
+            execute_interactive_terminal(
+                step=_step("claude"),
                 prompt_path=prompt,
                 verdict_path=verdict,
                 workdir=tmp_path,
                 timeout=5,
             )
 
-        # Codex never gets a runner-minted launch UUID: 7th (resume) and 8th
-        # (launch) wrapper args are both empty.
-        assert calls[0][-4:] == ["", "", "", ""]
+        pipe_calls = [call for call in calls if call[:2] == ["/usr/bin/tmux", "pipe-pane"]]
+        assert len(pipe_calls) == 1
+        assert pipe_calls[0][:5] == ["/usr/bin/tmux", "pipe-pane", "-o", "-t", "%99"]
+        assert str(tmp_path / "terminal.log") in pipe_calls[0][-1]
+
+    def test_pipe_pane_failure_with_verdict_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A short-running agent can write verdict.yaml and exit before the pipe
+        # attaches; tmux then rejects pipe-pane. A present verdict must still be
+        # reported as success rather than masked by the transcript setup failure.
+        prompt = tmp_path / "prompt.txt"
+        verdict = tmp_path / "verdict.yaml"
+        prompt.write_text("prompt", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        calls: list[list[str]] = []
+        fake_run = _make_fake_tmux(
+            calls=calls,
+            pipe_returncode=1,
+            on_split=lambda: verdict.write_text(_PASS_VERDICT, encoding="utf-8"),
+        )
+
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "kaji_harness.interactive_terminal.uuid.uuid4",
+                return_value=uuid.UUID("11111111-1111-4111-8111-111111111111"),
+            ),
+            patch.object(subprocess, "run", side_effect=fake_run),
+        ):
+            result = execute_interactive_terminal(
+                step=_step("claude"),
+                prompt_path=prompt,
+                verdict_path=verdict,
+                workdir=tmp_path,
+                timeout=5,
+            )
+
+        assert result.session_id == "11111111-1111-4111-8111-111111111111"
+
+    def test_pipe_pane_failure_without_verdict_fails_loud(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # pipe-pane rejected and no verdict present → genuine launch failure.
+        prompt = tmp_path / "prompt.txt"
+        prompt.write_text("prompt", encoding="utf-8")
+        (tmp_path / "terminal.log").write_text("agent failed at launch\n", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        calls: list[list[str]] = []
+        fake_run = _make_fake_tmux(calls=calls, pipe_returncode=1)
+
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=fake_run),
+        ):
+            with pytest.raises(CLIExecutionError) as excinfo:
+                execute_interactive_terminal(
+                    step=_step("claude"),
+                    prompt_path=prompt,
+                    verdict_path=tmp_path / "verdict.yaml",
+                    workdir=tmp_path,
+                    timeout=5,
+                )
+
+        assert "agent failed at launch" in excinfo.value.stderr
+        # The orphaned pane is cleaned up before failing loud.
+        assert ["/usr/bin/tmux", "kill-pane", "-t", "%99"] in calls
+
+    def test_early_pane_exit_fails_loud(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        prompt = tmp_path / "prompt.txt"
+        prompt.write_text("prompt", encoding="utf-8")
+        (tmp_path / "terminal.log").write_text("agent failed at launch\n", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        fake_run = _make_fake_tmux(pane_dead="1")  # pane dead, no verdict ever
+
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=fake_run),
+        ):
+            with pytest.raises(CLIExecutionError) as excinfo:
+                execute_interactive_terminal(
+                    step=_step("claude"),
+                    prompt_path=prompt,
+                    verdict_path=tmp_path / "verdict.yaml",
+                    workdir=tmp_path,
+                    timeout=600,
+                )
+        assert "agent failed at launch" in excinfo.value.stderr
+
+    def test_timeout_raises_and_kills_pane(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        prompt = tmp_path / "prompt.txt"
+        prompt.write_text("prompt", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        calls: list[list[str]] = []
+        fake_run = _make_fake_tmux(calls=calls)  # never writes verdict; pane alive
+
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=fake_run),
+            patch("kaji_harness.interactive_terminal.time.sleep", return_value=None),
+            patch(
+                "kaji_harness.interactive_terminal.time.monotonic",
+                side_effect=[0.0, 0.5, 2.0],
+            ),
+        ):
+            with pytest.raises(StepTimeoutError):
+                execute_interactive_terminal(
+                    step=_step("claude"),
+                    prompt_path=prompt,
+                    verdict_path=tmp_path / "verdict.yaml",
+                    workdir=tmp_path,
+                    timeout=1,
+                )
+        assert ["/usr/bin/tmux", "kill-pane", "-t", "%99"] in calls
 
 
-@pytest.mark.small
+@pytest.mark.medium
 class TestCodexSessionIdExtraction:
     """Codex session id from terminal.log, with session-store fallback."""
 
-    def _run(self, tmp_path: Path, popen_cls: type) -> str | None:
+    def _run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        on_split: object,
+    ) -> str | None:
         prompt = tmp_path / "prompt.txt"
         verdict = tmp_path / "verdict.yaml"
         prompt.write_text("prompt", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        # pane reported dead so the codex session-id grace loop returns at once.
+        fake_run = _make_fake_tmux(pane_dead="1", on_split=on_split)
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/kitty"),
-            patch.object(subprocess, "Popen", popen_cls),
-            patch("kaji_harness.interactive_terminal._close_terminal"),
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=fake_run),
         ):
             result = execute_interactive_terminal(
                 step=_step("codex", step_id="review"),
@@ -282,24 +591,23 @@ class TestCodexSessionIdExtraction:
             )
         return result.session_id
 
-    def test_extracts_from_terminal_log(self, tmp_path: Path) -> None:
+    def test_extracts_from_terminal_log(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         verdict = tmp_path / "verdict.yaml"
         terminal_log = tmp_path / "terminal.log"
 
-        class FakePopen:
-            pid = 1
+        def on_split() -> None:
+            verdict.write_text(_PASS_VERDICT, encoding="utf-8")
+            terminal_log.write_text(
+                "To continue, run codex resume 22222222-2222-4222-8222-222222222222\n",
+                encoding="utf-8",
+            )
 
-            def __init__(self, argv: list[str], cwd: Path, start_new_session: bool) -> None:
-                verdict.write_text(_PASS_VERDICT, encoding="utf-8")
-                terminal_log.write_text(
-                    "To continue, run codex resume 22222222-2222-4222-8222-222222222222\n",
-                    encoding="utf-8",
-                )
-
-            def poll(self) -> int:
-                return 0
-
-        assert self._run(tmp_path, FakePopen) == "22222222-2222-4222-8222-222222222222"
+        assert (
+            self._run(tmp_path, monkeypatch, on_split=on_split)
+            == "22222222-2222-4222-8222-222222222222"
+        )
 
     def test_session_store_fallback_when_marker_matches(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -318,16 +626,14 @@ class TestCodexSessionIdExtraction:
         )
         monkeypatch.setenv("CODEX_HOME", str(codex_home))
 
-        class FakePopen:
-            pid = 1
-
-            def __init__(self, argv: list[str], cwd: Path, start_new_session: bool) -> None:
-                verdict.write_text(_PASS_VERDICT, encoding="utf-8")
-
-            def poll(self) -> int:
-                return 0
-
-        assert self._run(tmp_path, FakePopen) == "44444444-4444-4444-8444-444444444444"
+        assert (
+            self._run(
+                tmp_path,
+                monkeypatch,
+                on_split=lambda: verdict.write_text(_PASS_VERDICT, encoding="utf-8"),
+            )
+            == "44444444-4444-4444-8444-444444444444"
+        )
 
     def test_session_store_fallback_ignores_unrelated_rollout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -336,195 +642,25 @@ class TestCodexSessionIdExtraction:
         codex_home = tmp_path / "codex-home"
         sessions_dir = codex_home / "sessions" / "2026" / "06" / "05"
         sessions_dir.mkdir(parents=True)
-        # A rollout that does NOT reference this attempt's prompt/verdict path.
         other = (
             sessions_dir / "rollout-2026-06-05T00-00-00-99999999-9999-4999-8999-999999999999.jsonl"
         )
         other.write_text('{"type":"user","text":"unrelated session"}\n', encoding="utf-8")
         monkeypatch.setenv("CODEX_HOME", str(codex_home))
 
-        class FakePopen:
-            pid = 1
-
-            def __init__(self, argv: list[str], cwd: Path, start_new_session: bool) -> None:
-                verdict.write_text(_PASS_VERDICT, encoding="utf-8")
-
-            def poll(self) -> int:
-                return 0
-
-        assert self._run(tmp_path, FakePopen) is None
-
-
-@pytest.mark.medium
-class TestRunnerVerdictAndCleanup:
-    """Verdict polling, close-on-verdict cleanup, and timeout cleanup."""
-
-    def test_verdict_appearance_returns_cli_result(self, tmp_path: Path) -> None:
-        prompt = tmp_path / "prompt.txt"
-        verdict = tmp_path / "verdict.yaml"
-        prompt.write_text("prompt", encoding="utf-8")
-
-        class FakePopen:
-            pid = 1
-
-            def __init__(self, argv: list[str], cwd: Path, start_new_session: bool) -> None:
-                verdict.write_text(_PASS_VERDICT, encoding="utf-8")
-
-            def poll(self) -> int:
-                return 0
-
-        with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/kitty"),
-            patch.object(subprocess, "Popen", FakePopen),
-            patch("kaji_harness.interactive_terminal._close_terminal"),
-        ):
-            result = execute_interactive_terminal(
-                step=_step("claude"),
-                prompt_path=prompt,
-                verdict_path=verdict,
-                workdir=tmp_path,
-                timeout=5,
+        assert (
+            self._run(
+                tmp_path,
+                monkeypatch,
+                on_split=lambda: verdict.write_text(_PASS_VERDICT, encoding="utf-8"),
             )
-        assert result.full_output == ""
-        assert verdict.exists()
-
-    def test_close_on_verdict_true_calls_cleanup(self, tmp_path: Path) -> None:
-        prompt = tmp_path / "prompt.txt"
-        verdict = tmp_path / "verdict.yaml"
-        prompt.write_text("prompt", encoding="utf-8")
-
-        class FakePopen:
-            pid = 1
-
-            def __init__(self, argv: list[str], cwd: Path, start_new_session: bool) -> None:
-                verdict.write_text(_PASS_VERDICT, encoding="utf-8")
-
-            def poll(self) -> int:
-                return 0
-
-        with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/kitty"),
-            patch.object(subprocess, "Popen", FakePopen),
-            patch("kaji_harness.interactive_terminal._close_terminal") as close,
-        ):
-            execute_interactive_terminal(
-                step=_step("claude"),
-                prompt_path=prompt,
-                verdict_path=verdict,
-                workdir=tmp_path,
-                timeout=5,
-                close_on_verdict=True,
-            )
-        close.assert_called_once()
-
-    def test_close_on_verdict_false_skips_cleanup(self, tmp_path: Path) -> None:
-        prompt = tmp_path / "prompt.txt"
-        verdict = tmp_path / "verdict.yaml"
-        prompt.write_text("prompt", encoding="utf-8")
-
-        class FakePopen:
-            pid = 1
-
-            def __init__(self, argv: list[str], cwd: Path, start_new_session: bool) -> None:
-                verdict.write_text(_PASS_VERDICT, encoding="utf-8")
-
-            def poll(self) -> None:
-                return None
-
-        with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/kitty"),
-            patch.object(subprocess, "Popen", FakePopen),
-            patch("kaji_harness.interactive_terminal._close_terminal") as close,
-        ):
-            execute_interactive_terminal(
-                step=_step("claude"),
-                prompt_path=prompt,
-                verdict_path=verdict,
-                workdir=tmp_path,
-                timeout=5,
-                close_on_verdict=False,
-            )
-        close.assert_not_called()
-
-    def test_timeout_raises_and_cleans_up(self, tmp_path: Path) -> None:
-        prompt = tmp_path / "prompt.txt"
-        prompt.write_text("prompt", encoding="utf-8")
-
-        class FakePopen:
-            pid = 1
-
-            def __init__(self, argv: list[str], cwd: Path, start_new_session: bool) -> None:
-                pass  # never writes verdict
-
-            def poll(self) -> None:
-                return None  # still alive: drives the loop to the deadline
-
-        with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/kitty"),
-            patch.object(subprocess, "Popen", FakePopen),
-            patch("kaji_harness.interactive_terminal.time.sleep", return_value=None),
-            patch(
-                "kaji_harness.interactive_terminal.time.monotonic",
-                side_effect=[0.0, 0.5, 2.0],
-            ),
-            patch("kaji_harness.interactive_terminal._close_terminal") as close,
-        ):
-            with pytest.raises(StepTimeoutError):
-                execute_interactive_terminal(
-                    step=_step("claude"),
-                    prompt_path=prompt,
-                    verdict_path=tmp_path / "verdict.yaml",
-                    workdir=tmp_path,
-                    timeout=1,
-                )
-        close.assert_called_once()
-
-    def test_early_terminal_exit_fails_loud_before_timeout(self, tmp_path: Path) -> None:
-        prompt = tmp_path / "prompt.txt"
-        prompt.write_text("prompt", encoding="utf-8")
-        terminal_log = prompt.parent / "terminal.log"
-        terminal_log.write_text("kitty: cannot open display\n", encoding="utf-8")
-
-        class FakePopen:
-            pid = 1
-
-            def __init__(self, argv: list[str], cwd: Path, start_new_session: bool) -> None:
-                pass  # never writes verdict; exits immediately
-
-            def poll(self) -> int:
-                return 1  # already exited non-zero before any verdict
-
-        with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/kitty"),
-            patch.object(subprocess, "Popen", FakePopen),
-            patch("kaji_harness.interactive_terminal.time.sleep", return_value=None),
-        ):
-            with pytest.raises(CLIExecutionError) as excinfo:
-                execute_interactive_terminal(
-                    step=_step("claude"),
-                    prompt_path=prompt,
-                    verdict_path=tmp_path / "verdict.yaml",
-                    workdir=tmp_path,
-                    timeout=600,
-                )
-        assert excinfo.value.returncode == 1
-        assert "cannot open display" in excinfo.value.stderr
-
-
-def _fake_bin_with(tmp_path: Path, *tools: str) -> Path:
-    """Create a bin dir symlinking real tools (so we can control PATH)."""
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir(exist_ok=True)
-    for tool in tools:
-        real = shutil.which(tool)
-        assert real is not None, f"required tool not found on host: {tool}"
-        (fake_bin / tool).symlink_to(real)
-    return fake_bin
+            is None
+        )
 
 
 @pytest.mark.medium
 class TestInteractiveTerminalWrapper:
-    """Wrapper shell contract: cwd, arg order, agent commands, transcript branch."""
+    """Wrapper shell contract: cwd, arg order, and agent command lines (8 args)."""
 
     def test_wrapper_syntax_is_valid(self) -> None:
         result = subprocess.run(
@@ -556,15 +692,11 @@ class TestInteractiveTerminalWrapper:
         wrapper_args: list[str],
         *,
         path_prefix: Path,
-        path_suffix: bool = True,
         extra_env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         verdict = tmp_path / "verdict.yaml"
         env = dict(os.environ)
-        path = str(path_prefix)
-        if path_suffix:
-            path = f"{path_prefix}:{os.environ['PATH']}"
-        env["PATH"] = path
+        env["PATH"] = f"{path_prefix}:{os.environ['PATH']}"
         env["FAKE_VERDICT_PATH"] = str(verdict)
         env["ARGS_PATH"] = str(tmp_path / f"{agent}-args.txt")
         env["CWD_PATH"] = str(tmp_path / f"{agent}-cwd.txt")
@@ -584,13 +716,8 @@ class TestInteractiveTerminalWrapper:
         prompt.write_text("prompt", encoding="utf-8")
         workdir = tmp_path / "work"
         workdir.mkdir(exist_ok=True)
-        return [
-            agent,
-            str(prompt),
-            str(tmp_path / "verdict.yaml"),
-            str(tmp_path / "terminal.log"),
-            str(workdir),
-        ]
+        # 8-arg contract: agent prompt verdict workdir ...
+        return [agent, str(prompt), str(tmp_path / "verdict.yaml"), str(workdir)]
 
     def test_wrapper_cds_into_workdir_before_agent(self, tmp_path: Path) -> None:
         workdir = tmp_path / "work"
@@ -601,13 +728,7 @@ class TestInteractiveTerminalWrapper:
         result = self._run_wrapper(
             tmp_path,
             "claude",
-            [
-                "claude",
-                str(tmp_path / "prompt.txt"),
-                str(tmp_path / "verdict.yaml"),
-                str(tmp_path / "terminal.log"),
-                str(workdir),
-            ],
+            ["claude", str(tmp_path / "prompt.txt"), str(tmp_path / "verdict.yaml"), str(workdir)],
             path_prefix=fake_bin,
         )
         assert result.returncode == 0, result.stderr
@@ -627,11 +748,10 @@ class TestInteractiveTerminalWrapper:
             encoding="utf-8",
         )
         fake_claude.chmod(0o755)
-        wrapper_args = self._base_args(tmp_path, "claude")
         result = self._run_wrapper(
             tmp_path,
             "claude",
-            wrapper_args,
+            self._base_args(tmp_path, "claude"),
             path_prefix=fake_bin,
             extra_env={"NO_COLOR": "1", "COLORTERM": "falsecolor", "ENV_PATH": str(env_path)},
         )
@@ -644,12 +764,7 @@ class TestInteractiveTerminalWrapper:
     def test_claude_fresh_command_matches_contract(self, tmp_path: Path) -> None:
         args_path, _ = self._fake_agent_recording_argv(tmp_path, "claude")
         fake_bin = tmp_path / "bin"
-        wrapper_args = self._base_args(tmp_path, "claude") + [
-            "",  # resume
-            "launch-uuid",  # launch
-            "haiku",  # model
-            "low",  # effort
-        ]
+        wrapper_args = self._base_args(tmp_path, "claude") + ["", "launch-uuid", "haiku", "low"]
         result = self._run_wrapper(tmp_path, "claude", wrapper_args, path_prefix=fake_bin)
         assert result.returncode == 0, result.stderr
         args = args_path.read_text(encoding="utf-8").splitlines()
@@ -666,12 +781,7 @@ class TestInteractiveTerminalWrapper:
     def test_claude_resume_command_matches_contract(self, tmp_path: Path) -> None:
         args_path, _ = self._fake_agent_recording_argv(tmp_path, "claude")
         fake_bin = tmp_path / "bin"
-        wrapper_args = self._base_args(tmp_path, "claude") + [
-            "resume-uuid",  # resume
-            "",  # launch
-            "haiku",
-            "low",
-        ]
+        wrapper_args = self._base_args(tmp_path, "claude") + ["resume-uuid", "", "haiku", "low"]
         result = self._run_wrapper(tmp_path, "claude", wrapper_args, path_prefix=fake_bin)
         assert result.returncode == 0, result.stderr
         args = args_path.read_text(encoding="utf-8").splitlines()
@@ -688,27 +798,13 @@ class TestInteractiveTerminalWrapper:
     def test_codex_fresh_command_matches_contract(self, tmp_path: Path) -> None:
         args_path, _ = self._fake_agent_recording_argv(tmp_path, "codex")
         fake_bin = tmp_path / "bin"
-        workdir = tmp_path / "work"
-        workdir.mkdir(exist_ok=True)
-        wrapper_args = [
-            "codex",
-            str(tmp_path / "prompt.txt"),
-            str(tmp_path / "verdict.yaml"),
-            str(tmp_path / "terminal.log"),
-            str(workdir),
-            "",  # resume
-            "",  # launch
-            "gpt-5.4-mini",
-            "low",
-        ]
-        (tmp_path / "prompt.txt").write_text("prompt", encoding="utf-8")
+        wrapper_args = self._base_args(tmp_path, "codex") + ["", "", "gpt-5.4-mini", "low"]
         result = self._run_wrapper(tmp_path, "codex", wrapper_args, path_prefix=fake_bin)
         assert result.returncode == 0, result.stderr
         args = args_path.read_text(encoding="utf-8").splitlines()
-        # The prompt (last positional) is multi-line; assert the fixed prefix only.
         assert args[:7] == [
             "--cd",
-            str(workdir),
+            str(tmp_path / "work"),
             "--dangerously-bypass-approvals-and-sandbox",
             "--model",
             "gpt-5.4-mini",
@@ -719,27 +815,19 @@ class TestInteractiveTerminalWrapper:
     def test_codex_resume_command_matches_contract(self, tmp_path: Path) -> None:
         args_path, _ = self._fake_agent_recording_argv(tmp_path, "codex")
         fake_bin = tmp_path / "bin"
-        workdir = tmp_path / "work"
-        workdir.mkdir(exist_ok=True)
-        wrapper_args = [
-            "codex",
-            str(tmp_path / "prompt.txt"),
-            str(tmp_path / "verdict.yaml"),
-            str(tmp_path / "terminal.log"),
-            str(workdir),
-            "33333333-3333-4333-8333-333333333333",  # resume
-            "",  # launch
+        wrapper_args = self._base_args(tmp_path, "codex") + [
+            "33333333-3333-4333-8333-333333333333",
+            "",
             "gpt-5.4-mini",
             "low",
         ]
-        (tmp_path / "prompt.txt").write_text("prompt", encoding="utf-8")
         result = self._run_wrapper(tmp_path, "codex", wrapper_args, path_prefix=fake_bin)
         assert result.returncode == 0, result.stderr
         args = args_path.read_text(encoding="utf-8").splitlines()
         assert args[:4] == [
             "resume",
             "--cd",
-            str(workdir),
+            str(tmp_path / "work"),
             "--dangerously-bypass-approvals-and-sandbox",
         ]
         assert args[4:9] == [
@@ -750,120 +838,82 @@ class TestInteractiveTerminalWrapper:
             "33333333-3333-4333-8333-333333333333",
         ]
 
-    def test_transcript_recorded_with_util_linux_script(self, tmp_path: Path) -> None:
-        """util-linux script present → terminal.log path is used."""
-        if shutil.which("script") is None:
-            pytest.skip("script(1) not available on host")
-        version = subprocess.run(
-            ["script", "--version"], capture_output=True, text=True, check=False
-        )
-        if "util-linux" not in version.stdout.lower():
-            pytest.skip("host script is not util-linux")
 
-        args_path, _ = self._fake_agent_recording_argv(tmp_path, "claude")
-        fake_bin = tmp_path / "bin"
-        terminal_log = tmp_path / "terminal.log"
-        (tmp_path / "prompt.txt").write_text("prompt", encoding="utf-8")
-        wrapper_args = [
-            "claude",
-            str(tmp_path / "prompt.txt"),
-            str(tmp_path / "verdict.yaml"),
-            str(terminal_log),
-            str(tmp_path),
-        ]
-        # real script must be reachable: keep system PATH after fake_bin.
-        result = self._run_wrapper(tmp_path, "claude", wrapper_args, path_prefix=fake_bin)
-        assert result.returncode == 0, result.stderr
-        assert terminal_log.exists()
+def _tmux_at_least_3() -> bool:
+    tmux = shutil.which("tmux")
+    if tmux is None:
+        return False
+    proc = subprocess.run([tmux, "-V"], capture_output=True, text=True, check=False)
+    import re
 
-    def test_transcript_unavailable_when_script_absent(self, tmp_path: Path) -> None:
-        """script absent → agent runs directly with a transcript-unavailable warning."""
-        fake_bin = _fake_bin_with(tmp_path, "bash")
-        args_path, _ = self._fake_agent_recording_argv(tmp_path, "claude")
-        terminal_log = tmp_path / "terminal.log"
-        (tmp_path / "prompt.txt").write_text("prompt", encoding="utf-8")
-        wrapper_args = [
-            "claude",
-            str(tmp_path / "prompt.txt"),
-            str(tmp_path / "verdict.yaml"),
-            str(terminal_log),
-            str(tmp_path),
-        ]
-        # PATH = fake_bin only (bash + fake claude), so script(1) is absent.
-        result = self._run_wrapper(
-            tmp_path, "claude", wrapper_args, path_prefix=fake_bin, path_suffix=False
-        )
-        assert result.returncode == 0, result.stderr
-        assert "util-linux script(1) not found" in result.stderr
-        assert args_path.exists()  # agent ran directly
-        assert not terminal_log.exists()
-
-    def test_transcript_fail_soft_when_script_not_util_linux(self, tmp_path: Path) -> None:
-        """script present but non-util-linux → fail-soft direct launch (no long-option crash)."""
-        fake_bin = tmp_path / "bin"
-        fake_bin.mkdir()
-        sentinel = tmp_path / "script-invoked-with-command"
-        # Fake BSD-style script: --version lacks 'util-linux'; long options abort.
-        (fake_bin / "script").write_text(
-            "#!/usr/bin/env bash\n"
-            'if [[ "$1" == "--version" ]]; then echo "script (BSD)"; exit 0; fi\n'
-            f'touch "{sentinel}"\n'
-            "exit 3\n",
-            encoding="utf-8",
-        )
-        (fake_bin / "script").chmod(0o755)
-        args_path, _ = self._fake_agent_recording_argv(tmp_path, "claude")
-        terminal_log = tmp_path / "terminal.log"
-        (tmp_path / "prompt.txt").write_text("prompt", encoding="utf-8")
-        wrapper_args = [
-            "claude",
-            str(tmp_path / "prompt.txt"),
-            str(tmp_path / "verdict.yaml"),
-            str(terminal_log),
-            str(tmp_path),
-        ]
-        result = self._run_wrapper(tmp_path, "claude", wrapper_args, path_prefix=fake_bin)
-        assert result.returncode == 0, result.stderr
-        # The non-util-linux script must NOT be invoked with --command.
-        assert not sentinel.exists()
-        assert args_path.exists()  # agent ran directly
-        assert not terminal_log.exists()
+    match = re.search(r"tmux\s+(\d+)\.(\d+)", proc.stdout)
+    if match is None:
+        return False
+    return (int(match.group(1)), int(match.group(2))) >= (3, 0)
 
 
 @pytest.mark.large
 @pytest.mark.large_local
+@pytest.mark.skipif(not _tmux_at_least_3(), reason="requires real tmux >= 3.0 on PATH")
 class TestInteractiveTerminalEndToEnd:
-    """E2E: fake kitty → real wrapper.sh → fake agent → verdict.yaml → runner resolves."""
+    """E2E: real tmux split-window → wrapper.sh → fake agent → verdict → kill-pane."""
 
-    def test_fake_kitty_drives_wrapper_to_write_verdict(
+    def _start_server(self, socket: str) -> tuple[str, str]:
+        """Start a private tmux server and return (TMUX env value, pane id)."""
+        tmux = shutil.which("tmux")
+        assert tmux is not None
+        subprocess.run(
+            [tmux, "-L", socket, "new-session", "-d", "-s", "main", "-x", "200", "-y", "50"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        info = subprocess.run(
+            [
+                tmux,
+                "-L",
+                socket,
+                "display-message",
+                "-p",
+                "-t",
+                "main",
+                "#{socket_path}\t#{pid}\t#{session_id}\t#{pane_id}",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        socket_path, server_pid, session_id, pane_id = info.split("\t")
+        tmux_env = f"{socket_path},{server_pid},{session_id.lstrip('$')}"
+        return tmux_env, pane_id
+
+    def _list_panes(self, socket: str) -> list[str]:
+        tmux = shutil.which("tmux")
+        assert tmux is not None
+        proc = subprocess.run(
+            [tmux, "-L", socket, "list-panes", "-a", "-F", "#{pane_id}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return proc.stdout.split()
+
+    def test_real_tmux_drives_wrapper_to_write_and_resolve_verdict(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         fake_bin = tmp_path / "bin"
         fake_bin.mkdir()
-
-        # Fake kitty: strip its own options (--title VALUE / --hold), then exec
-        # the wrapper command with the 9 args in the exact Wrapper 契約 order.
-        fake_kitty = fake_bin / "kitty"
-        fake_kitty.write_text(
-            "#!/usr/bin/env bash\n"
-            "while [[ $# -gt 0 ]]; do\n"
-            '  case "$1" in\n'
-            "    --title) shift 2 ;;\n"
-            "    --hold) shift ;;\n"
-            "    *) break ;;\n"
-            "  esac\n"
-            "done\n"
-            'exec "$@"\n',
-            encoding="utf-8",
-        )
-        fake_kitty.chmod(0o755)
-
-        # Fake claude: write a pure-YAML verdict to the path runner expects.
+        # Fake claude: parse the verdict path the wrapper embeds in the prompt,
+        # write a pure-YAML verdict, then stay alive so the runner kills the pane.
         fake_claude = fake_bin / "claude"
         fake_claude.write_text(
             "#!/usr/bin/env bash\n"
+            'for arg in "$@"; do prompt="$arg"; done\n'
+            "verdict_path=$(printf '%s\\n' \"$prompt\" | "
+            "awk '/write only a pure YAML verdict file to this exact path:/{getline; print; exit}')\n"
             'printf "status: PASS\\nreason: ok\\nevidence: e2e\\nsuggestion: \x27\x27\\n"'
-            ' > "$FAKE_VERDICT_PATH"\n',
+            ' > "$verdict_path"\n'
+            "sleep 30\n",
             encoding="utf-8",
         )
         fake_claude.chmod(0o755)
@@ -874,12 +924,16 @@ class TestInteractiveTerminalEndToEnd:
         attempt.mkdir()
         prompt = attempt / "prompt.txt"
         verdict = attempt / "verdict.yaml"
+        terminal_log = attempt / "terminal.log"
         prompt.write_text("the full task prompt", encoding="utf-8")
 
+        socket = f"kaji-e2e-{uuid.uuid4().hex[:8]}"
+        # Server inherits the modified PATH so the new pane finds fake claude.
         monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
-        monkeypatch.setenv("FAKE_VERDICT_PATH", str(verdict))
-
-        with patch("kaji_harness.interactive_terminal.shutil.which", return_value=str(fake_kitty)):
+        tmux_env, origin_pane = self._start_server(socket)
+        try:
+            monkeypatch.setenv("TMUX", tmux_env)
+            monkeypatch.setenv("TMUX_PANE", origin_pane)
             result = execute_interactive_terminal(
                 step=_step("claude", model="haiku", effort="low"),
                 prompt_path=prompt,
@@ -888,8 +942,20 @@ class TestInteractiveTerminalEndToEnd:
                 timeout=30,
             )
 
-        assert result.full_output == ""
-        assert verdict.exists()
-        # The runner's artifact-primary path can resolve the agent-written verdict.
-        resolved = load_verdict_yaml(verdict, {"PASS", "RETRY", "BACK", "ABORT"})
-        assert resolved.status == "PASS"
+            assert result.full_output == ""
+            assert verdict.exists()
+            resolved = load_verdict_yaml(verdict, {"PASS", "RETRY", "BACK", "ABORT"})
+            assert resolved.status == "PASS"
+            # pipe-pane recorded the transcript to the attempt directory.
+            assert terminal_log.exists()
+            # close_on_verdict default True → the agent pane was killed and the
+            # origin pane is the only one left.
+            panes = self._list_panes(socket)
+            assert origin_pane in panes
+            assert len(panes) == 1
+        finally:
+            tmux = shutil.which("tmux")
+            assert tmux is not None
+            subprocess.run(
+                [tmux, "-L", socket, "kill-server"], capture_output=True, text=True, check=False
+            )

@@ -1,17 +1,29 @@
 """Interactive terminal runner.
 
 This runner starts a real interactive agent CLI (``claude`` / ``codex``) inside
-``kitty`` and waits for the agent-written ``verdict.yaml`` artifact. It
+a ``tmux`` pane and waits for the agent-written ``verdict.yaml`` artifact. It
 intentionally avoids parsing stdout: completion is decided by the
 artifact-primary verdict resolution introduced in Issue #220.
+
+The terminal backend is tmux only (ADR 007 v2, Issue #230). ``kaji run`` must
+run inside a tmux session; the runner adds a pane to the current window with
+``tmux split-window -h`` (to the user's right), records the transcript with
+``tmux pipe-pane``, decides liveness via ``#{pane_dead}``, and cleans up with
+``tmux kill-pane``. There is no ``/proc`` scan and no util-linux ``script(1)``
+dependency, so Linux and macOS share one implementation.
+
+The single completion trigger is the appearance of ``verdict.yaml``; the agent
+process is not waited on. The post-verdict ``kill-pane`` is best-effort cleanup
+with no latency contract.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import shlex
 import shutil
-import signal
 import subprocess
 import time
 import uuid
@@ -30,16 +42,17 @@ _SESSION_ID_GRACE_SECONDS = 5.0
 _CODEX_SESSION_SCAN_LIMIT = 100
 _VERDICT_POLL_INTERVAL_SECONDS = 2
 _TERMINAL_LOG_TAIL_CHARS = 2000
+_MIN_TMUX_VERSION = (3, 0)
 
 
 def _terminal_exit_detail(terminal_log: Path) -> str:
-    """Build a diagnostic string from the terminal log tail for early exits."""
+    """Build a diagnostic string from the terminal log tail for early pane exits."""
     if not terminal_log.is_file():
-        return f"terminal exited before writing verdict.yaml (no {terminal_log.name})"
+        return f"tmux pane exited before writing verdict.yaml (no {terminal_log.name})"
     text = terminal_log.read_text(encoding="utf-8", errors="replace").strip()
     if not text:
-        return f"terminal exited before writing verdict.yaml ({terminal_log.name} empty)"
-    return f"terminal exited before writing verdict.yaml; log tail:\n{text[-_TERMINAL_LOG_TAIL_CHARS:]}"
+        return f"tmux pane exited before writing verdict.yaml ({terminal_log.name} empty)"
+    return f"tmux pane exited before writing verdict.yaml; log tail:\n{text[-_TERMINAL_LOG_TAIL_CHARS:]}"
 
 
 def _wrapper_path() -> Path:
@@ -51,43 +64,82 @@ def _wrapper_path() -> Path:
     return Path(__file__).resolve().parent / "assets" / "interactive-terminal" / "wrapper.sh"
 
 
-def _build_kitty_argv(
-    kitty: str,
+def _build_wrapper_command(
     wrapper: Path,
     *,
     agent: str,
-    step_id: str,
     prompt_path: Path,
     verdict_path: Path,
-    terminal_log: Path,
+    workdir: Path,
+    resume_session_id: str,
+    launch_session_id: str,
+    model: str,
+    effort: str,
+) -> str:
+    """Build the single shell command tmux runs in the new pane.
+
+    ``split-window`` takes one command argument, so the wrapper argv is
+    shell-quoted with ``shlex.join``. The 8 wrapper arguments follow the
+    Wrapper 契約 order exactly: ``agent prompt_path verdict_path workdir
+    resume_session_id launch_session_id model effort``.
+    """
+    return shlex.join(
+        [
+            str(wrapper),
+            agent,
+            str(prompt_path),
+            str(verdict_path),
+            str(workdir),
+            resume_session_id,
+            launch_session_id,
+            model,
+            effort,
+        ]
+    )
+
+
+def _build_tmux_split_argv(
+    tmux: str,
+    wrapper: Path,
+    *,
+    target_pane: str,
+    agent: str,
+    prompt_path: Path,
+    verdict_path: Path,
     workdir: Path,
     resume_session_id: str,
     launch_session_id: str,
     model: str,
     effort: str,
 ) -> list[str]:
-    """Assemble the ``kitty`` argv that launches the wrapper.
+    """Assemble the ``tmux split-window`` argv.
 
-    The 9 wrapper arguments follow the Wrapper 契約 order exactly:
-    ``agent prompt_path verdict_path terminal_log workdir resume_session_id
-    launch_session_id model effort``.
+    ``-d`` keeps focus on the current pane; ``-h`` splits horizontally so the
+    new pane appears to the user's right (Issue #230 MF2); ``-P -F '#{pane_id}'``
+    prints the created pane id, which becomes the lifecycle handle for polling,
+    transcript, and cleanup.
     """
-    title = f"kaji-{agent}-{step_id}"
     return [
-        kitty,
-        "--title",
-        title,
-        "--hold",
-        str(wrapper),
-        agent,
-        str(prompt_path),
-        str(verdict_path),
-        str(terminal_log),
-        str(workdir),
-        resume_session_id,
-        launch_session_id,
-        model,
-        effort,
+        tmux,
+        "split-window",
+        "-d",
+        "-h",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-t",
+        target_pane,
+        _build_wrapper_command(
+            wrapper,
+            agent=agent,
+            prompt_path=prompt_path,
+            verdict_path=verdict_path,
+            workdir=workdir,
+            resume_session_id=resume_session_id,
+            launch_session_id=launch_session_id,
+            model=model,
+            effort=effort,
+        ),
     ]
 
 
@@ -101,24 +153,29 @@ def execute_interactive_terminal(
     session_id: str | None = None,
     close_on_verdict: bool = True,
 ) -> CLIResult:
-    """Start a real interactive CLI in kitty and wait for ``verdict.yaml``.
+    """Start a real interactive CLI in a tmux pane and wait for ``verdict.yaml``.
 
     Args:
         step: The workflow step (``agent`` must be ``claude`` or ``codex``).
         prompt_path: Absolute path to the attempt's ``prompt.txt``.
         verdict_path: Absolute path the agent must write ``verdict.yaml`` to.
-        workdir: Trusted project worktree used as cwd / ``--cd``.
+        workdir: Trusted project worktree used as cwd / ``--cd``. Resolved by
+            ``runner.py`` to the same ``effective_workdir`` as the headless
+            runner (backend-independent).
         timeout: Seconds to wait for ``verdict.yaml`` before failing.
         session_id: Previous session id to resume (``None`` → fresh run).
-        close_on_verdict: Close the terminal / wrapper / agent after the
-            verdict artifact appears.
+        close_on_verdict: ``kill-pane`` after the verdict artifact appears
+            (best-effort cleanup). When ``False`` the pane is left with
+            ``remain-on-exit on`` so it survives the agent's natural exit.
 
     Returns:
         ``CLIResult(full_output="", session_id=<resolved id or None>)``.
 
     Raises:
-        CLINotFoundError: ``kitty`` is not on PATH or failed to launch.
-        CLIExecutionError: The terminal exited before writing ``verdict.yaml``.
+        CLINotFoundError: ``tmux`` is missing, ``$TMUX`` / ``$TMUX_PANE`` is
+            unset, or ``tmux`` is older than 3.0.
+        CLIExecutionError: ``split-window`` failed, or the pane died before
+            writing ``verdict.yaml``.
         StepTimeoutError: ``verdict.yaml`` did not appear before the deadline.
         ValueError: ``step.agent`` is missing or unsupported.
         FileNotFoundError: ``prompt.txt`` or the wrapper script is missing.
@@ -130,55 +187,69 @@ def execute_interactive_terminal(
     if not prompt_path.is_file():
         raise FileNotFoundError(f"prompt.txt not found: {prompt_path}")
 
-    kitty = shutil.which("kitty")
-    if kitty is None:
-        raise CLINotFoundError(
-            "CLI 'kitty' not found. Install kitty or use agent_runner='headless'."
-        )
+    tmux = _resolve_tmux()
+    target_pane = _resolve_target_pane()
+    _validate_tmux_version(tmux)
 
     wrapper = _wrapper_path()
     if not wrapper.is_file():
         raise FileNotFoundError(f"interactive terminal wrapper not found: {wrapper}")
 
     terminal_log = prompt_path.parent / "terminal.log"
+    metadata_path = prompt_path.parent / "pane-metadata.json"
     # Claude fresh runs need a runner-generated UUID so resume can reuse it.
     # Resume runs and Codex (which mints its own id) pass an empty marker.
     launch_session_id = str(uuid.uuid4()) if step.agent == "claude" and session_id is None else ""
-    argv = _build_kitty_argv(
-        kitty,
+
+    pane_id = _launch_pane(
+        tmux,
         wrapper,
+        target_pane=target_pane,
         agent=step.agent,
-        step_id=step.id,
         prompt_path=prompt_path,
         verdict_path=verdict_path,
-        terminal_log=terminal_log,
         workdir=workdir,
         resume_session_id=session_id or "",
         launch_session_id=launch_session_id,
         model=step.model or "",
         effort=step.effort or "",
     )
-    try:
-        process = subprocess.Popen(argv, cwd=workdir, start_new_session=True)
-    except FileNotFoundError as exc:
-        raise CLINotFoundError(f"CLI '{argv[0]}' not found. Is it installed?") from exc
-    except OSError as exc:
-        raise RuntimeError(
-            "failed to launch interactive terminal runner:\n"
-            f"  argv: {argv!r}\n"
-            f"  workdir: {workdir}\n"
-            f"  prompt_path: {prompt_path}\n"
-            f"  verdict_path: {verdict_path}\n"
-            f"  error: {exc}"
-        ) from exc
+    if not _pipe_pane(tmux, pane_id, terminal_log):
+        # tmux rejected the pipe — most likely the pane already closed because a
+        # short-running agent wrote verdict.yaml and exited before we could
+        # attach the logging pipe. A present verdict means the step succeeded, so
+        # do not let a transcript-only setup failure mask it. Only a missing
+        # verdict is a genuine launch failure.
+        if verdict_path.is_file():
+            return CLIResult(full_output="", session_id=session_id or launch_session_id or None)
+        _kill_pane(tmux, pane_id)
+        raise CLIExecutionError(
+            "interactive_terminal",
+            1,
+            "tmux pipe-pane failed before any verdict appeared: "
+            + _terminal_exit_detail(terminal_log),
+        )
+    if not close_on_verdict:
+        _set_remain_on_exit(tmux, pane_id)
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if verdict_path.is_file():
+            # Snapshot the pane state at verdict detection (diagnostic evidence).
+            # Under the verdict-trigger contract the agent CLI is still alive
+            # here, so #{pane_dead} is normally 0.
+            _write_pane_metadata(
+                tmux,
+                pane_id,
+                metadata_path,
+                target_pane=target_pane,
+                close_on_verdict=close_on_verdict,
+            )
             result_session_id = session_id or launch_session_id or None
             if result_session_id is None and step.agent == "codex":
-                _wait_for_process_or_session_id(
-                    process,
+                _wait_for_pane_exit_or_session_id(
+                    tmux,
+                    pane_id,
                     terminal_log,
                     prompt_path=prompt_path,
                     verdict_path=verdict_path,
@@ -188,29 +259,208 @@ def execute_interactive_terminal(
                     terminal_log, prompt_path=prompt_path, verdict_path=verdict_path
                 )
             if close_on_verdict:
-                _close_terminal(process, markers=[prompt_path, verdict_path, terminal_log])
+                _kill_pane(tmux, pane_id)
             if result_session_id is None and step.agent == "codex":
-                # Re-scan after close: the rollout file may finalize on exit.
+                # Re-scan after cleanup: the rollout file may finalize on exit.
                 result_session_id = _extract_codex_session_id(
                     terminal_log, prompt_path=prompt_path, verdict_path=verdict_path
                 )
             return CLIResult(full_output="", session_id=result_session_id)
-        returncode = process.poll()
-        if returncode is not None:
-            # The terminal exited before any verdict appeared (e.g. no
-            # DISPLAY/Wayland session, an unsupported kitty flag, or the agent
-            # failed at launch). Fail loud with the real launch error instead of
-            # silently polling until the much longer step timeout.
-            raise CLIExecutionError(step.id, returncode, _terminal_exit_detail(terminal_log))
+
+        if _pane_dead(tmux, pane_id):
+            # The pane exited before any verdict appeared (e.g. the agent failed
+            # at launch). Fail loud with the real error instead of polling until
+            # the much longer step timeout.
+            _write_pane_metadata(
+                tmux,
+                pane_id,
+                metadata_path,
+                target_pane=target_pane,
+                close_on_verdict=close_on_verdict,
+            )
+            raise CLIExecutionError(step.id, 1, _terminal_exit_detail(terminal_log))
         time.sleep(_VERDICT_POLL_INTERVAL_SECONDS)
 
     # Timeout: verdict never appeared. Best-effort cleanup, then fail-loud.
-    _close_terminal(process, markers=[prompt_path, verdict_path, terminal_log])
+    _write_pane_metadata(
+        tmux, pane_id, metadata_path, target_pane=target_pane, close_on_verdict=close_on_verdict
+    )
+    _kill_pane(tmux, pane_id)
     raise StepTimeoutError(step.id, timeout)
 
 
-def _wait_for_process_or_session_id(
-    process: subprocess.Popen[bytes],
+def _resolve_tmux() -> str:
+    tmux = shutil.which("tmux")
+    if tmux is None:
+        raise CLINotFoundError("CLI 'tmux' not found. Install tmux or use agent_runner='headless'.")
+    return tmux
+
+
+def _resolve_target_pane() -> str:
+    if not os.environ.get("TMUX"):
+        raise CLINotFoundError(
+            "interactive terminal runner requires tmux. Run `kaji run` inside tmux "
+            "or use agent_runner='headless'."
+        )
+    target_pane = os.environ.get("TMUX_PANE")
+    if not target_pane:
+        raise CLINotFoundError("TMUX_PANE is not set; cannot target the current tmux pane.")
+    return target_pane
+
+
+def _validate_tmux_version(tmux: str) -> None:
+    proc = subprocess.run([tmux, "-V"], text=True, capture_output=True, check=False)
+    if proc.returncode != 0:
+        raise CLIExecutionError("interactive_terminal", proc.returncode, proc.stderr)
+    match = re.search(r"tmux\s+(\d+)\.(\d+)", proc.stdout)
+    if match is None:
+        raise CLIExecutionError("interactive_terminal", proc.returncode, proc.stdout or proc.stderr)
+    version = (int(match.group(1)), int(match.group(2)))
+    if version < _MIN_TMUX_VERSION:
+        raise CLINotFoundError(
+            f"interactive terminal runner requires tmux >= 3.0, got {proc.stdout.strip()}"
+        )
+
+
+def _launch_pane(
+    tmux: str,
+    wrapper: Path,
+    *,
+    target_pane: str,
+    agent: str,
+    prompt_path: Path,
+    verdict_path: Path,
+    workdir: Path,
+    resume_session_id: str,
+    launch_session_id: str,
+    model: str,
+    effort: str,
+) -> str:
+    argv = _build_tmux_split_argv(
+        tmux,
+        wrapper,
+        target_pane=target_pane,
+        agent=agent,
+        prompt_path=prompt_path,
+        verdict_path=verdict_path,
+        workdir=workdir,
+        resume_session_id=resume_session_id,
+        launch_session_id=launch_session_id,
+        model=model,
+        effort=effort,
+    )
+    proc = subprocess.run(argv, text=True, capture_output=True, check=False, cwd=workdir)
+    if proc.returncode != 0:
+        raise CLIExecutionError("interactive_terminal", proc.returncode, proc.stderr)
+    pane_id = proc.stdout.strip()
+    if not pane_id.startswith("%"):
+        raise CLIExecutionError(
+            "interactive_terminal",
+            proc.returncode,
+            f"tmux did not return a pane id: {proc.stdout!r}",
+        )
+    return pane_id
+
+
+def _pipe_pane(tmux: str, pane_id: str, terminal_log: Path) -> bool:
+    """Attach a logging pipe to the pane's output.
+
+    Returns:
+        ``True`` if tmux accepted the pipe; ``False`` if it was rejected (e.g.
+        the pane already closed because a short-running agent exited
+        immediately). The caller decides whether that is fatal based on whether
+        ``verdict.yaml`` is already present.
+    """
+    terminal_log.parent.mkdir(parents=True, exist_ok=True)
+    command = f"cat >> {shlex.quote(str(terminal_log))}"
+    proc = subprocess.run(
+        [tmux, "pipe-pane", "-o", "-t", pane_id, command],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return proc.returncode == 0
+
+
+def _set_remain_on_exit(tmux: str, pane_id: str) -> None:
+    """Keep the pane (as ``[dead]``) after the agent exits, for inspection."""
+    subprocess.run(
+        [tmux, "set-option", "-p", "-t", pane_id, "remain-on-exit", "on"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def _pane_dead(tmux: str, pane_id: str) -> bool:
+    """Return whether the pane has died; a failed pane lookup counts as dead."""
+    proc = subprocess.run(
+        [tmux, "display-message", "-p", "-t", pane_id, "#{pane_dead}"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return True
+    return proc.stdout.strip() == "1"
+
+
+def _kill_pane(tmux: str, pane_id: str) -> None:
+    """Best-effort ``kill-pane``; ignores a pane that is already gone."""
+    subprocess.run([tmux, "kill-pane", "-t", pane_id], text=True, capture_output=True, check=False)
+
+
+def _write_pane_metadata(
+    tmux: str,
+    pane_id: str,
+    destination: Path,
+    *,
+    target_pane: str,
+    close_on_verdict: bool,
+) -> None:
+    """Snapshot the pane's ``#{pane_dead}`` (and related) fields for diagnostics."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    metadata: dict[str, object] = {
+        "tmux_version": _tmux_version_text(tmux),
+        "pane_id": pane_id,
+        "target_pane": target_pane,
+        "close_on_verdict": close_on_verdict,
+    }
+    format_string = "\t".join(
+        [
+            "pane_id=#{pane_id}",
+            "pane_pid=#{pane_pid}",
+            "pane_current_command=#{pane_current_command}",
+            "pane_dead=#{pane_dead}",
+            "pane_dead_status=#{pane_dead_status}",
+            "pane_dead_signal=#{pane_dead_signal}",
+        ]
+    )
+    proc = subprocess.run(
+        [tmux, "display-message", "-p", "-t", pane_id, format_string],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode == 0:
+        for part in proc.stdout.strip().split("\t"):
+            key, _, value = part.partition("=")
+            metadata[key] = value
+    else:
+        metadata["display_error"] = proc.stderr or proc.stdout
+    destination.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _tmux_version_text(tmux: str) -> str:
+    proc = subprocess.run([tmux, "-V"], text=True, capture_output=True, check=False)
+    if proc.returncode != 0:
+        return proc.stderr.strip()
+    return proc.stdout.strip()
+
+
+def _wait_for_pane_exit_or_session_id(
+    tmux: str,
+    pane_id: str,
     terminal_log: Path,
     *,
     prompt_path: Path,
@@ -219,7 +469,7 @@ def _wait_for_process_or_session_id(
 ) -> None:
     """Give Codex a brief chance to print its explicit resume command."""
     while time.monotonic() < deadline:
-        if process.poll() is not None or _extract_codex_session_id(
+        if _pane_dead(tmux, pane_id) or _extract_codex_session_id(
             terminal_log, prompt_path=prompt_path, verdict_path=verdict_path
         ):
             return
@@ -280,77 +530,3 @@ def _codex_home() -> Path:
     if value := os.environ.get("CODEX_HOME"):
         return Path(value)
     return Path.home() / ".codex"
-
-
-def _close_terminal(process: subprocess.Popen[bytes], *, markers: list[Path]) -> None:
-    """Best-effort close for the kitty process after the verdict artifact appears."""
-    if process.poll() is None:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
-    _kill_processes_matching(markers)
-
-
-def _kill_processes_matching(markers: list[Path]) -> None:
-    """Kill detached agent processes whose argv still references this attempt."""
-    marker_text = [str(marker) for marker in markers]
-    proc = Path("/proc")
-    if not proc.is_dir():
-        return
-
-    matches: set[int] = set()
-    for child in proc.iterdir():
-        if not child.name.isdigit():
-            continue
-        pid = int(child.name)
-        if pid == os.getpid():
-            continue
-        try:
-            raw = (child / "cmdline").read_bytes()
-        except (FileNotFoundError, ProcessLookupError, PermissionError):
-            continue
-        cmdline = raw.replace(b"\0", b" ").decode("utf-8", errors="replace")
-        if any(marker in cmdline for marker in marker_text):
-            matches.add(pid)
-
-    _signal_matches(matches, signal.SIGTERM)
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline:
-        alive = {pid for pid in matches if _pid_exists(pid)}
-        if not alive:
-            return
-        time.sleep(0.2)
-    _signal_matches(matches, signal.SIGKILL)
-
-
-def _signal_matches(pids: set[int], sig: signal.Signals) -> None:
-    groups: set[int] = set()
-    for pid in pids:
-        try:
-            groups.add(os.getpgid(pid))
-        except ProcessLookupError:
-            continue
-    for pgid in groups:
-        try:
-            os.killpg(pgid, sig)
-        except ProcessLookupError:
-            continue
-
-
-def _pid_exists(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True

@@ -1,8 +1,9 @@
-"""Medium tests: WorkflowRunner runner-backend dispatch (Issue #224).
+"""Medium tests: WorkflowRunner runner-backend dispatch (Issue #224 / #230).
 
 Verifies that ``config.execution.agent_runner`` routes the agent step to either
-``execute_interactive_terminal`` (kitty path) or ``execute_cli`` (headless),
-without changing the existing headless behavior.
+``execute_interactive_terminal`` (tmux path) or ``execute_cli`` (headless),
+without changing the existing headless behavior, and that both backends receive
+the same ``effective_workdir`` (Issue #230 MF3 regression guard).
 """
 
 from __future__ import annotations
@@ -37,7 +38,9 @@ def _make_config(tmp_path: Path, *, execution_extra: str = "") -> KajiConfig:
     return KajiConfig._load(cfg)
 
 
-def _make_runner(config: KajiConfig, tmp_path: Path) -> WorkflowRunner:
+def _make_runner(
+    config: KajiConfig, tmp_path: Path, *, artifacts_dir: Path | None = None
+) -> WorkflowRunner:
     workflow = Workflow(
         name="t",
         description="",
@@ -48,7 +51,7 @@ def _make_runner(config: KajiConfig, tmp_path: Path) -> WorkflowRunner:
         workflow=workflow,
         issue_number=99,
         project_root=tmp_path,
-        artifacts_dir=tmp_path / ".kaji-artifacts",
+        artifacts_dir=artifacts_dir or (tmp_path / ".kaji-artifacts"),
         config=config,
     )
 
@@ -115,3 +118,57 @@ class TestRunnerBackendDispatch:
         mock_cli.assert_called_once()
         mock_it.assert_not_called()
         assert state.last_completed_step == "design"
+
+    def test_both_backends_receive_identical_effective_workdir(self, tmp_path: Path) -> None:
+        """MF3 regression guard: backend choice must not change workdir resolution.
+
+        The agent step's ``effective_workdir`` is resolved backend-independently
+        (``step.workdir`` → ``workflow.workdir`` → ``project_root``). This pins
+        that the interactive_terminal branch passes the exact same value the
+        headless ``execute_cli`` branch would, so switching backends never
+        relocates where the agent runs (and thus where artifacts land).
+        """
+        plain_meta = SkillMetadata(name="plain", description="", exec_script=None)
+
+        # interactive_terminal branch (separate artifacts dir to isolate state).
+        it_config = _make_config(tmp_path, execution_extra='agent_runner = "interactive_terminal"')
+        it_runner = _make_runner(it_config, tmp_path, artifacts_dir=tmp_path / "art-it")
+        it_captured: dict[str, Any] = {}
+
+        def fake_interactive(**kwargs: Any) -> CLIResult:
+            it_captured.update(kwargs)
+            kwargs["verdict_path"].write_text(_PASS_YAML, encoding="utf-8")
+            return CLIResult(full_output="", session_id="sess-it")
+
+        with (
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.runner.load_skill_metadata", return_value=plain_meta),
+            patch("kaji_harness.runner.execute_interactive_terminal", side_effect=fake_interactive),
+            patch("kaji_harness.runner.execute_cli"),
+        ):
+            it_runner.run()
+
+        # headless branch (same project_root → same effective_workdir).
+        hl_config = _make_config(tmp_path)  # default agent_runner = headless
+        hl_runner = _make_runner(hl_config, tmp_path, artifacts_dir=tmp_path / "art-hl")
+        hl_captured: dict[str, Any] = {}
+
+        def fake_cli(**kwargs: Any) -> CLIResult:
+            hl_captured.update(kwargs)
+            return CLIResult(
+                full_output=(
+                    "---VERDICT---\nstatus: PASS\nreason: |\n  ok\nevidence: |\n  ok\n"
+                    "suggestion: |\n  none\n---END_VERDICT---\n"
+                ),
+                session_id="s1",
+            )
+
+        with (
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.runner.load_skill_metadata", return_value=plain_meta),
+            patch("kaji_harness.runner.execute_cli", side_effect=fake_cli),
+            patch("kaji_harness.runner.execute_interactive_terminal"),
+        ):
+            hl_runner.run()
+
+        assert it_captured["workdir"] == hl_captured["workdir"] == tmp_path
