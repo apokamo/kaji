@@ -10,10 +10,12 @@ terminal backend = `tmux` 単一の実現性を確定し、本版を承認に確
 
 ### 承認時の確認事項（2026-06-07）
 
-- **close_on_verdict=true の pane 終了タイミング**: real-agent live 観測で確定。終了トリガは
+- **close_on_verdict=true の pane 終了**: real-agent live 観測で挙動を確定。終了トリガは
   `verdict.yaml` の出現であり agent プロセスの自然終了ではない（verdict 時点で agent CLI は
-  `pane_dead=0`＝生存）。verdict 検知 → `kill-pane` は poll 間隔（2s）以内（実測 0.77s）。
-  `completion_barrier=verdict` 既定のため `post_verdict_timeout` の 30s grace は適用されない。
+  `pane_dead=0`＝生存）。`completion_barrier=verdict` 既定のため `post_verdict_timeout` の 30s grace
+  は適用されない。**`kill-pane` は best-effort cleanup でありレイテンシ契約を持たない** — verdict
+  検知後に pane を killする（観測上は ~1s 以内だが、次 step 開始後に killしても問題なく、速さに
+  利得はない）。Codex fresh で session id 未解決時の session-id 回収 grace（≤5s）を挟むことも許容。
   検証は `#{pane_dead}` / `list-panes` の高頻度サンプリングで実施。
 - **実行 pane の配置**: ユーザー視点で**右**に追加する（下記スコープ参照）。
 - **macOS**: tmux 版が WSL で安定動作することをもって当面の確認とし、full macOS 実機検証は
@@ -89,11 +91,12 @@ runner backend `interactive_terminal` の terminal backend を **`tmux` 単一**
 - `interactive_terminal_close_on_verdict = true`（既定）で verdict 検知後に `tmux kill-pane -t
   %id` で best-effort cleanup する。**終了トリガは `verdict.yaml` の出現**であり agent プロセスの
   自然終了は待たない（`completion_barrier=verdict` 既定。`post_verdict_timeout` の 30s grace は
-  `completion_barrier=agent_exit` 専用で本経路では適用されない）。verdict 検知 → kill は polling
-  間隔（`_VERDICT_POLL_INTERVAL_SECONDS=2`）以内（real-agent 実測 0.77s）。`true` では pane は
-  `[dead]` で残らず即除去される。`false` なら `set-option -p -t %id remain-on-exit on` で pane
-  を `[dead]`（`#{pane_dead}=1`）表示のまま残す（デバッグ用）。timeout 経路でも best-effort
-  cleanup してから fail-loud する。
+  `completion_barrier=agent_exit` 専用で本経路では適用されない）。**kill のタイミングは契約では
+  ない** — verdict 検知後の cleanup であって、次 step 開始後に killしても問題なく、kill を急ぐ
+  利得は無い。したがって Codex fresh で session id 未解決時に session-id 回収 grace（≤5s）を挟む
+  ことも許容し、「poll≤Ns で kill」のようなレイテンシ契約は設けない。`false` なら
+  `set-option -p -t %id remain-on-exit on` で pane を `[dead]`（`#{pane_dead}=1`）表示のまま残す
+  （デバッグ用）。timeout 経路でも best-effort cleanup してから fail-loud する。
 - **pane の寿命は step 単位**。step ごとに split-window で pane を作り、verdict / timeout で
   kill する（v1 の「step ごとに1ウィンドウ」と同じ寿命）。pane の使い回しはしない。
 - transcript は `tmux pipe-pane -o -t %id 'cat >> terminal.log'` で attempt directory の
