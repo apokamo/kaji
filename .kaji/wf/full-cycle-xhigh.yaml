@@ -160,7 +160,7 @@ steps:
       ABORT: end
 
   - id: review-poll
-    skill: review-poll
+    exec: [uv, run, --no-sync, python, -m, kaji_harness.scripts.review_poll_entry]
     on:
       PASS: close
       RETRY: pr-fix

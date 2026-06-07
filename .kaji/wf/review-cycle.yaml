@@ -17,10 +17,7 @@ cycles:
 
 steps:
   - id: review-poll
-    skill: review-poll
-    agent: claude
-    model: sonnet
-    effort: medium
+    exec: [uv, run, --no-sync, python, -m, kaji_harness.scripts.review_poll_entry]
     on:
       PASS: end
       RETRY: pr-fix
