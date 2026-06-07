@@ -74,8 +74,20 @@ kaji run .kaji/wf/feature-development.yaml 235 --quiet
 ### エラー
 
 - `--log-level` に未定義値 → argparse `choices` で fail-fast（exit 2 相当、既存定義エラー経路）。
-- heartbeat 出力中の `print` 失敗（pipe 切断等）は polling 判定ロジックに影響させない
+- **heartbeat emitter の失敗隔離**: heartbeat 出力中の `sys.stdout.write` / `flush` が
+  `BrokenPipeError` または `OSError` を送出しても、polling 判定ロジックには一切影響させない
   （観測のみの副作用。verdict 判定は不変）。
+  - **捕捉責務の所在**: 二段で containment する。
+    1. **`_default_emit(line)`（出力実体）**: `sys.stdout.write` / `flush` を `try/except
+       (BrokenPipeError, OSError)` で囲み、捕捉したら **黙って return**（heartbeat は best-effort）。
+       pipe 切断（reader 側の `script_exec` が先に閉じた等）を polling 失敗に昇格させない。
+    2. **`run_polling`（呼び出し側）**: 注入された `emit_progress` が任意の例外を投げても
+       polling state を変えないよう、`emit_progress(...)` 呼び出しを `try/except Exception`
+       で囲み、例外を捨てる。これにより custom emitter（テストの fake 含む）が壊れても
+       state machine の終了判定は不変に保たれる。
+  - **根拠**: 組み込み `print` / stream の `flush=True` は flush を強制するが、write/flush 失敗を
+    自動で無害化する契約ではない（後述 Primary Sources）。「観測のみの副作用」を満たすには
+    上記の明示的 containment が必要。
 
 ## 制約・前提条件
 
@@ -96,10 +108,11 @@ kaji run .kaji/wf/feature-development.yaml 235 --quiet
 |----------|----------|
 | `kaji_harness/cli_main.py` | `--log-level` option 追加、`configure_console_logging(level)` 呼び出し（`cmd_run` 冒頭） |
 | `kaji_harness/console_log.py`（新規・小） | `configure_console_logging()`：stdout（`<= INFO`）/ stderr（`>= WARNING`）の二ハンドラ + 二 formatter をルート `kaji` logger に設定。冪等 |
-| `kaji_harness/runner.py` | workflow start / step start / exec start / verdict detected / step end / transition / cycle / barrier / abort / workflow end の各点で `logging.getLogger("kaji.runner").info()/warning()` を発火（既存 `RunLogger` 呼び出しと並置） |
+| `kaji_harness/runner.py` | workflow start / step start / verdict detected / step end / transition / cycle / barrier / abort / workflow end の各点で `logging.getLogger("kaji.runner").info()/warning()` を発火（既存 `RunLogger` 呼び出しと並置） |
+| `kaji_harness/script_exec.py` | `exec start` progress を **`_run_argv`（`exec` / `exec_script` 共有コア）** から発火。実 argv を知るのは runner ではなくこの層のため（後述 § 2 の argv 表示参照） |
 | `kaji_harness/interactive_terminal.py` | pane launch 成功直後に pane launched progress を `logging.getLogger("kaji.interactive_terminal").info()` |
 | `kaji_harness/scripts/codex_review_poll.py` | `run_polling` に progress emit を追加（injectable callback、default は stdout flush print）。`format_heartbeat()` 純粋関数を追加 |
-| `tests/` | console routing / formatter / heartbeat content / verdict 非破壊 / flush / runner progress のテスト |
+| `tests/` | console routing / formatter / heartbeat content / verdict 非破壊 / flush / **emitter 失敗隔離** / runner progress のテスト追加 + 既存 `tests/test_cli_timestamp.py::test_quiet_flag_suppresses_timestamp_output` の期待値更新（`[kaji]` progress 行は残る前提に絞る） |
 
 kaji は Python 単一スタック。backend/frontend の Scope 分岐は無い。
 
@@ -146,8 +159,8 @@ def configure_console_logging(level: int = logging.INFO) -> None:
 | 進行 | 例（message 部のみ。formatter が `[ts] [kaji]` を付与） |
 |------|--------|
 | workflow start | `workflow start: <workflow.name> issue <issue_ref>` |
-| step start | `step start: <step_id> attempt-NNN dispatch=<agent\|exec\|exec_script> [agent=.. model=.. effort=..]` |
-| exec start | `exec start: <argv を join、長大なら省略>` |
+| step start | `step start: <step_id> attempt-NNN dispatch=<agent\|exec\|exec_script> [agent=.. model=.. effort=..]`（runner.py） |
+| exec start | `exec start: <argv を join、長大なら省略>`（**script_exec.py の `_run_argv`**。理由は下記） |
 | pane launched（interactive_terminal） | `pane launched: <step_id> pane=<pane_id> verdict=<verdict_path>` |
 | verdict detected | `verdict detected: <step_id> source=<artifact\|comment\|stdout> status=<status>` |
 | step end | `step end: <step_id> status=<status> duration=<ms>ms next=<next_step_id\|end>` |
@@ -158,6 +171,20 @@ def configure_console_logging(level: int = logging.INFO) -> None:
 
 > next step id は `current_step.on.get(verdict.status)` 確定後に出す。step_end の next を表示するため、
 > transition 解決後に step end を出す順序とする（or step end と transition を 2 行に分ける）。
+
+#### `exec start` の argv 表示位置（`exec` / `exec_script` 共通化）
+
+`exec start` だけは runner.py ではなく **`script_exec.py` の `_run_argv`** から発火する。理由:
+
+- 実 argv を組み立てるのは `_run_argv` の呼び出し元であり、runner.py は知らない:
+  - `execute_exec` → `command_label=" ".join(argv)`（workflow.yaml の任意 argv そのまま）
+  - `execute_script` → `args=[sys.executable, "-m", module]` / `command_label=module`（runner からは module 名のみ）
+- もし runner.py で表示すると `exec_script` は module 名しか出せず、`exec` と表示粒度が食い違う。
+- `_run_argv` は両 dispatch の唯一の共有コアで、既に `command_label`（`exec`=full argv / `exec_script`=module）と
+  実 `args` を保持する。ここで `exec start: <argv>` を 1 箇所だけ発火すれば、両 dispatch で
+  **同じ作り方の argv 文字列**（`" ".join(args)`。長大時は末尾省略）を一貫表示でき、実装重複も避けられる。
+- relay 行 `[ts] [step_id] ...` と同じ `_now_stamp()`（local time）コンテキストに並ぶため、
+  console formatter の local time とも整合する。
 
 ### 3. review-poll heartbeat
 
@@ -182,7 +209,27 @@ def run_polling(..., emit_progress=_default_emit):  # _default_emit = print(...,
         sleep(poll_interval_sec)
 ```
 
-- `_default_emit(line)` は `sys.stdout.write(line + "\n"); sys.stdout.flush()`（または `print(line, flush=True)`）。
+- `_default_emit(line)` は `sys.stdout.write(line + "\n"); sys.stdout.flush()` を行い、
+  `BrokenPipeError` / `OSError` を捕捉して return する（best-effort。失敗を例外として伝播させない）:
+
+  ```python
+  def _default_emit(line: str) -> None:
+      try:
+          sys.stdout.write(line + "\n")
+          sys.stdout.flush()
+      except (BrokenPipeError, OSError):
+          return  # heartbeat は観測のみ。pipe 切断を polling 失敗に昇格させない
+  ```
+
+- `run_polling` 側でも、注入 emitter が壊れても state machine を守るため emit 呼び出しを隔離する:
+
+  ```python
+  try:
+      emit_progress(format_heartbeat(...))
+  except Exception:
+      pass  # emitter 例外は polling 判定に影響させない（観測のみの副作用）
+  ```
+
 - terminal state（`done_pass` / `done_retry`）で return する経路では heartbeat を出さず即 return（verdict 直前に
   不要な progress を混ぜない）。`---VERDICT---` block は従来どおり `emit_verdict` が最後に 1 度出す。
 
@@ -212,13 +259,29 @@ def run_polling(..., emit_progress=_default_emit):  # _default_emit = print(...,
   heartbeat が呼ばれること、elapsed / remaining が単調に推移すること、終了判定（PollResult.state）が
   従来と同一であることを検証（既存の `run_polling` medium テスト資産を流用）。
 - **verdict parse 非破壊**: heartbeat を複数行混ぜた `codex_review_poll.main()` の合成 stdout を
-  `parse_verdict_block()` / `resolve_verdict()` に渡し、抽出される `status` が heartbeat 無しの場合と
-  一致することを検証（完了条件「heartbeat が `---VERDICT---` parse を破壊しない」をテストで固定）。
+  `parse_verdict_block()`（現行 `kaji_harness/verdict.py:544` に実在）/ `resolve_verdict()`（同 `:608`）に渡し、
+  抽出される `status` が heartbeat 無しの場合と一致することを検証
+  （完了条件「heartbeat が `---VERDICT---` parse を破壊しない」をテストで固定）。
 - **flush 検証**: `write`/`flush` 呼び出しを記録する fake stream を `_default_emit` に差し、各 heartbeat で
   `flush` が呼ばれることを assert（subprocess pipe で終了まで溜まらないことの単位化）。
+- **emitter 失敗隔離（Must Fix 対応）**: 二観点を固定する。
+  1. **`_default_emit` の例外吸収**: `sys.stdout` を `write`/`flush` で `BrokenPipeError`（および
+     `OSError`）を投げる fake stream に差し替え、`_default_emit("line")` が **例外を送出せず return** すること。
+  2. **`run_polling` の state 不変**: 必ず例外を投げる `emit_progress`（`raise BrokenPipeError` / 任意 `Exception`）を
+     注入して `run_polling` を回し、heartbeat 無し（`emit_progress` 省略時）と **同一の `PollResult.state`**
+     （done_pass / done_retry / done_fallback / done_abort）になることを、既存の medium 状態機械シナリオで検証。
+     → 「heartbeat は観測のみの副作用」を回帰テストで固定する。
 - **runner progress**: 既存 runner テスト（exec-step 最小 workflow）を `capsys` で回し、`[kaji] workflow
   start` / `step start` / `exec start` / `verdict detected` / `step end ... next=...` / `workflow end` が
   stdout に、WARNING 系が stderr に出ることを検証。`RunLogger` の `run.log` JSONL が不変であることも併検証。
+- **既存 `--quiet` テストの整合更新（Should Fix 対応）**:
+  `tests/test_cli_timestamp.py::test_quiet_flag_suppresses_timestamp_output`（現状 `:347-390`）は
+  「`--quiet` 時に `^\[<ISO>\]` で始まる timestamp 行が stdout に **一切** 出ない」ことを期待している。
+  本設計では `--quiet`（agent/exec streaming 抑制）でも harness progress（`[ts] [kaji] ...`）は
+  `--log-level`（default INFO）で出るため、この期待は成立しなくなる。**期待値を「抑制対象は
+  agent/exec relay 行（`[ts] [step_id] ...`、`[kaji]` 以外の prefix）のみで、`[ts] [kaji] ...` の
+  harness progress 行は残る」へ更新する**（regex を `\[kaji\]` を除外する形に絞る、または relay prefix を
+  明示的に対象化する）。この更新は本設計に伴う必須変更として `tests/` 変更スコープに含める。
 
 ### Large テスト
 
