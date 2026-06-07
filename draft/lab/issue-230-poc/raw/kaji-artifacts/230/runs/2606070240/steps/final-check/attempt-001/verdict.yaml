@@ -1,0 +1,9 @@
+status: PASS
+reason: "dev workflow 最終チェック完了。全 16 完了条件が充足し、品質ゲート (make check) PASS、docs 整合・設計書添付・本文更新を完了。PR に進める。"
+evidence: |
+  前段証跡: review-ready PASS / design 作成 (f9fbb4b) / review-design Approve / fix-design→verify-design Approve / implement verdict PASS (Pre-Handoff Review Yes, 0784f83) / review-code Approve (独立テスト 1790 中 1788 passed / 0 regression / 2 skipped)。
+  品質ゲート: worktree kaji-feat-230 で make check 実行 → 1788 passed, 2 skipped (127.98s)。ruff/format/mypy/pytest 一括 PASS。
+  kitty 残骸 grep: rg ヒットは ADR 007 v2 の履歴説明と "/proc scan 無し"・"script(1) 依存も無く" 等の不在記述のみ。稼働中 kitty backend コードは残存せず（意図的残置）。
+  docs: interactive-terminal-runner.md / ARCHITECTURE.md を tmux 前提へ更新済み（diff 確認）。設計書昇格は不要（決定は ADR 007 v2 が捕捉済み）。
+  Issue 本文: 完了条件 16/16 を [x] に更新し、設計書を NOTE 直下に <details> 添付。
+suggestion: ""

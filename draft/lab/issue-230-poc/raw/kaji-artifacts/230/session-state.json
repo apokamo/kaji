@@ -1,0 +1,184 @@
+{
+  "issue_number": "230",
+  "sessions": {
+    "review-ready": "019e9e05-679f-7581-ab0f-9ada47c7b8b8",
+    "start": "1ece9e4c-561f-4ffb-8ab8-7e5c126a2aab",
+    "design": "a3e4b53e-29ea-4db6-b847-7f58ca3071d1",
+    "review-design": "019e9e11-96b9-7140-a449-48ddf5859664",
+    "fix-design": "c2396e95-182d-409e-8d6d-eba25c163914",
+    "verify-design": "019e9e18-e438-78d1-a49c-920da1b0c77e",
+    "implement": "eb89919b-0a37-4ec6-8f60-14f9ebf26468",
+    "review-code": "019e9e36-7163-7c72-b9f6-9059e2ba9126",
+    "final-check": "bf20e135-6c2b-4cd2-bff8-f6b1bb1e56d4",
+    "pr": "48896f67-ab86-4dd1-9182-a57d2cdda831",
+    "pr-fix": "19c1ce00-e465-4dd4-8e82-3caca68b7b85",
+    "pr-verify": "019e9e49-4df6-7aa3-a5d6-c07c45aca1e7",
+    "close": "1f32c110-9ec3-444d-99f7-7fa7613bb1ec"
+  },
+  "step_history": [
+    {
+      "step_id": "review-ready",
+      "verdict_status": "PASS",
+      "verdict_reason": "Issue 本文は review-ready の全チェック観点を満たしており、作業着手に進行可能",
+      "verdict_evidence": "Issue #230 は `## 概要`, `## 目的`, `## 完了条件` の3セクションが存在し、各セクションが空でない。\n概要では対象を `interactive_terminal` runner、`kaji_harness/interactive_terminal.py`、`kaji_harness/assets/interactive-terminal/wrapper.sh` と特定し、kitty から tmux 単一 backend へ実装置換する内容が明確。\n目的では現行 runner の cleanup が `/proc/*/cmdline` marker scan に依存すること、transcript が util-linux `script(1)` に依存すること、WSL2 / SSH / headless で並列可視性が得られないことを具体的に説明している。\n完了条件は `$TMUX` / `tmux -V >= 3.0` 検査、`split-window -d -h` argv、`#{pane_dead}` 存命判定、verdict.yaml 出現を終了トリガにすること、`close_on_verdict=false`、`pipe-pane` transcript、`/proc` scan 削除、テスト項目、docs 更新、grep 確認、`make check` まで客観的に検証可能。\n一次情報として ADR 007 v2 `docs/adr/007-interactive-terminal-runner.md`、前身 Issue #229、ADR 005 / Issue #224、PoC worktree、real-agent 検証レポートが本文に明記されている。\nラベルは `type:feature` の1件のみ。feature 追加観点について、到達したい状態に kaji 利用者・メンテナのユースケースがあり、スコープ境界では bug 修正・refactor・backend 実装に付随しない docs 改定などを OUT として明示している。\nIssue コメントでは前回の実装方針レビュー指摘 MF1/MF2/MF3/SF4/SF5/SF6 が本文へ反映され、その後の確認コメントで Approve されている。",
+      "verdict_suggestion": "次は /issue-start 230 で worktree をセットアップ",
+      "timestamp": "2026-06-06T17:41:54.391871+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "start",
+      "verdict_status": "PASS",
+      "verdict_reason": "Worktree 構築成功",
+      "verdict_evidence": "- git worktree add -b feat/230 /home/aki/dev/kaji-feat-230 main を実行し、worktree が正常に作成された\n- .venv シンボリックリンクを /home/aki/dev/kaji-feat-230/.venv として作成済み\n- .kaji/config.local.toml は main リポジトリに未配置のため overlay symlink は不要と判断\n- kaji issue prepend-note 230 --worktree kaji-feat-230 --branch feat/230 --commit を実行し、Issue #230 本文先頭に Worktree / Branch メタ情報を追記済み\n- git worktree list で /home/aki/dev/kaji-feat-230 [feat/230] の存在を確認済み",
+      "verdict_suggestion": "",
+      "timestamp": "2026-06-06T17:43:05.999336+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "design",
+      "verdict_status": "PASS",
+      "verdict_reason": "設計書作成・コミット完了（初回起動。Step 1.6 の 3 観測すべて非該当で通常フローを実行）。",
+      "verdict_evidence": "- 設計書 draft/design/issue-230-feat-harness-interactive-terminal-runner.md を作成・コミット（f9fbb4b, worktree feat/230）\n- 起動分岐: Step 1.6 の 3 観測すべて非該当（既存設計書なし / 設計後コミット TOTAL=0・NON_DESIGN=0 / 戻し先 design の BACK verdict コメント BACK_COUNT=0）→ 初回起動\n- type ラベル: type:feature 単一（cardinality OK）, canonical → _shared/design-by-type/feat.md を適用\n- 必須セクション全充足: 概要 / 背景・目的(ユースケース2本+代替案) / インターフェース(入出力・使用例・エラー) / 制約・前提条件 / 変更スコープ / 方針(Minimal How+PoC差分3点+スコープ決定) / テスト戦略(S/M/L) / 影響ドキュメント / 参照情報\n- 一次情報(アクセス可能): ADR 007 v2(docs/adr/007, コミット済み) / tmux man page(man7 公開URL) / tmux CHANGES(GitHub, \"pane options ... tmux 3.0\" を引用し tmux>=3.0 を裏付け) を根拠列付きで記載。gitignored の real-agent レポートと未コミット PoC worktree は「レビュー不可」と明示し、各判断を ADR/tmux 公式で独立裏付け\n- Self-Check(design pre-handoff, 対象 commit f9fbb4b): review-design rubric Step1.5 Gate Check / Step2 type重み付け(feat) / 基準1〜5 すべて ✅、Self-Check Verdict=Yes（補完不要）",
+      "verdict_suggestion": "",
+      "timestamp": "2026-06-06T17:53:30.617258+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "review-design",
+      "verdict_status": "RETRY",
+      "verdict_reason": "設計修正が必要: close_on_verdict=false の pane_dead=1 metadata 要件が verdict-trigger 単一契約と矛盾している",
+      "verdict_evidence": "Issue #230 は type:feature ラベル 1 件で、設計レビュー対象として妥当。\n設計書 draft/design/issue-230-feat-harness-interactive-terminal-runner.md には Primary Sources があり、ADR 007 v2、tmux man page、tmux CHANGES、現行 runner/wrapper を確認した。\ntmux man page は split-window -h/-P/-F、pipe-pane -o、set-option -p、remain-on-exit、pane_dead format を裏付けている。\ntmux CHANGES は CHANGES FROM 2.9 TO 3.0 に「Add pane options, set with set-option -p」と記載しており、tmux >= 3.0 要件の根拠になる。\nしかし設計書 lines 146-147 は「終了トリガは verdict.yaml の出現のみ」「agent プロセスの自然終了は待たない」「verdict 時点で agent CLI は生存（pane_dead=0）」と定義している。\n同じ設計書 lines 194-196 と lines 257-261 は close_on_verdict=false 時に kill-pane せず remain-on-exit on を設定し、metadata に pane_dead=1 を保存すると定義している。\ntmux man page の remain-on-exit は「program running in it exits」した pane を破棄せず残すための option であり、agent exit を待たない verdict-trigger 単一契約のままでは verdict 検知時点の pane_dead=1 を保証できない。\nこの矛盾により、Issue 完了条件「close_on_verdict=false ... pane_dead=1 metadata 保存」とテスト戦略を実装可能な契約に落とせない。",
+      "verdict_suggestion": "設計書で close_on_verdict=false の metadata 契約を修正してください。例: verdict 検知時点の snapshot は pane_dead=0/1 の実値を保存する、または pane_dead=1 を必須にするなら bounded wait など agent exit を観測する明示経路を追加し、verdict-trigger 単一契約との関係を再定義してください。",
+      "timestamp": "2026-06-06T17:57:34.903703+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "fix-design",
+      "verdict_status": "PASS",
+      "verdict_reason": "設計修正完了。verdict-trigger 単一契約と close_on_verdict=false の metadata 要件の矛盾を Option A（verdict 検知時点の実値 snapshot 記録）で解消した",
+      "verdict_evidence": "指摘の矛盾（設計 line 146-147 の「verdict 時点 pane_dead=0」と line 194-196/257-261 の「metadata に pane_dead=1 保存」の両立不能）を解消。\ndraft/design/issue-230-feat-harness-interactive-terminal-runner.md を 4 箇所修正（commit 9e59064、1 file changed, 24 insertions, 6 deletions）:\n- 出力 副作用: metadata = verdict 検知時点の #{pane_dead} 実値 snapshot（契約下では通常 0）と再定義。\n- 方針 step 5: 契約 = remain-on-exit on 設定 + kill-pane 抑止 / metadata = verdict 時点実値 snapshot に分離。[dead]/pane_dead=1 は agent 自然終了後の最終 pane 状態（契約外・runner 戻り時点では非観測）と区別。\n- Issue 完了条件との整合ノートを追加し、完了条件の pane_dead=1 が最終 pane 状態を指すことを明記。\n- スコープ決定表と Medium テストを実値 snapshot 前提に更新。\ngrep 確認: 残る #{pane_dead}=1 言及は verdict 前 dead の error 経路（line 135/280）と整合ノート/最終状態テスト（line 199/205-206/278）のみで、verdict 時点の metadata=1 保証は全て除去済み。",
+      "verdict_suggestion": "/issue-verify-design 230 で修正確認",
+      "timestamp": "2026-06-06T18:01:30.437309+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "verify-design",
+      "verdict_status": "PASS",
+      "verdict_reason": "前回 Must Fix の close_on_verdict=false metadata 契約の矛盾は、verdict 検知時点の pane_dead 実値 snapshot と最終 [dead] pane 状態を分離する設計へ修正され、再修正不要と判断した。",
+      "verdict_evidence": "前回の設計レビュー結果（Issue #230 comment 4639902996）の Must Fix は「close_on_verdict=false の pane_dead=1 metadata 契約が verdict-trigger 単一契約と矛盾している」の 1 件のみ。\n最新の設計修正報告（Issue #230 comment 4639911813）は Option A（verdict 検知時点の実値 snapshot を保存）を採用し、Option B（agent exit bounded wait）は verdict-trigger 単一契約と衝突するため不採用としている。\n現行設計書 /home/aki/dev/kaji-feat-230/draft/design/issue-230-feat-harness-interactive-terminal-runner.md:99 は pane lifecycle metadata を「verdict 検知時点の pane_dead 実値 snapshot」と定義し、同:101 で通常 pane_dead=0 になると明記している。\n同設計書:149 は終了トリガを verdict.yaml 出現のみ、agent 自然終了は待たない、verdict 時点で agent CLI は生存（pane_dead=0）と維持している。\n同設計書:197-203 は close_on_verdict=false の契約を remain-on-exit on 設定 + kill-pane 抑止に限定し、metadata は verdict 時点の pane_dead 実値（通常 0）snapshot として記録、最終 [dead] 状態は runner 戻り時点では観測しない契約外と明記している。\n同設計書:205-210 は Issue 完了条件の [dead]（pane_dead=1）を agent 自然終了後にユーザーが確認できる最終 pane 状態として説明し、metadata snapshot とは区別している。\n同設計書:231 の PoC 要素表と同:274-279 の Medium テスト戦略も、metadata は verdict 検知時点の実値 snapshot、最終 [dead] 状態確認は別観点として整理されている。\n`rg -n \"metadata.*#\\\\{pane_dead\\\\}=1|#\\\\{pane_dead\\\\}=1.*metadata|metadata.*pane_dead=1|pane_dead=1.*metadata|metadata に.*1|metadata.*保存\" /home/aki/dev/kaji-feat-230/draft/design/issue-230-feat-harness-interactive-terminal-runner.md` の結果は、汎用の「pane metadata を保存」記述 1 件のみで、metadata に pane_dead=1 を必須保存する旧契約は残っていない。",
+      "verdict_suggestion": "",
+      "timestamp": "2026-06-06T18:03:56.674703+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "implement",
+      "verdict_status": "PASS",
+      "verdict_reason": "interactive_terminal runner の terminal backend を kitty から tmux 単一へ実装置換し、設計書・ADR 007 v2 の契約どおりに実装・テスト・品質チェックがすべて通過した。",
+      "verdict_evidence": "実装: kaji_harness/interactive_terminal.py を tmux backend へ全面置換（split-window -d -h / #{pane_dead} / kill-pane best-effort / pipe-pane）。/proc scan と util-linux script(1) 経路を撤去。$TMUX / $TMUX_PANE / tmux>=3.0 を fail-fast 検査。verdict 検知時点の #{pane_dead} 実値を pane-metadata.json に snapshot。公開シグネチャ・config・CLI option・verdict 解決・session 継続は不変（config.py / cli_main.py は diff に現れない）。\nwrapper: 9->8 引数（terminal_log 除去）、transcript は runner 側 pipe-pane に一本化、agent 直接起動（PoC の agent-exited.json / exit-code 捕捉 / completion_barrier=agent_exit / verbose / pane-capture は contract 外として不採用）。\nテスト: tests/test_interactive_terminal.py を tmux 前提へ書き換え（Small 10 / Medium 18 / Large(large_local) 1 = 29 passed、実 tmux 3.4 の E2E 含む）。tests/test_runner_interactive_dispatch.py に MF3 回帰 guard を追加（3 passed）。\npytest 全体: 1788 passed, 2 skipped, 0 failed（実装前 baseline 1785 passed/2 skipped から regression 0）。\n品質: ruff check All checks passed! / ruff format 2 files reformatted, 122 unchanged / mypy Success: no issues found in 32 source files。\nkitty 残骸 grep: ADR 007 / draft/design の意図的履歴を除き tmux 前提へ統一済み。\nPre-Handoff Review: self-check 経路（subagent unparseable fallback）で 4 観点すべて ✅、verdict Yes。PHR_COUNT=1。",
+      "verdict_suggestion": "",
+      "timestamp": "2026-06-06T18:33:45.952638+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "review-code",
+      "verdict_status": "PASS",
+      "verdict_reason": "コードレビューで Must Fix は見つからず、設計整合性・type:feature 観点・独立品質ゲートを満たしている",
+      "verdict_evidence": "Issue #230 は type:feature 単一ラベル。Pre-Handoff Review hard gate は GitHub REST コメント確認で PHR_COUNT=1、経路行=2 のため通過。\n実装差分は 11 files changed, 1280 insertions(+), 724 deletions(-)。対象は interactive_terminal runner / wrapper / runner dispatch コメント・回帰テスト / 関連 docs / 設計書で、config key・CLI option・verdict 解決経路は変更されていない。\nkaji_harness/interactive_terminal.py:101-143 で tmux split-window -d -h -P -F '#{pane_id}' -t $TMUX_PANE を生成し、右 pane 追加と pane_id 回収を実装。146-254 で verdict.yaml 出現を完了トリガにし、metadata snapshot、Codex session id 回収 grace、close_on_verdict=true 時の kill-pane cleanup を実装。\nkaji_harness/interactive_terminal.py:278-390 で tmux PATH、$TMUX、$TMUX_PANE、tmux >= 3.0、#{pane_dead} 存命判定、pipe-pane transcript、kill-pane cleanup を実装。/proc scan と script(1) 実行経路は runtime code から削除済み。\nkaji_harness/assets/interactive-terminal/wrapper.sh:4-11 は 8 引数契約、13 で workdir に cd、48-84 で script(1) を使わず claude/codex を直接起動し、Codex には --cd workdir を渡している。\ntests/test_interactive_terminal.py:100-142 で -h を含む split-window argv exact assert、145-210 で tmux/$TMUX/$TMUX_PANE/version fail-fast、337-494 で verdict cleanup・remain-on-exit・pipe-pane・early pane death・timeout を検証。789-889 で実 tmux E2E が split-window -> wrapper -> verdict -> kill-pane 後の pane 消滅を確認している。\ntests/test_runner_interactive_dispatch.py:122-174 で interactive_terminal と headless が同一 effective_workdir を受け取る MF3 回帰 guard を追加している。\ngrep 確認: rg -n \"kitty|script\\(1\\)|_build_kitty|/proc|kill_processes|signal_matches|pid_exists\" kaji_harness tests docs は ADR 履歴説明と tmux置換説明、および no script(1)/no /proc の説明のみを返し、runtime/tests に旧 kitty 実装シンボルは残っていない。\n独立品質ゲート: source .venv/bin/activate && ruff check kaji_harness/ tests/ && ruff format --check kaji_harness/ tests/ && mypy kaji_harness/ は exit 0（All checks passed / 124 files already formatted / Success: no issues found in 32 source files）。\n独立 pytest: source .venv/bin/activate && pytest は 1788 passed, 2 skipped in 127.89s、failed/errors 0。Baseline failure コメントは無いが全テストが exit 0 のため regression 0。",
+      "verdict_suggestion": "",
+      "timestamp": "2026-06-06T18:39:07.406059+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "final-check",
+      "verdict_status": "PASS",
+      "verdict_reason": "dev workflow 最終チェック完了。全 16 完了条件が充足し、品質ゲート (make check) PASS、docs 整合・設計書添付・本文更新を完了。PR に進める。",
+      "verdict_evidence": "前段証跡: review-ready PASS / design 作成 (f9fbb4b) / review-design Approve / fix-design→verify-design Approve / implement verdict PASS (Pre-Handoff Review Yes, 0784f83) / review-code Approve (独立テスト 1790 中 1788 passed / 0 regression / 2 skipped)。\n品質ゲート: worktree kaji-feat-230 で make check 実行 → 1788 passed, 2 skipped (127.98s)。ruff/format/mypy/pytest 一括 PASS。\nkitty 残骸 grep: rg ヒットは ADR 007 v2 の履歴説明と \"/proc scan 無し\"・\"script(1) 依存も無く\" 等の不在記述のみ。稼働中 kitty backend コードは残存せず（意図的残置）。\ndocs: interactive-terminal-runner.md / ARCHITECTURE.md を tmux 前提へ更新済み（diff 確認）。設計書昇格は不要（決定は ADR 007 v2 が捕捉済み）。\nIssue 本文: 完了条件 16/16 を [x] に更新し、設計書を NOTE 直下に <details> 添付。",
+      "verdict_suggestion": "",
+      "timestamp": "2026-06-06T18:44:14.772492+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "pr",
+      "verdict_status": "PASS",
+      "verdict_reason": "PR作成を完了した",
+      "verdict_evidence": "- git push -u origin HEAD: feat/230 ブランチを正常にリモートへプッシュ\n- kaji pr create: https://github.com/apokamo/kaji/pull/231 を作成（rc=0）\n- PR URL形式検証: https://github.com/apokamo/kaji/pull/231 は規定パターンに一致\n- Issue #230 本文を更新: **PR**: `gh:231` を NOTE ブロックに追記（kaji issue edit rc=0）\n- git absorb: 未インストールのためスキップ（正常）",
+      "verdict_suggestion": "",
+      "timestamp": "2026-06-06T18:45:43.751571+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "review-poll",
+      "verdict_status": "RETRY",
+      "verdict_reason": "codex auto-review が現在 head に対し COMMENTED review を投稿",
+      "verdict_evidence": "bot review on head 0784f83",
+      "verdict_suggestion": "/pr-fix を実行して codex auto-review 指摘に対応する。",
+      "timestamp": "2026-06-06T18:48:11.175499+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "pr-fix",
+      "verdict_status": "PASS",
+      "verdict_reason": "codex auto-review の P2 指摘 1 件に対応し、コミット・プッシュ・レビュー返信を完了した。",
+      "verdict_evidence": "- 指摘: pipe-pane が pane 消失で失敗すると verdict 確認前に CLIExecutionError を\n  raise し、短命 step の成功が隠される (interactive_terminal.py:217, P2)。\n- 修正 (commit a5706c8): _pipe_pane を bool 返却化。呼び出し側で失敗時に\n  verdict_path.is_file() を確認し、verdict 存在→成功 return、不在→_kill_pane 後に\n  _terminal_exit_detail を添えて fail-loud。\n- 回帰テスト 2 件追加: test_pipe_pane_failure_with_verdict_succeeds /\n  test_pipe_pane_failure_without_verdict_fails_loud。\n- make check: PASS (1790 passed, 2 skipped)。\n- push: 0784f83..a5706c8 feat/230、inline 返信 (comment 3368040483) と\n  全体サマリー (issuecomment-4640025823) 投稿済み。",
+      "verdict_suggestion": "/pr-verify 230 で修正確認を実施する。",
+      "timestamp": "2026-06-06T18:54:22.183797+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "pr-verify",
+      "verdict_status": "PASS",
+      "verdict_reason": "codex auto-review の P2 指摘に対する修正が適切で、品質ゲートも通過した。",
+      "verdict_evidence": "Issue #230 と PR #231 を確認。前回指摘は chatgpt-codex-connector[bot] の P2「Check for verdict before failing pipe setup」1 件のみ。\nPR 対応報告では commit a5706c8 で _pipe_pane を bool 返却化し、pipe-pane 失敗時に verdict.yaml の存在を確認する修正と、回帰テスト 2 件追加が報告されている。\n/home/aki/dev/kaji-feat-230/kaji_harness/interactive_terminal.py:217-231 で _pipe_pane が False の場合に verdict_path.is_file() を先に確認し、verdict があれば CLIResult(full_output=\"\", session_id=...) を返す。verdict 不在時のみ _kill_pane 後に CLIExecutionError を raise する。\n/home/aki/dev/kaji-feat-230/kaji_harness/interactive_terminal.py:365-382 で _pipe_pane は tmux pipe-pane の returncode を bool として返し、内部で即 raise しない実装に変更されている。\n/home/aki/dev/kaji-feat-230/tests/test_interactive_terminal.py:444-478 で pipe-pane 失敗 + verdict ありの成功経路を検証し、同ファイル:480-507 で pipe-pane 失敗 + verdict なしの fail-loud と kill-pane cleanup を検証している。\ngit diff HEAD~1 は kaji_harness/interactive_terminal.py と tests/test_interactive_terminal.py のみで、確認対象の P2 race 修正と回帰テスト追加に限定されている。\nsource .venv/bin/activate && make check を /home/aki/dev/kaji-feat-230 で実行し、ruff check / ruff format / mypy / pytest が全て PASS。pytest は 1790 passed, 2 skipped in 127.90s。",
+      "verdict_suggestion": "",
+      "timestamp": "2026-06-06T18:59:08.892228+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "close",
+      "verdict_status": "PASS",
+      "verdict_reason": "クローズ完了",
+      "verdict_evidence": "PR #231 マージ済み (2026-06-06T18:59:30Z)\nworktree /home/aki/dev/kaji-feat-230 削除済み\nローカルブランチ feat/230 削除済み\nリモートブランチ origin/feat/230 削除済み\nmain を af907e1 まで ff-only 最新化\nIssue #230 クローズ済み (reason: completed)",
+      "verdict_suggestion": "",
+      "timestamp": "2026-06-06T19:00:22.059745+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    }
+  ],
+  "cycle_counts": {},
+  "last_completed_step": "close",
+  "last_transition_verdict": {
+    "status": "PASS",
+    "reason": "クローズ完了",
+    "evidence": "PR #231 マージ済み (2026-06-06T18:59:30Z)\nworktree /home/aki/dev/kaji-feat-230 削除済み\nローカルブランチ feat/230 削除済み\nリモートブランチ origin/feat/230 削除済み\nmain を af907e1 まで ff-only 最新化\nIssue #230 クローズ済み (reason: completed)",
+    "suggestion": ""
+  },
+  "worktree_dir": "/home/aki/dev/kaji-feat-230",
+  "branch_name": "feat/230"
+}

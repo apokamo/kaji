@@ -1,0 +1,9 @@
+status: PASS
+reason: Worktree 構築成功
+evidence: |
+  - git worktree add -b feat/230 /home/aki/dev/kaji-feat-230 main を実行し、worktree が正常に作成された
+  - .venv シンボリックリンクを /home/aki/dev/kaji-feat-230/.venv として作成済み
+  - .kaji/config.local.toml は main リポジトリに未配置のため overlay symlink は不要と判断
+  - kaji issue prepend-note 230 --worktree kaji-feat-230 --branch feat/230 --commit を実行し、Issue #230 本文先頭に Worktree / Branch メタ情報を追記済み
+  - git worktree list で /home/aki/dev/kaji-feat-230 [feat/230] の存在を確認済み
+suggestion: ""

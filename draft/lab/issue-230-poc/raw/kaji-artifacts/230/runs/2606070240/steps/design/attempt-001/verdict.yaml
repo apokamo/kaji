@@ -1,0 +1,11 @@
+status: PASS
+reason: |
+  設計書作成・コミット完了（初回起動。Step 1.6 の 3 観測すべて非該当で通常フローを実行）。
+evidence: |
+  - 設計書 draft/design/issue-230-feat-harness-interactive-terminal-runner.md を作成・コミット（f9fbb4b, worktree feat/230）
+  - 起動分岐: Step 1.6 の 3 観測すべて非該当（既存設計書なし / 設計後コミット TOTAL=0・NON_DESIGN=0 / 戻し先 design の BACK verdict コメント BACK_COUNT=0）→ 初回起動
+  - type ラベル: type:feature 単一（cardinality OK）, canonical → _shared/design-by-type/feat.md を適用
+  - 必須セクション全充足: 概要 / 背景・目的(ユースケース2本+代替案) / インターフェース(入出力・使用例・エラー) / 制約・前提条件 / 変更スコープ / 方針(Minimal How+PoC差分3点+スコープ決定) / テスト戦略(S/M/L) / 影響ドキュメント / 参照情報
+  - 一次情報(アクセス可能): ADR 007 v2(docs/adr/007, コミット済み) / tmux man page(man7 公開URL) / tmux CHANGES(GitHub, "pane options ... tmux 3.0" を引用し tmux>=3.0 を裏付け) を根拠列付きで記載。gitignored の real-agent レポートと未コミット PoC worktree は「レビュー不可」と明示し、各判断を ADR/tmux 公式で独立裏付け
+  - Self-Check(design pre-handoff, 対象 commit f9fbb4b): review-design rubric Step1.5 Gate Check / Step2 type重み付け(feat) / 基準1〜5 すべて ✅、Self-Check Verdict=Yes（補完不要）
+suggestion: ""

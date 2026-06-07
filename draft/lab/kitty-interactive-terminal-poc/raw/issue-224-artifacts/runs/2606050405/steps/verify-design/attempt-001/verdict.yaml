@@ -1,0 +1,12 @@
+status: PASS
+reason: "設計レビューの Must Fix である script(1) 非 util-linux 環境の扱いが、設計書上で fail-soft 直接起動として具体化され、対応する Medium テスト方針も追加されているため。"
+evidence: |
+  Issue #224 の前回設計レビューは Must Fix として「script(1) の互換性検出または fallback 契約を明記してください」の 1 点を要求していた。
+  修正後の draft/design/issue-224-feat-interactive-terminal-runner.md:160-165 は、script(1) を util-linux 互換の場合のみ transcript に使い、不在時・非 util-linux（BSD/macOS native 等）では transcript 無しで agent を直接起動して継続すると明記している。
+  同設計書:295-303 は Wrapper 契約として、command -v script の存在確認に加えて script --version 出力の util-linux 表記で判定し、非互換 / 不在では GNU long option を当てず agent を直接起動する fail-soft 動作を定義している。
+  同設計書:389-395 は Medium テストに transcript 分岐 3 ケースを追加し、fake script が存在するが util-linux 非互換の場合に wrapper が long option で fail せず fake agent を直接起動することを検証対象にしている。
+  同設計書:414 は docs guide の手動検証手順で、terminal.log transcript は util-linux/Linux 環境のみ best-effort であり macOS native では transcript 取得を成功条件に含めない旨を記載する方針を追加している。
+  同設計書:433 は PoC wrapper の command -v script のみ分岐の限界を明記し、本設計では script --version の util-linux 判定と非互換時 fail-soft 直接起動を追加する、と参照情報との差分を明確にしている。
+  git diff a5f9c06..02a4256 では設計書 1 ファイルに 23 行追加 / 6 行削除があり、上記 script 互換性契約・テスト方針・docs 方針・PoC 差分注記が追加されていることを確認した。
+  修正報告には「議論/見送りなし」とあり、反論検討対象は存在しない。
+suggestion: ""

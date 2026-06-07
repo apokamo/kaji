@@ -1,0 +1,12 @@
+status: PASS
+reason: "前回 Must Fix の close_on_verdict=false metadata 契約の矛盾は、verdict 検知時点の pane_dead 実値 snapshot と最終 [dead] pane 状態を分離する設計へ修正され、再修正不要と判断した。"
+evidence: |
+  前回の設計レビュー結果（Issue #230 comment 4639902996）の Must Fix は「close_on_verdict=false の pane_dead=1 metadata 契約が verdict-trigger 単一契約と矛盾している」の 1 件のみ。
+  最新の設計修正報告（Issue #230 comment 4639911813）は Option A（verdict 検知時点の実値 snapshot を保存）を採用し、Option B（agent exit bounded wait）は verdict-trigger 単一契約と衝突するため不採用としている。
+  現行設計書 /home/aki/dev/kaji-feat-230/draft/design/issue-230-feat-harness-interactive-terminal-runner.md:99 は pane lifecycle metadata を「verdict 検知時点の pane_dead 実値 snapshot」と定義し、同:101 で通常 pane_dead=0 になると明記している。
+  同設計書:149 は終了トリガを verdict.yaml 出現のみ、agent 自然終了は待たない、verdict 時点で agent CLI は生存（pane_dead=0）と維持している。
+  同設計書:197-203 は close_on_verdict=false の契約を remain-on-exit on 設定 + kill-pane 抑止に限定し、metadata は verdict 時点の pane_dead 実値（通常 0）snapshot として記録、最終 [dead] 状態は runner 戻り時点では観測しない契約外と明記している。
+  同設計書:205-210 は Issue 完了条件の [dead]（pane_dead=1）を agent 自然終了後にユーザーが確認できる最終 pane 状態として説明し、metadata snapshot とは区別している。
+  同設計書:231 の PoC 要素表と同:274-279 の Medium テスト戦略も、metadata は verdict 検知時点の実値 snapshot、最終 [dead] 状態確認は別観点として整理されている。
+  `rg -n "metadata.*#\\{pane_dead\\}=1|#\\{pane_dead\\}=1.*metadata|metadata.*pane_dead=1|pane_dead=1.*metadata|metadata に.*1|metadata.*保存" /home/aki/dev/kaji-feat-230/draft/design/issue-230-feat-harness-interactive-terminal-runner.md` の結果は、汎用の「pane metadata を保存」記述 1 件のみで、metadata に pane_dead=1 を必須保存する旧契約は残っていない。
+suggestion: ""

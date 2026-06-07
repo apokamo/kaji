@@ -1,0 +1,6 @@
+This is a kaji interactive-terminal PoC smoke test using the cheapest Codex model available in this environment.
+Write exactly this YAML to the verdict path requested by the wrapper:
+status: PASS
+reason: cheap model final smoke test inside project directory
+evidence: codex gpt-5.4-mini wrote artifact verdict inside the project worktree
+suggestion: ""

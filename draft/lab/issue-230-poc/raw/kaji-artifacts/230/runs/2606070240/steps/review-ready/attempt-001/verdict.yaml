@@ -1,0 +1,11 @@
+status: PASS
+reason: "Issue 本文は review-ready の全チェック観点を満たしており、作業着手に進行可能"
+evidence: |
+  Issue #230 は `## 概要`, `## 目的`, `## 完了条件` の3セクションが存在し、各セクションが空でない。
+  概要では対象を `interactive_terminal` runner、`kaji_harness/interactive_terminal.py`、`kaji_harness/assets/interactive-terminal/wrapper.sh` と特定し、kitty から tmux 単一 backend へ実装置換する内容が明確。
+  目的では現行 runner の cleanup が `/proc/*/cmdline` marker scan に依存すること、transcript が util-linux `script(1)` に依存すること、WSL2 / SSH / headless で並列可視性が得られないことを具体的に説明している。
+  完了条件は `$TMUX` / `tmux -V >= 3.0` 検査、`split-window -d -h` argv、`#{pane_dead}` 存命判定、verdict.yaml 出現を終了トリガにすること、`close_on_verdict=false`、`pipe-pane` transcript、`/proc` scan 削除、テスト項目、docs 更新、grep 確認、`make check` まで客観的に検証可能。
+  一次情報として ADR 007 v2 `docs/adr/007-interactive-terminal-runner.md`、前身 Issue #229、ADR 005 / Issue #224、PoC worktree、real-agent 検証レポートが本文に明記されている。
+  ラベルは `type:feature` の1件のみ。feature 追加観点について、到達したい状態に kaji 利用者・メンテナのユースケースがあり、スコープ境界では bug 修正・refactor・backend 実装に付随しない docs 改定などを OUT として明示している。
+  Issue コメントでは前回の実装方針レビュー指摘 MF1/MF2/MF3/SF4/SF5/SF6 が本文へ反映され、その後の確認コメントで Approve されている。
+suggestion: "次は /issue-start 230 で worktree をセットアップ"

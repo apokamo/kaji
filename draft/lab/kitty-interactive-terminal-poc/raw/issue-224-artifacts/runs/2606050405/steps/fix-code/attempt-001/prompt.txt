@@ -1,0 +1,55 @@
+スキル `issue-fix-code` を実行してください。
+
+## セッション開始プロトコル
+1. Issue #224 を読み、現在の進捗を把握する
+2. git log --oneline -10 で最近の変更を確認する
+3. 以下のコンテキスト変数を確認する
+4. 上記を踏まえて、スキルの指示に従って作業を実行する
+
+## コンテキスト変数
+- issue_id: 224
+- issue_ref: #224
+- step_id: fix-code
+- issue_input: 224
+- branch_prefix: feat
+- branch_name: feat/224
+- worktree_dir: /home/aki/dev/kaji-feat-224
+- design_path: draft/design/issue-224-feat-interactive-terminal-runner.md
+- provider_type: github
+- default_branch: main
+- git_remote: origin
+- verdict_path: /home/aki/dev/kaji/.kaji-artifacts/224/runs/2606050405/steps/fix-code/attempt-001/verdict.yaml
+- cycle_count: 1
+- max_iterations: 3
+- previous_verdict: reason: コード・自動テストは設計契約を満たしているが、Issue 完了条件の real kitty + real Claude/Codex 手動検証が未実施のまま残っているため。
+evidence: Pre-Handoff Review hard gate は通過: Issue #224 comments に `## Pre-Handoff Review` が 1 件あり、`- **経路**:` 行も存在する。
+type ラベルは `type:feature` の 1 件のみ。
+独立実行した品質ゲートは通過:
+- `ruff check kaji_harness/ tests/` → All checks passed!
+- `ruff format --check kaji_harness/ tests/` → 121 files already formatted
+- `mypy kaji_harness/` → Success: no issues found in 32 source files
+- `pytest` → 1739 passed, 2 skipped in 130.59s
+- `make verify-docs` → All Markdown links valid (83 file(s) checked)
+実装完了報告の `完了条件の段階確認` では、`trusted worktree 上で real kitty + real Claude / Codex の手動検証` が未チェック `[ ]` として明記されている。
+Issue 本文の完了条件にも `trusted project worktree 上で real kitty + real Claude / Codex の最小 workflow を手動検証する` が含まれている。
+設計書 `draft/design/issue-224-feat-interactive-terminal-runner.md` は real CLI テストを自動化しない代わりに fake terminal Large + 手動検証で担保すると定義しているため、手動検証未実施は完了条件未充足。
+suggestion: trusted project worktree 上で real kitty + real Claude/Codex の fresh/resume、close-on-verdict true/false、terminal.log 条件を手動検証し、結果を Issue コメントへ追記してから review-code を再実行する。
+
+## 出力要件
+作業完了後、以下を必ず実施してください:
+
+1. 次の YAML を `/home/aki/dev/kaji/.kaji-artifacts/224/runs/2606050405/steps/fix-code/attempt-001/verdict.yaml` に保存する（pure YAML。`---VERDICT---` delimiter は付けない）:
+   status: PASS | ABORT のいずれか
+   reason: 判定理由
+   evidence: 具体的根拠（複数行可。抽象表現禁止）
+   suggestion: 次のアクション提案（ABORT/BACK 時必須）
+2. 作業報告 Issue comment の末尾に、同じ内容を次の `---VERDICT---` block として追記する。
+3. 互換のため、同じ block を stdout にも出力する:
+
+---VERDICT---
+status: PASS | ABORT
+reason: "判定理由"
+evidence: |
+  具体的根拠（複数行可。抽象表現禁止）
+suggestion: "次のアクション提案"（ABORT/BACK時必須）
+---END_VERDICT---

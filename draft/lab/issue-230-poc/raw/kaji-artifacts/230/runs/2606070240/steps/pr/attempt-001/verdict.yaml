@@ -1,0 +1,9 @@
+status: PASS
+reason: PR作成を完了した
+evidence: |
+  - git push -u origin HEAD: feat/230 ブランチを正常にリモートへプッシュ
+  - kaji pr create: https://github.com/apokamo/kaji/pull/231 を作成（rc=0）
+  - PR URL形式検証: https://github.com/apokamo/kaji/pull/231 は規定パターンに一致
+  - Issue #230 本文を更新: **PR**: `gh:231` を NOTE ブロックに追記（kaji issue edit rc=0）
+  - git absorb: 未インストールのためスキップ（正常）
+suggestion: ""

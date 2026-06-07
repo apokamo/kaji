@@ -1,0 +1,10 @@
+status: PASS
+reason: "設計レビュー RETRY の単一指摘（script(1) 非 util-linux 環境での wrapper 起動失敗）に対し、util-linux 判定 + 非互換時 fail-soft 直接起動の方針と検証テストを設計書へ反映した。"
+evidence: |
+  draft/design/issue-224-feat-interactive-terminal-runner.md を更新（commit 02a4256, +23/-6）。
+  - § Wrapper 契約: `script --version` の util-linux 判定を導入し、互換時のみ `script --quiet --flush --command` を使用。非互換（BSD/macOS native）/ 不在では BSD long option を当てず agent を直接起動する fail-soft 分岐を明記。
+  - § 制約・前提条件 §依存: transcript は util-linux/Linux のみ best-effort、`script` の PATH 存在だけでは互換とみなさない旨を明記。
+  - § テスト戦略 Medium（wrapper shell）: transcript 分岐を 3 ケース（util-linux 互換 / 不在 / 存在するが非互換）に拡張し、非互換時に long option で fail せず agent 直接起動を fake script で検証するケースを追加（指摘の Medium テスト要求に対応）。
+  - § 参照情報: PoC wrapper の `command -v script` のみ分岐の限界と本設計の意図的分岐を明記。
+  - § 影響ドキュメント: cli-guide 手動検証手順で transcript を OS 別に扱い macOS native では成功条件に含めない指示を追記。
+suggestion: ""

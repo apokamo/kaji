@@ -1,0 +1,4 @@
+status: PASS
+reason: cheap model final smoke test inside project directory
+evidence: codex gpt-5.4-mini wrote artifact verdict inside the project worktree
+suggestion: ""

@@ -1,0 +1,10 @@
+status: PASS
+reason: クローズ完了
+evidence: |
+  PR #231 マージ済み (2026-06-06T18:59:30Z)
+  worktree /home/aki/dev/kaji-feat-230 削除済み
+  ローカルブランチ feat/230 削除済み
+  リモートブランチ origin/feat/230 削除済み
+  main を af907e1 まで ff-only 最新化
+  Issue #230 クローズ済み (reason: completed)
+suggestion: ""

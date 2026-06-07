@@ -1,0 +1,14 @@
+status: PASS
+reason: codex auto-review の P2 指摘 1 件に対応し、コミット・プッシュ・レビュー返信を完了した。
+evidence: |
+  - 指摘: pipe-pane が pane 消失で失敗すると verdict 確認前に CLIExecutionError を
+    raise し、短命 step の成功が隠される (interactive_terminal.py:217, P2)。
+  - 修正 (commit a5706c8): _pipe_pane を bool 返却化。呼び出し側で失敗時に
+    verdict_path.is_file() を確認し、verdict 存在→成功 return、不在→_kill_pane 後に
+    _terminal_exit_detail を添えて fail-loud。
+  - 回帰テスト 2 件追加: test_pipe_pane_failure_with_verdict_succeeds /
+    test_pipe_pane_failure_without_verdict_fails_loud。
+  - make check: PASS (1790 passed, 2 skipped)。
+  - push: 0784f83..a5706c8 feat/230、inline 返信 (comment 3368040483) と
+    全体サマリー (issuecomment-4640025823) 投稿済み。
+suggestion: /pr-verify 230 で修正確認を実施する。

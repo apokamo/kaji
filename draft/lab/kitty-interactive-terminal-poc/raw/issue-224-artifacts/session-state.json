@@ -1,0 +1,125 @@
+{
+  "issue_number": "224",
+  "sessions": {
+    "review-ready": "019e9406-e1b0-7f72-815c-563369d2eb5a",
+    "start": "bf8dbcc1-d89e-4c30-b59b-0c756fff2be0",
+    "design": "b020555e-2ee7-4eaf-9141-f902f1c14128",
+    "review-design": "019e9412-1634-7083-8af4-c61e3a1aed3e",
+    "fix-design": "3b306da3-b22b-449b-b5e9-51a7719abb49",
+    "verify-design": "019e9418-62f3-7f42-a8e2-63e2f0582729",
+    "implement": "1f1486d4-43c4-4aae-ac51-e8e4c4ee41b1",
+    "review-code": "019e943b-230b-7f33-88b5-e282e051569b",
+    "fix-code": "2d078f87-61a6-4057-a593-82138f0b124c"
+  },
+  "step_history": [
+    {
+      "step_id": "review-ready",
+      "verdict_status": "PASS",
+      "verdict_reason": "Issue #224 は review-ready の共通観点および type:feature 追加観点を満たしているため、作業着手に進行可能。",
+      "verdict_evidence": "Issue #224 の本文には `## 概要`, `## 目的`, `## 完了条件` が存在し、いずれも空ではない。\n概要では `kaji run` の agent step に `interactive_terminal` runner を追加すること、対象ファイル/ディレクトリとして `kaji_harness/config.py`, `kaji_harness/runner.py`, `kaji_harness/cli.py`, `kaji_harness/verdict.py`, `kaji_harness/interactive_terminal.py`, `assets/interactive-terminal/wrapper.sh`, 関連テスト、docs 更新が列挙されている。\n目的では現行 runner の実コマンド `claude -p --output-format stream-json --verbose` と `codex exec --json`、および Issue #220 / PR #221 / `docs/adr/005-artifact-primary-verdict.md` を根拠として、artifact-primary verdict resolution と attempt layout を前提にする理由が説明されている。\ntype ラベルは `type:feature` の 1 件のみで、追加観点 8/9 の対象として確定できる。\nfeature のユースケースは「`kaji run` 利用者が repository config または CLI option で `interactive_terminal` runner を選択できる」などの到達状態として具体化されている。\nfeature のスコープ境界は「本 Issue は `interactive_terminal` runner の追加だけを扱う」と明記され、既存 headless runner の削除、既存 headless runner の CLI 起動引数変更、handoff runner、kitty 以外の terminal backend、CI で real Claude / real Codex を実行するテスト等を実装しない対象として列挙している。\n完了条件は config overlay、CLI option 優先順位、dispatch、invalid config fail-fast、kitty 未インストール時 fail-fast、wrapper 引数順、verdict polling、cleanup、Claude/Codex command、session fallback、docs 更新、`make check`、real kitty + real Claude/Codex 手動検証など、客観的に確認できる項目で構成されている。",
+      "verdict_suggestion": "次の step_id=start に進み、worktree `/home/aki/dev/kaji-feat-224` の作成と Issue メタ情報追記を行う。",
+      "timestamp": "2026-06-04T19:07:09.778651+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "start",
+      "verdict_status": "PASS",
+      "verdict_reason": "Worktree 構築成功",
+      "verdict_evidence": "- git worktree add -b feat/224 /home/aki/dev/kaji-feat-224 main 実行済み (HEAD: 291e19d)\n- .venv シンボリックリンク作成済み (/home/aki/dev/kaji-feat-224/.venv -> /home/aki/dev/kaji/.venv)\n- provider overlay (.kaji/config.local.toml) は main に未配置のため不要\n- kaji issue prepend-note 224 --worktree kaji-feat-224 --branch feat/224 --commit 実行済み\n- Issue #224 本文先頭に NOTE ブロック (Worktree/Branch) が追記されたことを gh issue view で確認",
+      "verdict_suggestion": "",
+      "timestamp": "2026-06-04T19:08:16.512682+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "design",
+      "verdict_status": "PASS",
+      "verdict_reason": "interactive_terminal runner の設計書を作成しコミットした。初回起動（既存設計書なし・設計後コミットなし）であり通常フローを完走した。",
+      "verdict_evidence": "draft/design/issue-224-feat-interactive-terminal-runner.md を作成（commit a5f9c06）。\nfeat type 単一ラベルを確認し、_shared/design-by-type/feat.md に沿って IF 設計・ユースケース・代替案・使用例を具体化した。\n一次情報 3 点（subscription-runner-proposal.md / interactive-terminal-poc-result.md / PoC 実装 interactive_terminal.py・wrapper.sh）を Read し、tmp/ が gitignore のためレビュワー向けに該当箇所を Primary Sources 表へ引用した。\n現行 runner.py L638 の execute_cli dispatch 箇所、config.py の ExecutionConfig / [provider] overlay、resolve_verdict() / SessionState を読み、verdict.py・state.py は再利用で変更不要、CLI option は cli_main.py（Issue リストの cli.py ではなく）に追加という統合判断をスコープ注記として明記した。\nテスト戦略は実行時コード変更として S/M/L を定義（config 解析・CLI 正規化・argv builder・kitty 不在 fail-fast=Small / dispatch 分岐・close/timeout・wrapper shell=Medium / fake terminal E2E=large_local）。real Claude/Codex 自動テストは意図的スコープ外として代替担保を記載。\n影響ドキュメント（新規 ADR 007 / ARCHITECTURE / 新規 interactive-terminal-runner guide / github-local-mode / workflow-authoring / CLAUDE.md index）を列挙。\nSelf-Check（review-design rubric Step 1.5 / type 重み付け / 基準 1〜5）は全 ✅、補完項目なし。",
+      "verdict_suggestion": "/issue-review-design 224 で設計レビューを実施。スコープ注記2点（cli.py→cli_main.py、verdict.py/state.py 変更不要）と effort pass-through 方針の妥当性を重点確認してほしい。",
+      "timestamp": "2026-06-04T19:17:52.864084+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "review-design",
+      "verdict_status": "RETRY",
+      "verdict_reason": "設計は主要な IF とテスト戦略を満たしているが、任意依存として扱う script(1) の互換性条件が不足しており、想定環境の macOS native で wrapper が agent 起動前に失敗しうるため。",
+      "verdict_evidence": "設計書 draft/design/issue-224-feat-interactive-terminal-runner.md は type:feature として、repository config / CLI option / execute_interactive_terminal の公開 IF / wrapper の 9 引数契約 / session ID 契約 / cleanup 契約 / S-M-L テスト戦略 / 影響ドキュメントを定義している。\n一次情報 docs/adr/005-artifact-primary-verdict.md と kaji_harness/verdict.py の resolve_verdict() は artifact verdict.yaml primary を実装しており、stdout を持たない runner でも verdict 解決できるという設計前提と整合している。\n現行 kaji_harness/runner.py:632-671 は prompt.txt 保存、execute_cli dispatch、session 保存、resolve_verdict の統合点を持ち、設計書が示す runner dispatch 差し替え箇所と整合している。\n現行 kaji_harness/config.py:143-160 は [execution] default_timeout のみを読むため、agent_runner / interactive_terminal_close_on_verdict と [execution] overlay の追加スコープは明確である。\nローカルの claude --help / codex --help / codex resume --help / kitty --help では、設計書の Claude/Codex/kitty 起動 option は現在の CLI と整合している。\nただし設計書は script(1) を「任意」とし、PATH にあれば `script --quiet --flush --command <cmd> <terminal_log_path>` を使い、無ければ直接起動するとしている。ローカル util-linux script --help では --quiet/--flush/--command が存在する一方、OpenBSD/FreeBSD 系 script(1) は短い option 体系（例: -c command, -q）で、GNU long option 前提ではない。設計書は macOS native を kitty 単独採用の想定環境に含めているため、macOS のように script が存在するが GNU long option 非互換の環境では「script 不在時 fallback」に入らず、wrapper が agent 起動前に失敗する可能性がある。\nテスト戦略も script(1) が「ある場合」と「無い場合」だけを検証しており、「存在するが GNU option 非対応」の fallback または fail-soft を検証しない。",
+      "verdict_suggestion": "script(1) は `script --help` 等で GNU util-linux 互換を検出して使う、非互換なら直接起動へ fallback する、または transcript は Linux-only と明記して macOS 手動検証条件から外す。あわせて fake script で long option を拒否する Medium テストを追加し、wrapper が agent 直接起動へ進むことを検証してください。",
+      "timestamp": "2026-06-04T19:21:49.598994+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "fix-design",
+      "verdict_status": "PASS",
+      "verdict_reason": "設計レビュー RETRY の単一指摘（script(1) 非 util-linux 環境での wrapper 起動失敗）に対し、util-linux 判定 + 非互換時 fail-soft 直接起動の方針と検証テストを設計書へ反映した。",
+      "verdict_evidence": "draft/design/issue-224-feat-interactive-terminal-runner.md を更新（commit 02a4256, +23/-6）。\n- § Wrapper 契約: `script --version` の util-linux 判定を導入し、互換時のみ `script --quiet --flush --command` を使用。非互換（BSD/macOS native）/ 不在では BSD long option を当てず agent を直接起動する fail-soft 分岐を明記。\n- § 制約・前提条件 §依存: transcript は util-linux/Linux のみ best-effort、`script` の PATH 存在だけでは互換とみなさない旨を明記。\n- § テスト戦略 Medium（wrapper shell）: transcript 分岐を 3 ケース（util-linux 互換 / 不在 / 存在するが非互換）に拡張し、非互換時に long option で fail せず agent 直接起動を fake script で検証するケースを追加（指摘の Medium テスト要求に対応）。\n- § 参照情報: PoC wrapper の `command -v script` のみ分岐の限界と本設計の意図的分岐を明記。\n- § 影響ドキュメント: cli-guide 手動検証手順で transcript を OS 別に扱い macOS native では成功条件に含めない指示を追記。",
+      "verdict_suggestion": "",
+      "timestamp": "2026-06-04T19:24:46.162242+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "verify-design",
+      "verdict_status": "PASS",
+      "verdict_reason": "設計レビューの Must Fix である script(1) 非 util-linux 環境の扱いが、設計書上で fail-soft 直接起動として具体化され、対応する Medium テスト方針も追加されているため。",
+      "verdict_evidence": "Issue #224 の前回設計レビューは Must Fix として「script(1) の互換性検出または fallback 契約を明記してください」の 1 点を要求していた。\n修正後の draft/design/issue-224-feat-interactive-terminal-runner.md:160-165 は、script(1) を util-linux 互換の場合のみ transcript に使い、不在時・非 util-linux（BSD/macOS native 等）では transcript 無しで agent を直接起動して継続すると明記している。\n同設計書:295-303 は Wrapper 契約として、command -v script の存在確認に加えて script --version 出力の util-linux 表記で判定し、非互換 / 不在では GNU long option を当てず agent を直接起動する fail-soft 動作を定義している。\n同設計書:389-395 は Medium テストに transcript 分岐 3 ケースを追加し、fake script が存在するが util-linux 非互換の場合に wrapper が long option で fail せず fake agent を直接起動することを検証対象にしている。\n同設計書:414 は docs guide の手動検証手順で、terminal.log transcript は util-linux/Linux 環境のみ best-effort であり macOS native では transcript 取得を成功条件に含めない旨を記載する方針を追加している。\n同設計書:433 は PoC wrapper の command -v script のみ分岐の限界を明記し、本設計では script --version の util-linux 判定と非互換時 fail-soft 直接起動を追加する、と参照情報との差分を明確にしている。\ngit diff a5f9c06..02a4256 では設計書 1 ファイルに 23 行追加 / 6 行削除があり、上記 script 互換性契約・テスト方針・docs 方針・PoC 差分注記が追加されていることを確認した。\n修正報告には「議論/見送りなし」とあり、反論検討対象は存在しない。",
+      "verdict_suggestion": "",
+      "timestamp": "2026-06-04T19:26:56.851044+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "implement",
+      "verdict_status": "PASS",
+      "verdict_reason": "設計書どおり interactive_terminal runner を TDD で実装し、テスト・品質チェックが全て green。\nPre-Handoff Review 自己評価も Yes。既定 headless runner の挙動は不変。",
+      "verdict_evidence": "- 実装: kaji_harness/interactive_terminal.py（新規）+ assets/interactive-terminal/wrapper.sh（新規）\n  + config.py（ExecutionConfig 2 フィールド + [execution] overlay）+ cli_main.py（CLI option precedence 1）\n  + runner.py（agent_runner dispatch 分岐）。\n- 設計契約一致: execute_interactive_terminal IF / Wrapper 9 引数順 / Agent Command（Claude・Codex fresh/resume）\n  / Session ID（Claude launch UUID, Codex terminal.log→session store fallback）/ Cleanup（process group + /proc marker）\n  / timeout 経路 cleanup。設計明示の PoC 逸脱（--title, util-linux script 判定+fail-soft, [execution] overlay, timeout cleanup）を反映。\n- テスト: 新規 47 件（test_interactive_terminal.py 25 / test_run_execution_overrides.py 11\n  / test_runner_interactive_dispatch.py 2 / test_config.py +9）。Small/Medium/Large(large_local E2E 1) を網羅。\n- pytest: 1739 passed, 2 skipped（baseline 1692 passed,2 skipped → +47, regression 0）。\n- 品質: ruff check / ruff format --check / mypy すべて pass、make verify-docs link OK。\n- Pre-Handoff Review: PHR_COUNT=1, verdict Yes（self-check fallback。subagent 起動は成功したが最終 verdict が harness 戻り値に未捕捉）。",
+      "verdict_suggestion": "/issue-review-code 224 でコードレビューへ。\n残課題: trusted worktree 上の real kitty + real Claude/Codex 手動検証（自動化対象外。CLI guide § 手動検証手順）。",
+      "timestamp": "2026-06-04T20:02:43.491726+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "review-code",
+      "verdict_status": "RETRY",
+      "verdict_reason": "コード・自動テストは設計契約を満たしているが、Issue 完了条件の real kitty + real Claude/Codex 手動検証が未実施のまま残っているため。",
+      "verdict_evidence": "Pre-Handoff Review hard gate は通過: Issue #224 comments に `## Pre-Handoff Review` が 1 件あり、`- **経路**:` 行も存在する。\ntype ラベルは `type:feature` の 1 件のみ。\n独立実行した品質ゲートは通過:\n- `ruff check kaji_harness/ tests/` → All checks passed!\n- `ruff format --check kaji_harness/ tests/` → 121 files already formatted\n- `mypy kaji_harness/` → Success: no issues found in 32 source files\n- `pytest` → 1739 passed, 2 skipped in 130.59s\n- `make verify-docs` → All Markdown links valid (83 file(s) checked)\n実装完了報告の `完了条件の段階確認` では、`trusted worktree 上で real kitty + real Claude / Codex の手動検証` が未チェック `[ ]` として明記されている。\nIssue 本文の完了条件にも `trusted project worktree 上で real kitty + real Claude / Codex の最小 workflow を手動検証する` が含まれている。\n設計書 `draft/design/issue-224-feat-interactive-terminal-runner.md` は real CLI テストを自動化しない代わりに fake terminal Large + 手動検証で担保すると定義しているため、手動検証未実施は完了条件未充足。",
+      "verdict_suggestion": "trusted project worktree 上で real kitty + real Claude/Codex の fresh/resume、close-on-verdict true/false、terminal.log 条件を手動検証し、結果を Issue コメントへ追記してから review-code を再実行する。",
+      "timestamp": "2026-06-04T20:07:57.650986+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "step_id": "fix-code",
+      "verdict_status": "ABORT",
+      "verdict_reason": "唯一残った Must Fix はコード欠陥ではなく「real kitty + real Claude/Codex の手動検証」未実施である。\nfix-code（コード修正・反論）で解決できる性質ではなく、修正対象コードが存在しないため自動修正サイクルを継続できない。",
+      "verdict_evidence": "- worktree feat/224 は clean、実装は 9c31e6a \"feat: add interactive_terminal runner for #224\" でコミット済み。git status --short は空。\n- 直近 review-code verdict（RETRY）の Must Fix は 1 件のみで「trusted project worktree 上で real kitty + real Claude / Codex の最小 workflow を手動検証する」未実施。改善提案(Should Fix)は「なし」。\n- レビュー本文の type 別観点 A(IF 契約)・F(Scope 混在) はいずれも ✅、品質ゲート(ruff/format/mypy/pytest 1739 passed,2 skipped/verify-docs)は全 PASS。コード起因の指摘はゼロ。\n- 当環境には kitty(/usr/bin/kitty)・claude・codex・script・WSLg DISPLAY が揃い技術的には実行可能だが、\n  手動検証は (a) ユーザーの実課金サブスク(Claude/Codex)を消費する outward-facing アクション、\n  (b) GUI kitty ウィンドウの残存/close を目視確認する人手検証であり、認可なき自律実行は不適切。\n- 進め方を AskUserQuestion で確認したが回答が得られず、サブスク消費の認可が取れていない。",
+      "verdict_suggestion": "fix-code では解決不能。次のいずれかを人が選択する:\n1. ユーザーが docs(CLI guide § 手動検証手順)に沿って手動検証を実施し、結果(fresh/resume、close-on-verdict true/false、terminal.log)を Issue #224 にコメント追記 → /issue-review-code 224 を再実行。\n2. 私に実 CLI 検証を明示認可する場合は、その旨を指示すれば interactive_terminal runner を実起動し artifact(verdict.yaml/terminal.log/session state/プロセス残存)ベースで検証して証跡を追記する。",
+      "timestamp": "2026-06-04T20:10:42.743366+00:00",
+      "attempt": 1,
+      "exit_code": 0,
+      "signal": null
+    }
+  ],
+  "cycle_counts": {},
+  "last_completed_step": "fix-code",
+  "last_transition_verdict": {
+    "status": "ABORT",
+    "reason": "唯一残った Must Fix はコード欠陥ではなく「real kitty + real Claude/Codex の手動検証」未実施である。\nfix-code（コード修正・反論）で解決できる性質ではなく、修正対象コードが存在しないため自動修正サイクルを継続できない。",
+    "evidence": "- worktree feat/224 は clean、実装は 9c31e6a \"feat: add interactive_terminal runner for #224\" でコミット済み。git status --short は空。\n- 直近 review-code verdict（RETRY）の Must Fix は 1 件のみで「trusted project worktree 上で real kitty + real Claude / Codex の最小 workflow を手動検証する」未実施。改善提案(Should Fix)は「なし」。\n- レビュー本文の type 別観点 A(IF 契約)・F(Scope 混在) はいずれも ✅、品質ゲート(ruff/format/mypy/pytest 1739 passed,2 skipped/verify-docs)は全 PASS。コード起因の指摘はゼロ。\n- 当環境には kitty(/usr/bin/kitty)・claude・codex・script・WSLg DISPLAY が揃い技術的には実行可能だが、\n  手動検証は (a) ユーザーの実課金サブスク(Claude/Codex)を消費する outward-facing アクション、\n  (b) GUI kitty ウィンドウの残存/close を目視確認する人手検証であり、認可なき自律実行は不適切。\n- 進め方を AskUserQuestion で確認したが回答が得られず、サブスク消費の認可が取れていない。",
+    "suggestion": "fix-code では解決不能。次のいずれかを人が選択する:\n1. ユーザーが docs(CLI guide § 手動検証手順)に沿って手動検証を実施し、結果(fresh/resume、close-on-verdict true/false、terminal.log)を Issue #224 にコメント追記 → /issue-review-code 224 を再実行。\n2. 私に実 CLI 検証を明示認可する場合は、その旨を指示すれば interactive_terminal runner を実起動し artifact(verdict.yaml/terminal.log/session state/プロセス残存)ベースで検証して証跡を追記する。"
+  },
+  "worktree_dir": "/home/aki/dev/kaji-feat-224",
+  "branch_name": "feat/224"
+}
