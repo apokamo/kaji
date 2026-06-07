@@ -166,13 +166,14 @@ agent 経路の起動 backend は repository config の `[execution] agent_runne
 - **`headless`（既定）**: 従来どおり `execute_cli()` が `claude -p --output-format
   stream-json` / `codex exec --json` を起動し、stdout を読む。
 - **`interactive_terminal`**: `execute_interactive_terminal()` が **tmux pane** 上で通常の
-  対話 `claude` / `codex` を起動し（`tmux split-window -h` で現ウィンドウの右に追加）、
+  対話 `claude` / `codex` を起動し（初回は `split-window -h` で origin の右、2枚目以降は右列内を
+  `-v` で上下分割し、kaji 管理 agent pane を右列に最大2枚まで維持 / Issue #238）、
   stdout を読まずに attempt directory の `verdict.yaml` を polling する。完了判定は
-  artifact-primary 経路（Issue #220）に完全に乗る。`tmux`（>= 3.0）/ `$TMUX` 不在は
+  artifact-primary 経路（Issue #220）に完全に乗る。`tmux`（>= 3.1）/ `$TMUX` 不在は
   fail-fast、`interactive_terminal_close_on_verdict` で verdict 検知後に pane を `kill-pane`
   するか（best-effort cleanup）を制御する。transcript は `tmux pipe-pane` で `terminal.log` に
   常時記録され、`/proc` scan も util-linux `script(1)` 依存も無く Linux / macOS 同一に動く
-  （tmux 単一 backend / Issue #230, [ADR 007](./adr/007-interactive-terminal-runner.md) v2）。
+  （tmux 単一 backend / Issue #230, [ADR 007](./adr/007-interactive-terminal-runner.md) v3）。
 
 設定方法と手動検証手順は
 [Interactive Terminal Runner ガイド](./cli-guides/interactive-terminal-runner.md) を参照。

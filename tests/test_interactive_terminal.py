@@ -21,8 +21,12 @@ import pytest
 
 from kaji_harness.errors import CLIExecutionError, CLINotFoundError, StepTimeoutError
 from kaji_harness.interactive_terminal import (
+    KajiAgentPane,
     _build_tmux_split_argv,
+    _list_kaji_agent_panes,
     _pane_dead,
+    _parse_kaji_pane_marker,
+    _prune_kaji_agent_panes,
     execute_interactive_terminal,
 )
 from kaji_harness.models import Step
@@ -63,6 +67,9 @@ def _make_fake_tmux(
     pane_id: str = "%99",
     pane_dead: str = "0",
     pipe_returncode: int = 0,
+    list_panes_output: str = "",
+    list_panes_returncode: int = 0,
+    set_option_returncode: int = 0,
     on_split: object = None,
     calls: list[list[str]] | None = None,
 ):
@@ -70,6 +77,9 @@ def _make_fake_tmux(
 
     ``on_split`` (a no-arg callable) fires when ``split-window`` is seen so the
     test can write ``verdict.yaml`` / ``terminal.log`` at pane-launch time.
+    ``list_panes_output`` is the stdout for the kaji-pane discovery call (empty =
+    no existing managed panes); ``set_option_returncode`` lets a test simulate a
+    failed kaji marker write.
     """
 
     def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -77,6 +87,8 @@ def _make_fake_tmux(
             calls.append(argv)
         if argv == [tmux, "-V"]:
             return _completed(stdout=version)
+        if argv[:2] == [tmux, "list-panes"]:
+            return _completed(stdout=list_panes_output, returncode=list_panes_returncode)
         if argv[:2] == [tmux, "split-window"]:
             if on_split is not None:
                 on_split()  # type: ignore[operator]
@@ -84,6 +96,8 @@ def _make_fake_tmux(
         if argv[:2] == [tmux, "pipe-pane"]:
             return _completed(returncode=pipe_returncode, stderr="can't find pane")
         if argv[:2] == [tmux, "set-option"]:
+            return _completed(returncode=set_option_returncode, stderr="set-option failed")
+        if argv[:2] == [tmux, "kill-pane"]:
             return _completed()
         if argv[:2] == [tmux, "display-message"]:
             if argv[-1] == "#{pane_dead}":
@@ -91,8 +105,6 @@ def _make_fake_tmux(
             return _completed(
                 stdout=_PANE_METADATA.replace("pane_dead=0", f"pane_dead={pane_dead}")
             )
-        if argv[:2] == [tmux, "kill-pane"]:
-            return _completed()
         raise AssertionError(f"unexpected tmux call: {argv}")
 
     return fake_run
@@ -100,15 +112,16 @@ def _make_fake_tmux(
 
 @pytest.mark.small
 class TestBuildTmuxSplitArgv:
-    """tmux ``split-window`` command construction (MF2: right split via ``-h``)."""
+    """tmux ``split-window`` command construction (Issue #238: -h / -v split)."""
 
-    def test_split_window_prefix_includes_dash_h_and_pane_id_format(self, tmp_path: Path) -> None:
+    def _argv(self, tmp_path: Path, *, split_target_pane: str, split_flag: str) -> list[str]:
         prompt = tmp_path / "prompt.txt"
         verdict = tmp_path / "verdict.yaml"
-        argv = _build_tmux_split_argv(
+        return _build_tmux_split_argv(
             "/usr/bin/tmux",
             WRAPPER,
-            target_pane="%7",
+            split_target_pane=split_target_pane,
+            split_flag=split_flag,
             agent="claude",
             prompt_path=prompt,
             verdict_path=verdict,
@@ -119,7 +132,10 @@ class TestBuildTmuxSplitArgv:
             effort="low",
         )
 
-        # Exact prefix: `-h` after `-d` puts the new pane to the user's right.
+    def test_horizontal_split_prefix_and_pane_id_format(self, tmp_path: Path) -> None:
+        argv = self._argv(tmp_path, split_target_pane="%7", split_flag="-h")
+
+        # Exact prefix: `-h` after `-d` puts the first agent pane to the right.
         assert argv[:9] == [
             "/usr/bin/tmux",
             "split-window",
@@ -136,11 +152,30 @@ class TestBuildTmuxSplitArgv:
         command = argv[9]
         assert str(WRAPPER) in command
         assert "claude" in command
-        assert str(prompt) in command
-        assert str(verdict) in command
+        assert str(tmp_path / "prompt.txt") in command
+        assert str(tmp_path / "verdict.yaml") in command
         assert "11111111-1111-4111-8111-111111111111" in command
         assert "haiku" in command
         assert "low" in command
+
+    def test_vertical_split_targets_existing_agent_pane(self, tmp_path: Path) -> None:
+        argv = self._argv(tmp_path, split_target_pane="%12", split_flag="-v")
+        # `-v` splits the right column's bottom pane; target is the agent pane.
+        assert argv[:9] == [
+            "/usr/bin/tmux",
+            "split-window",
+            "-d",
+            "-v",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-t",
+            "%12",
+        ]
+
+    def test_invalid_split_flag_raises(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="split_flag"):
+            self._argv(tmp_path, split_target_pane="%7", split_flag="-x")
 
 
 @pytest.mark.small
@@ -192,9 +227,11 @@ class TestRunnerEntryValidation:
                     timeout=5,
                 )
 
+    @pytest.mark.parametrize("version", ["tmux 2.9\n", "tmux 3.0\n"])
     def test_tmux_version_below_minimum_fails_loud(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: str
     ) -> None:
+        # Issue #238: pane options require tmux 3.1, so 3.0 now also fails fast.
         prompt = tmp_path / "prompt.txt"
         prompt.write_text("prompt", encoding="utf-8")
         monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
@@ -202,13 +239,13 @@ class TestRunnerEntryValidation:
 
         def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
             assert argv == ["/usr/bin/tmux", "-V"]
-            return _completed(stdout="tmux 2.9\n")
+            return _completed(stdout=version)
 
         with (
             patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
             patch.object(subprocess, "run", side_effect=fake_run),
         ):
-            with pytest.raises(CLINotFoundError, match="tmux >= 3.0"):
+            with pytest.raises(CLINotFoundError, match="tmux >= 3.1"):
                 execute_interactive_terminal(
                     step=_step("claude"),
                     prompt_path=prompt,
@@ -216,6 +253,32 @@ class TestRunnerEntryValidation:
                     workdir=tmp_path,
                     timeout=5,
                 )
+
+    def test_tmux_3_1_passes_version_check(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # tmux 3.1 is the minimum and must clear the version gate.
+        prompt = tmp_path / "prompt.txt"
+        verdict = tmp_path / "verdict.yaml"
+        prompt.write_text("prompt", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        fake_run = _make_fake_tmux(
+            version="tmux 3.1\n",
+            on_split=lambda: verdict.write_text(_PASS_VERDICT, encoding="utf-8"),
+        )
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=fake_run),
+        ):
+            result = execute_interactive_terminal(
+                step=_step("claude"),
+                prompt_path=prompt,
+                verdict_path=verdict,
+                workdir=tmp_path,
+                timeout=5,
+            )
+        assert result.full_output == ""
 
     def test_rejects_unsupported_agent(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -839,7 +902,263 @@ class TestInteractiveTerminalWrapper:
         ]
 
 
-def _tmux_at_least_3() -> bool:
+@pytest.mark.small
+class TestKajiPaneMarker:
+    """`_parse_kaji_pane_marker` tolerates unknown / empty / malformed values."""
+
+    def test_parses_origin_field(self) -> None:
+        assert _parse_kaji_pane_marker("origin=%7") == {"origin": "%7"}
+
+    def test_empty_value_is_empty_dict(self) -> None:
+        assert _parse_kaji_pane_marker("") == {}
+
+    def test_malformed_token_without_equals_is_dropped(self) -> None:
+        assert _parse_kaji_pane_marker("garbage") == {}
+
+    def test_unknown_fields_kept_origin_extracted(self) -> None:
+        parsed = _parse_kaji_pane_marker("origin=%7 extra=foo")
+        assert parsed["origin"] == "%7"
+        assert parsed["extra"] == "foo"
+
+    def test_empty_origin_value_kept_as_empty_string(self) -> None:
+        assert _parse_kaji_pane_marker("origin=") == {"origin": ""}
+
+
+def _list_panes_lines(*rows: tuple[str, int, int, int, str]) -> str:
+    """Render fake ``list-panes -F`` output rows (pane_id, top, left, width, marker)."""
+    return "".join(
+        f"{pid}\t{top}\t{left}\t{width}\t{marker}\n" for pid, top, left, width, marker in rows
+    )
+
+
+@pytest.mark.medium
+class TestListKajiAgentPanes:
+    """`_list_kaji_agent_panes` filtering, ordering, and fail-loud behaviour."""
+
+    def _list(self, output: str, *, returncode: int = 0) -> list[KajiAgentPane]:
+        fake_run = _make_fake_tmux(list_panes_output=output, list_panes_returncode=returncode)
+        with patch.object(subprocess, "run", side_effect=fake_run):
+            return _list_kaji_agent_panes("/usr/bin/tmux", "%7")
+
+    def test_returns_managed_panes_sorted_by_pane_top(self) -> None:
+        output = _list_panes_lines(
+            ("%7", 0, 0, 60, ""),  # origin pane, excluded
+            ("%2", 18, 61, 60, "origin=%7"),  # newer (lower) pane
+            ("%1", 0, 61, 60, "origin=%7"),  # older (upper) pane
+        )
+        panes = self._list(output)
+        assert [pane.pane_id for pane in panes] == ["%1", "%2"]
+        assert panes[0].pane_top == 0
+        assert panes[1].pane_top == 18
+        assert panes[1].pane_left == 61
+        assert panes[1].pane_width == 60
+
+    def test_ignores_origin_and_unmarked_and_foreign_origin(self) -> None:
+        output = _list_panes_lines(
+            ("%7", 0, 0, 60, ""),  # origin
+            ("%3", 0, 61, 60, ""),  # unmarked manual pane
+            ("%4", 5, 61, 60, "origin=%99"),  # marked for a different origin
+            ("%5", 9, 61, 60, "origin=%7"),  # our managed pane
+        )
+        panes = self._list(output)
+        assert [pane.pane_id for pane in panes] == ["%5"]
+
+    def test_list_panes_failure_fails_loud(self) -> None:
+        with pytest.raises(CLIExecutionError):
+            self._list("", returncode=1)
+
+
+@pytest.mark.small
+class TestPruneKajiAgentPanes:
+    """`_prune_kaji_agent_panes` keeps the newest N panes, killing the oldest."""
+
+    def test_keeps_all_when_under_limit(self) -> None:
+        panes = [KajiAgentPane("%1", 0, 61, 60)]
+        calls: list[list[str]] = []
+        fake_run = _make_fake_tmux(calls=calls)
+        with patch.object(subprocess, "run", side_effect=fake_run):
+            survivors = _prune_kaji_agent_panes("/usr/bin/tmux", panes, keep=1)
+        assert [p.pane_id for p in survivors] == ["%1"]
+        assert not any(call[:2] == ["/usr/bin/tmux", "kill-pane"] for call in calls)
+
+    def test_kills_oldest_top_pane_when_over_limit(self) -> None:
+        panes = [
+            KajiAgentPane("%2", 18, 61, 60),
+            KajiAgentPane("%1", 0, 61, 60),
+        ]
+        calls: list[list[str]] = []
+        fake_run = _make_fake_tmux(calls=calls)
+        with patch.object(subprocess, "run", side_effect=fake_run):
+            survivors = _prune_kaji_agent_panes("/usr/bin/tmux", panes, keep=1)
+        # %1 (pane_top 0, top of column) is the oldest and is killed.
+        assert [p.pane_id for p in survivors] == ["%2"]
+        assert ["/usr/bin/tmux", "kill-pane", "-t", "%1"] in calls
+        assert ["/usr/bin/tmux", "kill-pane", "-t", "%2"] not in calls
+
+
+@pytest.mark.medium
+class TestRightColumnPanePlacement:
+    """Issue #238: first pane splits right; later panes split the right column."""
+
+    def _run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        list_panes_output: str = "",
+        set_option_returncode: int = 0,
+        list_panes_returncode: int = 0,
+        write_verdict: bool = True,
+    ) -> list[list[str]]:
+        prompt = tmp_path / "prompt.txt"
+        verdict = tmp_path / "verdict.yaml"
+        prompt.write_text("prompt", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        calls: list[list[str]] = []
+        on_split = (
+            (lambda: verdict.write_text(_PASS_VERDICT, encoding="utf-8")) if write_verdict else None
+        )
+        fake_run = _make_fake_tmux(
+            calls=calls,
+            list_panes_output=list_panes_output,
+            list_panes_returncode=list_panes_returncode,
+            set_option_returncode=set_option_returncode,
+            on_split=on_split,
+        )
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=fake_run),
+        ):
+            execute_interactive_terminal(
+                step=_step("claude"),
+                prompt_path=prompt,
+                verdict_path=verdict,
+                workdir=tmp_path,
+                timeout=5,
+            )
+        return calls
+
+    def _split_call(self, calls: list[list[str]]) -> list[str]:
+        for call in calls:
+            if call[:2] == ["/usr/bin/tmux", "split-window"]:
+                return call
+        raise AssertionError("split-window was never called")
+
+    def test_zero_panes_splits_origin_horizontally(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = self._run(
+            tmp_path, monkeypatch, list_panes_output=_list_panes_lines(("%7", 0, 0, 60, ""))
+        )
+        split = self._split_call(calls)
+        assert split[2:4] == ["-d", "-h"]
+        assert split[7:9] == ["-t", "%7"]
+        # The new pane is tagged with the kaji marker.
+        assert [
+            "/usr/bin/tmux",
+            "set-option",
+            "-p",
+            "-t",
+            "%99",
+            "@kaji_interactive_terminal",
+            "origin=%7",
+        ] in calls
+
+    def test_one_pane_splits_existing_agent_vertically(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        output = _list_panes_lines(
+            ("%7", 0, 0, 60, ""),
+            ("%1", 0, 61, 60, "origin=%7"),
+        )
+        calls = self._run(tmp_path, monkeypatch, list_panes_output=output)
+        split = self._split_call(calls)
+        assert split[2:4] == ["-d", "-v"]
+        assert split[7:9] == ["-t", "%1"]
+        # The existing managed pane is reused (split), never pruned. (The created
+        # pane %99 is still killed by the close_on_verdict cleanup.)
+        assert ["/usr/bin/tmux", "kill-pane", "-t", "%1"] not in calls
+
+    def test_two_panes_kills_oldest_then_splits_newest_vertically(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        output = _list_panes_lines(
+            ("%7", 0, 0, 60, ""),
+            ("%1", 0, 61, 60, "origin=%7"),  # oldest (top)
+            ("%2", 18, 61, 60, "origin=%7"),  # newest (bottom)
+        )
+        calls = self._run(tmp_path, monkeypatch, list_panes_output=output)
+        # The oldest managed pane is pruned before the split.
+        assert ["/usr/bin/tmux", "kill-pane", "-t", "%1"] in calls
+        split = self._split_call(calls)
+        assert split[2:4] == ["-d", "-v"]
+        assert split[7:9] == ["-t", "%2"]
+
+    def test_foreign_origin_pane_is_not_pruned(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A pane marked for a different origin must never be killed and must not
+        # count toward the limit (so we split the origin horizontally).
+        output = _list_panes_lines(
+            ("%7", 0, 0, 60, ""),
+            ("%8", 0, 61, 60, "origin=%99"),
+        )
+        calls = self._run(tmp_path, monkeypatch, list_panes_output=output)
+        # The foreign-origin pane %8 is never pruned.
+        assert ["/usr/bin/tmux", "kill-pane", "-t", "%8"] not in calls
+        split = self._split_call(calls)
+        assert split[2:4] == ["-d", "-h"]
+        assert split[7:9] == ["-t", "%7"]
+
+    def test_list_panes_failure_fails_loud(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        with pytest.raises(CLIExecutionError):
+            self._run(tmp_path, monkeypatch, list_panes_returncode=1, write_verdict=False)
+
+    def test_marker_set_failure_kills_pane_and_fails_loud(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[list[str]] = []
+        prompt = tmp_path / "prompt.txt"
+        prompt.write_text("prompt", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        fake_run = _make_fake_tmux(
+            calls=calls,
+            list_panes_output=_list_panes_lines(("%7", 0, 0, 60, "")),
+            set_option_returncode=1,
+        )
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=fake_run),
+        ):
+            with pytest.raises(CLIExecutionError):
+                execute_interactive_terminal(
+                    step=_step("claude"),
+                    prompt_path=prompt,
+                    verdict_path=tmp_path / "verdict.yaml",
+                    workdir=tmp_path,
+                    timeout=5,
+                )
+        # The orphaned (unmarked) pane is best-effort killed before failing loud.
+        assert ["/usr/bin/tmux", "kill-pane", "-t", "%99"] in calls
+
+    def test_metadata_records_layout(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        output = _list_panes_lines(
+            ("%7", 0, 0, 60, ""),
+            ("%1", 0, 61, 60, "origin=%7"),
+        )
+        self._run(tmp_path, monkeypatch, list_panes_output=output)
+        metadata = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
+        assert metadata["split_target_pane"] == "%1"
+        assert metadata["split_direction"] == "vertical"
+        assert metadata["kaji_agent_panes_before"] == ["%1"]
+        assert metadata["kaji_agent_panes_pruned"] == []
+
+
+def _tmux_at_least_3_1() -> bool:
     tmux = shutil.which("tmux")
     if tmux is None:
         return False
@@ -849,12 +1168,12 @@ def _tmux_at_least_3() -> bool:
     match = re.search(r"tmux\s+(\d+)\.(\d+)", proc.stdout)
     if match is None:
         return False
-    return (int(match.group(1)), int(match.group(2))) >= (3, 0)
+    return (int(match.group(1)), int(match.group(2))) >= (3, 1)
 
 
 @pytest.mark.large
 @pytest.mark.large_local
-@pytest.mark.skipif(not _tmux_at_least_3(), reason="requires real tmux >= 3.0 on PATH")
+@pytest.mark.skipif(not _tmux_at_least_3_1(), reason="requires real tmux >= 3.1 on PATH")
 class TestInteractiveTerminalEndToEnd:
     """E2E: real tmux split-window → wrapper.sh → fake agent → verdict → kill-pane."""
 
@@ -897,6 +1216,117 @@ class TestInteractiveTerminalEndToEnd:
             check=False,
         )
         return proc.stdout.split()
+
+    def _kaji_pane_geometry(self, socket: str, origin_pane: str) -> list[tuple[str, int, int]]:
+        """Return (pane_id, pane_left, pane_width) for kaji-managed agent panes.
+
+        Filters to panes whose ``@kaji_interactive_terminal`` marker resolves to
+        ``origin=<origin_pane>``, ordered by ``pane_top`` ascending.
+        """
+        tmux = shutil.which("tmux")
+        assert tmux is not None
+        fmt = "\t".join(
+            [
+                "#{pane_id}",
+                "#{pane_top}",
+                "#{pane_left}",
+                "#{pane_width}",
+                "#{@kaji_interactive_terminal}",
+            ]
+        )
+        proc = subprocess.run(
+            [tmux, "-L", socket, "list-panes", "-t", origin_pane, "-F", fmt],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        rows: list[tuple[int, str, int, int]] = []
+        for line in proc.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 5:
+                continue
+            pane_id, top, left, width, marker = parts[:5]
+            if pane_id == origin_pane or marker != f"origin={origin_pane}":
+                continue
+            rows.append((int(top), pane_id, int(left), int(width)))
+        rows.sort()
+        return [(pid, left, width) for _, pid, left, width in rows]
+
+    def _write_fake_claude(self, fake_bin: Path) -> None:
+        fake_claude = fake_bin / "claude"
+        # Write the verdict path embedded in the prompt, then stay alive so the
+        # pane survives under close_on_verdict=False.
+        fake_claude.write_text(
+            "#!/usr/bin/env bash\n"
+            'for arg in "$@"; do prompt="$arg"; done\n'
+            "verdict_path=$(printf '%s\\n' \"$prompt\" | "
+            "awk '/write only a pure YAML verdict file to this exact path:/{getline; print; exit}')\n"
+            'printf "status: PASS\\nreason: ok\\nevidence: e2e\\nsuggestion: \x27\x27\\n"'
+            ' > "$verdict_path"\n'
+            "sleep 30\n",
+            encoding="utf-8",
+        )
+        fake_claude.chmod(0o755)
+
+    def test_real_tmux_keeps_right_column_at_two_panes_with_stable_width(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Issue #238: launch agent panes repeatedly with close_on_verdict=False
+        # and confirm the right column never exceeds two kaji panes and that the
+        # origin/agent widths do not shrink with each additional launch.
+        fake_bin = tmp_path / "bin"
+        fake_bin.mkdir()
+        self._write_fake_claude(fake_bin)
+        workdir = tmp_path / "work"
+        workdir.mkdir()
+
+        socket = f"kaji-e2e-{uuid.uuid4().hex[:8]}"
+        monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
+        tmux_env, origin_pane = self._start_server(socket)
+        tmux = shutil.which("tmux")
+        assert tmux is not None
+        try:
+            monkeypatch.setenv("TMUX", tmux_env)
+            monkeypatch.setenv("TMUX_PANE", origin_pane)
+
+            geometries: list[list[tuple[str, int, int]]] = []
+            for index in range(4):
+                attempt = tmp_path / f"attempt-{index}"
+                attempt.mkdir()
+                prompt = attempt / "prompt.txt"
+                prompt.write_text("the full task prompt", encoding="utf-8")
+                execute_interactive_terminal(
+                    step=_step("claude", model="haiku", effort="low"),
+                    prompt_path=prompt,
+                    verdict_path=attempt / "verdict.yaml",
+                    workdir=workdir,
+                    timeout=30,
+                    close_on_verdict=False,
+                )
+                geometries.append(self._kaji_pane_geometry(socket, origin_pane))
+
+            # First launch: exactly one managed agent pane in the right column.
+            assert len(geometries[0]) == 1
+            # Subsequent launches stabilise at the two-pane cap.
+            assert len(geometries[1]) == 2
+            assert len(geometries[2]) == 2
+            assert len(geometries[3]) == 2
+
+            # The right column stays in a single vertical column: every managed
+            # pane shares the same pane_left, and that left does not drift right
+            # with additional launches (no horizontal re-splitting).
+            agent_lefts = {left for geo in geometries for _, left, _ in geo}
+            assert len(agent_lefts) == 1
+            # Agent pane width is preserved across launches (no shrinking).
+            agent_widths = {width for geo in geometries for _, _, width in geo}
+            assert len(agent_widths) == 1
+
+            # The origin pane is still present after repeated launches.
+            assert origin_pane in self._list_panes(socket)
+        finally:
+            subprocess.run(
+                [tmux, "-L", socket, "kill-server"], capture_output=True, text=True, check=False
+            )
 
     def test_real_tmux_drives_wrapper_to_write_and_resolve_verdict(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
