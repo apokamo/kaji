@@ -96,15 +96,11 @@ def build_prompt(
 {header}
 
 ## 出力要件
-作業完了後、以下を必ず実施してください:
+作業完了後、以下を必ず実施してください。
+`{verdict_target}` は harness の完了トリガです。Issue comment 投稿など、この step の外部副作用がすべて完了するまで保存してはいけません。
 
-1. 次の YAML を `{verdict_target}` に保存する（pure YAML。`---VERDICT---` delimiter は付けない）:
-   status: {status_choices} のいずれか
-   reason: 判定理由
-   evidence: 具体的根拠（複数行可。抽象表現禁止）
-   suggestion: 次のアクション提案（ABORT/BACK 時必須）
-2. 作業報告 Issue comment の末尾に、同じ内容を次の `---VERDICT---` block として追記する。
-3. 互換のため、同じ block を stdout にも出力する:
+1. 作業報告 Issue comment の末尾に、次の `---VERDICT---` block を追記して投稿を完了する。
+2. 互換のため、同じ block を stdout にも出力する:
 
 ---VERDICT---
 status: {status_choices}
@@ -113,4 +109,10 @@ evidence: |
   具体的根拠（複数行可。抽象表現禁止）
 suggestion: "次のアクション提案"（ABORT/BACK時必須）
 ---END_VERDICT---
+
+3. 最後に、同じ内容の pure YAML を `{verdict_target}` に保存する（`---VERDICT---` delimiter は付けない）:
+   status: {status_choices} のいずれか
+   reason: 判定理由
+   evidence: 具体的根拠（複数行可。抽象表現禁止）
+   suggestion: 次のアクション提案（ABORT/BACK 時必須）
 """

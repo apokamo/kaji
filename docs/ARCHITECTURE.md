@@ -193,6 +193,7 @@ resolve_verdict(attempt_dir, full_output, valid_statuses, attempt_started_at, co
 - **artifact primary**: 解決対象は常に「今 dispatch した attempt の dir」であり、`verdict.yaml` が存在すれば comment / stdout は **見ない**。stale comment が fresh artifact を上書きしない核心の不変条件。
 - **comment fallback の attempt scoping**: `attempt_started_at`（dispatch 直前に harness が記録するローカル時刻）を下限に、`created_at >= attempt_started_at` のコメントのみ対象にする。retry / resume で当該 attempt が verdict を出さなかった場合に、前 attempt の作業報告コメントを誤採用しない。下限を満たすコメントが無ければ古いコメントを拾わず stdout / `VerdictNotFound` へ落とす（false verdict より解決失敗を優先する fail-safe）。
 - **source != "artifact" の正規化保存**: comment / stdout で解決した場合、harness は同じ verdict を `attempt_dir/verdict.yaml` へ正規化保存する。未移行スキルが stdout しか出さなくても attempt 単位の `verdict.yaml` が必ず残る。解決経路は `run.log` の `verdict_source` イベントに記録される。
+- **agent 側の書き込み順**: 上記は harness の解決順であり、agent / script の書き込み順とは別概念。interactive terminal runner では `verdict.yaml` の出現が次 step への完了トリガになるため、作業報告 Issue comment など当該 step の外部副作用を完了してから最後に `verdict.yaml` を保存する。
 
 artifact / log の layout は attempt 単位（`runs/<run_id>/steps/<step_id>/attempt-NNN/`、詳細は § 実行アーティファクトの layout）。
 

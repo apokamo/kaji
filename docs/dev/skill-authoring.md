@@ -131,11 +131,14 @@ suggestion: |
 ---END_VERDICT---
 ```
 
-1. **artifact `verdict.yaml`（primary）**: コンテキスト変数 `verdict_path`（exec_script では env `KAJI_VERDICT_PATH`）が指す絶対パスへ、`status` / `reason` / `evidence` / `suggestion` の **pure YAML**（`---VERDICT---` delimiter なし）を保存する。
-2. **作業報告 Issue comment 末尾（fallback）**: 作業報告コメントの末尾に、上記 `---VERDICT---` block をそのまま追記する。verdict 専用コメントを新設せず、既存の作業報告コメントの末尾に足すだけでよい。
-3. **stdout（互換 fallback）**: 同じ `---VERDICT---` block を stdout にも出力する。
+スキルが各経路へ書き込む順序は次のとおり。これは後述の harness verdict 解決順とは別概念である。
+
+1. **作業報告 Issue comment 末尾（fallback）**: 作業報告コメントの末尾に、上記 `---VERDICT---` block をそのまま追記する。verdict 専用コメントを新設せず、既存の作業報告コメントの末尾に足すだけでよい。
+2. **stdout（互換 fallback）**: 同じ `---VERDICT---` block を stdout にも出力する。
+3. **artifact `verdict.yaml`（primary / 書き込みは最後）**: コンテキスト変数 `verdict_path`（exec_script では env `KAJI_VERDICT_PATH`）が指す絶対パスへ、`status` / `reason` / `evidence` / `suggestion` の **pure YAML**（`---VERDICT---` delimiter なし）を保存する。
 
 ハーネスはこの 3 経路を **artifact → comment → stdout** の順で解決する（詳細は [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) § Verdict 判定機構）。`verdict_path` への保存が primary 経路であり、`kaji issue comment --body` の引数や別コマンドの入力にだけ verdict を埋めても、artifact / 作業報告コメント末尾 / stdout のいずれにも残っていなければ判定されない。
+interactive terminal runner では `verdict.yaml` の出現が次 step への完了トリガになるため、agent は Issue comment 投稿などの外部副作用を完了してから、最後に `verdict.yaml` を保存する。
 
 `verdict.yaml` の例（pure YAML）:
 

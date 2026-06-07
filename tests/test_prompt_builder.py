@@ -591,6 +591,10 @@ class TestVerdictPathInjection:
         # 出力要件に保存先 path と comment 末尾追記契約が含まれる
         assert f"`{path}`" in prompt
         assert "作業報告 Issue comment の末尾" in prompt
+        assert "harness の完了トリガ" in prompt
+        assert prompt.index("作業報告 Issue comment の末尾") < prompt.index(
+            f"pure YAML を `{path}` に保存"
+        )
         # stdout 互換 block も残る
         assert "---VERDICT---" in prompt
         assert "---END_VERDICT---" in prompt

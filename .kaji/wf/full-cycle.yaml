@@ -52,7 +52,7 @@ steps:
   - id: start
     skill: issue-start
     agent: claude
-    model: haiku
+    model: sonnet
     effort: medium
     on:
       PASS: design
