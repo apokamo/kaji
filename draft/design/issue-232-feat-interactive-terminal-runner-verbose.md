@@ -111,19 +111,24 @@ _console.info(
 
 #### Small テスト
 
-- **新規回帰テスト**: `tests/test_interactive_terminal.py` の `TestRunnerPaneLifecycle` に、`pane launched` progress の内容を固定するテストを 1 件追加する。検証観点:
-  - `caplog`（logger `kaji.interactive_terminal`, level INFO）に出る `pane launched` レコードが `step=<step.id>` / `agent=<step.agent>` / `pane=<pane_id>` / `timeout=<timeout>s` / `verdict=<verdict_path>` の全フィールドを含むこと。
-  - フィールド順が `step → agent → pane → timeout → verdict` であること（部分文字列 or 正規表現で固定）。
-  - 既存の `_make_fake_tmux` / `subprocess.run` patch fixture を流用し、tmux 実体に依存しない（外部依存なし＝Small）。
-- 既存の `TestRunnerPaneLifecycle` テスト群（verdict kill / metadata / 戻り値）は本変更で挙動が変わらないため、回帰確認として実行する。
+- 不要。本変更の検証経路は純粋関数・モック完結ではなく、`execute_interactive_terminal()` を `tmp_path` 上の `prompt.txt` / `verdict.yaml` 読み書きと `subprocess.run` patch（`_make_fake_tmux`）越しに通す結合経路である。`docs/dev/testing-convention.md` の判定基準（「ファイル / 内部サービス結合あり → Medium」）に従い、新フォーマットを固定する回帰テストは Medium に分類するのが正しく（次節）、Small で固定できる純粋ロジック（format 生成専用関数の切り出し等）は本変更の最小スコープでは導入しない。
 
 #### Medium テスト
 
-- 不要。本変更はファイル I/O / 内部サービス結合を新たに伴わない。pane 起動・transcript pipe・verdict polling の結合経路は既存 Medium 相当テスト（`_make_fake_tmux` ベース）で既にカバーされており、本変更は同経路に流れる 1 行の文言のみを変える。`docs/dev/testing-convention.md` の 4 条件（独自ロジック追加なし／不具合パターンは Small + 既存ゲートで捕捉／新規 Medium で回帰情報が増えない／本節が理由）を満たす。
+- **新規回帰テスト**: `tests/test_interactive_terminal.py` の `TestRunnerPaneLifecycle`（`@pytest.mark.medium`）に、`pane launched` progress の内容を固定するテストを 1 件追加する。検証観点:
+  - `caplog`（logger `kaji.interactive_terminal`, level INFO）に出る `pane launched` レコードが `step=<step.id>` / `agent=<step.agent>` / `pane=<pane_id>` / `timeout=<timeout>s` / `verdict=<verdict_path>` の全フィールドを含むこと。
+  - フィールド順が `step → agent → pane → timeout → verdict` であること（部分文字列 or 正規表現で固定）。
+  - 既存の `_make_fake_tmux` / `subprocess.run` patch fixture と `tmp_path` を流用し、tmux 実体・実 agent CLI には依存しない（実 API 疎通なし）。`tmp_path` での prompt/verdict file I/O と mock process 経由で `execute_interactive_terminal()` を通すため、`docs/dev/testing-convention.md` の「ファイル / 内部サービス結合あり → Medium」および `pyproject.toml` の `medium: Medium tests - file I/O, mock processes` に該当する。
+- **追加先の根拠**: `TestRunnerPaneLifecycle` は既に `@pytest.mark.medium` 配下であり、同クラスへ追加する新規テストも Medium として整合する。既存の `TestRunnerPaneLifecycle` テスト群（verdict kill / metadata / 戻り値）は本変更で挙動が変わらないため、回帰確認として併せて実行する。
 
 #### Large テスト
 
-- 不要。実 tmux / 実 agent CLI 疎通は本変更の検証に寄与しない（変わるのは logger 文言のみで、tmux 実挙動には非依存）。`docs/dev/testing-convention.md` の 4 条件を満たす（実 API 疎通ロジックの追加なし／文言は Small で完全固定可能／Large で増える回帰情報なし／本節が理由）。
+- 不要。実 tmux / 実 agent CLI 疎通は本変更の検証に寄与しない（変わるのは logger 文言のみで、tmux 実挙動には非依存）。`docs/dev/testing-convention.md` の判定基準（実 API / 実サービス疎通ありのみ Large）に該当せず、新フォーマットは上記 Medium テストで完全固定できるため Large で増える回帰情報はない。
+
+### 検証コマンド
+
+- `uv run pytest tests/test_interactive_terminal.py`（新規 Medium テストを含む `interactive_terminal` テスト全体）。Medium テストのみを直接走らせる場合は `uv run pytest -m medium tests/test_interactive_terminal.py`。
+- 最終ゲートとして `make check`（lint → format → typecheck → pytest 全体）を実行する。未実行の場合は理由と代替検証を作業ログに記録する。
 
 ## 影響ドキュメント
 
@@ -142,5 +147,5 @@ _console.info(
 |--------|----------|-------------------|
 | 現行実装の `pane launched` 出力 | `kaji_harness/interactive_terminal.py`（`execute_interactive_terminal` 内 `_console.info("pane launched: %s pane=%s verdict=%s", step.id, pane_id, verdict_path)`） | 変更対象の唯一の出力箇所。`step.agent` は同関数冒頭で `claude` / `codex` に validation 済み、`timeout` は引数として在席。追加情報はすべて当該スコープ内で取得可能 |
 | #235 progress logging の表示例 | `docs/cli-guides/interactive-terminal-runner.md` 「起動コンソール progress（Issue #235）」節（line 129–145） | `step start` / `pane launched` / `step end` の既存 3 行フォーマットと `key=value` 表記体系。本変更が後方互換に追記すべき書式の根拠 |
-| logging 規約（遅延フォーマット） | `docs/reference/python/logging.md` | logger 呼び出しは `%` プレースホルダで引数を渡す（f-string で事前組み立てしない）。新 format 文字列もこの規約に従う |
-| テスト規約（変更タイプ別検証） | `docs/dev/testing-convention.md` § 変更タイプごとの期待値 / § 省略してよい理由 | 実行時コード変更は原則 Small で検証観点を定義。Medium / Large 省略の 4 条件の根拠 |
+| logging 規約 | `docs/reference/python/logging.md` | 同文書が定める主契約は `kaji.*` logger 名前空間・stdout/stderr routing・RunLogger と console progress の分離。本変更の `_console.info(...)` は `kaji.interactive_terminal`（`kaji.*` 名前空間）の console progress として許容される。`%` プレースホルダで引数を渡す遅延フォーマット（f-string で事前組み立てしない）も既存実装のスタイルに合わせて維持する |
+| テスト規約（変更タイプ別検証 / サイズ判定基準） | `docs/dev/testing-convention.md` § テストサイズ定義・判定基準 / § 変更タイプごとの期待値、`pyproject.toml` marker 定義 | 「ファイル / 内部サービス結合あり → Medium」「medium: file I/O, mock processes」を、新規回帰テストを Medium に分類する根拠とする。Large 省略理由も同判定基準による |
