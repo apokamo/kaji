@@ -49,6 +49,11 @@ from .worktree_discovery import AmbiguousWorktreeError, discover_existing_worktr
 # ``logger`` という名でローカル束縛する既存規約を持つため）。
 _logger = logging.getLogger(__name__)
 
+# Issue #235: 起動コンソール向け human-readable progress logger（kaji.* 名前空間）。
+# ``_logger``（``kaji_harness.runner``）とは別ツリーで、console_log の handler に
+# 伝播する。RunLogger の JSONL 契約とは独立した人間向け表示のみを担う。
+_console = logging.getLogger("kaji.runner")
+
 
 def allocate_attempt_dir(run_dir: Path, step_id: str) -> Path:
     """Issue #220: 当該 step の次の attempt ディレクトリを採番して作成する。
@@ -444,6 +449,7 @@ class WorkflowRunner:
         run_dir.mkdir(parents=True, exist_ok=True)
         logger = RunLogger(log_path=run_dir / "run.log")
         logger.log_workflow_start(run_ctx.canonical_id, self.workflow.name)
+        _console.info("workflow start: %s issue %s", self.workflow.name, run_ctx.issue_ref)
 
         # 4. 開始ステップの決定
         if self.single_step:
@@ -478,6 +484,7 @@ class WorkflowRunner:
             )
             last_verdict = ambiguous_abort
             end_status = "ABORT"
+            _console.error("workflow abort: %s", ambiguous_abort.reason)
             # cli_main は state.last_transition_verdict.status == "ABORT" を見て
             # EXIT_ABORT を返すため、main loop 未到達でもここで反映する。
             state.last_transition_verdict = ambiguous_abort
@@ -490,6 +497,7 @@ class WorkflowRunner:
                 total_cost=total_cost if total_cost > 0 else None,
                 error=None,
             )
+            _console.info("workflow end: status=%s duration=%dms", end_status, total_duration_ms)
             return state
 
         # 5. メインループ
@@ -498,6 +506,7 @@ class WorkflowRunner:
                 # --before barrier: dispatch 直前で停止（開始 step / --from 開始 step も含む）
                 if self.before_step and current_step.id == self.before_step:
                     logger.log_barrier_hit(self.before_step)
+                    _console.info("barrier hit: %s", self.before_step)
                     barrier_hit = True
                     break
 
@@ -547,6 +556,7 @@ class WorkflowRunner:
                         evidence=f"{cycle.max_iterations} iterations reached",
                         suggestion="手動で確認してください",
                     )
+                    _console.info("cycle exhausted: %s", cycle.name)
                     cost: CostInfo | None = None
                 else:
                     # PR context は step ごとに最新状態を見る（`i-pr` step 実行後など、
@@ -578,6 +588,23 @@ class WorkflowRunner:
                         session_id,
                         attempt=attempt_no,
                         dispatch=dispatch_label,
+                    )
+                    # Issue #235: agent step のみ agent/model/effort を付記する
+                    # （exec / exec_script は LLM 非経路なので付けない）。
+                    agent_suffix = ""
+                    if not is_script_like:
+                        agent_parts = [f"agent={current_step.agent}"]
+                        if current_step.model:
+                            agent_parts.append(f"model={current_step.model}")
+                        if current_step.effort:
+                            agent_parts.append(f"effort={current_step.effort}")
+                        agent_suffix = " " + " ".join(agent_parts)
+                    _console.info(
+                        "step start: %s %s dispatch=%s%s",
+                        current_step.id,
+                        attempt_dir.name,
+                        dispatch_label,
+                        agent_suffix,
                     )
 
                     # タイムアウト解決: workflow.default_timeout → config.execution.default_timeout
@@ -728,6 +755,12 @@ class WorkflowRunner:
                             ai_formatter=formatter,
                         )
                         logger.log_verdict_source(current_step.id, verdict_source, attempt_dir.name)
+                        _console.info(
+                            "verdict detected: %s source=%s status=%s",
+                            current_step.id,
+                            verdict_source,
+                            verdict.status,
+                        )
                         # 解決 source が artifact 以外なら正規化保存（legacy skill が
                         # stdout しか出さなくても attempt-NNN/verdict.yaml を必ず残す）。
                         if verdict_source != "artifact":
@@ -831,18 +864,41 @@ class WorkflowRunner:
                         state.cycle_iterations(cycle.name),
                         cycle.max_iterations,
                     )
+                    _console.info(
+                        "cycle iteration: %s %d/%d",
+                        cycle.name,
+                        state.cycle_iterations(cycle.name),
+                        cycle.max_iterations,
+                    )
 
                 # 次のステップを決定
                 if self.single_step:
+                    # Issue #235: --step は遷移しないので next=end として step end を出す。
+                    _console.info(
+                        "step end: %s status=%s duration=%dms next=end",
+                        current_step.id,
+                        verdict.status,
+                        duration_ms,
+                    )
                     break
 
                 next_step_id = current_step.on.get(verdict.status)
                 if next_step_id is None:
                     raise InvalidTransition(current_step.id, verdict.status)
 
+                # Issue #235: next step 解決後に step end progress を出す（next を含めるため）。
+                _console.info(
+                    "step end: %s status=%s duration=%dms next=%s",
+                    current_step.id,
+                    verdict.status,
+                    duration_ms,
+                    next_step_id,
+                )
+
                 # --before barrier: dispatch 直前で停止
                 if self.before_step and next_step_id == self.before_step:
                     logger.log_barrier_hit(self.before_step)
+                    _console.info("barrier hit: %s", self.before_step)
                     barrier_hit = True
                     break
 
@@ -863,6 +919,7 @@ class WorkflowRunner:
                 and naturally_completed
             ):
                 logger.log_barrier_missed(self.before_step)
+                _console.warning("barrier missed: %s", self.before_step)
                 print(
                     f"WARN: stop point '{self.before_step}' was never reached; "
                     "workflow completed naturally",
@@ -875,6 +932,7 @@ class WorkflowRunner:
         except Exception as exc:
             end_status = "ERROR"
             end_error = f"{type(exc).__name__}: {exc}"
+            _console.error("workflow error: %s", end_error)
             raise
         finally:
             total_duration_ms = int((time.monotonic() - workflow_start) * 1000)
@@ -885,4 +943,5 @@ class WorkflowRunner:
                 total_cost=total_cost if total_cost > 0 else None,
                 error=end_error,
             )
+            _console.info("workflow end: status=%s duration=%dms", end_status, total_duration_ms)
         return state

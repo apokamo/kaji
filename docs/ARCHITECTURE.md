@@ -148,6 +148,16 @@ WorkflowRunner.run()
 exec_script の 3 経路を `dispatch` field で区別する。詳細は
 [ロギング規約](./reference/python/logging.md) を参照。
 
+#### observability 2 層（機械可読ログ ↔ 起動コンソール progress）
+
+kaji のログは責務の異なる 2 層に分かれる（Issue #235）。**機械可読ログ** は `RunLogger`
+（`logger.py`）が `run.log` へ JSONL で書く実行記録で、プログラムが解析する正本。一方
+**起動コンソール progress** は `console_log.py` が設定する stdlib `logging`（`kaji.*` 名前空間）で、
+`kaji run` を叩いた起動コンソールに日時付き `[kaji]` 行（workflow / step / verdict / transition、
+および exec step の `[review-poll]` heartbeat）を人間向けに時系列表示する（`INFO` 以下 stdout /
+`WARNING` 以上 stderr、`--log-level` で閾値制御）。後者は `RunLogger` の JSONL 契約に影響しない
+別系統であり、`run.log` には混入しない。
+
 ### Runner backend dispatch（headless ↔ interactive_terminal）
 
 agent 経路の起動 backend は repository config の `[execution] agent_runner`（または

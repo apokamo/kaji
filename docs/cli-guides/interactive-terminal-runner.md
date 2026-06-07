@@ -116,6 +116,35 @@ kaji run .kaji/wf/feature-development.yaml 224 \
 kaji run .kaji/wf/feature-development.yaml 224 --agent-runner headless
 ```
 
+## 起動コンソール progress（Issue #235）
+
+interactive terminal runner では agent の作業内容は pane 側に表示されるため、起動コンソール
+（`kaji run` を叩いた元の pane）には harness 自身の進行が見えにくい。Issue #235 で、harness は
+起動コンソールへ日時付き `[kaji]` progress を stdlib `logging` 経由で出力する。
+
+```text
+[2026-06-07T12:34:57] [kaji] workflow start: feature-development issue #224
+[2026-06-07T12:34:57] [kaji] step start: design attempt-001 dispatch=agent agent=claude model=opus
+[2026-06-07T12:35:02] [kaji] pane launched: design pane=%12 verdict=/.../steps/design/attempt-001/verdict.yaml
+[2026-06-07T12:42:10] [kaji] verdict detected: design source=artifact status=PASS
+[2026-06-07T12:42:10] [kaji] step end: design status=PASS duration=433000ms next=review-design
+[2026-06-07T12:42:10] [kaji] workflow end: status=COMPLETE duration=...ms
+```
+
+- `INFO` 以下は stdout、`WARNING` 以上は stderr に出る。
+- `--log-level {DEBUG,INFO,WARNING,ERROR}`（default `INFO`）で表示閾値を制御する。
+- `--quiet` は agent/exec の stdout streaming（pane や exec 中継）を抑制するが、`[kaji]` progress
+  には影響しない（両者は独立）。harness progress だけ抑えたい場合は `--log-level WARNING` を使う。
+- `review-poll` のような deterministic exec step は pane を開かない代わり、polling 中に
+  `POLL_INTERVAL_SEC`（10s）ごとの `[review-poll]` heartbeat を起動コンソールへ flush 出力する
+  （経過秒・PR 番号・head 短縮・観測中 state・timeout 残を含む）。これにより待機中 / 停止中 /
+  エラーを `run.log` を開かずに切り分けられる。
+
+```bash
+# harness progress を抑えて警告/エラーのみ表示
+kaji run .kaji/wf/feature-development.yaml 224 --log-level WARNING
+```
+
 ## 振る舞い
 
 1. runner は `tmux split-window -d -h -P -F '#{pane_id}' -t "$TMUX_PANE" <wrapper.sh + 8 args>` を
