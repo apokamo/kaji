@@ -10,10 +10,22 @@ GitHub `chatgpt-codex-connector[bot]` (id `199175422`) の auto-review シグナ
 verdict を出力する skill。`review` skill との二重起動を避け、auto-review クレジット不足時のみ
 `BACK_FALLBACK` 経由で既存 `review` skill (codex agent) に fallback させる。
 
-本 skill は **`exec_script` 経路** で動作する deterministic skill。harness は LLM agent を起動せず、
-`kaji_harness.scripts.review_poll_entry` module を ``python -m`` で直接 subprocess 実行する。
-entry module が env から PR 情報を解決し、polling 本体 `kaji_harness.scripts.codex_review_poll`
-に委譲する。
+本 skill は LLM agent を起動しない deterministic skill であり、`kaji_harness.scripts.review_poll_entry`
+module を直接 subprocess 実行する。entry module が env から PR 情報を解決し、polling 本体
+`kaji_harness.scripts.codex_review_poll` に委譲する。
+
+起動経路は 2 系統あり、いずれも同じ entry module に合流する:
+
+- **builtin workflow（`review-cycle` / `review-close` / `full-cycle` / `full-cycle-xhigh`）**:
+  各 YAML が `exec: [uv, run, --no-sync, python, -m, kaji_harness.scripts.review_poll_entry]` で
+  entry module を直接起動する。dispatch の正本は YAML 側の `exec` step であり、agent / model /
+  effort はスキーマレベルで指定不可（指定すると `kaji validate` が reject）。
+  `uv` が PATH にある前提で起動し、`.venv` の鮮度は `uv sync` の責務（本 skill は関与しない）。
+- **skill 単体起動・再利用**: frontmatter の `exec_script: kaji_harness.scripts.review_poll_entry`
+  が契約となり、harness が同 entry module を ``python -m`` で subprocess 実行する。
+
+どちらの経路でも、入力（env）/ verdict 仕様の正本は entry module（`review_poll_entry`）であり、
+本ファイルの記述はその契約のミラーである。
 
 ## いつ使うか
 
@@ -23,7 +35,7 @@ entry module が env から PR 情報を解決し、polling 本体 `kaji_harness
 | `provider.type='local'` 配下 | ❌ ABORT verdict |
 | `review-poll` で `BACK_FALLBACK` を受けた場合 | 既存 `review` skill (codex agent) に進む |
 
-**ワークフロー内の位置**: i-pr → [PR 作成] → **review-poll** → (PASS=close / RETRY=pr-fix / BACK_FALLBACK=review fallback)
+**ワークフロー内の位置**: i-pr → [PR 作成] → **review-poll**（builtin workflow では `exec` step として起動）→ (PASS=close / RETRY=pr-fix / BACK_FALLBACK=review fallback)
 
 ## 入力（harness が env として注入）
 
@@ -35,8 +47,8 @@ entry module が env から PR 情報を解決し、polling 本体 `kaji_harness
 | `KAJI_WORKTREE_DIR` | ✅ | `git remote get-url` 実行 cwd |
 | `KAJI_PR_ID` | 任意 | harness 側で解決済みの場合のみ。未設定なら `kaji pr list` で取得 |
 
-`exec_script` 経路では workflow YAML 側で `agent` / `model` / `effort` を指定する必要はない
-（指定しても無視され harness が WARN を出す）。
+これらの env は entry module（`review_poll_entry`）が正本として解釈する。builtin workflow の
+`exec` step は `agent` / `model` / `effort` をスキーマで拒否するため、これらを指定する余地はない。
 
 ## 検出ロジック（仕様）
 
