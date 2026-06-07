@@ -5,6 +5,18 @@ kaji における実行ログの規約。`kaji_harness/logger.py` の `RunLogger
 > このドキュメントは Python 標準 `logging` モジュールの使い方ガイドではない。
 > `RunLogger` は JSONL を直接書き出す専用実装であり、標準 `logging` を使用しない。
 
+> [!NOTE]
+> kaji には責務の異なる **2 系統** のログ層がある。本ドキュメントは前者（機械可読
+> ログ）の契約を定める。
+>
+> | 層 | 実装 | 出力 | 用途 |
+> |----|------|------|------|
+> | 機械可読ログ | `RunLogger`（`logger.py`） | `run.log`（JSONL） | プログラムが解析する実行記録 |
+> | 起動コンソール progress | stdlib `logging`（`console_log.py` / `kaji.*` 名前空間） | stdout（`INFO` 以下）/ stderr（`WARNING` 以上） | `kaji run` 起動コンソールで人間が時系列に進行を追う表示 |
+>
+> 後者は Issue #235 で導入。起動コンソール向けの **人間可読 progress** であり、
+> `RunLogger` の JSONL 契約には一切影響しない。詳細は § 起動コンソール progress logging。
+
 ## RunLogger の概要
 
 `RunLogger` は `kaji_harness/logger.py` に定義された dataclass。ワークフロー実行中のイベントを JSONL 形式でファイルに記録する。
@@ -229,18 +241,42 @@ def log_budget_exceeded(self, step_id: str, budget_usd: float, spent_usd: float)
 
 既存フィールドの削除・型変更は禁止。新フィールドの追加は `| None` として optional にする。
 
+## 起動コンソール progress logging（Issue #235）
+
+`run.log`（JSONL）とは別系統の、`kaji run` 起動コンソール向け人間可読表示層。
+`kaji_harness/console_log.py` の `configure_console_logging()` が stdlib `logging` の
+二ハンドラを `kaji` ルート logger に設定する。
+
+- **routing**: `INFO` 以下 → stdout、`WARNING` 以上 → stderr。
+- **formatter**: `[%(asctime)s] [kaji] %(message)s`（local time。`script_exec` の
+  exec 中継行 `[ts] [step_id] ...` と同一タイムラインに並ぶよう local time にそろえる）。
+- **logger 名前空間**: 各モジュールは `logging.getLogger("kaji.<module>")` を使い、
+  `kaji` ルートのハンドラへ伝播させる。`RunLogger`（`kaji_harness.*`）とは別ツリー。
+- **`--log-level`**: `kaji run --log-level {DEBUG,INFO,WARNING,ERROR}`（default `INFO`）で
+  閾値を制御。`--quiet`（agent/exec stdout streaming 抑制）とは独立。
+
+この層は「人間が起動コンソールで進行を追う」用途に限定し、プログラムが解析する記録は
+引き続き `RunLogger`（JSONL）を正本とする。
+
 ## 禁止事項
 
-### 標準 logging の直接使用
+### `RunLogger` 文脈での標準 logging 直接使用
+
+`run.log`（JSONL 機械可読ログ）に書くべきイベントを、標準 `logging` で出してはならない。
+機械可読ログは必ず `RunLogger` のメソッド経由にする。
 
 ```python
-# ❌ 禁止
+# ❌ 禁止: run.log に残すべきイベントを stdlib logging で出す
 import logging
 logging.info("step started")
 
 # ✅ RunLogger を使う
 self.logger.log_step_start(step.id, step.agent, step.model, step.effort, session_id)
 ```
+
+> 起動コンソール向けの **人間可読 progress** を `kaji.*` 名前空間の stdlib `logging` で
+> 出すのは別系統として許容される（§ 起動コンソール progress logging）。この禁止事項は
+> あくまで「JSONL 機械可読ログを stdlib logging で代替するな」という趣旨に限定される。
 
 ### 文字列フォーマットでのイベント記述
 
@@ -271,7 +307,7 @@ self._write("step_start", agent=step.agent, model=step.model, ...)
 - [ ] `RunLogger` のメソッドを正しいタイミングで呼んでいるか
 - [ ] `log_workflow_end` が正常・異常終了どちらのパスでも呼ばれているか（`try/finally` 等）
 - [ ] 新規イベントのフィールド名が snake_case か
-- [ ] 標準 `logging` モジュールを直接使用していないか
+- [ ] `run.log`（JSONL）に残すべきイベントを標準 `logging` で代替していないか（起動コンソール progress は別系統として許容）
 - [ ] 機密情報がフィールドに含まれていないか
 
 ## 関連ドキュメント

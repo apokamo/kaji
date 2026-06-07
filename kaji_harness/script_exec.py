@@ -23,6 +23,7 @@ private helper ``_run_argv`` で共有する。共通の不変条件:
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -35,6 +36,13 @@ from .errors import CLINotFoundError, ScriptExecutionError, StepTimeoutError
 from .models import CLIResult, Step
 from .result import derive_signal
 
+# Issue #235: 起動コンソール向け progress logger（kaji.* 名前空間）。
+# RunLogger の JSONL とは別系統で、人間向け表示のみを担う。
+_console = logging.getLogger("kaji.script_exec")
+
+# exec start 行で表示する argv 文字列の最大長。これを超えたら末尾を省略する。
+_ARGV_DISPLAY_LIMIT = 200
+
 # skill-authoring.md の env 契約上「未解決なら未注入」となる reserved 変数。
 # parent process に古い値が残っていた場合に subprocess へ漏れて
 # review_poll_entry 等が無関係 PR を polling する事故を防ぐため、
@@ -44,6 +52,19 @@ _OPTIONAL_RESERVED_ENV = frozenset({"KAJI_PR_ID", "KAJI_PR_REF"})
 
 def _now_stamp() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def _format_argv(args: list[str]) -> str:
+    """argv を 1 行表示用に join する。長大なら末尾を省略する。
+
+    exec / exec_script 共通の表示作法。``command_label`` ではなく実 ``args`` を
+    join することで、両 dispatch で同じ作り方の argv 文字列を一貫表示する
+    （設計書 § exec start の argv 表示位置）。
+    """
+    joined = " ".join(args)
+    if len(joined) > _ARGV_DISPLAY_LIMIT:
+        return joined[:_ARGV_DISPLAY_LIMIT] + "…"
+    return joined
 
 
 def _run_argv(
@@ -83,6 +104,11 @@ def _run_argv(
     full_env = {**base_env, **env}
 
     log_dir.mkdir(parents=True, exist_ok=True)
+
+    # Issue #235: 起動コンソールへ exec start progress を出す。実 argv を知るのは
+    # この共有コアのみ（runner は exec_script の module 名しか持たない）ため、
+    # exec / exec_script いずれもここで 1 箇所だけ発火し表示粒度を揃える。
+    _console.info("exec start: %s", _format_argv(args))
 
     try:
         process = subprocess.Popen(

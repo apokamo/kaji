@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import logging
 import shutil
 import subprocess
 import sys
@@ -163,6 +164,15 @@ def _register_run(subparsers: argparse._SubParsersAction[argparse.ArgumentParser
         help="Starting directory for config discovery (default: current directory)",
     )
     p.add_argument("--quiet", action="store_true", help="Suppress agent output streaming")
+    # Issue #235: 起動コンソール progress（stdlib logging）の閾値。--quiet とは独立で、
+    # agent/exec の stdout streaming 抑制（--quiet）と harness progress 表示を分離する。
+    p.add_argument(
+        "--log-level",
+        dest="log_level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        default="INFO",
+        help="Console progress log level (default: INFO).",
+    )
     # Issue #224: per-run overrides for the [execution] runner backend. These take
     # precedence over both config.local.toml and config.toml (precedence 1).
     p.add_argument(
@@ -365,6 +375,12 @@ def _apply_execution_overrides(config: KajiConfig, args: argparse.Namespace) -> 
 
 def cmd_run(args: argparse.Namespace) -> int:
     """Execute the `run` subcommand."""
+    # Issue #235: 起動コンソール progress logging を初期化する（argparse choices で
+    # 検証済みの log level を stdlib level int へ変換）。RunLogger の JSONL とは別系統。
+    from .console_log import configure_console_logging
+
+    configure_console_logging(getattr(logging, getattr(args, "log_level", "INFO")))
+
     # Mutual exclusion: --from and --step
     if args.from_step and args.single_step:
         print(

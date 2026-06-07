@@ -446,3 +446,102 @@ class TestWorkflowEndLogging:
         assert len(logged_calls) == 1
         assert logged_calls[0]["status"] == "ERROR"
         assert "RuntimeError" in logged_calls[0]["error"]
+
+
+@pytest.mark.medium
+class TestConsoleProgress:
+    """Issue #235: 起動コンソール向け console progress（kaji.* logging）の検証。"""
+
+    def _configure(self) -> None:
+        import logging as _logging
+
+        from kaji_harness.console_log import configure_console_logging
+
+        configure_console_logging(_logging.INFO)
+
+    def _teardown(self) -> None:
+        import logging as _logging
+
+        from kaji_harness.console_log import ROOT_LOGGER_NAME
+
+        root = _logging.getLogger(ROOT_LOGGER_NAME)
+        for h in [h for h in root.handlers if getattr(h, "_kaji", False)]:
+            root.removeHandler(h)
+
+    def test_progress_lines_routed_to_stdout(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        workflow = _simple_workflow()
+        results = [
+            _make_cli_result("PASS", session_id="sess-1"),
+            _make_cli_result("PASS", session_id="sess-2"),
+        ]
+        call_count = 0
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            nonlocal call_count
+            r = results[call_count]
+            call_count += 1
+            return r
+
+        self._configure()
+        try:
+            with (
+                patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+                patch("kaji_harness.runner.validate_skill_exists"),
+            ):
+                runner = _make_runner(tmp_path, workflow)
+                runner.run()
+            out = capsys.readouterr().out
+        finally:
+            self._teardown()
+
+        assert "[kaji] workflow start: test-workflow" in out
+        assert "step start: design attempt-001 dispatch=agent agent=claude" in out
+        assert "verdict detected: design source=" in out
+        assert "step end: design status=PASS" in out and "next=review" in out
+        assert "step end: review status=PASS" in out and "next=end" in out
+        assert "workflow end: status=COMPLETE" in out
+
+    def test_run_log_jsonl_unchanged_by_console_progress(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """console progress を有効化しても run.log の JSONL イベント列は不変。"""
+        import json as _json
+
+        workflow = _simple_workflow()
+        results = [
+            _make_cli_result("PASS", session_id="sess-1"),
+            _make_cli_result("PASS", session_id="sess-2"),
+        ]
+        call_count = 0
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            nonlocal call_count
+            r = results[call_count]
+            call_count += 1
+            return r
+
+        self._configure()
+        try:
+            with (
+                patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+                patch("kaji_harness.runner.validate_skill_exists"),
+            ):
+                runner = _make_runner(tmp_path, workflow)
+                runner.run()
+        finally:
+            self._teardown()
+
+        run_logs = list((tmp_path / ".kaji-artifacts").rglob("run.log"))
+        assert run_logs, "run.log not found"
+        events = [
+            _json.loads(line)["event"]
+            for line in run_logs[0].read_text().splitlines()
+            if line.strip()
+        ]
+        # console progress 行は run.log（JSONL 機械可読ログ）に混入しない。
+        assert "workflow_start" in events
+        assert "workflow_end" in events
+        for ev in events:
+            assert not ev.startswith("[kaji]")

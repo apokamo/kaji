@@ -43,6 +43,45 @@ class PollResult:
     reason: str
 
 
+def format_heartbeat(
+    *,
+    elapsed_sec: float,
+    pr_number: int,
+    head_sha: str,
+    state: str,
+    remaining_sec: float,
+) -> str:
+    """polling 進捗 heartbeat の 1 行を組み立てる純粋関数（Issue #235）。
+
+    起動コンソール運用者が「待機中 / 停止中 / エラー」を切り分けられるよう、
+    経過秒・PR 番号・head 短縮・観測中 state・timeout 残を 1 行に含める。
+
+    verdict marker 非汚染: ``---VERDICT---`` / ``---END_VERDICT---`` および
+    ``---`` 始まりの marker 類似文字列を **含めない** 素のテキストを返す
+    （``verdict.py`` の抽出正規表現を壊さない）。
+    """
+    return (
+        f"polling PR #{pr_number} head={head_sha[:7]} "
+        f"state={state} elapsed={int(elapsed_sec)}s remaining={max(0, int(remaining_sec))}s"
+    )
+
+
+def _default_emit(line: str) -> None:
+    """heartbeat を stdout へ flush 出力する既定 emitter。
+
+    subprocess の stdout は非 tty で block-buffer されるため、各行を
+    ``flush()`` で即時送出しないと ``script_exec`` の pipe で終了まで溜まる。
+    ``BrokenPipeError`` / ``OSError``（reader 側が先に閉じた等）は捕捉して
+    黙って return する。heartbeat は観測のみの best-effort 副作用であり、
+    pipe 切断を polling 失敗へ昇格させない。
+    """
+    try:
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+    except (BrokenPipeError, OSError):
+        return
+
+
 def _is_bot(user: dict[str, Any], bot_id: int) -> bool:
     """Match by id (primary). login is checked only as a secondary signal."""
     return isinstance(user, dict) and user.get("id") == bot_id
@@ -138,11 +177,17 @@ def run_polling(
     bot_id: int = BOT_ID,
     now: object = time.monotonic,
     sleep: object = time.sleep,
+    emit_progress: object = _default_emit,
 ) -> PollResult:
     """Drive the state machine until a terminal state is reached.
 
     `now` and `sleep` are injectable for medium tests. `head_committed_at`
     is fetched once by the caller (skill bash) and held constant across polls.
+
+    `emit_progress` is an injectable heartbeat sink (default: stdout flush
+    print). It is called once per non-terminal poll just before sleeping and
+    is fully isolated: any exception it raises is swallowed so the verdict
+    state machine stays unchanged (Issue #235, heartbeat is observation only).
     """
     reactions_path = f"repos/{owner}/{repo}/issues/{pr_number}/reactions"
     reviews_path = f"repos/{owner}/{repo}/pulls/{pr_number}/reviews"
@@ -215,6 +260,26 @@ def run_polling(
                         "done_abort",
                         f"IN_PROGRESS_TIMEOUT_SEC ({in_progress_timeout_sec}s) exceeded",
                     )
+
+        # Issue #235: non-terminal poll の末尾で heartbeat を 1 回 emit する。
+        # emitter が任意の例外を投げても polling 判定（state machine）には影響
+        # させない（観測のみの副作用）。
+        if state == "in_progress" and in_progress_start is not None:
+            remaining = in_progress_timeout_sec - (now() - in_progress_start)  # type: ignore[operator]
+        else:
+            remaining = no_reaction_timeout_sec - elapsed
+        try:
+            emit_progress(  # type: ignore[operator]
+                format_heartbeat(
+                    elapsed_sec=elapsed,
+                    pr_number=pr_number,
+                    head_sha=head_sha,
+                    state=state,
+                    remaining_sec=remaining,
+                )
+            )
+        except Exception:
+            pass
 
         sleep(poll_interval_sec)  # type: ignore[operator]
 

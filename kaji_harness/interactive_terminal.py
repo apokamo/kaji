@@ -20,6 +20,7 @@ with no latency contract.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shlex
@@ -31,6 +32,9 @@ from pathlib import Path
 
 from .errors import CLIExecutionError, CLINotFoundError, StepTimeoutError
 from .models import CLIResult, Step
+
+# Issue #235: 起動コンソール向け progress logger（kaji.* 名前空間）。
+_console = logging.getLogger("kaji.interactive_terminal")
 
 _CODEX_RESUME_RE = re.compile(
     r"\bcodex\s+resume\s+([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b"
@@ -214,6 +218,8 @@ def execute_interactive_terminal(
         model=step.model or "",
         effort=step.effort or "",
     )
+    # Issue #235: pane 起動成功直後に起動コンソールへ progress を出す。
+    _console.info("pane launched: %s pane=%s verdict=%s", step.id, pane_id, verdict_path)
     if not _pipe_pane(tmux, pane_id, terminal_log):
         # tmux rejected the pipe — most likely the pane already closed because a
         # short-running agent wrote verdict.yaml and exited before we could

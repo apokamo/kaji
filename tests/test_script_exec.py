@@ -10,7 +10,7 @@ import pytest
 
 from kaji_harness.errors import ScriptExecutionError, StepTimeoutError
 from kaji_harness.models import Step
-from kaji_harness.script_exec import execute_script
+from kaji_harness.script_exec import execute_exec, execute_script
 
 
 def _make_step() -> Step:
@@ -287,3 +287,74 @@ class TestStepAgentOptional:
     def test_step_default_agent_is_none(self) -> None:
         step = Step(id="s", skill="k", on={"PASS": "end"})
         assert step.agent is None
+
+
+@pytest.mark.small
+class TestExecStartProgress:
+    """Issue #235: `_run_argv` が起動コンソールへ exec start progress を出す。"""
+
+    def _configure(self) -> None:
+        import logging
+
+        from kaji_harness.console_log import configure_console_logging
+
+        configure_console_logging(logging.INFO)
+
+    def _teardown(self) -> None:
+        import logging
+
+        from kaji_harness.console_log import ROOT_LOGGER_NAME
+
+        root = logging.getLogger(ROOT_LOGGER_NAME)
+        for h in [h for h in root.handlers if getattr(h, "_kaji", False)]:
+            root.removeHandler(h)
+
+    def test_exec_start_logged_with_full_argv(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._configure()
+        try:
+            with patch(
+                "kaji_harness.script_exec.subprocess.Popen",
+                return_value=_mock_popen(stdout_lines=["---VERDICT---\n", "status: PASS\n"]),
+            ):
+                execute_exec(
+                    step=_make_step(),
+                    argv=["echo", "hello", "world"],
+                    env={},
+                    workdir=tmp_path,
+                    log_dir=tmp_path / "log",
+                    timeout=60,
+                    verbose=False,
+                )
+            out = capsys.readouterr().out
+            assert "exec start: echo hello world" in out
+            assert "[kaji]" in out
+        finally:
+            self._teardown()
+
+    def test_exec_start_truncates_long_argv(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._configure()
+        try:
+            long_arg = "x" * 500
+            with patch(
+                "kaji_harness.script_exec.subprocess.Popen",
+                return_value=_mock_popen(stdout_lines=["---VERDICT---\n", "status: PASS\n"]),
+            ):
+                execute_exec(
+                    step=_make_step(),
+                    argv=["run", long_arg],
+                    env={},
+                    workdir=tmp_path,
+                    log_dir=tmp_path / "log",
+                    timeout=60,
+                    verbose=False,
+                )
+            exec_line = next(
+                ln for ln in capsys.readouterr().out.splitlines() if "exec start:" in ln
+            )
+            assert exec_line.endswith("…")
+        finally:
+            self._teardown()
