@@ -129,7 +129,7 @@ interactive terminal runner では agent の作業内容は pane 側に表示さ
 ```text
 [2026-06-07T12:34:57] [kaji] workflow start: feature-development issue #224
 [2026-06-07T12:34:57] [kaji] step start: design attempt-001 dispatch=agent agent=claude model=opus
-[2026-06-07T12:35:02] [kaji] pane launched: design pane=%12 verdict=/.../steps/design/attempt-001/verdict.yaml
+[2026-06-07T12:35:02] [kaji] pane launched: step=design agent=claude pane=%12 timeout=1800s verdict=/.../steps/design/attempt-001/verdict.yaml
 [2026-06-07T12:42:10] [kaji] verdict detected: design source=artifact status=PASS
 [2026-06-07T12:42:10] [kaji] step end: design status=PASS duration=433000ms next=review-design
 [2026-06-07T12:42:10] [kaji] workflow end: status=COMPLETE duration=...ms
