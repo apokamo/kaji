@@ -441,6 +441,86 @@ class TestHeartbeat:
         )
         assert with_raise.state == baseline.state == "done_pass"
 
+    def test_heartbeat_emitted_on_api_failure_retry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 1 回目の poll で gh api が失敗 → retry 待機中に heartbeat が出ること。
+        # 2 回目で fresh +1 を返し done_pass で終了（terminal は heartbeat 無し）。
+        plus_one = _load("reactions_plus_one.json")
+        calls = {"n": 0}
+
+        def fake_gh_api(path: str) -> list[dict[str, Any]]:
+            calls["n"] += 1
+            if calls["n"] == 1:  # poll1 の reactions 取得で失敗
+                raise subprocess.CalledProcessError(1, ["gh", "api", path])
+            if "reactions" in path:
+                return plus_one
+            return []
+
+        monkeypatch.setattr(mod, "_gh_api", fake_gh_api)
+        clock = _FakeClock()
+        emitted: list[str] = []
+        result = run_polling(
+            pr_number=176,
+            owner="apokamo",
+            repo="kaji",
+            head_sha=HEAD,
+            head_committed_at=HEAD_AT,
+            poll_interval_sec=10,
+            no_reaction_timeout_sec=60,
+            in_progress_timeout_sec=1800,
+            eyes_grace_sec=10,
+            api_failure_limit=3,
+            now=clock.now,
+            sleep=clock.sleep,
+            emit_progress=emitted.append,
+        )
+        assert result.state == "done_pass"
+        # API failure retry の sleep 直前に heartbeat が 1 行出る（transient error 可視化）
+        retry_lines = [ln for ln in emitted if "api_retry:1/3" in ln]
+        assert len(retry_lines) == 1
+        for line in emitted:
+            assert "PR #176" in line
+            assert "---" not in line
+
+    def test_heartbeat_emitted_on_eyes_lost_grace(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # eyes 観測 → eyes 消失（grace 待機）→ +1 の遷移を classify を差し替えて強制し、
+        # grace 待機の sleep 直前に heartbeat が出ることを固定する。
+        seq = [
+            PollResult("in_progress", "eyes"),  # poll1: in_progress
+            PollResult("init", "eyes lost"),  # poll2: eyes 消失 → grace 待機
+            PollResult("done_pass", "fresh +1"),  # poll3: 終了
+        ]
+        idx = {"i": 0}
+
+        def fake_classify(*_args: Any, **_kwargs: Any) -> PollResult:
+            r = seq[min(idx["i"], len(seq) - 1)]
+            idx["i"] += 1
+            return r
+
+        _gh_responses(monkeypatch, [([], [])])
+        monkeypatch.setattr(mod, "classify", fake_classify)
+        clock = _FakeClock()
+        emitted: list[str] = []
+        result = run_polling(
+            pr_number=176,
+            owner="apokamo",
+            repo="kaji",
+            head_sha=HEAD,
+            head_committed_at=HEAD_AT,
+            poll_interval_sec=10,
+            no_reaction_timeout_sec=60,
+            in_progress_timeout_sec=1800,
+            eyes_grace_sec=10,
+            now=clock.now,
+            sleep=clock.sleep,
+            emit_progress=emitted.append,
+        )
+        assert result.state == "done_pass"
+        grace_lines = [ln for ln in emitted if "eyes_lost_grace" in ln]
+        assert len(grace_lines) == 1
+        for line in emitted:
+            assert "PR #176" in line
+            assert "---" not in line
+
 
 # --- _default_emit flush / failure isolation (Medium) -----------------------
 

@@ -185,9 +185,12 @@ def run_polling(
     is fetched once by the caller (skill bash) and held constant across polls.
 
     `emit_progress` is an injectable heartbeat sink (default: stdout flush
-    print). It is called once per non-terminal poll just before sleeping and
-    is fully isolated: any exception it raises is swallowed so the verdict
-    state machine stays unchanged (Issue #235, heartbeat is observation only).
+    print). It is called once per non-terminal poll just before sleeping —
+    including the API-failure retry wait and the eyes-lost grace wait — so the
+    startup console can distinguish "waiting / stalled / erroring" on every
+    sleep path. It is fully isolated: any exception it raises is swallowed so
+    the verdict state machine stays unchanged (Issue #235, heartbeat is
+    observation only).
     """
     reactions_path = f"repos/{owner}/{repo}/issues/{pr_number}/reactions"
     reviews_path = f"repos/{owner}/{repo}/pulls/{pr_number}/reviews"
@@ -197,6 +200,31 @@ def run_polling(
     in_progress_start: float | None = None
     eyes_lost_at: float | None = None
     consecutive_failures = 0
+
+    def emit_heartbeat(state_label: str) -> None:
+        """非 terminal poll の sleep 直前に heartbeat を 1 回 emit する（Issue #235）。
+
+        elapsed / remaining は現在の state machine 状態から都度計算する。emitter が
+        任意の例外を投げても polling 判定（state machine）には一切影響させない
+        （観測のみの副作用）。
+        """
+        elapsed = now() - start  # type: ignore[operator]
+        if state == "in_progress" and in_progress_start is not None:
+            remaining = in_progress_timeout_sec - (now() - in_progress_start)  # type: ignore[operator]
+        else:
+            remaining = no_reaction_timeout_sec - elapsed
+        try:
+            emit_progress(  # type: ignore[operator]
+                format_heartbeat(
+                    elapsed_sec=elapsed,
+                    pr_number=pr_number,
+                    head_sha=head_sha,
+                    state=state_label,
+                    remaining_sec=remaining,
+                )
+            )
+        except Exception:
+            pass
 
     while True:
         try:
@@ -210,6 +238,8 @@ def run_polling(
                     "done_abort",
                     f"gh api failed {consecutive_failures} times in a row: {exc}",
                 )
+            # transient error の待機中であることを起動コンソールへ可視化する。
+            emit_heartbeat(f"api_retry:{consecutive_failures}/{api_failure_limit}")
             sleep(poll_interval_sec)  # type: ignore[operator]
             continue
 
@@ -250,6 +280,8 @@ def run_polling(
             else:
                 if eyes_lost_at is None:
                     eyes_lost_at = now()  # type: ignore[operator]
+                    # eyes 消失の grace 待機中であることを起動コンソールへ可視化する。
+                    emit_heartbeat("in_progress/eyes_lost_grace")
                     sleep(eyes_grace_sec)  # type: ignore[operator]
                     continue
                 if (
@@ -262,24 +294,7 @@ def run_polling(
                     )
 
         # Issue #235: non-terminal poll の末尾で heartbeat を 1 回 emit する。
-        # emitter が任意の例外を投げても polling 判定（state machine）には影響
-        # させない（観測のみの副作用）。
-        if state == "in_progress" and in_progress_start is not None:
-            remaining = in_progress_timeout_sec - (now() - in_progress_start)  # type: ignore[operator]
-        else:
-            remaining = no_reaction_timeout_sec - elapsed
-        try:
-            emit_progress(  # type: ignore[operator]
-                format_heartbeat(
-                    elapsed_sec=elapsed,
-                    pr_number=pr_number,
-                    head_sha=head_sha,
-                    state=state,
-                    remaining_sec=remaining,
-                )
-            )
-        except Exception:
-            pass
+        emit_heartbeat(state)
 
         sleep(poll_interval_sec)  # type: ignore[operator]
 
