@@ -6,6 +6,68 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-06-08
+
+This release adds the interactive terminal runner path for subscription CLI
+usage, introduces direct `exec` workflow steps, and improves workflow
+observability through structured verdict artifacts, attempt results, and
+console progress logging.
+
+### Added
+
+- `interactive_terminal` agent runner. `kaji run` can now launch normal
+  Claude/Codex CLI sessions in tmux-backed panes and resolve step completion
+  from artifact-primary `verdict.yaml` files (#224, #230).
+- `exec` workflow step type. Workflow YAML can now declare deterministic
+  subprocess steps directly, separate from LLM agent steps and `exec_script`
+  skill wrappers (#205).
+- Artifact-primary verdict resolution and attempt-scoped log layout. Verdicts
+  are read from `verdict.yaml` first, then issue comments and stdout fallback;
+  step logs now live under `attempt-NNN/` directories (#220).
+- Per-attempt `result.json` artifacts and attempt-aware `run.log` events for
+  exit status, signal, timing, and session metadata (#222).
+- `kaji issue prepend-note`, a deterministic helper used by `/issue-start` to
+  prepend worktree notes without model-dependent markdown formatting drift
+  (#200).
+- `full-cycle-xhigh` workflow variant (#220).
+
+### Changed
+
+- The interactive terminal runner now uses tmux as the single backend, replacing
+  the earlier kitty/proc-scan prototype with Linux/macOS-aligned tmux pane
+  management (#230).
+- tmux agent panes are kept to a right-column maximum of two managed panes,
+  pruning older kaji-created panes while preserving user-created panes (#238).
+- `review-poll` builtin workflow steps now use the `exec` step type directly,
+  removing ignored agent fields and the extra skill dispatch layer (#234).
+- Interactive terminal pane launch progress now includes `step`, `agent`, and
+  `timeout` fields in INFO logs for easier run tracking (#232).
+
+### Fixed
+
+- Fixed `/issue-start` note insertion so the blockquote/body blank line is
+  preserved through a deterministic Python path instead of heredoc reproduction
+  by an agent (#200).
+- Fixed attempt result persistence around verdict parse errors, same-second
+  issue comments, terminal success cleanup, and voluntary process exits (#220,
+  #222).
+- Fixed interactive terminal edge cases including packaged wrapper discovery,
+  early terminal exit detection, truecolor environment setup, and non-fatal
+  tmux `pipe-pane` failures after a verdict is already present (#224, #230).
+- Fixed verdict artifact ordering relative to issue comments (#220).
+- Added review-poll heartbeat output during API retry and eyes-grace sleeps
+  (#235).
+
+### Docs
+
+- Added ADRs for artifact-primary verdicts, attempt result JSON, and the
+  interactive terminal runner (#220, #222, #224).
+- Added and updated CLI/developer documentation for interactive terminal
+  execution, workflow authoring, skill authoring, logging, and provider-specific
+  guides (#205, #224, #230, #238).
+- Archived interactive terminal PoC evidence and design records for the tmux
+  backend work (#224, #230).
+
 ## [0.11.2] - 2026-06-01
 
 ### Fixed
