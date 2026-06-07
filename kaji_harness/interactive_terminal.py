@@ -6,11 +6,20 @@ intentionally avoids parsing stdout: completion is decided by the
 artifact-primary verdict resolution introduced in Issue #220.
 
 The terminal backend is tmux only (ADR 007 v2, Issue #230). ``kaji run`` must
-run inside a tmux session; the runner adds a pane to the current window with
-``tmux split-window -h`` (to the user's right), records the transcript with
-``tmux pipe-pane``, decides liveness via ``#{pane_dead}``, and cleans up with
-``tmux kill-pane``. There is no ``/proc`` scan and no util-linux ``script(1)``
-dependency, so Linux and macOS share one implementation.
+run inside a tmux session; the runner adds a pane to the current window,
+records the transcript with ``tmux pipe-pane``, decides liveness via
+``#{pane_dead}``, and cleans up with ``tmux kill-pane``. There is no ``/proc``
+scan and no util-linux ``script(1)`` dependency, so Linux and macOS share one
+implementation.
+
+Pane placement (Issue #238): the first agent pane is created to the right of
+the origin pane (``split-window -h``); subsequent agent panes split the right
+column vertically (``split-window -v``) so the origin/agent widths stay stable
+instead of shrinking each step. The right column keeps at most
+``_MAX_VISIBLE_AGENT_PANES`` kaji-managed agent panes — when a new pane would
+exceed that, the oldest (top-most) managed pane is killed first. kaji-created
+panes are tagged with a ``@kaji_interactive_terminal`` pane option so manually
+created panes are never pruned.
 
 The single completion trigger is the appearance of ``verdict.yaml``; the agent
 process is not waited on. The post-verdict ``kill-pane`` is best-effort cleanup
@@ -28,6 +37,7 @@ import shutil
 import subprocess
 import time
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .errors import CLIExecutionError, CLINotFoundError, StepTimeoutError
@@ -46,7 +56,40 @@ _SESSION_ID_GRACE_SECONDS = 5.0
 _CODEX_SESSION_SCAN_LIMIT = 100
 _VERDICT_POLL_INTERVAL_SECONDS = 2
 _TERMINAL_LOG_TAIL_CHARS = 2000
-_MIN_TMUX_VERSION = (3, 0)
+# Issue #238: pane scoped user options (`set-option -p`) are used as the kaji
+# marker; they were added in tmux 3.1, so the minimum is raised from 3.0.
+_MIN_TMUX_VERSION = (3, 1)
+# Pane option name marking a pane as kaji-created (value: ``origin=<pane_id>``).
+_KAJI_PANE_OPTION = "@kaji_interactive_terminal"
+# Max kaji-managed agent panes kept visible in the right column at once.
+_MAX_VISIBLE_AGENT_PANES = 2
+
+
+@dataclass(frozen=True)
+class KajiAgentPane:
+    """A kaji-created agent pane discovered via ``tmux list-panes``.
+
+    ``pane_top`` is the y-offset used to order panes: in the right-column layout
+    a newly created pane is added below, so a smaller ``pane_top`` means an older
+    pane. ``created_at`` wall-clock is intentionally *not* used (NTP corrections
+    can run it backwards), so the geometry is the single ordering source.
+    """
+
+    pane_id: str
+    pane_top: int
+    pane_left: int
+    pane_width: int
+
+
+@dataclass(frozen=True)
+class _PaneLaunch:
+    """Placement outcome of a single agent-pane launch (diagnostic metadata)."""
+
+    pane_id: str
+    split_target_pane: str
+    split_flag: str
+    panes_before: list[str] = field(default_factory=list)
+    panes_pruned: list[str] = field(default_factory=list)
 
 
 def _terminal_exit_detail(terminal_log: Path) -> str:
@@ -106,7 +149,8 @@ def _build_tmux_split_argv(
     tmux: str,
     wrapper: Path,
     *,
-    target_pane: str,
+    split_target_pane: str,
+    split_flag: str,
     agent: str,
     prompt_path: Path,
     verdict_path: Path,
@@ -118,21 +162,33 @@ def _build_tmux_split_argv(
 ) -> list[str]:
     """Assemble the ``tmux split-window`` argv.
 
-    ``-d`` keeps focus on the current pane; ``-h`` splits horizontally so the
-    new pane appears to the user's right (Issue #230 MF2); ``-P -F '#{pane_id}'``
-    prints the created pane id, which becomes the lifecycle handle for polling,
-    transcript, and cleanup.
+    ``-d`` keeps focus on the current pane; ``-P -F '#{pane_id}'`` prints the
+    created pane id, which becomes the lifecycle handle for polling, transcript,
+    and cleanup. The split direction and target are chosen by the caller (Issue
+    #238): the first agent pane splits the origin pane horizontally (``-h``,
+    right column), and later panes split the right column's bottom pane
+    vertically (``-v``) so widths stay stable.
+
+    Args:
+        split_target_pane: The ``-t`` target the new pane splits off from.
+        split_flag: ``"-h"`` (right) or ``"-v"`` (below). Any other value is a
+            programming error.
+
+    Raises:
+        ValueError: ``split_flag`` is neither ``"-h"`` nor ``"-v"``.
     """
+    if split_flag not in {"-h", "-v"}:
+        raise ValueError(f"split_flag must be '-h' or '-v', got {split_flag!r}")
     return [
         tmux,
         "split-window",
         "-d",
-        "-h",
+        split_flag,
         "-P",
         "-F",
         "#{pane_id}",
         "-t",
-        target_pane,
+        split_target_pane,
         _build_wrapper_command(
             wrapper,
             agent=agent,
@@ -177,9 +233,10 @@ def execute_interactive_terminal(
 
     Raises:
         CLINotFoundError: ``tmux`` is missing, ``$TMUX`` / ``$TMUX_PANE`` is
-            unset, or ``tmux`` is older than 3.0.
-        CLIExecutionError: ``split-window`` failed, or the pane died before
-            writing ``verdict.yaml``.
+            unset, or ``tmux`` is older than 3.1.
+        CLIExecutionError: ``split-window`` failed, ``list-panes`` failed, the
+            kaji marker could not be set, or the pane died before writing
+            ``verdict.yaml``.
         StepTimeoutError: ``verdict.yaml`` did not appear before the deadline.
         ValueError: ``step.agent`` is missing or unsupported.
         FileNotFoundError: ``prompt.txt`` or the wrapper script is missing.
@@ -205,7 +262,7 @@ def execute_interactive_terminal(
     # Resume runs and Codex (which mints its own id) pass an empty marker.
     launch_session_id = str(uuid.uuid4()) if step.agent == "claude" and session_id is None else ""
 
-    pane_id = _launch_pane(
+    launch = _launch_pane(
         tmux,
         wrapper,
         target_pane=target_pane,
@@ -218,6 +275,7 @@ def execute_interactive_terminal(
         model=step.model or "",
         effort=step.effort or "",
     )
+    pane_id = launch.pane_id
     # Issue #235: pane 起動成功直後に起動コンソールへ progress を出す。
     _console.info("pane launched: %s pane=%s verdict=%s", step.id, pane_id, verdict_path)
     if not _pipe_pane(tmux, pane_id, terminal_log):
@@ -250,6 +308,7 @@ def execute_interactive_terminal(
                 metadata_path,
                 target_pane=target_pane,
                 close_on_verdict=close_on_verdict,
+                layout=launch,
             )
             result_session_id = session_id or launch_session_id or None
             if result_session_id is None and step.agent == "codex":
@@ -283,13 +342,19 @@ def execute_interactive_terminal(
                 metadata_path,
                 target_pane=target_pane,
                 close_on_verdict=close_on_verdict,
+                layout=launch,
             )
             raise CLIExecutionError(step.id, 1, _terminal_exit_detail(terminal_log))
         time.sleep(_VERDICT_POLL_INTERVAL_SECONDS)
 
     # Timeout: verdict never appeared. Best-effort cleanup, then fail-loud.
     _write_pane_metadata(
-        tmux, pane_id, metadata_path, target_pane=target_pane, close_on_verdict=close_on_verdict
+        tmux,
+        pane_id,
+        metadata_path,
+        target_pane=target_pane,
+        close_on_verdict=close_on_verdict,
+        layout=launch,
     )
     _kill_pane(tmux, pane_id)
     raise StepTimeoutError(step.id, timeout)
@@ -324,7 +389,7 @@ def _validate_tmux_version(tmux: str) -> None:
     version = (int(match.group(1)), int(match.group(2)))
     if version < _MIN_TMUX_VERSION:
         raise CLINotFoundError(
-            f"interactive terminal runner requires tmux >= 3.0, got {proc.stdout.strip()}"
+            f"interactive terminal runner requires tmux >= 3.1, got {proc.stdout.strip()}"
         )
 
 
@@ -341,11 +406,35 @@ def _launch_pane(
     launch_session_id: str,
     model: str,
     effort: str,
-) -> str:
+) -> _PaneLaunch:
+    """Place and launch one agent pane, returning its id and placement metadata.
+
+    Placement (Issue #238): existing kaji-managed agent panes are listed; if the
+    right column already holds the maximum, the oldest (top-most) panes are
+    pruned so the new pane keeps the column at ``_MAX_VISIBLE_AGENT_PANES``. With
+    no managed pane left the origin pane is split horizontally (right column);
+    otherwise the bottom managed pane is split vertically.
+    """
+    existing = _list_kaji_agent_panes(tmux, target_pane)
+    # keep one slot free for the pane we are about to create, so launch ends at
+    # _MAX_VISIBLE_AGENT_PANES.
+    remaining = _prune_kaji_agent_panes(tmux, existing, keep=_MAX_VISIBLE_AGENT_PANES - 1)
+    remaining_ids = {pane.pane_id for pane in remaining}
+    pruned_ids = [pane.pane_id for pane in existing if pane.pane_id not in remaining_ids]
+
+    if remaining:
+        # remaining is sorted by pane_top ascending; the last is the bottom pane.
+        split_target_pane = remaining[-1].pane_id
+        split_flag = "-v"
+    else:
+        split_target_pane = target_pane
+        split_flag = "-h"
+
     argv = _build_tmux_split_argv(
         tmux,
         wrapper,
-        target_pane=target_pane,
+        split_target_pane=split_target_pane,
+        split_flag=split_flag,
         agent=agent,
         prompt_path=prompt_path,
         verdict_path=verdict_path,
@@ -365,7 +454,131 @@ def _launch_pane(
             proc.returncode,
             f"tmux did not return a pane id: {proc.stdout!r}",
         )
-    return pane_id
+    try:
+        _set_kaji_agent_pane_marker(tmux, pane_id, target_pane=target_pane)
+    except CLIExecutionError:
+        # Without the marker the pane cannot be safely identified for later
+        # cleanup; best-effort kill it before failing loud.
+        _kill_pane(tmux, pane_id)
+        raise
+    return _PaneLaunch(
+        pane_id=pane_id,
+        split_target_pane=split_target_pane,
+        split_flag=split_flag,
+        panes_before=[pane.pane_id for pane in existing],
+        panes_pruned=pruned_ids,
+    )
+
+
+def _parse_kaji_pane_marker(value: str) -> dict[str, str]:
+    """Parse a ``@kaji_interactive_terminal`` marker into a field dict.
+
+    The marker is a whitespace-separated list of ``key=value`` tokens (currently
+    just ``origin=<pane_id>``). Unknown fields, empty values, and malformed
+    tokens are tolerated: malformed tokens are dropped rather than raising, so a
+    user-set or corrupted option never crashes pane discovery.
+    """
+    fields: dict[str, str] = {}
+    for token in value.split():
+        key, sep, val = token.partition("=")
+        if sep and key:
+            fields[key] = val
+    return fields
+
+
+def _list_kaji_agent_panes(tmux: str, target_pane: str) -> list[KajiAgentPane]:
+    """List kaji-created agent panes in ``target_pane``'s window, oldest first.
+
+    Only panes whose ``@kaji_interactive_terminal`` marker resolves to
+    ``origin=<target_pane>`` are returned; the origin pane itself, unmarked
+    panes, and panes from a different origin are ignored so manually created
+    panes are never touched. A failed ``list-panes`` fails loud rather than
+    risk mis-cleanup on broken tmux state.
+    """
+    format_string = "\t".join(
+        [
+            "#{pane_id}",
+            "#{pane_top}",
+            "#{pane_left}",
+            "#{pane_width}",
+            f"#{{{_KAJI_PANE_OPTION}}}",
+        ]
+    )
+    proc = subprocess.run(
+        [tmux, "list-panes", "-F", format_string, "-t", target_pane],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise CLIExecutionError(
+            "interactive_terminal",
+            proc.returncode,
+            proc.stderr or "tmux list-panes failed",
+        )
+    panes: list[KajiAgentPane] = []
+    for line in proc.stdout.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) < 5:
+            continue
+        pane_id, top, left, width, marker = parts[0], parts[1], parts[2], parts[3], parts[4]
+        if pane_id == target_pane:
+            continue
+        if _parse_kaji_pane_marker(marker).get("origin") != target_pane:
+            continue
+        try:
+            pane = KajiAgentPane(
+                pane_id=pane_id,
+                pane_top=int(top),
+                pane_left=int(left),
+                pane_width=int(width),
+            )
+        except ValueError:
+            continue
+        panes.append(pane)
+    panes.sort(key=lambda pane: pane.pane_top)
+    return panes
+
+
+def _prune_kaji_agent_panes(
+    tmux: str, panes: list[KajiAgentPane], *, keep: int
+) -> list[KajiAgentPane]:
+    """Kill the oldest panes so at most ``keep`` remain, returning the survivors.
+
+    Oldest = smallest ``pane_top`` (top of the right column). The survivors are
+    the newest ``keep`` panes, returned sorted by ``pane_top`` ascending.
+    """
+    ordered = sorted(panes, key=lambda pane: pane.pane_top)
+    if len(ordered) <= keep:
+        return ordered
+    survivors = ordered[len(ordered) - keep :] if keep > 0 else []
+    for pane in ordered[: len(ordered) - len(survivors)]:
+        _kill_pane(tmux, pane.pane_id)
+    return survivors
+
+
+def _set_kaji_agent_pane_marker(tmux: str, pane_id: str, *, target_pane: str) -> None:
+    """Tag a freshly created pane as kaji-managed via a pane user option.
+
+    Raises:
+        CLIExecutionError: ``set-option`` failed; the caller cleans up the
+            orphaned pane and fails loud, since an unmarked pane cannot be safely
+            identified for later pruning.
+    """
+    proc = subprocess.run(
+        [tmux, "set-option", "-p", "-t", pane_id, _KAJI_PANE_OPTION, f"origin={target_pane}"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise CLIExecutionError(
+            "interactive_terminal",
+            proc.returncode,
+            proc.stderr or "tmux set-option (kaji marker) failed",
+        )
 
 
 def _pipe_pane(tmux: str, pane_id: str, terminal_log: Path) -> bool:
@@ -423,6 +636,7 @@ def _write_pane_metadata(
     *,
     target_pane: str,
     close_on_verdict: bool,
+    layout: _PaneLaunch | None = None,
 ) -> None:
     """Snapshot the pane's ``#{pane_dead}`` (and related) fields for diagnostics."""
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -432,6 +646,13 @@ def _write_pane_metadata(
         "target_pane": target_pane,
         "close_on_verdict": close_on_verdict,
     }
+    if layout is not None:
+        # Issue #238: pane placement diagnostics (right-column layout).
+        metadata["layout_target_pane"] = target_pane
+        metadata["split_target_pane"] = layout.split_target_pane
+        metadata["split_direction"] = "horizontal" if layout.split_flag == "-h" else "vertical"
+        metadata["kaji_agent_panes_before"] = layout.panes_before
+        metadata["kaji_agent_panes_pruned"] = layout.panes_pruned
     format_string = "\t".join(
         [
             "pane_id=#{pane_id}",

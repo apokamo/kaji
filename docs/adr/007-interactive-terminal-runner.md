@@ -17,7 +17,9 @@ terminal backend = `tmux` 単一の実現性を確定し、本版を承認に確
   検知後に pane を killする（観測上は ~1s 以内だが、次 step 開始後に killしても問題なく、速さに
   利得はない）。Codex fresh で session id 未解決時の session-id 回収 grace（≤5s）を挟むことも許容。
   検証は `#{pane_dead}` / `list-panes` の高頻度サンプリングで実施。
-- **実行 pane の配置**: ユーザー視点で**右**に追加する（下記スコープ参照）。
+- **実行 pane の配置**: ユーザー視点で**右**に追加する（下記スコープ参照）。Issue #238 で、初回のみ
+  origin pane の右、2枚目以降は右列内の上下分割とし、kaji が作成した agent pane は右列に最大2枚まで
+  に制限する配置へ更新した（§ 改訂履歴 v3）。
 - **macOS**: tmux 版が WSL で安定動作することをもって当面の確認とし、full macOS 実機検証は
   WSL 安定後に別 Issue で実施する（deferred）。
 
@@ -26,11 +28,12 @@ terminal backend = `tmux` 単一の実現性を確定し、本版を承認に確
 | 版 | 日付 | 決定 | 備考 |
 |----|------|------|------|
 | v1 | 2026-06-05 | terminal backend = `kitty` 単一 | GUI ウィンドウを spawn して並列可視性を得る前提。`/proc` cmdline scan による cleanup、util-linux `script(1)` による transcript |
-| v2（本版） | 2026-06-06 | terminal backend = `tmux` 単一 | 「kaji を tmux 内で起動 → runner が `split-window` で pane 追加」で**並列可視性をディスプレイ無しで再現できる**と判明し、v1 の前提が崩れたため改訂 |
+| v2 | 2026-06-06 | terminal backend = `tmux` 単一 | 「kaji を tmux 内で起動 → runner が `split-window` で pane 追加」で**並列可視性をディスプレイ無しで再現できる**と判明し、v1 の前提が崩れたため改訂 |
+| v3（本版） | 2026-06-08 | pane 配置を「初回右・以後右列内・最大2枚」に変更、最小 tmux を 3.1 に引き上げ | v2 の「毎 step で現在 pane の右に追加」は `close_on_verdict=false` で pane を残すと横幅が step ごとに狭くなる。Issue #238 で、初回のみ origin の右、2枚目以降は右列内の上下分割、右列の kaji 管理 pane を最大2枚に制限する配置へ更新。pane を kaji marker（pane user option）で識別するため最小 tmux を 3.1 に引き上げ |
 
-v2 は v1 の **runner 抽象・verdict 解決経路・session 継続方針を維持**し、terminal backend の実体だけを
+v2 / v3 は v1 の **runner 抽象・verdict 解決経路・session 継続方針を維持**し、terminal backend の実体だけを
 `kitty` → `tmux` に差し替える。`agent_runner = "interactive_terminal"` という設定面・workflow 契約・
-ADR 005 artifact-primary verdict 解決は不変。
+ADR 005 artifact-primary verdict 解決は不変。v3 は v2 の pane 配置契約のみを更新し、その他の決定は維持する。
 
 ## コンテキスト
 
@@ -81,9 +84,22 @@ runner backend `interactive_terminal` の terminal backend を **`tmux` 単一**
   こと（`$TMUX` が設定されていること）を前提**とする。`$TMUX` が無ければ step failure として
   **fail-fast**（「`tmux` 内で `kaji run` を実行してください」）。自動 fallback はしない。
 - runner は現在ウィンドウに pane を作って wrapper を起動する:
-  `tmux split-window -d -h -P -F '#{pane_id}' -t "$TMUX_PANE" <wrapper.sh> <args>` で **pane id を
+  `tmux split-window -d <-h|-v> -P -F '#{pane_id}' -t <split target> <wrapper.sh> <args>` で **pane id を
   回収**し、それを以後のライフサイクルのハンドルにする。`-d` でフォーカスを奪わない。
-  **`-h` で pane をユーザー視点の「右」に追加する**（既定の `split-window`（下に追加）ではなく横分割）。
+  **配置（v3 / Issue #238）**: kaji が作成した agent pane が右列に0枚なら origin pane を `-h` で右に分割し
+  右列を作る。1枚あれば右列の pane を `-v` で上下分割して2枚目を作る。2枚以上ある場合は、`pane_top`
+  昇順で最古（上側）の管理対象 pane を `kill-pane` してから残った最新 pane を `-v` で分割し、右列を
+  常に最新2枚相当に保つ。これにより `close_on_verdict=false` で pane を残しても横幅が step ごとに
+  狭くならない。
+- **kaji 管理 pane の識別**: 作成直後の pane に pane user option `@kaji_interactive_terminal`
+  （値 `origin=<origin pane id>`）を `set-option -p` で付与する。launch 前に `list-panes` で同一 window
+  の pane を列挙し、marker が origin 一致する pane だけを管理対象として prune 候補にする。marker 設定に
+  失敗した場合は作成済み pane を best-effort `kill-pane` してから `CLIExecutionError` で fail-loud する
+  （識別不能な pane を残さない）。`list-panes` / pane lookup が失敗した場合も `CLIExecutionError` で
+  fail-loud する（壊れた tmux state で誤 cleanup するより停止を優先）。最古判定は wall-clock ではなく
+  `pane_top` 昇順で行う。ユーザーが手動で agent pane を active にした後にその pane が prune 対象に
+  なった場合、active pane が tmux 通常挙動で移ることは許容する（「自動作成時に origin からフォーカスを
+  奪わない」ことのみを契約とし、ユーザー操作後の active 復帰は範囲外）。
 - 完了判定は ADR 005 の artifact-primary 経路。runner は attempt directory の `verdict.yaml` を
   polling し、出現したら verdict を読んで次 step へ進む。stdout は読まない
   （`CLIResult.full_output=""`）。pane の存命は `#{pane_dead}` / `list-panes` で確認し、verdict
@@ -105,8 +121,9 @@ runner backend `interactive_terminal` の terminal backend を **`tmux` 単一**
   `--session-id` に渡し、同じ UUID を session state に保存する。Codex fresh は `terminal.log` の
   `codex resume <uuid>` を抽出し、取れなければ `CODEX_HOME/sessions/**/*.jsonl` →
   `~/.codex/sessions/**/*.jsonl` を marker 一致で fallback 抽出する（v1 と同一）。
-- 起動時に **`tmux -V` で最低バージョン（`tmux >= 3.0`）を検査**し、満たさなければ fail-fast する
-  （`remain-on-exit -p` / `#{pane_dead}` / `split-window -P -F` が 3.0 を要求）。`kitty` の PATH
+- 起動時に **`tmux -V` で最低バージョン（v3 / Issue #238 以降は `tmux >= 3.1`）を検査**し、満たさなければ
+  fail-fast する。`#{pane_dead}` / `split-window -P -F` は 3.0 を要求し、v3 で導入する pane user option
+  marker（`set-option -p @...`）は tmux 3.1 を要求するため、最小を 3.1 へ引き上げた。`kitty` の PATH
   検査はこのバージョン検査に置換される。
 - `agent_runner` 未指定時は既存の `headless` runner を使い、headless の CLI 引数 / stdout logging
   / verdict 解決挙動は変更しない（互換維持）。
@@ -129,7 +146,8 @@ runner backend `interactive_terminal` の terminal backend を **`tmux` 単一**
   `--interactive-terminal-close-on-verdict` / `--no-...` は不変。
 - docs: 本 ADR、`docs/ARCHITECTURE.md` § runner backend dispatch、
   `docs/cli-guides/interactive-terminal-runner.md`（前提を `kitty`→`tmux` / `$TMUX` 必須 /
-  `tmux >= 3.0` に更新、トラブルシュート更新）、`github-mode.md` / `local-mode.md` の `[execution]`
+  `tmux >= 3.1`（v3）に更新、配置契約と右列最大2枚、トラブルシュート更新）、`github-mode.md` /
+  `local-mode.md` の `[execution]`
   例（更新があれば）。
 - workflow YAML / 遷移仕様 / verdict 解決経路（ADR 005）は不変。runner backend の選択は repository
   config の責務であり workflow step の責務にしない。
@@ -152,5 +170,6 @@ runner backend `interactive_terminal` の terminal backend を **`tmux` 単一**
 - ADR 005: artifact-primary verdict resolution（本 runner の前提）
 - Issue #220 / PR #221: attempt layout / `verdict.yaml` primary
 - Issue #224: interactive_terminal runner（v1, kitty backend）の実装
-- Issue #229: terminal backend を tmux に改訂（本版の PoC 検証 + 実装）
+- Issue #229: terminal backend を tmux に改訂（v2 の PoC 検証 + 実装）
+- Issue #238: pane 配置を「初回右・以後右列内・最大2枚」に変更し最小 tmux を 3.1 に引き上げ（v3）
 - `docs/cli-guides/interactive-terminal-runner.md`: 設定・手動検証手順

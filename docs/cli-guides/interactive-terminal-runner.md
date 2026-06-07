@@ -5,10 +5,12 @@
 `verdict.yaml` を書いたら、kaji は artifact-primary 経路（[ADR 005](../adr/005-artifact-primary-verdict.md)）
 で verdict を読み、次 step へ進む。
 
-`kaji run` を tmux session 内で起動し、runner が `tmux split-window -h` で現ウィンドウの右に pane を
+`kaji run` を tmux session 内で起動し、runner が `tmux split-window` で現ウィンドウに pane を
 追加して agent を起動するため、ディスプレイ無し環境（WSL2 / SSH / headless）でも `kaji run` の出力と
-agent を同一画面で並列に見られる。cleanup は `tmux kill-pane`、transcript は `tmux pipe-pane` で行い、
-`/proc` scan も util-linux `script(1)` 依存も無いため Linux / macOS で同一に動く。
+agent を同一画面で並列に見られる。pane 配置は **初回のみ origin pane の右、2枚目以降は右列内の上下
+分割**で、kaji が作成した agent pane は右列に**最大2枚**まで残す（Issue #238）。cleanup は
+`tmux kill-pane`、transcript は `tmux pipe-pane` で行い、`/proc` scan も util-linux `script(1)` 依存も
+無いため Linux / macOS で同一に動く。
 
 技術選定の経緯は [ADR 007](../adr/007-interactive-terminal-runner.md)、runner dispatch の
 位置づけは [ARCHITECTURE](../ARCHITECTURE.md) § Runner backend dispatch を参照。
@@ -18,7 +20,8 @@ agent を同一画面で並列に見られる。cleanup は `tmux kill-pane`、t
 - 従量課金の headless 経路ではなく、通常コンソール利用に近い形で workflow を進めたいとき。
 - ディスプレイ無し環境（WSL2 / SSH / headless）でも `kaji run` 出力と agent を同一画面で並列に見たいとき。
 - step ごとに Claude / Codex の session を `--resume` / `codex resume` で引き継ぎたいとき。
-- agent の最終状態を verdict 後も pane に残して確認したいとき（`close_on_verdict = false`）。
+- agent の最終状態を verdict 後も pane に残して確認したいとき（`close_on_verdict = false`）。pane を
+  残しても右列は最新2枚相当に保たれ、横幅が step ごとに狭くならない。
 
 `agent_runner` 未指定時は既存の `headless` runner が使われる。既存 workflow / CI の挙動は
 変わらない。
@@ -29,8 +32,9 @@ agent を同一画面で並列に見られる。cleanup は `tmux kill-pane`、t
   failure として **fail-fast** する（自動 fallback / 他 terminal 探索はしない）。tmux 外で使いたい
   場合は `--agent-runner headless` に戻す。
 - `$TMUX_PANE`（split の `-t` ターゲット）が設定されていること（tmux pane 内なら自動で入る）。
-- `tmux`（**>= 3.0**）が PATH にあること。pane option（`set-option -p` による per-pane
-  `remain-on-exit`）が tmux 3.0 で追加されたため。無ければ / 古ければ fail-fast。
+- `tmux`（**>= 3.1**）が PATH にあること。kaji 管理 pane を識別する pane user option
+  （`set-option -p @kaji_interactive_terminal`）が tmux 3.1 で追加されたため（Issue #238 で 3.0 から
+  引き上げ）。無ければ / 古ければ fail-fast。
 - `claude` / `codex` CLI が PATH にあること（runner が起動する agent）。
 - transcript（`terminal.log`）は `tmux pipe-pane` で **常時記録**される（OS 分岐なし）。
 - wrapper は agent 起動前に `NO_COLOR` を unset し、`COLORTERM=truecolor` を設定する。
@@ -147,9 +151,21 @@ kaji run .kaji/wf/feature-development.yaml 224 --log-level WARNING
 
 ## 振る舞い
 
-1. runner は `tmux split-window -d -h -P -F '#{pane_id}' -t "$TMUX_PANE" <wrapper.sh + 8 args>` を
-   実行する。`-d` でフォーカスを奪わず、**`-h` で現ウィンドウの右**に pane を追加し、`-P -F '#{pane_id}'`
-   で生成された pane id を回収して以降のライフサイクルハンドルにする。
+1. runner は launch 前に `tmux list-panes` で同一 window の kaji 管理 agent pane（pane user option
+   `@kaji_interactive_terminal` が `origin=<origin pane>` 一致）を列挙し、配置を決める（Issue #238）:
+   - 管理対象0枚: origin pane を `tmux split-window -d -h -t "$TMUX_PANE"` で右に分割し、右列を作る。
+   - 管理対象1枚: その agent pane を `-d -v` で上下分割し、右列の2枚目を作る。
+   - 管理対象2枚以上: `pane_top` 昇順で最古（上側）の管理対象 pane を `kill-pane` してから、残った最新
+     pane を `-d -v` で分割する。これで右列は常に最新2枚相当に保たれ、横幅が step ごとに狭くならない。
+
+   いずれも `-d` でフォーカスを奪わず、`-P -F '#{pane_id}'` で生成された pane id を回収して以降の
+   ライフサイクルハンドルにする。作成直後の pane には `tmux set-option -p -t <pane> @kaji_interactive_terminal
+   origin=<origin pane>` で marker を付与し、kaji が作成した pane だけを後続の prune 対象にする
+   （ユーザーが手動で作った pane や別 origin の pane は誤って閉じない）。marker 設定に失敗した場合は
+   作成済み pane を best-effort `kill-pane` してから fail-loud する。`list-panes` / pane lookup が
+   失敗した場合も fail-loud する（壊れた tmux state での誤 cleanup を避ける）。ユーザーが手動で agent
+   pane を active にした後にその pane が prune された場合、active pane が tmux 通常挙動で移ることは
+   許容する（自動作成時に origin からフォーカスを奪わないことのみが契約）。
 2. runner は `tmux pipe-pane -o -t %id 'cat >> terminal.log'` で pane 出力を attempt directory の
    `terminal.log` に記録する。
 3. wrapper は最初に `cd <workdir>`（trusted な project worktree。`/tmp` や attempt directory を
@@ -164,12 +180,16 @@ kaji run .kaji/wf/feature-development.yaml 224 --log-level WARNING
    （次 step 開始後の kill も許容）。timeout 経路でも best-effort `kill-pane` してから fail-loud する。
 7. `interactive_terminal_close_on_verdict = false` なら、polling 前に
    `tmux set-option -p -t %id remain-on-exit on` を設定し、verdict 後に `kill-pane` しない。pane は
-   agent 自然終了後も `[dead]`（`#{pane_dead}=1`）として残り、ユーザーが後から内容を確認できる。
+   agent 自然終了後も `[dead]`（`#{pane_dead}=1`）として残り、ユーザーが後から内容を確認できる。次 step
+   の launch 時にその pane は kaji marker 付き pane として検出され、右列が最大2枚になるよう最古 pane が
+   prune される（直近の agent step と1つ前を見比べられる）。
 
 > **pane metadata（診断用）**: runner は verdict 検知時点の `#{pane_dead}` 等を
 > attempt directory の `pane-metadata.json` に snapshot 記録する。verdict-trigger 契約のもとでは
 > verdict 時点の agent CLI は生存しているため、この snapshot は通常 `#{pane_dead}=0` になる。
 > `[dead]` への遷移は `remain-on-exit on` が保証する最終状態で、metadata snapshot とは別物。
+> Issue #238 以降は配置診断として `layout_target_pane` / `split_target_pane` / `split_direction`
+> （`horizontal` / `vertical`）/ `kaji_agent_panes_before` / `kaji_agent_panes_pruned` も記録する。
 
 ### session 継続
 
@@ -215,6 +235,10 @@ Codex の `reasoning.effort = minimal` は現 tool 構成（`image_gen` / `web_s
 7. `interactive_terminal_close_on_verdict = true` で verdict 後に pane が消える（`kill-pane`）こと、
    `false`（`--no-interactive-terminal-close-on-verdict`）で `[dead]` pane が残ることを確認する。
 8. `terminal.log` が attempt directory に記録されることを確認する（OS を問わず常時記録）。
+9. `--no-interactive-terminal-close-on-verdict` で **agent step を3回以上**連続実行し、右列の kaji 管理
+   pane が**最大2枚**に保たれること、origin pane と右列 agent pane の `pane_width` が連続作成後も横方向に
+   狭くならない（毎 step で縮み続けない）ことを確認する。手動で作った別 pane が誤って閉じられないことも
+   合わせて確認する。
 
 ## トラブルシュート
 
@@ -222,7 +246,7 @@ Codex の `reasoning.effort = minimal` は現 tool 構成（`image_gen` / `web_s
 |------|-------------|
 | `CLI 'tmux' not found` で即終了 | `tmux` を PATH に入れるか `--agent-runner headless` で実行する |
 | `requires tmux. Run kaji run inside tmux` で即終了 | tmux session の外で実行している。`tmux new-session` 内で再実行するか `--agent-runner headless` |
-| `requires tmux >= 3.0` で即終了 | tmux が古い。3.0 以上へ更新する（pane option / `#{pane_dead}` / `split-window -P -F` が 3.0 を要求） |
+| `requires tmux >= 3.1` で即終了 | tmux が古い。3.1 以上へ更新する（kaji marker の pane user option `set-option -p` が 3.1、`#{pane_dead}` / `split-window -P -F` が 3.0 を要求） |
 | `TMUX_PANE is not set` で即終了 | tmux pane 内で実行していない。通常の tmux session なら自動設定される |
 | step が timeout する | agent が `verdict.yaml` を書いていない。prompt の verdict 書き出し指示と path を確認 |
 | pane が verdict 前に消える / `tmux pane exited before writing verdict.yaml` | agent が起動失敗。`terminal.log` の tail（エラー文面に添付）を確認 |
