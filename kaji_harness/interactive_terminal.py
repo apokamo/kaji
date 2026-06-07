@@ -277,7 +277,15 @@ def execute_interactive_terminal(
     )
     pane_id = launch.pane_id
     # Issue #235: pane 起動成功直後に起動コンソールへ progress を出す。
-    _console.info("pane launched: %s pane=%s verdict=%s", step.id, pane_id, verdict_path)
+    # Issue #232: step / agent / timeout を加え、親コンソール 1 行で追跡可能にする。
+    _console.info(
+        "pane launched: step=%s agent=%s pane=%s timeout=%ds verdict=%s",
+        step.id,
+        step.agent,
+        pane_id,
+        timeout,
+        verdict_path,
+    )
     if not _pipe_pane(tmux, pane_id, terminal_log):
         # tmux rejected the pipe — most likely the pane already closed because a
         # short-running agent wrote verdict.yaml and exited before we could

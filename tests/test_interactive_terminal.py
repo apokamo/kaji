@@ -440,6 +440,44 @@ class TestRunnerPaneLifecycle:
         # Verdict-trigger contract: the agent CLI is still alive at verdict time.
         assert metadata["pane_dead"] == "0"
 
+    def test_pane_launched_progress_includes_step_agent_timeout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Issue #232: 親コンソール向け `pane launched` INFO progress に
+        # step / agent / pane / timeout / verdict path が全て載ることを固定する。
+        prompt = tmp_path / "prompt.txt"
+        verdict = tmp_path / "verdict.yaml"
+        prompt.write_text("prompt", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        fake_run = _make_fake_tmux(
+            on_split=lambda: verdict.write_text(_PASS_VERDICT, encoding="utf-8")
+        )
+
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=fake_run),
+            caplog.at_level("INFO", logger="kaji.interactive_terminal"),
+        ):
+            execute_interactive_terminal(
+                step=_step("claude", step_id="design"),
+                prompt_path=prompt,
+                verdict_path=verdict,
+                workdir=tmp_path,
+                timeout=1800,
+            )
+
+        launched = [
+            rec.getMessage()
+            for rec in caplog.records
+            if rec.getMessage().startswith("pane launched:")
+        ]
+        assert len(launched) == 1
+        message = launched[0]
+        assert message == (
+            f"pane launched: step=design agent=claude pane=%99 timeout=1800s verdict={verdict}"
+        )
+
     def test_close_on_verdict_false_sets_remain_on_exit_and_skips_kill(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
