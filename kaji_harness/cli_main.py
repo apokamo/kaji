@@ -592,7 +592,7 @@ def _forward_to_gh(group: str, raw_args: list[str], *, repo: str | None = None) 
     return result.returncode
 
 
-_PR_BUILTIN_SUBCOMMANDS = {"review-comments", "reviews", "reply-to-comment"}
+_PR_BUILTIN_SUBCOMMANDS = {"review-comments", "reviews", "reply-to-comment", "review-poll"}
 
 _PR_BARE_PROVIDER_ERROR = (
     "Error: 'kaji pr' is a forge-only command and cannot run under "
@@ -623,7 +623,7 @@ def _is_ascii_decimal(s: str) -> bool:
 _GH_MISSING_GUIDANCE = (
     "Error: 'gh' CLI not found in PATH. "
     "Install GitHub CLI to use 'kaji pr review-comments' / 'reviews' / "
-    "'reply-to-comment' (Phase 2).\n"
+    "'reply-to-comment' / 'review-poll' (Phase 2).\n"
 )
 
 
@@ -777,12 +777,26 @@ def _forward_pr_reply_to_comment(
         return EXIT_RUNTIME_ERROR
 
 
+def _run_pr_review_poll(rest: list[str]) -> int:
+    """Run the review-poll workflow helper through the installed kaji package."""
+    p = argparse.ArgumentParser(prog="kaji pr review-poll", add_help=True)
+    p.parse_args(rest)
+
+    from .scripts import review_poll_entry
+
+    return review_poll_entry.main([])
+
+
 def _dispatch_pr_builtin(sub: str, rest: list[str], *, repo_override: str | None = None) -> int:
     """Parse ``rest`` with a sub-specific argparse and dispatch to the handler.
 
     ``--help`` / ``-h`` prints sub-specific usage. argparse's default exit
     code on invalid args is 2, matching ``EXIT_INVALID_INPUT``.
     """
+    if sub == "review-poll":
+        del repo_override
+        return _run_pr_review_poll(rest)
+
     p = argparse.ArgumentParser(prog=f"kaji pr {sub}", add_help=True)
     p.add_argument("pr_id", type=str, help="PR number")
     if sub in {"review-comments", "reviews"}:

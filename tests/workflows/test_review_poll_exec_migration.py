@@ -37,6 +37,12 @@ TARGET_WORKFLOWS = [
     "full-cycle-xhigh.yaml",
 ]
 
+PUBLIC_WORKFLOWS = [
+    "dev.yaml",
+    "dev-thorough.yaml",
+    "docs.yaml",
+]
+
 EXPECTED_EXEC = [
     "uv",
     "run",
@@ -46,8 +52,12 @@ EXPECTED_EXEC = [
     "kaji_harness.scripts.review_poll_entry",
 ]
 
+PUBLIC_EXPECTED_EXEC = ["kaji", "pr", "review-poll"]
+
 TARGET_PATHS = [REPO_ROOT / ".kaji" / "wf" / name for name in TARGET_WORKFLOWS]
 TARGET_IDS = TARGET_WORKFLOWS
+PUBLIC_PATHS = [REPO_ROOT / ".kaji" / "wf" / name for name in PUBLIC_WORKFLOWS]
+PUBLIC_IDS = PUBLIC_WORKFLOWS
 
 
 def _review_poll_step(path: Path) -> Step:
@@ -104,6 +114,32 @@ class TestReviewPollExecStatic:
         assert step.on.get("PASS") == expected_pass, (
             f"{path.name}: PASS routing が変化した（期待 {expected_pass}）"
         )
+
+
+@pytest.mark.small
+class TestPublicReviewPollExecStatic:
+    def test_all_public_workflows_exist(self) -> None:
+        """READMEで案内する新標準workflowが存在する。"""
+        missing = [p.name for p in PUBLIC_PATHS if not p.exists()]
+        assert not missing, f"対象 workflow が見つからない: {missing}"
+
+    @pytest.mark.parametrize("path", PUBLIC_PATHS, ids=PUBLIC_IDS)
+    def test_review_poll_uses_installed_kaji_cli(self, path: Path) -> None:
+        """公開workflowは対象repoのPython環境ではなくinstalled kaji CLI経由でpollする。"""
+        step = _review_poll_step(path)
+        assert step.exec == PUBLIC_EXPECTED_EXEC, (
+            f"{path.name}: review-poll.exec がportableなCLI経由ではない。"
+            f"got={step.exec!r} expected={PUBLIC_EXPECTED_EXEC!r}"
+        )
+
+    @pytest.mark.parametrize("path", PUBLIC_PATHS, ids=PUBLIC_IDS)
+    def test_review_poll_has_no_agent_fields(self, path: Path) -> None:
+        """公開workflowのreview-pollもexec stepとしてdispatchされる。"""
+        step = _review_poll_step(path)
+        assert step.skill is None, f"{path.name}: review-poll.skill が残存している"
+        assert step.agent is None, f"{path.name}: review-poll.agent が残存している"
+        assert step.model is None, f"{path.name}: review-poll.model が残存している"
+        assert step.effort is None, f"{path.name}: review-poll.effort が残存している"
 
 
 # ============================================================
