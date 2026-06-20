@@ -830,6 +830,37 @@ class TestPrReplyToCommentBuiltin:
 
 
 @pytest.mark.small
+class TestPrReviewPollBuiltin:
+    @pytest.fixture(autouse=True)
+    def _isolate_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "kaji_harness.cli_main._load_config_for_dispatch",
+            _stub_github_config,
+        )
+
+    def test_dispatches_to_installed_review_poll_entry(self) -> None:
+        from kaji_harness.cli_main import _handle_pr
+
+        with patch("kaji_harness.scripts.review_poll_entry.main", return_value=0) as mock_main:
+            rc = _handle_pr(["review-poll"])
+
+        assert rc == 0
+        mock_main.assert_called_once_with([])
+
+    def test_unknown_arg_exits_two(self) -> None:
+        from kaji_harness.cli_main import _handle_pr
+
+        with (
+            patch("kaji_harness.scripts.review_poll_entry.main") as mock_main,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            _handle_pr(["review-poll", "--unexpected"])
+
+        assert exc_info.value.code == 2
+        mock_main.assert_not_called()
+
+
+@pytest.mark.small
 class TestHasApproveFlag:
     """`_has_approve_flag` 純粋関数の単体テスト。"""
 

@@ -178,7 +178,7 @@ steps:
       ABORT: end
 
   - id: review-poll
-    exec: [uv, run, --no-sync, python, -m, kaji_harness.scripts.review_poll_entry]
+    exec: [kaji, pr, review-poll]
     on:
       PASS: close
       RETRY: pr-fix
