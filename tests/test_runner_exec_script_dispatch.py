@@ -180,7 +180,7 @@ class TestExecScriptDispatch:
     def test_runlog_nulls_agent_fields_on_exec_script(self, tmp_path: Path) -> None:
         """exec_script では指定された agent/model/effort も run.log では null になる
         (Issue #204 MF-2: 設計書 § 副作用 L111 の正本契約)。
-        review-cycle.yaml / review-close.yaml の互換ケースで起動しない値を残さない。
+        skill + agent/model/effort を併記した互換ケースでも起動しない値を残さない。
         """
         import json
 

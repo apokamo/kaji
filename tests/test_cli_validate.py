@@ -264,12 +264,12 @@ class TestCmdValidateSmall:
     def test_yaml_in_subdirectory_resolves_project_root(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """YAML in workflows/ subdirectory should resolve skills from project root."""
-        # Simulate repo layout: project_root/workflows/wf.yaml + project_root/.claude/skills/
+        """YAML in an arbitrary subdirectory should resolve skills from project root."""
+        # Simulate repo layout: project_root/flows/wf.yaml + project_root/.claude/skills/
         (tmp_path / "pyproject.toml").write_text("[project]\nname = 'test'\n")
-        workflows_dir = tmp_path / "workflows"
-        workflows_dir.mkdir()
-        f = workflows_dir / "wf.yaml"
+        flows_dir = tmp_path / "flows"
+        flows_dir.mkdir()
+        f = flows_dir / "wf.yaml"
         f.write_text(VALID_WORKFLOW_YAML)
         _create_skill(tmp_path, "test-skill")
         _create_config(tmp_path)
@@ -423,11 +423,11 @@ class TestCmdValidateMedium:
 
     @pytest.mark.medium
     def test_yaml_in_subdirectory_via_main(self, tmp_path: Path) -> None:
-        """main(["validate", ...]) with YAML in workflows/ subdirectory passes."""
+        """main(["validate", ...]) with YAML in an arbitrary subdirectory passes."""
         (tmp_path / "pyproject.toml").write_text("[project]\nname = 'test'\n")
-        workflows_dir = tmp_path / "workflows"
-        workflows_dir.mkdir()
-        f = workflows_dir / "wf.yaml"
+        flows_dir = tmp_path / "flows"
+        flows_dir.mkdir()
+        f = flows_dir / "wf.yaml"
         f.write_text(VALID_WORKFLOW_YAML)
         _create_skill(tmp_path, "test-skill")
         _create_config(tmp_path)

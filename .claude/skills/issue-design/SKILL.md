@@ -124,8 +124,8 @@ kaji issue view [issue_id] --json labels --jq '[.labels[].name] | map(select(sta
 
 ### Step 1.6: BACK 経由再起動の検出と分岐
 
-`feature-development` workflow では `review-code` / `i-dev-final-check` 等が `BACK` verdict を返すと、戻し先が `design` の場合に本 skill が再起動される
-（`.kaji/wf/feature-development.yaml:79` の `BACK: design` 等）。この再起動経路では設計書・implementation commit が既に存在するため、初回起動を前提とした
+`dev` workflow では `review-code` / `i-dev-final-check` 等が `BACK` verdict を返すと、戻し先が `design` の場合に本 skill が再起動される
+（`.kaji/wf/dev.yaml:134` の `review-code` の `BACK: design` 等）。この再起動経路では設計書・implementation commit が既に存在するため、初回起動を前提とした
 Step 2 以降の通常フローを素朴に実行すると scope 違反になる。本 Step では Step 1 で解決済みの `[worktree_dir]` を使って内部状態を観測し、初回起動 / BACK
 経由再起動を分岐する。
 
@@ -307,8 +307,8 @@ Step 1.6 で BACK 経由再起動と判定された場合のみ実行する。`P
 
 #### Step 1.7 終了後の挙動
 
-BACK 経由再起動フローで `PASS` を返した場合、Step 2 以降の通常フローは実行しない。`PASS` で復帰すれば `feature-development.yaml:27` の
-`PASS: review-design` 遷移が機能し、通常フロー（`review-design` → `implement` → `review-code`）が再開する。
+BACK 経由再起動フローで `PASS` を返した場合、Step 2 以降の通常フローは実行しない。`PASS` で復帰すれば `.kaji/wf/dev.yaml:82` の
+`design` の `PASS: review-design` 遷移が機能し、通常フロー（`review-design` → `implement` → `review-code`）が再開する。
 
 #### 初回起動への影響（後方互換）
 

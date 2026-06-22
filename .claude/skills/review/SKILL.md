@@ -1,5 +1,5 @@
 ---
-description: PR に対し初回コードレビューを実施し、Approve / Changes Requested を投稿する。新規レビュー専用（修正確認は /pr-verify）。`review-close` / `review-cycle` workflow では `review-poll` の `BACK_FALLBACK` を受けた fallback step として呼び出される。
+description: PR に対し初回コードレビューを実施し、Approve / Changes Requested を投稿する。新規レビュー専用（修正確認は /pr-verify）。`dev` / `dev-thorough` / `docs` workflow では `review-poll` の `BACK_FALLBACK` を受けた fallback step として呼び出される。
 name: review
 ---
 

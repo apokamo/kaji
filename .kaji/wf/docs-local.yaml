@@ -1,4 +1,4 @@
-name: docs-maintenance-local
+name: docs-local
 description: |
   provider=local 用の docs-only 開発 workflow。
   type:docs Issue を local provider 配下で完走させる。

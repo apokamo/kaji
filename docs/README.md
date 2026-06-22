@@ -7,15 +7,15 @@ kaji のドキュメント一覧。[Diataxis フレームワーク](https://diat
 | ドキュメント | 概要 |
 |-------------|------|
 | [ワークフロー概要](dev/workflow_overview.md) | Issue 種別から workflow を選択するエントリポイント |
-| [feature-development](dev/development_workflow.md) | TDD ベースで設計 → 実装 → レビュー → PR まで進める開発ワークフロー |
-| [docs-maintenance](dev/docs_maintenance_workflow.md) | コード変更を含まない docs-only Issue 専用ワークフロー |
+| [dev / dev-thorough](dev/development_workflow.md) | TDD ベースで設計 → 実装 → レビュー → PR → close まで進める開発ワークフロー |
+| [docs](dev/docs_maintenance_workflow.md) | コード変更を含まない docs-only Issue 専用ワークフロー |
 | [ワークフローガイド](dev/workflow_guide.md) | dev / docs-only の選択基準とスキル選択指針 |
 | [完了条件](dev/workflow_completion_criteria.md) | 各フェーズで PASS とみなすための具体的チェックリスト |
 | [テスト規約](dev/testing-convention.md) | S/M/L サイズ別テスト戦略と Given-When-Then 原則 |
 | [ドキュメント更新基準](dev/documentation_update_criteria.md) | コード変更ごとに docs 更新要否を判断するフレームワーク |
 | [スキル横断ルール](dev/shared_skill_rules.md) | review / fix / verify サイクルの責務分離と新規指摘禁止ルール |
 | [GitHub ラベル運用](dev/labels.md) | `.github/labels.yml` 管理・追加削除手順・bot 所有ラベルとの境界 |
-| [ワークフロー作成](dev/workflow-authoring.md) | workflows/*.yaml の step / cycle / verdict 遷移の書き方 |
+| [ワークフロー作成](dev/workflow-authoring.md) | .kaji/wf/*.yaml の step / cycle / verdict 遷移の書き方 |
 | [スキル作成](dev/skill-authoring.md) | `.claude/skills/` 配下スキルファイルの構造と verdict 規約 |
 
 ## Tutorials（ガイド）
