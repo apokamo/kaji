@@ -1,9 +1,11 @@
-name: feature-development
+name: dev-local
 description: |
-  Issue の設計から PR 作成までの開発ワークフロー。
+  provider=local 用の開発 workflow。
   issue-create / issue-start は事前に手動実行済みであることが前提。
+  PR concept を持たないため、最終 step は issue-close
+  （local merge + frontmatter 更新。design.md § local mode における /issue-close の手順）。
 execution_policy: auto
-requires_provider: any
+requires_provider: local
 
 cycles:
   design-review:
@@ -22,7 +24,7 @@ steps:
     skill: issue-design
     agent: claude
     model: opus
-    effort: medium
+    effort: high
     on:
       PASS: review-design
       ABORT: end
@@ -31,7 +33,7 @@ steps:
     skill: issue-review-design
     agent: codex
     model: gpt-5.4
-    effort: medium
+    effort: high
     on:
       PASS: implement
       RETRY: fix-design
@@ -41,6 +43,7 @@ steps:
     skill: issue-fix-design
     agent: claude
     model: opus
+    effort: high
     resume: design
     on:
       PASS: verify-design
@@ -51,6 +54,7 @@ steps:
     agent: codex
     model: gpt-5.4
     effort: medium
+    resume: review-design
     on:
       PASS: implement
       RETRY: fix-design
@@ -59,7 +63,8 @@ steps:
   - id: implement
     skill: issue-implement
     agent: claude
-    model: sonnet
+    model: opus
+    effort: medium
     on:
       PASS: review-code
       RETRY: implement
@@ -70,7 +75,7 @@ steps:
     skill: issue-review-code
     agent: codex
     model: gpt-5.4
-    effort: medium
+    effort: high
     on:
       PASS: final-check
       RETRY: fix-code
@@ -82,6 +87,8 @@ steps:
     skill: issue-fix-code
     agent: claude
     model: opus
+    effort: medium
+    resume: implement
     inject_verdict: true
     on:
       PASS: verify-code
@@ -92,6 +99,7 @@ steps:
     agent: codex
     model: gpt-5.4
     effort: medium
+    resume: review-code
     on:
       PASS: final-check
       RETRY: fix-code
@@ -101,16 +109,17 @@ steps:
     skill: i-dev-final-check
     agent: claude
     model: opus
+    effort: high
     on:
-      PASS: pr
+      PASS: close
       RETRY: final-check
       ABORT: end
 
-  - id: pr
-    skill: i-pr
+  - id: close
+    skill: issue-close
     agent: claude
     model: sonnet
     on:
       PASS: end
-      RETRY: pr
+      RETRY: close
       ABORT: end

@@ -151,9 +151,9 @@ tests/
 ### ワークフロー・スキルファイル
 
 ```
-workflows/
-├── feature_development.yaml
-└── bugfix.yaml
+.kaji/wf/
+├── dev.yaml
+└── docs.yaml
 
 .claude/skills/
 ├── issue-start/

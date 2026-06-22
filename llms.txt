@@ -120,7 +120,7 @@ kaji local init
 ```
 
 Local mode uses local-specific workflows such as
-`.kaji/wf/feature-development-local.yaml`.
+`.kaji/wf/dev-local.yaml`.
 
 ## Important Paths
 

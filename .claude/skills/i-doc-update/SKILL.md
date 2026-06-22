@@ -110,7 +110,7 @@ cd [worktree_dir] && source .venv/bin/activate && make verify-docs
 ### Step 6: コミット
 
 ```bash
-cd [worktree_dir] && git add docs/ README.md workflows/ .claude/skills/ .agents/skills/ && git commit -m "docs: update for [issue_ref]"
+cd [worktree_dir] && git add docs/ README.md .kaji/wf/ .claude/skills/ .agents/skills/ && git commit -m "docs: update for [issue_ref]"
 ```
 
 必要に応じて変更対象パスを絞ってよい。

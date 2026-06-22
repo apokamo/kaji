@@ -16,11 +16,12 @@ module を直接 subprocess 実行する。entry module が env から PR 情報
 
 起動経路は 2 系統あり、いずれも同じ entry module に合流する:
 
-- **builtin workflow（`review-cycle` / `review-close` / `full-cycle` / `full-cycle-xhigh`）**:
-  各 YAML が `exec: [uv, run, --no-sync, python, -m, kaji_harness.scripts.review_poll_entry]` で
-  entry module を直接起動する。dispatch の正本は YAML 側の `exec` step であり、agent / model /
-  effort はスキーマレベルで指定不可（指定すると `kaji validate` が reject）。
-  `uv` が PATH にある前提で起動し、`.venv` の鮮度は `uv sync` の責務（本 skill は関与しない）。
+- **builtin workflow（`dev` / `dev-thorough` / `docs`）**:
+  各 YAML が `exec: [kaji, pr, review-poll]` で installed `kaji` CLI 経由で起動し、
+  CLI 側 (`kaji pr review-poll`) が同 entry module（`review_poll_entry.main`）へ委譲する。
+  dispatch の正本は YAML 側の `exec` step であり、agent / model / effort はスキーマレベルで
+  指定不可（指定すると `kaji validate` が reject）。対象 repo の Python 環境ではなく installed
+  `kaji` CLI 経由で起動するため可搬性が高い。
 - **skill 単体起動・再利用**: frontmatter の `exec_script: kaji_harness.scripts.review_poll_entry`
   が契約となり、harness が同 entry module を ``python -m`` で subprocess 実行する。
 

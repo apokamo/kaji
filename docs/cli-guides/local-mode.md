@@ -1,7 +1,7 @@
 # Local Mode CLI Guide
 
 `kaji` を GitHub なしで運用するための最小ガイド。Phase 3-d で追加された
-`kaji local init` と `feature-development-local.yaml` が前提。
+`kaji local init` と `dev-local.yaml` が前提。
 
 ## いつ使うか
 
@@ -138,7 +138,7 @@ kaji issue context local-pc1-1 --json branch_prefix,branch_name,worktree_dir
 kaji issue prepend-note local-pc1-1 --worktree kaji-feat-local-pc1-1 --branch feat/local-pc1-1 --commit
 
 # workflow 起動（local 専用）
-kaji run .kaji/wf/feature-development-local.yaml local-pc1-1
+kaji run .kaji/wf/dev-local.yaml local-pc1-1
 ```
 
 `kaji issue prepend-note <id> --worktree <basename> --branch <branch> [--commit]`
@@ -155,8 +155,9 @@ mapping → `chore` fallback の優先順で context を解決する（`provider
 / `'github'` のいずれでも利用可能）。`/issue-start` skill が
 worktree / branch 名を導出するために使う。
 
-`feature-development-local.yaml` は `feature-development.yaml` の最終 step
-（`i-pr`）を `issue-close` に差し替えたもの。PR は作らず、`/issue-close`
+`dev-local.yaml` は `dev.yaml` から GitHub 前提の PR 関連 step（`i-pr` /
+`review-poll` / PR review / `pr-fix` / `pr-verify`）を除き、`final-check` の後を
+`issue-close` で終端した local provider 版。PR は作らず、`/issue-close`
 が `git merge --no-ff` + frontmatter close を行う。
 
 ## 5. ID 文法

@@ -70,13 +70,13 @@ steps:
         with pytest.raises(WorkflowValidationError):
             load_workflow_from_str(yaml_str)
 
-    def test_full_cycle_yaml_still_loads(self) -> None:
-        """full-cycle.yaml の review-poll step が agent 無しで parse できる。"""
+    def test_dev_yaml_still_loads(self) -> None:
+        """dev.yaml の review-poll step が agent 無しで parse できる。"""
         from pathlib import Path
 
         from kaji_harness.workflow import load_workflow
 
-        path = Path(__file__).resolve().parents[1] / ".kaji" / "wf" / "full-cycle.yaml"
+        path = Path(__file__).resolve().parents[1] / ".kaji" / "wf" / "dev.yaml"
         wf = load_workflow(path)
         poll = next(s for s in wf.steps if s.id == "review-poll")
         assert poll.agent is None
