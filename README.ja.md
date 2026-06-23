@@ -147,7 +147,7 @@ kaji local init
 
 `kaji local init` は現在のmachine用の `.kaji/config.local.toml` を作成します。
 trackedなbase configを置き換えるものではありません。local modeでは
-`.kaji/wf/feature-development-local.yaml` などのlocal専用workflowを使います。
+`.kaji/wf/dev-local.yaml` などのlocal専用workflowを使います。
 
 skillは `.claude/skills/` に配置します。他agent向けのskill directoryは、
 同じcanonical skill fileへのsymlinkとして構成できます。

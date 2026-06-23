@@ -158,7 +158,7 @@ kaji local init
 
 `kaji local init` creates `.kaji/config.local.toml` for the current machine; it
 does not replace the tracked base config. Local mode uses local-specific
-workflows such as `.kaji/wf/feature-development-local.yaml`.
+workflows such as `.kaji/wf/dev-local.yaml`.
 
 Skills live under `.claude/skills/`. Other agent-specific skill directories can
 point to the same canonical skill files with symlinks.

@@ -13,7 +13,7 @@ name: kaji-run-verify
 | タイミング | このスキルを使用 |
 |-----------|-----------------|
 | ワークフロー変更後の実機検証 | ✅ 必須 |
-| 「`kaji run workflows/... <issue>` を実行して、結果を Issue に残して」と依頼されたとき | ✅ 推奨 |
+| 「`kaji run .kaji/wf/... <issue>` を実行して、結果を Issue に残して」と依頼されたとき | ✅ 推奨 |
 | 通常の feature 開発をそのまま進めたいだけ | ⚠️ 任意 |
 | 単に YAML の静的検証だけしたい | ❌ `kaji validate` のみで十分 |
 
@@ -25,16 +25,16 @@ name: kaji-run-verify
 $ARGUMENTS = <workflow-path> <issue_id> [kaji run options...]
 ```
 
-- `workflow-path` (必須): 例 `workflows/feature-development.yaml`
+- `workflow-path` (必須): 例 `.kaji/wf/dev.yaml`
 - `issue_id` (必須): GitHub Issue 番号
 - `kaji run options...` (任意): `--from` / `--step` / `--workdir` / `--quiet` などをそのまま後続に渡す
 
 ### 例
 
 ```bash
-/kaji-run-verify workflows/feature-development.yaml 73
-/kaji-run-verify workflows/feature-development.yaml 73 --from fix-code
-/kaji-run-verify workflows/feature-development.yaml 73 --workdir ../kaji-feat-73
+/kaji-run-verify .kaji/wf/dev.yaml 73
+/kaji-run-verify .kaji/wf/dev.yaml 73 --from fix-code
+/kaji-run-verify .kaji/wf/dev.yaml 73 --workdir ../kaji-feat-73
 ```
 
 ## 前提知識の読み込み

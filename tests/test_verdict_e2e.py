@@ -166,17 +166,23 @@ class TestKajiRunWorkflowExecution:
     """
 
     def test_kaji_validate_workflows(self) -> None:
-        """kaji validate succeeds on all workflow files (no agent required)."""
+        """kaji validate succeeds on all builtin workflow files (no agent required).
+
+        Issue #247: the root ``workflows`` directory was removed and the
+        canonical workflow YAMLs now live under ``.kaji/wf/`` (the 5-file
+        operation). Assert that
+        the directory and files exist instead of silently skipping when they
+        are missing, so a regression that empties ``.kaji/wf/`` surfaces as a
+        failure rather than a silent skip.
+        """
         import subprocess
         import sys
 
-        workflows_dir = Path(__file__).parent.parent / "workflows"
-        if not workflows_dir.exists():
-            pytest.skip("workflows/ directory not found")
+        workflows_dir = Path(__file__).parent.parent / ".kaji" / "wf"
+        assert workflows_dir.exists(), f"{workflows_dir} not found"
 
-        yaml_files = list(workflows_dir.glob("*.yaml"))
-        if not yaml_files:
-            pytest.skip("No workflow YAML files found")
+        yaml_files = sorted(workflows_dir.glob("*.yaml"))
+        assert yaml_files, f"No workflow YAML files under {workflows_dir}"
 
         result = subprocess.run(
             [

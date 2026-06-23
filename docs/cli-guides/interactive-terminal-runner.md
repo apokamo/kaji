@@ -109,15 +109,15 @@ agent_runner = "interactive_terminal"
 tmux new-session            # もしくは既存 tmux session 内
 
 # repository config で interactive_terminal を既定にして実行
-kaji run .kaji/wf/feature-development.yaml 224
+kaji run .kaji/wf/dev.yaml 224
 
 # この実行だけ interactive terminal + pane を残す
-kaji run .kaji/wf/feature-development.yaml 224 \
+kaji run .kaji/wf/dev.yaml 224 \
   --agent-runner interactive-terminal \
   --no-interactive-terminal-close-on-verdict
 
 # この実行だけ headless に戻す（tmux 不要）
-kaji run .kaji/wf/feature-development.yaml 224 --agent-runner headless
+kaji run .kaji/wf/dev.yaml 224 --agent-runner headless
 ```
 
 ## 起動コンソール progress（Issue #235）
@@ -127,7 +127,7 @@ interactive terminal runner では agent の作業内容は pane 側に表示さ
 起動コンソールへ日時付き `[kaji]` progress を stdlib `logging` 経由で出力する。
 
 ```text
-[2026-06-07T12:34:57] [kaji] workflow start: feature-development issue #224
+[2026-06-07T12:34:57] [kaji] workflow start: dev issue #224
 [2026-06-07T12:34:57] [kaji] step start: design attempt-001 dispatch=agent agent=claude model=opus
 [2026-06-07T12:35:02] [kaji] pane launched: step=design agent=claude pane=%12 timeout=1800s verdict=/.../steps/design/attempt-001/verdict.yaml
 [2026-06-07T12:42:10] [kaji] verdict detected: design source=artifact status=PASS
@@ -146,7 +146,7 @@ interactive terminal runner では agent の作業内容は pane 側に表示さ
 
 ```bash
 # harness progress を抑えて警告/エラーのみ表示
-kaji run .kaji/wf/feature-development.yaml 224 --log-level WARNING
+kaji run .kaji/wf/dev.yaml 224 --log-level WARNING
 ```
 
 ## 振る舞い

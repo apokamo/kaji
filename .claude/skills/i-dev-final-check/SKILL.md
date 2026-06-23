@@ -327,9 +327,9 @@ valid status 一覧（`prompt.py:75, 92-97` の `valid_statuses = list(step.on.k
 
 | 呼び出された workflow の `final-check.on` キー | skill が返すべき status |
 |------------------------------------------------|-------------------------|
-| `BACK_DESIGN` と `BACK_IMPLEMENT` の両方が定義（例: `feature-development.yaml`） | root-cause を判定して `BACK_DESIGN` / `BACK_IMPLEMENT` を使い分け。無印 `BACK` は使わない |
+| `BACK_DESIGN` と `BACK_IMPLEMENT` の両方が定義（例: `dev.yaml`） | root-cause を判定して `BACK_DESIGN` / `BACK_IMPLEMENT` を使い分け。無印 `BACK` は使わない |
 | `BACK` のみが定義（例: `implement-to-pr.yaml`） | 従来通り `BACK` を返す（root-cause 判定結果に関わらず YAML 制約に従う） |
-| BACK 系が一切未定義（例: `feature-development-light.yaml`） | BACK 系を返さない。`RETRY`（軽微修正）または `ABORT`（重大な前提不整合）で表現 |
+| BACK 系が一切未定義（例: `dev-local.yaml`） | BACK 系を返さない。`RETRY`（軽微修正）または `ABORT`（重大な前提不整合）で表現 |
 | `BACK_DESIGN` のみ / `BACK_IMPLEMENT` のみ定義 | **想定外構成**。`ABORT` を返し、運用に workflow YAML の見直しを促す |
 
 prompt と skill 出力に不整合が生じた場合（valid status に無い status を返した場合）、harness
