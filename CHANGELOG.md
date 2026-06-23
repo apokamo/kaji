@@ -6,6 +6,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-06-24
+
+Maintenance release. No external API or runtime behavior changes: internal
+cleanup of the `review-poll` CLI dispatch, workflow inventory consolidation,
+and documentation.
+
+### Changed
+
+- Split `review-poll` out of the shared `kaji pr` builtin dispatch into its own
+  branch in `_handle_pr`, removing the `del repo_override` workaround and
+  documenting in code that it intentionally accepts no repo argument (repo is
+  resolved from `KAJI_GIT_REMOTE` / the git remote, not a CLI flag) (#246).
+- Consolidated the tracked workflows into the five GitHub/local everyday
+  workflows (#247).
+
+### Fixed
+
+- Dispatch the public `review-poll` step through the `kaji` CLI entry point.
+- Restored test isolation so the console progress logging test no longer
+  pollutes the kaji root logger (#250).
+
+### Docs
+
+- Refreshed README for the public launch and added design notes for #246 /
+  #247 / #250.
+
 ## [0.12.0] - 2026-06-08
 
 This release adds the interactive terminal runner path for subscription CLI
