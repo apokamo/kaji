@@ -859,6 +859,48 @@ class TestPrReviewPollBuiltin:
         assert exc_info.value.code == 2
         mock_main.assert_not_called()
 
+    def test_review_poll_excluded_from_pr_builtin_subcommands(self) -> None:
+        """review-poll は gh-api 直叩き builtin ではないため set から除外される。
+
+        誤って ``_PR_BUILTIN_SUBCOMMANDS`` に戻すと、review-poll が
+        ``_dispatch_pr_builtin`` 経由（gh-api builtin 扱い）へ再び流れ、
+        独立 dispatch + repo 非受理の意図が壊れる。その回帰を固定する。
+        """
+        from kaji_harness.cli_main import _PR_BUILTIN_SUBCOMMANDS
+
+        assert "review-poll" not in _PR_BUILTIN_SUBCOMMANDS
+
+    def test_review_poll_requires_github_repo(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """github provider で repo 未設定なら review-poll も repo 必須検証で弾く。
+
+        review-poll 独立分岐は repo 必須検証より後段に置くため、検証順序が
+        維持され、repo 未設定時は ``review_poll_entry.main`` に到達せず
+        ``EXIT_INVALID_INPUT`` を返す。
+        """
+        from kaji_harness.cli_main import EXIT_INVALID_INPUT, _handle_pr
+
+        def _stub_github_config_no_repo() -> KajiConfig:
+            return KajiConfig(
+                repo_root=Path("/tmp/stub"),
+                paths=PathsConfig(skill_dir=".claude/skills", artifacts_dir=".kaji/artifacts"),
+                execution=ExecutionConfig(default_timeout=1800),
+                provider=ProviderConfig(
+                    type="github",
+                    local=LocalProviderConfig(),
+                    github=GitHubProviderConfig(repo=""),
+                ),
+            )
+
+        monkeypatch.setattr(
+            "kaji_harness.cli_main._load_config_for_dispatch",
+            _stub_github_config_no_repo,
+        )
+        with patch("kaji_harness.scripts.review_poll_entry.main") as mock_main:
+            rc = _handle_pr(["review-poll"])
+
+        assert rc == EXIT_INVALID_INPUT
+        mock_main.assert_not_called()
+
 
 @pytest.mark.small
 class TestHasApproveFlag:
