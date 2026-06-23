@@ -456,7 +456,6 @@ class TestConsoleProgress:
 
     def test_progress_lines_routed_to_stdout(
         self,
-        clean_kaji_console_root: None,
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
@@ -491,7 +490,6 @@ class TestConsoleProgress:
 
     def test_run_log_jsonl_unchanged_by_console_progress(
         self,
-        clean_kaji_console_root: None,
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:

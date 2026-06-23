@@ -297,7 +297,6 @@ class TestExecStartProgress:
 
     def test_exec_start_logged_with_full_argv(
         self,
-        clean_kaji_console_root: None,
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
@@ -321,7 +320,6 @@ class TestExecStartProgress:
 
     def test_exec_start_truncates_long_argv(
         self,
-        clean_kaji_console_root: None,
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:

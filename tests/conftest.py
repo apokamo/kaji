@@ -62,20 +62,30 @@ def restore_kaji_root_logging(state: KajiRootLoggingState) -> None:
     root.propagate = state.propagate
 
 
-@pytest.fixture()
+@pytest.fixture(autouse=True)
 def clean_kaji_console_root() -> Iterator[None]:
-    """``kaji`` root logger の handlers/level/propagate を保存・復元する。
+    """全テストで ``kaji`` root logger の handlers/level/propagate を復元する。
 
-    Issue #250: ``configure_console_logging()`` を呼ぶ console progress logging
-    テストが ``propagate=False`` / ``level`` を後続テストへ漏らし、``caplog``
-    依存の ``test_pane_launched_progress_includes_step_agent_timeout`` を flaky
-    に FAILED させていた。本 fixture をそれらのテストに適用し、teardown で
-    必ず元の global state へ戻す。
+    Issue #250: ``configure_console_logging()`` は ``kaji`` root logger に
+    ``setLevel`` / ``propagate=False`` / handler を設定するため、復元しないと
+    同一 pytest worker 内の後続 ``caplog`` 依存テスト
+    （``test_pane_launched_progress_includes_step_agent_timeout``）へ漏れ、
+    伝播停止により ``caplog.records`` が空になって flaky に FAILED していた。
+
+    汚染源は ``configure_console_logging()`` を直接呼ぶテストだけではない。
+    ``cmd_run()`` が ``kaji_harness/cli_main.py`` で無条件に
+    ``configure_console_logging()`` を呼ぶため、``main(["run", ...])`` を叩く
+    in-process run-entry テスト（例: ``tests/test_cli_main.py`` の
+    ``TestMainMedium``）も同じ global state を汚す。opt-in fixture では
+    これらを取りこぼすため、``autouse=True`` で全テストの teardown 時に必ず
+    pre-test state へ戻し、どの caller 経由の汚染も後続テストへ漏らさない。
+
+    各テストは直前のテストが復元した clean な baseline から開始するため、
+    setup 時の handler 除去は不要（``configure_console_logging()`` は冪等で
+    handler を重複登録しない）。snapshot した state を teardown で戻すだけで
+    isolation 契約（``tests/test_console_log.py`` の ``_clean_root``）を満たす。
     """
     state = snapshot_kaji_root_logging()
-    root = logging.getLogger(ROOT_LOGGER_NAME)
-    for h in list(root.handlers):
-        root.removeHandler(h)
     yield
     restore_kaji_root_logging(state)
 

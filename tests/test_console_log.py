@@ -121,20 +121,18 @@ class TestKajiRootLoggingIsolation:
     global state を後続テストへ漏らさないことを、テスト順序に依存しない単一
     テスト内で deterministic に固定する回帰テスト。
 
-    汚染源（``TestExecStartProgress`` / ``TestConsoleProgress``）が使う
-    ``clean_kaji_console_root`` fixture と同一の復元実装（``conftest`` の
-    ``snapshot_kaji_root_logging`` / ``restore_kaji_root_logging``）を直接
+    autouse の ``clean_kaji_console_root`` fixture が使う復元実装（``conftest``
+    の ``snapshot_kaji_root_logging`` / ``restore_kaji_root_logging``）を直接
     呼び、復元後に ``kaji.interactive_terminal`` への INFO が ``caplog`` で
     捕捉できる（= 伝播が回復している）ことを検証する。
     """
 
     def test_restore_recovers_propagation_for_caplog(
         self,
-        clean_kaji_console_root: None,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         root = logging.getLogger(ROOT_LOGGER_NAME)
-        # (1) pre-state を保存（fixture により clean な初期状態）
+        # (1) pre-state を保存（autouse fixture が復元した clean な初期状態）
         pre_state = snapshot_kaji_root_logging()
         pre_propagate = root.propagate
         pre_level = root.level
