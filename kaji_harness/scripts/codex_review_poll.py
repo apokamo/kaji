@@ -1,10 +1,12 @@
-"""Codex auto-review polling helper for the `review-poll` skill.
+"""Codex auto-review polling helper for the `review-poll` step.
 
 Polls the GitHub Reactions / Reviews APIs for `chatgpt-codex-connector[bot]`
 signals and emits a verdict consumed by the workflow runner.
 
-The skill bash wrapper invokes this module via
-`python -m kaji_harness.scripts.codex_review_poll`.
+Since #234 the workflow runner (`script_exec.py`) launches review-poll as an
+exec step (`exec: [kaji, pr, review-poll]`), which dispatches to
+`kaji_harness.scripts.review_poll_entry`; this module is invoked by that entry
+as the polling core (not via a skill bash wrapper).
 """
 
 from __future__ import annotations

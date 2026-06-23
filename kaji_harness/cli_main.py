@@ -592,7 +592,7 @@ def _forward_to_gh(group: str, raw_args: list[str], *, repo: str | None = None) 
     return result.returncode
 
 
-_PR_BUILTIN_SUBCOMMANDS = {"review-comments", "reviews", "reply-to-comment", "review-poll"}
+_PR_BUILTIN_SUBCOMMANDS = {"review-comments", "reviews", "reply-to-comment"}
 
 _PR_BARE_PROVIDER_ERROR = (
     "Error: 'kaji pr' is a forge-only command and cannot run under "
@@ -790,13 +790,16 @@ def _run_pr_review_poll(rest: list[str]) -> int:
 def _dispatch_pr_builtin(sub: str, rest: list[str], *, repo_override: str | None = None) -> int:
     """Parse ``rest`` with a sub-specific argparse and dispatch to the handler.
 
+    ``gh api`` 直叩き builtin（``review-comments`` / ``reviews`` /
+    ``reply-to-comment``）専用。これらは ``repo_override``（config の
+    ``[provider.github] repo`` 由来）を尊重し、別 repo 運用を許す。
+    review-poll は workflow 専用 step で repo を取らないため、``_handle_pr``
+    側の独立分岐で処理し本関数には流さない（``_PR_BUILTIN_SUBCOMMANDS``
+    からも除外済み）。
+
     ``--help`` / ``-h`` prints sub-specific usage. argparse's default exit
     code on invalid args is 2, matching ``EXIT_INVALID_INPUT``.
     """
-    if sub == "review-poll":
-        del repo_override
-        return _run_pr_review_poll(rest)
-
     p = argparse.ArgumentParser(prog=f"kaji pr {sub}", add_help=True)
     p.add_argument("pr_id", type=str, help="PR number")
     if sub in {"review-comments", "reviews"}:
@@ -1081,6 +1084,14 @@ def _handle_pr(raw_args: list[str]) -> int:
         and (_has_approve_flag(args[1:]) or _has_request_changes_flag(args[1:]))
     ):
         return _github_pr_review(args[1:], repo_override=repo_override)
+    # review-poll は workflow 専用 step（#234 で exec step 化）。repo は
+    # review_poll_entry が KAJI_GIT_REMOTE→`git remote get-url` から一意に
+    # 解決するため、CLI `-R` / config `repo_override` のいずれも受理しない。
+    # 他 builtin と違い repo_override を渡さないのはこのため（gh-api 直叩き
+    # builtin ではないので _PR_BUILTIN_SUBCOMMANDS からも除外している）。
+    # bare-provider ガードと repo 必須検証は上で通過済みなので挙動は不変。
+    if args and args[0] == "review-poll":
+        return _run_pr_review_poll(args[1:])
     if args and args[0] in _PR_BUILTIN_SUBCOMMANDS:
         return _dispatch_pr_builtin(args[0], args[1:], repo_override=repo_override)
     return _forward_to_gh("pr", raw_args, repo=repo_override)
