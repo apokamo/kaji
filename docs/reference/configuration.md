@@ -24,7 +24,7 @@ how-to 文脈での最小設定例は各 CLI ガイド（[GitHub Mode](../cli-gu
 | ファイル | git 管理 | 役割 |
 |---------|---------|------|
 | `.kaji/config.toml` | tracked | repository default。リポジトリ標準の設定値を保持する |
-| `.kaji/config.local.toml` | gitignored | 個人環境の overlay。tracked の値を key 単位で上書きする |
+| `.kaji/config.local.toml` | gitignored | 個人環境の overlay。`[execution]` / `[provider]` のみ tracked を key 単位で上書きする（[overlay merge 規則](#overlay-merge-規則) 参照） |
 
 - overlay は `kaji local init` が生成する（[Local Mode CLI Guide](../cli-guides/local-mode.md) § 2 参照）。
 - `git worktree add` は **tracked ファイルだけを checkout** するため、gitignored の overlay は
@@ -45,7 +45,8 @@ how-to 文脈での最小設定例は各 CLI ガイド（[GitHub Mode](../cli-gu
 
 ## overlay merge 規則
 
-overlay（`.kaji/config.local.toml`）は **top-level section 内の key 単位**で tracked を上書きする。
+overlay（`.kaji/config.local.toml`）が tracked を上書きできるのは **`[execution]` と `[provider]` の
+2 section に限られ**、いずれも **top-level section 内の key 単位**でマージする。
 
 - `[execution]`: overlay の同名 key が tracked の同名 key を上書きする。overlay に書かれていない
   key は tracked の値を維持する。
@@ -53,6 +54,9 @@ overlay（`.kaji/config.local.toml`）は **top-level section 内の key 単位*
   overlay が `type = "local"` を書けば tracked が `type = "github"` でも provider を切り替えられ、
   `[provider.github]` / `[provider.local]` のサブテーブルは key 単位でマージされる。
 - tracked と overlay の双方に `[provider]` が無い場合のみ、loader は provider を `None` として返す。
+- `[paths]`（`artifacts_dir` / `skill_dir` / `worktree_prefix`）は overlay 対象外。`PathsConfig` は
+  tracked `.kaji/config.toml` のみから組み立てられ、overlay は `[execution]` / `[provider]` の解析に
+  しか渡されない（`config.py:141-154`）。overlay に `[paths]` を書いても無視される。
 
 検証エラーのメッセージが「その key を実際に定義したファイル」（tracked / overlay）を指すのは、
 `[execution]` の各 key と `provider.local.machine_id` に限られる（`config.py:213-249` の `source()`、
