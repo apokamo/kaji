@@ -54,7 +54,11 @@ overlay（`.kaji/config.local.toml`）は **top-level section 内の key 単位*
   `[provider.github]` / `[provider.local]` のサブテーブルは key 単位でマージされる。
 - tracked と overlay の双方に `[provider]` が無い場合のみ、loader は provider を `None` として返す。
 
-検証エラーのメッセージは「その key を実際に定義したファイル」（tracked / overlay）を指す。
+検証エラーのメッセージが「その key を実際に定義したファイル」（tracked / overlay）を指すのは、
+`[execution]` の各 key と `provider.local.machine_id` に限られる（`config.py:213-249` の `source()`、
+`config.py:369-374` の `source_path`）。`[provider]` のそれ以外の検証エラー（`type` /
+`[provider.github]` の型エラーなど）は `ConfigLoadError(path, ...)` を使うため、overlay 由来の値で
+あっても tracked `.kaji/config.toml` を指す（`config.py:323-354`）。
 
 ## section / key 仕様
 

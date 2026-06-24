@@ -56,7 +56,11 @@ The overlay (`.kaji/config.local.toml`) overrides tracked values **per key withi
   the `[provider.github]` / `[provider.local]` subtables are merged per key.
 - Only when neither tracked nor overlay defines `[provider]` does the loader return the provider as `None`.
 
-Validation error messages point at the file that actually defined the key (tracked / overlay).
+Validation error messages point at the file that actually defined the key (tracked / overlay) only
+for each `[execution]` key and for `provider.local.machine_id` (`config.py:213-249` `source()`,
+`config.py:369-374` `source_path`). For the rest of `[provider]` (e.g. `type` / `[provider.github]`
+type errors), the message uses `ConfigLoadError(path, ...)` and therefore points at the tracked
+`.kaji/config.toml` even when the value came from the overlay (`config.py:323-354`).
 
 ## Section / key specification
 
