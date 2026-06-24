@@ -30,6 +30,7 @@ kaji のドキュメント一覧。[Diataxis フレームワーク](https://diat
 | ドキュメント | 概要 |
 |-------------|------|
 | [アーキテクチャ](ARCHITECTURE.md) | システム構成・モジュール依存関係 |
+| [設定リファレンス](reference/configuration.md) | `.kaji/config.toml` / overlay の全 section/key 仕様の正本（[English](reference/configuration.en.md)） |
 | [テストサイズ判断ガイド](reference/testing-size-guide.md) | S/M/L の境界ケース判断基準 |
 | [CLI ガイド](cli-guides/) | CLI 操作リファレンス（[GitHub Mode](cli-guides/github-mode.md) / [Local Mode](cli-guides/local-mode.md) / [Interactive Terminal Runner](cli-guides/interactive-terminal-runner.md)） |
 

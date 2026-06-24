@@ -198,6 +198,9 @@ cd ../kaji-feat-42 && kaji local init
 
 > **WARN**: overlay 不在の worktree から provider 解決を伴うコマンドを実行し、かつメインリポジトリの overlay が異なる `provider.type` を選んでいる場合、kaji は stderr に WARN を出して気付かせる（コマンド自体は従来どおり続行する）。詳細は [`docs/cli-guides/local-mode.md`](../cli-guides/local-mode.md) § 3「provider 切替」を参照。
 
+`.kaji/config.toml` / `.kaji/config.local.toml` の役割と全 key 仕様は
+[設定リファレンス](../reference/configuration.md) を参照。
+
 ## 運用ルール
 
 ### Do

@@ -74,13 +74,12 @@ git_remote = "origin"               # 任意。default `"origin"`。hybrid setup
 runner backend。設定方法・CLI option・手動検証手順は
 [Interactive Terminal Runner ガイド](./interactive-terminal-runner.md) を参照。
 
-要点:
+各 key の型 / 既定 / 検証規則の網羅的な仕様は
+[設定リファレンス](../reference/configuration.md) を正本とする。GitHub mode で押さえる要点:
 
-- `[provider.github].repo` は **`owner/name`** 形式。`https://` プレフィクスや `.git` サフィックスは付けない
-- `gh --repo <owner>/<name>` および `gh api repos/<owner>/<name>/...` に渡される
-- `default_branch` を省略すると `main`
-- `git_remote` は skill 内の `git push` / `git fetch` 等が対象とする git remote
-  名。**default `"origin"`**
+- `[provider.github].repo` は **`owner/name`** 形式。`https://` プレフィクスや `.git` サフィックスは付けない。`gh --repo <owner>/<name>` / `gh api repos/<owner>/<name>/...` に渡される
+- `worktree_prefix` / `agent_runner` / `git_remote` の既定値・実効挙動は
+  [設定リファレンス](../reference/configuration.md#section-key-仕様) を参照
 
 ### 1.4 `.github/labels.yml` の連動
 

@@ -133,7 +133,7 @@ gh release create vX.Y.Z --title "vX.Y.Z" --notes "<CHANGELOG 抜粋>"
 | 症状 | 対処 |
 |------|------|
 | `/release` が Step 1 で stop（main 以外） | `git checkout main && git pull --ff-only "$GITHUB_REMOTE" main` してから再実行（`GITHUB_REMOTE` は Step 1 で skill が動的解決する remote 名） |
-| `/release` が Step 1 で stop（GitHub remote 未発見） | `.kaji/config.toml` の `provider.github.git_remote` と `git remote -v` 出力を確認し、必要なら `git remote add origin <github-url>` で remote を追加 |
+| `/release` が Step 1 で stop（GitHub remote 未発見） | `.kaji/config.toml` の `provider.github.git_remote`（仕様は [設定リファレンス](../../reference/configuration.md#providergithub) 参照）と `git remote -v` 出力を確認し、必要なら `git remote add origin <github-url>` で remote を追加 |
 | Step 1 で working tree dirty | 別 branch / stash で退避してから再実行（skill は破壊操作を一切しない） |
 | Step 2 で commit 0 件 ABORT | 前回 tag 以降に release 対象の変更が無い。merge を待つ |
 | Step 4 で `make check` 失敗 | release を中断し、修正 commit を main に入れてから再実行 |
