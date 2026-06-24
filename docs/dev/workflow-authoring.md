@@ -16,6 +16,10 @@ skill_dir = ".claude/skills"          # 必須: スキルディレクトリ
 default_timeout = 1800               # 必須: タイムアウトのデフォルト値（秒）
 ```
 
+上記は workflow 実行に必要な最小構成。`.kaji/config.toml` / overlay の全 section / key 仕様
+（型 / 既定 / 検証規則 / overlay merge）の正本は
+[設定リファレンス](../reference/configuration.md) を参照。
+
 > **`artifacts_dir` の解決基準** (Issue #177): 相対パス指定の場合、`kaji run` は main worktree（`provider.<type>.default_branch` を checkout している worktree）基準で解決する。feature worktree 内で `kaji run` を実行しても artifacts/log は main worktree 配下に集約され、`git worktree remove` でログが消えない。絶対パス指定はそのまま。
 
 > **runner backend は repository config の責務** (Issue #224 / #230): agent step を headless CLI で起動するか tmux pane 上の対話 CLI で起動するかは `[execution] agent_runner`（または `kaji run --agent-runner`）で選ぶ。これは **repository config / 実行時 option の責務**であり、workflow YAML の step 定義には書かない。step は backend 非依存に保つ。詳細は [Interactive Terminal Runner ガイド](../cli-guides/interactive-terminal-runner.md)。

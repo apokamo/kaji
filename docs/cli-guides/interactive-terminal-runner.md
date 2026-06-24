@@ -68,6 +68,9 @@ interactive_terminal_close_on_verdict = true     # 既定 true
 
 `agent_runner` が許可値以外なら **config load 時点で `ConfigLoadError`**（fail-fast）。
 
+> 上表は runner 文脈の早見表。`[execution]` を含む全 key の網羅的な仕様（型 / 既定 / 検証）の
+> 正本は [設定リファレンス](../reference/configuration.md#execution) を参照。
+
 ### overlay
 
 `.kaji/config.local.toml` の `[execution]` は `[provider]` と同じく **top-level section 内の

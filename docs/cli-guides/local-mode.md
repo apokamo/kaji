@@ -46,6 +46,10 @@ type = "local"
 runner backend。設定方法・CLI option・手動検証手順は
 [Interactive Terminal Runner ガイド](./interactive-terminal-runner.md) を参照。
 
+各 key（`[paths]` / `[execution]` / `[provider.local]` 等）の型 / 既定 / 検証規則の
+網羅的な仕様は [設定リファレンス](../reference/configuration.md) を正本とする。本ガイドは
+local mode の運用 how-to に責務を絞る。
+
 `type = "github"` 運用なら上記 `[provider]` ブロックを以下に差し替える:
 
 ```toml
@@ -200,6 +204,8 @@ git_remote = "backup"
 `git remote get-url backup` が解決できる前提（事前に `git remote add backup …` で
 登録しておく）。skill prompt の `[git_remote]` placeholder がここで指定した値に
 解決され、`/issue-close` の Step 4.5 / 6 が当該 remote を叩く。
+`provider.local.git_remote` の既定値・型仕様は
+[設定リファレンス](../reference/configuration.md#providerlocal) を参照。
 
 ### `kaji issue {edit,comment} --commit` flag（local）
 
