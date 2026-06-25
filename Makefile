@@ -30,7 +30,7 @@ test-large-local:
 	pytest -m large_local
 
 verify-docs:
-	python3 scripts/check_doc_links.py docs/ README.md CLAUDE.md .claude/skills/
+	python3 scripts/check_doc_links.py docs/ README.md README.ja.md CLAUDE.md .claude/skills/
 
 verify-packaging:
 	@scripts/verify-packaging.sh

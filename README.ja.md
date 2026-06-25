@@ -121,9 +121,12 @@ GitHub前提のworkflowです。
 [paths]
 artifacts_dir = ".kaji-artifacts"
 skill_dir = ".claude/skills"
+worktree_prefix = "kaji"
 
 [execution]
 default_timeout = 1800
+agent_runner = "headless"
+interactive_terminal_close_on_verdict = true
 
 [provider]
 type = "github"
@@ -131,7 +134,11 @@ type = "github"
 [provider.github]
 repo = "<owner>/<name>"
 default_branch = "main"
+git_remote = "origin"
 ```
+
+`.kaji/config.toml` の全設定項目、overlay、利用可能なkeyの詳細は
+[設定リファレンス](docs/reference/configuration.md)を参照してください。
 
 GitHubを使わないlocal issue storageの場合は、local provider configにし、
 gitignoredなmachine overlayを作成します。
@@ -147,7 +154,8 @@ kaji local init
 
 `kaji local init` は現在のmachine用の `.kaji/config.local.toml` を作成します。
 trackedなbase configを置き換えるものではありません。local modeでは
-`.kaji/wf/dev-local.yaml` などのlocal専用workflowを使います。
+`.kaji/wf/dev-local.yaml` などのlocal専用workflowを使います。local providerの
+セットアップは [Local Mode CLI Guide](docs/cli-guides/local-mode.md) を参照してください。
 
 skillは `.claude/skills/` に配置します。他agent向けのskill directoryは、
 同じcanonical skill fileへのsymlinkとして構成できます。
