@@ -132,9 +132,12 @@ opens PRs, polls review state, and closes issues.
 [paths]
 artifacts_dir = ".kaji-artifacts"
 skill_dir = ".claude/skills"
+worktree_prefix = "kaji"
 
 [execution]
 default_timeout = 1800
+agent_runner = "headless"
+interactive_terminal_close_on_verdict = true
 
 [provider]
 type = "github"
@@ -142,7 +145,12 @@ type = "github"
 [provider.github]
 repo = "<owner>/<name>"
 default_branch = "main"
+git_remote = "origin"
 ```
+
+For the full `.kaji/config.toml` reference, including overlays and all
+available keys, see
+[Configuration Reference](docs/reference/configuration.en.md).
 
 For local issue storage without GitHub, use a local provider config and create a
 gitignored machine overlay:
@@ -158,7 +166,9 @@ kaji local init
 
 `kaji local init` creates `.kaji/config.local.toml` for the current machine; it
 does not replace the tracked base config. Local mode uses local-specific
-workflows such as `.kaji/wf/dev-local.yaml`.
+workflows such as `.kaji/wf/dev-local.yaml`. See
+[Local Mode CLI Guide](docs/cli-guides/local-mode.md) for the local provider
+setup.
 
 Skills live under `.claude/skills/`. Other agent-specific skill directories can
 point to the same canonical skill files with symlinks.
