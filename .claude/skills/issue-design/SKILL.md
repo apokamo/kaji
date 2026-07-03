@@ -410,7 +410,7 @@ Issue: [issue_ref]
 | docs/dev/ | あり/なし | (ワークフロー・開発手順変更がある場合) |
 | docs/reference/ | あり/なし | (API仕様・規約変更がある場合) |
 | docs/cli-guides/ | あり/なし | (CLI仕様変更がある場合) |
-| CLAUDE.md | あり/なし | (規約変更がある場合) |
+| AGENTS.md / CLAUDE.md | あり/なし | (規約変更がある場合) |
 
 ## 参照情報（Primary Sources）
 

@@ -94,7 +94,7 @@ $ARGUMENTS = <issue_id>
 - **B: 対応しない/反論する (Disagree/Discuss)**
   - 指摘が誤解に基づいている場合
   - 修正による副作用やコストがメリットを上回る場合
-  - CLAUDE.md の方針や既存の設計思想と矛盾する場合
+  - AGENTS.md / CLAUDE.md の方針や既存の設計思想と矛盾する場合
   - **必須**: 反論する場合は、明確な論理的根拠を用意
 
 ### Step 3: 修正の実行
@@ -105,7 +105,7 @@ $ARGUMENTS = <issue_id>
 2. **品質チェック（コミット前必須）**:
 
    以下を実行し、**すべての基準をクリアするまでコミットしてはならない**。失敗した場合は原因を修正して再実行すること。
-   CLAUDE.md の「Pre-Commit (REQUIRED)」セクションに記載されたコマンドと等価。kaji では baseline failure
+   AGENTS.md の pre-commit 契約（`make check`）と等価。kaji では baseline failure
    判定のため `pytest` を `&&` チェーンから切り離す必要がある。
 
    #### 3.1 Lint / Format / 型チェック（exit 0 必須）

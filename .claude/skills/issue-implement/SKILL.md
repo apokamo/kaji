@@ -229,7 +229,7 @@ kaji issue view [issue_id] --json labels --jq '[.labels[].name] | map(select(sta
 
 以下の 2 段階で実行すること。**すべての基準をクリアするまでコミットしてはならない**。
 
-> CLAUDE.md の「Pre-Commit (REQUIRED)」セクションに記載されたコマンドと等価。`make check` を
+> AGENTS.md の pre-commit 契約（`make check`）と等価。`make check` を
 > 一括で叩く方法もあるが、kaji では baseline failure 判定のため `pytest` を `&&` チェーンから
 > 切り離す必要がある。下記 7a / 7b の分離はそのための運用。
 

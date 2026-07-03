@@ -286,12 +286,12 @@ $ARGUMENTS = <issue_id>
 
 ### 品質チェックコマンドの汎用化
 
-スキル内で品質チェックコマンドを記述する場合、プロジェクト固有のパス（例: `bugfix_agent/`）をハードコードしない。代わりに CLAUDE.md を参照する形にする。
+スキル内で品質チェックコマンドを記述する場合、プロジェクト固有のパス（例: `bugfix_agent/`）をハードコードしない。代わりに AGENTS.md を参照する形にする。
 
 ```markdown
 **品質チェック（コミット前必須）**:
 
-CLAUDE.md の「Pre-Commit (REQUIRED)」セクションに記載されたコマンドを実行すること。
+AGENTS.md の pre-commit 契約（`source .venv/bin/activate && make check`）を実行すること。
 ```
 
 ## 関連ドキュメント

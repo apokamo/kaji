@@ -53,7 +53,7 @@ $ARGUMENTS = <issue_id>
 
 1. 前回の `i-doc-review` / `i-doc-fix` コメントを確認
 2. 指摘事項ごとに OK / NG を判定
-3. 必要最小限で根拠となる実装 / docs / workflow / CLAUDE.md を再確認
+3. 必要最小限で根拠となる実装 / docs / workflow / AGENTS.md / CLAUDE.md を再確認
 4. 変更ファイルに絞ったリンクチェック結果を確認:
    ```bash
    cd [worktree_dir] && python3 scripts/check_doc_links.py [changed-markdown-files...]

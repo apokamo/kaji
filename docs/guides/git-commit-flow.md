@@ -92,6 +92,9 @@ gh pr merge --merge --delete-branch
 
 `--merge` オプションにより merge commit が作成され、`--no-ff` と同等のブランチ構造が維持される。
 
+PR description（または merge 後の commit message）に `Closes #N` 等を記載すると、
+GitHub の auto-close により merge 時に対応 Issue が自動 close される。
+
 #### PR レビュー指摘対応（pr-fix の流れ）
 
 PR 作成後にレビュー指摘が付いた場合は、`/pr-fix` スキルが次の流れを担う（`/i-pr` 内の `git absorb --and-rebase` とは異なり、レビュー対応は **追加の fix コミット** として積む）:
@@ -170,7 +173,20 @@ docs: READMEにインストール手順を追加
 
 - `git merge` のデフォルト（fast-forward）使用
 - squash マージ（履歴が失われる）
-- main ブランチへの直接コミット
+- main ブランチへの直接コミット（下記の例外を除く）
+
+### main 直コミットの例外
+
+コード変更（`kaji_harness/` / `tests/` / `Makefile` / `pyproject.toml` 等）は必ず
+feature branch (worktree) → `--no-ff` merge とし、main 直コミットを禁止する。
+ただし以下のみ main 直コミットを許容する:
+
+- `chore(local)`: kaji local Issue ファイル（`.kaji/issues/`）の追加・更新（`kaji issue create/edit/comment/close` の永続化）
+- `docs(...)`: `docs/` / `draft/` 配下の設計文書 / lab note 等、コードを伴わない文書変更
+- `chore`: 設定ファイル（`.gitignore` / `.github/labels.yml` 等）の minor 修正（コードビルドに影響しない範囲）
+
+コード変更を含むコミットの前には pre-commit チェック（`source .venv/bin/activate && make check`）を
+必ず通す。markdown / 設計文書のみのコミットは省略可。
 
 ## git absorb の動作原理
 

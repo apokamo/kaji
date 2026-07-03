@@ -59,11 +59,11 @@ cd [worktree_dir] && source .venv/bin/activate && pytest tests/<path> -v
 - `docs/reference/python/` — コーディング規約への影響
 - `docs/dev/` — 開発ワークフロー・テスト規約への影響
 - `docs/adr/` — 技術選定（新ライブラリ採用等）
-- `CLAUDE.md` — プロジェクト規約や必読ドキュメントの更新
+- `AGENTS.md` / `CLAUDE.md` — プロジェクト規約や必読ドキュメントの更新
 
 ### Step F8: 品質ゲート
 
-`make check` を実行し、ruff / mypy / pytest がすべて green になることを確認する（[CLAUDE.md](../../../../CLAUDE.md) の Pre-Commit 要件）。
+`make check` を実行し、ruff / mypy / pytest がすべて green になることを確認する（[AGENTS.md](../../../../AGENTS.md) の pre-commit 契約）。
 
 ```bash
 cd [worktree_dir] && source .venv/bin/activate && make check

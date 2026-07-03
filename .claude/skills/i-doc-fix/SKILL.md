@@ -49,7 +49,7 @@ $ARGUMENTS = <issue_id>
 1. `previous_verdict` または Issue コメントから最新レビュー結果を取得
 2. Must Fix を 1 件ずつ検討
 3. docs のみ修正
-4. 実装 / CLI / CLAUDE.md / 関連 docs との整合を再確認
+4. 実装 / CLI / AGENTS.md / CLAUDE.md / 関連 docs との整合を再確認
 5. 修正対象ファイルに絞って以下を実行:
    ```bash
    cd [worktree_dir] && python3 scripts/check_doc_links.py [changed-markdown-files...]
