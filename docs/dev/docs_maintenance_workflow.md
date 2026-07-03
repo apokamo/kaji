@@ -80,7 +80,7 @@ flowchart TB
 
 ## docs-only final-check の責務
 
-- リンク、参照パス、コマンド例の整合確認（`make verify-docs` + root `AGENTS.md` の個別チェック `python3 scripts/check_doc_links.py AGENTS.md`。現行 `verify-docs` 対象に root `AGENTS.md` が含まれないための暫定手順）
+- リンク、参照パス、コマンド例の整合確認（`make verify-docs`。検査対象には root `AGENTS.md` も含まれる）
 - 現行実装・CLI・運用方針との整合確認
 - docs-only の完了条件確認
 - Issue 本文・コメントの状態更新
