@@ -76,11 +76,11 @@ flowchart TB
 |------|----------|
 | 事実整合性 | 現行コード・CLI・コマンド出力との一致 |
 | 実装整合性 | コード差分との対応関係（実装に対して docs が遅れていないか） |
-| 運用整合性 | CLAUDE.md / workflow / skill 構成との一致、リンク切れ・古いコマンド例の有無 |
+| 運用整合性 | AGENTS.md / CLAUDE.md / workflow / skill 構成との一致、リンク切れ・古いコマンド例の有無 |
 
 ## docs-only final-check の責務
 
-- リンク、参照パス、コマンド例の整合確認（`make verify-docs`）
+- リンク、参照パス、コマンド例の整合確認（`make verify-docs` + root `AGENTS.md` の個別チェック `python3 scripts/check_doc_links.py AGENTS.md`。現行 `verify-docs` 対象に root `AGENTS.md` が含まれないための暫定手順）
 - 現行実装・CLI・運用方針との整合確認
 - docs-only の完了条件確認
 - Issue 本文・コメントの状態更新
