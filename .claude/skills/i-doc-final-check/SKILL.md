@@ -53,7 +53,7 @@ $ARGUMENTS = <issue_id>
 
 1. worktree と branch を解決する
 2. docs / workflow / skill 参照の整合を確認する
-3. links、コマンド例、導線の整合を確認する（`make verify-docs` + root `AGENTS.md` の個別チェック）
+3. links、コマンド例、導線の整合を確認する（`make verify-docs`）
 4. Issue 本文の完了条件を照合し、充足状態を更新する
 5. Issue に最終チェック結果をコメントする
 
@@ -61,14 +61,9 @@ $ARGUMENTS = <issue_id>
 
 ```bash
 cd [worktree_dir] && source .venv/bin/activate && make verify-docs
-python3 scripts/check_doc_links.py AGENTS.md
 ```
 
-いずれも exit 0 必須。
-
-> 現行 Makefile の `verify-docs` は `docs/ README.md README.ja.md CLAUDE.md .claude/skills/` を
-> 対象とし、root `AGENTS.md` を含まない。`verify-docs` 対象へ追加されるまでの暫定手順として
-> `AGENTS.md` の個別チェックを併用する。
+exit 0 必須。`verify-docs` の検査対象には root `AGENTS.md` も含まれる。
 
 ## Step 4 詳細: Issue 本文の完了条件更新
 
@@ -100,7 +95,7 @@ status: PASS
 reason: |
   docs-only workflow の最終チェックを完了し、PR に進める状態を確認した
 evidence: |
-  make verify-docs / AGENTS.md 個別リンクチェック通過、完了条件充足、Issue 本文更新済み
+  make verify-docs 通過、完了条件充足、Issue 本文更新済み
 suggestion: |
 ---END_VERDICT---
 ```
