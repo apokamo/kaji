@@ -121,7 +121,7 @@ kaji は Python 単一スタックのため、以下の 1 本に統一する。
 cd [worktree_dir] && source .venv/bin/activate && make check
 ```
 
-`make check` は ruff / format / mypy / pytest を一括で実行する（CLAUDE.md「Pre-Commit (REQUIRED)」と同一）。
+`make check` は ruff / format / mypy / pytest を一括で実行する（AGENTS.md の pre-commit 契約と同一）。
 
 特定マーカーや変更タイプ固有の検証が必要な場合は、設計書「テスト戦略」に従い追加実行する:
 

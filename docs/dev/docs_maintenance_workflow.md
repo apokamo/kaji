@@ -5,7 +5,7 @@ docs-only Issue 向けのワークフロー。
 
 ## 対象
 
-- `docs/`, `README.md`, `CLAUDE.md`, `.kaji/wf/`, `.claude/skills/` の整理が主目的
+- `docs/`, `README.md`, `AGENTS.md`, `CLAUDE.md`, `.kaji/wf/`, `.claude/skills/` の整理が主目的
 - 実装変更なしで整合性を回復できる Issue
 
 コード変更が必要になった場合は docs-only のまま進めず、dev workflow に切り替える。

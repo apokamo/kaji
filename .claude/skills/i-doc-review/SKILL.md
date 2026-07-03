@@ -71,7 +71,7 @@ $ARGUMENTS = <issue_id>
 
 1. 現行実装と一致しているか
 2. CLI コマンド例が現行仕様と一致するか
-3. `CLAUDE.md` の運用方針と矛盾しないか
+3. `AGENTS.md` / `CLAUDE.md` の運用方針と矛盾しないか
 4. workflow / skill / docs 間で記述が矛盾しないか
 5. リンク切れ、古いパス、読者導線の破綻がないか
 

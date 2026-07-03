@@ -191,7 +191,7 @@ kaji issue view [issue_id] --json labels --jq '[.labels[].name] | map(select(sta
 3. **コード品質**:
    - 型ヒントは具体的か？ (`Any` の乱用禁止)
    - 命名は適切で説明的か？
-   - CLAUDE.md および `docs/reference/python/*` のコーディング規約に準拠しているか？
+   - `docs/reference/python/*` のコーディング規約に準拠しているか？（規約の正本は docs + ruff/mypy 設定）
 
 4. **テスト**:
    - 追加された機能に対するテストは十分か？
