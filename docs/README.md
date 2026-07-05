@@ -22,6 +22,7 @@ kaji のドキュメント一覧。[Diataxis フレームワーク](https://diat
 
 | ドキュメント | 概要 |
 |-------------|------|
+| [Python Starter ガイド](guides/python-starter.md) | kaji-starter-python template からの repository 作成・セットアップ・カスタマイズ（英語正本、[日本語](guides/python-starter.ja.md)） |
 | [Git Worktree ガイド](guides/git-worktree.md) | Bare Repository + Worktree パターン |
 | [Git コミット戦略](guides/git-commit-flow.md) | git absorb + --no-ff ワークフロー |
 

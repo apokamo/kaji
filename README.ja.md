@@ -164,8 +164,11 @@ skillは `.claude/skills/` に配置します。他agent向けのskill directory
 
 workflow fileは各リポジトリの `.kaji/wf/` から実行します。このリポジトリでは現在、
 GitHub前提のworkflow setとして `.kaji/wf/dev.yaml`、`.kaji/wf/dev-thorough.yaml`、
-`.kaji/wf/docs.yaml` を置いています。template配布と初回導入の詳細は
-[Initial Setup Guide issue #242](https://github.com/apokamo/kaji/issues/242)で扱います。
+`.kaji/wf/docs.yaml` を置いています。これらのworkflowを設定済みの新規Python
+プロジェクトを始めるには、
+[kaji-starter-python](https://github.com/apokamo/kaji-starter-python)
+template repositoryからリポジトリを作成し、
+[Python Starterガイド](docs/guides/python-starter.ja.md)に従ってください。
 
 `dev.yaml` の例は、GitHub Issueが存在し、必要なskillがあり、選択するagent CLIが使え、
 `/issue-create` が完了していることを前提にします。`issue-start` はworkflow内で実行します。

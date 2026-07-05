@@ -177,9 +177,11 @@ point to the same canonical skill files with symlinks.
 
 Workflow files are run from `.kaji/wf/` in each repository. This repository
 ships `.kaji/wf/dev.yaml`, `.kaji/wf/dev-thorough.yaml`, and `.kaji/wf/docs.yaml`
-as the current GitHub-backed workflow set. Template distribution and first-time
-setup details are tracked in
-[Initial Setup Guide issue #242](https://github.com/apokamo/kaji/issues/242).
+as the current GitHub-backed workflow set. To start a new Python project with
+these workflows preconfigured, create it from the
+[kaji-starter-python](https://github.com/apokamo/kaji-starter-python) template
+repository and follow the
+[Python Starter Guide](docs/guides/python-starter.md).
 
 The `dev.yaml` example assumes that a GitHub issue already exists, required
 skills are available, selected agent CLIs are installed, and `/issue-create` has
