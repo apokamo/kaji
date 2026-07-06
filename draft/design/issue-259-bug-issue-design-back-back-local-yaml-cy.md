@@ -102,6 +102,12 @@ starter（kaji-starter-python）側は #242 で修正済みであり、本体へ
   未追跡の `dev-thorough-fable.yaml` / `docs-fable.yaml` も 1-step cycle 構成のため対象外（Issue 確定事項 6）
 - Makefile に `fmt` target は未存在（名前衝突なし）。CI は `labels-sync.yml` のみで `make check` を
   使わないため CI 影響なし（Issue 確定事項）
+- **mutating `ruff format` を gate として実行する箇所の棚卸し**（2026-07-07 grep 実測、設計レビュー指摘 1 を受けて追加）:
+  `issue-implement/SKILL.md:239` と `issue-fix-code/SKILL.md:114` が「AGENTS.md の pre-commit 契約
+  （`make check`）と等価」と明記した品質チェックチェーン内で `--check` なしの
+  `ruff format kaji_harness/ tests/` を直接実行している。`make check` を非破壊化すると
+  この等価性が崩れ、かつ gate 実行がファイルを書き換える同根の問題が skill 側に残るため、
+  両 skill も修正対象に含める。`issue-review-code/SKILL.md:118` は既に `ruff format --check` であり対象外
 
 ## インターフェース
 
@@ -118,6 +124,7 @@ bug 修正のため IF は原則維持。変更点は以下のみ:
 | docs-local.yaml `close.on` | `PASS / RETRY / ABORT` | `PASS / ABORT`（`RETRY: close` 除去） |
 | `make format` | `ruff format $(SOURCES)`（mutating） | `ruff format --check $(SOURCES)`（非破壊 gate） |
 | `make fmt`（新設） | — | `ruff format $(SOURCES)`（mutating な整形） |
+| issue-implement / issue-fix-code の品質チェックチェーン | `... && ruff format kaji_harness/ tests/ && ...`（mutating） | `... && ruff format --check kaji_harness/ tests/ && ...`（非破壊。整形差分で FAIL した場合は `make fmt` で整形し、差分をコミット対象に含めて再チェック） |
 
 ### 後方互換性の評価
 
@@ -126,8 +133,10 @@ bug 修正のため IF は原則維持。変更点は以下のみ:
 - 項目 3: cycle 追加は RETRY 無限ループを上限 3 回 + ABORT に変える挙動変更だが、これが本来の仕様
   （GitHub 系 3 本と同一パターン）。`close` の RETRY edge は producer（issue-close skill）が
   RETRY を返さないため、除去による挙動変化なし
-- 項目 4: `make format` の意味が「整形する」→「検査する」に変わる。リポジトリ内で
-  「make check が整形してくれる」前提の手順は無いことを確認済み（Issue 確定事項）。
+- 項目 4: `make format` の意味が「整形する」→「検査する」に変わる。「make check が整形してくれる」
+  前提の手順は無い（Issue 確定事項）が、issue-implement / issue-fix-code は `make check` 等価チェーン内で
+  mutating な `ruff format` を**直接**実行しており、`make check` 非破壊化後は等価性が崩れる。
+  両 skill のチェーンも `--check` 化して等価性を維持する（設計レビュー指摘 1 対応）。
   整形が必要な場合は新設の `make fmt` を使う
 
 ## 制約・前提条件
@@ -156,6 +165,8 @@ bug 修正のため IF は原則維持。変更点は以下のみ:
 | `.kaji/wf/dev-local.yaml` | `implementation` / `final-check` の 1-step cycle 追加、`close` の `RETRY: close` 除去 |
 | `.kaji/wf/docs-local.yaml` | `final-check` の 1-step cycle 追加、`close` の `RETRY: close` 除去 |
 | `Makefile` | `format` を `--check` 化、`fmt` 新設、`.PHONY` / help 文字列更新 |
+| `.claude/skills/issue-implement/SKILL.md` | Step 7a のチェーン（L239）を `ruff format --check` 化し、整形差分 FAIL 時は `make fmt` → 再チェックの手順を追記。証跡テンプレート内の gate 出力ラベル（L297 / L327 / L464 の `ruff format`）を `ruff format --check` 表記に整合 |
+| `.claude/skills/issue-fix-code/SKILL.md` | Step 3.1 のチェーン（L114）を同様に `--check` 化、証跡テンプレート（L155）の表記を整合 |
 | `docs/dev/workflow-authoring.md` | 「サイクル定義」節に「self-RETRY を持つ step は cycle 所属必須（loop 末尾）」の制約を追記（再発防止。完了条件の要否判断 → **必要と判断**: runner の enforce 実装と YAML 記述の暗黙契約であり、#247 の移植漏れはこの制約が明文化されていれば防げた） |
 | `docs/dev/testing-convention.md` | L211 のコミット前ゲート構成 `ruff format` → `ruff format --check` に更新 |
 | `docs/dev/development_workflow.md` | L141 の `make check` 構成説明 `ruff format` → `ruff format --check` に更新 |
@@ -189,7 +200,11 @@ bug 修正のため IF は原則維持。変更点は以下のみ:
 3. **項目 4**: 実装順序として、まず `ruff format --check` が現状素通しすることを再確認してから
    Makefile を変更する（2026-07-07 時点で「128 files already formatted」exit 0 を実測済み）。
    `format:` を `--check` 化し、`fmt:` を新設、`.PHONY` に `fmt` を追加、help に
-   `make fmt` の行を追加し `make check` の説明行を非破壊 gate である旨に更新する
+   `make fmt` の行を追加し `make check` の説明行を非破壊 gate である旨に更新する。
+   あわせて、`make check` 等価を謳う skill 側 gate（issue-implement Step 7a / issue-fix-code Step 3.1）の
+   チェーンを `ruff format --check` に変更し、「整形差分で FAIL した場合は `make fmt` で整形し、
+   差分をコミット対象に含めて再チェックする」旨を両 skill に追記する。証跡テンプレート内の
+   gate 出力ラベルも `--check` 表記に整合させる（設計レビュー指摘 1 対応）
 4. **TDD 順序**: 項目 3 は恒久回帰テストを先に書き、YAML 修正前に Red（dev-local / docs-local で
    violation 検出）→ 修正後に Green を証跡として残す
 
@@ -253,6 +268,9 @@ PASS することを実装フェーズの証跡とする。
 - `make fmt` が整形を実行すること（意図的に整形崩れを作った一時ファイルで確認、確認後に破棄）
 - `make check` が全体通過すること（共通完了条件）
 - `make help` の出力に `fmt` 行が含まれ、`check` の説明が更新されていること
+- gate 用途の mutating `ruff format` の残存ゼロ確認:
+  `grep -rn 'ruff format' .claude/skills/ Makefile docs/dev/` の出力で、gate として実行される行が
+  すべて `--check` 付きであること（`make fmt` の定義行と、整形手段としての `ruff format` 言及は除く）
 
 **恒久テストを追加しない理由**（testing-convention の 4 条件)):
 
@@ -274,6 +292,7 @@ PASS することを実装フェーズの証跡とする。
 | docs/reference/ | なし | `python-style.md:12` の「すべて make check 経由で機械的に判定」は `--check` 化後も真のまま（整合確認のみ） |
 | docs/cli-guides/ | なし | `kaji issue view` の CLI 仕様自体は変更しない（skill 側の呼び出し方の修正） |
 | AGENTS.md / CLAUDE.md | なし | `make check` の呼称のみで内部構成に言及していない（整合確認のみ） |
+| .claude/skills/（issue-implement / issue-fix-code） | **あり** | 項目 4: `make check` 等価の品質チェックチェーンを `ruff format --check` 化し、証跡テンプレート表記を整合（設計レビュー指摘 1 対応。詳細は「変更スコープ」） |
 
 ## 参照情報（Primary Sources）
 
@@ -288,6 +307,7 @@ PASS することを実装フェーズの証跡とする。
 | 参照パターン | `.kaji/wf/dev.yaml:25-34` | `implementation` / `final-check` の 1-step cycle 構成（移植元） |
 | 修正対象 YAML | `.kaji/wf/dev-local.yaml:70,115,124` / `.kaji/wf/docs-local.yaml:65,75` | cycle 未所属の self-RETRY edge の実在箇所（2026-07-07 grep 実測） |
 | 修正対象 Makefile | `Makefile`（`format:` target） | `ruff format $(SOURCES)` が `--check` なしで `check` の依存に組み込まれている |
+| 修正対象 skill gate | `.claude/skills/issue-implement/SKILL.md:239` / `.claude/skills/issue-fix-code/SKILL.md:114` | 「`make check` と等価」と明記した品質チェックチェーン内で mutating な `ruff format kaji_harness/ tests/` を直接実行している（2026-07-07 grep 実測）。比較: `issue-review-code/SKILL.md:118` は既に `--check` 付き |
 | 既存テストパターン | `tests/workflows/test_workflow_set_invariants.py` / `tests/workflows/test_review_code_routing.py` | canonical workflow セットへの静的不変条件テストの先行例（Small / YAML パース + アサーション） |
 | workflow 仕様 | `docs/dev/workflow-authoring.md`（サイクル定義節） | cycle の構造と「loop 末尾ステップの on.RETRY は loop 先頭を指す」既存制約。再発防止追記の挿入先 |
 | 実測ログ（OB 再現） | 本設計セッション（2026-07-07） | `kaji issue view 259 --output json` → `unknown flag: --output` / `kaji issue view 259 --json comments \| jq '.comments \| length'` → exit 0 / `ruff format --check kaji_harness/ tests/` → 「128 files already formatted」exit 0 |
