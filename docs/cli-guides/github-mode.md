@@ -94,6 +94,16 @@ kaji は GitHub project 直下の `.github/labels.yml` を label の正本とし
 - `kaji pr review <pr> --approve` / `kaji pr review <pr> --request-changes` は self-PR (PR author == authenticated user) を検知すると `<!-- kaji-review: state=APPROVED -->` / `<!-- kaji-review: state=CHANGES_REQUESTED -->` marker 付き comment を Issue comments API に投稿することで review シグナルを表現し rc=0 を返す。`gh pr review --approve` / `--request-changes` は GitHub API が author の APPROVE / REQUEST_CHANGES event を `Can not approve your own pull request` / `Can not request changes on your own pull request` で 422 拒否するため、self-PR では skip される。非 self-PR では従来通り `gh pr review --approve` / `--request-changes` を委譲する。`--comment` / flag 無しは routing 段で `_github_pr_review` に分岐せず従来通り `gh pr review` へ passthrough
   - **`--request-changes` の body 必須契約（self / 非 self 一貫）**: GitHub REST API の `event=REQUEST_CHANGES` は body parameter を必須とするため、kaji 側で `--body` / `--body-file` 未指定または空白のみは subprocess 呼び出し前に `EXIT_INVALID_INPUT` (rc=2) で fail-fast する。`--approve` は GitHub API 側で body optional のため空 body を許容（既存挙動を維持）
   - **marker comment の観測経路の非対称性**: self-PR fallback で投稿された marker comment は Issue Comments API (`/repos/<repo>/issues/<N>/comments`) に書き込まれるため、`kaji pr view <pr> --comments` 経由では取得可能だが、`kaji pr reviews <pr>` (`/pulls/<N>/reviews`) には現れない。後続の `pr-fix` skill は `kaji pr view --comments` を主要 read path としているため、観測経路上は問題なし
+- `kaji issue comment <id> --verdict-step <step> --verdict-status <STATUS>` は判定コメントに verdict マーカーを付与する（下記 § 2.1）
+
+### 2.1 `kaji issue comment` の verdict マーカー付与
+
+`kaji issue comment` に `--verdict-step <step> --verdict-status <STATUS>` を渡すと、CLI が comment body の **1 行目**に決定的な HTML コメントマーカー `<!-- kaji-verdict: step=<step> status=<STATUS> -->` を付与してから投稿する（GitHub UI 上では HTML コメントとして不可視）。cross-skill 契約（`issue-design` の BACK 再入検出）を SKILL.md 散文ではなく CLI 層に置くための機構（ADR 008 決定 3）。
+
+- **両フラグ同時必須**: 片方のみの指定は exit 2（stderr にエラー）。両方なしの従来呼び出しは一切変更しない（gh passthrough のまま）
+- **語彙検証（fail-loud）**: `--verdict-step` は `^[a-z][a-z0-9_-]*$`、`--verdict-status` は `PASS` / `RETRY` / `ABORT` / `BACK` / `BACK_<UPPER>`（`BACK_[A-Z0-9_]+`）。不正値は exit 2 で gh を起動しない
+- github / local 両 provider で同一の振る舞い。`--commit` は github では silent に無視される
+- 例: `kaji issue comment 261 --verdict-step review-code --verdict-status BACK --body-file - <<'EOF' ... EOF`
 
 ## 3. `kaji sync from-github` の使い方
 
