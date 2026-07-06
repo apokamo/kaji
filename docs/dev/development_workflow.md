@@ -138,7 +138,7 @@ CLI 層（`kaji pr` の bare-provider error）／Skill 層（`pr-fix` / `pr-veri
 
 kaji は Python 単一スタックであり、品質ゲートは `make check` に統一されている。
 
-- 日常開発・コミット前の統合ゲート: `make check`（`ruff check` → `ruff format` → `mypy` → `pytest`）
+- 日常開発・コミット前の統合ゲート: `make check`（`ruff check` → `ruff format --check` → `mypy` → `pytest`。非破壊。整形は `make fmt`）
 - docs-only 変更時のリンク整合性ゲート: `make verify-docs`
 - packaging-only 変更時の独立検証: `make verify-packaging`
 - マーカー別個別実行: `make test-small` / `make test-medium` / `make test-large` / `make test-large-local`

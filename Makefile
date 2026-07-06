@@ -1,4 +1,4 @@
-.PHONY: check lint format typecheck test test-small test-medium test-large \
+.PHONY: check lint format fmt typecheck test test-small test-medium test-large \
         test-large-local verify-docs verify-packaging setup help
 
 SOURCES := kaji_harness/ tests/
@@ -9,6 +9,9 @@ lint:
 	ruff check $(SOURCES)
 
 format:
+	ruff format --check $(SOURCES)
+
+fmt:
 	ruff format $(SOURCES)
 
 typecheck:
@@ -40,7 +43,8 @@ setup:
 
 help:
 	@echo "Common targets:"
-	@echo "  make check               - lint + format + typecheck + test"
+	@echo "  make check               - lint + format(--check) + typecheck + test (non-mutating gate)"
+	@echo "  make fmt                 - apply ruff format (mutating)"
 	@echo "  make test                - pytest (all markers)"
 	@echo "  make test-small          - pytest -m small"
 	@echo "  make test-medium         - pytest -m medium"

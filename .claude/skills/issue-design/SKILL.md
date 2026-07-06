@@ -176,11 +176,11 @@ NON_DESIGN=$(git -C [worktree_dir] log --oneline [default_branch]..HEAD -- ':(ex
 #          scope 違反を再発する。`2>/dev/null` を付けず、エラー発生時
 #          は BACK_COUNT が空文字となり (e) で ABORT 経路に流す
 #
-#    GitHub provider の `kaji issue view --comments --output json` は
-#    top-level object で、コメント配列を `.comments` プロパティに持つ
-#    （各要素は GitHub REST API の Issue Comments リソース。`body` /
-#    `created_at` 等のフィールドあり）。
-BACK_COUNT=$(kaji issue view [issue_id] --comments --output json \
+#    `kaji issue view --json comments` は top-level object で、コメント配列を
+#    `.comments` プロパティに持つ（各要素は GitHub REST API の Issue Comments
+#    リソース。`body` / `created_at` 等のフィールドあり）。gh 互換の `--json`
+#    フィールド指定形（https://cli.github.com/manual/gh_issue_view ）を使う。
+BACK_COUNT=$(kaji issue view [issue_id] --json comments \
   | jq '[
       .comments[]
       | select(.body | test("^(# コードレビュー結果|## 最終チェック結果)"; "m"))
@@ -200,7 +200,7 @@ status: ABORT
 reason: |
   BACK detection pipeline failed (kaji issue view / jq error).
 evidence: |
-  `kaji issue view [issue_id] --comments --output json | jq ...` の評価に
+  `kaji issue view [issue_id] --json comments | jq ...` の評価に
   失敗し BACK_COUNT が空文字となった。初回フローへの silent fallthrough は
   既存設計書の上書きという scope 違反を再発させるため抑止する。
 suggestion: |
@@ -212,9 +212,9 @@ VERDICT_BLOCK
 fi
 # BACK_COUNT >= 1 → 該当
 #
-# provider 別フォールバック:
-# - local provider: `--output json` の構造は別。実装側で provider 別の
-#   抽出器（comment body iterator）を用意する
+# provider 差分: `--json comments` は github / local 両 provider で同一構造
+# （`.comments[].body`）を返す（local は cli_main.py `_local_issue_view` が
+# gh 互換 `--json` を実装済み）。provider 別の抽出器は不要。
 ```
 
 `[worktree_dir]` は Step 1 で取得した絶対パスを再利用する（再解決しない）。

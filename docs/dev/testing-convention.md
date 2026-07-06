@@ -208,7 +208,7 @@ repo にコミットし、今後も継続実行するテスト。以下を満た
 | タイミング | 実行するもの | 根拠 |
 |-----------|-------------|------|
 | 実装中（Red/Green サイクル） | `pytest`（対象テストまたは全体） | 開発中の動作確認 |
-| コミット前 | `ruff check` + `ruff format` + `mypy` + `pytest` | 品質ゲート（`make check` 相当） |
+| コミット前 | `ruff check` + `ruff format --check` + `mypy` + `pytest` | 品質ゲート（`make check` 相当。非破壊。整形は `make fmt`） |
 | PR 前（`/i-dev-final-check`） | `make check` | 最終品質確認 |
 | docs-only PR 前（`/i-doc-final-check`） | `make verify-docs` | リンク整合性確認 |
 | CI | `make check` + `make verify-docs` | 自動品質検証 |

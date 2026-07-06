@@ -14,6 +14,11 @@ cycles:
     loop: [doc-fix, doc-verify]
     max_iterations: 3
     on_exhaust: ABORT
+  final-check:
+    entry: final-check
+    loop: [final-check]
+    max_iterations: 3
+    on_exhaust: ABORT
 
 steps:
   - id: doc-update
@@ -72,5 +77,4 @@ steps:
     model: sonnet
     on:
       PASS: end
-      RETRY: close
       ABORT: end
