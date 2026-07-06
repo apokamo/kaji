@@ -270,6 +270,16 @@ cycles:
 
 **制約**: `loop` 末尾ステップの `on.RETRY` は `loop` 先頭ステップを指すこと。
 
+**制約**: `on.RETRY` が自ステップ自身を指す **self-RETRY step**（例: `implement` /
+`final-check` の 1-step ループ）は、必ずいずれかの cycle の `loop` に所属し、かつ
+その step が `loop` 末尾（1-step cycle なら唯一の要素）でなければならない。runner は
+cycle 経由でのみ RETRY 上限を enforce する（increment 条件は
+「step が `cycle.loop[-1]` かつ verdict が `RETRY`」）ため、cycle 未所属の self-RETRY
+step は `max_iterations` が効かず無限ループしうる。cycle に入れない場合は、その
+self-RETRY edge が dead（producer skill が RETRY を返さない）であることを確認して
+edge を除去する。この不変条件は `tests/workflows/test_self_retry_cycle_membership.py`
+で機械的に検証している。
+
 ## execution_policy
 
 **必須フィールド**（未設定時はバリデーションエラー）。

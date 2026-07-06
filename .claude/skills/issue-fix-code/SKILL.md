@@ -111,8 +111,12 @@ $ARGUMENTS = <issue_id>
    #### 3.1 Lint / Format / 型チェック（exit 0 必須）
 
    ```bash
-   cd [worktree_dir] && source .venv/bin/activate && ruff check kaji_harness/ tests/ && ruff format kaji_harness/ tests/ && mypy kaji_harness/
+   cd [worktree_dir] && source .venv/bin/activate && ruff check kaji_harness/ tests/ && ruff format --check kaji_harness/ tests/ && mypy kaji_harness/
    ```
+
+   > `ruff format --check` は非破壊 gate（`make check` と等価）。整形差分で FAIL
+   > した場合は `make fmt`（または `ruff format kaji_harness/ tests/`）で整形し、
+   > 生じた差分をコミット対象に含めてから再チェックすること。
 
    #### 3.2 テスト実行
 
@@ -152,7 +156,7 @@ kaji issue comment [issue_id] --commit --body "$(cat <<'EOF'
 ## 品質チェック結果
 
 ```
-(ruff check + ruff format + mypy + pytest の出力をそのまま貼り付け)
+(ruff check + ruff format --check + mypy + pytest の出力をそのまま貼り付け)
 ```
 
 ## 次のステップ

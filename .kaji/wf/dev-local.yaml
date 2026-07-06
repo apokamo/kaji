@@ -18,6 +18,16 @@ cycles:
     loop: [fix-code, verify-code]
     max_iterations: 3
     on_exhaust: ABORT
+  implementation:
+    entry: implement
+    loop: [implement]
+    max_iterations: 3
+    on_exhaust: ABORT
+  final-check:
+    entry: final-check
+    loop: [final-check]
+    max_iterations: 3
+    on_exhaust: ABORT
 
 steps:
   - id: design
@@ -121,5 +131,4 @@ steps:
     model: sonnet
     on:
       PASS: end
-      RETRY: close
       ABORT: end
