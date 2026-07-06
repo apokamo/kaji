@@ -1847,6 +1847,216 @@ class TestPrBuiltinDispatch:
         assert exc.value.code == 2
 
 
+class TestIssueCommentVerdictMarker:
+    """Medium: `kaji issue comment --verdict-step/--verdict-status` marker 付与（Issue #261）。
+
+    両 provider で comment body の 1 行目が決定的にマーカーになること・不正入力が
+    silent に通らないこと・従来経路の非回帰を検証する。testing-convention.md
+    § patch スコープ表遵守（local は git init fixture、github は handler 単体 +
+    投稿 body capture）。
+    """
+
+    pytestmark = pytest.mark.medium
+
+    # ---------- local provider ----------
+
+    def _seed_local(self, tmp_path: Path) -> tuple[object, str]:
+        from kaji_harness.providers.local import LocalProvider
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", "--initial-branch=main", str(repo)], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "commit.gpgsign", "false"], check=True)
+        provider = LocalProvider(repo_root=repo, machine_id="pc1")
+        issue = provider.create_issue(title="t", body="b", slug="x", labels=["type:bug"])
+        subprocess.run(["git", "-C", str(repo), "add", ".kaji"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "seed"], check=True)
+        return provider, issue.id
+
+    def _comment_files(self, provider: object, issue_id: str) -> list[Path]:
+        issue_dir = provider._resolve_issue_dir(issue_id)  # type: ignore[attr-defined]
+        return sorted((issue_dir / "comments").glob("*.md"))
+
+    def test_local_first_line_is_marker(self, tmp_path: Path) -> None:
+        from kaji_harness.cli_main import _local_issue_comment
+        from kaji_harness.providers.markers import build_kaji_verdict_marker
+
+        provider, issue_id = self._seed_local(tmp_path)
+        rc = _local_issue_comment(
+            provider,
+            [
+                issue_id,
+                "--verdict-step",
+                "design",
+                "--verdict-status",
+                "PASS",
+                "--body",
+                "設計完了",
+            ],
+        )
+        assert rc == 0
+        files = self._comment_files(provider, issue_id)
+        assert len(files) == 1
+        # frontmatter を除いた本文の 1 行目 == marker、2 行目以降 == body。
+        raw = files[0].read_text(encoding="utf-8")
+        body_section = raw.split("---\n", 2)[-1]
+        lines = body_section.splitlines()
+        assert lines[0] == build_kaji_verdict_marker("design", "PASS")
+        assert "設計完了" in body_section
+
+    def test_local_commit_flag_preserved_with_verdict(self, tmp_path: Path) -> None:
+        from kaji_harness.cli_main import _local_issue_comment
+
+        provider, issue_id = self._seed_local(tmp_path)
+        repo = provider.repo_root  # type: ignore[attr-defined]
+        head_before = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        rc = _local_issue_comment(
+            provider,
+            [
+                issue_id,
+                "--commit",
+                "--verdict-step",
+                "review-code",
+                "--verdict-status",
+                "BACK",
+                "--body",
+                "差し戻し",
+            ],
+        )
+        assert rc == 0
+        head_after = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        assert head_after != head_before
+
+    def test_local_invalid_status_exits_two(self, tmp_path: Path) -> None:
+        from kaji_harness.cli_main import _handle_issue_local
+
+        provider, issue_id = self._seed_local(tmp_path)
+        rc = _handle_issue_local(
+            provider,
+            [
+                "comment",
+                issue_id,
+                "--verdict-step",
+                "review-code",
+                "--verdict-status",
+                "back",
+                "--body",
+                "x",
+            ],
+        )
+        assert rc == 2
+
+    def test_local_partial_flags_exits_two(self, tmp_path: Path) -> None:
+        from kaji_harness.cli_main import _handle_issue_local
+
+        provider, issue_id = self._seed_local(tmp_path)
+        rc = _handle_issue_local(
+            provider,
+            ["comment", issue_id, "--verdict-step", "design", "--body", "x"],
+        )
+        assert rc == 2
+
+    def test_local_no_verdict_flags_unchanged(self, tmp_path: Path) -> None:
+        """verdict フラグ無しの従来呼び出しは body を一切変更しない（非回帰）。"""
+        from kaji_harness.cli_main import _local_issue_comment
+
+        provider, issue_id = self._seed_local(tmp_path)
+        rc = _local_issue_comment(provider, [issue_id, "--body", "plain body"])
+        assert rc == 0
+        raw = self._comment_files(provider, issue_id)[0].read_text(encoding="utf-8")
+        assert "<!-- kaji-verdict:" not in raw
+
+    # ---------- github provider ----------
+
+    def _github_provider(self) -> object:
+        from kaji_harness.providers.github import GitHubProvider
+
+        return GitHubProvider(
+            repo="owner/repo",
+            repo_root=Path("/tmp/stub"),
+            default_branch="main",
+            git_remote="origin",
+        )
+
+    def test_github_verdict_posts_marker_body(self) -> None:
+        from kaji_harness.cli_main import _github_issue_comment_with_verdict
+        from kaji_harness.providers.markers import build_kaji_verdict_marker
+
+        provider = self._github_provider()
+        with patch.object(type(provider), "comment_issue") as mock_comment:
+            rc = _github_issue_comment_with_verdict(
+                provider,
+                [
+                    "261",
+                    "--commit",
+                    "--verdict-step",
+                    "review-code",
+                    "--verdict-status",
+                    "BACK",
+                    "--body",
+                    "レビュー結果",
+                ],
+            )
+        assert rc == 0
+        assert mock_comment.call_count == 1
+        issue_id_arg, body_arg = mock_comment.call_args[0]
+        assert issue_id_arg == "261"
+        marker = build_kaji_verdict_marker("review-code", "BACK")
+        assert body_arg.startswith(f"{marker}\n")
+        assert body_arg.endswith("レビュー結果")
+
+    def test_github_invalid_status_exits_two_without_gh(self) -> None:
+        from kaji_harness.cli_main import _github_issue_comment_with_verdict
+
+        provider = self._github_provider()
+        with patch.object(type(provider), "comment_issue") as mock_comment:
+            rc = _github_issue_comment_with_verdict(
+                provider,
+                [
+                    "261",
+                    "--verdict-step",
+                    "review-code",
+                    "--verdict-status",
+                    "APPROVE",
+                    "--body",
+                    "x",
+                ],
+            )
+        assert rc == 2
+        assert mock_comment.call_count == 0
+
+    def test_github_partial_flags_exits_two_without_gh(self) -> None:
+        from kaji_harness.cli_main import _github_issue_comment_with_verdict
+
+        provider = self._github_provider()
+        with patch.object(type(provider), "comment_issue") as mock_comment:
+            rc = _github_issue_comment_with_verdict(
+                provider,
+                ["261", "--verdict-status", "BACK", "--body", "x"],
+            )
+        assert rc == 2
+        assert mock_comment.call_count == 0
+
+    def test_has_verdict_flags_detection(self) -> None:
+        from kaji_harness.cli_main import _has_verdict_flags
+
+        assert _has_verdict_flags(["261", "--verdict-step", "design", "--verdict-status", "PASS"])
+        assert _has_verdict_flags(["261", "--verdict-step=design"])
+        assert not _has_verdict_flags(["261", "--body", "x", "--commit"])
+
+
 # ============================================================
 # Helpers
 # ============================================================

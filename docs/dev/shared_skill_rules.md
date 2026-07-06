@@ -39,6 +39,46 @@ workflow 固有の最終判定は `i-dev-final-check` または `i-doc-final-che
 
 すべての workflow スキルは作業完了時に verdict を **artifact `verdict.yaml`（primary）+ 作業報告 Issue comment 末尾の `---VERDICT---` block（fallback）+ stdout（互換）** の 3 経路で残す（Issue #220）。harness は `verdict_path`（exec_script では env `KAJI_VERDICT_PATH`）で保存先 attempt の絶対パスを注入し、解決順は artifact → comment → stdout。verdict 専用コメントは新設せず、既存の作業報告コメント末尾に block を追記するだけでよい。詳細・YAML 例・stdout 段階廃止方針は [skill-authoring.md](skill-authoring.md) § verdict 出力規約 を参照。
 
+## 後方互換（共通）
+
+ADR 008（[`docs/adr/008-no-backward-compat-layer.md`](../adr/008-no-backward-compat-layer.md)）に従い、
+kaji は**後方互換レイヤを書かない**。
+
+- 旧フォーマット読み取り・フォールバック・バージョン分岐を skill / harness に実装しない。
+  レビュー（人間・agent とも）は互換フォールバックの追加を指摘・要求しない。
+- 破壊的変更は CHANGELOG / GitHub Release notes の BREAKING セクションで
+  **3 要素**（壊れる契約 / 影響の判定方法 / 適用指針）を明示する。`/release` skill
+  Step 3 がこの 3 要素の充足を確認する。
+- 曖昧状態で破壊的操作を行わない fail-safe（例: 検出不能時は上書きせず ABORT）は
+  後方互換ではなく恒久的な安全設計であり、本ルールの対象外（引き続き推奨）。
+
+## verdict マーカー契約（producer / consumer）
+
+cross-skill 契約（BACK 再入検出など）は SKILL.md の散文ではなく **CLI / harness 層**
+に置く（ADR 008 決定 3）。判定コメントの合意点として `kaji issue comment` の verdict
+マーカーを用いる。**契約の正本は CLI コード**（`kaji_harness/providers/markers.py` の
+`build_kaji_verdict_marker` + 語彙検証）であり、本節はその案内。
+
+- **producer（判定を発行する skill）**: 判定コメント投稿時に
+  `--verdict-step <step> --verdict-status <STATUS>` を **無条件付与**する。CLI が
+  body 1 行目に `<!-- kaji-verdict: step=<step> status=<STATUS> -->` を決定的に
+  埋め込む。`<STATUS>` は当該 skill が `---VERDICT---` で返す status と一致させる。
+  「BACK のときだけ付ける」条件付き出力は**禁止**（付け忘れが silent に契約を壊すため。
+  本マーカー導入の契機となったバグの発生機序そのもの）。
+  - 現行 producer: `issue-review-code` / `i-dev-final-check` / `issue-implement` /
+    `issue-review-design` / `issue-design`
+- **consumer（`issue-design` Step 1.6 / 1.7）**: このマーカーのみを参照する。body
+  1 行目を厳密照合し（`test()` の `^`、`m` フラグなし）、design を戻し先とする status
+  集合 `{BACK, BACK_DESIGN}` を design 再入として数える。旧来の判定見出しゲート・
+  regex は残さない（ADR 008 決定 1）。
+- **語彙**: `--verdict-step` は `^[a-z][a-z0-9_-]*$`、`--verdict-status` は
+  `PASS` / `RETRY` / `ABORT` / `BACK` / `BACK_<UPPER>`（`BACK_[A-Z0-9_]+`、
+  [`workflow-authoring.md`](workflow-authoring.md) § `BACK_*` 文法と整合）。不正語彙・
+  片方のみのフラグ指定は fail-loud（exit 2）。github / local 両 provider で同一。
+- **BREAKING 適用指針**: 下流 repo で判定コメントを投稿する skill をカスタマイズして
+  いる場合、producer 側は投稿コマンドへ `--verdict-step/--verdict-status` を付与
+  （呼び出し 1 行の差し替え）、consumer 側は `issue-design` Step 1.6 の diff を自版へ移植する。
+
 ## スキル実体
 
 - 実体: `.claude/skills/`

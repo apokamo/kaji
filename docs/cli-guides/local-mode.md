@@ -234,6 +234,21 @@ git stage + commit を **同一 process 内で atomic に** 行う。実装は
 - `provider.type='github'` 配下では `--commit` は **silent strip**
   され、CLI 引数として認識されつつ何もしない（passthrough 経路の冪等性のため）
 
+### `kaji issue comment` の verdict マーカー付与（local）
+
+`kaji issue comment` に `--verdict-step <step> --verdict-status <STATUS>` を渡すと、
+CLI が comment body の **1 行目**に決定的な HTML マーカー
+`<!-- kaji-verdict: step=<step> status=<STATUS> -->` を付与してから
+`.kaji/issues/<id>/comments/<seq>-<machine>.md` に永続化する。cross-skill 契約
+（`issue-design` の BACK 再入検出）を CLI 層に置くための機構（ADR 008 決定 3）。
+
+- **両フラグ同時必須**: 片方のみは exit 2。両方なしの従来呼び出しは body を一切変更しない
+- **語彙検証（fail-loud）**: `--verdict-step` は `^[a-z][a-z0-9_-]*$`、`--verdict-status`
+  は `PASS` / `RETRY` / `ABORT` / `BACK` / `BACK_<UPPER>`（`BACK_[A-Z0-9_]+`）。不正値は exit 2
+- `--commit` との併用可（atomic commit の挙動は不変。marker は commit されるファイルの 1 行目に入る）
+- github / local 両 provider で同一の振る舞い（marker 形式・付与位置・語彙検証）
+- 実装: `kaji_harness/providers/markers.py` `build_kaji_verdict_marker`（契約の正本）
+
 ### main worktree への書き込み固定（main worktree redirection）
 
 `provider.type='local'` 配下では、`kaji issue {create,edit,comment,close}` の

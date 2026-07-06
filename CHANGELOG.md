@@ -6,6 +6,47 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### BREAKING CHANGE
+
+- **壊れる契約**: `issue-design` Step 1.6 の BACK 経由再起動検出は、判定コメントの
+  見出し・checkbox 表現（`[x] Changes Requested / BACK` / `| 判定 |` テーブル / 判定
+  見出しゲート）を **読まなくなった**。検出対象は `kaji issue comment
+  --verdict-step/--verdict-status` が付与する body 1 行目マーカー
+  `<!-- kaji-verdict: step=<step> status=<STATUS> -->` のみ。マーカーを付与しない判定
+  コメントは BACK 再入として検出されず、「設計書あり + 設計後コミットあり + マーカー
+  なし」の曖昧状態は上書きに進まず ABORT で停止する（#261）。
+  - **影響の判定方法**: 下流 repo で
+    `grep -rn 'Changes Requested / BACK' .claude/skills/` がヒットする場合、旧 consumer を
+    保持しており更新が必要。producer 側は
+    `grep -rln 'kaji issue comment' .claude/skills/issue-review-code .claude/skills/i-dev-final-check`
+    等で判定コメント投稿箇所を特定する。
+  - **適用指針**: 未カスタマイズなら該当 SKILL.md の再コピー + kaji 本体更新で完結。
+    カスタマイズ済み repo は、producer 側は判定コメント投稿コマンドへ
+    `--verdict-step <step> --verdict-status <STATUS>` を付与（呼び出し 1 行の差し替え）、
+    consumer 側は本 PR の `issue-design` Step 1.6 diff を自版へ移植する（上流 PR: #261）。
+
+### Added
+
+- `kaji issue comment` に verdict マーカー付与機能（`--verdict-step` /
+  `--verdict-status`）を追加。CLI が comment body 1 行目に決定的な HTML マーカー
+  `<!-- kaji-verdict: step=<step> status=<STATUS> -->` を埋め込み、cross-skill 契約
+  （BACK 再入検出）を CLI 層に固定する。github / local 両 provider で同一の振る舞い、
+  語彙検証は fail-loud（#261）。
+
+### Fixed
+
+- BACK 判定コメントの producer / consumer 契約不一致を恒久修正。旧 consumer regex
+  （`[x] Changes Requested / BACK`）は producer が一度も出力しておらず、BACK 経由の
+  design 再入が常に「初回起動」と誤判定され既存設計書を上書きしうる欠陥だった。
+  producer は全判定コメントで verdict マーカーを無条件付与し、consumer はマーカーのみを
+  参照する（#261）。
+
+### Docs
+
+- ADR 008「後方互換レイヤを提供しない（BREAKING 明示ポリシー）」を追加。付随して
+  `shared_skill_rules.md` / `skill-authoring.md` / `release` skill / cli-guides に契約と
+  BREAKING 3 要素要件を反映（#261）。
+
 ## [0.12.1] - 2026-06-24
 
 Maintenance release. No external API or runtime behavior changes: internal

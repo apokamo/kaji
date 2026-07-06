@@ -245,8 +245,12 @@ kaji issue edit [issue_id] --commit --body-file /tmp/issue-body-updated.md
 
 ## Step 8 詳細: 最終チェックコメントのテンプレート
 
+**verdict マーカーの無条件付与（必須）**: 最終チェック結果コメントには **常に** `--verdict-step final-check --verdict-status <STATUS>` を付与する。`<STATUS>` は本 skill が返す status（`PASS` / `RETRY` / `BACK_DESIGN` / `BACK_IMPLEMENT` / `BACK`。旧 YAML 互換で `BACK` に丸める場合は `BACK`）に置換する。CLI が body 1 行目に `<!-- kaji-verdict: step=final-check status=<STATUS> -->` を決定的に付与し、`issue-design` Step 1.6 の BACK 再入検出は `BACK` / `BACK_DESIGN` マーカーのみを design 再入として数える（契約の正本は CLI コード。ADR 008 決定 3）。「BACK のときだけ付ける」条件付き出力は禁止（決定 3。`PASS` / `RETRY` でも常に付ける）。`--body-file -` は stdin から body を読むため、フラグは以下の順で付与する。
+
 ```bash
-kaji issue comment [issue_id] --commit --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit \
+  --verdict-step final-check --verdict-status <STATUS> \
+  --body-file - <<'EOF'
 ## 最終チェック結果
 
 ### 前段証跡の確認

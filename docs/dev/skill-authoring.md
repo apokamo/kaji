@@ -216,6 +216,23 @@ kaji issue edit <issue_id> --body "..."
 
 **ルール**: レビュー系スキル（review-\*, verify-\*）は Issue にコメントで結果を記録する。実装系スキルは完了報告をコメントする。
 
+### cross-skill 契約は CLI / harness 層に置く（ADR 008 決定 3）
+
+あるスキルの出力を別のスキルが機械的に消費する契約（producer / consumer 契約）は、
+**SKILL.md の散文ではなく CLI / harness 層（コード）に置く**。散文契約は producer と
+consumer が別々に管理され、突き合わせる機構がないため silent に壊れる（不一致でも
+エラーにならず、検出ゼロがそのまま「該当なし」として振る舞う）。
+
+- 悪い例: consumer が「producer はコメントに `[x] Changes Requested / BACK` と書くはず」と
+  regex で期待するが、producer テンプレートにその表現が存在せず検出が一度も機能しない
+  （Issue #261 の根本原因）。
+- 良い例: producer は `kaji issue comment --verdict-step/--verdict-status` を無条件付与し、
+  CLI が決定的にマーカー行を埋め込む。consumer はそのマーカーのみを参照する。契約の
+  正本は CLI コード（語彙検証つき）にあり、下流 repo のスキルカスタマイズでも壊れにくい。
+  BREAKING の適用指針も「呼び出し 1 行の追加・差し替え」で説明が完結する。
+
+詳細な運用は [`shared_skill_rules.md`](shared_skill_rules.md) § verdict マーカー契約 を参照。
+
 ## 推奨パターン
 
 ### Devil's Advocate プリアンブル（レビュー系）

@@ -120,7 +120,9 @@ user が異なる version を希望する場合はそちらを採用する（初
 ## [X.Y.Z] - YYYY-MM-DD
 
 ### BREAKING CHANGE
-- ...
+- **壊れる契約**: 何を前提にしていた何が動かなくなるか
+  - **影響の判定方法**: 下流 repo が影響を受けるかを確認する手段（grep 等の 1 コマンドが理想）
+  - **適用指針**: 未カスタマイズなら再コピーで可の旨。カスタマイズ済み repo 向けには契約変更点の説明と上流 commit / PR への参照
 
 ### Added
 - feat: ... entries
@@ -132,12 +134,21 @@ user が異なる version を希望する場合はそちらを採用する（初
 - その他 (docs / refactor / chore / test) entries
 ```
 
+**BREAKING エントリの 3 要素（ADR 008 決定 2・必須）**: `### BREAKING CHANGE` に記載する
+各項目は、**壊れる契約 / 影響の判定方法 / 適用指針** の 3 要素を必ず含める。kaji は
+後方互換レイヤを提供しない（ADR 008）ため、破壊的変更の伝達は release notes 側の責務で
+あり、この 3 要素が下流 repo の唯一の移行ガイドになる。3 要素が揃わない BREAKING
+エントリのまま release を進めてはならない（参照:
+[`docs/adr/008-no-backward-compat-layer.md`](../../../docs/adr/008-no-backward-compat-layer.md) /
+[`docs/dev/shared_skill_rules.md`](../../../docs/dev/shared_skill_rules.md) § 後方互換（共通））。
+
 進め方:
 
 1. `## [Unreleased]` 配下の既存記述を新 version セクションへ移動
 2. 不足分（Unreleased に未記載の commit）があれば commit message から要約を追記
-3. 末尾の比較リンク（存在する場合）を更新
-4. `CHANGELOG.md` の **diff を user に提示** して承認待ち
+3. `### BREAKING CHANGE` に項目がある場合、各項目が 3 要素（壊れる契約 / 影響の判定方法 / 適用指針）を満たすか確認し、欠けていれば補う
+4. 末尾の比較リンク（存在する場合）を更新
+5. `CHANGELOG.md` の **diff を user に提示** して承認待ち
 
 **user 承認待ち**: user が文面修正を希望する場合は再 edit → 再提示。
 

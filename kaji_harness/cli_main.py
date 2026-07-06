@@ -41,6 +41,7 @@ from .providers.local import (
     LocalProvider,
     LocalProviderError,
 )
+from .providers.markers import build_kaji_verdict_marker
 from .runner import WorkflowRunner
 from .skill import load_skill_metadata, validate_skill_exists
 from .state import _format_issue_ref
@@ -1164,6 +1165,12 @@ def _handle_issue(raw_args: list[str]) -> int:
 
     if isinstance(provider, LocalProvider):
         return _handle_issue_local(provider, raw_args)
+    # verdict marker 付与要求（`--verdict-step` / `--verdict-status`）は gh へ
+    # passthrough せず構造化経路へ振り分ける。gh issue comment は verdict
+    # フラグを知らないため passthrough は unknown flag で fail するし、marker
+    # 合成を CLI 層で決定的に行う必要がある（ADR 008 決定 3）。
+    if args and args[0] == "comment" and _has_verdict_flags(args):
+        return _github_issue_comment_with_verdict(provider, args[1:])
     # GitHubProvider 経路: 設定 repo を --repo で強制注入し cwd 推論を防ぐ。
     # `--commit` は LocalProvider 専用フラグ（.kaji/issues/<id>/ への永続化と
     # commit を atomic 化する用途）。skill は provider 型を意識せず付与できる
@@ -1172,6 +1179,56 @@ def _handle_issue(raw_args: list[str]) -> int:
     forwarded = [a for a in raw_args if a != "--commit"]
     assert config.provider is not None  # for type checker
     return _forward_to_gh("issue", forwarded, repo=config.provider.github.repo)
+
+
+def _github_issue_comment_with_verdict(provider: object, rest: list[str]) -> int:
+    """``kaji issue comment <id> ... --verdict-step S --verdict-status ST`` (github)。
+
+    verdict marker を要求する comment は gh passthrough せず、marker を 1 行目
+    に前置した body を ``GitHubProvider.comment_issue`` で投稿する（repo は
+    provider が ``--repo`` で注入する）。``--commit`` は local 専用のため github
+    では silent に無視する（passthrough 経路と同じ扱い）。
+
+    片方のみのフラグ / 不正語彙 / body 不在は ``EXIT_INVALID_INPUT``（fail-loud）。
+    """
+    from .providers.github import GitHubProvider
+
+    assert isinstance(provider, GitHubProvider)  # github 経路のみ到達
+    p = argparse.ArgumentParser(prog="kaji issue comment", add_help=True)
+    p.add_argument("issue_id", type=str)
+    p.add_argument("--body", default=None, type=str)
+    p.add_argument("--body-file", dest="body_file", default=None, type=str)
+    # `--commit` は github では no-op（local 専用）だが、skill が provider 型を
+    # 意識せず付与できるよう受理して無視する。
+    p.add_argument("--commit", action="store_true")
+    p.add_argument("--verdict-step", dest="verdict_step", default=None, type=str)
+    p.add_argument("--verdict-status", dest="verdict_status", default=None, type=str)
+    ns = p.parse_args(rest)
+    try:
+        body = _read_body_arg(ns.body, ns.body_file)
+    except ValueError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+    except OSError as exc:
+        sys.stderr.write(f"Error: cannot read --body-file {ns.body_file!r}: {exc}\n")
+        return EXIT_INVALID_INPUT
+    if body is None:
+        sys.stderr.write("Error: 'kaji issue comment' requires --body or --body-file\n")
+        return EXIT_INVALID_INPUT
+    try:
+        marker = _resolve_verdict_marker(ns.verdict_step, ns.verdict_status)
+    except ValueError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+    # 本経路は `_has_verdict_flags` 検出後にのみ到達するため marker は非 None。
+    assert marker is not None
+    marked_body = f"{marker}\n{body}"
+    try:
+        provider.comment_issue(ns.issue_id, marked_body)
+    except GitHubProviderError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+    return EXIT_OK
 
 
 # ---------- LocalProvider dispatch ----------
@@ -1217,6 +1274,40 @@ def _read_body_arg(body: str | None, body_file: str | None) -> str | None:
     if body_file == "-":
         return sys.stdin.read()
     return Path(body_file).read_text(encoding="utf-8")
+
+
+def _resolve_verdict_marker(step: str | None, status: str | None) -> str | None:
+    """``--verdict-step`` / ``--verdict-status`` から marker 行を解決する。
+
+    両フラグは同時必須（片方のみは契約違反）。両方 ``None`` の従来呼び出しは
+    ``None`` を返し、呼出側は body を一切変更しない。
+
+    Returns:
+        marker 文字列（1 行目に前置する）、または verdict フラグ未指定なら ``None``。
+
+    Raises:
+        ValueError: 片方のみ指定 / 不正な step・status 語彙（fail-loud）。
+            呼出側で ``EXIT_INVALID_INPUT`` にマップする。
+    """
+    if step is None and status is None:
+        return None
+    if step is None or status is None:
+        raise ValueError("--verdict-step and --verdict-status must be specified together")
+    return build_kaji_verdict_marker(step, status)
+
+
+def _has_verdict_flags(args: list[str]) -> bool:
+    """``args`` に verdict marker フラグ（``--verdict-step`` / ``--verdict-status``）が含まれるか。
+
+    github passthrough を構造化経路へ切替えるかの判定に使う。``--flag=value``
+    形式も検出する。
+    """
+    return any(
+        a in ("--verdict-step", "--verdict-status")
+        or a.startswith("--verdict-step=")
+        or a.startswith("--verdict-status=")
+        for a in args
+    )
 
 
 def _apply_jq(json_text: str, expr: str) -> tuple[str, int]:
@@ -1715,6 +1806,8 @@ def _local_issue_comment(provider: LocalProvider, rest: list[str]) -> int:
             "staged changes are not included in the new commit)."
         ),
     )
+    p.add_argument("--verdict-step", dest="verdict_step", default=None, type=str)
+    p.add_argument("--verdict-status", dest="verdict_status", default=None, type=str)
     ns = p.parse_args(rest)
     rid_or_rc = _resolve_local_id(provider, ns.issue_id, write=True)
     if isinstance(rid_or_rc, int):
@@ -1723,6 +1816,11 @@ def _local_issue_comment(provider: LocalProvider, rest: list[str]) -> int:
     body = _read_body_arg(ns.body, ns.body_file)
     if body is None:
         raise ValueError("'kaji issue comment' requires --body or --body-file")
+    # verdict marker（ADR 008 決定 3: cross-skill 契約を CLI 層に置く）。
+    # 片方のみ / 不正語彙は ValueError → _handle_issue_local が exit 2 にマップ。
+    marker = _resolve_verdict_marker(ns.verdict_step, ns.verdict_status)
+    if marker is not None:
+        body = f"{marker}\n{body}"
     comment = provider.comment_issue(rid.value, body)
     sys.stdout.write(f"{comment.seq}-{comment.machine_id}\n")
     if ns.commit:
