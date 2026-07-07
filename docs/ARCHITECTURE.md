@@ -440,5 +440,5 @@ HarnessError
 | [テスト規約](dev/testing-convention.md) | S/M/L テストサイズ定義 |
 | [ワークフローガイド](dev/workflow_guide.md) | ワークフロー選択基準・概要 |
 | [Claude Code CLI ガイド](cli-guides/claude-code-cli-guide.md) | claude コマンド仕様 |
-| [Codex CLI ガイド](cli-guides/codex-cli-session-guide.md) | codex コマンド仕様 |
+| [Codex CLI Guide](cli-guides/codex-cli-session-guide.md) | codex コマンド仕様 |
 | [Gemini CLI ガイド](cli-guides/gemini-cli-session-guide.md) | gemini コマンド仕様 |

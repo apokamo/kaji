@@ -1,847 +1,432 @@
-# Codex CLI セッション管理ガイド
+# Codex CLI Session Guide
 
-## 概要
+## Overview
 
-OpenAI Codex CLI のセッション管理機能に関する調査結果をまとめた資料。
-複数エージェントの並列実行やセッション引き継ぎのベストプラクティスを記載。
+This guide summarizes the Codex CLI behavior that matters when running or
+integrating kaji workflows: starting sessions, resuming work, collecting
+machine-readable output, and choosing safe automation flags.
 
-**調査日**: 2026-05-23
-**対象バージョン**: OpenAI Codex CLI v0.124.0
-**公式リファレンス**: https://developers.openai.com/codex/cli/reference/
-**--help 取得日**: 2026-05-23（v0.124.0 のローカル環境で取得）
+Verified environment:
 
----
+| Item | Value |
+|------|-------|
+| CLI | OpenAI Codex CLI `0.142.5` |
+| Verification date | 2026-07-08 |
+| Verification method | `codex --version`, `codex --help`, selected subcommand `--help` output, and the current OpenAI Codex manual |
 
-## 1. 基本コマンド構造
+The installed command line is the source of truth for local behavior. Re-check
+`codex --help` after upgrading Codex CLI.
 
-### 1.1 主要コマンド一覧
+Official documentation:
 
-| コマンド | エイリアス | 説明 |
-|----------|-----------|------|
-| `codex exec` | `codex e` | 非インタラクティブ実行 |
-| `codex exec resume` | - | セッション再開 |
-| `codex fork` | - | セッションフォーク（新スレッドに分岐） |
-| `codex apply` | `codex a` | Codex Cloud タスクの diff を適用 |
-| `codex cloud` | - | Cloud タスク管理 |
-| `codex cloud exec` | - | Cloud タスクの直接実行 |
-| `codex cloud list` | - | Cloud タスク一覧 |
-| `codex resume` | - | インタラクティブセッション再開 |
-| `codex mcp` | - | MCP サーバー管理 |
-| `codex features` | - | フィーチャーフラグ管理 |
-| `codex login` | - | OAuth / API キー認証 |
-| `codex logout` | - | 認証情報の削除 |
-| `codex completion` | - | シェル補完スクリプト生成 |
-| `codex app-server` | - | アプリサーバーをローカル起動（experimental、v0.124.0 時点） |
+- <https://developers.openai.com/codex/cli/reference/>
+- <https://developers.openai.com/codex/cli/features/>
+- <https://developers.openai.com/codex/noninteractive/>
+- <https://developers.openai.com/codex/models/>
 
-### 1.2 新規セッション開始
+## 1. Command Shape
+
+Codex starts an interactive terminal UI when no subcommand is provided:
+
+```bash
+codex [OPTIONS] [PROMPT]
+```
+
+Use `codex exec` for non-interactive automation:
 
 ```bash
 codex exec [OPTIONS] [PROMPT]
 ```
 
-### 1.3 セッション再開
+The installed CLI exposes these session-oriented commands:
+
+| Command | Alias | Purpose |
+|---------|-------|---------|
+| `codex exec` | `codex e` | Run Codex non-interactively. |
+| `codex exec resume` | | Resume a previous non-interactive session by ID or with `--last`. |
+| `codex resume` | | Resume a previous interactive session by ID, picker, or `--last`. |
+| `codex fork` | | Fork a previous interactive session into a new thread. |
+| `codex review` | | Run a non-interactive code review. |
+| `codex exec review` | | Run code review through the `exec` command path. |
+| `codex apply` | `codex a` | Apply the latest diff produced by a Codex agent to the local tree. |
+| `codex cloud` | | Browse and manage Codex Cloud tasks. |
+| `codex mcp` | | Manage MCP servers. |
+| `codex plugin` | | Manage plugins and plugin marketplaces. |
+| `codex features` | | Inspect and persist feature flags. |
+| `codex doctor` | | Diagnose local installation, config, auth, and runtime health. |
+| `codex sandbox` | | Run commands inside a Codex-provided sandbox. |
+| `codex archive` / `codex unarchive` | | Hide or restore saved interactive sessions. |
+| `codex delete` | | Permanently delete a saved interactive session. |
+
+## 2. Core Options
+
+Common runtime options:
+
+| Option | Short | Notes |
+|--------|-------|-------|
+| `--model <model>` | `-m` | Select the model for the session or run. |
+| `--cd <dir>` | `-C` | Set the working directory for the agent. |
+| `--sandbox <mode>` | `-s` | One of `read-only`, `workspace-write`, or `danger-full-access`. |
+| `--ask-for-approval <policy>` | `-a` | One of `untrusted`, `on-request`, or `never`; `on-failure` is deprecated. |
+| `--add-dir <dir>` | | Add another writable root alongside the main workspace. |
+| `--config <key=value>` | `-c` | Override config values for one invocation. Values are parsed as TOML when possible. |
+| `--enable <feature>` / `--disable <feature>` | | Override feature flags for one invocation. |
+| `--strict-config` | | Fail when config contains fields not recognized by this CLI version. |
+| `--image <file>` | `-i` | Attach one or more images to the prompt. |
+| `--profile <name>` | `-p` | Layer `$CODEX_HOME/<name>.config.toml` on top of the base user config. |
+| `--oss` | | Use the open-source provider. |
+| `--local-provider <provider>` | | Choose `lmstudio` or `ollama` when using local models. |
+| `--search` | | Enable live web search for the run. |
+| `--no-alt-screen` | | Run the interactive TUI inline instead of using the alternate screen. |
+| `--dangerously-bypass-approvals-and-sandbox` | | Disable approvals and sandboxing. Use only inside an external sandbox. |
+| `--dangerously-bypass-hook-trust` | | Run enabled hooks without persisted hook trust for this invocation. |
+
+`codex exec` adds automation-friendly flags:
+
+| Option | Notes |
+|--------|-------|
+| `--json` | Emit a JSON Lines event stream to stdout. |
+| `--output-last-message <file>` / `-o <file>` | Write the final agent message to a file. |
+| `--output-schema <file>` | Require the final response to match a JSON Schema. |
+| `--ephemeral` | Do not persist session files to disk. |
+| `--skip-git-repo-check` | Allow execution outside a Git repository. |
+| `--ignore-user-config` | Do not load `$CODEX_HOME/config.toml`; auth still uses `CODEX_HOME`. |
+| `--ignore-rules` | Do not load user or project execpolicy `.rules` files. |
+| `--color <always|never|auto>` | Control ANSI color output. |
+
+In `0.142.5`, `codex exec resume --help` also lists `--json`,
+`--output-last-message`, and `--output-schema`, so new and resumed
+non-interactive runs can use the same structured-output path.
+
+## 3. Sessions
+
+### 3.1 Start a Non-Interactive Session
 
 ```bash
-codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]
+codex exec \
+  --model gpt-5.5 \
+  --sandbox workspace-write \
+  --ask-for-approval on-request \
+  "Summarize the current repository"
 ```
 
-### 1.4 セッションフォーク
+If no prompt argument is provided, or if the prompt is `-`, `codex exec` reads
+instructions from stdin. If stdin is piped and a prompt argument is also
+provided, Codex treats the prompt as the instruction and appends stdin as
+additional context.
+
+### 3.2 Resume a Non-Interactive Session
 
 ```bash
-codex fork [OPTIONS] [SESSION_ID]
+codex exec resume --last "Continue from the previous findings"
+codex exec resume "$SESSION_ID" "Run the next verification step"
 ```
 
-前のインタラクティブセッションを新しいスレッドにフォーク（元のトランスクリプトを保持）。
+Use explicit session IDs for parallel agent workflows. `--last` is convenient
+for a single local thread, but it can pick the wrong run when several Codex
+sessions are active or have recently completed.
 
----
+`codex exec resume --all` disables the current-working-directory filter when
+listing sessions.
 
-## 2. 利用可能なパラメータ
-
-### 2.1 グローバルフラグ（全サブコマンド共通）
-
-| オプション | 短縮形 | 説明 | 例 |
-|-----------|--------|------|-----|
-| `--model` | `-m` | 使用モデル | `-m gpt-5.4` |
-| `--cd` | `-C` | 作業ディレクトリ | `-C /path/to/project` |
-| `--sandbox` | `-s` | サンドボックスポリシー | `-s workspace-write` |
-| `--config` | `-c` | 設定オーバーライド | `-c key=value` |
-| `--enable` | - | 機能を有効化 | `--enable web_search_request` |
-| `--disable` | - | 機能を無効化 | `--disable feature_name` |
-| `--image` | `-i` | 画像添付 | `-i image.png` |
-| `--full-auto` | - | 低摩擦モード（`--ask-for-approval on-request` のショートカット） | 承認なしで実行 |
-| `--ask-for-approval` | `-a` | 承認タイミング制御 | `-a never` |
-| `--add-dir` | - | 追加の書き込み可能ディレクトリ | `--add-dir /other/path` |
-| `--profile` | `-p` | 設定プロファイル読み込み | `-p my-profile` |
-| `--oss` | - | ローカル OSS モデルプロバイダー使用 | Ollama / LM Studio |
-| `--search` | - | ライブ Web 検索を有効化 | - |
-| `--no-alt-screen` | - | 代替スクリーンモード無効化 | - |
-| `--dangerously-bypass-approvals-and-sandbox` | `--yolo` | 全承認・サンドボックスをバイパス（危険） | - |
-
-### 2.2 `codex exec` 固有のオプション
-
-| オプション | 短縮形 | 説明 | 例 |
-|-----------|--------|------|-----|
-| `--json` | - | JSONL形式で出力 | セッションID抽出に使用。v0.124.0 では `--json` が正式名（旧 `--experimental-json` 表記は廃止） |
-| `--output-last-message` | `-o` | 最終メッセージをファイル出力 | `-o result.txt` |
-| `--output-schema` | - | JSON Schema によるレスポンス検証 | `--output-schema schema.json` |
-| `--ephemeral` | - | セッションファイルをディスクに永続化しない | CI 向け |
-| `--color` | - | ANSI カラー出力制御 | `--color never` |
-| `--skip-git-repo-check` | - | Gitリポジトリ外での実行許可 | - |
-
-### 2.3 `codex exec resume` のオプション
-
-`codex exec resume --help`（v0.124.0）で確認済みのオプション一覧：
-
-| オプション | 短縮形 | 説明 | 例 |
-|-----------|--------|------|-----|
-| `--last` | - | 最新セッションを再開 | `--last` |
-| `--all` | - | 現在のディレクトリ外のセッションも対象 | `--all` |
-| `--config` | `-c` | 設定オーバーライド | `-c key=value` |
-| `--enable` | - | 機能を有効化 | `--enable web_search_request` |
-| `--disable` | - | 機能を無効化 | `--disable feature_name` |
-| `--image` | `-i` | フォローアップに画像添付 | `-i screenshot.png` |
-| `--model` | `-m` | 使用モデル | `-m gpt-5.3-codex` |
-| `--full-auto` | - | 低摩擦モード | 承認なしで実行 |
-| `--dangerously-bypass-approvals-and-sandbox` | - | 全承認・サンドボックスをバイパス | - |
-| `--skip-git-repo-check` | - | Gitリポジトリ外での実行許可 | - |
-| `--ephemeral` | - | セッションファイルをディスクに永続化しない | CI 向け |
-| `--json` | - | JSONL形式で出力 | セッションID抽出に使用 |
-| `--output-last-message` | `-o` | 最終メッセージをファイル出力 | `-o result.txt` |
-| `SESSION_ID` | - | 特定セッションID | UUID形式 |
-| `PROMPT` | - | フォローアッププロンプト | stdin からもパイプ可 |
-
-#### 注意: `exec resume` で使用**できない**オプション
-
-- `--output-schema` → exec 固有（resume では使用不可）
-
-> グローバルフラグ（`--model`, `--sandbox`, `--config` 等）はセッション開始時の設定を引き継ぐ。
-> resume 時に `-m` でモデルを直接変更可能（`-c model=` での回避は不要）。
-
-#### `--json` オプションの resume 対応状況
-
-v0.124.0 にて `--json` が `codex exec resume` でも使用可能であることを確認済み。
-以前のバージョン（v0.63.0 時点）では resume 時に `--json` が使用できなかったが、この制約は v0.112.0 で解消されており、v0.124.0 でも維持されている。
-
-### 2.4 `codex fork` のオプション
-
-| オプション | 説明 |
-|-----------|------|
-| `--all` | 現在のディレクトリ外のセッションも表示 |
-| `--last` | ピッカーをスキップし最新セッションをフォーク |
-| `SESSION_ID` | 特定セッションを指定してフォーク |
-
-### 2.5 `codex cloud exec` のオプション
-
-| オプション | 説明 | 例 |
-|-----------|------|-----|
-| `--env` | 環境ID（必須） | `--env env_abc123` |
-| `--attempts` | アシスタント試行回数（1-4） | `--attempts 3` |
-| `QUERY` | タスクプロンプト | `"バグを修正して"` |
-
-### 2.6 `codex cloud list` のオプション
-
-| オプション | 説明 |
-|-----------|------|
-| `--cursor` | ページネーションカーソル |
-| `--env` | 環境でフィルタ |
-| `--json` | 機械可読出力 |
-| `--limit` | 最大件数（1-20） |
-
----
-
-## 3. セッションIDの取得方法
-
-### 3.1 標準出力から確認
-
-`codex exec` 実行時にヘッダーとして表示される：
-
-```
-OpenAI Codex v0.124.0
---------
-workdir: /home/aki/project
-model: gpt-5.4
-provider: openai
-approval: never
-sandbox: workspace-write [workdir, /tmp, $TMPDIR] (network access enabled)
-session id: 019ac592-167e-7ac2-94c5-38ffcd86fbd0   ← ここ
---------
-```
-
-### 3.2 JSON出力からプログラム的に取得
+### 3.3 Resume or Fork an Interactive Session
 
 ```bash
-SESSION_ID=$(codex exec -m gpt-5.4 --json "タスク" 2>&1 | \
-  grep '"type":"thread.started"' | jq -r '.thread_id')
+codex resume
+codex resume --last
+codex resume "$SESSION_ID" "Pick up the refactor"
+
+codex fork --last "Explore an alternative implementation"
+codex fork "$SESSION_ID"
 ```
 
-#### JSON出力の全体例（コマンド実行を含む場合）
+`codex resume` reopens the saved transcript. `codex fork` preserves the
+original transcript and starts a new thread from it.
 
-実行コマンド：
-```bash
-codex exec -m gpt-5.4 --json "pwdを実行して" 2>&1 | jq '.'
-```
-
-出力（JSONL形式 - 各行が1つのJSONイベント、以下は整形済み）：
-
-```json
-{
-  "type": "thread.started",
-  "thread_id": "019ac5b0-190b-75c0-bf3e-5f1acf69fcce"
-}
-{
-  "type": "turn.started"
-}
-{
-  "type": "item.completed",
-  "item": {
-    "id": "item_0",
-    "type": "reasoning",
-    "text": "**Executing command**"
-  }
-}
-{
-  "type": "item.started",
-  "item": {
-    "id": "item_1",
-    "type": "command_execution",
-    "command": "/bin/bash -lc pwd",
-    "aggregated_output": "",
-    "exit_code": null,
-    "status": "in_progress"
-  }
-}
-{
-  "type": "item.completed",
-  "item": {
-    "id": "item_1",
-    "type": "command_execution",
-    "command": "/bin/bash -lc pwd",
-    "aggregated_output": "/home/aki/project\n",
-    "exit_code": 0,
-    "status": "completed"
-  }
-}
-{
-  "type": "item.completed",
-  "item": {
-    "id": "item_2",
-    "type": "agent_message",
-    "text": "/home/aki/project"
-  }
-}
-{
-  "type": "turn.completed",
-  "usage": {
-    "input_tokens": 44105,
-    "cached_input_tokens": 42752,
-    "output_tokens": 53
-  }
-}
-```
-
-#### イベントタイプの説明
-
-| type | 説明 |
-|------|------|
-| `thread.started` | セッション開始。`thread_id` がセッションIDとなる |
-| `turn.started` | ターン（会話の1往復）の開始 |
-| `item.started` | アイテム（アクション）の開始。主にコマンド実行で使用 |
-| `item.completed` | アイテムの完了。推論・コマンド実行・回答など |
-| `turn.completed` | ターンの終了。トークン使用量を含む |
-| `turn.failed` | ターンの失敗 |
-| `error` | エラーイベント |
-
-#### item.type の種類
-
-| item.type | 説明 | イベント |
-|-----------|------|---------|
-| `reasoning` | エージェントの推論・思考ステップ | `completed` のみ |
-| `command_execution` | シェルコマンドの実行 | `started` → `completed` |
-| `agent_message` | ユーザーへの最終回答 | `completed` のみ |
-| `file_change` | ファイル変更 | `completed` のみ |
-| `mcp_tool_call` | MCP ツール呼び出し | `started` → `completed` |
-| `web_search` | Web 検索 | `completed` のみ |
-| `plan_update` | プラン更新 | `completed` のみ |
-
-#### command_execution の詳細フィールド
-
-| フィールド | 説明 | 例 |
-|-----------|------|-----|
-| `command` | 実行されたコマンド | `"/bin/bash -lc pwd"` |
-| `aggregated_output` | コマンドの標準出力全体 | `"/home/aki/project\n"` |
-| `exit_code` | 終了コード（実行中は `null`） | `0` (成功), `1` (失敗) |
-| `status` | 実行状態 | `"in_progress"` → `"completed"` |
-
-**注意**: `aggregated_output` にはコマンドの出力全体が含まれるため、`ls` や `cat` などを実行すると JSON が非常に大きくなる。
-
-#### turn.completed の usage フィールド
-
-| フィールド | 説明 | 用途 |
-|-----------|------|------|
-| `input_tokens` | 入力トークン数 | コスト計算 |
-| `cached_input_tokens` | キャッシュ済みトークン数 | 課金対象外（コスト削減） |
-| `output_tokens` | 出力トークン数 | コスト計算 |
+### 3.4 Archive, Delete, and Restore Sessions
 
 ```bash
-# トークン使用量の抽出
-codex exec -m gpt-5.4 --json "質問" 2>&1 | \
-  grep '"type":"turn.completed"' | jq '.usage'
+codex archive "$SESSION_ID"
+codex unarchive "$SESSION_ID"
+codex delete "$SESSION_ID"
 ```
 
-#### セッションID抽出のワンライナー
+Archive sessions when you only want to hide them from active lists. Delete
+sessions only when the transcript should be removed.
+
+## 4. Non-Interactive Output
+
+Without `--json`, `codex exec` streams progress to stderr and prints only the
+final agent message to stdout. This makes shell pipelines simple:
 
 ```bash
-# jq を使用
-codex exec -m gpt-5.4 --json "タスク" 2>&1 | \
-  grep '"type":"thread.started"' | jq -r '.thread_id'
-
-# jq なしで抽出（sed使用）
-codex exec -m gpt-5.4 --json "タスク" 2>&1 | \
-  grep '"type":"thread.started"' | sed 's/.*"thread_id":"\([^"]*\)".*/\1/'
+codex exec "Generate release notes for the last 10 commits" > release-notes.md
 ```
 
-#### item 数の目安
-
-| タスクの複雑さ | item数 | 主な内訳 |
-|---------------|--------|----------|
-| 単純な質問回答 | 2 | reasoning(1) + agent_message(1) |
-| コマンド1回実行 | 3-4 | reasoning + command_execution + agent_message |
-| 複数ステップ | 5+ | 各ステップごとに reasoning + 実行が増加 |
-
----
-
-## 4. stdout/stderr の出力分離
-
-Codex CLI はヘッダー情報と最終応答を異なるストリームに出力する。
-
-| 出力先 | 内容 |
-|--------|------|
-| **stderr** | バージョン、workdir、model、session id、プロンプト、thinking、exec、codex応答、tokens |
-| **stdout** | 最終応答のみ |
-
-### 4.1 プログラム的な処理例
-
-```python
-# session_id は stderr から抽出
-for line in stderr.splitlines():
-    if line.startswith("session id:"):
-        session_id = line.split(":", 1)[1].strip()
-        break
-
-# レビュー結果は stderr + stdout を結合して検索
-full_output = f"{stderr}\n{stdout}".strip()
-```
-
-**注意**: `--json` モードでは全出力が stdout に JSONL 形式で出力される。
-
----
-
-## 5. セッション設定の引き継ぎ動作
-
-### 5.1 引き継ぎ一覧
-
-| 設定項目 | 開始時指定 | resume時 | 備考 |
-|---------|-----------|----------|------|
-| `cwd` (`-C`) | `-C /path` | **自動引き継ぎ** | 変更不可 |
-| `sandbox` (`-s`) | `-s workspace-write` | **自動引き継ぎ** | 変更不可 |
-| `model` (`-m`) | `-m gpt-5.4` | **自動引き継ぎ** | `-m` で直接変更可能 |
-| `features` (`--enable`) | `--enable web_search_request` | **自動引き継ぎ** | 追加/変更可能 |
-| その他 `-c` 設定 | `-c key=value` | **自動引き継ぎ** | 追加/変更可能 |
-| Git コンテキスト | 自動 | **自動引き継ぎ** | v0.111.0 で修正 |
-| アプリ（プラグイン） | 自動 | **自動引き継ぎ** | v0.111.0 で修正 |
-
-### 5.2 検証結果
-
-セッション開始時に `--enable web_search_request` を指定した場合、resume時に指定しなくてもWeb検索が有効のまま維持されることを確認済み。
-
-> **v0.111.0 修正**: resume 時に Git コンテキストとアプリが壊れる問題が修正された。
-
----
-
-## 6. 実践的な使用パターン
-
-### 6.1 単一エージェント（シンプル）
+Use `--json` when a harness needs structured progress:
 
 ```bash
-# セッション開始
-codex exec -m gpt-5.4 "タスク1を開始"
-
-# 最新セッションを引き継ぎ
-codex exec resume --last "続きの作業"
+codex exec --json "Summarize the repository" | jq
 ```
 
-### 6.2 複数エージェントの並列実行
+The documented JSONL event stream includes:
+
+| Event | Meaning |
+|-------|---------|
+| `thread.started` | Session started; includes `thread_id`. |
+| `turn.started` | A model turn started. |
+| `item.started` / `item.completed` | A work item such as command execution, MCP call, file change, web search, reasoning, plan update, or agent message. |
+| `turn.completed` | A turn completed; includes usage fields. |
+| `turn.failed` | A turn failed. |
+| `error` | An error event. |
+
+Extract a session ID from JSONL output:
 
 ```bash
-#!/bin/bash
-
-# エージェント1: コードレビュー担当
-SESSION_REVIEW=$(codex exec \
-  -m gpt-5.4 \
-  -C /home/aki/project \
-  -s workspace-write \
-  --json "コードレビューを開始" 2>&1 | \
-  grep '"type":"thread.started"' | jq -r '.thread_id')
-
-# エージェント2: テスト担当
-SESSION_TEST=$(codex exec \
-  -m gpt-5.4 \
-  -C /home/aki/project \
-  -s workspace-write \
-  --json "テスト作成を開始" 2>&1 | \
-  grep '"type":"thread.started"' | jq -r '.thread_id')
-
-# エージェント3: ドキュメント担当（Web検索有効）
-SESSION_DOCS=$(codex exec \
-  -m gpt-5.4 \
-  -C /home/aki/project \
-  -s workspace-write \
-  --search \
-  --json "ドキュメント作成を開始" 2>&1 | \
-  grep '"type":"thread.started"' | jq -r '.thread_id')
-
-echo "Review Session: $SESSION_REVIEW"
-echo "Test Session: $SESSION_TEST"
-echo "Docs Session: $SESSION_DOCS"
-
-# 各セッションを個別に継続
-codex exec resume "$SESSION_REVIEW" "src/main.py をレビューして"
-codex exec resume "$SESSION_TEST" "ユニットテストを追加して"
-codex exec resume "$SESSION_DOCS" "README.mdを更新して"
+SESSION_ID=$(
+  codex exec --json "Start the investigation" |
+    jq -r 'select(.type == "thread.started") | .thread_id'
+)
 ```
 
-### 6.3 セッション環境の完全固定（ベストプラクティス）
+Write the final message while still receiving the normal stream:
 
 ```bash
-# すべての設定をセッション開始時に指定
-SESSION_ID=$(codex exec \
-  -m gpt-5.4 \
-  -C /home/aki/project \
-  -s workspace-write \
-  --search \
-  --json "プロジェクト分析を開始" 2>&1 | \
-  grep '"type":"thread.started"' | jq -r '.thread_id')
-
-# resume時はプロンプトのみ（設定はすべて引き継がれる）
-codex exec resume "$SESSION_ID" "依存関係を調査して"
-codex exec resume "$SESSION_ID" "セキュリティ脆弱性をチェックして"
-
-# 必要に応じてモデルをアップグレード
-codex exec resume "$SESSION_ID" \
-  -m gpt-5.3-codex \
-  "複雑なリファクタリングを提案して"
-```
-
-### 6.4 プログラム的実装パターン
-
-v0.124.0 では `--json` が resume でも使用可能なため、新規・resume で統一的に扱える。
-
-```python
-def build_codex_args(session_id: str | None, model: str, workdir: str, sandbox: str) -> list[str]:
-    """Codex CLI の引数を構築する（新規・resume 共通で --json 使用可能）"""
-    if session_id:
-        args = ["codex", "exec", "resume", session_id, "--json"]
-    else:
-        args = [
-            "codex", "exec",
-            "-m", model,
-            "-C", workdir,
-            "-s", sandbox,
-            "--search",
-            "--json",
-        ]
-    return args
-```
-
-**ポイント**:
-- 新規・resume ともに `--json` で構造化出力が可能
-- セッションIDは `thread.started` イベントの `thread_id` から取得
-- `--output-schema` のみ exec 固有（resume では使用不可）
-
-### 6.5 CI/CD での使用
-
-```bash
-# API キーを環境変数で設定（推奨）
-CODEX_API_KEY=<key> codex exec \
+codex exec \
   --json \
+  --output-last-message result.md \
+  "Inspect this change and summarize the result"
+```
+
+Require a structured final response:
+
+```bash
+codex exec \
+  --output-schema ./schema.json \
+  --output-last-message ./result.json \
+  "Extract the requested fields"
+```
+
+## 5. Common Patterns
+
+### 5.1 Single-Agent Continuation
+
+```bash
+codex exec \
+  --sandbox workspace-write \
+  --ask-for-approval on-request \
+  "Start the documentation audit"
+
+codex exec resume --last "Apply the next documentation update"
+```
+
+### 5.2 Parallel Agents
+
+```bash
+SESSION_REVIEW=$(
+  codex exec --json -C /path/to/project \
+    --sandbox workspace-write \
+    "Review the current diff" |
+    jq -r 'select(.type == "thread.started") | .thread_id'
+)
+
+SESSION_DOCS=$(
+  codex exec --json -C /path/to/project \
+    --sandbox workspace-write \
+    --search \
+    "Check whether the docs are current" |
+    jq -r 'select(.type == "thread.started") | .thread_id'
+)
+
+codex exec resume "$SESSION_REVIEW" "Report the top risks"
+codex exec resume "$SESSION_DOCS" "Update only the stale documentation"
+```
+
+### 5.3 Prompt Plus Stdin
+
+```bash
+git diff --stat |
+  codex exec "Summarize the scope of this change for a pull request"
+```
+
+### 5.4 Ephemeral Automation
+
+```bash
+codex exec \
   --ephemeral \
-  --full-auto \
-  -s workspace-write \
-  -o result.txt \
-  "テストを実行してレポートを生成"
-
-# --output-last-message と --json の併用で
-# 機械可読なイベントストリームと最終サマリの両方を取得
+  --sandbox read-only \
+  "Triage this repository and suggest the next three checks"
 ```
 
-### 6.6 セッションフォーク
+Use `--ephemeral` when the session should not be resumed later.
+
+## 6. Permissions and Sandbox
+
+Use the least access needed for the task:
+
+| Mode | When to use |
+|------|-------------|
+| `--sandbox read-only` | Inspection, review, and planning. |
+| `--sandbox workspace-write --ask-for-approval on-request` | Normal local coding or docs work. |
+| `--sandbox danger-full-access --ask-for-approval never` | Only inside an externally isolated container, VM, or CI runner. |
+
+`workspace-write` can be extended with `--add-dir` when a workflow genuinely
+needs another writable root:
 
 ```bash
-# 最新セッションをフォーク（新しいスレッドに分岐）
-codex fork --last
-
-# 特定のセッションをフォーク
-codex fork <SESSION_ID>
-
-# インタラクティブセッション内では /fork スラッシュコマンドも使用可能
+codex exec \
+  --sandbox workspace-write \
+  --add-dir ../shared-docs \
+  "Update cross-repository references"
 ```
 
-### 6.7 プロファイルの活用
+Avoid using the bypass flags as a convenience shortcut on a normal workstation.
+They remove the guardrails that make agentic shell execution reviewable.
+
+Inside the interactive TUI, use `/permissions` to adjust permission behavior
+without restarting the session.
+
+## 7. Web Search and Models
+
+Codex has a first-party web search tool. Cached search may be available by
+default depending on configuration. Use `--search` when the task needs live
+results:
 
 ```bash
-# プロファイルを使用してセッション開始
-codex exec -p my-review-profile "コードレビューを実行"
-
-# プロファイルの設定例（~/.codex/config.toml）
-# [profiles.my-review-profile]
-# model = "gpt-5.4"
-# model_reasoning_effort = "high"
-# web_search = "cached"
+codex exec --search "Check the current upstream release notes"
 ```
 
-### 6.8 ローカル LLM の使用
+Models change over time. The current OpenAI Codex manual recommends `gpt-5.5`
+for most Codex work and `gpt-5.4-mini` for faster, lower-cost lighter tasks.
+Use `codex --model <model>`, `codex exec --model <model>`, or `/model` inside
+the TUI to select a model, and re-check the official model documentation after
+upgrading Codex.
 
 ```bash
-# --oss フラグでローカルモデルを使用
-codex exec --oss "タスクを実行"
-
-# Ollama プロバイダーの設定例（~/.codex/config.toml）
-# [model_providers.ollama]
-# name = "Ollama"
-# base_url = "http://localhost:11434/v1"
-#
-# [profiles.gpt-oss-120b-ollama]
-# model_provider = "ollama"
-# model = "gpt-oss:120b"
-
-# プロファイルと組み合わせ
-codex exec -p gpt-oss-120b-ollama "ローカルで分析"
+codex --model gpt-5.5
+codex exec --model gpt-5.5 "Review this branch"
 ```
 
----
+## 8. MCP, Plugins, and Feature Flags
 
-## 7. 利用可能なモデル
-
-### 7.1 推奨モデル
-
-| モデル | 特徴 | 用途 |
-|--------|------|------|
-| `gpt-5.4` | フラッグシップ。コーディング + 強力な推論 + エージェンティック | **最も推奨** |
-| `gpt-5.3-codex` | 業界最高水準のコーディング特化モデル | 複雑なソフトウェアエンジニアリング |
-| `gpt-5.3-codex-spark` | テキスト専用。ほぼ即座の反復に最適化 | 高速イテレーション（ChatGPT Pro 限定） |
-
-### 7.2 その他のモデル
-
-| モデル | 特徴 | 状態 |
-|--------|------|------|
-| `gpt-5.2-codex` | 高度なコーディングモデル | gpt-5.3-codex に後継 |
-| `gpt-5.2` | 汎用モデル | gpt-5.4 に後継 |
-| `gpt-5.1-codex-max` | 長期エージェンティックタスク最適化 | 利用可能 |
-| `gpt-5.1` | クロスドメイン + エージェンティック | 利用可能 |
-| `gpt-5.1-codex` | 長時間エージェンティックタスク | 後継あり |
-| `gpt-5-codex` | 初代エージェンティックバリアント | レガシー |
-| `gpt-5-codex-mini` | 小型・低コスト | レガシー |
-| `gpt-5` | 推論重視 | レガシー |
-
-> **注意**: 旧ガイドで記載していた `gpt-5.1-codex-mini` は `gpt-5-codex-mini` の誤記の可能性あり。
-> 最新の推奨は `gpt-5.4`（汎用）または `gpt-5.3-codex`（コーディング特化）。
-
----
-
-## 8. Web検索機能
-
-### 8.1 有効化方法
+Manage MCP servers with `codex mcp`:
 
 ```bash
-# 推奨: --search フラグ（ライブ検索）
-codex exec --search "質問"
-
-# --enable フラグでも有効化可能
-codex exec --enable web_search_request "質問"
-
-# 設定ファイルで制御
-# web_search = "disabled" | "cached" | "live"
-```
-
-### 8.2 Web検索の出力例
-
-```
-🌐 Searched: current USD JPY exchange rate today
-```
-
-> **注意**: デフォルトでキャッシュ済み検索が有効。`--search` でライブ検索に切り替え。
-
----
-
-## 9. サンドボックスポリシー
-
-| ポリシー | 説明 |
-|---------|------|
-| `read-only` | 読み取り専用（デフォルト） |
-| `workspace-write` | 作業ディレクトリ + /tmp への書き込み許可 |
-| `danger-full-access` | フルアクセス（危険） |
-
-### 9.1 追加の書き込みディレクトリ
-
-```bash
-# --add-dir で追加のディレクトリに書き込み許可を付与
-codex exec -s workspace-write --add-dir /other/project "クロスプロジェクト変更"
-```
-
-### 9.2 サンドボックスの詳細
-
-`workspace-write` ではデフォルトでネットワークアクセスが有効：
-```
-sandbox: workspace-write [workdir, /tmp, $TMPDIR] (network access enabled)
-```
-
-> **v0.110.0**: Linux での読み取り専用アクセスが改善。`~/.ssh` 等の機密ディレクトリを除外。
-
-### 9.3 承認ポリシー
-
-| 値 | 説明 |
-|----|------|
-| `untrusted` | すべてのアクションに承認を要求 |
-| `on-request` | リクエスト時のみ承認（`--full-auto` のデフォルト） |
-| `never` | 承認なし（`--yolo` と同等） |
-
----
-
-## 10. MCP（Model Context Protocol）サポート
-
-### 10.1 概要
-
-MCP サーバーを接続して追加ツールやコンテキストを Codex に提供可能。
-
-### 10.2 CLI での管理
-
-```bash
-# MCP サーバーを追加
+codex mcp list
 codex mcp add context7 -- npx -y @upstash/context7-mcp
-
-# インタラクティブセッション内で確認
-# /mcp スラッシュコマンド
+codex mcp get context7
+codex mcp remove context7
 ```
 
-### 10.3 設定ファイルでの構成
+MCP configuration lives in Codex config files such as
+`~/.codex/config.toml`, and trusted projects can also use project-scoped
+`.codex/config.toml`.
 
-```toml
-# ~/.codex/config.toml（グローバル）
-# または .codex/config.toml（プロジェクトスコープ、信頼済みプロジェクトのみ）
-
-[mcp_servers.context7]
-command = "npx"
-args = ["-y", "@upstash/context7-mcp"]
-
-[mcp_servers.my-server]
-command = "node"
-args = ["server.js"]
-bearer_token_env_var = "MY_SERVER_TOKEN"  # 任意: 認証トークン
-# http_headers = { "X-Custom" = "value" }  # 任意: カスタムヘッダー
-```
-
-### 10.4 サーバータイプ
-
-| タイプ | 説明 |
-|--------|------|
-| STDIO | ローカルプロセスとして起動（`command` で指定） |
-| Streamable HTTP | アドレスで接続（URL で指定） |
-
----
-
-## 11. スラッシュコマンド
-
-インタラクティブセッション内で使用可能なコマンド。
-
-### 11.1 セッション・モデル制御
-
-| コマンド | 説明 |
-|---------|------|
-| `/model` | アクティブモデルの切り替え（推論努力レベルも設定可能） |
-| `/personality` | コミュニケーションスタイルの調整 |
-| `/plan` | プランモードに切り替え（実行前に計画を提案） |
-| `/experimental` | 実験的機能の有効化（マルチエージェント等） |
-| `/permissions` | 承認ポリシーの変更 |
-
-### 11.2 ナビゲーション・スレッド
-
-| コマンド | 説明 |
-|---------|------|
-| `/fork` | 現在の会話を新しいスレッドにクローン |
-| `/new` | 新しい会話を開始（同じ CLI セッション内） |
-| `/resume` | 保存済みセッションのトランスクリプトを再読み込み |
-| `/agent` | スポーンされたサブエージェントスレッド間の切り替え |
-
-### 11.3 レビュー・分析
-
-| コマンド | 説明 |
-|---------|------|
-| `/review` | ワーキングツリーの評価（動作変更とテストに焦点） |
-| `/diff` | Git 変更の表示（未追跡ファイルを含む） |
-| `/compact` | 可視会話を要約してトークンを解放 |
-| `/status` | セッション設定とトークン使用量を表示 |
-
-### 11.4 ユーティリティ
-
-| コマンド | 説明 |
-|---------|------|
-| `/mention` | 特定ファイルを会話に添付 |
-| `/mcp` | 設定済み MCP ツールの一覧 |
-| `/apps` | コネクターの参照・挿入 |
-| `/init` | `AGENTS.md` スキャフォールドの生成 |
-| `/copy` | 最新の応答をクリップボードにコピー |
-| `/ps` | バックグラウンドターミナルの状態と最近の出力 |
-| `/debug-config` | 設定レイヤーと診断情報の表示 |
-| `/statusline` | フッターステータスラインのカスタマイズ |
-| `/feedback` | メンテナーに診断情報を送信 |
-| `/clear` | ターミナルリセット＋新規チャット |
-| `/logout` | ローカル認証情報のクリア |
-| `/quit`, `/exit` | CLI を終了 |
-
----
-
-## 12. Codex Cloud
-
-### 12.1 概要
-
-`codex cloud` コマンドでクラウドタスクをターミナルから管理。引数なしでインタラクティブピッカーが開く。
-
-### 12.2 タスクの実行
+Manage plugins with `codex plugin`:
 
 ```bash
-# クラウドでタスクを実行
-codex cloud exec --env ENV_ID "バグを修正して"
-
-# Best-of-N（複数試行）
-codex cloud exec --env ENV_ID --attempts 3 "最適化案を提案して"
+codex plugin list
+codex plugin add <plugin-name>
+codex plugin remove <plugin-name>
+codex plugin marketplace list
 ```
 
-### 12.3 結果の適用
+Inspect feature flags with `codex features`:
 
 ```bash
-# クラウドタスクの diff をローカルに適用
-codex apply <TASK_ID>
+codex features list
+codex features enable <feature-name>
+codex features disable <feature-name>
 ```
 
-### 12.4 タスク一覧
+Feature, plugin, and MCP availability can differ by installed Codex version,
+account, workspace policy, and local config.
+
+## 9. Codex Cloud
+
+`codex cloud` is experimental in the installed `0.142.5` CLI.
 
 ```bash
-# 最近のタスクを確認
+codex cloud
 codex cloud list --limit 10
-
-# JSON で出力
-codex cloud list --json --env ENV_ID
+codex cloud list --json --env "$ENV_ID"
+codex cloud exec --env "$ENV_ID" --attempts 3 "Investigate this bug"
+codex cloud status "$TASK_ID"
+codex cloud diff "$TASK_ID"
+codex cloud apply "$TASK_ID"
 ```
 
----
+`codex cloud exec` requires `--env <ENV_ID>`. In `0.142.5`, it also accepts
+`--branch <BRANCH>` to choose the Git branch for the cloud task.
 
-## 13. プラグインシステム（v0.110.0+）
+Use `codex apply <TASK_ID>` or `codex cloud apply <TASK_ID>` only after
+reviewing the task and confirming that applying the diff to the current local
+tree is safe.
 
-### 13.1 概要
+## 10. Troubleshooting
 
-スキル、MCP エントリ、アプリコネクターを設定またはローカルマーケットプレースから読み込み。
+### 10.1 `--last` Resumes the Wrong Session
 
-### 13.2 `@plugin` メンション（v0.112.0+）
+Use explicit session IDs in scripts and parallel workflows. Reserve `--last`
+for a single local thread where recent session ordering is obvious.
 
-チャット内で `@plugin_name` のようにプラグインを直接参照し、関連する MCP/アプリ/スキルコンテキストを自動的に含めることが可能。
+### 10.2 Git Repository Check Fails
 
-### 13.3 マルチエージェント（v0.110.0+）
-
-- `/agent` ベースのサブエージェント有効化
-- 承認プロンプト対応
-- 序数ニックネーム（ordinal nicknames）でのエージェント管理
-
----
-
-## 14. トラブルシューティング
-
-### 14.1 モデル変更時の警告
-
-```
-warning: This session was recorded with model `gpt-5.4` but is resuming with `gpt-5.3-codex`. Consider switching back to `gpt-5.4` as it may affect Codex performance.
-```
-
-→ 警告は出るが動作に問題なし。必要に応じてモデル変更可能。
-
-### 14.2 `--last` の競合リスク
-
-複数エージェントを並列実行している場合、`--last` は最新のセッションを参照するため、意図しないセッションを引き継ぐ可能性がある。
-
-→ **解決策**: 明示的にセッションIDを管理する（6.2の方法）
-
-### 14.3 resume 時の Git コンテキスト消失
-
-v0.111.0 以前では resume 時に Git コンテキストとアプリが保持されない問題があった。
-
-→ **解決策**: v0.111.0 以降にアップグレード
-
-### 14.4 認証
+Codex requires a Git repository for normal local work. If an automation target
+is intentionally outside Git, use:
 
 ```bash
-# CI/CD での認証（推奨）
-export CODEX_API_KEY=<your-api-key>
-
-# インタラクティブ認証
-codex login
+codex exec --skip-git-repo-check "Inspect this directory"
 ```
 
----
+Only use this when the surrounding environment is controlled.
 
-## 15. 比較: 他のCLIツール
+### 10.3 Config Drift After Upgrade
 
-| 機能 | Codex CLI | Gemini CLI | Claude Code |
-|------|-----------|------------|-------------|
-| セッション引き継ぎ | `exec resume` | 未確認 | MCP経由 |
-| セッションフォーク | `fork` / `/fork` | - | - |
-| JSON出力 | `--json` | - | - |
-| Web検索 | `--search` / `--enable web_search_request` | 組み込み | `WebSearch` tool |
-| モデル指定 | `-m` | `-m` | `/model` |
-| MCP サポート | `codex mcp` + config.toml | 設定ファイル | 設定ファイル |
-| ローカル LLM | `--oss` / `--local-provider` | - | - |
-| クラウドタスク | `codex cloud` | - | - |
-| コードレビュー | `/review` | - | - |
-| プロファイル | `--profile` | - | - |
+Run:
 
----
+```bash
+codex doctor
+codex --strict-config --help
+```
 
-## 16. 参考リンク
+Then remove or update config keys that the new CLI version no longer accepts.
 
-- [Codex CLI Reference](https://developers.openai.com/codex/cli/reference/)
-- [Codex CLI Features](https://developers.openai.com/codex/cli/features/)
-- [Codex Non-interactive Mode](https://developers.openai.com/codex/noninteractive/)
-- [Codex Models](https://developers.openai.com/codex/models/)
-- [Codex Config Reference](https://developers.openai.com/codex/config-reference)
-- [Codex Advanced Configuration](https://developers.openai.com/codex/config-advanced/)
-- [Codex MCP Integration](https://developers.openai.com/codex/mcp/)
-- [Codex Slash Commands](https://developers.openai.com/codex/cli/slash-commands/)
-- [Codex Changelog](https://developers.openai.com/codex/changelog/)
-- [Codex GitHub Repository](https://github.com/openai/codex)
+### 10.4 Automation Auth
 
----
+For one-off automation with an API key, pass the key only to the Codex process:
 
-## 17. 一次情報と検証状況
+```bash
+CODEX_API_KEY="$CODEX_API_KEY" codex exec --json "Triage this change"
+```
 
-| 情報 | 一次情報源 | 検証方法 | 検証日 |
-|------|-----------|---------|--------|
-| コマンドオプション | `codex exec --help` / `codex exec resume --help` (v0.124.0) | ローカル実行 | 2026-05-23 |
-| モデル一覧 | Web検索（OpenAI公式） | 未実機検証 | 2026-03-09 |
-| JSONL出力フォーマット | 実機検証（v0.63.0時点） | ローカル実行 | 2025-11-27 |
-| セッション設定引き継ぎ | 実機検証（v0.63.0時点） | ローカル実行 | 2025-12-02 |
-| 新コマンド（fork/cloud/apply） | Web検索 | 未実機検証 | 2026-03-09 |
-| MCP サポート | Web検索 | 未実機検証 | 2026-03-09 |
-| プラグインシステム | Web検索 | 未実機検証 | 2026-03-09 |
-| スラッシュコマンド | Web検索 | 未実機検証 | 2026-03-09 |
+Do not expose API keys to unrelated setup commands, tests, dependency hooks, or
+repository-controlled scripts in the same job environment.
 
-> **注意**: 「未実機検証」の項目はWeb検索結果に基づく。バージョンアップにより仕様が変更されている可能性がある。
-> 実機で検証する場合は `codex exec --help`, `codex exec resume --help` 等で最新仕様を確認すること。
+### 10.5 Older Flag Examples
 
----
+Older guides used flags such as `--experimental-json` and broad shortcuts such
+as `--full-auto`. For current examples, use `--json` and explicit sandbox /
+approval flags.
 
-## 変更履歴
+## 11. References and Verification
 
-| 日付 | 内容 |
-|------|------|
-| 2025-11-27 | 初版作成（v0.63.0 対象）|
-| 2025-12-02 | `--json` オプションの制約を追記（resume時に引き継がれない問題）|
-| 2026-03-09 | v0.112.0 対応に全面更新。モデル一覧更新（gpt-5.4 推奨）、新コマンド追加（fork/cloud/apply/mcp/features）、スラッシュコマンド一覧、MCP サポート、プロファイル・OSS 対応、プラグインシステム、サンドボックス改善、item.type の拡張（file_change/mcp_tool_call/web_search/plan_update）、CI/CD パターン追加。`--json` resume 制約の解消を確認・修正（v0.112.0 で resume でも `--json` 使用可能）。一次情報セクション追加 |
-| 2026-05-23 | v0.124.0 追従。対象バージョンを v0.124.0 に更新。`codex app`（macOS デスクトップ）コマンドを削除（現行 help から消失、`app-server` のみが残存）。`--experimental-json` 旧表記を `--json` に統一 |
+| Information | Source | Verification |
+|-------------|--------|--------------|
+| Installed version | `codex --version` | Local command returned `codex-cli 0.142.5`. |
+| Top-level commands and global flags | `codex --help` | Local command on 2026-07-08. |
+| Non-interactive options | `codex exec --help` | Local command on 2026-07-08. |
+| Resume options | `codex exec resume --help`, `codex resume --help`, `codex fork --help` | Local command on 2026-07-08. |
+| Cloud options | `codex cloud --help`, `codex cloud exec --help`, `codex cloud list --help` | Local command on 2026-07-08. |
+| MCP, plugin, and feature commands | `codex mcp --help`, `codex plugin --help`, `codex features --help` | Local command on 2026-07-08. |
+| JSONL event model, sandbox semantics, model guidance, slash commands | Current OpenAI Codex manual | Fetched on 2026-07-08. |
+
+## Change History
+
+| Date | Change |
+|------|--------|
+| 2025-11-27 | Initial Japanese guide for Codex CLI v0.63.0. |
+| 2025-12-02 | Added notes about earlier `--json` resume limitations. |
+| 2026-03-09 | Updated for v0.112.0 era commands and features. |
+| 2026-05-23 | Updated for v0.124.0 and replaced `--experimental-json` with `--json`. |
+| 2026-07-08 | Rewritten as the English canonical guide for Codex CLI `0.142.5`; stale model, command, and session notes were trimmed or updated. |
