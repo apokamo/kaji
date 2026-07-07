@@ -260,8 +260,10 @@ claude --worktree feature-name --tmux "Start work"
 claude --worktree feature-name --tmux=classic "Start work"
 ```
 
-The old `--teammate-mode` option is not present in `claude --help` for
-Claude Code `2.1.202`; use the currently documented `--tmux` option instead.
+`claude --help` is not exhaustive. The CLI reference still documents
+`--teammate-mode` for agent team display modes (`in-process`, `auto`, `tmux`,
+or `iterm2`), while `--tmux` is specifically for creating a tmux session for a
+worktree.
 
 ## 9. MCP Servers
 
