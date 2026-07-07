@@ -12,8 +12,8 @@ configuration, naming rules, and troubleshooting in one file.
 - You are returning from emergency local-mode fallback ([Local Mode CLI Guide](local-mode.md)) to normal GitHub operation.
 - You want to import GitHub Issues into the local cache with `kaji sync from-github`.
 
-> **Auto-close keyword warning**: GitHub interprets `Closes #N`, `Fixes #N`,
-> `Resolves #N`, and similar phrases in PR descriptions as auto-close keywords,
+> **Auto-close keyword warning**: GitHub interprets `Closes #<N>`, `Fixes #<N>`,
+> `Resolves #<N>`, and similar phrases in PR descriptions as auto-close keywords,
 > and automatically closes the referenced issue when the PR is merged into the
 > default branch. See
 > [docs/dev/shared_skill_rules.md section auto close keyword avoidance](../dev/shared_skill_rules.md)
@@ -239,9 +239,9 @@ Add `repo = "owner/name"` to `.kaji/config.toml` `[provider.github]`, or pass
 `gh pr list --head <branch> --state open` returns multiple PRs, close the
 unneeded PRs or operate on the target one explicitly with `kaji pr`.
 
-### 4.5 Commit / PR description `Fix #N` auto-closes an unrelated GitHub issue
+### 4.5 Commit / PR description `Fix #<N>` auto-closes an unrelated GitHub issue
 
-GitHub closing keywords (`Closes`, `Fix(es|ed)`, `Resolves`, etc. + `#N`) close
+GitHub closing keywords (`Closes`, `Fix(es|ed)`, `Resolves`, etc. + `#<N>`) close
 the referenced issue automatically on merge to the default branch
 ([official docs](https://docs.github.com/en/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue#linking-a-pull-request-to-an-issue-using-a-keyword)).
 See the grep procedure and placeholder convention in
