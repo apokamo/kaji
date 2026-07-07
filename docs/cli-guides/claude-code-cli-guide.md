@@ -152,7 +152,7 @@ Tool availability and permission behavior are controlled separately.
 
 | Option | Purpose |
 |--------|---------|
-| `--tools <tools...>` | Restrict the available built-in tools. Use `""` to disable all tools, `default` to use the default set, or names such as `Bash,Edit,Read`. |
+| `--tools <tools...>` | Restrict the available built-in tools. Use `""` to disable all tools, `default` to use all built-in tools, or names such as `Bash,Edit,Read`. |
 | `--allowedTools` / `--allowed-tools <tools...>` | Allow tools or tool patterns without prompting. |
 | `--disallowedTools` / `--disallowed-tools <tools...>` | Deny tools or tool patterns. |
 | `--permission-mode <mode>` | Set the permission mode. Choices are `acceptEdits`, `auto`, `bypassPermissions`, `manual`, `dontAsk`, and `plan`. |

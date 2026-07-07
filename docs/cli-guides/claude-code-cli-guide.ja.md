@@ -151,7 +151,7 @@ tool availability と permission behavior は別々に制御します。
 
 | オプション | 用途 |
 |------------|------|
-| `--tools <tools...>` | 利用可能な built-in tool を制限する。`""` で全 tool 無効、`default` で default set、または `Bash,Edit,Read` のような名前を指定する。 |
+| `--tools <tools...>` | 利用可能な built-in tool を制限する。`""` で全 tool 無効、`default` で全 built-in tool を使用、または `Bash,Edit,Read` のような名前を指定する。 |
 | `--allowedTools` / `--allowed-tools <tools...>` | prompt なしで許可する tool または tool pattern を指定する。 |
 | `--disallowedTools` / `--disallowed-tools <tools...>` | 拒否する tool または tool pattern を指定する。 |
 | `--permission-mode <mode>` | permission mode を設定する。選択肢は `acceptEdits`、`auto`、`bypassPermissions`、`manual`、`dontAsk`、`plan`。 |
