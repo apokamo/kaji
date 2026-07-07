@@ -1,193 +1,202 @@
-# Local Mode 運用 Runbook（GitHub 障害時・緊急時 fallback）
+# Local Mode Operations Runbook (GitHub Outage / Emergency Fallback)
 
-通常運用は GitHub provider（`.kaji/wf/dev.yaml` / `dev-thorough.yaml` / `docs.yaml`）で
-行い、GitHub 障害・不通時の緊急 fallback として kaji local-mode へ切り替えるための実用 runbook。
-複数 PC・コード同期戦略・forge 復帰判断までを 1 ファイルで提供する。
+Language: English | [日本語](local-mode-runbook.ja.md)
 
-## 1. このドキュメントの位置づけ
+Normal operation uses the GitHub provider (`.kaji/wf/dev.yaml`,
+`dev-thorough.yaml`, and `docs.yaml`). This practical runbook explains how to
+switch to kaji local mode as an emergency fallback when GitHub is down or
+unreachable, covering multi-PC operation, code synchronization strategy, and the
+criteria for returning to the forge.
 
-- **通常運用**: GitHub provider が SoT。Issue / PR / review は GitHub 上で回す
-  （`.kaji/wf/dev.yaml` / `dev-thorough.yaml` / `docs.yaml`）。
-- **本 runbook の対象**: GitHub 障害・不通・レート制限などで GitHub 運用を継続できない
-  ときに、local-mode へ一時退避して開発を止めないための **緊急時 fallback 手順**。
-- **復帰**: GitHub が復旧したら通常運用（GitHub）へ戻す。fallback 中に蓄積した
-  local Issue / commit を GitHub 側へどう反映するかは user が判断する。
+## 1. Role of this document
 
-参照: `draft/design/local-mode/design.md` § 概要 / § 検証戦略の前提 / § 残課題。
+- **Normal operation**: GitHub provider is the SoT. Issues, PRs, and reviews run
+  on GitHub (`.kaji/wf/dev.yaml`, `dev-thorough.yaml`, and `docs.yaml`).
+- **Scope of this runbook**: emergency fallback steps for temporarily moving to
+  local mode when GitHub outages, connectivity failures, rate limits, or similar
+  problems prevent GitHub operation.
+- **Return**: once GitHub recovers, return to normal GitHub operation. The user
+  decides how local issues / commits accumulated during fallback are reflected
+  back to GitHub.
 
-## 2. セットアップ
+Reference: `draft/design/local-mode/design.md` sections Overview, Verification
+strategy prerequisites, and Remaining work.
 
-### 2.1 単一 PC セットアップ
+## 2. Setup
 
-リポジトリ root で overlay を生成する。**tracked `.kaji/config.toml`
-（`type = "github"`）は書き換えない** — 個人環境の provider 切替が repo 全体に
-commit されるのを防ぐため、切替は gitignored overlay で行う:
+### 2.1 Single-PC setup
+
+Generate the overlay from the repository root. **Do not rewrite the tracked
+`.kaji/config.toml` (`type = "github"`)**. Use the gitignored overlay for the
+switch so a personal provider choice is not committed for the whole repository:
 
 ```bash
 kaji local init
 ```
 
-- `.kaji/config.local.toml`（gitignored）に `[provider] type = "local"` と
-  `machine_id` / `default_branch` が書き込まれる
-- `machine_id` は `[a-z0-9]{1,16}`（ハイフン禁止）。明示する場合は
-  `--machine-id pc1` 等を渡す
-- `.gitignore` の `.kaji/config.local.toml` 行は `kaji local init` が追記する
-  （`.kaji/counters/` 行は手動で確認する）
-- config 不備があれば `kaji issue` / `kaji pr` / `kaji run` が exit 2 で停止し、
-  エラーメッセージが修正内容を案内する
+- `.kaji/config.local.toml` (gitignored) is written with `[provider] type = "local"`,
+  `machine_id`, and `default_branch`.
+- `machine_id` must match `[a-z0-9]{1,16}` (no hyphen). Pass
+  `--machine-id pc1`, etc. to set it explicitly.
+- `kaji local init` adds `.kaji/config.local.toml` to `.gitignore` (check the
+  `.kaji/counters/` line manually).
+- If config is invalid, `kaji issue`, `kaji pr`, and `kaji run` stop with exit 2
+  and print guidance for the needed fix.
 
-生成される overlay の内容・machine_id の解決順は
-[Local Mode CLI Guide](../cli-guides/local-mode.md) § 2 を参照。
+See [Local Mode CLI Guide](../cli-guides/local-mode.md) section 2 for generated
+overlay contents and `machine_id` resolution order.
 
-### 2.2 複数 PC セットアップ
+### 2.2 Multi-PC setup
 
-各 PC で **異なる `machine_id`** を必ず設定する。`.kaji/config.local.toml`
-は gitignored なので、PC ごとの設定は git に流れない。
+Always set a **different `machine_id`** on each PC. `.kaji/config.local.toml` is
+gitignored, so per-PC settings do not flow through git.
 
-| PC | machine_id 例 | counter dir |
-|----|--------------|-------------|
-| pc1（メイン） | `pc1` | `.kaji/counters/pc1.txt` |
-| pc2（ノート） | `pc2` | `.kaji/counters/pc2.txt` |
-| mac1（外出先） | `mac1` | `.kaji/counters/mac1.txt` |
+| PC | Example machine_id | counter dir |
+|----|--------------------|-------------|
+| pc1 (main) | `pc1` | `.kaji/counters/pc1.txt` |
+| pc2 (laptop) | `pc2` | `.kaji/counters/pc2.txt` |
+| mac1 (mobile) | `mac1` | `.kaji/counters/mac1.txt` |
 
-- counter dir は PC ごとに独立（gitignored）。git pull 時に他 PC の counter
-  と衝突しない
-- 既存 repo を別 PC に clone した場合、`.kaji/config.local.toml` を作成し
-  `machine_id` を新値で設定する。counter は不在でも `next_local_id()` が
-  既存 `.kaji/issues/local-<machine>-*` の最大値から自動補正する
+- Counter dirs are independent per PC (gitignored), so they do not collide on
+  `git pull`.
+- When cloning an existing repo on another PC, create `.kaji/config.local.toml`
+  and set a new `machine_id`. Even if the counter is absent, `next_local_id()`
+  automatically corrects from the maximum existing `.kaji/issues/local-<machine>-*`.
 
-### 2.3 セットアップ後の動作確認
+### 2.3 Post-setup smoke check
 
 ```bash
-kaji config provider-type      # → local
-kaji issue list --state open   # （まだ何もなければ空、エラーが出なければ OK）
+kaji config provider-type      # -> local
+kaji issue list --state open   # Empty is fine; no error means OK
 ```
 
-## 3. 日常運用
+## 3. Daily operation
 
-### 3.1 Issue ライフサイクル（/issue-create → /issue-close）
+### 3.1 Issue lifecycle (`/issue-create` -> `/issue-close`)
 
-緊急時 fallback 中の Issue は **type ラベル** に応じて以下の local workflow を使い分ける：
+During emergency fallback, choose the local workflow by **type label**:
 
-| type | workflow YAML | 使用 Skill 系列 |
-|------|--------------|----------------|
+| type | workflow YAML | Skill series |
+|------|---------------|--------------|
 | type:feature | `dev-local.yaml` | issue-design / issue-implement / issue-review-* / issue-close |
 | type:docs | `docs-local.yaml` | i-doc-update / i-doc-review / i-doc-fix / i-doc-verify / i-doc-final-check / issue-close |
-| github 用 (`dev.yaml` 等) | — | **GitHub 障害・不通時は使用しない**（forge 通信を伴うため。復旧後の通常運用で使う） |
+| GitHub workflows (`dev.yaml`, etc.) | - | **Do not use during GitHub outage / disconnection** because they communicate with the forge. Use them after returning to normal operation |
 
-呼び出し例:
+Invocation example:
 
 ```bash
-# 事前手動実行
-/issue-create   # Issue 起票 (Skill)
-/issue-start    # worktree 作成 (Skill)
+# Manual prerequisites
+/issue-create   # Create issue (Skill)
+/issue-start    # Create worktree (Skill)
 
-# 自動連続実行（kaji run はファイルパス必須。basename 探索はしない）
+# Automatic continuous run (kaji run requires a file path; it does not search by basename)
 kaji run .kaji/wf/dev-local.yaml local-pc1-1
-# または
+# or
 kaji run .kaji/wf/docs-local.yaml   local-pc1-2
 ```
 
-### 3.1a docs-only Issue の手動運用（`kaji run` を使わない場合）
+### 3.1a Manual operation for docs-only issues (without `kaji run`)
 
-`docs-local.yaml` を使わず、Skill 単位で手動実行する代替手順：
+Alternative procedure when running skills manually instead of `docs-local.yaml`:
 
 1. `/i-doc-update [issue_id]`
 2. `/i-doc-review [issue_id]`
-3. RETRY なら `/i-doc-fix [issue_id]` → `/i-doc-verify [issue_id]` を収束まで繰り返す
+3. On RETRY, repeat `/i-doc-fix [issue_id]` -> `/i-doc-verify [issue_id]` until it converges
 4. `/i-doc-final-check [issue_id]`
 5. `/issue-close [issue_id]`
 
-> `/i-pr` は **使用しない**。local (bare) provider は PR 概念を持たないため、
-> `kaji pr create` は bare-provider ガードで exit 2 となる
-> （[Local Mode CLI Guide](../cli-guides/local-mode.md) § 8 参照）。
+> Do **not** use `/i-pr`. The local (bare) provider has no PR concept, so
+> `kaji pr create` exits 2 through the bare-provider guard (see
+> [Local Mode CLI Guide](../cli-guides/local-mode.md) section 8).
 
-### 3.2 複数 PC 並行運用
+### 3.2 Multi-PC parallel operation
 
-- 各 PC は自分の `local-<machine>-<n>` 番号空間のみ採番（machine prefix で
-  物理分離されているため衝突は構造的に発生しない）
-- 1 サイクル: `git pull` → 作業 → commit → `git push`
-- Issue / counter / config の git tracked 状態確認:
+- Each PC allocates only inside its own `local-<machine>-<n>` number space, so
+  the machine prefix structurally prevents collisions.
+- One cycle: `git pull` -> work -> commit -> `git push`.
+- Issue / counter / config tracked state:
   - tracked: `.kaji/issues/`, `.kaji/config.toml`
   - gitignored: `.kaji/config.local.toml`, `.kaji/counters/`
 
-### 3.3 Conflict 解決
+### 3.3 Conflict resolution
 
-| ケース | 対処 |
-|--------|------|
-| 同一 Issue を複数 PC で編集 | git の通常 merge conflict として手動解決 |
-| counter の不整合（fresh clone / cleanup 後）| `next_local_id()` が `.kaji/issues/local-<machine>-*` の最大値から自動補正するため、特別対処不要 |
-| duplicate issue dir 検出時 | `resolve_issue_dir` が glob で重複検出してエラー停止する。手動で重複 dir を削除（merge 事故由来が多い）|
+| Case | Action |
+|------|--------|
+| Multiple PCs edit the same issue | Resolve as a normal git merge conflict |
+| Counter inconsistency (fresh clone / after cleanup) | `next_local_id()` automatically corrects from the maximum `.kaji/issues/local-<machine>-*`; no special action needed |
+| Duplicate issue dir detected | `resolve_issue_dir` stops with a duplicate glob error. Manually remove the duplicate dir (usually from a merge accident) |
 
-## 4. コード同期
+## 4. Code synchronization
 
-fallback 中も git 自体は通常どおり使える。コード同期は従来どおり
-`git push origin main`（GitHub への push まで不通の場合は、復旧後に push する）。
-LAN bare repo 等の代替 remote が必要になるほどの長期障害は本 runbook の
-スコープ外として別途判断する。
+Even during fallback, git itself is used normally. Synchronize code as usual
+with `git push origin main` (if GitHub push is unavailable too, push after
+recovery). Long outages that require an alternative remote such as a LAN bare
+repo are outside this runbook and should be decided separately.
 
-## 5. GitHub 運用への復帰
+## 5. Return to GitHub operation
 
-GitHub が復旧したら通常運用へ戻す。GitHub provider のセットアップ / 認証は
-[GitHub Mode CLI Guide](../cli-guides/github-mode.md) を参照。
+After GitHub recovers, return to normal operation. See the
+[GitHub Mode CLI Guide](../cli-guides/github-mode.md) for GitHub provider setup
+and authentication.
 
-1. `.kaji/config.local.toml` の overlay を削除する（または `[provider]` の
-   `type = "github"` へ書き換える）
-2. `kaji config provider-type` が `github` を返すことを確認する
-3. fallback 中に蓄積した local Issue（`local-<m>-<n>`）の扱いを決める:
-   GitHub Issue へ手動転記して local 側を close する（自動転記は無い）か、
-   local Issue のまま `dev-local.yaml` / `docs-local.yaml` で完結させる
-4. fallback 期間中の commit / branch は git remote に保持されているため、
-   復帰後も履歴は失われない
-5. GitHub Issue の read-only 参照が必要な場合は `kaji sync from-github` で
-   cache を更新する（`gh:N` 参照、[Local Mode CLI Guide](../cli-guides/local-mode.md) § 10）
+1. Delete `.kaji/config.local.toml`, or rewrite its `[provider] type` to
+   `"github"`.
+2. Confirm `kaji config provider-type` returns `github`.
+3. Decide how to handle local issues accumulated during fallback
+   (`local-<m>-<n>`): manually copy them to GitHub and close the local side, or
+   finish them as local issues with `dev-local.yaml` / `docs-local.yaml`.
+4. Commits and branches from the fallback period are retained in git remote, so
+   history is not lost after returning.
+5. If you need read-only references to GitHub Issues, refresh the cache with
+   `kaji sync from-github` (`gh:N` references; see
+   [Local Mode CLI Guide](../cli-guides/local-mode.md) section 10).
 
-## 6. トラブルシューティング
+## 6. Troubleshooting
 
-### 6.1 「provider.type が解決できない」エラー
+### 6.1 "provider.type cannot be resolved" errors
 
-- `[provider] section is required in .kaji/config.toml.` — tracked / overlay の
-  いずれにも `[provider]` セクションが無い。local fallback へ切り替えるなら
-  `kaji local init` で overlay を生成する
-- `Error loading <path>: provider.type is required (string)` — `[provider]`
-  セクションはあるが `type` が無い / 不正な値。overlay で切り替えている場合は
-  `.kaji/config.local.toml` 側の `[provider]` ブロックを確認する
+- `[provider] section is required in .kaji/config.toml.` - neither the tracked
+  config nor the overlay has a `[provider]` section. Generate an overlay with
+  `kaji local init` if switching to local fallback.
+- `Error loading <path>: provider.type is required (string)` - the `[provider]`
+  section exists but `type` is missing or invalid. If switching through an
+  overlay, check the `[provider]` block in `.kaji/config.local.toml`.
 
-legacy passthrough（config 無しで `gh` へ素通り）は存在しないため、
-`type` は必ず明示する必要がある。
+There is no legacy passthrough that falls through to `gh` without config;
+`type` must be explicit.
 
-### 6.2 machine_id 衝突
+### 6.2 machine_id collision
 
-同じ `machine_id` を 2 PC で使うと `local-<machine>-<n>` の番号空間が重複
-する。発生時の対処：
+Using the same `machine_id` on two PCs makes the `local-<machine>-<n>` number
+space collide. Recovery:
 
-1. 重複した dir をどちらか片方の PC で `git mv` で改名（例:
-   `local-pc1-3-foo` → `local-pc1-99-foo`）
-2. `.kaji/config.local.toml` の `machine_id` を再設定し直す（既存 dir の
-   `machine` 部は手動で改名する必要がある）
-3. counter ファイルを必要なら手動で再採番
+1. On one PC, rename the duplicate dir with `git mv` (for example,
+   `local-pc1-3-foo` -> `local-pc1-99-foo`).
+2. Reset `.kaji/config.local.toml` to a new `machine_id` (existing dirs'
+   `machine` portion must be renamed manually).
+3. Manually resequence the counter file if needed.
 
-### 6.3 counter / dir 不整合
+### 6.3 counter / dir inconsistency
 
-`make clean` 等で `.kaji/counters/` を消した場合、次回 `kaji issue create` で
-`next_local_id()` が `.kaji/issues/local-<machine>-*` の最大値を見て自動
-補正する。手動対処は不要。
+If `.kaji/counters/` is deleted by `make clean` or similar, the next
+`kaji issue create` automatically corrects `next_local_id()` from the maximum
+`.kaji/issues/local-<machine>-*`. No manual action is needed.
 
-### 6.4 worktree 削除失敗
+### 6.4 worktree removal failure
 
-`/issue-close` で worktree 削除に失敗した場合、Issue 状態は closed として
-確定する（cleanup 失敗時も Issue 状態は確定する設計）。手動 cleanup：
+If `/issue-close` fails to remove the worktree, the issue state is already
+closed (cleanup failure does not roll back issue close). Manual cleanup:
 
 ```bash
-git worktree list   # 残存 worktree 確認
+git worktree list   # Check remaining worktrees
 git worktree remove <path>
 git branch -d <branch>
 ```
 
-## 7. 参照
+## 7. References
 
-- 設計書: `draft/design/local-mode/design.md`（特に § 残課題 / § 履歴）
-- Phase 5 設計書: `draft/design/local-mode/phase5-design.md`
+- Design: `draft/design/local-mode/design.md` (especially Remaining work / History)
+- Phase 5 design: `draft/design/local-mode/phase5-design.md`
 - CLI Guide: `docs/cli-guides/local-mode.md`
 - Workflow Guide: `docs/dev/workflow_guide.md`
 - Workflow Authoring: `docs/dev/workflow-authoring.md`

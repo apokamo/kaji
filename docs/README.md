@@ -46,7 +46,7 @@ kaji のドキュメント一覧。[Diataxis フレームワーク](https://diat
 | [アーキテクチャ](ARCHITECTURE.md) | システム構成・モジュール依存関係 |
 | [設定リファレンス](reference/configuration.md) | `.kaji/config.toml` / overlay の全 section/key 仕様の正本（英語正本、[日本語](reference/configuration.ja.md)） |
 | [テストサイズ判断ガイド](reference/testing-size-guide.md) | S/M/L の境界ケース判断基準 |
-| [CLI ガイド](cli-guides/) | CLI 操作リファレンス（[GitHub Mode](cli-guides/github-mode.md) / [Local Mode](cli-guides/local-mode.md) / [Interactive Terminal Runner](cli-guides/interactive-terminal-runner.md)） |
+| [CLI ガイド](cli-guides/) | CLI 操作リファレンス（[GitHub Mode](cli-guides/github-mode.md)（英語正本、[日本語](cli-guides/github-mode.ja.md)） / [Local Mode](cli-guides/local-mode.md)（英語正本、[日本語](cli-guides/local-mode.ja.md)） / [Interactive Terminal Runner](cli-guides/interactive-terminal-runner.md)（英語正本、[日本語](cli-guides/interactive-terminal-runner.ja.md)）） |
 
 ### Python 品質規約
 
@@ -65,14 +65,14 @@ kaji のドキュメント一覧。[Diataxis フレームワーク](https://diat
 |-------------|------|
 | [Release Runbook](operations/release/runbook.md) | `/release` skill ベースのリリース運用（CI 非依存 / maintainer 手元実行）と緊急時 fallback |
 | [Release-Please Admin 設定（historical）](operations/release/admin-setup.md) | 旧 GitHub release-please 運用の admin 初期設定。現在は非運用。GitHub 運用を再開する場合の参考資料 |
-| [Local Mode 緊急時 Fallback Runbook](operations/local-mode-runbook.md) | GitHub 障害・不通時に local-mode へ一時退避するための手順、複数 PC 運用、GitHub 復帰判断 |
+| [Local Mode 緊急時 Fallback Runbook](operations/local-mode-runbook.md) | GitHub 障害・不通時に local-mode へ一時退避するための手順、複数 PC 運用、GitHub 復帰判断（英語正本、[日本語](operations/local-mode-runbook.ja.md)） |
 
 ## Explanation（コンセプト）
 
 | ドキュメント | 概要 |
 |-------------|------|
-| [AI 駆動開発戦略](concepts/ai-driven-strategy.md) | 95% AI / 5% 人間の開発モデル |
-| [AI ドキュメント管理方針](concepts/ai-docs-management.md) | Docs-as-Code 運用ルール |
+| [AI 駆動開発戦略](concepts/ai-driven-strategy.md) | 95% AI / 5% 人間の開発モデル（英語正本、[日本語](concepts/ai-driven-strategy.ja.md)） |
+| [AI ドキュメント管理方針](concepts/ai-docs-management.md) | Docs-as-Code 運用ルール（英語正本、[日本語](concepts/ai-docs-management.ja.md)） |
 
 ## ADR（アーキテクチャ決定記録）
 
