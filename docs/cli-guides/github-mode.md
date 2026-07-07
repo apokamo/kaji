@@ -7,7 +7,7 @@
 ## いつ使うか
 
 - GitHub 上の repo（`github.com/<owner>/<name>`）を kaji の primary forge として運用する場合
-- 検証期間中の local-mode（`docs/cli-guides/local-mode.md`）から GitHub を本格 forge として採用する移行段階
+- 緊急時 fallback の local-mode（[Local Mode CLI Guide](local-mode.md)）から GitHub 通常運用へ復帰する場合
 - `kaji sync from-github` で GitHub Issue を local cache に取り込みたい場合
 
 > ⚠️ **auto-close keyword 注意**: GitHub も PR description 内の
@@ -27,11 +27,9 @@
 | `git` | 通常運用 | `git@github.com` への SSH push が前提 |
 
 `gh` 未導入の場合、`kaji sync from-github` および `provider.type='github'` 配下の
-`kaji issue` / `kaji pr` は以下のメッセージで exit する:
-
-```
-'gh' CLI not found in PATH. Install GitHub CLI to use provider.type='github'.
-```
+`kaji issue` / `kaji pr` は `'gh' CLI not found in PATH. ...` で始まるエラーで exit する
+（後続の案内文は entry point ごとに異なる。例: passthrough 経路は
+`Install GitHub CLI to use 'kaji issue' / 'kaji pr'.`）。
 
 ### 1.2 認証
 
@@ -54,12 +52,12 @@ CI / 無人スクリプトでは `GH_TOKEN` 環境変数で PAT を渡す。PAT 
 [paths]
 artifacts_dir = ".kaji-artifacts"
 skill_dir = ".claude/skills"
-# worktree_prefix = "kaji"          # 任意。worktree dir 名の先頭 segment（<prefix>-<branch_prefix>-<id>）。未設定時は "kaji"。issue-start skill が別 prefix で worktree を作る consumer のみ設定し、harness の算出値を実体に一致させる
+# worktree_prefix = "kaji"          # 任意。既定値・実効挙動は設定リファレンス参照
 
 [execution]
 default_timeout = 1800
-# agent_runner = "headless"                      # 任意。"headless"（既定） | "interactive_terminal"
-# interactive_terminal_close_on_verdict = true   # 任意。interactive_terminal で verdict 検知後に terminal を閉じるか
+# agent_runner = "headless"          # 任意。"headless"（既定） | "interactive_terminal"
+# interactive_terminal_close_on_verdict = true   # 任意
 
 [provider]
 type = "github"
@@ -67,7 +65,7 @@ type = "github"
 [provider.github]
 repo = "<owner>/<name>"             # 例: "apokamo/kaji"
 default_branch = "main"             # 既定 "main"
-git_remote = "origin"               # 任意。default `"origin"`。hybrid setup での remote 名
+git_remote = "origin"               # 任意。既定 "origin"
 ```
 
 `agent_runner = "interactive_terminal"` は tmux pane 上で通常 `claude` / `codex` を起動する
@@ -79,18 +77,18 @@ runner backend。設定方法・CLI option・手動検証手順は
 
 - `[provider.github].repo` は **`owner/name`** 形式。`https://` プレフィクスや `.git` サフィックスは付けない。`gh --repo <owner>/<name>` / `gh api repos/<owner>/<name>/...` に渡される
 - `worktree_prefix` / `agent_runner` / `git_remote` の既定値・実効挙動は
-  [設定リファレンス](../reference/configuration.md#section-key-specification) を参照
+  [設定リファレンス](../reference/configuration.md) の section / key 仕様を参照
 
 ### 1.4 `.github/labels.yml` の連動
 
-kaji は GitHub project 直下の `.github/labels.yml` を label の正本として運用する。`/issue-create` 等の skill は `kaji_harness/providers/_mappings.py` の標準 label と `.github/labels.yml` の交集合を採用する。`.github/labels.yml` を編集した場合は GitHub Actions の `labels-sync` workflow（`.github/workflows/labels-sync.yml`）で同期される。
+kaji は GitHub project 直下の `.github/labels.yml` を label の正本として運用する（追加・削除手順は [GitHub ラベル運用](../dev/labels.md) 参照）。`kaji_harness/providers/_mappings.py` は `type:*` label から branch prefix への mapping を担う。`.github/labels.yml` を編集した場合は GitHub Actions の `labels-sync` workflow（`.github/workflows/labels-sync.yml`）で GitHub 側へ同期される。
 
 ## 2. `kaji issue` / `kaji pr` の挙動
 
 `provider.type = "github"` 配下では `kaji issue` / `kaji pr` は skill 互換 contract で動作する。
 
-- `kaji pr create` / `view` / `list` / `comment` / `review` / `merge` / `review-comments` / `reviews` / `reply-to-comment` は GitHub でも同じ呼び出し方が通る
-- `kaji pr merge` は `--squash` / `--rebase` flag を **kaji 側で拒否**（`--no-ff` only の merge 規約。`gh pr merge --merge` 固定で叩く）
+- `kaji pr create` / `view` / `list` / `comment` / `review` / `merge` / `review-comments` / `reviews` / `reply-to-comment` / `review-poll` は GitHub でも同じ呼び出し方が通る
+- `kaji pr merge` は `--squash` / `--rebase` flag を **kaji 側で silent に除去**し、常に `gh pr merge --merge` 固定で叩く（`--no-ff` only の merge 規約）
 - `kaji pr review <pr> --approve` / `kaji pr review <pr> --request-changes` は self-PR (PR author == authenticated user) を検知すると `<!-- kaji-review: state=APPROVED -->` / `<!-- kaji-review: state=CHANGES_REQUESTED -->` marker 付き comment を Issue comments API に投稿することで review シグナルを表現し rc=0 を返す。`gh pr review --approve` / `--request-changes` は GitHub API が author の APPROVE / REQUEST_CHANGES event を `Can not approve your own pull request` / `Can not request changes on your own pull request` で 422 拒否するため、self-PR では skip される。非 self-PR では従来通り `gh pr review --approve` / `--request-changes` を委譲する。`--comment` / flag 無しは routing 段で `_github_pr_review` に分岐せず従来通り `gh pr review` へ passthrough
   - **`--request-changes` の body 必須契約（self / 非 self 一貫）**: GitHub REST API の `event=REQUEST_CHANGES` は body parameter を必須とするため、kaji 側で `--body` / `--body-file` 未指定または空白のみは subprocess 呼び出し前に `EXIT_INVALID_INPUT` (rc=2) で fail-fast する。`--approve` は GitHub API 側で body optional のため空 body を許容（既存挙動を維持）
   - **marker comment の観測経路の非対称性**: self-PR fallback で投稿された marker comment は Issue Comments API (`/repos/<repo>/issues/<N>/comments`) に書き込まれるため、`kaji pr view <pr> --comments` 経由では取得可能だが、`kaji pr reviews <pr>` (`/pulls/<N>/reviews`) には現れない。後続の `pr-fix` skill は `kaji pr view --comments` を主要 read path としているため、観測経路上は問題なし

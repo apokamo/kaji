@@ -118,8 +118,8 @@ The `timeout` resolution order is step.timeout → workflow.default_timeout →
 
 The `[provider]` section is optional at the config loader layer: when neither tracked nor overlay
 defines it, the loader returns the provider as `None` (`config.py:303-304`). However, the provider
-resolution path of `kaji issue` / `kaji pr` / `kaji run` requires `[provider]` (Phase 3-e; unset
-exits 2). For the detailed migration, see [Local Mode CLI Guide](../cli-guides/local-mode.md) § 10.
+resolution path of `kaji issue` / `kaji pr` / `kaji run` requires `[provider]` (unset exits 2; see
+[Local Mode CLI Guide](../cli-guides/local-mode.md) § 2).
 
 | key | Required/Optional | Type | Default | Validation | Source |
 |-----|-------------------|------|---------|------------|--------|

@@ -113,8 +113,8 @@ worktree）基準で解決される（Issue #177、[ワークフロー作成](..
 
 `[provider]` section は config loader 層では任意で、tracked / overlay の双方に無い場合 loader は
 provider を `None` として返す（`config.py:303-304`）。ただし `kaji issue` / `kaji pr` / `kaji run` の
-provider 解決経路では `[provider]` は必須化されている（Phase 3-e、未設定は exit 2）。詳細な migration は
-[Local Mode CLI Guide](../cli-guides/local-mode.md) § 10 を参照。
+provider 解決経路では `[provider]` は必須（未設定は exit 2。
+[Local Mode CLI Guide](../cli-guides/local-mode.md) § 2 参照）。
 
 | key | 必須/任意 | 型 | 既定 | 検証規則 | 一次情報 |
 |-----|----------|----|------|----------|---------|
