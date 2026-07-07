@@ -4,8 +4,9 @@
 > 差異がある場合は英語版が正（[`.ja.md` ポリシー](../README.md#翻訳ファイルのポリシーjamd) 参照）。
 
 kaji の設定ファイル `.kaji/config.toml` および overlay `.kaji/config.local.toml` の
-全 section / key 仕様を集約した**正本（Source of Truth）**。各 key の型 / 既定値 / 検証規則 /
-挙動はすべて `kaji_harness/config.py` / `kaji_harness/local_init.py` を一次情報として記載する。
+全 section / key 仕様を集約したリファレンス。仕様の**正本（Source of Truth）**は英語版
+[configuration.md](configuration.md) であり、本書はその日本語訳。各 key の型 / 既定値 /
+検証規則 / 挙動はすべて `kaji_harness/config.py` / `kaji_harness/local_init.py` を一次情報として記載する。
 
 how-to 文脈での最小設定例は各 CLI ガイド（[GitHub Mode](../cli-guides/github-mode.md) /
 [Local Mode](../cli-guides/local-mode.md) /
@@ -17,8 +18,9 @@ how-to 文脈での最小設定例は各 CLI ガイド（[GitHub Mode](../cli-gu
 - `.kaji/config.toml` は kaji が **repository root を特定するためのマーカー**でもある。
   kaji は `--workdir` または cwd から親方向へ `.kaji/config.toml` を探索し、`.kaji/` を
   含む directory を repository root とみなす。
-- 本ファイルは config 仕様の正本である。設定項目の型 / 既定 / 検証を更新するときは、
-  まず本書を更新し、各 how-to / CLI ガイドは最小例とリンクに留める。
+- config 仕様の正本は英語版 [configuration.md](configuration.md)。設定項目の型 / 既定 /
+  検証を更新するときは、まず英語版を更新し（本書はその日本語訳）、各 how-to / CLI ガイドは
+  最小例とリンクに留める。
 
 ## ファイルの役割
 
