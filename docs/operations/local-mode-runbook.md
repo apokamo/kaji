@@ -19,28 +19,25 @@
 
 ### 2.1 単一 PC セットアップ
 
-```toml
-# .kaji/config.toml （tracked）
-[provider]
-type = "local"
+リポジトリ root で overlay を生成する。**tracked `.kaji/config.toml`
+（`type = "github"`）は書き換えない** — 個人環境の provider 切替が repo 全体に
+commit されるのを防ぐため、切替は gitignored overlay で行う:
 
-[provider.local]
-default_branch = "main"
+```bash
+kaji local init
 ```
 
-```toml
-# .kaji/config.local.toml （gitignored）
-[provider.local]
-machine_id = "pc1"
-```
+- `.kaji/config.local.toml`（gitignored）に `[provider] type = "local"` と
+  `machine_id` / `default_branch` が書き込まれる
+- `machine_id` は `[a-z0-9]{1,16}`（ハイフン禁止）。明示する場合は
+  `--machine-id pc1` 等を渡す
+- `.gitignore` の `.kaji/config.local.toml` 行は `kaji local init` が追記する
+  （`.kaji/counters/` 行は手動で確認する）
+- config 不備があれば `kaji issue` / `kaji pr` / `kaji run` が exit 2 で停止し、
+  エラーメッセージが修正内容を案内する
 
-- `machine_id` は `[a-z0-9]{1,16}`（ハイフン禁止）。`pc1` / `mac1` /
-  `desktop` / `home` / `office` 等
-- `.gitignore` に `.kaji/config.local.toml` と `.kaji/counters/` が登録されて
-  いることを確認（`kaji local init` が初期化する）
-- 既存設定がある場合、`kaji issue` / `kaji pr` / `kaji run` 実行時に config
-  不備があれば exit 2 で停止し、エラーメッセージで「何を、どこに、どう書くか」
-  を案内する
+生成される overlay の内容・machine_id の解決順は
+[Local Mode CLI Guide](../cli-guides/local-mode.md) § 2 を参照。
 
 ### 2.2 複数 PC セットアップ
 
@@ -101,8 +98,9 @@ kaji run .kaji/wf/docs-local.yaml   local-pc1-2
 4. `/i-doc-final-check [issue_id]`
 5. `/issue-close [issue_id]`
 
-> `/i-pr` は **使用しない**。検証期間中は forge 通信を行わない方針のため、
-> `kaji pr create` は Phase 4 の bare-provider ガードで exit 2 となる。
+> `/i-pr` は **使用しない**。local (bare) provider は PR 概念を持たないため、
+> `kaji pr create` は bare-provider ガードで exit 2 となる
+> （[Local Mode CLI Guide](../cli-guides/local-mode.md) § 8 参照）。
 
 ### 3.2 複数 PC 並行運用
 
@@ -121,92 +119,42 @@ kaji run .kaji/wf/docs-local.yaml   local-pc1-2
 | counter の不整合（fresh clone / cleanup 後）| `next_local_id()` が `.kaji/issues/local-<machine>-*` の最大値から自動補正するため、特別対処不要 |
 | duplicate issue dir 検出時 | `resolve_issue_dir` が glob で重複検出してエラー停止する。手動で重複 dir を削除（merge 事故由来が多い）|
 
-## 4. コード同期戦略
+## 4. コード同期
 
-**現状**: GitHub に push（バックアップ兼ねる）。
+fallback 中も git 自体は通常どおり使える。コード同期は従来どおり
+`git push origin main`（GitHub への push まで不通の場合は、復旧後に push する）。
+LAN bare repo 等の代替 remote が必要になるほどの長期障害は本 runbook の
+スコープ外として別途判断する。
 
-### 4.1 採用候補の比較
+## 5. GitHub 運用への復帰
 
-| 案 | 特徴 | 適用シナリオ |
-|----|------|-------------|
-| GitHub Cloud | 無償枠で private repo / branch 保護 | **現状の選択** |
-| Self-host (Gitea / Forgejo) | フルコントロール、保守必要 | 長期運用が固まった後の選択肢 |
-| LAN bare repo (NAS) | オフライン可、PC 間限定 | 外部送信を避けたい場合 |
-| Bundle ファイル USB 持ち回り | git remote 不要 | 単一 PC + 偶発的バックアップ |
+GitHub が復旧したら通常運用へ戻す。GitHub provider のセットアップ / 認証は
+[GitHub Mode CLI Guide](../cli-guides/github-mode.md) を参照。
 
-### 4.2 GitHub セットアップ手順
-
-GitHub に push するための一般的な手順を以下に示す。詳細は GitHub 公式ドキュメントを参照すること。
-
-1. GitHub に private repo を作成（例: `apokamo/kaji`）
-2. SSH 鍵を GitHub アカウントに登録
-3. 既存 kaji repo に GitHub remote を追加:
-   ```bash
-   git remote add origin git@github.com:<user>/<repo>.git
-   ```
-4. 初回 push:
-   ```bash
-   git push -u origin main
-   ```
-5. 以降は通常運用で `git push origin main`
-
-### 4.3 採用判断の基準
-
-| 観点 | 評価ポイント |
-|------|-------------|
-| 容量 | repo + LFS 想定容量、無償枠の上限 |
-| 認証 | SSH / HTTPS / 2FA / SAML 等 |
-| 可用性 | SLA、地域別レイテンシ、ダウンタイム傾向 |
-| 価格 | 無償枠の制限、有償プラン費用 |
-| 移行コスト | repo 移行、Issue 転記、CI 設定 |
-
-## 5. 将来 forge への移行
-
-> GitHub を primary forge として採用する場合のセットアップ / 認証 /
-> `provider.type='github'` 起動手順は
-> [GitHub Mode CLI Guide](../cli-guides/github-mode.md) を参照。本節は
-> 移行判断材料に focus する。
-
-### 5.1 移行可能性の維持
-
-- local-mode の Issue は `local-<m>-<n>` で SoT として保持される
-- forge に移行する場合、local Issue を **手動転記** する必要がある（自動転記は
-  §残課題）
-- 検証期間中の commit / branch は git remote で保持されているため、forge 切替
-  後も履歴は失われない
-
-### 5.2 移行時の判断材料
-
-- 過去 Issue の扱い（転記 / 凍結のまま / 部分転記）
-- 移行時に必要な kaji 実装は `draft/design/local-mode/design.md` § 残課題 を
-  参照。`kaji sync from-github` / PR context 注入 等は実装済み
-
-### 5.3 移行のチェックリスト
-
-```
-[ ] forge 採用先を決定
-[ ] 採用先で repo 作成、git remote 設定
-[ ] 過去 local Issue の扱いを決定（転記対象を選別）
-[ ] design.md / runbook v2 を新方針で書き直し
-[ ] 必要な kaji 実装を §残課題 から起票
-[ ] 検証期間終了の宣言（CHANGELOG に記録）
-```
+1. `.kaji/config.local.toml` の overlay を削除する（または `[provider]` の
+   `type = "github"` へ書き換える）
+2. `kaji config provider-type` が `github` を返すことを確認する
+3. fallback 中に蓄積した local Issue（`local-<m>-<n>`）の扱いを決める:
+   GitHub Issue へ手動転記して local 側を close する（自動転記は無い）か、
+   local Issue のまま `dev-local.yaml` / `docs-local.yaml` で完結させる
+4. fallback 期間中の commit / branch は git remote に保持されているため、
+   復帰後も履歴は失われない
+5. GitHub Issue の read-only 参照が必要な場合は `kaji sync from-github` で
+   cache を更新する（`gh:N` 参照、[Local Mode CLI Guide](../cli-guides/local-mode.md) § 10）
 
 ## 6. トラブルシューティング
 
 ### 6.1 「provider.type が解決できない」エラー
 
-```
-ERROR: provider.type is not configured.
-Add the following to .kaji/config.toml:
+- `[provider] section is required in .kaji/config.toml.` — tracked / overlay の
+  いずれにも `[provider]` セクションが無い。local fallback へ切り替えるなら
+  `kaji local init` で overlay を生成する
+- `Error loading <path>: provider.type is required (string)` — `[provider]`
+  セクションはあるが `type` が無い / 不正な値。overlay で切り替えている場合は
+  `.kaji/config.local.toml` 側の `[provider]` ブロックを確認する
 
-  [provider]
-  type = "local"
-```
-
-`.kaji/config.toml` に `[provider]` セクションが無い、または `type` が
-不正な値。Phase 3-e 以降は legacy passthrough を廃止したため、必ず
-`type = "local"` を明示する必要がある。
+legacy passthrough（config 無しで `gh` へ素通り）は存在しないため、
+`type` は必ず明示する必要がある。
 
 ### 6.2 machine_id 衝突
 

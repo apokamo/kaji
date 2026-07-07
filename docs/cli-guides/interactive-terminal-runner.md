@@ -43,9 +43,8 @@ agent を同一画面で並列に見られる。pane 配置は **初回のみ or
 
 ## 設定
 
-`[execution]` は **workflow YAML ではなく repository config** に書く。`kaji run` は `--workdir`
-または現在の cwd から親方向へ `.kaji/config.toml` を探索し、その directory を repository root と
-する。
+`[execution]` は **workflow YAML ではなく repository config** に書く（`.kaji/config.toml` の
+探索ルールは [設定リファレンス](../reference/configuration.md#discovery-rule) 参照）。
 
 tracked な既定値は `.kaji/config.toml`、個人環境だけで切り替える場合は gitignored の
 `.kaji/config.local.toml` に書く。
@@ -58,25 +57,16 @@ agent_runner = "interactive_terminal"            # "headless"（既定） | "int
 interactive_terminal_close_on_verdict = true     # 既定 true
 ```
 
-`ExecutionConfig` のフィールド:
-
-| フィールド | 型 | 既定 | 説明 |
-|-----------|-----|------|------|
-| `default_timeout` | `int` | （必須） | step timeout 秒 |
-| `agent_runner` | `"headless"` \| `"interactive_terminal"` | `"headless"` | runner backend |
-| `interactive_terminal_close_on_verdict` | `bool` | `true` | verdict 検知後に pane を閉じるか |
-
 `agent_runner` が許可値以外なら **config load 時点で `ConfigLoadError`**（fail-fast）。
-
-> 上表は runner 文脈の早見表。`[execution]` を含む全 key の網羅的な仕様（型 / 既定 / 検証）の
-> 正本は [設定リファレンス](../reference/configuration.md#execution) を参照。
+`[execution]` 各 key の網羅的な仕様（型 / 既定 / 検証）の正本は
+[設定リファレンス](../reference/configuration.md#execution) を参照。
 
 ### overlay
 
-`.kaji/config.local.toml` の `[execution]` は `[provider]` と同じく **top-level section 内の
-key 単位** で `.kaji/config.toml` の同名 key を上書きする。例えば tracked が
-`agent_runner = "headless"` でも、overlay に `agent_runner = "interactive_terminal"` だけ書けば
-個人環境のみ interactive terminal に切り替えられる（`default_timeout` は tracked のまま）。
+`.kaji/config.local.toml` の `[execution]` は **key 単位**で `.kaji/config.toml` の同名 key を
+上書きする（[設定リファレンス](../reference/configuration.md#overlay-merge-rule) 参照）。tracked が
+`agent_runner = "headless"` でも、overlay に 1 key 書くだけで個人環境のみ切り替えられる
+（`default_timeout` は tracked のまま）。
 
 ```toml
 # .kaji/config.local.toml （gitignored, 個人環境）
@@ -158,8 +148,9 @@ kaji run .kaji/wf/dev.yaml 224 --log-level WARNING
    `@kaji_interactive_terminal` が `origin=<origin pane>` 一致）を列挙し、配置を決める（Issue #238）:
    - 管理対象0枚: origin pane を `tmux split-window -d -h -t "$TMUX_PANE"` で右に分割し、右列を作る。
    - 管理対象1枚: その agent pane を `-d -v` で上下分割し、右列の2枚目を作る。
-   - 管理対象2枚以上: `pane_top` 昇順で最古（上側）の管理対象 pane を `kill-pane` してから、残った最新
-     pane を `-d -v` で分割する。これで右列は常に最新2枚相当に保たれ、横幅が step ごとに狭くならない。
+   - 管理対象2枚以上: `pane_top` 昇順で最古（上側）の管理対象 pane から順に、残り 1 枚になるまで
+     `kill-pane` してから、残った最新 pane を `-d -v` で分割する。これで右列は常に最新2枚相当に
+     保たれ、横幅が step ごとに狭くならない。
 
    いずれも `-d` でフォーカスを奪わず、`-P -F '#{pane_id}'` で生成された pane id を回収して以降の
    ライフサイクルハンドルにする。作成直後の pane には `tmux set-option -p -t <pane> @kaji_interactive_terminal
