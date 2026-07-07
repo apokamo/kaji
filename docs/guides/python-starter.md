@@ -298,17 +298,22 @@ converts its outcome into a workflow verdict.
 | `docs/dev/kaji-workflow.md` | The five workflows, skill lifecycle, and local-provider manual steps |
 | `docs/dev/shared_skill_rules.md` | Responsibility boundaries between skills and verdict conventions |
 | `docs/dev/documentation_update_criteria.md` | Framework for deciding whether a change needs docs updates |
-| `docs/reference/configuration.md` (+ `.en.md`) | `.kaji/config.toml` and `.env` responsibilities, including where run logs go (Japanese primary + English) |
-| `docs/reference/python-standards.md` (+ `.en.md`) | Python coding standards the skills load before writing code (Japanese primary + English) |
+| `docs/reference/configuration.md` (+ `.en.md`) | `.kaji/config.toml` and `.env` responsibilities, including where run logs go (Japanese primary + English — the starter's current layout, see the note below) |
+| `docs/reference/python-standards.md` (+ `.en.md`) | Python coding standards the skills load before writing code (Japanese primary + English — the starter's current layout, see the note below) |
 | `LICENSE` | 0BSD — no attribution obligation, replace freely. Intentionally different from kaji itself (Apache-2.0): the starter's contents become *your* repository |
 | `scripts/` | `set_agent.py` (agent conversion) / `setup_labels.sh` (labels) / `check_doc_links.py` (doc link checker) |
 | `.claude/skills/` + `.agents/skills/` | 23 generalized skills (canonical + per-skill symlinks) |
 
-Language policy (provisional, mirroring kaji's selective bilingual practice):
-public-facing docs are English-primary with Japanese counterparts
-(`README.ja.md`, this guide's `.ja`), internal references are
-Japanese-primary with `.en.md` translations, and internal process docs
-(`docs/dev/`, `AGENTS.md`, `CLAUDE.md`, skills) are Japanese-only for now.
+Language policy (provisional; describes the **starter template as it ships
+today**, not kaji's convention): public-facing docs are English-primary with
+Japanese counterparts (`README.ja.md`, this guide's `.ja`), internal
+references are Japanese-primary with `.en.md` translations, and internal
+process docs (`docs/dev/`, `AGENTS.md`, `CLAUDE.md`, skills) are
+Japanese-only for now. Note that kaji itself has since switched to "base
+name = English canonical + optional `.ja.md`, no `.en.md`" for user-facing
+docs (see the [translation policy in kaji's docs index](../README.md));
+re-aligning the starter template is tracked in the starter repository, not
+here.
 
 ## 7. Troubleshooting
 

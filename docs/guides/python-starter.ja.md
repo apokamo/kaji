@@ -289,16 +289,19 @@ skills は同梱コピーであり kaji 本体とは同期されない: kaji を
 | `docs/dev/kaji-workflow.md` | workflow 5 本・skill lifecycle・local provider の手動手順 |
 | `docs/dev/shared_skill_rules.md` | skill 間の責務境界と verdict 規約 |
 | `docs/dev/documentation_update_criteria.md` | 変更に docs 更新が必要かの判断フレームワーク |
-| `docs/reference/configuration.md`（+ `.en.md`） | `.kaji/config.toml` と `.env` の責務。実行ログの出力先の定義を含む（日本語正本 + 英語） |
-| `docs/reference/python-standards.md`（+ `.en.md`） | skill がコードを書く前にロードする Python コーディング規約（日本語正本 + 英語） |
+| `docs/reference/configuration.md`（+ `.en.md`） | `.kaji/config.toml` と `.env` の責務。実行ログの出力先の定義を含む（日本語正本 + 英語 — starter の現行構成、下記注記参照） |
+| `docs/reference/python-standards.md`（+ `.en.md`） | skill がコードを書く前にロードする Python コーディング規約（日本語正本 + 英語 — starter の現行構成、下記注記参照） |
 | `LICENSE` | 0BSD — 帰属義務なし、自由に差し替え可。kaji 本体（Apache-2.0）とは意図的に別: starter の中身は*あなたの* repository になるため |
 | `scripts/` | `set_agent.py`（agent 変換）/ `setup_labels.sh`（ラベル）/ `check_doc_links.py`（doc link checker） |
 | `.claude/skills/` + `.agents/skills/` | 汎用化 skills 23 本（正本 + per-skill symlink） |
 
-ドキュメント言語方針（暫定。kaji 本体の選択的 bilingual 運用に準拠）:
-公開面は英語メイン + 日本語版（`README.ja.md`、本ガイドの `.ja`）、内部
-reference は日本語正本 + `.en.md` 訳、内部 process docs（`docs/dev/` /
-`AGENTS.md` / `CLAUDE.md` / skills）は当面日本語のみ。
+ドキュメント言語方針（暫定。**現時点の starter template 同梱物の説明**であり、
+kaji 本体の規約ではない）: 公開面は英語メイン + 日本語版（`README.ja.md`、本ガイドの
+`.ja`）、内部 reference は日本語正本 + `.en.md` 訳、内部 process docs（`docs/dev/` /
+`AGENTS.md` / `CLAUDE.md` / skills）は当面日本語のみ。なお kaji 本体はその後
+ユーザー向け docs を「base 名 = 英語正本 + 任意の `.ja.md`、`.en.md` 廃止」方式に
+切り替えている（[kaji ドキュメント索引の翻訳ポリシー](../README.md) 参照）。
+starter template 側の追随は starter リポジトリで扱い、本ガイドの対象外。
 
 ## 7. トラブルシュート
 
