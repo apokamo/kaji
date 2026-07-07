@@ -330,7 +330,7 @@ Japanese-primary with `.en.md` translations, and internal process docs
 
 - Starter repository: <https://github.com/apokamo/kaji-starter-python>
 - kaji configuration reference: [configuration.md](../reference/configuration.md)
-  ([English](../reference/configuration.en.md))
+  ([Japanese](../reference/configuration.ja.md))
 - Workflow YAML authoring: [workflow-authoring.md](../dev/workflow-authoring.md)
 - Local mode CLI guide: [local-mode.md](../cli-guides/local-mode.md)
 - Interactive terminal runner: [interactive-terminal-runner.md](../cli-guides/interactive-terminal-runner.md)

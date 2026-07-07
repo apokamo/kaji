@@ -2,6 +2,19 @@
 
 kaji のドキュメント一覧。[Diataxis フレームワーク](https://diataxis.fr/) に基づいて分類。
 
+## 翻訳ファイルのポリシー（.ja.md）
+
+ユーザー向けドキュメントは「base 名 = 英語（正本）、`.ja.md` = 任意の日本語訳」方式で管理する
+（実例: `README.md` + `README.ja.md`、[python-starter.md](guides/python-starter.md) +
+[python-starter.ja.md](guides/python-starter.ja.md)）。
+
+- base 名ファイル（例: `reference/configuration.md`）の本文が英語の正本。内容更新は base 名側に行う
+- `.ja.md` は best-effort の日本語訳。英語版の更新に追随しない場合がある
+- 記述に差異がある場合は英語版（base 名）が正
+- `.en.md` suffix は使用しない（旧 `configuration.en.md` 方式は廃止）
+- 内部文書（`dev/` / `reference/python/` / `adr/` / `rfc/` 等）は日本語のまま維持し、英語化の対象外
+- ユーザー向け文書の英語化は EPIC #264 で段階的に実施中のため、base 名でも本文が日本語のままの文書が残っている
+
 ## How-to（開発ワークフロー）
 
 | ドキュメント | 概要 |
@@ -31,7 +44,7 @@ kaji のドキュメント一覧。[Diataxis フレームワーク](https://diat
 | ドキュメント | 概要 |
 |-------------|------|
 | [アーキテクチャ](ARCHITECTURE.md) | システム構成・モジュール依存関係 |
-| [設定リファレンス](reference/configuration.md) | `.kaji/config.toml` / overlay の全 section/key 仕様の正本（[English](reference/configuration.en.md)） |
+| [設定リファレンス](reference/configuration.md) | `.kaji/config.toml` / overlay の全 section/key 仕様の正本（英語正本、[日本語](reference/configuration.ja.md)） |
 | [テストサイズ判断ガイド](reference/testing-size-guide.md) | S/M/L の境界ケース判断基準 |
 | [CLI ガイド](cli-guides/) | CLI 操作リファレンス（[GitHub Mode](cli-guides/github-mode.md) / [Local Mode](cli-guides/local-mode.md) / [Interactive Terminal Runner](cli-guides/interactive-terminal-runner.md)） |
 

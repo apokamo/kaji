@@ -150,7 +150,7 @@ git_remote = "origin"
 
 For the full `.kaji/config.toml` reference, including overlays and all
 available keys, see
-[Configuration Reference](docs/reference/configuration.en.md).
+[Configuration Reference](docs/reference/configuration.md).
 
 For local issue storage without GitHub, use a local provider config and create a
 gitignored machine overlay:

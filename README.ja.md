@@ -138,7 +138,7 @@ git_remote = "origin"
 ```
 
 `.kaji/config.toml` の全設定項目、overlay、利用可能なkeyの詳細は
-[設定リファレンス](docs/reference/configuration.md)を参照してください。
+[設定リファレンス](docs/reference/configuration.md)（英語正本、[日本語版](docs/reference/configuration.ja.md)）を参照してください。
 
 GitHubを使わないlocal issue storageの場合は、local provider configにし、
 gitignoredなmachine overlayを作成します。

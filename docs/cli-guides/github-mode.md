@@ -79,7 +79,7 @@ runner backend。設定方法・CLI option・手動検証手順は
 
 - `[provider.github].repo` は **`owner/name`** 形式。`https://` プレフィクスや `.git` サフィックスは付けない。`gh --repo <owner>/<name>` / `gh api repos/<owner>/<name>/...` に渡される
 - `worktree_prefix` / `agent_runner` / `git_remote` の既定値・実効挙動は
-  [設定リファレンス](../reference/configuration.md#section-key-仕様) を参照
+  [設定リファレンス](../reference/configuration.md#section-key-specification) を参照
 
 ### 1.4 `.github/labels.yml` の連動
 

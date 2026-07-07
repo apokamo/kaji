@@ -319,8 +319,8 @@ reference は日本語正本 + `.en.md` 訳、内部 process docs（`docs/dev/` 
 ## 関連ドキュメント
 
 - starter repository: <https://github.com/apokamo/kaji-starter-python>
-- kaji 設定リファレンス: [configuration.md](../reference/configuration.md)
-  （[English](../reference/configuration.en.md)）
+- kaji 設定リファレンス: [configuration.md](../reference/configuration.md)（英語正本）
+  （[日本語版](../reference/configuration.ja.md)）
 - workflow YAML の書き方: [workflow-authoring.md](../dev/workflow-authoring.md)
 - Local Mode CLI ガイド: [local-mode.md](../cli-guides/local-mode.md)
 - Interactive Terminal Runner: [interactive-terminal-runner.md](../cli-guides/interactive-terminal-runner.md)
