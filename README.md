@@ -167,8 +167,8 @@ kaji local init
 `kaji local init` creates `.kaji/config.local.toml` for the current machine; it
 does not replace the tracked base config. Local mode uses local-specific
 workflows such as `.kaji/wf/dev-local.yaml`. See
-[Local Mode CLI Guide](docs/cli-guides/local-mode.md) for the local provider
-setup.
+[Local Mode CLI Guide](docs/cli-guides/local-mode.md)
+([Japanese](docs/cli-guides/local-mode.ja.md)) for the local provider setup.
 
 Skills live under `.claude/skills/`. Other agent-specific skill directories can
 point to the same canonical skill files with symlinks.
@@ -243,6 +243,7 @@ subscription CLI usage, and debugging agent behavior.
 
 Read more:
 [Interactive Terminal Runner](docs/cli-guides/interactive-terminal-runner.md)
+([Japanese](docs/cli-guides/interactive-terminal-runner.ja.md))
 
 ## Workflow example
 
@@ -308,8 +309,8 @@ the runner supports it.
 | Workflow overview | [docs/dev/workflow_overview.md](docs/dev/workflow_overview.md) |
 | Workflow authoring | [docs/dev/workflow-authoring.md](docs/dev/workflow-authoring.md) |
 | Skill authoring | [docs/dev/skill-authoring.md](docs/dev/skill-authoring.md) |
-| Interactive terminal runner | [docs/cli-guides/interactive-terminal-runner.md](docs/cli-guides/interactive-terminal-runner.md) |
-| AI-driven development strategy | [docs/concepts/ai-driven-strategy.md](docs/concepts/ai-driven-strategy.md) |
+| Interactive terminal runner | [docs/cli-guides/interactive-terminal-runner.md](docs/cli-guides/interactive-terminal-runner.md) ([Japanese](docs/cli-guides/interactive-terminal-runner.ja.md)) |
+| AI-driven development strategy | [docs/concepts/ai-driven-strategy.md](docs/concepts/ai-driven-strategy.md) ([Japanese](docs/concepts/ai-driven-strategy.ja.md)) |
 | CLI guides | [docs/cli-guides/](docs/cli-guides/) |
 
 ## AI-readable docs

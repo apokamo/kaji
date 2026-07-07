@@ -44,10 +44,12 @@ in the `kaji_harness` package.
   YAML, steps, transitions, cycles, and verdict mappings.
 - [Skill authoring](docs/dev/skill-authoring.md): how to write skills and their
   verdict contracts.
-- [Interactive terminal runner](docs/cli-guides/interactive-terminal-runner.md):
-  tmux-backed runner for normal Claude Code and Codex CLI sessions.
-- [AI-driven strategy](docs/concepts/ai-driven-strategy.md): project philosophy
-  for human direction and AI-executed development loops.
+- [Interactive terminal runner](docs/cli-guides/interactive-terminal-runner.md)
+  ([Japanese](docs/cli-guides/interactive-terminal-runner.ja.md)): tmux-backed
+  runner for normal Claude Code and Codex CLI sessions.
+- [AI-driven strategy](docs/concepts/ai-driven-strategy.md)
+  ([Japanese](docs/concepts/ai-driven-strategy.ja.md)): project philosophy for
+  human direction and AI-executed development loops.
 
 ## CLI and Setup
 
