@@ -106,9 +106,13 @@ non-interactive runs can use the same structured-output path.
 codex exec \
   --model gpt-5.5 \
   --sandbox workspace-write \
-  --ask-for-approval on-request \
+  --ask-for-approval never \
   "Summarize the current repository"
 ```
+
+Use `--ask-for-approval never` for scripted or otherwise unattended
+non-interactive runs. Reserve `on-request` for supervised local sessions where a
+human can answer approval prompts.
 
 If no prompt argument is provided, or if the prompt is `-`, `codex exec` reads
 instructions from stdin. If stdin is piped and a prompt argument is also
@@ -214,7 +218,7 @@ codex exec \
 ```bash
 codex exec \
   --sandbox workspace-write \
-  --ask-for-approval on-request \
+  --ask-for-approval never \
   "Start the documentation audit"
 
 codex exec resume --last "Apply the next documentation update"
@@ -267,7 +271,8 @@ Use the least access needed for the task:
 | Mode | When to use |
 |------|-------------|
 | `--sandbox read-only` | Inspection, review, and planning. |
-| `--sandbox workspace-write --ask-for-approval on-request` | Normal local coding or docs work. |
+| `--sandbox workspace-write --ask-for-approval never` | Scripted non-interactive local coding or docs work where failures should return to the agent instead of prompting. |
+| `--sandbox workspace-write --ask-for-approval on-request` | Supervised interactive or local runs where a human is available to answer approval prompts. |
 | `--sandbox danger-full-access --ask-for-approval never` | Only inside an externally isolated container, VM, or CI runner. |
 
 `workspace-write` can be extended with `--add-dir` when a workflow genuinely
