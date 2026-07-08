@@ -51,6 +51,10 @@ in the `kaji_harness` package.
   ([Japanese](docs/cli-guides/claude-code-cli-guide.ja.md)): verified Claude
   Code CLI options, subcommands, permissions, agents, MCP, plugins, and kaji
   integration notes.
+- [Codex CLI Session Guide](docs/cli-guides/codex-cli-session-guide.md)
+  ([Japanese](docs/cli-guides/codex-cli-session-guide.ja.md)): verified Codex
+  CLI session, resume, structured output, sandbox, MCP, plugin, and cloud
+  integration notes.
 - [AI-driven strategy](docs/concepts/ai-driven-strategy.md)
   ([Japanese](docs/concepts/ai-driven-strategy.ja.md)): project philosophy for
   human direction and AI-executed development loops.
