@@ -6,7 +6,7 @@ Language: English | [Japanese](README.ja.md)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](pyproject.toml)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue)](LICENSE)
 
-https://github.com/user-attachments/assets/5d5e41c5-9e4e-4f60-91b9-49a135757db9
+https://github.com/user-attachments/assets/b1e3fb2e-6b92-4798-8f4c-0227b0727ce1
 
 <p align="center">
   <a href="docs/assets/demo.mp4">Watch the terminal demo (MP4)</a>
