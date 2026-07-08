@@ -1,0 +1,46 @@
+name: Publish PyPI
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Build and publish to PyPI
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8
+
+      - name: Build distributions
+        run: uv build --no-sources
+
+      - name: Check package metadata
+        run: uvx twine check --strict dist/*
+
+      - name: Smoke test wheel entry point
+        run: |
+          wheel="$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+          if [ -z "$wheel" ]; then
+            echo "No wheel found in dist/" >&2
+            exit 1
+          fi
+          UV_TOOL_DIR="$RUNNER_TEMP/uv-tools" \
+            UV_TOOL_BIN_DIR="$RUNNER_TEMP/uv-bin" \
+            uv tool install --from "$wheel" kaji
+          "$RUNNER_TEMP/uv-bin/kaji" --help
+
+      - name: Publish to PyPI
+        run: uv publish

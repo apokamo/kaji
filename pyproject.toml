@@ -9,6 +9,9 @@ license-files = ["LICENSE"]
 authors = [
     {name = "apokamo"}
 ]
+maintainers = [
+    {name = "apokamo"}
+]
 keywords = ["ai", "agent", "workflow", "orchestrator", "claude", "codex", "gemini"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -37,6 +40,12 @@ dev = [
 
 [project.scripts]
 kaji = "kaji_harness.cli_main:main"
+
+[project.urls]
+Homepage = "https://github.com/apokamo/kaji"
+Repository = "https://github.com/apokamo/kaji"
+Issues = "https://github.com/apokamo/kaji/issues"
+Changelog = "https://github.com/apokamo/kaji/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["setuptools>=77.0.0", "wheel"]

@@ -37,7 +37,7 @@ publish は GitHub Actions + PyPI Trusted Publisher を正とし、workflow file
 
 ### 入力
 
-- Git tag: `v*` に一致する tag push を publish workflow の起動条件にする。
+- GitHub Release: `published` event を publish workflow の起動条件にする。
 - GitHub environment: `pypi`
   - repository の Environments で作成し、approval rule を設定する。
 - PyPI Pending Trusted Publisher:
@@ -72,7 +72,7 @@ maintainer:
   # release skill creates and pushes vX.Y.Z and GitHub Release
 
 GitHub Actions:
-  .github/workflows/publish-pypi.yml runs on tag vX.Y.Z
+  .github/workflows/publish-pypi.yml runs when GitHub Release vX.Y.Z is published
   waits for environment pypi approval
   builds dist
   checks README/package metadata
@@ -106,7 +106,7 @@ GitHub Actions:
 3. `README.md` / `README.ja.md` の Install 節を PyPI install 正に更新し、Git URL install は
    development / unreleased fallback として短く残す。
 4. `.github/workflows/publish-pypi.yml` を追加する。
-   - `on.push.tags: ["v*"]`
+   - `on.release.types: [published]`
    - job-level `environment: pypi`
    - job-level `permissions.id-token: write` と `permissions.contents: read`
    - `astral-sh/setup-uv` で uv を入れる
@@ -116,7 +116,7 @@ GitHub Actions:
    - `uv publish`
 5. release skill と runbook を更新する。
    - `/release` は引き続き main worktree で version bump / CHANGELOG / tag / GitHub Release 作成を担う。
-   - PyPI publish は tag push 後の `publish-pypi.yml` と environment approval が担う。
+   - PyPI publish は GitHub Release publish 後の `publish-pypi.yml` と environment approval が担う。
    - dry-run は PyPI publish を起動しない。
    - emergency fallback の API token 手順は「通常運用では使わない」扱いで、token を docs / Issue /
      shell history / repo 内に残さない注意を明記する。
@@ -149,7 +149,7 @@ uv tool install --from dist/kaji-*.whl --install-dir "$tmpdir/bin" kaji
 ```
 
 GitHub Actions 自体の Trusted Publisher publish は、repository に merge され、PyPI 側の Pending
-Trusted Publisher と GitHub environment `pypi` が設定された後で初回 tag release により確認する。
+Trusted Publisher と GitHub environment `pypi` が設定された後で初回 GitHub Release publish により確認する。
 AI 実装フェーズでは workflow YAML の静的整合と local packaging 検証までを対象にする。
 
 #### 恒久テストを追加しない理由
