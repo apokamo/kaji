@@ -163,6 +163,47 @@ AI 実装フェーズでは workflow YAML の静的整合と local packaging 検
    新しい回帰検出情報がほとんど増えない。
 4. 本設計書と実装報告に、local packaging 検証と初回 publish 時の手動確認範囲を記録する。
 
+## 完了条件の分類（merge 阻害条件 / post-merge 運用タスク）
+
+Issue #270 の `## 完了条件` には、repository の変更だけでは達成できず、PyPI / GitHub の
+管理画面権限・Trusted Publisher OIDC 認証・実 publish を要する項目が含まれる。
+`docs/dev/workflow_completion_criteria.md` §「admin 権限を要する検証の扱い」の原則
+（AI 単独で達成不能な検証は merge 阻害条件に含めず、post-merge / 初回リリース前後の
+user 運用タスクとして整理する）に従い、本設計では完了条件を以下の 2 群に分類する。
+本節を本 Issue の merge 阻害境界の source of truth とする。
+
+### A. merge 阻害条件（本 PR 内で AI が達成・検証する）
+
+| 完了条件 | 検証手段 |
+|----------|----------|
+| GitHub Actions + Trusted Publisher workflow 追加（`id-token: write` + environment `pypi`） | `.github/workflows/publish-pypi.yml` の存在と YAML 静的整合 |
+| release skill / runbook に publish 手順を追記 | `.claude/skills/release/SKILL.md` / `docs/operations/release/runbook.md` の diff |
+| `README.md` / `README.ja.md` の Install 節を PyPI install 正へ更新 | 両 README の diff |
+| `[project.urls]` / `maintainers` metadata 整備 | `pyproject.toml` の diff、wheel METADATA の `Project-URL` / `Maintainer` |
+| 設計書作成（`draft/design/issue-270-pypi-publish.md`） | 本設計書の存在 |
+| テスト戦略（packaging 検証中心・恒久テスト不要判断の記録） | 本設計書「テスト戦略」節 + 実装報告 |
+| `make check` 通過（baseline 一致） | ruff / format / mypy PASS、pytest は既知 baseline failure のみ・新規 regression 0 |
+
+これらは merge 前に AI フェーズで達成・検証し、review-design → review-code → final-check の
+証跡で確認する。
+
+### B. post-merge / 初回 release 前後の user 運用タスク（merge 阻害条件ではない）
+
+以下は外部 credential（PyPI Trusted Publisher OIDC）・管理画面権限・実 publish を要するため、
+`workflow_completion_criteria.md` の原則に従い merge 阻害条件に含めない。手順は
+`.claude/skills/release/SKILL.md` / `docs/operations/release/runbook.md` に残し、user が merge 後 /
+初回 GitHub Release publish 前後に実施する。
+
+| 完了条件 | AI フェーズの代替検証 | 実施タイミング |
+|----------|----------------------|---------------|
+| PyPI に `kaji` が公開され、クリーン環境で `uv tool install kaji && kaji --help` が成功する | isolated wheel smoke test（`uv tool install --from dist/*.whl kaji && kaji --help`）+ `uv build --no-sources` | 初回 GitHub Release publish 後 |
+| PyPI プロジェクトページで README render / `[project.urls]` リンク表示を確認する | `uvx twine check --strict dist/*` + wheel METADATA 確認 | 初回 publish 後の PyPI ページ確認 |
+| PyPI account / 2FA / recovery codes / Pending Trusted Publisher / GitHub environment `pypi` approval | 対象外（repository 変更では自動化しない前提作業） | 初回 publish 前 |
+
+> final-check は本節の分類を参照し、B 群の未達を merge 阻害条件として扱わない。Issue 本文の
+> 完了条件チェックボックス更新（B 群を「前提作業 / 本 PR 外」として明示）は
+> `workflow_completion_criteria.md` の Issue 本文更新プロトコルに従い final-check PASS 時に実施する。
+
 ## 影響ドキュメント
 
 | ドキュメント | 影響の有無 | 理由 |
@@ -187,3 +228,4 @@ AI 実装フェーズでは workflow YAML の静的整合と local packaging 検
 | uv Docs: Building and publishing a package | https://docs.astral.sh/uv/guides/package/#publishing-your-package | Trusted Publisher 経由の PyPI publish では credentials を設定せず `uv publish` できる。 |
 | Issue #270 | https://github.com/apokamo/kaji/issues/270 | PyPI account / package name / Trusted Publisher 正 / emergency fallback の要件。 |
 | testing convention | docs/dev/testing-convention.md | metadata-only / packaging-only 変更では、条件を満たせば恒久回帰テスト追加不要。 |
+| workflow completion criteria | docs/dev/workflow_completion_criteria.md | 「AI 単独で達成不能な検証は完了条件（merge 阻害条件）に含めず、手順を docs に残し post-merge / 初回リリース前後の user 運用タスクとして整理する」。実 publish / PyPI page 確認を merge 阻害境界から外す根拠。 |
