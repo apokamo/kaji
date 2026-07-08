@@ -6,6 +6,12 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](pyproject.toml)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue)](LICENSE)
 
+https://github.com/user-attachments/assets/5d5e41c5-9e4e-4f60-91b9-49a135757db9
+
+<p align="center">
+  <a href="docs/assets/demo.mp4">ターミナルデモを見る（MP4）</a>
+</p>
+
 Claude Code、Codex、Gemini CLIのための closed-loop agentic development。
 
 kajiは、Issueを起点に、設計 -> 実装 -> レビュー -> 修正 -> 検証 -> PR までを
