@@ -140,12 +140,17 @@ GitHub Actions:
 - `make verify-packaging`
 - `rm -rf dist && uv build --no-sources`
 - `uvx twine check --strict dist/*`
-- isolated wheel smoke test:
+- isolated wheel smoke test（`.github/workflows/publish-pypi.yml` の Smoke test step と同一方式。
+  uv には `uv tool install` 用の `--install-dir` フラグが無いため、隔離は `UV_TOOL_DIR` /
+  `UV_TOOL_BIN_DIR` 環境変数で行い、bin を明示パスで起動する。local 検証では `$tmpdir`、
+  CI では `$RUNNER_TEMP` を隔離先に使う）:
 
 ```bash
 tmpdir="$(mktemp -d)"
-uv tool install --from dist/kaji-*.whl --install-dir "$tmpdir/bin" kaji
-"$tmpdir/bin/kaji" --help
+wheel="$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+UV_TOOL_DIR="$tmpdir/uv-tools" UV_TOOL_BIN_DIR="$tmpdir/uv-bin" \
+  uv tool install --from "$wheel" kaji
+"$tmpdir/uv-bin/kaji" --help
 ```
 
 GitHub Actions 自体の Trusted Publisher publish は、repository に merge され、PyPI 側の Pending
