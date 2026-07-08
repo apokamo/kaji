@@ -6,12 +6,10 @@ Language: English | [Japanese](README.ja.md)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](pyproject.toml)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue)](LICENSE)
 
-<p align="center">
-  <video src="docs/assets/demo.mp4" controls muted playsinline></video>
-</p>
+https://github.com/user-attachments/assets/5d5e41c5-9e4e-4f60-91b9-49a135757db9
 
 <p align="center">
-  <a href="docs/assets/demo.mp4">Watch the terminal demo</a>
+  <a href="docs/assets/demo.mp4">Watch the terminal demo (MP4)</a>
 </p>
 
 Closed-loop agentic development for Claude Code, Codex, and Gemini CLI.
