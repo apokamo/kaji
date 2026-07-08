@@ -44,22 +44,45 @@ quality gate.
 
 ```mermaid
 flowchart TB
-  Issue["Issue"] --> Ready["Ready gate"]
-  Ready --> Design["Design"]
+  Issue["Issue"] --> Ready{"Ready gate"}
+  Ready -- "PASS" --> Start["Issue start"]
+  Ready -- "RETRY" --> FixReady["Fix ready"]
+  FixReady --> Ready
+
+  Start --> Design["Design"]
   Design --> DesignReview{"Design review"}
   DesignReview -- "PASS" --> Implement["Implement"]
   DesignReview -- "RETRY" --> FixDesign["Fix design"]
   FixDesign --> VerifyDesign["Verify design"]
-  VerifyDesign --> DesignReview
+  VerifyDesign -- "PASS" --> Implement
+  VerifyDesign -- "RETRY" --> FixDesign
 
-  Implement --> CodeReview{"Code review"}
+  Implement -- "PASS" --> CodeReview{"Code review"}
+  Implement -- "RETRY" --> Implement
+  Implement -- "BACK" --> Design
   CodeReview -- "PASS" --> FinalCheck["Final check"]
   CodeReview -- "RETRY" --> FixCode["Fix code"]
-  FixCode --> VerifyCode["Verify code"]
-  VerifyCode --> CodeReview
   CodeReview -- "BACK" --> Design
+  CodeReview -- "BACK_IMPLEMENT" --> Implement
+  FixCode --> VerifyCode["Verify code"]
+  VerifyCode -- "PASS" --> FinalCheck
+  VerifyCode -- "RETRY" --> FixCode
 
-  FinalCheck --> PR["Pull request"]
+  FinalCheck -- "PASS" --> PR["Pull request"]
+  FinalCheck -- "RETRY" --> FinalCheck
+  FinalCheck -- "BACK_DESIGN" --> Design
+  FinalCheck -- "BACK_IMPLEMENT" --> Implement
+
+  PR -- "PASS" --> ReviewPoll{"PR review poll"}
+  PR -- "RETRY" --> PR
+  ReviewPoll -- "PASS" --> Close["Issue close"]
+  ReviewPoll -- "RETRY" --> PRFix["PR fix"]
+  ReviewPoll -- "BACK_FALLBACK" --> Review["Fallback review"]
+  PRFix --> PRVerify["PR verify"]
+  PRVerify -- "PASS" --> Close
+  PRVerify -- "RETRY" --> PRFix
+  Review -- "PASS" --> Close
+  Review -- "RETRY" --> PRFix
 ```
 
 Every agent step returns a verdict:
