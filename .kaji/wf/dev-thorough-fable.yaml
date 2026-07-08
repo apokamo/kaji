@@ -1,0 +1,227 @@
+name: dev-thorough
+description: |
+  開発作業の丁寧版 workflow。設計・実装・修正を厚めに行う高品質優先の構成。
+  dev.yaml と同じ遷移グラフで、design/fix-design=xhigh, implement/fix-code=high。
+  レビュー系は標準の dev.yaml と同じ high を維持する。
+  issue-create は事前に完了していることが前提。
+  review-ready が RETRY の場合は fix-ready で Issue 本文を修正してから再試行する。
+execution_policy: auto
+requires_provider: github
+
+cycles:
+  ready-review:
+    entry: review-ready
+    loop: [fix-ready, review-ready]
+    max_iterations: 3
+    on_exhaust: ABORT
+  design-review:
+    entry: review-design
+    loop: [fix-design, verify-design]
+    max_iterations: 3
+    on_exhaust: ABORT
+  code-review:
+    entry: review-code
+    loop: [fix-code, verify-code]
+    max_iterations: 3
+    on_exhaust: ABORT
+  implementation:
+    entry: implement
+    loop: [implement]
+    max_iterations: 3
+    on_exhaust: ABORT
+  final-check:
+    entry: final-check
+    loop: [final-check]
+    max_iterations: 3
+    on_exhaust: ABORT
+  pr-create:
+    entry: pr
+    loop: [pr]
+    max_iterations: 3
+    on_exhaust: ABORT
+  pr-review:
+    entry: review-poll
+    loop: [pr-fix, pr-verify]
+    max_iterations: 3
+    on_exhaust: ABORT
+
+steps:
+  - id: review-ready
+    skill: issue-review-ready
+    agent: codex
+    model: gpt-5.5
+    effort: medium
+    on:
+      PASS: start
+      RETRY: fix-ready
+      ABORT: end
+
+  - id: fix-ready
+    skill: issue-fix-ready
+    agent: claude
+    model: opus
+    effort: medium
+    inject_verdict: true
+    on:
+      PASS: review-ready
+      ABORT: end
+
+  - id: start
+    skill: issue-start
+    agent: claude
+    model: sonnet
+    effort: medium
+    on:
+      PASS: design
+      ABORT: end
+
+  - id: design
+    skill: issue-design
+    agent: claude
+    model: fable
+    effort: high
+    on:
+      PASS: review-design
+      ABORT: end
+
+  - id: review-design
+    skill: issue-review-design
+    agent: codex
+    model: gpt-5.5
+    effort: high
+    on:
+      PASS: implement
+      RETRY: fix-design
+      ABORT: end
+
+  - id: fix-design
+    skill: issue-fix-design
+    agent: claude
+    model: fable
+    effort: high
+    resume: design
+    on:
+      PASS: verify-design
+      ABORT: end
+
+  - id: verify-design
+    skill: issue-verify-design
+    agent: codex
+    model: gpt-5.5
+    effort: medium
+    on:
+      PASS: implement
+      RETRY: fix-design
+      ABORT: end
+
+  - id: implement
+    skill: issue-implement
+    agent: claude
+    model: opus
+    effort: high
+    on:
+      PASS: review-code
+      RETRY: implement
+      BACK: design
+      ABORT: end
+
+  - id: review-code
+    skill: issue-review-code
+    agent: codex
+    model: gpt-5.5
+    effort: high
+    on:
+      PASS: final-check
+      RETRY: fix-code
+      BACK: design
+      BACK_IMPLEMENT: implement
+      ABORT: end
+
+  - id: fix-code
+    skill: issue-fix-code
+    agent: claude
+    model: opus
+    effort: high
+    inject_verdict: true
+    on:
+      PASS: verify-code
+      ABORT: end
+
+  - id: verify-code
+    skill: issue-verify-code
+    agent: codex
+    model: gpt-5.5
+    effort: medium
+    on:
+      PASS: final-check
+      RETRY: fix-code
+      ABORT: end
+
+  - id: final-check
+    skill: i-dev-final-check
+    agent: codex
+    model: gpt-5.5
+    effort: medium
+    on:
+      PASS: pr
+      RETRY: final-check
+      BACK_DESIGN: design
+      BACK_IMPLEMENT: implement
+      ABORT: end
+
+  - id: pr
+    skill: i-pr
+    agent: claude
+    model: sonnet
+    effort: medium
+    on:
+      PASS: review-poll
+      RETRY: pr
+      ABORT: end
+
+  - id: review-poll
+    exec: [kaji, pr, review-poll]
+    on:
+      PASS: close
+      RETRY: pr-fix
+      BACK_FALLBACK: review
+      ABORT: end
+
+  - id: review
+    skill: review
+    agent: codex
+    model: gpt-5.5
+    effort: high
+    on:
+      PASS: close
+      RETRY: pr-fix
+      ABORT: end
+
+  - id: pr-fix
+    skill: pr-fix
+    agent: claude
+    model: opus
+    effort: high
+    inject_verdict: true
+    on:
+      PASS: pr-verify
+      ABORT: end
+
+  - id: pr-verify
+    skill: pr-verify
+    agent: codex
+    model: gpt-5.5
+    effort: medium
+    on:
+      PASS: close
+      RETRY: pr-fix
+      ABORT: end
+
+  - id: close
+    skill: issue-close
+    agent: claude
+    model: sonnet
+    effort: medium
+    on:
+      PASS: end
+      ABORT: end
