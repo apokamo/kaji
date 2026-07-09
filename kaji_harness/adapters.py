@@ -234,6 +234,12 @@ class GeminiAdapter:
         return None
 
     def extract_error_message(self, event: dict[str, Any]) -> str | None:
+        event_type = event.get("type")
+        if event_type not in ("error", "result"):
+            return None
+        if event_type == "result" and not self.is_terminal_failure(event):
+            return None
+
         message = _non_empty_string(event.get("message"))
         if message:
             return message

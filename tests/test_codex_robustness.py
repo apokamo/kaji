@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
-from kaji_harness.adapters import ClaudeAdapter, CodexAdapter
+from kaji_harness.adapters import ClaudeAdapter, CodexAdapter, GeminiAdapter
 from kaji_harness.cli import _is_transient, execute_cli, stream_and_log
 from kaji_harness.errors import CLIExecutionError
 from kaji_harness.models import Step
@@ -246,6 +246,25 @@ class TestAdapterErrorMessageExtraction:
                 {"type": "turn.failed", "error": {"message": "Selected model is at capacity."}}
             )
             == "Selected model is at capacity."
+        )
+
+    @pytest.mark.small
+    def test_gemini_tool_result_error_is_not_failure_detail(self) -> None:
+        """Gemini handled tool_result errors do not become stream failure detail."""
+        adapter = GeminiAdapter()
+
+        assert (
+            adapter.extract_error_message(
+                {
+                    "type": "tool_result",
+                    "status": "error",
+                    "error": {
+                        "type": "tool_not_registered",
+                        "message": 'Tool "run_shell_command" not found in registry.',
+                    },
+                }
+            )
+            is None
         )
 
 
@@ -567,6 +586,53 @@ class TestExecuteCLIRetry:
         assert result.session_id == "claude-retry"
         assert result.terminal_seen is True
         assert result.terminal_failure is False
+
+    def test_gemini_tool_result_error_then_terminal_success_returns(self, tmp_path: Path) -> None:
+        """Gemini non-terminal tool_result errors do not fail a successful run."""
+        script = _create_mock_cli_script(
+            tmp_path,
+            [
+                json.dumps({"type": "init", "session_id": "gemini-tool-error"}),
+                json.dumps(
+                    {
+                        "type": "tool_result",
+                        "status": "error",
+                        "error": {
+                            "type": "tool_not_registered",
+                            "message": 'Tool "run_shell_command" not found in registry.',
+                        },
+                    }
+                ),
+                json.dumps({"type": "message", "role": "assistant", "content": "Handled."}),
+                json.dumps(
+                    {
+                        "type": "result",
+                        "status": "success",
+                        "stats": {"input_tokens": 10, "output_tokens": 2},
+                    }
+                ),
+            ],
+            exit_code=0,
+        )
+        step = Step(id="implement", skill="test-skill", agent="gemini", on={"PASS": "end"})
+
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            result = execute_cli(
+                step=step,
+                prompt="test",
+                workdir=tmp_path,
+                session_id=None,
+                log_dir=tmp_path / "logs",
+                execution_policy="auto",
+                verbose=False,
+                default_timeout=1800,
+            )
+
+        assert result.session_id == "gemini-tool-error"
+        assert result.terminal_seen is True
+        assert result.terminal_failure is False
+        assert result.error_messages == []
+        assert "Handled." in result.full_output
 
     def test_non_transient_error_not_retried(self, tmp_path: Path) -> None:
         """Permanent errors are raised immediately without retry."""
