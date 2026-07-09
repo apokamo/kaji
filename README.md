@@ -138,17 +138,17 @@ tell us what workflow you want to run.
 
 ### Install kaji
 
-Install from Git while distribution is repository-based:
-
-```bash
-uv tool install git+https://github.com/apokamo/kaji.git
-kaji --help
-```
-
-If kaji is later published to PyPI, this can become:
+Install from PyPI:
 
 ```bash
 uv tool install kaji
+kaji --help
+```
+
+For unreleased development builds, install from Git:
+
+```bash
+uv tool install git+https://github.com/apokamo/kaji.git
 ```
 
 ### Configure your repository

@@ -1,12 +1,14 @@
 ---
-description: kaji の release 作業（version bump / CHANGELOG / tag / GitHub Release ページ）を skill で完結させる。CI を使わず maintainer 手元で対話的に進める。
+description: kaji の release 作業（version bump / CHANGELOG / tag / GitHub Release ページ）を進め、PyPI publish workflow へ引き継ぐ。
 name: release
 ---
 
 # Release
 
-kaji の release を maintainer の手元で完結させる skill。
-forge CI (GitHub Actions) に依存せず、各 step で user 承認を挟みながら version bump → CHANGELOG → tag → GitHub Release ページ作成まで進める。
+kaji の release を maintainer の手元で進める skill。
+各 step で user 承認を挟みながら version bump → CHANGELOG → tag → GitHub Release ページ作成まで進める。
+PyPI publish は GitHub Release 公開後に `.github/workflows/publish-pypi.yml` が
+GitHub Actions + PyPI Trusted Publisher で実行する。
 
 ## いつ使うか
 
@@ -14,7 +16,7 @@ forge CI (GitHub Actions) に依存せず、各 step で user 承認を挟みな
 |-----------|-----------|
 | kaji の release（version bump + tag + Release ページ）を切る | ✅ 必須 |
 | dry-run（push / Release ページ作成手前まで確認したい） | ✅ `--dry-run` 経路 |
-| PyPI publish / dist build | ❌ 対象外（現運用で未使用） |
+| PyPI publish | ✅ GitHub Release 公開後、`publish-pypi.yml` へ引き継ぐ |
 | `.github/workflows/release-please.yml` の再有効化 | ❌ 対象外（本 skill は maintainer 手元実行前提） |
 
 ## 入力
@@ -33,6 +35,12 @@ forge CI (GitHub Actions) に依存せず、各 step で user 承認を挟みな
 - GitHub を指す git remote が 1 つ存在すること。Step 1 で `git remote -v` の URL から動的に抽出する。`.kaji/config.toml` の `provider.github.git_remote` 値と整合する remote 名であることが前提
 - 解決した GitHub remote に対して `git push` できる権限を maintainer が持っていること
 - `uv` / `make check` が走る環境（kaji 開発環境セットアップ済み）
+- PyPI publish を行う場合、GitHub environment `pypi` が作成済みで approval rule が設定されていること
+- PyPI 側で project `kaji` の Trusted Publisher（初回は Pending Trusted Publisher）が設定済みであること
+  - owner: `apokamo`
+  - repository: `kaji`
+  - workflow filename: `publish-pypi.yml`
+  - environment: `pypi`
 
 > **Note**: 現状 skill は `git remote -v` の URL grep でのみ remote を解決し、`.kaji/config.toml` の `provider.github.git_remote` は直接読まない。config 値を変えただけでは動作は変わらない点に注意。将来 `kaji config git-remote` 相当の CLI を追加する余地あり。
 
@@ -209,17 +217,41 @@ gh release create vX.Y.Z \
 
 完了後、`gh release view vX.Y.Z` で URL を取得し user に提示する。
 
+GitHub Release の `published` event により `.github/workflows/publish-pypi.yml` が起動する。
+workflow は GitHub environment `pypi` の approval 後、Trusted Publisher で `uv publish` を実行する。
+通常運用では PyPI API token を local 端末、`.pypirc`、GitHub Secrets に保存しない。
+
+### Step 7.5: PyPI publish workflow 確認
+
+`--dry-run` では本 step を実行しない。
+
+```bash
+gh run list --workflow publish-pypi.yml --limit 3
+```
+
+確認すること:
+
+- workflow が対象 release / tag に対して起動している
+- `pypi` environment approval 待ち、または approval 後に実行中である
+- `Build distributions` / `Check package metadata` / `Smoke test wheel entry point` / `Publish to PyPI` が失敗していない
+
+失敗時は PyPI project / Pending Trusted Publisher / GitHub environment `pypi` の設定値が
+workflow と一致しているか確認する。特に workflow filename は `publish-pypi.yml` であること。
+
 ### Step 8: 完了報告
 
 user に以下を提示して終了:
 
 - 採番した version と tag URL
 - GitHub Release ページ URL
+- PyPI publish workflow の状態または URL
+- PyPI 公開後の install 確認: `uv tool install kaji && kaji --help`
 - consumer 側に `uv lock --upgrade-package kaji` を案内する一文（kamo2 等の dependency consumer 向け）
 
 ## Dry-run 経路（`--dry-run`）
 
-Step 1 → 5 まで実行し、Step 6 (push) と Step 7 (Release ページ) を **スキップ**。
+Step 1 → 5 まで実行し、Step 6 (push)、Step 7 (Release ページ)、Step 7.5 (PyPI publish workflow 確認) を **スキップ**。
+dry-run では tag push / GitHub Release 作成を行わないため、PyPI publish workflow も起動しない。
 
 dry-run 終了時に skill が必ず提示する内容:
 
@@ -286,6 +318,20 @@ gh release view vX.Y.Z 2>/dev/null || \
 ```
 
 それでも作成できない場合、GitHub UI から手動で Release ページを作る選択肢を user に提示する。
+
+### Step 7.5 で PyPI publish workflow が失敗
+
+main commit / tag / GitHub Release は作成済みなので、release commit を rollback しない。
+以下を確認してから、失敗した workflow を GitHub UI で rerun する:
+
+- PyPI Pending Trusted Publisher または project Trusted Publisher の workflow filename が `publish-pypi.yml`
+- PyPI Trusted Publisher の owner / repository / environment が `apokamo` / `kaji` / `pypi`
+- GitHub environment `pypi` が存在し、approval rule が意図どおり
+- workflow job に `permissions.id-token: write` がある
+- `uvx twine check --strict dist/*` の失敗なら README / metadata を修正し、次の patch release で再 publish する
+
+PyPI API token による local `uv publish` は emergency fallback のみ。使用する場合も token を
+`.pypirc`、shell history、Issue コメント、docs、repo 内ファイルに残さない。
 
 ### 既に push 済みの release を撤回したい（緊急）
 
