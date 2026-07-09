@@ -3,7 +3,7 @@
 # 配色: Catppuccin Mocha パレット（https://catppuccin.com/palette）
 # 同期: .github/workflows/labels-sync.yml が main への push / 手動 / 週次 cron で実行
 #
-# 管理対象は type:* (11) + meta (8) = 合計 19 ラベルのみ。
+# 管理対象は type:* (11) + meta (9) = 合計 20 ラベルのみ。
 # release-please が自動生成する `autorelease:*` / `release-please:*` は bot 所有で
 # 管理対象外（運用ガイド: docs/dev/labels.md を参照）。
 
@@ -57,8 +57,12 @@ labels:
     description: "CI/CD・GitHub Actions 関連"
 
   # ============================================================
-  # meta (8) — type:* と直交する補助ラベル
+  # meta (9) — type:* と直交する補助ラベル
   # ============================================================
+
+  - name: "epic"
+    color: "cba6f7"
+    description: "複数 Issue を束ねる親 Issue / sub-issues の管理単位"
 
   - name: "breaking-change"
     color: "f2cdcd"
