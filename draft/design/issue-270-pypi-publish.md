@@ -112,7 +112,7 @@ GitHub Actions:
    - `astral-sh/setup-uv` で uv を入れる
    - `uv build --no-sources`
    - `uvx twine check --strict dist/*`
-   - isolated `uv tool install --from dist/*.whl kaji && kaji --help`
+   - isolated `uv tool install dist/*.whl && kaji --help`
    - `uv publish`
 5. release skill と runbook を更新する。
    - `/release` は引き続き main worktree で version bump / CHANGELOG / tag / GitHub Release 作成を担う。
@@ -149,7 +149,7 @@ GitHub Actions:
 tmpdir="$(mktemp -d)"
 wheel="$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
 UV_TOOL_DIR="$tmpdir/uv-tools" UV_TOOL_BIN_DIR="$tmpdir/uv-bin" \
-  uv tool install --from "$wheel" kaji
+  uv tool install "$wheel"
 "$tmpdir/uv-bin/kaji" --help
 ```
 
@@ -201,7 +201,7 @@ user 運用タスクとして整理する）に従い、本設計では完了条
 
 | 完了条件 | AI フェーズの代替検証 | 実施タイミング |
 |----------|----------------------|---------------|
-| PyPI に `kaji` が公開され、クリーン環境で `uv tool install kaji && kaji --help` が成功する | isolated wheel smoke test（`uv tool install --from dist/*.whl kaji && kaji --help`）+ `uv build --no-sources` | 初回 GitHub Release publish 後 |
+| PyPI に `kaji` が公開され、クリーン環境で `uv tool install kaji && kaji --help` が成功する | isolated wheel smoke test（`uv tool install dist/*.whl && kaji --help`）+ `uv build --no-sources` | 初回 GitHub Release publish 後 |
 | PyPI プロジェクトページで README render / `[project.urls]` リンク表示を確認する | `uvx twine check --strict dist/*` + wheel METADATA 確認 | 初回 publish 後の PyPI ページ確認 |
 | PyPI account / 2FA / recovery codes / Pending Trusted Publisher / GitHub environment `pypi` approval | 対象外（repository 変更では自動化しない前提作業） | 初回 publish 前 |
 

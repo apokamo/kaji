@@ -39,7 +39,7 @@ jobs:
           fi
           UV_TOOL_DIR="$RUNNER_TEMP/uv-tools" \
             UV_TOOL_BIN_DIR="$RUNNER_TEMP/uv-bin" \
-            uv tool install --from "$wheel" kaji
+            uv tool install "$wheel"
           "$RUNNER_TEMP/uv-bin/kaji" --help
 
       - name: Publish to PyPI
