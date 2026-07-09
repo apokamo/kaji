@@ -21,6 +21,7 @@ EXPECTED_WORKFLOWS = {
     "dev",
     "dev-local",
     "dev-thorough",
+    "dev-thorough-codex",
     "dev-thorough-fable",
     "docs",
     "docs-fable",
