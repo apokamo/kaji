@@ -108,10 +108,27 @@ kaji recover <workflow.yaml> <issue> [--run-id <run_id>] [--auto-recover] [--wor
 | `<run_dir>/recovery.json` | `RecoveryDecision` の直列化（下記スキーマ）。decision 更新のたびに上書き |
 | `<run_dir>/recovery-chain.json` | child run 側が起動直後に書く chain identity `{root_run_id, parent_run_id}`（`--recovery-*` flag がある run のみ） |
 | `run.log` 追記 event | `failure_event` / `recovery_decision` / `recovery_scheduled` / `recovery_attempt_start` / `recovery_attempt_end`（`RunLogger` に追加） |
-| Issue コメント | 機械生成 triage report（下記テンプレート）。`provider.comment_issue()` 経由。kaji-verdict マーカーは**付与しない**（step verdict ではないため。`issue-design` Step 1.6 の BACK 検出母集団を汚さない） |
+| Issue コメント | 機械生成 triage report（下記テンプレート）。`provider.comment_issue()` 経由。戻り値 `Comment.ref`（下記「comment reference」参照）を stderr サマリと `recovery.json.triage_comment_ref` に記録。kaji-verdict マーカーは**付与しない**（step verdict ではないため。`issue-design` Step 1.6 の BACK 検出母集団を汚さない） |
 | bug issue | 条件成立時のみ `provider.create_issue(title="bug: ...", labels=["type:bug"])`。作成した番号/URL を元 Issue コメントと `recovery.json.bug_issue` に記録 |
-| stderr サマリ | 既存終端表示（`Error: ...` / `Workflow aborted: ...`）の**直後**に数行追加: `failed_step` / `classification` / `synthetic` / `decision` / `resume_scheduled_at`（resume 時）/ コメント URL / 次アクション |
+| stderr サマリ | 既存終端表示（`Error: ...` / `Workflow aborted: ...`）の**直後**に数行追加: `failed_step` / `classification` / `synthetic` / `decision` / `resume_scheduled_at`（resume 時）/ comment ref（取得不能時 `n/a`）/ 次アクション |
 | child run | `decision: resume` かつ auto_recover 有効時のみ、10 分ウェイト後に subprocess として `kaji run <workflow> <issue> --from <step> --recovery-root <root> --recovery-parent <run_id>` を起動 |
+
+#### comment reference（`Comment.ref` の追加）
+
+現行の `Comment`（`providers/models.py`）は `author` / `body` / `created_at` / `seq` /
+`machine_id` のみで投稿先参照を持たず、GitHub provider の `comment_issue()` は
+`gh issue comment` の stdout（作成コメント URL）を捨てている。stderr サマリ・
+`recovery.json` に載せる参照値を provider 中立に供給するため、以下を追加する:
+
+- `Comment.ref: str = ""` — 投稿コメントへの provider 中立参照。default `""` の末尾追加
+  なので既存生成箇所・既存テストは無変更で互換（frozen dataclass の既存 field 順不変）
+- `GitHubProvider.comment_issue()` — `gh issue comment` 成功時の stdout 1 行目
+  （作成コメント URL、例 `https://github.com/<owner>/<repo>/issues/288#issuecomment-<id>`）を
+  strip して `ref` に格納。stdout が空・URL 形式でない場合は `ref=""`（fail させない）
+- `LocalProvider.comment_issue()` — 作成した comment file の **repo-root 相対パス**
+  （例 `.kaji/issues/local-pc1-3/comments/20260710T120000Z-pc1.md`）を `ref` に格納
+- consumer（handler / stderr サマリ / triage コメント外部の表示）は `ref == ""` を `n/a` と
+  表示する。`ref` の形式（URL か path か）には依存しない不透明文字列として扱う
 
 #### exit code（既存 map `0=OK / 1=ABORT / 2=定義エラー / 3=ランタイムエラー` は不変）
 
@@ -155,6 +172,7 @@ kaji recover <workflow.yaml> <issue> [--run-id <run_id>] [--auto-recover] [--wor
   "resume_scheduled_at": null,
   "resume_started_at": null,
   "discarded_resume_session": false,
+  "triage_comment_ref": null,
   "bug_issue": null
 }
 ```
@@ -164,6 +182,8 @@ kaji recover <workflow.yaml> <issue> [--run-id <run_id>] [--auto-recover] [--wor
   （最後は 10 分ウェイト中の SIGINT / KeyboardInterrupt で自動再開を中止した状態。
   ウェイト中断を「resume 予定のまま」に見せない）。
 - 時刻はすべて UTC ISO 8601。`resume_scheduled_at = decision 確定時刻 + 600s`。
+- `triage_comment_ref` は投稿した triage コメントの `Comment.ref`（前掲）。投稿前・投稿失敗・
+  `ref` 取得不能時は `null`。
 - child run 終了後、親 run の `recovery.json` に `recovery_child_run_id` /
   `recovery_child_final_status`（`COMPLETE` / `ABORT` / `DEFINITION_ERROR` / `ERROR`。child の
   exit code から導出）を書き戻す。child run_id は「`resume_started_at` 以降に作成され、
@@ -274,14 +294,17 @@ kaji run .kaji/wf/dev.yaml 288 --from review-code \
 | モジュール | 変更 |
 |-----------|------|
 | `kaji_harness/recovery/`（新規 package） | `models.py`（`FailureClassification` / `RecoveryDecision`）、`classify.py`（純関数 classifier）、`snapshot.py`（artifact 収集）、`report.py`（コメント/サマリ生成の純関数）、`handler.py`（orchestrator: 投稿・ウェイト・child 起動・書き戻し） |
-| `kaji_harness/runner.py` | `failure_event` の emit（4 箇所: dispatch/verdict 例外・cycle exhaust・ambiguous worktree・agent ABORT）、`last_run_dir` 属性の公開、`--recovery-*` 受領時の `recovery-chain.json` 書き出し |
+| `kaji_harness/runner.py` | `failure_event` の emit（emit 箇所は 4、kind は 5 種: dispatch/verdict 例外は同一 except 節から `dispatch_exception` / `verdict_exception` を出し分け、他は cycle exhaust・ambiguous worktree・agent ABORT の各 1 箇所）、`last_run_dir` 属性の公開、`--recovery-*` 受領時の `recovery-chain.json` 書き出し |
 | `kaji_harness/cli.py` | `_is_transient` を公開 helper `is_transient_error_text` に抽出（挙動不変） |
 | `kaji_harness/result.py` | `AttemptResult.synthetic: bool = False` を末尾追加（既存 result.json の後方互換は default で担保） |
 | `kaji_harness/logger.py` | `log_failure_event` / `log_recovery_decision` / `log_recovery_scheduled` / `log_recovery_attempt_start` / `log_recovery_attempt_end` を追加 |
 | `kaji_harness/config.py` | `ExecutionConfig.failure_triage` / `auto_recover` の追加 + validation |
 | `kaji_harness/cli_main.py` | `cmd_run` 終端の handler 呼び出し（例外経路含む）、新 flag、`kaji recover` subcommand、stderr サマリ |
 | `kaji_harness/state.py` | 変更なし（recovery 状態は run artifact 側に置く。Issue 単位 state を汚さない） |
-| `kaji_harness/providers/*` | 変更なし（既存 `comment_issue` / `create_issue` を使用） |
+| `kaji_harness/providers/models.py` | `Comment.ref: str = ""` を末尾追加（provider 中立の投稿コメント参照。default で後方互換） |
+| `kaji_harness/providers/github.py` | `comment_issue()` が `gh issue comment` stdout の作成コメント URL を `Comment.ref` に格納（現状は捨てている） |
+| `kaji_harness/providers/local.py` | `comment_issue()` が作成 comment file の repo-root 相対パスを `Comment.ref` に格納 |
+| `kaji_harness/providers/base.py` | 変更なし（`comment_issue` / `create_issue` の signature 不変。`Comment` の field 追加のみで IF は不変） |
 | `docs/` / `tests/` | 影響ドキュメント・テスト戦略の節を参照 |
 
 ## 方針
@@ -453,7 +476,9 @@ comment:        https://github.com/apokamo/kaji/issues/288#issuecomment-...
 next action:    kaji run .kaji/wf/dev.yaml 288 --from review-code
 ```
 
-初期実装は triage 対象 failure の要約に限定する。run を止めなかった途中異常（transient retry
+`comment:` 行の値は `Comment.ref`（§ comment reference）をそのまま表示する。GitHub provider
+では作成コメント URL、local provider では comment file の repo-root 相対パス、投稿失敗・
+`ref` 取得不能時は `n/a`。初期実装は triage 対象 failure の要約に限定する。run を止めなかった途中異常（transient retry
 で回復した失敗等）のサマリ包含は、`CLIResult` への retry 回数追加が必要になるためスコープ外
 とし、必要なら別 Issue で扱う（Issue § 5 の設計論点への回答）。
 
@@ -508,14 +533,15 @@ kaji run（親）
 - resume command 文字列の構築（workflow path / issue / flag の合成）
 - newer-run 検出の run_id 辞書順比較（`-NNN` suffix 含む）
 - コメント本文 / stderr サマリ生成の純関数: テンプレート充足、auto-close hazard pattern
-  不含、credential masking、500 文字引用上限
+  不含、credential masking、500 文字引用上限、`Comment.ref` 空文字 → `n/a` 表示の fallback
 - `resume_scheduled_at = 決定時刻 + 600s` の算出
 - `derive` 系: child exit code → `child_final_status` mapping（0/1/2/3）
 
 #### Medium テスト
 
-- runner の `failure_event` emit 4 経路（dispatch 例外 / verdict 例外 / cycle exhaust /
-  ambiguous worktree / agent ABORT）が run.log に構造化記録されること（tmp fs + stub dispatch）
+- runner の `failure_event` emit（emit 箇所 4 / kind 5 種の全組合せ: dispatch 例外 /
+  verdict 例外 / cycle exhaust / ambiguous worktree / agent ABORT）が run.log に構造化記録
+  されること（tmp fs + stub dispatch。テストケースは kind 5 種を網羅する）
 - `AttemptResult.synthetic` が except 経路で true、agent ABORT attempt で false になること。
   旧形式 result.json（synthetic キーなし）の読み込み互換
 - handler orchestration（provider mock + subprocess mock + `wait_seconds` 短縮注入）:
@@ -528,6 +554,9 @@ kaji run（親）
 - `recovery.json` / `recovery-chain.json` の永続化と再読込、run.log の recovery event 5 種
 - bug issue 作成経路: local provider（実 fs）+ GitHub provider mock で
   `create_issue(labels=["type:bug"])` と元 Issue への番号記録
+- `Comment.ref` の格納: GitHub provider は `_run_gh` mock の stdout（コメント URL）が
+  `ref` に入ること・stdout 空なら `ref=""` になること、local provider は作成 comment file の
+  repo-root 相対パスが `ref` に入ること（実 fs）。既存呼び出し（`ref` 未参照）の互換
 - config: `failure_triage` / `auto_recover` の型 validation・default・overlay / CLI flag
   precedence（`_apply_execution_overrides` 経由）
 - `cmd_run` 終端: 失敗時に handler が呼ばれ、stderr サマリが出力されること（`capsys`）。
@@ -542,9 +571,11 @@ kaji run（親）
   `.kaji/issues/<id>/comments/` に triage コメントが永続化され、(c) stderr に triage サマリが
   出ることを E2E で 1 ケース検証する。続けて `kaji recover --run-id <該当>` で handler を
   失敗 artifact から再起動できることを確認する（Issue 完了条件の E2E 1 ケース以上に対応）
-- 実 GitHub API 疎通（`large_forge`）は追加しない: provider 境界は既存 `comment_issue` /
-  `create_issue` を呼ぶだけで新規 API 面がなく、既存 provider テストで捕捉済み。10 分実ウェイト
-  の実時間検証は CI で再現不能なため、`wait_seconds` 注入 + Medium での順序検証で代替する
+- 実 GitHub API 疎通（`large_forge`）は追加しない: provider 境界の新規面は
+  `gh issue comment` stdout の `ref` 捕捉のみで、stdout 形式は gh CLI の公開仕様
+  （Primary Sources 参照）に基づき Medium の `_run_gh` mock で検証する。空 stdout 時も
+  `ref=""` → `n/a` に落ちるだけで機能を壊さない。10 分実ウェイトの実時間検証は CI で
+  再現不能なため、`wait_seconds` 注入 + Medium での順序検証で代替する
   （`docs/dev/testing-convention.md` の変更固有検証の考え方に基づく省略理由）
 
 ## 影響ドキュメント
@@ -574,7 +605,10 @@ kaji run（親）
 | run logger | `kaji_harness/logger.py:26-151` | JSONL 追記 + 即時 flush の `_write()`。recovery event 5 種は同形式で追加でき、handler が別プロセス時点でも同一 `run.log` に追記可能 |
 | exit code map | `kaji_harness/cli_main.py:50-56, 488-510` | `EXIT_OK=0 / EXIT_ABORT=1 / EXIT_DEFINITION_ERROR=2 / EXIT_RUNTIME_ERROR=3` と `cmd_run` の catch 節・`Workflow aborted:` 表示。handler 呼び出しの挿入点と「既存 map 不変」の正本 |
 | CLI flag 群 | `kaji_harness/cli_main.py:145-208, 360-382` | `--from` / `--step` / `--before` / `--reset-cycle` の登録と `_apply_execution_overrides` の precedence。新 flag / `kaji recover` は同パターンに従う |
-| provider interface | `kaji_harness/providers/base.py:29-62` | `comment_issue(issue_id, body)` / `create_issue(title, body, labels)` が github / local 両実装で利用可能。triage コメントと bug issue 作成はこの既存 IF のみ使用 |
+| provider interface | `kaji_harness/providers/base.py:29-62` | `comment_issue(issue_id, body)` / `create_issue(title, body, labels)` が github / local 両実装で利用可能。signature は不変のまま戻り値 `Comment` の field 追加で参照値を供給する |
+| Comment model の現状 | `kaji_harness/providers/models.py:24-39` | `Comment` は `author` / `body` / `created_at` / `seq` / `machine_id` のみで投稿先参照を持たない。`ref: str = ""` の末尾追加が frozen dataclass の既存互換を壊さない根拠（既存 field はすべて default 付きで順序不変） |
+| GitHub provider の comment_issue | `kaji_harness/providers/github.py:236-244` | `gh issue comment` 実行後に `Comment(author="", body=body, created_at="")` を返し stdout を捨てている。`ref` 捕捉の挿入点 |
+| gh CLI のコメント URL 出力 | https://github.com/cli/cli/blob/trunk/pkg/cmd/pr/shared/commentable.go | `createComment` が `api.CommentCreate` 成功後に `fmt.Fprintln(opts.IO.Out, url)` で作成コメント URL を stdout へ出力する（`--quiet` 指定時を除く）。`gh issue comment` は本 shared package（`CommentableRun`）経由でこの経路を通る。GitHub 側 `Comment.ref` の取得可能性の根拠 |
 | verdict marker 契約 | `kaji_harness/providers/markers.py:19-57` | kaji-verdict マーカーは step verdict 用の契約。triage コメントに付けないことで `issue-design` Step 1.6 の BACK 検出母集団を汚さない判断の根拠 |
 | config 仕様の正本 | `docs/reference/configuration.md` § `[execution]` | 「This file is the Source of Truth for the config spec」。`failure_triage` / `auto_recover` 追加時に本 doc を先に更新する運用ルールの根拠 |
 | 再開プリミティブ | `docs/dev/workflow_guide.md` | `--from` / `--before` / `--step` / `--reset-cycle` が既存の途中再開手段として定義済み。resume command はこの語彙のみで構成する |
