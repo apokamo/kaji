@@ -100,9 +100,11 @@ A relative `artifacts_dir` is resolved against the main worktree (the worktree t
 
 | key | Required/Optional | Type | Default | Validation | Source |
 |-----|-------------------|------|---------|------------|--------|
-| `default_timeout` | Required | int | — (unset is an error) | Integer `> 0` (bool not allowed) | `config.py:219-231` |
-| `agent_runner` | Optional | `"headless"` \| `"interactive_terminal"` | `"headless"` | Out-of-enum is `ConfigLoadError` | `config.py:233-244` |
-| `interactive_terminal_close_on_verdict` | Optional | bool | `true` | Non-bool is `ConfigLoadError` | `config.py:246-252` |
+| `default_timeout` | Required | int | — (unset is an error) | Integer `> 0` (bool not allowed) | `config.py:226-238` |
+| `agent_runner` | Optional | `"headless"` \| `"interactive_terminal"` | `"headless"` | Out-of-enum is `ConfigLoadError` | `config.py:240-251` |
+| `interactive_terminal_close_on_verdict` | Optional | bool | `true` | Non-bool is `ConfigLoadError` | `config.py:253-259` |
+| `failure_triage` | Optional | bool | `true` | Non-bool is `ConfigLoadError` | `config.py:261-268` |
+| `auto_recover` | Optional | bool | `false` | Non-bool is `ConfigLoadError` | `config.py:261-268` |
 
 - `agent_runner` selects whether agent steps launch via a headless CLI or an interactive CLI inside a
   tmux pane. For `interactive_terminal` behavior, CLI options, and precedence, see the
@@ -110,9 +112,35 @@ A relative `artifacts_dir` is resolved against the main worktree (the worktree t
 - `interactive_terminal_close_on_verdict` takes effect only when
   `agent_runner = "interactive_terminal"` (whether to close the pane after a verdict is detected). It
   is inert under headless operation.
+- `failure_triage` enables failure classification, the machine-generated triage comment,
+  `recovery.json` / `run.log` records, and the stderr summary when a `kaji run` ends in `ERROR` or a
+  triage-eligible `ABORT`. It is **enabled by default** because triage only records evidence and
+  performs no destructive operation.
+- `auto_recover` allows the handler to start **one** child run per recovery chain after a fixed
+  10-minute wait when the decision is `resume`. It is **disabled by default** because starting a
+  child run is a strong side effect. Setting `failure_triage = false` forces `auto_recover` to
+  `false` as well (the handler that would start the child run never runs).
+- The recovery budget (1 per chain) and the recovery wait (600s) are **not configurable**. They are
+  module constants (`RECOVERY_BUDGET` / `RECOVERY_WAIT_SECONDS` in `kaji_harness/recovery/models.py`)
+  so that "unlimited auto retry" cannot be reached through configuration.
 
 The `timeout` resolution order is step.timeout → workflow.default_timeout →
 `config.execution.default_timeout` (see [Workflow authoring](../dev/workflow-authoring.md) § step fields).
+
+### `[execution]` CLI overrides for `kaji run`
+
+`kaji run` accepts per-run overrides with the same precedence as `--agent-runner`
+(CLI flag > `.kaji/config.local.toml` > `.kaji/config.toml`, applied by `_apply_execution_overrides`).
+
+| flag | Overrides |
+|------|-----------|
+| `--failure-triage` / `--no-failure-triage` | `execution.failure_triage` |
+| `--auto-recover` / `--no-auto-recover` | `execution.auto_recover` |
+
+`--recovery-root <run_id>` / `--recovery-parent <run_id>` propagate the recovery chain identity and
+are normally added by the handler itself when it starts a child run. `--recovery-parent` without
+`--recovery-root` exits with `EXIT_DEFINITION_ERROR (2)`. See
+[Workflow guide](../dev/workflow_guide.md) § Failure triage / auto recovery.
 
 ### `[provider]`
 
@@ -187,6 +215,8 @@ worktree_prefix = "kaji"            # leading segment of the worktree dir name (
 default_timeout = 2400
 agent_runner = "headless"           # "headless" (default) | "interactive_terminal"
 # interactive_terminal_close_on_verdict = true   # only takes effect under interactive_terminal
+# failure_triage = true             # classify failures and post a triage comment (default: true)
+# auto_recover = false              # opt-in: resume once per recovery chain after a 10-minute wait
 
 [provider]
 type = "github"
@@ -202,6 +232,7 @@ git_remote = "origin"
 - [GitHub Mode CLI Guide](../cli-guides/github-mode.md) — GitHub provider setup / operation
 - [Local Mode CLI Guide](../cli-guides/local-mode.md) — local provider / overlay how-to
 - [Interactive Terminal Runner guide](../cli-guides/interactive-terminal-runner.md) — `[execution] agent_runner`
+- [Failure Triage / Recovery CLI](../cli-guides/failure-recovery.md) — `[execution] failure_triage` / `auto_recover`
 - [Workflow authoring](../dev/workflow-authoring.md) — workflow definitions that assume `.kaji/config.toml`
 - [Git Worktree guide](../guides/git-worktree.md) — the overlay is not carried over to new worktrees
 - [Release Runbook](../operations/release/runbook.md) — reference to `provider.github.git_remote`

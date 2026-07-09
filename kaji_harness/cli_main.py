@@ -27,6 +27,7 @@ from .errors import (
 )
 from .models import Workflow
 from .providers import (
+    IssueContext,
     IssueProvider,
     ResolvedId,
     actual_provider_type,
@@ -42,6 +43,8 @@ from .providers.local import (
     LocalProviderError,
 )
 from .providers.markers import build_kaji_verdict_marker
+from .recovery.handler import RecoveryHandler
+from .recovery.snapshot import read_run_log_events
 from .runner import WorkflowRunner
 from .skill import load_skill_metadata, validate_skill_exists
 from .state import _format_issue_ref
@@ -73,6 +76,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {_get_version()}")
     subparsers = parser.add_subparsers(dest="command", required=True)
     _register_run(subparsers)
+    _register_recover(subparsers)
     _register_validate(subparsers)
     _register_issue(subparsers)
     _register_pr(subparsers)
@@ -204,6 +208,84 @@ def _register_run(subparsers: argparse._SubParsersAction[argparse.ArgumentParser
         action="store_false",
         default=None,
         help="Keep the interactive terminal open after the verdict is detected.",
+    )
+    _add_recovery_arguments(p)
+
+
+def _add_recovery_arguments(p: argparse.ArgumentParser) -> None:
+    """Issue #288: failure triage / auto recovery の per-run override と chain flag。"""
+    triage_group = p.add_mutually_exclusive_group()
+    triage_group.add_argument(
+        "--failure-triage",
+        dest="failure_triage",
+        action="store_true",
+        default=None,
+        help="Classify the failure and record a triage report when the run fails.",
+    )
+    triage_group.add_argument(
+        "--no-failure-triage",
+        dest="failure_triage",
+        action="store_false",
+        default=None,
+        help="Disable failure triage for this run.",
+    )
+    recover_group = p.add_mutually_exclusive_group()
+    recover_group.add_argument(
+        "--auto-recover",
+        dest="auto_recover",
+        action="store_true",
+        default=None,
+        help="Automatically resume once (per recovery chain) after a recoverable failure.",
+    )
+    recover_group.add_argument(
+        "--no-auto-recover",
+        dest="auto_recover",
+        action="store_false",
+        default=None,
+        help="Disable the automatic child run for this run.",
+    )
+    # 以下 2 つは handler が child run 起動時に付与する内部伝播用（手動指定も可）。
+    p.add_argument(
+        "--recovery-root",
+        dest="recovery_root",
+        default=None,
+        help="Root run_id of the recovery chain this run belongs to.",
+    )
+    p.add_argument(
+        "--recovery-parent",
+        dest="recovery_parent",
+        default=None,
+        help="Direct parent run_id (requires --recovery-root).",
+    )
+
+
+def _register_recover(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Register the ``recover`` subcommand (Issue #288).
+
+    失敗 run の artifact に対して failure triage handler を手動起動する入口。
+    調査・再調査・opt-in 再開に使う。
+    """
+    p = subparsers.add_parser("recover", help="Run failure triage against a failed run's artifacts")
+    p.add_argument("workflow", type=Path, help="Workflow YAML used by the target run")
+    p.add_argument("issue", type=str, help="Issue ID (GitHub number or local form)")
+    p.add_argument(
+        "--run-id",
+        dest="run_id",
+        default=None,
+        help="Target run_id (default: the newest run for the issue).",
+    )
+    p.add_argument(
+        "--auto-recover",
+        dest="auto_recover",
+        action="store_true",
+        default=False,
+        help="Allow the handler to start a child run when the decision is 'resume'.",
+    )
+    p.add_argument(
+        "--workdir",
+        type=Path,
+        default=Path.cwd(),
+        help="Starting directory for config discovery (default: current directory)",
     )
 
 
@@ -365,19 +447,39 @@ def _apply_execution_overrides(config: KajiConfig, args: argparse.Namespace) -> 
     unspecified (``None``) the resolved config value is kept. The three-state
     ``close_on_verdict`` (``None`` / ``True`` / ``False``) distinguishes "not
     given" from an explicit ``--no-...``.
-    """
-    runner_override = getattr(args, "agent_runner", None)
-    close_override = getattr(args, "close_on_verdict", None)
-    if runner_override is None and close_override is None:
-        return config
 
+    Issue #288: ``failure_triage`` / ``auto_recover`` も同じ three-state で上書きする。
+    triage が無効なら handler 自体が起動しないため、``auto_recover`` は常に無効へ
+    正規化する（CLI flag が無い場合の config 組み合わせにも適用する）。
+    """
     execution = config.execution
+    changed = False
+
+    runner_override = getattr(args, "agent_runner", None)
     if runner_override is not None:
         execution = dataclasses.replace(execution, agent_runner=runner_override.replace("-", "_"))
+        changed = True
+    close_override = getattr(args, "close_on_verdict", None)
     if close_override is not None:
         execution = dataclasses.replace(
             execution, interactive_terminal_close_on_verdict=close_override
         )
+        changed = True
+    triage_override = getattr(args, "failure_triage", None)
+    if triage_override is not None:
+        execution = dataclasses.replace(execution, failure_triage=triage_override)
+        changed = True
+    recover_override = getattr(args, "auto_recover", None)
+    if recover_override is not None:
+        execution = dataclasses.replace(execution, auto_recover=recover_override)
+        changed = True
+
+    if not execution.failure_triage and execution.auto_recover:
+        execution = dataclasses.replace(execution, auto_recover=False)
+        changed = True
+
+    if not changed:
+        return config
     return dataclasses.replace(config, execution=execution)
 
 
@@ -409,6 +511,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.reset_cycle and not args.from_step:
         print(
             "Error: --reset-cycle requires --from <step>",
+            file=sys.stderr,
+        )
+        return EXIT_DEFINITION_ERROR
+
+    # Issue #288: chain identity は root を伴わない parent 単独では成立しない。
+    if args.recovery_parent and not args.recovery_root:
+        print(
+            "Error: --recovery-parent requires --recovery-root",
             file=sys.stderr,
         )
         return EXIT_DEFINITION_ERROR
@@ -471,43 +581,230 @@ def cmd_run(args: argparse.Namespace) -> int:
         return rc
 
     # Run workflow
+    artifacts_dir = resolve_artifacts_dir(config)
+    runner = WorkflowRunner(
+        workflow=workflow,
+        issue_number=args.issue,
+        project_root=project_root,
+        artifacts_dir=artifacts_dir,
+        config=config,
+        from_step=args.from_step,
+        single_step=args.single_step,
+        before_step=args.before_step,
+        reset_cycle=args.reset_cycle,
+        verbose=not args.quiet,
+        recovery_root=args.recovery_root,
+        recovery_parent=args.recovery_parent,
+    )
     try:
-        runner = WorkflowRunner(
-            workflow=workflow,
-            issue_number=args.issue,
-            project_root=project_root,
-            artifacts_dir=resolve_artifacts_dir(config),
-            config=config,
-            from_step=args.from_step,
-            single_step=args.single_step,
-            before_step=args.before_step,
-            reset_cycle=args.reset_cycle,
-            verbose=not args.quiet,
-        )
         state = runner.run()
     except (WorkflowValidationError, SkillNotFound, SecurityError, SkillFrontmatterError) as e:
         print(f"Error: {e}", file=sys.stderr)
-        return EXIT_DEFINITION_ERROR
+        exit_code = EXIT_DEFINITION_ERROR
     except HarnessError as e:
         print(f"Error: {e}", file=sys.stderr)
-        return EXIT_RUNTIME_ERROR
+        exit_code = EXIT_RUNTIME_ERROR
     except Exception as e:
         print(f"Unexpected error: {e}", file=sys.stderr)
-        return EXIT_ABORT
+        exit_code = EXIT_ABORT
+    else:
+        # Check for ABORT verdict
+        if state.last_transition_verdict and state.last_transition_verdict.status == "ABORT":
+            print(
+                f"Workflow aborted: {state.last_transition_verdict.reason}",
+                file=sys.stderr,
+            )
+            exit_code = EXIT_ABORT
+        else:
+            # Success summary: canonical_issue_ref を優先（Phase 3-d preflight § 1）。
+            # ``[provider]`` 未設定 fallback などで未確定の場合のみ raw 入力で整形する。
+            issue_ref = runner.canonical_issue_ref or _format_issue_ref(args.issue)
+            print(f"Workflow '{workflow.name}' completed for issue {issue_ref}")
+            return EXIT_OK
 
-    # Check for ABORT verdict
-    if state.last_transition_verdict and state.last_transition_verdict.status == "ABORT":
+    # Issue #288: ERROR / ABORT 終端でのみ failure triage を起動する。run_dir 作成前の
+    # 失敗（config / workflow validation / IssueContext 解決失敗）は artifact が無く
+    # 根拠のない Issue コメントになるため triage 対象外。
+    child_exit_code = _run_failure_triage(
+        config=config,
+        workflow=workflow,
+        workflow_path=workflow_path,
+        runner=runner,
+        artifacts_dir=artifacts_dir,
+        workdir=start_dir,
+    )
+    # child run を起動した場合、親プロセスの exit code は chain の最終結果に一致させる。
+    return child_exit_code if child_exit_code is not None else exit_code
+
+
+def _run_failure_triage(
+    *,
+    config: KajiConfig,
+    workflow: Workflow,
+    workflow_path: Path,
+    runner: WorkflowRunner,
+    artifacts_dir: Path,
+    workdir: Path,
+) -> int | None:
+    """失敗した run に対し failure triage handler を起動する（Issue #288）。
+
+    triage は best-effort であり、handler 側の失敗で元の run の exit code を変えない
+    （WARN を stderr に出して ``None`` を返す）。
+
+    Returns:
+        child run を起動した場合はその exit code、そうでなければ ``None``。
+    """
+    if not config.execution.failure_triage:
+        return None
+    run_dir = runner.last_run_dir
+    if run_dir is None or runner.canonical_issue_id is None:
+        return None
+
+    provider: IssueProvider | None
+    try:
+        provider = get_provider(config)
+    except ValueError as exc:
+        print(f"WARNING: failure triage cannot resolve a provider: {exc}", file=sys.stderr)
+        provider = None
+
+    handler = RecoveryHandler(
+        workflow=workflow,
+        workflow_path=workflow_path,
+        issue_id=runner.canonical_issue_id,
+        issue_ref=runner.canonical_issue_ref or runner.canonical_issue_id,
+        artifacts_dir=artifacts_dir,
+        run_dir=run_dir,
+        workdir=workdir,
+        provider=provider,
+        auto_recover=config.execution.auto_recover,
+    )
+    try:
+        result = handler.run()
+    except (OSError, HarnessError) as exc:
+        print(f"WARNING: failure triage failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return None
+    return result.child_exit_code
+
+
+def cmd_recover(args: argparse.Namespace) -> int:
+    """Execute the `recover` subcommand (Issue #288).
+
+    失敗 run の artifact に対して handler を手動起動する。triage が完了すれば decision に
+    かかわらず ``EXIT_OK``。対象 run 不在 / 進行中 run は ``EXIT_INVALID_INPUT``、
+    handler 内部エラーは ``EXIT_RUNTIME_ERROR``。
+    """
+    start_dir = args.workdir.resolve()
+    if not start_dir.is_dir():
+        print(f"Error: --workdir '{args.workdir}' is not a valid directory", file=sys.stderr)
+        return EXIT_DEFINITION_ERROR
+    try:
+        config = KajiConfig.discover(start_dir=start_dir)
+    except (ConfigNotFoundError, ConfigLoadError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_CONFIG_NOT_FOUND
+
+    try:
+        provider = get_provider(config)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+
+    if not args.workflow.exists():
+        print(f"Error: Workflow file not found: {args.workflow}", file=sys.stderr)
+        return EXIT_DEFINITION_ERROR
+    try:
+        workflow = load_workflow(args.workflow)
+    except WorkflowValidationError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_DEFINITION_ERROR
+
+    try:
+        issue_context = _resolve_recover_issue_context(config, provider, args.issue)
+    except (ValueError, HarnessError, GitHubProviderError, LocalProviderError) as e:
+        print(f"Error: cannot resolve issue {args.issue!r}: {e}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+
+    artifacts_dir = resolve_artifacts_dir(config)
+    runs_dir = artifacts_dir / issue_context.issue_id / "runs"
+    run_dir = _resolve_target_run_dir(runs_dir, args.run_id)
+    if run_dir is None:
+        return EXIT_INVALID_INPUT
+
+    handler = RecoveryHandler(
+        workflow=workflow,
+        workflow_path=args.workflow,
+        issue_id=issue_context.issue_id,
+        issue_ref=issue_context.issue_ref,
+        artifacts_dir=artifacts_dir,
+        run_dir=run_dir,
+        workdir=start_dir,
+        provider=provider,
+        auto_recover=args.auto_recover,
+    )
+    try:
+        handler.run()
+    except (OSError, HarnessError) as exc:
+        print(f"Error: failure triage failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME_ERROR
+    return EXIT_OK
+
+
+def _resolve_recover_issue_context(
+    config: KajiConfig, provider: IssueProvider, issue_input: str
+) -> IssueContext:
+    """``kaji recover`` 用に canonical Issue ID / ref を解決する。"""
+    assert config.provider is not None  # get_provider 成功後
+    provider_type = config.provider.type
+    machine_id = config.provider.local.machine_id if provider_type == "local" else None
+    rid = normalize_id(issue_input, provider_name=provider_type, machine_id=machine_id)
+    return provider.resolve_issue_context(rid.value)
+
+
+def _resolve_target_run_dir(runs_dir: Path, run_id: str | None) -> Path | None:
+    """triage 対象の run dir を解決する。不正な場合は stderr に理由を出して ``None``。
+
+    実行中 run（``workflow_end`` event が無い）への誤介入は拒否する。
+    """
+    if not runs_dir.is_dir():
+        print(f"Error: no runs found under {runs_dir}", file=sys.stderr)
+        return None
+    if run_id is not None:
+        run_dir = runs_dir / run_id
+        if not run_dir.is_dir():
+            print(f"Error: run dir not found: {run_dir}", file=sys.stderr)
+            return None
+    else:
+        candidates = sorted(p for p in runs_dir.iterdir() if p.is_dir())
+        if not candidates:
+            print(f"Error: no runs found under {runs_dir}", file=sys.stderr)
+            return None
+        run_dir = candidates[-1]
+
+    run_log = run_dir / "run.log"
+    if not run_log.is_file():
+        print(f"Error: run.log not found: {run_log}", file=sys.stderr)
+        return None
+    try:
+        events = read_run_log_events(run_log)
+    except OSError as exc:
+        print(f"Error: cannot read {run_log}: {exc}", file=sys.stderr)
+        return None
+    end = [e for e in events if e.get("event") == "workflow_end"]
+    if not end:
         print(
-            f"Workflow aborted: {state.last_transition_verdict.reason}",
+            f"Error: run {run_dir.name} is still in progress (no workflow_end event); "
+            "refusing to run failure triage against it",
             file=sys.stderr,
         )
-        return EXIT_ABORT
-
-    # Success summary: canonical_issue_ref を優先（Phase 3-d preflight § 1）。
-    # ``[provider]`` 未設定 fallback などで未確定の場合のみ raw 入力で整形する。
-    issue_ref = runner.canonical_issue_ref or _format_issue_ref(args.issue)
-    print(f"Workflow '{workflow.name}' completed for issue {issue_ref}")
-    return EXIT_OK
+        return None
+    if end[-1].get("status") not in ("ERROR", "ABORT"):
+        print(
+            f"Error: run {run_dir.name} ended with status {end[-1].get('status')!r}; "
+            "failure triage only applies to ERROR / ABORT runs",
+            file=sys.stderr,
+        )
+        return None
+    return run_dir
 
 
 def _validate_workflow_provider_match(workflow: Workflow, config: KajiConfig) -> int:
@@ -2033,6 +2330,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = create_parser()
     args = parser.parse_args(argv)
 
+    if args.command == "recover":
+        return cmd_recover(args)
     if args.command == "run":
         return cmd_run(args)
     if args.command == "validate":

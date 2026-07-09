@@ -37,6 +37,7 @@ from .prompt import build_prompt
 from .providers import IssueContext, IssueProvider, PRContext, get_provider, normalize_id
 from .providers.github import GitHubProviderError
 from .providers.local import LocalProvider
+from .recovery.models import RECOVERY_CHAIN_FILE, write_recovery_chain
 from .result import RESULT_FILE, AttemptResult, derive_signal, write_result_json
 from .script_exec import execute_exec, execute_script
 from .skill import SkillMetadata, load_skill_metadata, validate_skill_exists
@@ -143,6 +144,7 @@ def _record_attempt_end(
     cost: CostInfo | None,
     logger: RunLogger,
     state: SessionState,
+    synthetic: bool = False,
 ) -> None:
     """attempt 終了処理（Issue #222）を 1 箇所にまとめる。
 
@@ -154,6 +156,9 @@ def _record_attempt_end(
     壊さない。``result.json`` の ``duration_ms`` は ``ended_at - started_at`` の
     wall-clock 値、``step_end`` の ``duration_ms`` は呼び出し側が計測した
     ``step_duration_ms``（step iteration 全体）を用いる。
+
+    Issue #288: ``synthetic`` は except 経路の合成 ABORT record で ``True``、
+    dispatch 結果から解決した verdict で ``False``。
     """
     result_duration_ms = int((ended_at - started_at).total_seconds() * 1000)
     result = AttemptResult(
@@ -168,6 +173,7 @@ def _record_attempt_end(
         session_id=session_id,
         dispatch=dispatch,
         error=error,
+        synthetic=synthetic,
     )
     try:
         write_result_json(attempt_dir / RESULT_FILE, result)
@@ -220,10 +226,18 @@ class WorkflowRunner:
     before_step: str | None = None
     reset_cycle: bool = False
     verbose: bool = True
+    # Issue #288: recovery chain identity。handler が child run 起動時に付与する。
+    # ``recovery_root`` があれば当該 run は recovery child であり、その failure handler は
+    # budget guard で無条件 ``exhausted`` になる。
+    recovery_root: str | None = None
+    recovery_parent: str | None = None
     # Phase 3-d preflight: ``run()`` 完了後に外部から参照される canonical id。
     # ``cmd_run()`` の成功表示などが利用する。``run()`` 起動前は ``None``。
     canonical_issue_id: str | None = field(default=None, init=False)
     canonical_issue_ref: str | None = field(default=None, init=False)
+    # Issue #288: run_dir 採番後に確定する。``cmd_run`` の failure handler は
+    # この値が非 None の場合のみ triage を起動する（run_dir 作成前の失敗は対象外）。
+    last_run_dir: Path | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         # int / その他から str へ正規化（既存呼び出し互換のため）
@@ -502,6 +516,16 @@ class WorkflowRunner:
 
         # 4. run ログディレクトリを作成（canonical id ベース）
         run_dir = allocate_run_dir(self.artifacts_dir / run_ctx.canonical_id / "runs")
+        self.last_run_dir = run_dir
+        # Issue #288: recovery child は起動直後に chain identity を artifact 化する。
+        # 親 handler はこれを見て child run を特定し、child 自身の handler は
+        # budget guard の入力にする。
+        if self.recovery_root:
+            write_recovery_chain(
+                run_dir / RECOVERY_CHAIN_FILE,
+                root_run_id=self.recovery_root,
+                parent_run_id=self.recovery_parent or self.recovery_root,
+            )
         logger = RunLogger(log_path=run_dir / "run.log")
         logger.log_workflow_start(run_ctx.canonical_id, self.workflow.name)
         _console.info("workflow start: %s issue %s", self.workflow.name, run_ctx.issue_ref)
@@ -539,6 +563,7 @@ class WorkflowRunner:
             )
             last_verdict = ambiguous_abort
             end_status = "ABORT"
+            logger.log_failure_event(kind="ambiguous_worktree", synthetic=True)
             _console.error("workflow abort: %s", ambiguous_abort.reason)
             # cli_main は state.last_transition_verdict.status == "ABORT" を見て
             # EXIT_ABORT を返すため、main loop 未到達でもここで反映する。
@@ -613,6 +638,12 @@ class WorkflowRunner:
                         reason=f"Cycle '{cycle.name}' exhausted",
                         evidence=f"{cycle.max_iterations} iterations reached",
                         suggestion="手動で確認してください",
+                    )
+                    logger.log_failure_event(
+                        kind="cycle_exhausted",
+                        step_id=current_step.id,
+                        cycle_name=cycle.name,
+                        synthetic=True,
                     )
                     _console.info("cycle exhausted: %s", cycle.name)
                     cost: CostInfo | None = None
@@ -849,6 +880,22 @@ class WorkflowRunner:
                             exit_code = exc_returncode
                             signal_name = derive_signal(exit_code)
                         started = attempt_started_at if attempt_started_at is not None else ended_at
+                        # Issue #288: 同一 except 節から二系統を出し分ける。dispatch 失敗
+                        # （プロセス側）と verdict 解決失敗（dispatch は成功）は recovery
+                        # classifier にとって別 cause であり、reason 文字列で後から
+                        # 判別させない。
+                        logger.log_failure_event(
+                            kind=(
+                                "verdict_exception"
+                                if isinstance(
+                                    exc, VerdictNotFound | VerdictParseError | InvalidVerdictValue
+                                )
+                                else "dispatch_exception"
+                            ),
+                            step_id=current_step.id,
+                            exception_type=type(exc).__name__,
+                            synthetic=True,
+                        )
                         abort_verdict = Verdict(
                             status="ABORT",
                             reason="step aborted without a usable verdict",
@@ -874,6 +921,7 @@ class WorkflowRunner:
                             cost=None,
                             logger=logger,
                             state=state,
+                            synthetic=True,
                         )
                         raise
 
@@ -901,7 +949,14 @@ class WorkflowRunner:
                         cost=cost,
                         logger=logger,
                         state=state,
+                        synthetic=False,
                     )
+                    # Issue #288: agent が返した正規の ABORT verdict。runner 生成の
+                    # 合成 ABORT と区別するため synthetic=False で記録する。
+                    if verdict.status == "ABORT":
+                        logger.log_failure_event(
+                            kind="agent_abort", step_id=current_step.id, synthetic=False
+                        )
                 else:
                     # cycle 上限 exhaust の合成 verdict: dispatch 無し → result.json 無し。
                     logger.log_step_end(

@@ -46,7 +46,7 @@ kaji のドキュメント一覧。[Diataxis フレームワーク](https://diat
 | [アーキテクチャ](ARCHITECTURE.md) | システム構成・モジュール依存関係 |
 | [設定リファレンス](reference/configuration.md) | `.kaji/config.toml` / overlay の全 section/key 仕様の正本（英語正本、[日本語](reference/configuration.ja.md)） |
 | [テストサイズ判断ガイド](reference/testing-size-guide.md) | S/M/L の境界ケース判断基準 |
-| [CLI ガイド](cli-guides/) | CLI 操作リファレンス（[GitHub Mode](cli-guides/github-mode.md)（英語正本、[日本語](cli-guides/github-mode.ja.md)） / [Local Mode](cli-guides/local-mode.md)（英語正本、[日本語](cli-guides/local-mode.ja.md)） / [Interactive Terminal Runner](cli-guides/interactive-terminal-runner.md)（英語正本、[日本語](cli-guides/interactive-terminal-runner.ja.md)） / [Claude Code CLI](cli-guides/claude-code-cli-guide.md)（英語正本、[日本語](cli-guides/claude-code-cli-guide.ja.md)） / [Codex CLI](cli-guides/codex-cli-session-guide.md)（英語正本、[日本語](cli-guides/codex-cli-session-guide.ja.md)）） |
+| [CLI ガイド](cli-guides/) | CLI 操作リファレンス（[GitHub Mode](cli-guides/github-mode.md)（英語正本、[日本語](cli-guides/github-mode.ja.md)） / [Local Mode](cli-guides/local-mode.md)（英語正本、[日本語](cli-guides/local-mode.ja.md)） / [Interactive Terminal Runner](cli-guides/interactive-terminal-runner.md)（英語正本、[日本語](cli-guides/interactive-terminal-runner.ja.md)） / [Failure Triage / Recovery](cli-guides/failure-recovery.md)（英語正本、[日本語](cli-guides/failure-recovery.ja.md)） / [Claude Code CLI](cli-guides/claude-code-cli-guide.md)（英語正本、[日本語](cli-guides/claude-code-cli-guide.ja.md)） / [Codex CLI](cli-guides/codex-cli-session-guide.md)（英語正本、[日本語](cli-guides/codex-cli-session-guide.ja.md)）） |
 
 ### Python 品質規約
 

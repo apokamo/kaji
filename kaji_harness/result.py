@@ -58,6 +58,11 @@ class AttemptResult:
 
     ``status`` は正常終了では解決済み verdict の status、異常終了では ``"ABORT"``。
     ``exit_code`` / ``signal`` / ``session_id`` / ``error`` は取得不能なら ``None``。
+
+    Issue #288: ``synthetic`` は ABORT record が runner 生成（dispatch / verdict の
+    except 経路）か、agent の正規 ABORT verdict かを ``result.json`` 単体で区別する
+    ための直交属性。末尾に default 付きで追加するため、旧形式 ``result.json``
+    （``synthetic`` キーなし）の読み込みは default ``False`` で互換を保つ。
     """
 
     step_id: str
@@ -71,6 +76,7 @@ class AttemptResult:
     session_id: str | None
     dispatch: str
     error: str | None = None
+    synthetic: bool = False
 
 
 def write_result_json(path: Path, result: AttemptResult) -> None:

@@ -174,6 +174,9 @@ class TestMutualExclusionSmall:
     @pytest.mark.small
     def test_from_alone_is_valid(self, workflow_file: Path, workdir: Path) -> None:
         with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+            # Issue #288: run_dir 未作成（= failure triage 対象外）を明示する。
+            # MagicMock の auto attribute だと triage が起動してしまう。
+            mock_runner.return_value.last_run_dir = None
             mock_runner.return_value.run.return_value = MagicMock(
                 last_transition_verdict=Verdict("PASS", "", "", "")
             )
@@ -190,6 +193,9 @@ class TestMutualExclusionSmall:
     @pytest.mark.small
     def test_step_alone_is_valid(self, workflow_file: Path, workdir: Path) -> None:
         with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+            # Issue #288: run_dir 未作成（= failure triage 対象外）を明示する。
+            # MagicMock の auto attribute だと triage が起動してしまう。
+            mock_runner.return_value.last_run_dir = None
             mock_runner.return_value.run.return_value = MagicMock(
                 last_transition_verdict=Verdict("PASS", "", "", "")
             )
@@ -279,6 +285,9 @@ class TestExitCodeMappingSmall:
         expected_code: int,
     ) -> None:
         with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+            # Issue #288: run_dir 未作成（= failure triage 対象外）を明示する。
+            # MagicMock の auto attribute だと triage が起動してしまう。
+            mock_runner.return_value.last_run_dir = None
             mock_runner.return_value.run.side_effect = exception
             exit_code = cmd_run_with_args(
                 str(workflow_file),
@@ -291,6 +300,9 @@ class TestExitCodeMappingSmall:
     @pytest.mark.small
     def test_unexpected_exception_exit_code(self, workflow_file: Path, workdir: Path) -> None:
         with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+            # Issue #288: run_dir 未作成（= failure triage 対象外）を明示する。
+            # MagicMock の auto attribute だと triage が起動してしまう。
+            mock_runner.return_value.last_run_dir = None
             mock_runner.return_value.run.side_effect = RuntimeError("boom")
             exit_code = cmd_run_with_args(
                 str(workflow_file),
@@ -303,6 +315,9 @@ class TestExitCodeMappingSmall:
     @pytest.mark.small
     def test_abort_verdict_exit_code(self, workflow_file: Path, workdir: Path) -> None:
         with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+            # Issue #288: run_dir 未作成（= failure triage 対象外）を明示する。
+            # MagicMock の auto attribute だと triage が起動してしまう。
+            mock_runner.return_value.last_run_dir = None
             mock_runner.return_value.run.return_value = MagicMock(
                 last_transition_verdict=Verdict("ABORT", "reason", "ev", "sug")
             )
@@ -328,6 +343,9 @@ class TestCmdRunMedium:
         self, workflow_file: Path, workdir: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+            # Issue #288: run_dir 未作成（= failure triage 対象外）を明示する。
+            # MagicMock の auto attribute だと triage が起動してしまう。
+            mock_runner.return_value.last_run_dir = None
             mock_runner.return_value.run.return_value = MagicMock(
                 last_transition_verdict=Verdict("PASS", "done", "all good", "")
             )
@@ -378,6 +396,9 @@ class TestCmdRunMedium:
         self, workflow_file: Path, workdir: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+            # Issue #288: run_dir 未作成（= failure triage 対象外）を明示する。
+            # MagicMock の auto attribute だと triage が起動してしまう。
+            mock_runner.return_value.last_run_dir = None
             mock_runner.return_value.run.side_effect = CLIExecutionError("s1", 1, "fail")
             exit_code = cmd_run_with_args(
                 str(workflow_file),
@@ -394,6 +415,9 @@ class TestCmdRunMedium:
         self, workflow_file: Path, workdir: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+            # Issue #288: run_dir 未作成（= failure triage 対象外）を明示する。
+            # MagicMock の auto attribute だと triage が起動してしまう。
+            mock_runner.return_value.last_run_dir = None
             mock_runner.return_value.run.return_value = MagicMock(
                 last_transition_verdict=Verdict("ABORT", "blocked", "ev", "sug")
             )
@@ -424,6 +448,9 @@ class TestCmdRunMedium:
     @pytest.mark.medium
     def test_quiet_flag_passed_to_runner(self, workflow_file: Path, workdir: Path) -> None:
         with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+            # Issue #288: run_dir 未作成（= failure triage 対象外）を明示する。
+            # MagicMock の auto attribute だと triage が起動してしまう。
+            mock_runner.return_value.last_run_dir = None
             mock_runner.return_value.run.return_value = MagicMock(
                 last_transition_verdict=Verdict("PASS", "", "", "")
             )
@@ -463,6 +490,9 @@ class TestMainMedium:
     @pytest.mark.medium
     def test_main_returns_exit_code(self, workflow_file: Path, workdir: Path) -> None:
         with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+            # Issue #288: run_dir 未作成（= failure triage 対象外）を明示する。
+            # MagicMock の auto attribute だと triage が起動してしまう。
+            mock_runner.return_value.last_run_dir = None
             mock_runner.return_value.run.return_value = MagicMock(
                 last_transition_verdict=Verdict("PASS", "", "", "")
             )

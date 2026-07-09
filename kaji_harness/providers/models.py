@@ -37,6 +37,10 @@ class Comment:
     seq: str = ""
     # local mode 固有: コメント投稿元の machine_id。GitHub では空。
     machine_id: str = ""
+    # Issue #288: 投稿したコメントへの provider 中立な参照。GitHub では作成コメント
+    # URL、local では comment file の repo-root 相対パス。取得不能なら空文字列。
+    # consumer は形式に依存せず不透明文字列として扱い、空文字は `n/a` と表示する。
+    ref: str = ""
 
 
 @dataclass(frozen=True)

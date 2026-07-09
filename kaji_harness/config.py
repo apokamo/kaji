@@ -26,11 +26,18 @@ class PathsConfig:
 
 @dataclass(frozen=True)
 class ExecutionConfig:
-    """Execution-related configuration."""
+    """Execution-related configuration.
+
+    Issue #288: ``failure_triage`` は default 有効。triage は Issue コメントという
+    可視証跡を残すだけで destructive 操作を含まないため。``auto_recover`` は child run
+    起動という強い副作用を持つため default 無効（opt-in）。
+    """
 
     default_timeout: int  # Required. No default.
     agent_runner: Literal["headless", "interactive_terminal"] = "headless"
     interactive_terminal_close_on_verdict: bool = True
+    failure_triage: bool = True
+    auto_recover: bool = False
 
 
 @dataclass(frozen=True)
@@ -251,10 +258,21 @@ class KajiConfig:
                 f"got {type(raw_close).__name__}",
             )
 
+        def parse_bool(key: str, default: bool) -> bool:
+            raw = merged.get(key, default)
+            if not isinstance(raw, bool):
+                raise ConfigLoadError(
+                    source(key),
+                    f"execution.{key} must be a boolean, got {type(raw).__name__}",
+                )
+            return raw
+
         return ExecutionConfig(
             default_timeout=raw_timeout,
             agent_runner=raw_agent_runner,  # type: ignore[arg-type]
             interactive_terminal_close_on_verdict=raw_close,
+            failure_triage=parse_bool("failure_triage", True),
+            auto_recover=parse_bool("auto_recover", False),
         )
 
     @staticmethod
