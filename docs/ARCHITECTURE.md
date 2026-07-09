@@ -372,7 +372,7 @@ run / step / attempt の成果物は attempt 単位で分離される（Issue #2
       latest -> attempt-002       # 最新 attempt への convenience symlink（best-effort）
 ```
 
-- `run_id` は分（minute）精度（`%y%m%d%H%M`）。同一 step が同一 run 内で複数回 dispatch されても `attempt-NNN` で prompt / logs / verdict / result の対応が一意になる。
+- `run_id` は秒（second）精度（`%y%m%d%H%M%S`）を基本形とし、同一秒内に衝突した場合は `-002` / `-003` ... suffix を付けて一意化する。同一 step が同一 run 内で複数回 dispatch されても `attempt-NNN` で prompt / logs / verdict / result の対応が一意になる。
 - `latest` symlink は人間 / 外部ツール向けの利便性。harness の verdict 解決は in-memory で保持した attempt path を使い `latest` に依存しない（symlink 非対応 FS でも壊れない）。
 - 新規 run は新 layout を正とする。旧 `runs/<run_id>/<step_id>/`（attempt なしの flat 構造）が残っていても新 run はそれを温存したまま新 layout で完了する（migration は必須としない）。
 

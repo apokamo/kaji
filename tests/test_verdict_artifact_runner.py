@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess as _sp
+from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -26,10 +27,45 @@ from kaji_harness.errors import CLIExecutionError, StepTimeoutError, VerdictNotF
 from kaji_harness.models import CLIResult, CostInfo, CycleDefinition, Step, Verdict, Workflow
 from kaji_harness.providers import LocalProvider
 from kaji_harness.providers.models import Comment
-from kaji_harness.runner import WorkflowRunner, allocate_attempt_dir
+from kaji_harness.runner import WorkflowRunner, allocate_attempt_dir, allocate_run_dir
 from kaji_harness.verdict import load_verdict_yaml, write_verdict_yaml
 
 VALID = {"PASS", "RETRY", "BACK", "ABORT"}
+
+
+# ============================================================
+# Small: allocate_run_dir
+# ============================================================
+
+
+@pytest.mark.small
+class TestAllocateRunDir:
+    def test_first_run_uses_second_precision_base_id(self, tmp_path: Path) -> None:
+        timestamp = datetime(2026, 7, 10, 1, 43, 1)
+
+        run_dir = allocate_run_dir(tmp_path, timestamp)
+
+        assert run_dir == tmp_path / "260710014301"
+        assert run_dir.is_dir()
+
+    def test_existing_base_id_allocates_002_suffix(self, tmp_path: Path) -> None:
+        timestamp = datetime(2026, 7, 10, 1, 43, 1)
+        (tmp_path / "260710014301").mkdir()
+
+        run_dir = allocate_run_dir(tmp_path, timestamp)
+
+        assert run_dir == tmp_path / "260710014301-002"
+        assert run_dir.is_dir()
+
+    def test_existing_suffix_allocates_next_suffix(self, tmp_path: Path) -> None:
+        timestamp = datetime(2026, 7, 10, 1, 43, 1)
+        (tmp_path / "260710014301").mkdir()
+        (tmp_path / "260710014301-002").mkdir()
+
+        run_dir = allocate_run_dir(tmp_path, timestamp)
+
+        assert run_dir == tmp_path / "260710014301-003"
+        assert run_dir.is_dir()
 
 
 # ============================================================
@@ -251,6 +287,15 @@ def _events(run_dir: Path, event: str) -> list[dict]:
     return out
 
 
+class _FixedDateTime(datetime):
+    @classmethod
+    def now(cls, tz: tzinfo | None = None) -> datetime:
+        fixed = datetime(2026, 7, 10, 1, 43, 1)
+        if tz is UTC:
+            return fixed.replace(tzinfo=UTC)
+        return fixed
+
+
 @pytest.mark.medium
 class TestRunnerStdoutNormalization:
     def test_stdout_only_normalized_to_attempt_verdict_yaml(self, tmp_path: Path) -> None:
@@ -279,6 +324,30 @@ class TestRunnerStdoutNormalization:
         assert sources[-1]["attempt"] == "attempt-001"
         # prompt.txt も保存される
         assert (attempt / "prompt.txt").exists()
+
+    def test_two_runs_in_same_second_use_distinct_run_dirs(self, tmp_path: Path) -> None:
+        """同一秒 base id の 2 run が同じ run.log / steps を共有しない。"""
+        workflow = _single_step_workflow()
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            return _cli_result("PASS")
+
+        with (
+            patch("kaji_harness.runner.datetime", _FixedDateTime),
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+        ):
+            _make_runner(tmp_path, workflow).run()
+            _make_runner(tmp_path, workflow).run()
+
+        runs = tmp_path / ".kaji-artifacts" / "local-pc1-99" / "runs"
+        run_dirs = sorted(p for p in runs.iterdir() if p.is_dir())
+        assert [p.name for p in run_dirs] == ["260710014301", "260710014301-002"]
+
+        for run_dir in run_dirs:
+            starts = _events(run_dir, "workflow_start")
+            assert len(starts) == 1
+            assert (run_dir / "steps" / "implement" / "attempt-001" / "verdict.yaml").exists()
 
 
 @pytest.mark.medium
