@@ -30,12 +30,19 @@ _BASE_DELAY = 30.0
 # 猶予内に exit すればその returncode を attempt の真の終了として保持し、超過時は
 # CLI ハングと見なして kaji が terminate する（その returncode は SIGTERM ノイズ）。
 _TERMINAL_SELF_EXIT_GRACE = 2.0
-_TRANSIENT_PATTERNS = ["at capacity", "rate limit", "overloaded", "try again"]
+_TRANSIENT_PATTERNS = [
+    "at capacity",
+    "rate limit",
+    "overloaded",
+    "try again",
+    "`thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified",
+    "thinking or redacted_thinking blocks in the latest assistant message cannot be modified",
+]
 
 
 def _is_transient(error: CLIExecutionError) -> bool:
     """Return True if the error is likely transient and worth retrying."""
-    msg = str(error).lower()
+    msg = (error.stderr or str(error)).lower()
     return any(p in msg for p in _TRANSIENT_PATTERNS)
 
 
@@ -266,16 +273,10 @@ def stream_and_log(
             if c:
                 cost = c
 
-            # Collect error event messages for Bug 3: better CLIExecutionError messages
-            event_type = event.get("type")
-            if event_type == "error":
-                msg = event.get("message", "")
-                if msg:
-                    error_messages.append(msg)
-            elif event_type == "turn.failed":
-                msg = (event.get("error") or {}).get("message", "")
-                if msg:
-                    error_messages.append(msg)
+            # Collect provider-specific failure detail for better CLIExecutionError messages.
+            error_message = adapter.extract_error_message(event)
+            if error_message:
+                error_messages.append(error_message)
 
             if adapter.is_terminal_event(event):
                 terminal_seen = True

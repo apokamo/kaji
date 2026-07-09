@@ -16,6 +16,7 @@ class CLIEventAdapter(Protocol):
     def extract_session_id(self, event: dict[str, Any]) -> str | None: ...
     def extract_text(self, event: dict[str, Any]) -> str | None: ...
     def extract_cost(self, event: dict[str, Any]) -> CostInfo | None: ...
+    def extract_error_message(self, event: dict[str, Any]) -> str | None: ...
     def is_terminal_event(self, event: dict[str, Any]) -> bool: ...
     def is_terminal_failure(self, event: dict[str, Any]) -> bool: ...
     def treats_stream_error_as_failure(self) -> bool:
@@ -34,6 +35,11 @@ class CLIEventAdapter(Protocol):
 
 _TOOL_SUMMARY_LEN = 80
 _THINKING_SUMMARY_LEN = 160
+
+
+def _non_empty_string(value: Any) -> str | None:
+    """Return value when it is a non-empty string."""
+    return value if isinstance(value, str) and value else None
 
 
 def _truncate(value: str, limit: int) -> str:
@@ -117,6 +123,13 @@ class ClaudeAdapter:
                 return CostInfo(usd=usd)
         return None
 
+    def extract_error_message(self, event: dict[str, Any]) -> str | None:
+        if event.get("type") == "result" and self.is_terminal_failure(event):
+            return _non_empty_string(event.get("result"))
+        if event.get("type") == "error":
+            return _non_empty_string(event.get("message"))
+        return None
+
     def is_terminal_event(self, event: dict[str, Any]) -> bool:
         return event.get("type") == "result"
 
@@ -168,6 +181,15 @@ class CodexAdapter:
                 )
         return None
 
+    def extract_error_message(self, event: dict[str, Any]) -> str | None:
+        if event.get("type") == "error":
+            return _non_empty_string(event.get("message"))
+        if event.get("type") == "turn.failed":
+            error = event.get("error") or {}
+            if isinstance(error, dict):
+                return _non_empty_string(error.get("message"))
+        return None
+
     def is_terminal_event(self, event: dict[str, Any]) -> bool:
         return event.get("type") in ("turn.completed", "turn.failed")
 
@@ -210,6 +232,15 @@ class GeminiAdapter:
                     output_tokens=stats.get("output_tokens"),
                 )
         return None
+
+    def extract_error_message(self, event: dict[str, Any]) -> str | None:
+        message = _non_empty_string(event.get("message"))
+        if message:
+            return message
+        error = event.get("error")
+        if isinstance(error, dict):
+            return _non_empty_string(error.get("message"))
+        return _non_empty_string(error)
 
     def is_terminal_event(self, event: dict[str, Any]) -> bool:
         return event.get("type") == "result"

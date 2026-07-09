@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
-from kaji_harness.adapters import CodexAdapter
+from kaji_harness.adapters import ClaudeAdapter, CodexAdapter
 from kaji_harness.cli import _is_transient, execute_cli, stream_and_log
 from kaji_harness.errors import CLIExecutionError
 from kaji_harness.models import Step
@@ -181,6 +181,72 @@ class TestIsTransient:
         """Pattern matching is case insensitive."""
         err = CLIExecutionError("step", 1, "AT CAPACITY")
         assert _is_transient(err) is True
+
+    @pytest.mark.small
+    def test_claude_extended_thinking_block_error_is_transient(self) -> None:
+        """Claude Extended Thinking block mutation 400 is retried as transient."""
+        err = CLIExecutionError(
+            "design",
+            1,
+            (
+                "API Error: 400 messages.3.content.71: "
+                "`thinking` or `redacted_thinking` blocks in the latest assistant message "
+                "cannot be modified."
+            ),
+        )
+        assert _is_transient(err) is True
+
+    @pytest.mark.small
+    def test_full_stderr_used_when_pattern_is_after_message_truncation(self) -> None:
+        """Transient matching uses CLIExecutionError.stderr, not the truncated message."""
+        pattern = (
+            "`thinking` or `redacted_thinking` blocks in the latest assistant message "
+            "cannot be modified"
+        )
+        stderr = f"{'x' * 240} {pattern}"
+        err = CLIExecutionError("design", 1, stderr)
+
+        assert pattern not in str(err).lower()
+        assert pattern in err.stderr.lower()
+        assert _is_transient(err) is True
+
+
+class TestAdapterErrorMessageExtraction:
+    """CLI adapters expose failure detail from provider-specific event shapes."""
+
+    @pytest.mark.small
+    def test_claude_result_error_detail_is_extracted(self) -> None:
+        """Claude terminal result failure detail is collected for CLIExecutionError."""
+        error_message = (
+            "API Error: 400 messages.3.content.71: "
+            "`thinking` or `redacted_thinking` blocks in the latest assistant message "
+            "cannot be modified."
+        )
+        event = {
+            "type": "result",
+            "is_error": True,
+            "result": error_message,
+        }
+
+        assert ClaudeAdapter().extract_error_message(event) == error_message
+
+    @pytest.mark.small
+    def test_codex_error_shapes_still_extract_detail(self) -> None:
+        """Existing Codex error collection contract is preserved."""
+        adapter = CodexAdapter()
+
+        assert (
+            adapter.extract_error_message(
+                {"type": "error", "message": "Selected model is at capacity."}
+            )
+            == "Selected model is at capacity."
+        )
+        assert (
+            adapter.extract_error_message(
+                {"type": "turn.failed", "error": {"message": "Selected model is at capacity."}}
+            )
+            == "Selected model is at capacity."
+        )
 
 
 # ==========================================
@@ -438,6 +504,69 @@ class TestExecuteCLIRetry:
 
         assert call_count == 2
         assert "PASS after retry" in result.full_output
+
+    def test_claude_extended_thinking_error_retries_and_succeeds(self, tmp_path: Path) -> None:
+        """Claude terminal result API error detail drives transient retry."""
+        claude_error = (
+            "API Error: 400 messages.3.content.71: "
+            "`thinking` or `redacted_thinking` blocks in the latest assistant message "
+            "cannot be modified. These blocks must remain as they were in the original response."
+        )
+        (tmp_path / "fail").mkdir()
+        fail_script = _create_mock_cli_script(
+            tmp_path / "fail",
+            [
+                json.dumps(
+                    {
+                        "type": "result",
+                        "is_error": True,
+                        "result": claude_error,
+                    }
+                ),
+            ],
+            exit_code=1,
+        )
+
+        (tmp_path / "success").mkdir()
+        success_script = _create_mock_cli_script(
+            tmp_path / "success",
+            [
+                json.dumps({"type": "system", "subtype": "init", "session_id": "claude-retry"}),
+                json.dumps({"type": "result", "is_error": False, "total_cost_usd": 0.01}),
+            ],
+            exit_code=0,
+        )
+
+        call_count = 0
+        original_popen = subprocess.Popen
+
+        def mock_popen(args: list[str], **kwargs: object) -> subprocess.Popen[str]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return original_popen([str(fail_script)], **kwargs)  # type: ignore[return-value]
+            return original_popen([str(success_script)], **kwargs)  # type: ignore[return-value]
+
+        step = Step(id="design", skill="test-skill", agent="claude", on={"PASS": "end"})
+
+        with patch("kaji_harness.cli.build_cli_args", return_value=["dummy"]):
+            with patch("kaji_harness.cli.subprocess.Popen", side_effect=mock_popen):
+                with patch("kaji_harness.cli.time.sleep"):
+                    result = execute_cli(
+                        step=step,
+                        prompt="test",
+                        workdir=tmp_path,
+                        session_id=None,
+                        log_dir=tmp_path / "logs",
+                        execution_policy="auto",
+                        verbose=False,
+                        default_timeout=1800,
+                    )
+
+        assert call_count == 2
+        assert result.session_id == "claude-retry"
+        assert result.terminal_seen is True
+        assert result.terminal_failure is False
 
     def test_non_transient_error_not_retried(self, tmp_path: Path) -> None:
         """Permanent errors are raised immediately without retry."""
