@@ -1,4 +1,4 @@
-name: dev-thorough
+name: dev-thorough-fable
 description: |
   開発作業の丁寧版 workflow。設計・実装・修正を厚めに行う高品質優先の構成。
   dev.yaml と同じ遷移グラフで、design/fix-design=xhigh, implement/fix-code=high。
