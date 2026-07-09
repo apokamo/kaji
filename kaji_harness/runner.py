@@ -31,7 +31,7 @@ from .errors import (
 )
 from .interactive_terminal import execute_interactive_terminal
 from .logger import RunLogger
-from .models import CostInfo, Verdict, Workflow
+from .models import CostInfo, CycleDefinition, Verdict, Workflow
 from .prompt import build_prompt
 from .providers import IssueContext, IssueProvider, PRContext, get_provider, normalize_id
 from .providers.github import GitHubProviderError
@@ -193,6 +193,7 @@ class WorkflowRunner:
     from_step: str | None = None
     single_step: str | None = None
     before_step: str | None = None
+    reset_cycle: bool = False
     verbose: bool = True
     # Phase 3-d preflight: ``run()`` 完了後に外部から参照される canonical id。
     # ``cmd_run()`` の成功表示などが利用する。``run()`` 起動前は ``None``。
@@ -335,6 +336,38 @@ class WorkflowRunner:
             f"after confirming it belongs to the same issue.\n"
         )
 
+    def _validate_cycle_reset(self) -> CycleDefinition | None:
+        """`--reset-cycle` の前提を検証し、リセット対象 cycle を返す。
+
+        workflow 定義のみを参照する純粋な検証で、state / fs / provider に
+        触れない。誤用時に state を一切書き換えない保証はこの分離で成立する
+        （state.py への到達より前に呼ぶこと。design § 制約・前提条件）。
+        """
+        if not self.reset_cycle:
+            return None
+        if not self.from_step:
+            # cmd_run でも弾くが、WorkflowRunner の直接利用に対する防御
+            raise WorkflowValidationError("--reset-cycle requires --from <step>")
+        if not self.workflow.find_step(self.from_step):
+            raise WorkflowValidationError(f"Step '{self.from_step}' not found")
+        cycle = self.workflow.find_cycle_for_step(self.from_step)
+        if cycle is None:
+            raise WorkflowValidationError(
+                f"Step '{self.from_step}' does not belong to any cycle (--reset-cycle)"
+            )
+        return cycle
+
+    def _apply_cycle_reset(
+        self, cycle: CycleDefinition | None, state: SessionState, logger: RunLogger
+    ) -> None:
+        """検証済み cycle の反復回数を 0 に戻す（検証はしない）。"""
+        if cycle is None:
+            return
+        previous = state.cycle_iterations(cycle.name)
+        state.reset_cycle(cycle.name)
+        logger.log_cycle_reset(cycle.name, previous)
+        _console.info("cycle reset: %s (was %d)", cycle.name, previous)
+
     def run(self) -> SessionState:
         """ワークフローを実行し、最終状態を返す。
 
@@ -385,6 +418,9 @@ class WorkflowRunner:
         if self.before_step and self.before_step != "end":
             if not self.workflow.find_step(self.before_step):
                 raise WorkflowValidationError(f"Step '{self.before_step}' not found (--before)")
+
+        # 1.6. --reset-cycle の検証（workflow 定義のみ参照。state 未到達）
+        cycle_reset_target = self._validate_cycle_reset()
 
         # 2. canonical issue id を確定し、以降の state / run log / prompt /
         #    success summary に一貫適用する（phase3d-preflight § 1）。
@@ -499,6 +535,9 @@ class WorkflowRunner:
             )
             _console.info("workflow end: status=%s duration=%dms", end_status, total_duration_ms)
             return state
+
+        # 4.5. --reset-cycle の適用（state / logger が確定済み、メインループ前）
+        self._apply_cycle_reset(cycle_reset_target, state, logger)
 
         # 5. メインループ
         try:

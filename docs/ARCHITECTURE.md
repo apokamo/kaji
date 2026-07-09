@@ -333,6 +333,23 @@ kaji run .kaji/wf/dev.yaml 57 --from fix-code
 
 `--from` で指定したステップから再開し、`session-state.json` の `session_id` を使って CLI セッションを復元する。
 
+**cycle exhaust (`on_exhaust: ABORT`) 後の復旧**（Issue #189）:
+
+`--from` は開始ステップを選ぶだけで `cycle_counts` には触れない。そのため cycle が
+`max_iterations` に達して `on_exhaust: ABORT` で停止した後、`--from <cycle 内 step>`
+だけで再実行すると同じ step で即座に合成 ABORT verdict が再発する。復旧するには
+`--reset-cycle` を併用する:
+
+```bash
+kaji run .kaji/wf/dev.yaml 184 --from review-ready --reset-cycle
+```
+
+`--reset-cycle` は `--from` が指す step の属する cycle を `workflow.find_cycle_for_step()`
+で解決し、workflow 起動前にその cycle の `cycle_counts[<cycle>]` だけを `0` に戻す
+（他 cycle の counts / `step_history` / `last_transition_verdict` は変更しない）。
+`--from` なしでの単独指定や、cycle に属さない linear step との併用はエラー終了する
+（誤用時は state を書き換えない）。
+
 ### 実行アーティファクトの layout
 
 run / step / attempt の成果物は attempt 単位で分離される（Issue #220）。

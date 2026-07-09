@@ -114,6 +114,15 @@ class RunLogger:
             max_iterations=max_iter,
         )
 
+    def log_cycle_reset(self, cycle_name: str, previous_iterations: int) -> None:
+        """`--reset-cycle` によるサイクル反復回数のリセットを記録。"""
+        self._write(
+            "cycle_reset",
+            cycle_name=cycle_name,
+            previous_iterations=previous_iterations,
+            new_iterations=0,
+        )
+
     def log_barrier_hit(self, before_step: str) -> None:
         """`--before` barrier ヒット（指定 step を dispatch する直前で停止）を記録。"""
         self._write("barrier_hit", before_step=before_step)

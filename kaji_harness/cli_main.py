@@ -159,6 +159,13 @@ def _register_run(subparsers: argparse._SubParsersAction[argparse.ArgumentParser
         help="Stop just before dispatching <step> (exclusive barrier).",
     )
     p.add_argument(
+        "--reset-cycle",
+        dest="reset_cycle",
+        action="store_true",
+        help="Reset the iteration count of the cycle that --from's step belongs "
+        "to before running (requires --from).",
+    )
+    p.add_argument(
         "--workdir",
         type=Path,
         default=Path.cwd(),
@@ -398,6 +405,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         return EXIT_DEFINITION_ERROR
 
+    # Dependency: --reset-cycle requires --from
+    if args.reset_cycle and not args.from_step:
+        print(
+            "Error: --reset-cycle requires --from <step>",
+            file=sys.stderr,
+        )
+        return EXIT_DEFINITION_ERROR
+
     # Config discovery: --workdir overrides the start directory
     start_dir = args.workdir.resolve()
     if not start_dir.is_dir():
@@ -466,6 +481,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             from_step=args.from_step,
             single_step=args.single_step,
             before_step=args.before_step,
+            reset_cycle=args.reset_cycle,
             verbose=not args.quiet,
         )
         state = runner.run()

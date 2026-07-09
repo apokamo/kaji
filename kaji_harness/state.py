@@ -109,6 +109,11 @@ class SessionState:
         self.cycle_counts[cycle_name] = self.cycle_iterations(cycle_name) + 1
         self._persist()
 
+    def reset_cycle(self, cycle_name: str) -> None:
+        """指定サイクルの反復回数を 0 に戻し、即時永続化する。"""
+        self.cycle_counts[cycle_name] = 0
+        self._persist()
+
     def capture_worktree(self, worktree_dir: str, branch_name: str) -> None:
         """worktree/branch を構造化保存する（冪等。既に保存済みなら no-op）。
 
