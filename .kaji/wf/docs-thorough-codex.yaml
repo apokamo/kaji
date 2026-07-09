@@ -1,4 +1,4 @@
-name: docs
+name: docs-thorough-codex
 description: |
   docs-only 作業用 workflow。GitHub Issue から docs 更新、PR review、close まで進める。
   issue-create は事前に完了していることが前提。

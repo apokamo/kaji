@@ -1,10 +1,10 @@
-"""Invariants for the canonical workflow set under ``.kaji/wf/`` (Issue #247).
+"""Invariants for the canonical workflow set under ``.kaji/wf/``.
 
-Issue #247 fixed the normal-operation workflow set to exactly 5 files
-(3 GitHub + 2 local fallback) and required each workflow's ``name:`` to match
-its filename stem. This test guards those invariants so a re-added legacy
-workflow, an accidental deletion, or a ``name:`` / filename drift is caught
-cheaply by the loader (which is already covered by other tests).
+The workflow set contains the everyday GitHub/local workflows plus tracked model
+variants. Each workflow's ``name:`` must match its filename stem. This test
+guards those invariants so a re-added legacy workflow, an accidental deletion, or
+a ``name:`` / filename drift is caught cheaply by the loader (which is already
+covered by other tests).
 """
 
 from __future__ import annotations
@@ -19,17 +19,20 @@ WF_DIR = Path(__file__).resolve().parent.parent.parent / ".kaji" / "wf"
 
 EXPECTED_WORKFLOWS = {
     "dev",
-    "dev-thorough",
-    "docs",
     "dev-local",
+    "dev-thorough",
+    "dev-thorough-fable",
+    "docs",
+    "docs-fable",
     "docs-local",
+    "docs-thorough-codex",
 }
 
 
 @pytest.mark.small
 class TestWorkflowSetInvariants:
-    def test_exactly_five_workflows(self) -> None:
-        """``.kaji/wf/`` holds exactly the 5 canonical workflows."""
+    def test_exactly_canonical_workflows(self) -> None:
+        """``.kaji/wf/`` holds exactly the canonical workflows."""
         stems = {p.stem for p in WF_DIR.glob("*.yaml")}
         assert stems == EXPECTED_WORKFLOWS, (
             f"`.kaji/wf/` workflow set drifted: got {sorted(stems)}, "
