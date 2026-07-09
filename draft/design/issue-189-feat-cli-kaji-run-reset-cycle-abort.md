@@ -92,15 +92,21 @@ kaji run .kaji/wf/dev.yaml 189 --from review-code --reset-cycle --before final-c
 | 条件 | 検出層 | 挙動 |
 |------|--------|------|
 | `--reset-cycle` を `--from` なしで指定 | `cmd_run`（config 探索より前） | stderr に `Error: --reset-cycle requires --from <step>` / exit `2` |
-| `--from <step>` の step が workflow に存在しない | `runner.run()`（既存経路） | 既存の `WorkflowValidationError: Step '<step>' not found` / exit `2` |
-| `--from <step>` の step がどの cycle にも属さない（linear step、または `cycles:` を持たない workflow） | `runner.run()` | `WorkflowValidationError: Step '<step>' does not belong to any cycle (--reset-cycle)` / exit `2` |
+| 同上（`WorkflowRunner` の直接利用） | `runner.run()` の `_validate_cycle_reset()` | `WorkflowValidationError: --reset-cycle requires --from <step>` / exit `2` |
+| `--from <step>` の step が workflow に存在しない | `runner.run()` の `_validate_cycle_reset()`（`--reset-cycle` 時）／既存の開始 step 決定（それ以外） | `WorkflowValidationError: Step '<step>' not found` / exit `2` |
+| `--from <step>` の step がどの cycle にも属さない（linear step、または `cycles:` を持たない workflow） | `runner.run()` の `_validate_cycle_reset()` | `WorkflowValidationError: Step '<step>' does not belong to any cycle (--reset-cycle)` / exit `2` |
 | `session-state.json` が存在しない（初回実行） | — | エラーにしない。`load_or_create()` が新規 state を作り、`cycle_counts[<cycle>] = 0` を書くだけ（実質 no-op） |
 
-`--reset-cycle` が誤用エラーになるケースでは、**state を一切書き換えずに** 終了する（検証は state 書き込みより前に済ませる）。
+`--reset-cycle` が誤用エラーになるケースでは、**state を一切書き換えずに** 終了する。この保証は「検証を `SessionState` に触れる前に済ませる」ことで成立させる（→「制約・前提条件」の validate / apply 分離を参照）。
 
 ## 制約・前提条件
 
-- **reset の実行位置は `runner.run()` 内でなければならない**。`session-state.json` のパスは `<artifacts_dir>/<canonical_id>/` で決まり、`canonical_id` は `runner.run()` 内の `_resolve_run_issue_context()`（`runner.py:391`）で確定する。`cmd_run` の時点で持っているのは正規化前の生入力（`pc1-1` / `local-pc1-1` / `gh:N` などの表記ゆれ）なので、そこで state を触ると別ファイルを書きうる。よって **フラグ検証は `cmd_run`、state 変更は `runner.run()`** に分離する。
+- **reset の *state 変更* は `runner.run()` 内でなければならない**。`session-state.json` のパスは `<artifacts_dir>/<canonical_id>/` で決まり、`canonical_id` は `runner.run()` 内の `_resolve_run_issue_context()`（`runner.py:391`）で確定する。`cmd_run` の時点で持っているのは正規化前の生入力（`pc1-1` / `local-pc1-1` / `gh:N` などの表記ゆれ）なので、そこで state を触ると別ファイルを書きうる。
+- **`runner.run()` 内で validate と apply を分離し、validate を state 到達より前に置く**（レビュー指摘への対応）。単純に「開始 step 決定の直後に reset する」設計では、誤用時の state 非改変を保証できない。`runner.py:404-431` は `SessionState.load_or_create()`（`runner.py:402`）の直後、開始 step 決定（`runner.py:454-464`）より **前** に、`state.worktree_dir is None` なら `discover_existing_worktree()` → `state.capture_worktree()` を実行する。`capture_worktree()` は `_persist()` を呼び（`state.py:120-122` → `state.py:156-173`）、`session-state.json` と `progress.md` を書く。つまり旧 state file（`worktree_dir` を持たない Issue #218 以前の形式）を入力にすると、`--from <linear-step> --reset-cycle` の誤用がエラーになる前に state が書き換わる。したがって:
+  - `_validate_cycle_reset()` は **workflow 定義だけを参照する純粋な検証**（`from_step` 必須 / `find_step()` で存在 / `find_cycle_for_step()` で cycle 所属）とし、`validate_workflow()` 直後（`--before` の存在検証と同じ位置、`runner.py:384-387`）で実行する。ここは `_resolve_run_issue_context()` / `SessionState.load_or_create()` / backfill / `run_dir` 作成のいずれよりも前であり、state にもファイルシステムにも触れていない。
+  - `_apply_cycle_reset()` は検証済みの `CycleDefinition` を受け取り、`state` と `logger` が揃った後に `state.reset_cycle()` を呼ぶだけにする。
+  - 副産物として、`--reset-cycle` の誤用は provider 構築・Issue context 解決（`gh` 呼び出しを伴う）より前に fail-fast する。
+- **`--reset-cycle` の副作用保証は「誤用時に state 非改変」に限定される**。正常経路では、reset とは無関係な既存の永続化（worktree backfill、`run_dir` 作成）は従来どおり発生する。本 Issue はその挙動を変えない。
 - **リセット対象は `--from` の step が属する cycle 1 個のみ**。他 cycle の counts は保持する。exhaust 判定は step ごとに `find_cycle_for_step(current_step.id)` で cycle を引くため、再開点の cycle さえ戻せば即時 ABORT は解消する。
 - **`step_history` / `last_transition_verdict` は書き換えない**。手動 workaround は履歴末尾の ABORT 3 件を除去していたが、それは不要かつ有害（実行履歴の改竄）。理由: (a) 最初の step が dispatch されれば `record_step()` が `last_transition_verdict` を上書きする、(b) dispatch 前に `--before` barrier で止まる経路は `runner.py:909` が既に stale verdict を `None` に落として `cmd_run` の誤 ABORT 報告を抑止している。
 - リセットは即時永続化する（`increment_cycle()` と同じ契約）。reset 直後にクラッシュしても、再実行時の意図（counts=0 から再開）と一致する。
@@ -112,9 +118,9 @@ kaji run .kaji/wf/dev.yaml 189 --from review-code --reset-cycle --before final-c
 | ファイル | 変更内容 |
 |---------|---------|
 | `kaji_harness/cli_main.py` | `_register_run()` に `--reset-cycle` 追加。`cmd_run()` に `--from` 依存ガード追加。`WorkflowRunner(...)` へ `reset_cycle=args.reset_cycle` を渡す |
-| `kaji_harness/runner.py` | `WorkflowRunner.reset_cycle: bool = False` フィールド。`run()` の開始 step 決定後・メインループ前に reset 処理 |
+| `kaji_harness/runner.py` | `WorkflowRunner.reset_cycle: bool = False` フィールド。`_validate_cycle_reset()`（`--before` 検証の直後、state 到達前）と `_apply_cycle_reset()`（state / logger 確定後、メインループ前）を追加 |
 | `kaji_harness/state.py` | `SessionState.reset_cycle()` を追加 |
-| `kaji_harness/logger.py` | `log_cycle_reset()` を追加 |
+| `kaji_harness/logger.py` | `log_cycle_reset()` を追加（event `cycle_reset`） |
 | `tests/test_runner_reset_cycle.py` | 新規（`tests/test_runner_before.py` と同型） |
 | docs | 「影響ドキュメント」参照 |
 
@@ -129,37 +135,78 @@ cmd_run(args)
   ├─ [新規ガード] args.reset_cycle and not args.from_step → stderr + exit 2
   ├─ config 探索 / provider 検証 / load_workflow  （既存・順序不変）
   └─ WorkflowRunner(..., reset_cycle=args.reset_cycle).run()
-         ├─ skill preflight / validate_workflow            （既存）
-         ├─ canonical_id 確定 → SessionState.load_or_create（既存, runner.py:402）
-         ├─ run_dir / RunLogger 作成                        （既存, runner.py:450）
-         ├─ 開始 step 決定（--step / --from / 先頭）        （既存, runner.py:454-464）
-         ├─ [新規] _apply_cycle_reset(state, logger)
-         └─ メインループ（exhaust 判定は runner.py:552）    （既存）
+         ├─ skill preflight / validate_workflow                  （既存, runner.py:355-382）
+         ├─ --before の step 存在検証                             （既存, runner.py:384-387）
+         ├─ [新規] cycle = _validate_cycle_reset()   ← state 未到達・副作用なし
+         ├─ canonical_id 確定（provider / gh 呼び出し）          （既存, runner.py:391）
+         ├─ SessionState.load_or_create                          （既存, runner.py:402）
+         ├─ worktree backfill → state.capture_worktree → _persist（既存, runner.py:404-431）★state が書かれる
+         ├─ run_dir / RunLogger 作成                             （既存, runner.py:443-451）
+         ├─ 開始 step 決定（--step / --from / 先頭）             （既存, runner.py:454-464）
+         ├─ ambiguous worktree の早期 ABORT return               （既存, runner.py:476-501）
+         ├─ [新規] _apply_cycle_reset(cycle, state, logger)
+         └─ メインループ（exhaust 判定は runner.py:552）         （既存）
 ```
 
-reset を「開始 step 決定の直後」に置く理由: `--from` step の存在検証（`Step '<x>' not found`）が既に済んでおり、かつ exhaust 判定（メインループ冒頭）より前だから。
+**validate と apply を引き離す理由**は上記フローの ★ 行にある。`capture_worktree()` は `_persist()` 経由で `session-state.json` を書くため、検証をこれより後に置くと「誤用時に state 非改変」という保証が旧 state file 入力時に破れる。検証は workflow 定義のみで完結するので、state に到達する前（`--before` 検証の隣）へ引き上げられる。
+
+**apply を遅い位置に置く理由**は逆に 2 つある。(a) `state` と `logger` が揃っていること、(b) ambiguous worktree の早期 ABORT return（`runner.py:476-501`）で run が中断される場合に counts を戻してはならないこと。開始 step 決定より後である必要はないが、exhaust 判定（メインループ冒頭）より前である必要がある。
 
 ### 疑似コード
 
 ```python
-# runner.py
-def _apply_cycle_reset(self, state: SessionState, logger: RunLogger) -> None:
-    """--reset-cycle: from_step が属する cycle の反復回数を 0 に戻す。"""
+# runner.py — 検証: workflow 定義のみを見る。state / fs / provider に触れない。
+def _validate_cycle_reset(self) -> CycleDefinition | None:
+    """--reset-cycle の前提を検証し、リセット対象 cycle を返す。"""
     if not self.reset_cycle:
-        return
+        return None
     if not self.from_step:
-        # CLI 層で弾いているが、プログラム的利用のための防御
+        # cmd_run でも弾くが、WorkflowRunner の直接利用に対する防御
         raise WorkflowValidationError("--reset-cycle requires --from <step>")
+    if not self.workflow.find_step(self.from_step):
+        raise WorkflowValidationError(f"Step '{self.from_step}' not found")
     cycle = self.workflow.find_cycle_for_step(self.from_step)
     if cycle is None:
         raise WorkflowValidationError(
             f"Step '{self.from_step}' does not belong to any cycle (--reset-cycle)"
         )
+    return cycle
+
+
+# runner.py — 適用: state と logger が揃ってから呼ぶ。検証はしない。
+def _apply_cycle_reset(
+    self, cycle: CycleDefinition | None, state: SessionState, logger: RunLogger
+) -> None:
+    """検証済み cycle の反復回数を 0 に戻す。"""
+    if cycle is None:
+        return
     previous = state.cycle_iterations(cycle.name)
     state.reset_cycle(cycle.name)
     logger.log_cycle_reset(cycle.name, previous)
     _console.info("cycle reset: %s (was %d)", cycle.name, previous)
 ```
+
+`run()` 側では `reset_target = self._validate_cycle_reset()` を `runner.py:387` の直後で受け、`self._apply_cycle_reset(reset_target, state, logger)` を `runner.py:464` の直後（早期 ABORT return より後）で呼ぶ。
+
+### `log_cycle_reset()` の契約
+
+`RunLogger` の既存 event（`cycle_iteration` / `barrier_hit`）と同じく `_write()` の薄いラッパとする。実装時の解釈ぶれとテスト期待値を固定するため、シグネチャと payload を確定させる:
+
+```python
+# logger.py
+def log_cycle_reset(self, cycle_name: str, previous_iterations: int) -> None:
+    """`--reset-cycle` によるサイクル反復回数のリセットを記録。"""
+    self._write(
+        "cycle_reset",
+        cycle_name=cycle_name,
+        previous_iterations=previous_iterations,
+        new_iterations=0,
+    )
+```
+
+- event 名: `cycle_reset`
+- payload: `cycle_name`（str）/ `previous_iterations`（リセット前の値）/ `new_iterations`（常に `0`）
+- `new_iterations` は現状の定数だが、`cycle_iteration` event が `iteration` / `max_iterations` を持つのと対称にし、ログだけで before → after を読めるようにするため明示する
 
 ```python
 # state.py
@@ -198,9 +245,11 @@ def reset_cycle(self, cycle_name: str) -> None:
 - **回帰の再現（対照群）**: `cycle_counts = {"rev": 3}` を書き込んだ `session-state.json` を用意し、`--from review`（`--reset-cycle` なし）で `run()` すると step が dispatch されず `Cycle 'rev' exhausted` の ABORT verdict で終わること。＝ Issue が報告した現象がテストとして固定される
 - **実験群（本機能）**: 同じ state に対し `--from review --reset-cycle` で `run()` すると、ABORT せず `review` step が dispatch され、workflow が続行すること
 - **state の事後条件**: 実行後の `session-state.json` で対象 cycle が `0` から数え直されていること、および**他 cycle の counts が保存されていること**（`{"rev": 3, "other": 2}` → `other` は `2` のまま）
-- **cycle 外 step の誤用検知**: linear step（cycle に属さない step）を `--from` に与えて `--reset-cycle` すると `WorkflowValidationError` が送出され、`cmd_run()` 経由では exit `2` になること。かつ `session-state.json` の `cycle_counts` が**書き換わっていない**こと
+- **cycle 外 step の誤用検知**: linear step（cycle に属さない step）を `--from` に与えて `--reset-cycle` すると `WorkflowValidationError` が送出され、`cmd_run()` 経由では exit `2` になること
+- **誤用時の state 非改変（validate / apply 分離の回帰テスト）**: 上記 2 つの誤用ケース（cycle 外 step / `--from` 未指定の runner 直呼び）を、**`worktree_dir` / `branch_name` を持たない旧形式の `session-state.json`**（Issue #218 以前の形式）を入力として実行し、例外送出後に state ファイルの **mtime と内容が両方とも変化していない**ことを検証する。旧形式の state は `runner.py:409` の backfill 条件（`state.worktree_dir is None`）を満たすため、検証が `capture_worktree()` より後にあるとこのテストが落ちる。＝ 本レビューで指摘された順序バグを固定する対照テストであり、単に「`cycle_counts` が変わらない」ことを見るだけでは検出できない
 - **`--from` 未指定での runner 直呼び**: `WorkflowRunner(reset_cycle=True, from_step=None).run()` が `WorkflowValidationError` になること（API 層の防御）
-- **ログ証跡**: `run.log` に `cycle_reset` イベント（cycle 名・リセット前の値）が 1 件記録されること
+- **存在しない step**: `--from bogus --reset-cycle` が `Step 'bogus' not found` で `WorkflowValidationError` になること（既存の `--from` 単独時と同一メッセージ）
+- **ログ証跡**: `run.log` に `cycle_reset` イベントが 1 件記録され、payload が `cycle_name` / `previous_iterations=3` / `new_iterations=0` であること
 
 Issue 完了条件の「E2E テスト」は、この Medium 群のうち「exhaust 済み state → `--from ... --reset-cycle` → 続行」を `cmd_run()` から駆動するケースが担う（agent dispatch のみ patch し、argparse → config → workflow load → runner → state 永続化までを実経路で通す）。
 
@@ -240,6 +289,10 @@ Issue 完了条件の「E2E テスト」は、この Medium 群のうち「exhau
 | Python 公式ドキュメント `argparse` — `action="store_true"` | https://docs.python.org/3/library/argparse.html#action | `store_true` は「値を取らない真偽フラグ」で既定 `False`。→ `--reset-cycle` を値なしフラグとする実装根拠（`--reset-cycle <cycle-name>` を採らない） |
 | `kaji_harness/runner.py:552` | worktree 内ソース | `if cycle and state.cycle_iterations(cycle.name) >= cycle.max_iterations:` — exhaust 判定が dispatch より前、かつ step ごとに評価される。`cycle_counts` を 0 に戻せば同一 run 内で即時 ABORT は起きない |
 | `kaji_harness/runner.py:391, 402` | worktree 内ソース | `run_ctx = self._resolve_run_issue_context()` → `SessionState.load_or_create(run_ctx.canonical_id, self.artifacts_dir)`。state ファイルの位置は canonical id に依存する。→ reset を `cmd_run`（生入力しか持たない）で行ってはならない根拠 |
+| `kaji_harness/runner.py:404-431` | worktree 内ソース | `if state.worktree_dir is None:` → `discover_existing_worktree()` → `state.capture_worktree(...)`。この backfill は `load_or_create()`（`:402`）の直後、開始 step 決定（`:454-464`）より前に走る。→ `--reset-cycle` の検証をここより後ろに置くと、旧形式 state 入力時に誤用が state を書き換えてから失敗する。validate を `:387` 直後へ引き上げる根拠 |
+| `kaji_harness/state.py:112-122, 156-173` | worktree 内ソース | `capture_worktree()` は `worktree_dir` / `branch_name` を代入して `self._persist()` を呼び、`_persist()` は `session-state.json` を書いて `_write_progress_md()` も実行する。→ backfill が「読み取りだけ」ではなく永続化であることの根拠 |
+| `kaji_harness/runner.py:476-501` | worktree 内ソース | ambiguous worktree 検出時は ABORT verdict を emit してメインループに入らず `return` する。→ `_apply_cycle_reset()` をこの early return より後に置き、中断される run で counts を戻さない根拠 |
+| `kaji_harness/logger.py:108-123` | worktree 内ソース | `log_cycle_iteration()` は `self._write("cycle_iteration", cycle_name=..., iteration=..., max_iterations=...)`、barrier 系も `_write()` の薄いラッパ。→ `log_cycle_reset()` の event 名・payload をこの形式に揃える根拠 |
 | `kaji_harness/runner.py:909` | worktree 内ソース | `if barrier_hit and not step_dispatched and state.last_transition_verdict is not None: state.last_transition_verdict = None` — dispatch 前 barrier での stale verdict は既に抑止済み。→ `--reset-cycle` が `last_transition_verdict` を触る必要がない根拠 |
 | `kaji_harness/models.py:107-112` | worktree 内ソース | `find_cycle_for_step()` は `step_id in cycle.loop or step_id == cycle.entry` で一致判定し、非該当は `None`。→ entry / loop いずれの step からも復旧でき、linear step は `None` で誤用検知できる |
 | `kaji_harness/state.py:103-110` | worktree 内ソース | `cycle_iterations()` は `cycle_counts.get(name, 0)`、`increment_cycle()` は代入後に `_persist()`。→ `reset_cycle()` を「`0` 代入 + `_persist()`」として対称に置く根拠 |
