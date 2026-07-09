@@ -12,6 +12,7 @@ import sys
 import time
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from itertools import count
 from pathlib import Path
 
 from .cli import execute_cli
@@ -53,6 +54,30 @@ _logger = logging.getLogger(__name__)
 # ``_logger``（``kaji_harness.runner``）とは別ツリーで、console_log の handler に
 # 伝播する。RunLogger の JSONL 契約とは独立した人間向け表示のみを担う。
 _console = logging.getLogger("kaji.runner")
+
+RUN_ID_FORMAT = "%y%m%d%H%M%S"
+
+
+def allocate_run_dir(runs_dir: Path, timestamp: datetime | None = None) -> Path:
+    """一意な ``runs/<run_id>/`` ディレクトリを atomic に採番して作成する。
+
+    base は秒精度の ``YYMMDDHHMMSS``。同一秒内に既存 directory がある場合は
+    ``-002`` / ``-003`` ... suffix を付け、``mkdir(exist_ok=False)`` の成功を
+    一意性の判定にする。
+    """
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    base_id = (timestamp or datetime.now()).strftime(RUN_ID_FORMAT)
+
+    for sequence in count(1):
+        run_id = base_id if sequence == 1 else f"{base_id}-{sequence:03d}"
+        candidate = runs_dir / run_id
+        try:
+            candidate.mkdir()
+        except FileExistsError:
+            continue
+        return candidate
+
+    raise RuntimeError("unreachable: itertools.count is infinite")
 
 
 def allocate_attempt_dir(run_dir: Path, step_id: str) -> Path:
@@ -476,13 +501,7 @@ class WorkflowRunner:
             )
 
         # 4. run ログディレクトリを作成（canonical id ベース）
-        run_dir = (
-            self.artifacts_dir
-            / run_ctx.canonical_id
-            / "runs"
-            / datetime.now().strftime("%y%m%d%H%M")
-        )
-        run_dir.mkdir(parents=True, exist_ok=True)
+        run_dir = allocate_run_dir(self.artifacts_dir / run_ctx.canonical_id / "runs")
         logger = RunLogger(log_path=run_dir / "run.log")
         logger.log_workflow_start(run_ctx.canonical_id, self.workflow.name)
         _console.info("workflow start: %s issue %s", self.workflow.name, run_ctx.issue_ref)
