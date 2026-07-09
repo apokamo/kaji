@@ -66,8 +66,8 @@ steps:
 
   - id: start
     skill: issue-start
-    agent: claude
-    model: sonnet
+    agent: codex
+    model: gpt-5.4
     effort: medium
     on:
       PASS: design
@@ -115,8 +115,8 @@ steps:
   - id: implement
     skill: issue-implement
     agent: claude
-    model: opus
-    effort: medium
+    model: sonnet
+    effort: high
     on:
       PASS: review-code
       RETRY: implement
@@ -138,8 +138,8 @@ steps:
   - id: fix-code
     skill: issue-fix-code
     agent: claude
-    model: opus
-    effort: medium
+    model: sonnet
+    effort: high
     inject_verdict: true
     on:
       PASS: verify-code
@@ -169,8 +169,8 @@ steps:
 
   - id: pr
     skill: i-pr
-    agent: claude
-    model: sonnet
+    agent: codex
+    model: gpt-5.4
     effort: medium
     on:
       PASS: review-poll
@@ -198,8 +198,8 @@ steps:
   - id: pr-fix
     skill: pr-fix
     agent: claude
-    model: opus
-    effort: medium
+    model: sonnet
+    effort: high
     inject_verdict: true
     on:
       PASS: pr-verify
@@ -217,8 +217,8 @@ steps:
 
   - id: close
     skill: issue-close
-    agent: claude
-    model: sonnet
+    agent: codex
+    model: gpt-5.4
     effort: medium
     on:
       PASS: end
