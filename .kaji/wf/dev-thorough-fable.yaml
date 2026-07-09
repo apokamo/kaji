@@ -68,8 +68,8 @@ steps:
 
   - id: start
     skill: issue-start
-    agent: claude
-    model: sonnet
+    agent: codex
+    model: gpt-5.4
     effort: medium
     on:
       PASS: design
@@ -171,8 +171,8 @@ steps:
 
   - id: pr
     skill: i-pr
-    agent: claude
-    model: sonnet
+    agent: codex
+    model: gpt-5.4
     effort: medium
     on:
       PASS: review-poll
@@ -219,8 +219,8 @@ steps:
 
   - id: close
     skill: issue-close
-    agent: claude
-    model: sonnet
+    agent: codex
+    model: gpt-5.4
     effort: medium
     on:
       PASS: end
