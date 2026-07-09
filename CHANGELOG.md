@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-09
+
+This release publishes kaji as an installable PyPI package, adds the Trusted
+Publisher release pipeline, and includes workflow reliability fixes and the
+documentation translation refresh since 0.12.1.
+
 ### BREAKING CHANGE
 
 - **壊れる契約**: `issue-design` Step 1.6 の BACK 経由再起動検出は、判定コメントの
@@ -27,22 +33,46 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- PyPI publish pipeline: `.github/workflows/publish-pypi.yml` now builds
+  distributions on GitHub Release `published`, runs strict metadata checks,
+  smoke-tests the wheel entry point through `uv tool install`, and publishes via
+  PyPI Trusted Publisher using the `pypi` GitHub environment (#270).
+- PyPI package metadata and install documentation. `pyproject.toml` now carries
+  project URLs plus author / maintainer metadata, and the READMEs document
+  `uv tool install kaji` as the primary install path (#270).
 - `kaji issue comment` に verdict マーカー付与機能（`--verdict-step` /
   `--verdict-status`）を追加。CLI が comment body 1 行目に決定的な HTML マーカー
   `<!-- kaji-verdict: step=<step> status=<STATUS> -->` を埋め込み、cross-skill 契約
   （BACK 再入検出）を CLI 層に固定する。github / local 両 provider で同一の振る舞い、
   語彙検証は fail-loud（#261）。
+- Python starter repository guide and links from the top-level documentation
+  indexes (#242).
 
 ### Fixed
 
+- Fixed the `issue-design` BACK detection command, local-provider self-RETRY
+  cycle membership, and the mutating `make check` format gate. `make check` now
+  uses format checks, while mutating formatting is explicit through `make fmt`
+  (#259).
 - BACK 判定コメントの producer / consumer 契約不一致を恒久修正。旧 consumer regex
   （`[x] Changes Requested / BACK`）は producer が一度も出力しておらず、BACK 経由の
   design 再入が常に「初回起動」と誤判定され既存設計書を上書きしうる欠陥だった。
   producer は全判定コメントで verdict マーカーを無条件付与し、consumer はマーカーのみを
   参照する（#261）。
+- Fixed the publish workflow action pinning and wheel smoke-test install syntax
+  before the first PyPI release (#270).
 
 ### Docs
 
+- Reworked the public README workflow diagram and terminal demo assets so the
+  repository front page reflects the current GitHub workflow (#269, #277, #279).
+- Switched the configuration reference and several user-facing docs to the
+  English-canonical + `.ja.md` companion policy, with updated indexes and
+  language-switcher links (#264, #265, #266, #268, #272).
+- Added and refined configuration reference documentation, including standard
+  GitHub operation examples and README config snippets (#253).
+- Added root `AGENTS.md`, reduced `CLAUDE.md` to Claude-specific notes, and
+  included `AGENTS.md` in `make verify-docs` (#243, #256).
 - ADR 008「後方互換レイヤを提供しない（BREAKING 明示ポリシー）」を追加。付随して
   `shared_skill_rules.md` / `skill-authoring.md` / `release` skill / cli-guides に契約と
   BREAKING 3 要素要件を反映（#261）。
