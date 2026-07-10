@@ -1,0 +1,14 @@
+status: PASS
+reason: "コードレビューで Must Fix は見つからず、設計整合性・type:feature 観点・独立品質ゲートを満たしている"
+evidence: |
+  Issue #230 は type:feature 単一ラベル。Pre-Handoff Review hard gate は GitHub REST コメント確認で PHR_COUNT=1、経路行=2 のため通過。
+  実装差分は 11 files changed, 1280 insertions(+), 724 deletions(-)。対象は interactive_terminal runner / wrapper / runner dispatch コメント・回帰テスト / 関連 docs / 設計書で、config key・CLI option・verdict 解決経路は変更されていない。
+  kaji_harness/interactive_terminal.py:101-143 で tmux split-window -d -h -P -F '#{pane_id}' -t $TMUX_PANE を生成し、右 pane 追加と pane_id 回収を実装。146-254 で verdict.yaml 出現を完了トリガにし、metadata snapshot、Codex session id 回収 grace、close_on_verdict=true 時の kill-pane cleanup を実装。
+  kaji_harness/interactive_terminal.py:278-390 で tmux PATH、$TMUX、$TMUX_PANE、tmux >= 3.0、#{pane_dead} 存命判定、pipe-pane transcript、kill-pane cleanup を実装。/proc scan と script(1) 実行経路は runtime code から削除済み。
+  kaji_harness/assets/interactive-terminal/wrapper.sh:4-11 は 8 引数契約、13 で workdir に cd、48-84 で script(1) を使わず claude/codex を直接起動し、Codex には --cd workdir を渡している。
+  tests/test_interactive_terminal.py:100-142 で -h を含む split-window argv exact assert、145-210 で tmux/$TMUX/$TMUX_PANE/version fail-fast、337-494 で verdict cleanup・remain-on-exit・pipe-pane・early pane death・timeout を検証。789-889 で実 tmux E2E が split-window -> wrapper -> verdict -> kill-pane 後の pane 消滅を確認している。
+  tests/test_runner_interactive_dispatch.py:122-174 で interactive_terminal と headless が同一 effective_workdir を受け取る MF3 回帰 guard を追加している。
+  grep 確認: rg -n "kitty|script\(1\)|_build_kitty|/proc|kill_processes|signal_matches|pid_exists" kaji_harness tests docs は ADR 履歴説明と tmux置換説明、および no script(1)/no /proc の説明のみを返し、runtime/tests に旧 kitty 実装シンボルは残っていない。
+  独立品質ゲート: source .venv/bin/activate && ruff check kaji_harness/ tests/ && ruff format --check kaji_harness/ tests/ && mypy kaji_harness/ は exit 0（All checks passed / 124 files already formatted / Success: no issues found in 32 source files）。
+  独立 pytest: source .venv/bin/activate && pytest は 1788 passed, 2 skipped in 127.89s、failed/errors 0。Baseline failure コメントは無いが全テストが exit 0 のため regression 0。
+suggestion: ""

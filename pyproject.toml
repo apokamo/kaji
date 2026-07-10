@@ -1,12 +1,15 @@
 [project]
 name = "kaji"
-version = "0.9.1"
+version = "0.13.0"
 description = "AI-driven software development workflow orchestrator"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [
+    {name = "apokamo"}
+]
+maintainers = [
     {name = "apokamo"}
 ]
 keywords = ["ai", "agent", "workflow", "orchestrator", "claude", "codex", "gemini"]
@@ -20,6 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "pyyaml>=6.0",
+    "jq>=1.6",
 ]
 
 [dependency-groups]
@@ -31,10 +35,17 @@ dev = [
     "mypy>=1.10.0",
     "setuptools>=77.0.0",
     "types-PyYAML>=6.0",
+    "markdown-it-py>=3.0",
 ]
 
 [project.scripts]
 kaji = "kaji_harness.cli_main:main"
+
+[project.urls]
+Homepage = "https://github.com/apokamo/kaji"
+Repository = "https://github.com/apokamo/kaji"
+Issues = "https://github.com/apokamo/kaji/issues"
+Changelog = "https://github.com/apokamo/kaji/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["setuptools>=77.0.0", "wheel"]
@@ -43,6 +54,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["kaji_harness*"]
+
+[tool.setuptools.package-data]
+kaji_harness = ["assets/interactive-terminal/wrapper.sh"]
 
 [tool.ruff]
 line-length = 100
@@ -65,4 +79,6 @@ markers = [
     "small: Small tests - no external dependencies",
     "medium: Medium tests - file I/O, mock processes",
     "large: Large tests - real CLI, E2E",
+    "large_local: Large tests with subprocess but no external network (Phase 3-e+)",
+    "large_forge: Large tests requiring real GitHub API (post-recovery)",
 ]

@@ -1,0 +1,153 @@
+# kaji
+
+> Closed-loop agentic development workflows for Claude Code, Codex, and Gemini CLI.
+
+kaji is a Python CLI workflow orchestrator for AI-assisted software development.
+It turns an issue into a resumable design -> implement -> review -> fix -> verify
+-> PR loop, with human-in-the-loop gates and artifact-backed verdicts.
+
+Current public release: v0.12.0.
+
+The supported user-facing entry point is the `kaji` CLI. The implementation lives
+in the `kaji_harness` package.
+
+## Core Concepts
+
+- Closed-loop workflow: explicit review -> fix -> verify cycles instead of
+  one-shot prompting.
+- Multi-agent orchestration: workflow steps can route work to Claude Code,
+  Codex, or Gemini CLI.
+- Verdict-driven control flow: steps return `PASS`, `RETRY`, `BACK`, or `ABORT`.
+- Artifact-backed verdicts: `verdict.yaml` is the primary completion signal when
+  available.
+- Human-in-the-loop gates: humans keep control of issue readiness, design
+  direction, PR review, and merge decisions.
+- Interactive terminal runner: kaji can run normal agent CLIs in tmux panes and
+  advance the workflow when verdict artifacts appear.
+
+## Start Here
+
+- [README](README.md): public overview, quick start, workflow example, and
+  feature summary.
+- [Japanese README](README.ja.md): Japanese overview of the same public content.
+- [Documentation index](docs/README.md): map of how-to, reference, operations,
+  and concept docs.
+- [Changelog](CHANGELOG.md): release history and current behavior changes.
+
+## Architecture and Workflow
+
+- [Architecture](docs/ARCHITECTURE.md): harness architecture, dispatch paths,
+  verdict resolution, state, logging, and artifact layout.
+- [Workflow overview](docs/dev/workflow_overview.md): entry point for choosing a
+  workflow by issue type.
+- [Workflow authoring](docs/dev/workflow-authoring.md): how to write workflow
+  YAML, steps, transitions, cycles, and verdict mappings.
+- [Skill authoring](docs/dev/skill-authoring.md): how to write skills and their
+  verdict contracts.
+- [Interactive terminal runner](docs/cli-guides/interactive-terminal-runner.md)
+  ([Japanese](docs/cli-guides/interactive-terminal-runner.ja.md)): tmux-backed
+  runner for normal Claude Code and Codex CLI sessions.
+- [Claude Code CLI Guide](docs/cli-guides/claude-code-cli-guide.md)
+  ([Japanese](docs/cli-guides/claude-code-cli-guide.ja.md)): verified Claude
+  Code CLI options, subcommands, permissions, agents, MCP, plugins, and kaji
+  integration notes.
+- [Codex CLI Session Guide](docs/cli-guides/codex-cli-session-guide.md)
+  ([Japanese](docs/cli-guides/codex-cli-session-guide.ja.md)): verified Codex
+  CLI session, resume, structured output, sandbox, MCP, plugin, and cloud
+  integration notes.
+- [AI-driven strategy](docs/concepts/ai-driven-strategy.md)
+  ([Japanese](docs/concepts/ai-driven-strategy.ja.md)): project philosophy for
+  human direction and AI-executed development loops.
+
+## CLI and Setup
+
+Install kaji for use in another repository:
+
+```bash
+uv tool install git+https://github.com/apokamo/kaji.git
+kaji --help
+```
+
+Run a workflow in a configured target repository:
+
+```bash
+kaji run .kaji/wf/dev.yaml <issue-id>
+kaji run .kaji/wf/dev.yaml <issue-id> --from <step-id>
+kaji run .kaji/wf/dev.yaml <issue-id> --step <step-id>
+```
+
+Workflow files are run from `.kaji/wf/` in each repository. This repository
+currently includes `.kaji/wf/dev.yaml`, `.kaji/wf/dev-thorough.yaml`, and
+`.kaji/wf/docs.yaml` as GitHub-backed workflow examples. Template distribution
+and first-time setup details are tracked in:
+https://github.com/apokamo/kaji/issues/242
+
+The `dev.yaml` workflow assumes that a GitHub issue exists, required skills are
+available, selected agent CLIs are installed, and `/issue-create` has already
+been completed. It runs `issue-start` itself.
+
+Set up kaji for repository development:
+
+```bash
+git clone https://github.com/apokamo/kaji.git
+cd kaji
+uv sync
+source .venv/bin/activate
+kaji --help
+```
+
+Quality checks:
+
+```bash
+make check
+make verify-docs
+make verify-packaging
+```
+
+Minimal repository config for the GitHub-backed workflow set:
+
+```toml
+[paths]
+artifacts_dir = ".kaji-artifacts"
+skill_dir = ".claude/skills"
+
+[execution]
+default_timeout = 1800
+
+[provider]
+type = "github"
+
+[provider.github]
+repo = "<owner>/<name>"
+default_branch = "main"
+```
+
+For local mode without GitHub, use `type = "local"` and create the local machine
+overlay:
+
+```bash
+kaji local init
+```
+
+Local mode uses local-specific workflows such as
+`.kaji/wf/dev-local.yaml`.
+
+## Important Paths
+
+- `kaji_harness/`: supported runtime package behind the `kaji` CLI.
+- `.kaji/wf/`: repository-local operational workflow YAML layout.
+- `docs/`: canonical documentation.
+- `docs/cli-guides/`: CLI and runner guides.
+- `docs/dev/`: workflow and skill authoring docs.
+- `legacy/`: historical reference code, not the current supported runtime.
+
+## Notes for AI Assistants
+
+- Prefer the public README and this file for orientation before reading deeper
+  docs.
+- Use `docs/ARCHITECTURE.md` for implementation architecture.
+- Use `docs/dev/workflow-authoring.md` and `docs/dev/skill-authoring.md` for
+  workflow or skill changes.
+- Do not infer support for agents beyond Claude Code, Codex, and Gemini CLI
+  unless a workflow or adapter explicitly exists.
+- Do not treat `legacy/` as the current runtime.

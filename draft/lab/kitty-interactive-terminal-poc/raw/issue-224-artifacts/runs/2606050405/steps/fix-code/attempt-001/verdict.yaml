@@ -1,0 +1,16 @@
+status: ABORT
+reason: |
+  唯一残った Must Fix はコード欠陥ではなく「real kitty + real Claude/Codex の手動検証」未実施である。
+  fix-code（コード修正・反論）で解決できる性質ではなく、修正対象コードが存在しないため自動修正サイクルを継続できない。
+evidence: |
+  - worktree feat/224 は clean、実装は 9c31e6a "feat: add interactive_terminal runner for #224" でコミット済み。git status --short は空。
+  - 直近 review-code verdict（RETRY）の Must Fix は 1 件のみで「trusted project worktree 上で real kitty + real Claude / Codex の最小 workflow を手動検証する」未実施。改善提案(Should Fix)は「なし」。
+  - レビュー本文の type 別観点 A(IF 契約)・F(Scope 混在) はいずれも ✅、品質ゲート(ruff/format/mypy/pytest 1739 passed,2 skipped/verify-docs)は全 PASS。コード起因の指摘はゼロ。
+  - 当環境には kitty(/usr/bin/kitty)・claude・codex・script・WSLg DISPLAY が揃い技術的には実行可能だが、
+    手動検証は (a) ユーザーの実課金サブスク(Claude/Codex)を消費する outward-facing アクション、
+    (b) GUI kitty ウィンドウの残存/close を目視確認する人手検証であり、認可なき自律実行は不適切。
+  - 進め方を AskUserQuestion で確認したが回答が得られず、サブスク消費の認可が取れていない。
+suggestion: |
+  fix-code では解決不能。次のいずれかを人が選択する:
+  1. ユーザーが docs(CLI guide § 手動検証手順)に沿って手動検証を実施し、結果(fresh/resume、close-on-verdict true/false、terminal.log)を Issue #224 にコメント追記 → /issue-review-code 224 を再実行。
+  2. 私に実 CLI 検証を明示認可する場合は、その旨を指示すれば interactive_terminal runner を実起動し artifact(verdict.yaml/terminal.log/session state/プロセス残存)ベースで検証して証跡を追記する。

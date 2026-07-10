@@ -40,10 +40,15 @@ from kaji_harness.workflow import load_workflow_from_str, validate_workflow
 
 def _write_config(tmp_path: Path, content: str) -> Path:
     """Write .kaji/config.toml and return the config file path."""
+    import subprocess as _sp
+
     config_dir = tmp_path / ".kaji"
     config_dir.mkdir(exist_ok=True)
     config_file = config_dir / "config.toml"
     config_file.write_text(content)
+    # gl:21: provider.type='local' tests require a git repo for main worktree resolution.
+    if not (tmp_path / ".git").exists():
+        _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
     return config_file
 
 
@@ -89,7 +94,7 @@ class TestExecutionConfigValidation:
         """Valid positive integer default_timeout is accepted."""
         _write_config(
             tmp_path,
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n',
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n',
         )
         config = KajiConfig._load(tmp_path / ".kaji" / "config.toml")
         assert config.execution.default_timeout == 1800
@@ -616,7 +621,7 @@ class TestTimeoutFallbackIntegration:
         """Config default_timeout is used when workflow and step omit timeout."""
         _write_config(
             tmp_path,
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n',
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n',
         )
         config = KajiConfig._load(tmp_path / ".kaji" / "config.toml")
 
@@ -634,7 +639,7 @@ class TestTimeoutFallbackIntegration:
         """Workflow default_timeout overrides config default_timeout."""
         _write_config(
             tmp_path,
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n',
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n',
         )
         config = KajiConfig._load(tmp_path / ".kaji" / "config.toml")
 
@@ -659,7 +664,7 @@ class TestWorkflowRunnerWithConfig:
 
         _write_config(
             tmp_path,
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 900\n',
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 900\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n',
         )
         config = KajiConfig._load(tmp_path / ".kaji" / "config.toml")
 
@@ -681,7 +686,7 @@ class TestWorkflowRunnerWithConfig:
         ):
             runner = WorkflowRunner(
                 workflow=wf,
-                issue_number=1,
+                issue_number="1",
                 project_root=tmp_path,
                 artifacts_dir=tmp_path / ".kaji-artifacts",
                 config=config,
@@ -699,7 +704,7 @@ class TestWorkflowRunnerWithConfig:
 
         _write_config(
             tmp_path,
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n',
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n',
         )
         config = KajiConfig._load(tmp_path / ".kaji" / "config.toml")
 
@@ -721,7 +726,7 @@ class TestWorkflowRunnerWithConfig:
         ):
             runner = WorkflowRunner(
                 workflow=wf,
-                issue_number=1,
+                issue_number="1",
                 project_root=tmp_path,
                 artifacts_dir=tmp_path / ".kaji-artifacts",
                 config=config,
@@ -783,10 +788,15 @@ class TestTimeoutConfigE2E:
         # Create a project structure with config.toml
         project_dir = tmp_path / "project"
         project_dir.mkdir()
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(project_dir)],
+            check=True,
+        )
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         # Create skills directory structure for validation
@@ -832,10 +842,15 @@ class TestTimeoutConfigE2E:
         """kaji validate accepts a workflow YAML without default_timeout (optional)."""
         project_dir = tmp_path / "project"
         project_dir.mkdir()
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(project_dir)],
+            check=True,
+        )
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         skills_dir = project_dir / ".claude" / "skills" / "test-skill"
@@ -882,10 +897,15 @@ class TestTimeoutConfigE2E:
         """
         project_dir = tmp_path / "project"
         project_dir.mkdir()
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(project_dir)],
+            check=True,
+        )
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         skills_dir = project_dir / ".claude" / "skills" / "test-skill"
@@ -908,8 +928,12 @@ class TestTimeoutConfigE2E:
         """)
         )
 
-        # Use empty PATH so 'claude' CLI is not found, causing CLINotFoundError
-        env = {"HOME": str(tmp_path), "PATH": ""}
+        # Use minimal PATH (only git) so 'claude' CLI is not found, causing CLINotFoundError.
+        # ``provider.type='local'`` requires git on PATH (gl:21 fail-fast).
+        import shutil
+
+        git_dir = str(Path(shutil.which("git") or "/usr/bin/git").parent)
+        env = {"HOME": str(tmp_path), "PATH": git_dir}
         result = subprocess.run(
             [
                 sys.executable,

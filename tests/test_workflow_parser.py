@@ -47,7 +47,6 @@ FULL_WORKFLOW_YAML = dedent("""\
         model: gemini-2.5-pro
         effort: high
         max_budget_usd: 5.0
-        max_turns: 10
         timeout: 600
         on:
           PASS: implement
@@ -120,7 +119,6 @@ class TestWorkflowParsing:
         assert design.model == "gemini-2.5-pro"
         assert design.effort == "high"
         assert design.max_budget_usd == 5.0
-        assert design.max_turns == 10
         assert design.timeout == 600
 
         impl = wf.find_step("implement")
@@ -154,7 +152,6 @@ class TestWorkflowParsing:
         assert step_a.model is None
         assert step_a.effort is None
         assert step_a.max_budget_usd is None
-        assert step_a.max_turns is None
         assert step_a.timeout is None
         assert step_a.resume is None
 
@@ -183,6 +180,32 @@ class TestWorkflowParsing:
         step = wf.find_step("step1")
         assert step is not None
         assert step.on == {"PASS": "end"}
+
+    @pytest.mark.small
+    def test_max_turns_in_yaml_is_silently_ignored(self) -> None:
+        """`max_turns:` in step YAML is parsed without error and does not become a Step attribute.
+
+        Contract: claude `--max-turns` was removed upstream (v2.1.x), so the Step field
+        was deleted. Existing workflow YAML containing `max_turns:` must continue to parse
+        (silent ignore) — this protects against accidental fail-fast regression if a future
+        change adds unknown-key detection to parse_workflow.
+        """
+        yaml_str = dedent("""\
+            name: legacy-wf
+            execution_policy: auto
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+                max_turns: 10
+                on:
+                  PASS: end
+        """)
+        wf = load_workflow_from_str(yaml_str)
+
+        step = wf.find_step("step1")
+        assert step is not None
+        assert not hasattr(step, "max_turns")
 
 
 # ============================================================
@@ -325,7 +348,11 @@ class TestParsingErrors:
 
     @pytest.mark.small
     def test_step_missing_skill_raises_validation_error(self) -> None:
-        """Step missing 'skill' raises WorkflowValidationError."""
+        """Step with neither 'skill' nor 'exec' raises WorkflowValidationError.
+
+        Issue #205: ``skill`` は単独必須ではなくなり、``skill`` / ``exec`` の
+        どちらか 1 つが必須となった。両方欠落時は exactly-one 違反として fail する。
+        """
         yaml_str = dedent("""\
             name: test
             steps:
@@ -333,21 +360,24 @@ class TestParsingErrors:
                 agent: claude
         """)
 
-        with pytest.raises(WorkflowValidationError, match="missing required key.*skill"):
+        with pytest.raises(WorkflowValidationError, match="exactly one of 'skill' or 'exec'"):
             load_workflow_from_str(yaml_str)
 
     @pytest.mark.small
-    def test_step_missing_agent_raises_validation_error(self) -> None:
-        """Step missing 'agent' raises WorkflowValidationError."""
+    def test_step_without_agent_is_allowed(self) -> None:
+        """Issue #204: ``agent`` becomes optional at L1 (schema); skill metadata
+        L2 preflight decides whether the omission is valid (exec_script skill)."""
         yaml_str = dedent("""\
             name: test
+            execution_policy: auto
             steps:
               - id: step1
                 skill: s
+                on:
+                  PASS: end
         """)
-
-        with pytest.raises(WorkflowValidationError, match="missing required key.*agent"):
-            load_workflow_from_str(yaml_str)
+        wf = load_workflow_from_str(yaml_str)
+        assert wf.steps[0].agent is None
 
     @pytest.mark.small
     def test_step_missing_multiple_keys_reports_all(self) -> None:
@@ -355,10 +385,11 @@ class TestParsingErrors:
         yaml_str = dedent("""\
             name: test
             steps:
-              - skill: s
+              - on:
+                  PASS: end
         """)
 
-        with pytest.raises(WorkflowValidationError, match="id.*agent"):
+        with pytest.raises(WorkflowValidationError, match="missing required key"):
             load_workflow_from_str(yaml_str)
 
     @pytest.mark.small
@@ -840,3 +871,128 @@ class TestValidateWorkflowSchemaInvariants:
         # Must raise WorkflowValidationError (not AttributeError) even for multi-step cycle path
         with pytest.raises(WorkflowValidationError, match="'on' must be a non-empty mapping"):
             validate_workflow(wf)
+
+
+# ============================================================
+# Test class: effort validator (agent-specific allowed values)
+# ============================================================
+
+
+def _effort_workflow_yaml(agent: str, effort: object) -> str:
+    """Build a single-step workflow YAML for effort validator tests."""
+    effort_repr = "null" if effort is None else effort if isinstance(effort, int) else f"'{effort}'"
+    return dedent(f"""\
+        name: t
+        execution_policy: auto
+        steps:
+          - id: only
+            skill: s
+            agent: {agent}
+            effort: {effort_repr}
+            on:
+              PASS: end
+    """)
+
+
+class TestEffortValidator:
+    """Effort 値の agent 別 allowed values 検証 (Issue local-pc5090-16 A)."""
+
+    @pytest.mark.small
+    def test_parse_rejects_uppercase_effort_for_codex(self) -> None:
+        """codex agent に大文字 effort 'High' を渡すと WorkflowValidationError."""
+        with pytest.raises(
+            WorkflowValidationError,
+            match=r"effort 'High' is not valid for agent 'codex'",
+        ):
+            load_workflow_from_str(_effort_workflow_yaml("codex", "High"))
+
+    @pytest.mark.small
+    def test_parse_rejects_uppercase_effort_for_claude(self) -> None:
+        """claude agent に大文字 effort 'xHigh' を渡すと WorkflowValidationError."""
+        with pytest.raises(
+            WorkflowValidationError,
+            match=r"effort 'xHigh' is not valid for agent 'claude'",
+        ):
+            load_workflow_from_str(_effort_workflow_yaml("claude", "xHigh"))
+
+    @pytest.mark.small
+    def test_parse_accepts_claude_specific_effort(self) -> None:
+        """claude 専用 effort 'max' は claude では accept される."""
+        wf = load_workflow_from_str(_effort_workflow_yaml("claude", "max"))
+        assert wf.find_step("only").effort == "max"  # type: ignore[union-attr]
+
+    @pytest.mark.small
+    def test_parse_rejects_claude_specific_effort_on_codex(self) -> None:
+        """claude 専用 'max' を codex に渡すと reject."""
+        with pytest.raises(
+            WorkflowValidationError,
+            match=r"effort 'max' is not valid for agent 'codex'",
+        ):
+            load_workflow_from_str(_effort_workflow_yaml("codex", "max"))
+
+    @pytest.mark.small
+    def test_parse_accepts_codex_specific_effort(self) -> None:
+        """codex 専用 effort 'minimal' は codex では accept される."""
+        wf = load_workflow_from_str(_effort_workflow_yaml("codex", "minimal"))
+        assert wf.find_step("only").effort == "minimal"  # type: ignore[union-attr]
+
+    @pytest.mark.small
+    def test_parse_rejects_codex_specific_effort_on_claude(self) -> None:
+        """codex 専用 'minimal' を claude に渡すと reject."""
+        with pytest.raises(
+            WorkflowValidationError,
+            match=r"effort 'minimal' is not valid for agent 'claude'",
+        ):
+            load_workflow_from_str(_effort_workflow_yaml("claude", "minimal"))
+
+    @pytest.mark.small
+    def test_parse_accepts_common_subset_effort(self) -> None:
+        """common subset (low/medium/high/xhigh) は両 agent で accept."""
+        for agent in ("claude", "codex"):
+            for value in ("low", "medium", "high", "xhigh"):
+                wf = load_workflow_from_str(_effort_workflow_yaml(agent, value))
+                step = wf.find_step("only")
+                assert step is not None
+                assert step.effort == value
+
+    @pytest.mark.small
+    def test_parse_skips_validation_for_unknown_agent(self) -> None:
+        """allowed values 辞書に未登録の agent (gemini 等) は passthrough."""
+        wf = load_workflow_from_str(_effort_workflow_yaml("gemini", "anything"))
+        assert wf.find_step("only").effort == "anything"  # type: ignore[union-attr]
+
+    @pytest.mark.small
+    def test_parse_rejects_non_string_effort(self) -> None:
+        """effort が string 以外 (int) の場合は型エラーで reject."""
+        yaml_str = dedent("""\
+            name: t
+            execution_policy: auto
+            steps:
+              - id: only
+                skill: s
+                agent: claude
+                effort: 42
+                on:
+                  PASS: end
+        """)
+        with pytest.raises(
+            WorkflowValidationError,
+            match=r"'effort' must be a string, got int",
+        ):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_parse_accepts_missing_effort(self) -> None:
+        """effort 未指定 (None) は validator 対象外で PASS."""
+        yaml_str = dedent("""\
+            name: t
+            execution_policy: auto
+            steps:
+              - id: only
+                skill: s
+                agent: codex
+                on:
+                  PASS: end
+        """)
+        wf = load_workflow_from_str(yaml_str)
+        assert wf.find_step("only").effort is None  # type: ignore[union-attr]

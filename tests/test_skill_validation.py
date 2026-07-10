@@ -135,6 +135,7 @@ class TestRunnerSkillDirIntegration:
 
     def test_runner_validates_with_skill_dir(self, tmp_path: Path) -> None:
         """Runner uses config.paths.skill_dir for skill validation."""
+        import subprocess as _sp
         from unittest.mock import patch
 
         from kaji_harness.config import KajiConfig
@@ -147,8 +148,10 @@ class TestRunnerSkillDirIntegration:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = "my-skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = "my-skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
+        # gl:21: provider.type='local' requires a git repo.
+        _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
         config = KajiConfig._load(config_dir / "config.toml")
 
         workflow = Workflow(
@@ -178,7 +181,7 @@ class TestRunnerSkillDirIntegration:
 
         runner = WorkflowRunner(
             workflow=workflow,
-            issue_number=999,
+            issue_number="999",
             project_root=tmp_path,
             artifacts_dir=artifacts_dir,
             config=config,
@@ -205,11 +208,16 @@ class TestSkillDirE2E:
         import subprocess
         import sys
 
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(tmp_path)],
+            check=True,
+        )
         # Set up project structure
         kaji_dir = tmp_path / ".kaji"
         kaji_dir.mkdir()
         (kaji_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         # Create skill
@@ -233,7 +241,10 @@ steps:
         )
 
         python_dir = str(Path(sys.executable).parent)
-        env = {**os.environ, "PATH": python_dir}
+        import shutil
+
+        git_dir = str(Path(shutil.which("git") or "/usr/bin/git").parent)
+        env = {**os.environ, "PATH": f"{python_dir}:{git_dir}"}
 
         result = subprocess.run(
             [
@@ -263,10 +274,15 @@ steps:
         import subprocess
         import sys
 
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(tmp_path)],
+            check=True,
+        )
         kaji_dir = tmp_path / ".kaji"
         kaji_dir.mkdir()
         (kaji_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = "custom/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = "custom/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         _create_skill(tmp_path, "custom/skills", "my-skill")
@@ -288,7 +304,10 @@ steps:
         )
 
         python_dir = str(Path(sys.executable).parent)
-        env = {**os.environ, "PATH": python_dir}
+        import shutil
+
+        git_dir = str(Path(shutil.which("git") or "/usr/bin/git").parent)
+        env = {**os.environ, "PATH": f"{python_dir}:{git_dir}"}
 
         result = subprocess.run(
             [
@@ -321,7 +340,7 @@ steps:
         kaji_dir.mkdir()
         # No skill_dir in config (but artifacts_dir is present to isolate the error)
         (kaji_dir / "config.toml").write_text(
-            '[paths]\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         workflows_dir = tmp_path / "workflows"

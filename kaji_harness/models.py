@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 
 @dataclass
@@ -33,19 +34,34 @@ class CLIResult:
     cost: CostInfo | None = None
     stderr: str = ""
     error_messages: list[str] = field(default_factory=list)
+    terminal_seen: bool = False
+    terminal_failure: bool = False
+    # Issue #222: subprocess の終了情報を attempt result.json へ運ぶ。
+    # ``exit_code`` は ``process.returncode``（取得不能なら None）、``signal`` は
+    # そこから導出した signal 名（clean exit / signal 由来でなければ None）。
+    exit_code: int | None = None
+    signal: str | None = None
 
 
 @dataclass
 class Step:
-    """ワークフロー内の1ステップ定義。"""
+    """ワークフロー内の1ステップ定義。
+
+    step は ``skill`` を持つ skill-step か ``exec`` を持つ exec-step の
+    いずれか「ちょうど 1 つ」でなければならない（排他は parser /
+    ``validate_workflow`` で検証）。``exec`` は YAML 表層では str / list の
+    両形式を受け付けるが、parse 境界で ``shlex.split`` を通して
+    ``list[str]`` に正規化されるため、内部表現は常に正規化済み argv となる
+    （Issue #205 設計 § Step dataclass の表現）。
+    """
 
     id: str
-    skill: str
-    agent: str
+    skill: str | None = None
+    exec: list[str] | None = None
+    agent: str | None = None
     model: str | None = None
     effort: str | None = None
     max_budget_usd: float | None = None
-    max_turns: int | None = None
     timeout: int | None = None
     workdir: str | None = None
     resume: str | None = None
@@ -75,6 +91,7 @@ class Workflow:
     cycles: list[CycleDefinition] = field(default_factory=list)
     default_timeout: int | None = None
     workdir: str | None = None
+    requires_provider: Literal["github", "local", "any"] = "any"
 
     def find_step(self, step_id: str) -> Step | None:
         """ID でステップを検索。見つからなければ None。"""

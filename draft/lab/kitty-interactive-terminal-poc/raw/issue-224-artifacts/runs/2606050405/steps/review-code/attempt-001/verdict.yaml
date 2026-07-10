@@ -1,0 +1,15 @@
+status: RETRY
+reason: "コード・自動テストは設計契約を満たしているが、Issue 完了条件の real kitty + real Claude/Codex 手動検証が未実施のまま残っているため。"
+evidence: |
+  Pre-Handoff Review hard gate は通過: Issue #224 comments に `## Pre-Handoff Review` が 1 件あり、`- **経路**:` 行も存在する。
+  type ラベルは `type:feature` の 1 件のみ。
+  独立実行した品質ゲートは通過:
+  - `ruff check kaji_harness/ tests/` → All checks passed!
+  - `ruff format --check kaji_harness/ tests/` → 121 files already formatted
+  - `mypy kaji_harness/` → Success: no issues found in 32 source files
+  - `pytest` → 1739 passed, 2 skipped in 130.59s
+  - `make verify-docs` → All Markdown links valid (83 file(s) checked)
+  実装完了報告の `完了条件の段階確認` では、`trusted worktree 上で real kitty + real Claude / Codex の手動検証` が未チェック `[ ]` として明記されている。
+  Issue 本文の完了条件にも `trusted project worktree 上で real kitty + real Claude / Codex の最小 workflow を手動検証する` が含まれている。
+  設計書 `draft/design/issue-224-feat-interactive-terminal-runner.md` は real CLI テストを自動化しない代わりに fake terminal Large + 手動検証で担保すると定義しているため、手動検証未実施は完了条件未充足。
+suggestion: "trusted project worktree 上で real kitty + real Claude/Codex の fresh/resume、close-on-verdict true/false、terminal.log 条件を手動検証し、結果を Issue コメントへ追記してから review-code を再実行する。"

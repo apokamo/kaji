@@ -1,0 +1,12 @@
+status: PASS
+reason: |
+  interactive_terminal runner の terminal backend を kitty から tmux 単一へ実装置換し、設計書・ADR 007 v2 の契約どおりに実装・テスト・品質チェックがすべて通過した。
+evidence: |
+  実装: kaji_harness/interactive_terminal.py を tmux backend へ全面置換（split-window -d -h / #{pane_dead} / kill-pane best-effort / pipe-pane）。/proc scan と util-linux script(1) 経路を撤去。$TMUX / $TMUX_PANE / tmux>=3.0 を fail-fast 検査。verdict 検知時点の #{pane_dead} 実値を pane-metadata.json に snapshot。公開シグネチャ・config・CLI option・verdict 解決・session 継続は不変（config.py / cli_main.py は diff に現れない）。
+  wrapper: 9->8 引数（terminal_log 除去）、transcript は runner 側 pipe-pane に一本化、agent 直接起動（PoC の agent-exited.json / exit-code 捕捉 / completion_barrier=agent_exit / verbose / pane-capture は contract 外として不採用）。
+  テスト: tests/test_interactive_terminal.py を tmux 前提へ書き換え（Small 10 / Medium 18 / Large(large_local) 1 = 29 passed、実 tmux 3.4 の E2E 含む）。tests/test_runner_interactive_dispatch.py に MF3 回帰 guard を追加（3 passed）。
+  pytest 全体: 1788 passed, 2 skipped, 0 failed（実装前 baseline 1785 passed/2 skipped から regression 0）。
+  品質: ruff check All checks passed! / ruff format 2 files reformatted, 122 unchanged / mypy Success: no issues found in 32 source files。
+  kitty 残骸 grep: ADR 007 / draft/design の意図的履歴を除き tmux 前提へ統一済み。
+  Pre-Handoff Review: self-check 経路（subagent unparseable fallback）で 4 観点すべて ✅、verdict Yes。PHR_COUNT=1。
+suggestion: ""

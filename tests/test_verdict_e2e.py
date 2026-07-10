@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import stat
+import subprocess
 import textwrap
 from pathlib import Path
 
@@ -165,24 +166,32 @@ class TestKajiRunWorkflowExecution:
     """
 
     def test_kaji_validate_workflows(self) -> None:
-        """kaji validate succeeds on all workflow files (no agent required)."""
-        import shutil
+        """kaji validate succeeds on all builtin workflow files (no agent required).
+
+        Issue #247: the root ``workflows`` directory was removed and the
+        canonical workflow YAMLs now live under ``.kaji/wf/`` (the 5-file
+        operation). Assert that
+        the directory and files exist instead of silently skipping when they
+        are missing, so a regression that empties ``.kaji/wf/`` surfaces as a
+        failure rather than a silent skip.
+        """
         import subprocess
+        import sys
 
-        kaji_path = shutil.which("kaji")
-        if kaji_path is None:
-            pytest.skip("kaji CLI not installed")
+        workflows_dir = Path(__file__).parent.parent / ".kaji" / "wf"
+        assert workflows_dir.exists(), f"{workflows_dir} not found"
 
-        workflows_dir = Path(__file__).parent.parent / "workflows"
-        if not workflows_dir.exists():
-            pytest.skip("workflows/ directory not found")
-
-        yaml_files = list(workflows_dir.glob("*.yaml"))
-        if not yaml_files:
-            pytest.skip("No workflow YAML files found")
+        yaml_files = sorted(workflows_dir.glob("*.yaml"))
+        assert yaml_files, f"No workflow YAML files under {workflows_dir}"
 
         result = subprocess.run(
-            ["kaji", "validate", *[str(f) for f in yaml_files]],
+            [
+                sys.executable,
+                "-m",
+                "kaji_harness.cli_main",
+                "validate",
+                *[str(f) for f in yaml_files],
+            ],
             capture_output=True,
             text=True,
             timeout=30,
@@ -409,14 +418,22 @@ def _setup_fake_agent_env(
     # Create project directory with config and skill
     workdir = tmp_path / "project"
     workdir.mkdir()
+    # gl:21: provider.type='local' requires a git repo.
+    subprocess.run(["git", "init", "-q", "--initial-branch=main", str(workdir)], check=True)
     config_dir = workdir / ".kaji"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
-        '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+        '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
     )
     skill_dir = workdir / ".claude" / "skills" / "test-skill"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("# Test Skill\n")
+
+    # Phase 3-e: provider=local の subprocess kaji run には対象 issue dir が必要。
+    from tests.conftest import ensure_local_issue
+
+    for issue in ("9990", "9991", "9992"):
+        ensure_local_issue(workdir, issue)
 
 
 # ============================================================

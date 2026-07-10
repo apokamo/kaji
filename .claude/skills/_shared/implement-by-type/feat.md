@@ -22,7 +22,7 @@
 - 実行して期待通りに赤くなることを確認（ImportError や assert 失敗）
 
 ```bash
-cd [worktree-absolute-path] && source .venv/bin/activate && pytest tests/<path> -v
+cd [worktree_dir] && source .venv/bin/activate && pytest tests/<path> -v
 ```
 
 ### Step F3: 最小実装で Green
@@ -59,14 +59,14 @@ cd [worktree-absolute-path] && source .venv/bin/activate && pytest tests/<path> 
 - `docs/reference/python/` — コーディング規約への影響
 - `docs/dev/` — 開発ワークフロー・テスト規約への影響
 - `docs/adr/` — 技術選定（新ライブラリ採用等）
-- `CLAUDE.md` — プロジェクト規約や必読ドキュメントの更新
+- `AGENTS.md` / `CLAUDE.md` — プロジェクト規約や必読ドキュメントの更新
 
 ### Step F8: 品質ゲート
 
-`make check` を実行し、ruff / mypy / pytest がすべて green になることを確認する（[CLAUDE.md](../../../../CLAUDE.md) の Pre-Commit 要件）。
+`make check` を実行し、ruff / mypy / pytest がすべて green になることを確認する（[AGENTS.md](../../../../AGENTS.md) の pre-commit 契約）。
 
 ```bash
-cd [worktree-absolute-path] && source .venv/bin/activate && make check
+cd [worktree_dir] && source .venv/bin/activate && make check
 ```
 
 ## コミット前チェックリスト

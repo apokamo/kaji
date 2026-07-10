@@ -86,7 +86,6 @@ class Step:
     model: str | None = None
     effort: str | None = None
     max_budget_usd: float | None = None
-    max_turns: int | None = None
     timeout: int | None = None
     workdir: str | None = None
     resume: str | None = None

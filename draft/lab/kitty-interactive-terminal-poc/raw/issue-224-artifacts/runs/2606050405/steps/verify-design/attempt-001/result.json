@@ -1,0 +1,13 @@
+{
+  "step_id": "verify-design",
+  "attempt": 1,
+  "status": "PASS",
+  "exit_code": 0,
+  "signal": null,
+  "started_at": "2026-06-04T19:24:46.569169+00:00",
+  "ended_at": "2026-06-04T19:26:56.850825+00:00",
+  "duration_ms": 130281,
+  "session_id": "019e9418-62f3-7f42-a8e2-63e2f0582729",
+  "dispatch": "agent",
+  "error": null
+}

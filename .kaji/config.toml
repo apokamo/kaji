@@ -1,9 +1,23 @@
 # kaji configuration for kaji's own repository.
-# See: draft/design/issue-70-colocated-model.md
+# 設定仕様の正本（全 key の型/既定/検証/挙動）: docs/reference/configuration.md
+# See also: draft/design/issue-70-colocated-model.md
 
 [paths]
 artifacts_dir = ".kaji-artifacts"
 skill_dir = ".claude/skills"
+worktree_prefix = "kaji"            # worktree dir 名の先頭 segment（<prefix>-<branch_prefix>-<id>）。未設定でも実効 fallback は "kaji"
 
 [execution]
-default_timeout = 1800
+default_timeout = 2400
+agent_runner = "headless"           # "headless"（既定） | "interactive_terminal"
+# interactive_terminal_close_on_verdict = true   # interactive_terminal のときのみ作用（headless では無効）
+
+# Repository default. 各 user は `kaji local init` で
+# .kaji/config.local.toml (gitignored) overlay を作って provider 切替できる。
+[provider]
+type = "github"
+
+[provider.github]
+repo = "apokamo/kaji"
+default_branch = "main"
+git_remote = "origin"               # skill 内 git push / git fetch の対象 remote 名（既定 "origin"）

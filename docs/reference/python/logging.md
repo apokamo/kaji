@@ -5,6 +5,18 @@ kaji における実行ログの規約。`kaji_harness/logger.py` の `RunLogger
 > このドキュメントは Python 標準 `logging` モジュールの使い方ガイドではない。
 > `RunLogger` は JSONL を直接書き出す専用実装であり、標準 `logging` を使用しない。
 
+> [!NOTE]
+> kaji には責務の異なる **2 系統** のログ層がある。本ドキュメントは前者（機械可読
+> ログ）の契約を定める。
+>
+> | 層 | 実装 | 出力 | 用途 |
+> |----|------|------|------|
+> | 機械可読ログ | `RunLogger`（`logger.py`） | `run.log`（JSONL） | プログラムが解析する実行記録 |
+> | 起動コンソール progress | stdlib `logging`（`console_log.py` / `kaji.*` 名前空間） | stdout（`INFO` 以下）/ stderr（`WARNING` 以上） | `kaji run` 起動コンソールで人間が時系列に進行を追う表示 |
+>
+> 後者は Issue #235 で導入。起動コンソール向けの **人間可読 progress** であり、
+> `RunLogger` の JSONL 契約には一切影響しない。詳細は § 起動コンソール progress logging。
+
 ## RunLogger の概要
 
 `RunLogger` は `kaji_harness/logger.py` に定義された dataclass。ワークフロー実行中のイベントを JSONL 形式でファイルに記録する。
@@ -51,13 +63,26 @@ logger = RunLogger(log_path=Path(".kaji/run.jsonl"))
 | フィールド | 型 |
 |-----------|-----|
 | `step_id` | `str` |
-| `agent` | `str` |
+| `agent` | `str \| null` |
 | `model` | `str \| null` |
 | `effort` | `str \| null` |
 | `session_id` | `str \| null` |
+| `attempt` | `int \| null` |
+| `dispatch` | `str` |
+
+`dispatch` は dispatch 経路の識別子。`"agent"` は LLM 経由（既存）、`"exec_script"` は
+skill frontmatter `exec_script` による subprocess dispatch（Issue #204）、`"exec"` は
+workflow.yaml の `exec:` step による subprocess dispatch（Issue #205）。決定論経路
+（`"exec"` / `"exec_script"`）では `agent` / `model` / `effort` は常に null（LLM 起動なし）。
+
+`attempt` は `attempt-NNN` の 1 始まり整数（Issue #222）。dispatch される step では常に整数。
+同一 step が cycle / retry / resume で再 dispatch されると `attempt` が増え、step retry の
+時系列を `run.log` から復元できる。
 
 ```json
-{"ts": "2025-04-22T01:00:01+00:00", "event": "step_start", "step_id": "implement", "agent": "claude", "model": "claude-sonnet-4-6", "effort": null, "session_id": null}
+{"ts": "2025-04-22T01:00:01+00:00", "event": "step_start", "step_id": "implement", "agent": "claude", "model": "claude-sonnet-4-6", "effort": null, "session_id": null, "attempt": 1, "dispatch": "agent"}
+{"ts": "2025-04-22T01:00:01+00:00", "event": "step_start", "step_id": "poll-review", "agent": null, "model": null, "effort": null, "session_id": null, "attempt": 1, "dispatch": "exec_script"}
+{"ts": "2025-04-22T01:00:01+00:00", "event": "step_start", "step_id": "collect-metrics", "agent": null, "model": null, "effort": null, "session_id": null, "attempt": 1, "dispatch": "exec"}
 ```
 
 #### `step_end`
@@ -70,6 +95,21 @@ logger = RunLogger(log_path=Path(".kaji/run.jsonl"))
 | `verdict` | `dict` |
 | `duration_ms` | `int` |
 | `cost` | `dict \| null` |
+| `attempt` | `int \| null` |
+| `exit_code` | `int \| null` |
+| `signal` | `str \| null` |
+| `dispatch` | `str` |
+
+`dispatch` は `step_start` と同じ意味（`"agent"` / `"exec_script"` / `"exec"`）。決定論経路
+（`"exec"` / `"exec_script"`）では `cost` も常に null（LLM 課金なし）。
+
+`attempt` / `exit_code` / `signal` は Issue #222 で追加。`exit_code` は subprocess の
+`returncode`（取得不能なら null）、`signal` はそこから導出した signal 名（clean exit /
+signal 由来でなければ null）。`step_end` は異常終了（timeout / CLI / script の失敗）でも
+発火し、その場合 `verdict.status` は合成 `"ABORT"`、`exit_code` / `signal` は
+best-effort で記録される。cycle 上限 exhaust の合成 verdict では dispatch を伴わないため
+`attempt` / `exit_code` / `signal` は null。同じ終了情報は attempt 配下の
+`result.json`（[`docs/ARCHITECTURE.md`](../../ARCHITECTURE.md) § 実行アーティファクトの layout）にも構造化保存される。
 
 `verdict` の構造:
 
@@ -84,7 +124,7 @@ logger = RunLogger(log_path=Path(".kaji/run.jsonl"))
 ```
 
 ```json
-{"ts": "2025-04-22T01:05:00+00:00", "event": "step_end", "step_id": "implement", "verdict": {"status": "PASS", "reason": "実装完了", "evidence": "pytest 全パス", "suggestion": ""}, "duration_ms": 240000, "cost": {"usd": 0.015, "input_tokens": 2000, "output_tokens": 1200}}
+{"ts": "2025-04-22T01:05:00+00:00", "event": "step_end", "step_id": "implement", "verdict": {"status": "PASS", "reason": "実装完了", "evidence": "pytest 全パス", "suggestion": ""}, "duration_ms": 240000, "cost": {"usd": 0.015, "input_tokens": 2000, "output_tokens": 1200}, "attempt": 1, "exit_code": 0, "signal": null, "dispatch": "agent"}
 ```
 
 #### `cycle_iteration`
@@ -99,6 +139,20 @@ logger = RunLogger(log_path=Path(".kaji/run.jsonl"))
 
 ```json
 {"ts": "2025-04-22T01:10:00+00:00", "event": "cycle_iteration", "cycle_name": "review_fix_loop", "iteration": 2, "max_iterations": 5}
+```
+
+#### `verdict_source`
+
+各 step の verdict 解決経路を記録（Issue #220）。`resolve_verdict()` 直後に呼ぶ。
+
+| フィールド | 型 | 備考 |
+|-----------|-----|------|
+| `step_id` | `str` | |
+| `source` | `str` | `"artifact"` / `"comment"` / `"stdout"` |
+| `attempt` | `str` | `attempt-NNN` ディレクトリ名 |
+
+```json
+{"ts": "2025-04-22T01:05:00+00:00", "event": "verdict_source", "step_id": "implement", "source": "artifact", "attempt": "attempt-001"}
 ```
 
 #### `workflow_end`
@@ -124,9 +178,12 @@ logger = RunLogger(log_path=Path(".kaji/run.jsonl"))
 | メソッド | いつ呼ぶか |
 |---------|-----------|
 | `log_workflow_start(issue, workflow)` | ワークフロー開始直後 |
-| `log_step_start(step_id, agent, model, effort, session_id)` | CLI 実行前 |
-| `log_step_end(step_id, verdict, duration_ms, cost)` | CLI 終了・verdict 解析後 |
+| `log_step_start(step_id, agent, model, effort, session_id, *, attempt=None, dispatch="agent")` | CLI / subprocess 実行前。決定論経路では `dispatch="exec_script"`（Issue #204）/ `dispatch="exec"`（exec-step・Issue #205）+ `agent=model=effort=None`。`attempt` は attempt-NNN の整数（Issue #222） |
+| `log_verdict_source(step_id, source, attempt)` | `resolve_verdict()` 直後（verdict 解決経路の記録、Issue #220） |
+| `log_step_end(step_id, verdict, duration_ms, cost, *, attempt=None, exit_code=None, signal=None, dispatch="agent")` | CLI / subprocess 終了・verdict 解析後（異常終了でも合成 ABORT で発火、Issue #222） |
 | `log_cycle_iteration(cycle_name, iteration, max_iter)` | サイクル内の各反復開始時 |
+
+> **step log の出力先（Issue #220）**: `stdout.log` / `console.log` / `stderr.log` / `run.log` 以外の step 単位ログ（`prompt.txt` 等）と verdict は、従来の `runs/<run_id>/<step_id>/` ではなく `runs/<run_id>/steps/<step_id>/attempt-NNN/` 配下に出力される。`run.log` は従来どおり `runs/<run_id>/` 直下。詳細は [`docs/ARCHITECTURE.md`](../../ARCHITECTURE.md) § 実行アーティファクトの layout。
 | `log_workflow_end(status, cycle_counts, total_duration_ms, total_cost, error)` | ワークフロー終了時（正常・異常問わず） |
 
 ```python
@@ -184,18 +241,42 @@ def log_budget_exceeded(self, step_id: str, budget_usd: float, spent_usd: float)
 
 既存フィールドの削除・型変更は禁止。新フィールドの追加は `| None` として optional にする。
 
+## 起動コンソール progress logging（Issue #235）
+
+`run.log`（JSONL）とは別系統の、`kaji run` 起動コンソール向け人間可読表示層。
+`kaji_harness/console_log.py` の `configure_console_logging()` が stdlib `logging` の
+二ハンドラを `kaji` ルート logger に設定する。
+
+- **routing**: `INFO` 以下 → stdout、`WARNING` 以上 → stderr。
+- **formatter**: `[%(asctime)s] [kaji] %(message)s`（local time。`script_exec` の
+  exec 中継行 `[ts] [step_id] ...` と同一タイムラインに並ぶよう local time にそろえる）。
+- **logger 名前空間**: 各モジュールは `logging.getLogger("kaji.<module>")` を使い、
+  `kaji` ルートのハンドラへ伝播させる。`RunLogger`（`kaji_harness.*`）とは別ツリー。
+- **`--log-level`**: `kaji run --log-level {DEBUG,INFO,WARNING,ERROR}`（default `INFO`）で
+  閾値を制御。`--quiet`（agent/exec stdout streaming 抑制）とは独立。
+
+この層は「人間が起動コンソールで進行を追う」用途に限定し、プログラムが解析する記録は
+引き続き `RunLogger`（JSONL）を正本とする。
+
 ## 禁止事項
 
-### 標準 logging の直接使用
+### `RunLogger` 文脈での標準 logging 直接使用
+
+`run.log`（JSONL 機械可読ログ）に書くべきイベントを、標準 `logging` で出してはならない。
+機械可読ログは必ず `RunLogger` のメソッド経由にする。
 
 ```python
-# ❌ 禁止
+# ❌ 禁止: run.log に残すべきイベントを stdlib logging で出す
 import logging
 logging.info("step started")
 
 # ✅ RunLogger を使う
 self.logger.log_step_start(step.id, step.agent, step.model, step.effort, session_id)
 ```
+
+> 起動コンソール向けの **人間可読 progress** を `kaji.*` 名前空間の stdlib `logging` で
+> 出すのは別系統として許容される（§ 起動コンソール progress logging）。この禁止事項は
+> あくまで「JSONL 機械可読ログを stdlib logging で代替するな」という趣旨に限定される。
 
 ### 文字列フォーマットでのイベント記述
 
@@ -226,7 +307,7 @@ self._write("step_start", agent=step.agent, model=step.model, ...)
 - [ ] `RunLogger` のメソッドを正しいタイミングで呼んでいるか
 - [ ] `log_workflow_end` が正常・異常終了どちらのパスでも呼ばれているか（`try/finally` 等）
 - [ ] 新規イベントのフィールド名が snake_case か
-- [ ] 標準 `logging` モジュールを直接使用していないか
+- [ ] `run.log`（JSONL）に残すべきイベントを標準 `logging` で代替していないか（起動コンソール progress は別系統として許容）
 - [ ] 機密情報がフィールドに含まれていないか
 
 ## 関連ドキュメント

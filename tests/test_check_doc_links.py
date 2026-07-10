@@ -9,6 +9,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from markdown_it.token import Token
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "check_doc_links.py"
 
@@ -30,6 +31,9 @@ _is_external = _mod._is_external
 _is_hidden = _mod._is_hidden
 _index_to_line = _mod._index_to_line
 _slugify = _mod._slugify
+_strip_code_segments = _mod._strip_code_segments
+_fence_has_explicit_closing = _mod._fence_has_explicit_closing
+_MD_PARSER = _mod._MD_PARSER
 
 
 def _run(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -128,6 +132,298 @@ class TestIndexToLine:
     def test_end_of_content(self) -> None:
         lines = ["abc", "def", "ghi"]
         assert _index_to_line(8, lines) == 3
+
+
+@pytest.mark.small
+class TestStripCodeSegmentsFenced:
+    """_strip_code_segments: fenced code block (CommonMark § 4.5)."""
+
+    def test_fenced_block_blanks_fake_link(self) -> None:
+        src = "```\n[link](b.md)\n```\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" not in out
+        assert len(out) == len(src)
+
+    def test_fenced_block_with_info_string(self) -> None:
+        src = "```bash\n[link](b.md)\n```\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" not in out
+
+    def test_fence_char_must_match(self) -> None:
+        # ``` opened block is NOT closed by ~~~
+        src = "```\n[link](b.md)\n~~~\nstill in code\n```\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" not in out
+        assert "still in code" not in out
+
+    def test_fence_length_close_must_be_ge_open(self) -> None:
+        # 4-backtick open NOT closed by 3-backtick line
+        src = "````\n[link](b.md)\n```\nstill\n````\n"
+        out = _strip_code_segments(src)
+        # everything between open fence and matching 4-backtick close is blanked
+        assert "[link](b.md)" not in out
+        assert "still" not in out
+
+    def test_fence_length_5_closes_3_open(self) -> None:
+        # 3-backtick open is closed by 5-backtick line (>= open length)
+        src = "```\n[link](b.md)\n`````\nafter [x](y.md)\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" not in out
+        # after close, content again becomes raw
+        assert "[x](y.md)" in out
+
+    def test_closing_fence_cannot_have_info_string(self) -> None:
+        # Inside a ```bash block, a "``` aaa" line is NOT a close
+        src = "```bash\n[link](b.md)\n``` aaa\n[link2](c.md)\n```\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" not in out
+        assert "[link2](c.md)" not in out
+
+    def test_closing_fence_trailing_spaces_ok(self) -> None:
+        src = "```\n[link](b.md)\n```   \nafter [x](y.md)\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" not in out
+        assert "[x](y.md)" in out
+
+    def test_closing_fence_trailing_tab_ok(self) -> None:
+        src = "```\n[link](b.md)\n```\t\nafter [x](y.md)\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" not in out
+        assert "[x](y.md)" in out
+
+    def test_indented_code_block_not_stripped(self) -> None:
+        # 4-space indented code block is out of scope - links inside remain
+        src = "Para\n\n    [link](b.md)\n\nAfter\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" in out
+
+    def test_list_item_nested_fence(self) -> None:
+        # CommonMark §5.2: fence opening on a list-item marker line
+        src = "- ```bash\n  [fake](missing.md)\n  ```\n"
+        out = _strip_code_segments(src)
+        assert "[fake](missing.md)" not in out
+
+    def test_list_item_nested_fence_ordered(self) -> None:
+        src = "1. ```text\n   [fake](missing.md)\n   ```\n"
+        out = _strip_code_segments(src)
+        assert "[fake](missing.md)" not in out
+
+    def test_content_indentation_fence_example_263(self) -> None:
+        # CommonMark §5.2 Example 263: fence at content indentation of a list item
+        src = "1.  text\n\n    ```\n    [fake](missing.md)\n    ```\n"
+        out = _strip_code_segments(src)
+        assert "[fake](missing.md)" not in out
+
+    def test_block_quote_fence(self) -> None:
+        src = "> ```text\n> [fake](missing.md)\n> ```\n"
+        out = _strip_code_segments(src)
+        assert "[fake](missing.md)" not in out
+
+    def test_composite_container_fence(self) -> None:
+        # round 5 reviewer probe: list item content indent + block quote
+        src = "1.  > ```text\n    > [fake](missing.md)\n    > ```\n"
+        out = _strip_code_segments(src)
+        assert "[fake](missing.md)" not in out
+
+    def test_unclosed_fence_not_masked(self) -> None:
+        # Soundness guard: unclosed fence leaves following content visible
+        src = "```bash\nsome code\n\n[real-broken](missing.md)\n"
+        out = _strip_code_segments(src)
+        assert "[real-broken](missing.md)" in out
+
+    def test_eof_closing_fence_no_trailing_newline(self) -> None:
+        src = "```bash\nx\n```"
+        out = _strip_code_segments(src)
+        assert "x" not in out
+
+    def test_top_level_four_space_pseudo_close_not_masked(self) -> None:
+        # MF-1 (round 5→6): top-level fence with 4-sp pseudo-close is unclosed
+        # per CommonMark §4.5, so the inner broken link must remain visible.
+        src = "```bash\n[real-broken](missing.md)\n    ```\n"
+        out = _strip_code_segments(src)
+        assert "[real-broken](missing.md)" in out
+
+    def test_no_trailing_newline_unclosed_not_masked(self) -> None:
+        # MF-1 (round 6→7): unclosed fence whose source lacks a trailing
+        # newline must NOT be classified as closed (broken link must remain).
+        src = "```bash\n[real-broken](missing.md)"
+        out = _strip_code_segments(src)
+        assert "[real-broken](missing.md)" in out
+
+
+def _first_fence_token(source: str):
+    """Return the first ``fence`` token from ``source`` (or None if absent)."""
+    for tok in _MD_PARSER.parse(source):
+        if tok.type == "fence":
+            return tok
+    return None
+
+
+@pytest.mark.small
+class TestFenceHasExplicitClosing:
+    """_fence_has_explicit_closing: token-based closed/unclosed decision."""
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            # top-level closed with trailing newline
+            "```\nx\n```\n",
+            # top-level closed without trailing newline
+            "```\nx\n```",
+            # closed with info string
+            "```bash\nx\n```\n",
+            # closed empty body
+            "```\n```\n",
+            # block-quote-nested closed
+            "> ```\n> x\n> ```\n",
+            # list-item content-indent (Example 263) closed
+            "1.  text\n\n    ```\n    x\n    ```\n",
+            # composite container (list + blockquote) closed
+            "1.  > ```\n    > x\n    > ```\n",
+        ],
+    )
+    def test_closed_returns_true(self, source: str) -> None:
+        tok = _first_fence_token(source)
+        assert tok is not None
+        assert _fence_has_explicit_closing(tok) is True
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            # opening only with trailing newline
+            "```\n",
+            # opening only without trailing newline
+            "```",
+            # open + content, no close, trailing newline
+            "```\nx\ny\n",
+            # round 5→6 transition probe: top-level 4-sp pseudo-close is NOT close
+            "```bash\n[real-broken](missing.md)\n    ```\n",
+            # round 6→7 transition probe: no-trailing-newline unclosed
+            # round 6 `count("\n")` would (incorrectly) return True here.
+            "```bash\n[real-broken](missing.md)",
+            # block-quote opening without close
+            "> ```\n> x\n",
+        ],
+    )
+    def test_unclosed_returns_false(self, source: str) -> None:
+        tok = _first_fence_token(source)
+        assert tok is not None
+        assert _fence_has_explicit_closing(tok) is False
+
+    def test_defensive_fallback_when_map_is_none(self) -> None:
+        tok = Token("fence", "code", 0)
+        tok.map = None
+        tok.content = ""
+        assert _fence_has_explicit_closing(tok) is False
+
+
+@pytest.mark.small
+class TestStripCodeSegmentsInline:
+    """_strip_code_segments: inline code spans (CommonMark § 6.1)."""
+
+    def test_inline_code_blanks_fake_link(self) -> None:
+        src = "text `[link](b.md)` text\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" not in out
+
+    def test_multiline_code_span(self) -> None:
+        # Code span line endings treated as spaces (CommonMark § 6.1)
+        src = "see `[link]\n(b.md)` here\n"
+        out = _strip_code_segments(src)
+        assert "[link]" not in out
+        assert "(b.md)" not in out
+
+    def test_double_backtick_with_inner_single(self) -> None:
+        # ``code with ` single`` closes at matching `` only
+        src = "x ``code [link](b.md) with ` single`` y\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" not in out
+
+    def test_unmatched_backtick_run_not_a_span(self) -> None:
+        # ` ... `` (lengths differ) is not a code span; content remains
+        src = "`abc`` and [link](b.md)\n"
+        out = _strip_code_segments(src)
+        # The leading backticks are not a valid span (lengths differ),
+        # so the fake link in normal text remains.
+        assert "[link](b.md)" in out
+
+    def test_normal_link_preserved(self) -> None:
+        src = "see [link](b.md) here\n"
+        out = _strip_code_segments(src)
+        assert "[link](b.md)" in out
+
+    def test_escaped_backticks_do_not_form_code_span(self) -> None:
+        # CommonMark §2.4: `\`` is a literal backtick, not a delimiter.
+        # The link between two escaped backticks is real text and must
+        # survive masking.
+        src = "\\`[real](missing.md)\\`\n"
+        out = _strip_code_segments(src)
+        assert "[real](missing.md)" in out
+
+    def test_escaped_backslash_before_delimiter_still_masks_span(self) -> None:
+        # `\\` escapes to a literal backslash; the following backtick is a
+        # real code span delimiter and must still mask its content.
+        src = "x \\\\`[fake](missing.md)` y\n"
+        out = _strip_code_segments(src)
+        assert "[fake](missing.md)" not in out
+
+    def test_backslash_inside_span_is_literal_closing_backtick_closes(self) -> None:
+        # Review round 9 probe (case 1): inside a code span, backslashes are
+        # literal (CommonMark § 6.1) — the trailing single backtick after `\`
+        # closes the span. The pseudo-link must be masked. The old global
+        # `replace("\\`", "  ")` preprocessing dropped that closing backtick
+        # and surfaced the fake link as a false-positive broken link.
+        src = "` A [fake](missing.md) B \\`\n"
+        out = _strip_code_segments(src)
+        assert "[fake](missing.md)" not in out
+
+    def test_unmatched_backtick_runs_around_escaped_backtick_preserve_link(self) -> None:
+        # Review round 9 probe (case 2): a single-backtick opener cannot be
+        # closed by a two-backtick run, so no code span exists and the real
+        # link must survive masking. The old preprocessing fabricated a
+        # length-1 closer by consuming the `\` + first trailing backtick,
+        # which silently swallowed the real broken link (soundness regression).
+        src = "` A [real](missing.md) B \\``\n"
+        out = _strip_code_segments(src)
+        assert "[real](missing.md)" in out
+
+
+@pytest.mark.small
+class TestStripCodeSegmentsPositionPreserved:
+    """_strip_code_segments invariants for _index_to_line compatibility."""
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            "",
+            "no code\n",
+            "```\nfenced\n```\n",
+            "a `code` b\n",
+            "see `[link]\n(b.md)` after\n",
+            "```bash\n[x](y.md)\n```\nafter\n",
+        ],
+    )
+    def test_length_preserved(self, src: str) -> None:
+        out = _strip_code_segments(src)
+        assert len(out) == len(src)
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            "",
+            "no code\n",
+            "```\nfenced\n```\n",
+            "see `[link]\n(b.md)` after\n",
+            "line1\n```\nline3\n```\nline5\n",
+        ],
+    )
+    def test_newline_positions_preserved(self, src: str) -> None:
+        out = _strip_code_segments(src)
+        for i, ch in enumerate(src):
+            if ch == "\n":
+                assert out[i] == "\n", f"newline at index {i} not preserved"
+            else:
+                assert out[i] != "\n" or src[i] == "\n"
 
 
 # ===========================================================================
@@ -322,6 +618,164 @@ class TestEdgeCases:
         assert result.returncode == 0
 
 
+@pytest.mark.medium
+class TestCodeBlockExclusion:
+    """Issue #190: code block / inline code内の擬似 link は誤検出しない."""
+
+    def test_fenced_block_regex_not_detected_as_link(self, tmp_path: Path) -> None:
+        # The actual review-poll SKILL.md pattern
+        content = (
+            "# Doc\n"
+            "```bash\n"
+            "OWNER=$(echo \"$ORIGIN\" | sed -E 's#.*[:/]([^/]+)/[^/]+(\\.git)?$#\\1#')\n"
+            "```\n"
+        )
+        _write(tmp_path / "docs" / "a.md", content)
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_fenced_block_fake_link_not_detected(self, tmp_path: Path) -> None:
+        _write(tmp_path / "docs" / "a.md", "```\n[link](missing.md)\n```\n")
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_inline_code_fake_link_not_detected(self, tmp_path: Path) -> None:
+        _write(tmp_path / "docs" / "a.md", "use `[link](missing.md)` here\n")
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_multiline_code_span_fake_link_not_detected(self, tmp_path: Path) -> None:
+        _write(tmp_path / "docs" / "a.md", "see `[link]\n(missing.md)` after\n")
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_closing_fence_info_string_not_recognized(self, tmp_path: Path) -> None:
+        # ``` aaa line inside a ```bash block must NOT close the block
+        _write(
+            tmp_path / "docs" / "a.md",
+            "```bash\n[link](missing.md)\n``` aaa\nmore [x](missing2.md)\n```\n",
+        )
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_broken_link_outside_code_block_still_detected(self, tmp_path: Path) -> None:
+        _write(
+            tmp_path / "docs" / "a.md",
+            "[real](missing.md)\n```\n[fake](other.md)\n```\n",
+        )
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 1
+        assert "missing.md" in result.stderr
+        assert "other.md" not in result.stderr
+
+    def test_mixed_code_and_normal_links(self, tmp_path: Path) -> None:
+        _write(
+            tmp_path / "docs" / "a.md",
+            "[ok](b.md)\n```\n[fake](missing.md)\n```\n",
+        )
+        _write(tmp_path / "docs" / "b.md", "# B\n")
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_list_item_nested_fence_not_detected(self, tmp_path: Path) -> None:
+        _write(
+            tmp_path / "docs" / "a.md",
+            "- ```bash\n  [fake](missing.md)\n  ```\n",
+        )
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_content_indentation_fence_not_detected(self, tmp_path: Path) -> None:
+        _write(
+            tmp_path / "docs" / "a.md",
+            "1.  text\n\n    ```\n    [fake](missing.md)\n    ```\n",
+        )
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_block_quote_fence_not_detected(self, tmp_path: Path) -> None:
+        _write(
+            tmp_path / "docs" / "a.md",
+            "> ```text\n> [fake](missing.md)\n> ```\n",
+        )
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_composite_container_fence_not_detected(self, tmp_path: Path) -> None:
+        _write(
+            tmp_path / "docs" / "a.md",
+            "1.  > ```text\n    > [fake](missing.md)\n    > ```\n",
+        )
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_unclosed_fence_still_reports_broken_link(self, tmp_path: Path) -> None:
+        # Soundness: unclosed fence must NOT mask following broken links
+        _write(
+            tmp_path / "docs" / "a.md",
+            "Intro.\n\n```bash\nsome code\n\n[real-broken](missing.md)\n",
+        )
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 1
+        assert "missing.md" in result.stderr
+
+    def test_top_level_four_space_pseudo_close_reports_broken_link(self, tmp_path: Path) -> None:
+        # MF-1 (round 5→6 probe): top-level fence + 4-sp pseudo-close must be
+        # treated as unclosed; inner broken link must surface.
+        _write(
+            tmp_path / "docs" / "a.md",
+            "```bash\n[real-broken](missing.md)\n    ```\n",
+        )
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 1
+        assert "missing.md" in result.stderr
+
+    def test_escaped_backtick_link_still_detected(self, tmp_path: Path) -> None:
+        # Review feedback (round 8 probe): `\`[real](missing.md)\`` renders to
+        # literal-backtick + real link + literal-backtick. The link is NOT
+        # inside a code span and the broken target must surface.
+        _write(tmp_path / "docs" / "a.md", "\\`[real](missing.md)\\`\n")
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 1
+        assert "missing.md" in result.stderr
+
+    def test_escaped_backslash_before_delimiter_masks_inner_link(self, tmp_path: Path) -> None:
+        # Counterpart of the previous test: `\\` is a literal backslash, and
+        # the following backtick still opens a real code span. The fake link
+        # inside must remain masked.
+        _write(tmp_path / "docs" / "a.md", "x \\\\`[fake](missing.md)` y\n")
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_backslash_inside_span_does_not_surface_fake_link(self, tmp_path: Path) -> None:
+        # Review round 9 probe (case 1, subprocess): the fake link is inside
+        # a real code span closed by the backtick after `\`. CLI must exit 0.
+        _write(tmp_path / "docs" / "a.md", "` A [fake](missing.md) B \\`\n")
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 0, result.stderr
+
+    def test_unmatched_run_around_escaped_backtick_reports_broken_link(
+        self, tmp_path: Path
+    ) -> None:
+        # Review round 9 probe (case 2, subprocess): single-backtick opener
+        # with two-backtick "closer" forms no span. The real broken link must
+        # surface as a soundness guarantee.
+        _write(tmp_path / "docs" / "a.md", "` A [real](missing.md) B \\``\n")
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 1
+        assert "missing.md" in result.stderr
+
+    def test_no_trailing_newline_unclosed_reports_broken_link(self, tmp_path: Path) -> None:
+        # MF-1 (round 6→7 probe): no-trailing-newline unclosed fence must NOT
+        # be classified as closed. Write the file WITHOUT a trailing newline.
+        path = tmp_path / "docs" / "a.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"```bash\n[real-broken](missing.md)")
+        result = _run(tmp_path, "docs")
+        assert result.returncode == 1
+        assert "missing.md" in result.stderr
+
+
 # ===========================================================================
 # Large tests — E2E against real repository docs
 # ===========================================================================
@@ -350,3 +804,24 @@ class TestRealRepo:
             cwd=str(REPO_ROOT),
         )
         assert result.returncode == 0, f"Broken links found in README.md:\n{result.stderr}"
+
+    def test_repo_verify_docs_args_have_no_broken_links(self) -> None:
+        """E2E: check_doc_links.py with the same arguments as `make verify-docs`.
+
+        Covers Issue #190: ensure .claude/skills/ paths (e.g. review-poll/SKILL.md
+        fenced code block regex) do not produce false positives.
+        """
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "docs/",
+                "README.md",
+                "CLAUDE.md",
+                ".claude/skills/",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        assert result.returncode == 0, f"Broken links:\n{result.stderr}"

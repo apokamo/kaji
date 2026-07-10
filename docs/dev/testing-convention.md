@@ -18,7 +18,12 @@
 @pytest.mark.small
 @pytest.mark.medium
 @pytest.mark.large
+# Large の細分（必要に応じて large と併記）
+@pytest.mark.large_local   # subprocess あり / ネットワーク無し
+@pytest.mark.large_forge   # 実 GitHub API 疎通
 ```
+
+実行前提と Make ターゲットは [`testing-size-guide.md` § Large の細分マーカー](../reference/testing-size-guide.md) を参照。
 
 ### 判定基準
 
@@ -27,6 +32,14 @@
 DB / ファイル / 内部サービス結合あり → Medium
 それ以外（純粋関数・モック完結） → Small
 ```
+
+## テストファイル命名規約
+
+テストファイルは、テスト対象のモジュール / ドメイン名で命名する。
+
+- **基本形**: `test_<domain>.py`。`<domain>` はテスト対象のモジュール名または振る舞いドメイン名（例: `test_dispatcher.py` / `test_provider_type.py`）。
+- **フェーズ番号を含めない**: 開発フェーズ番号・マイルストーン番号（`phase3c` / `phase4` 等）はファイル名に含めない。これらは開発プロジェクトの内部進行を表す時間的アーティファクトであり、フェーズ完了後はファイル名としての情報量がゼロになる。機能名でテストへ到達できる発見性を優先する。
+- **テスト種別サフィックスは許容**: pytest marker と対応するテスト種別サフィックス（`_large_local` 等）は命名に含めてよい（例: `test_local_cli_large_local.py`）。これは時間的アーティファクトではなく、ファイルの実行特性を表す恒久的な情報である。
 
 ## テスト戦略の原則
 
@@ -116,6 +129,21 @@ repo にコミットし、今後も継続実行するテスト。以下を満た
 | 「軽微な変更なのでテスト不要」 | 実行時コード変更なら変更の大小だけでは省略できない |
 | 「Large テストはステージング環境で検証」 | 恒久テストなら CI で再現できる構成にすること |
 
+## `subprocess.run` patch スコープ
+
+`kaji_harness.cli_main.subprocess.run` / `kaji_harness.providers._worktree.subprocess.run` の
+名前空間 patch は、テスト対象に応じて以下のスコープで使い分ける。dispatch / provider 結合
+テストで安易に名前空間 patch を当てると、`MagicMock != 0` の truthy 評価などで暗黙の
+分岐依存が忍び込む（gl:21 で fail-fast 化した直前の構造）。
+
+| テスト層 | `subprocess.run` の名前空間 patch | 代替手段 |
+|---------|----------------------------------|---------|
+| dispatch / provider 結合（`get_provider()` / `_handle_issue` / `_handle_pr` 経路） | **禁止** | 系統 A: `git init -q --initial-branch=<default_branch>` fixture / 系統 B: `patch("kaji_harness.providers.resolve_main_worktree", return_value=...)` |
+| `resolve_main_worktree()` 自身の Small unit test | 許可 | （`subprocess.run` の戻り値・例外分岐を検証する経路では mock 必須） |
+
+詳細は gl:21 設計書 [`draft/design/issue-21-refactor-drop-test-compat-fallback-in-re.md`](../../draft/design/issue-21-refactor-drop-test-compat-fallback-in-re.md)
+§ 制約・前提条件 を参照。
+
 ## AI のテスト省略傾向への警告
 
 > **AI には、実行時コード変更でも都合よくテストを減らす傾向がある。**
@@ -180,7 +208,7 @@ repo にコミットし、今後も継続実行するテスト。以下を満た
 | タイミング | 実行するもの | 根拠 |
 |-----------|-------------|------|
 | 実装中（Red/Green サイクル） | `pytest`（対象テストまたは全体） | 開発中の動作確認 |
-| コミット前 | `ruff check` + `ruff format` + `mypy` + `pytest` | 品質ゲート（`make check` 相当） |
+| コミット前 | `ruff check` + `ruff format --check` + `mypy` + `pytest` | 品質ゲート（`make check` 相当。非破壊。整形は `make fmt`） |
 | PR 前（`/i-dev-final-check`） | `make check` | 最終品質確認 |
 | docs-only PR 前（`/i-doc-final-check`） | `make verify-docs` | リンク整合性確認 |
 | CI | `make check` + `make verify-docs` | 自動品質検証 |

@@ -70,6 +70,31 @@ steps:
       ABORT: end
 """
 
+EXEC_STEP_YAML = """\
+name: test
+description: test workflow
+execution_policy: auto
+steps:
+  - id: collect-metrics
+    exec: python -m kaji_harness.scripts.collect_metrics
+    on:
+      PASS: end
+      ABORT: end
+"""
+
+EXEC_PLUS_AGENT_YAML = """\
+name: test
+description: test workflow
+execution_policy: auto
+steps:
+  - id: collect-metrics
+    exec: python -m kaji_harness.scripts.collect_metrics
+    agent: claude
+    on:
+      PASS: end
+      ABORT: end
+"""
+
 INVALID_SCHEMA_YAML = """\
 name: bad
 steps: not_a_list
@@ -239,12 +264,12 @@ class TestCmdValidateSmall:
     def test_yaml_in_subdirectory_resolves_project_root(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """YAML in workflows/ subdirectory should resolve skills from project root."""
-        # Simulate repo layout: project_root/workflows/wf.yaml + project_root/.claude/skills/
+        """YAML in an arbitrary subdirectory should resolve skills from project root."""
+        # Simulate repo layout: project_root/flows/wf.yaml + project_root/.claude/skills/
         (tmp_path / "pyproject.toml").write_text("[project]\nname = 'test'\n")
-        workflows_dir = tmp_path / "workflows"
-        workflows_dir.mkdir()
-        f = workflows_dir / "wf.yaml"
+        flows_dir = tmp_path / "flows"
+        flows_dir.mkdir()
+        f = flows_dir / "wf.yaml"
         f.write_text(VALID_WORKFLOW_YAML)
         _create_skill(tmp_path, "test-skill")
         _create_config(tmp_path)
@@ -311,6 +336,34 @@ class TestCmdValidateSmall:
             main(["validate"])
         assert exc_info.value.code == 2
 
+    @pytest.mark.small
+    def test_exec_step_valid_without_skill(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """exec-step は skill ファイルが無くても skill 解決を skip して通る (Issue #205)。"""
+        f = tmp_path / "exec.yaml"
+        f.write_text(EXEC_STEP_YAML)
+        # skill は作成しない。exec-step は skill 解決対象ではない。
+        _create_config(tmp_path)
+        exit_code = _cmd_validate_with_args(str(f))
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert "✓" in captured.out
+
+    @pytest.mark.small
+    def test_exec_step_with_agent_exit_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """exec + agent 同時指定は排他違反として fail する (Issue #205)。"""
+        f = tmp_path / "exec_agent.yaml"
+        f.write_text(EXEC_PLUS_AGENT_YAML)
+        _create_config(tmp_path)
+        exit_code = _cmd_validate_with_args(str(f))
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "✗" in captured.err
+        assert "must not set 'agent'" in captured.err
+
 
 # ============================================================
 # Medium tests — real file I/O integration
@@ -370,11 +423,11 @@ class TestCmdValidateMedium:
 
     @pytest.mark.medium
     def test_yaml_in_subdirectory_via_main(self, tmp_path: Path) -> None:
-        """main(["validate", ...]) with YAML in workflows/ subdirectory passes."""
+        """main(["validate", ...]) with YAML in an arbitrary subdirectory passes."""
         (tmp_path / "pyproject.toml").write_text("[project]\nname = 'test'\n")
-        workflows_dir = tmp_path / "workflows"
-        workflows_dir.mkdir()
-        f = workflows_dir / "wf.yaml"
+        flows_dir = tmp_path / "flows"
+        flows_dir.mkdir()
+        f = flows_dir / "wf.yaml"
         f.write_text(VALID_WORKFLOW_YAML)
         _create_skill(tmp_path, "test-skill")
         _create_config(tmp_path)
@@ -396,6 +449,15 @@ class TestCmdValidateMedium:
         f.write_text(MISSING_SKILL_YAML)
         exit_code = main(["validate", str(f)])
         assert exit_code == 1
+
+    @pytest.mark.medium
+    def test_exec_step_valid_via_main(self, tmp_path: Path) -> None:
+        """main(["validate", ...]) with an exec-step (no skill) returns exit 0 (Issue #205)."""
+        f = tmp_path / "exec.yaml"
+        f.write_text(EXEC_STEP_YAML)
+        _create_config(tmp_path)
+        exit_code = main(["validate", str(f)])
+        assert exit_code == 0
 
 
 # ============================================================

@@ -236,14 +236,25 @@ def _build_e2e_env(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
 
     workdir = tmp_path / "project"
     workdir.mkdir()
+    # gl:21: provider.type='local' requires a git repo (main worktree).
+    subprocess.run(
+        ["git", "init", "-q", "--initial-branch=main", str(workdir)],
+        check=True,
+    )
     config_dir = workdir / ".kaji"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
-        '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+        '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
     )
     skill_dir = workdir / ".claude" / "skills" / "test-skill"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("# Test Skill\n")
+
+    # Phase 3-e: provider=local の subprocess kaji run は IssueContext 解決を
+    # 走らせるため、テストで使う Issue id を予め local に作成しておく。
+    from tests.conftest import ensure_local_issue
+
+    ensure_local_issue(workdir, "101")
 
     return wf, workdir
 
@@ -289,7 +300,10 @@ class TestKajiRunTimestampLarge:
 
         # Python venv の bin も PATH に含める（kaji モジュール実行のため）
         python_dir = str(Path(sys.executable).parent)
-        env = {**os.environ, "PATH": f"{bin_dir}:{python_dir}"}
+        import shutil
+
+        git_dir = str(Path(shutil.which("git") or "/usr/bin/git").parent)
+        env = {**os.environ, "PATH": f"{bin_dir}:{python_dir}:{git_dir}"}
 
         result = subprocess.run(
             [
@@ -331,7 +345,12 @@ class TestKajiRunTimestampLarge:
             )
 
     def test_quiet_flag_suppresses_timestamp_output(self, tmp_path: Path) -> None:
-        """--quiet フラグ使用時、タイムスタンプ付き出力が stdout に出ないこと。"""
+        """--quiet は agent/exec relay 行を抑制するが、harness progress は残る。
+
+        Issue #235: ``--quiet`` は agent/exec の stdout streaming（``[ts] [step_id]``
+        relay 行）を抑制する既存意味を保つ。一方 harness progress（``[ts] [kaji] ...``）
+        は ``--log-level``（default INFO）で制御され、``--quiet`` では抑制されない。
+        """
         wf, workdir = _build_e2e_env(tmp_path)
 
         bin_dir = tmp_path / "bin"
@@ -339,7 +358,10 @@ class TestKajiRunTimestampLarge:
         _create_mock_claude_script(bin_dir)
 
         python_dir = str(Path(sys.executable).parent)
-        env = {**os.environ, "PATH": f"{bin_dir}:{python_dir}"}
+        import shutil
+
+        git_dir = str(Path(shutil.which("git") or "/usr/bin/git").parent)
+        env = {**os.environ, "PATH": f"{bin_dir}:{python_dir}:{git_dir}"}
 
         result = subprocess.run(
             [
@@ -368,6 +390,14 @@ class TestKajiRunTimestampLarge:
             for line in result.stdout.splitlines()
             if re.match(r"^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\]", line)
         ]
-        assert not timestamp_lines, (
-            f"Expected no timestamp lines with --quiet, got: {timestamp_lines}"
+        # 抑制対象は agent/exec relay 行（`[ts] [step_id] ...`、`[kaji]` 以外の prefix）のみ。
+        relay_lines = [line for line in timestamp_lines if "[kaji]" not in line]
+        assert not relay_lines, (
+            f"Expected no agent/exec relay timestamp lines with --quiet, got: {relay_lines}"
+        )
+        # harness progress（`[ts] [kaji] ...`）は --quiet でも INFO で残る。
+        kaji_lines = [line for line in timestamp_lines if "[kaji]" in line]
+        assert kaji_lines, (
+            f"Expected harness progress [kaji] lines to remain with --quiet, "
+            f"got none. stdout={result.stdout!r}"
         )

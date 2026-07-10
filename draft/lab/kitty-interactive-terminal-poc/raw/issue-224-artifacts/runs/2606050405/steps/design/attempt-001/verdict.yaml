@@ -1,0 +1,11 @@
+status: PASS
+reason: interactive_terminal runner の設計書を作成しコミットした。初回起動（既存設計書なし・設計後コミットなし）であり通常フローを完走した。
+evidence: |
+  draft/design/issue-224-feat-interactive-terminal-runner.md を作成（commit a5f9c06）。
+  feat type 単一ラベルを確認し、_shared/design-by-type/feat.md に沿って IF 設計・ユースケース・代替案・使用例を具体化した。
+  一次情報 3 点（subscription-runner-proposal.md / interactive-terminal-poc-result.md / PoC 実装 interactive_terminal.py・wrapper.sh）を Read し、tmp/ が gitignore のためレビュワー向けに該当箇所を Primary Sources 表へ引用した。
+  現行 runner.py L638 の execute_cli dispatch 箇所、config.py の ExecutionConfig / [provider] overlay、resolve_verdict() / SessionState を読み、verdict.py・state.py は再利用で変更不要、CLI option は cli_main.py（Issue リストの cli.py ではなく）に追加という統合判断をスコープ注記として明記した。
+  テスト戦略は実行時コード変更として S/M/L を定義（config 解析・CLI 正規化・argv builder・kitty 不在 fail-fast=Small / dispatch 分岐・close/timeout・wrapper shell=Medium / fake terminal E2E=large_local）。real Claude/Codex 自動テストは意図的スコープ外として代替担保を記載。
+  影響ドキュメント（新規 ADR 007 / ARCHITECTURE / 新規 interactive-terminal-runner guide / github-local-mode / workflow-authoring / CLAUDE.md index）を列挙。
+  Self-Check（review-design rubric Step 1.5 / type 重み付け / 基準 1〜5）は全 ✅、補完項目なし。
+suggestion: /issue-review-design 224 で設計レビューを実施。スコープ注記2点（cli.py→cli_main.py、verdict.py/state.py 変更不要）と effort pass-through 方針の妥当性を重点確認してほしい。

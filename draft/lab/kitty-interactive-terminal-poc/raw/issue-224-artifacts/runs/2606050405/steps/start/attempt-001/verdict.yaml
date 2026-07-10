@@ -1,0 +1,9 @@
+status: PASS
+reason: Worktree 構築成功
+evidence: |
+  - git worktree add -b feat/224 /home/aki/dev/kaji-feat-224 main 実行済み (HEAD: 291e19d)
+  - .venv シンボリックリンク作成済み (/home/aki/dev/kaji-feat-224/.venv -> /home/aki/dev/kaji/.venv)
+  - provider overlay (.kaji/config.local.toml) は main に未配置のため不要
+  - kaji issue prepend-note 224 --worktree kaji-feat-224 --branch feat/224 --commit 実行済み
+  - Issue #224 本文先頭に NOTE ブロック (Worktree/Branch) が追記されたことを gh issue view で確認
+suggestion: ""

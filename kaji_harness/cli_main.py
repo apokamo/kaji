@@ -6,21 +6,48 @@ Provides the `kaji` command with subcommands (e.g., `kaji run`).
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import logging
+import shutil
+import subprocess
 import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+from .artifacts import resolve_artifacts_dir
 from .config import KajiConfig
 from .errors import (
     ConfigLoadError,
     ConfigNotFoundError,
     HarnessError,
     SecurityError,
+    SkillFrontmatterError,
     SkillNotFound,
     WorkflowValidationError,
 )
+from .models import Workflow
+from .providers import (
+    IssueContext,
+    IssueProvider,
+    ResolvedId,
+    actual_provider_type,
+    get_provider,
+    normalize_id,
+    provider_overlay_divergence_warning,
+)
+from .providers.github import GitHubProviderError, build_kaji_review_marker
+from .providers.local import (
+    IssueNotFoundError,
+    IssueReadOnlyError,
+    LocalProvider,
+    LocalProviderError,
+)
+from .providers.markers import build_kaji_verdict_marker
+from .recovery.handler import RecoveryHandler
+from .recovery.snapshot import read_run_log_events
 from .runner import WorkflowRunner
-from .skill import validate_skill_exists
+from .skill import load_skill_metadata, validate_skill_exists
+from .state import _format_issue_ref
 from .workflow import load_workflow, validate_workflow
 
 EXIT_OK = 0
@@ -28,6 +55,7 @@ EXIT_ABORT = 1
 EXIT_VALIDATION_ERROR = 1
 EXIT_DEFINITION_ERROR = 2
 EXIT_CONFIG_NOT_FOUND = 2
+EXIT_INVALID_INPUT = 2
 EXIT_RUNTIME_ERROR = 3
 
 
@@ -48,15 +76,85 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {_get_version()}")
     subparsers = parser.add_subparsers(dest="command", required=True)
     _register_run(subparsers)
+    _register_recover(subparsers)
     _register_validate(subparsers)
+    _register_issue(subparsers)
+    _register_pr(subparsers)
+    _register_config(subparsers)
+    _register_sync(subparsers)
+    from .local_init import register_subcommand as _register_local
+
+    _register_local(subparsers)
     return parser
+
+
+def _register_sync(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """``kaji sync`` 系の subcommand 登録。
+
+    ``from-github``: GitHub repo から open Issue を全件 fetch して
+    ``.kaji/cache/gh-<number>.json`` に atomic write する。
+    ``status``: 最終 sync 時刻 / cache 件数 / 経過時間を表示する。
+
+    ``--include-closed`` / ``--state`` / ``--since`` は将来予約 flag。
+    本 release では受理せず exit 2 で fail-fast する（completion criterion）。
+    """
+    p = subparsers.add_parser("sync", help="Cache synchronization commands")
+    sync_subs = p.add_subparsers(dest="sync_command", required=True)
+
+    fh = sync_subs.add_parser(
+        "from-github",
+        help="Sync open issues from a GitHub repo into local cache",
+    )
+    fh.add_argument(
+        "--repo",
+        default=None,
+        type=str,
+        help="GitHub repo (owner/name). Defaults to [provider.github].repo.",
+    )
+    fh.add_argument("--quiet", action="store_true", help="Suppress progress logs.")
+    fh.add_argument(
+        "--include-closed",
+        dest="include_closed",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    fh.add_argument("--state", dest="state", default=None, type=str, help=argparse.SUPPRESS)
+    fh.add_argument("--since", dest="since", default=None, type=str, help=argparse.SUPPRESS)
+
+    st = sync_subs.add_parser("status", help="Show local cache sync status")
+    st.add_argument("--json", dest="json_mode", action="store_true", help="Output JSON.")
+
+
+def _register_config(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Register the ``config`` subcommand group.
+
+    Phase 4 で ``kaji config provider-type`` を read-only で公開する。
+    Skill / 自動化スクリプトが overlay (``.kaji/config.local.toml``) を
+    考慮した正しい provider type を取得するための入口。
+    """
+    p = subparsers.add_parser("config", help="Read-only config inspection commands")
+    config_subs = p.add_subparsers(dest="config_command", required=True)
+    pt = config_subs.add_parser(
+        "provider-type",
+        help="Print resolved provider.type ('github' or 'local')",
+    )
+    pt.add_argument(
+        "--workdir",
+        type=Path,
+        default=Path.cwd(),
+        help="Starting directory for config discovery (default: current directory)",
+    )
 
 
 def _register_run(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """Register the `run` subcommand."""
     p = subparsers.add_parser("run", help="Run a workflow")
     p.add_argument("workflow", type=Path, help="Path to workflow YAML file")
-    p.add_argument("issue", type=int, help="GitHub Issue number")
+    p.add_argument(
+        "issue",
+        type=str,
+        help="Issue ID (GitHub number like '153' or local form like 'local-pc1-1')",
+    )
     p.add_argument("--from", dest="from_step", help="Resume from a specific step")
     p.add_argument("--step", dest="single_step", help="Run a single step only")
     p.add_argument(
@@ -65,12 +163,163 @@ def _register_run(subparsers: argparse._SubParsersAction[argparse.ArgumentParser
         help="Stop just before dispatching <step> (exclusive barrier).",
     )
     p.add_argument(
+        "--reset-cycle",
+        dest="reset_cycle",
+        action="store_true",
+        help="Reset the iteration count of the cycle that --from's step belongs "
+        "to before running (requires --from).",
+    )
+    p.add_argument(
         "--workdir",
         type=Path,
         default=Path.cwd(),
         help="Starting directory for config discovery (default: current directory)",
     )
     p.add_argument("--quiet", action="store_true", help="Suppress agent output streaming")
+    # Issue #235: 起動コンソール progress（stdlib logging）の閾値。--quiet とは独立で、
+    # agent/exec の stdout streaming 抑制（--quiet）と harness progress 表示を分離する。
+    p.add_argument(
+        "--log-level",
+        dest="log_level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        default="INFO",
+        help="Console progress log level (default: INFO).",
+    )
+    # Issue #224: per-run overrides for the [execution] runner backend. These take
+    # precedence over both config.local.toml and config.toml (precedence 1).
+    p.add_argument(
+        "--agent-runner",
+        dest="agent_runner",
+        choices=["headless", "interactive-terminal"],
+        default=None,
+        help="Override the agent runner backend for this run.",
+    )
+    close_group = p.add_mutually_exclusive_group()
+    close_group.add_argument(
+        "--interactive-terminal-close-on-verdict",
+        dest="close_on_verdict",
+        action="store_true",
+        default=None,
+        help="Close the interactive terminal after the verdict is detected.",
+    )
+    close_group.add_argument(
+        "--no-interactive-terminal-close-on-verdict",
+        dest="close_on_verdict",
+        action="store_false",
+        default=None,
+        help="Keep the interactive terminal open after the verdict is detected.",
+    )
+    _add_recovery_arguments(p)
+
+
+def _add_recovery_arguments(p: argparse.ArgumentParser) -> None:
+    """Issue #288: failure triage / auto recovery の per-run override と chain flag。"""
+    triage_group = p.add_mutually_exclusive_group()
+    triage_group.add_argument(
+        "--failure-triage",
+        dest="failure_triage",
+        action="store_true",
+        default=None,
+        help="Classify the failure and record a triage report when the run fails.",
+    )
+    triage_group.add_argument(
+        "--no-failure-triage",
+        dest="failure_triage",
+        action="store_false",
+        default=None,
+        help="Disable failure triage for this run.",
+    )
+    recover_group = p.add_mutually_exclusive_group()
+    recover_group.add_argument(
+        "--auto-recover",
+        dest="auto_recover",
+        action="store_true",
+        default=None,
+        help="Automatically resume once (per recovery chain) after a recoverable failure.",
+    )
+    recover_group.add_argument(
+        "--no-auto-recover",
+        dest="auto_recover",
+        action="store_false",
+        default=None,
+        help="Disable the automatic child run for this run.",
+    )
+    # 以下 2 つは handler が child run 起動時に付与する内部伝播用（手動指定も可）。
+    p.add_argument(
+        "--recovery-root",
+        dest="recovery_root",
+        default=None,
+        help="Root run_id of the recovery chain this run belongs to.",
+    )
+    p.add_argument(
+        "--recovery-parent",
+        dest="recovery_parent",
+        default=None,
+        help="Direct parent run_id (requires --recovery-root).",
+    )
+
+
+def _register_recover(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Register the ``recover`` subcommand (Issue #288).
+
+    失敗 run の artifact に対して failure triage handler を手動起動する入口。
+    調査・再調査・opt-in 再開に使う。
+    """
+    p = subparsers.add_parser("recover", help="Run failure triage against a failed run's artifacts")
+    p.add_argument("workflow", type=Path, help="Workflow YAML used by the target run")
+    p.add_argument("issue", type=str, help="Issue ID (GitHub number or local form)")
+    p.add_argument(
+        "--run-id",
+        dest="run_id",
+        default=None,
+        help="Target run_id (default: the newest run for the issue).",
+    )
+    p.add_argument(
+        "--auto-recover",
+        dest="auto_recover",
+        action="store_true",
+        default=False,
+        help="Allow the handler to start a child run when the decision is 'resume'.",
+    )
+    p.add_argument(
+        "--workdir",
+        type=Path,
+        default=Path.cwd(),
+        help="Starting directory for config discovery (default: current directory)",
+    )
+
+
+def _register_issue(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Register the `issue` subcommand.
+
+    Phase 3-e 以降は ``provider.type`` に応じて分岐する。
+    ``provider.type='local'`` → LocalProvider 経由の structured CRUD、
+    ``provider.type='github'`` → ``gh issue`` passthrough（``--repo`` 自動注入）。
+    """
+    p = subparsers.add_parser(
+        "issue",
+        help="Issue operations (provider-aware: github passthrough or local CRUD)",
+        add_help=False,
+    )
+    p.add_argument("args", nargs=argparse.REMAINDER, help="Arguments forwarded to 'gh issue'")
+
+
+def _register_pr(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Register the `pr` subcommand.
+
+    Phase 3-e: すべての引数を `gh pr` に転送する（`provider.type='github'` 時に
+    ``--repo`` を自動注入）。`pr merge` は method flag
+    (``--merge`` / ``--squash`` / ``--rebase``) を露出せず、内部で常に
+    ``--merge`` (= ``--no-ff`` 相当) 固定で gh に渡す
+    (`docs/guides/git-commit-flow.md` の merge 規約に従う)。
+    Phase 4 で `provider.type='local'` 配下では bare-provider エラー化予定。
+    """
+    p = subparsers.add_parser(
+        "pr",
+        help="Pull request operations (Phase 1: gh pr passthrough)",
+        add_help=False,
+    )
+    p.add_argument("args", nargs=argparse.REMAINDER, help="Arguments forwarded to 'gh pr'")
 
 
 def _register_validate(
@@ -134,13 +383,32 @@ def cmd_validate(args: argparse.Namespace) -> int:
             project_root = _resolve_project_root_for_validate(args.project_root, path)
             config = KajiConfig.discover(start_dir=project_root)
             skill_dir = config.paths.skill_dir
+            agent_omission_errors: list[str] = []
             for step in wf.steps:
+                # exec-step（Issue #205）は skill レイヤを介さないため skill 解決・
+                # agent 省略検証は不要。排他・型・必須検証は load_workflow /
+                # validate_workflow で完結済み（runner Step 0 preflight skip と対称）。
+                if step.exec is not None:
+                    continue
+                assert step.skill is not None  # exactly-one of skill/exec が保証
                 validate_skill_exists(step.skill, project_root, skill_dir)
+                # L3 任意: skill_dir が解決できているのでメタデータも check
+                metadata = load_skill_metadata(step.skill, project_root, skill_dir)
+                if step.agent is None and metadata.exec_script is None:
+                    agent_omission_errors.append(
+                        f"Step '{step.id}' omits 'agent' but skill "
+                        f"'{step.skill}' has no 'exec_script' frontmatter"
+                    )
+            if agent_omission_errors:
+                raise WorkflowValidationError(agent_omission_errors)
             _print_success(path)
         except WorkflowValidationError as e:
             _print_error(path, e.errors)
             failed += 1
         except (SkillNotFound, SecurityError) as e:
+            _print_error(path, [str(e)])
+            failed += 1
+        except SkillFrontmatterError as e:
             _print_error(path, [str(e)])
             failed += 1
         except (ConfigNotFoundError, ConfigLoadError) as e:
@@ -171,8 +439,58 @@ def _print_error(path: Path, errors: list[str]) -> None:
         print(f"  - {error}", file=sys.stderr)
 
 
+def _apply_execution_overrides(config: KajiConfig, args: argparse.Namespace) -> KajiConfig:
+    """Apply ``kaji run`` CLI overrides onto ``config.execution`` (precedence 1).
+
+    ``--agent-runner interactive-terminal`` is normalized to the config value
+    ``interactive_terminal``. Each option is independent: when an option is
+    unspecified (``None``) the resolved config value is kept. The three-state
+    ``close_on_verdict`` (``None`` / ``True`` / ``False``) distinguishes "not
+    given" from an explicit ``--no-...``.
+
+    Issue #288: ``failure_triage`` / ``auto_recover`` も同じ three-state で上書きする。
+    triage が無効なら handler 自体が起動しないため、``auto_recover`` は常に無効へ
+    正規化する（CLI flag が無い場合の config 組み合わせにも適用する）。
+    """
+    execution = config.execution
+    changed = False
+
+    runner_override = getattr(args, "agent_runner", None)
+    if runner_override is not None:
+        execution = dataclasses.replace(execution, agent_runner=runner_override.replace("-", "_"))
+        changed = True
+    close_override = getattr(args, "close_on_verdict", None)
+    if close_override is not None:
+        execution = dataclasses.replace(
+            execution, interactive_terminal_close_on_verdict=close_override
+        )
+        changed = True
+    triage_override = getattr(args, "failure_triage", None)
+    if triage_override is not None:
+        execution = dataclasses.replace(execution, failure_triage=triage_override)
+        changed = True
+    recover_override = getattr(args, "auto_recover", None)
+    if recover_override is not None:
+        execution = dataclasses.replace(execution, auto_recover=recover_override)
+        changed = True
+
+    if not execution.failure_triage and execution.auto_recover:
+        execution = dataclasses.replace(execution, auto_recover=False)
+        changed = True
+
+    if not changed:
+        return config
+    return dataclasses.replace(config, execution=execution)
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """Execute the `run` subcommand."""
+    # Issue #235: 起動コンソール progress logging を初期化する（argparse choices で
+    # 検証済みの log level を stdlib level int へ変換）。RunLogger の JSONL とは別系統。
+    from .console_log import configure_console_logging
+
+    configure_console_logging(getattr(logging, getattr(args, "log_level", "INFO")))
+
     # Mutual exclusion: --from and --step
     if args.from_step and args.single_step:
         print(
@@ -185,6 +503,22 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.single_step and args.before_step:
         print(
             "Error: --step and --before are mutually exclusive",
+            file=sys.stderr,
+        )
+        return EXIT_DEFINITION_ERROR
+
+    # Dependency: --reset-cycle requires --from
+    if args.reset_cycle and not args.from_step:
+        print(
+            "Error: --reset-cycle requires --from <step>",
+            file=sys.stderr,
+        )
+        return EXIT_DEFINITION_ERROR
+
+    # Issue #288: chain identity は root を伴わない parent 単独では成立しない。
+    if args.recovery_parent and not args.recovery_root:
+        print(
+            "Error: --recovery-parent requires --recovery-root",
             file=sys.stderr,
         )
         return EXIT_DEFINITION_ERROR
@@ -207,6 +541,21 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_CONFIG_NOT_FOUND
 
+    # Issue #224: CLI option override（agent_runner / close_on_verdict）を
+    # config.local.toml / config.toml より優先して適用する（precedence 1）。
+    config = _apply_execution_overrides(config, args)
+
+    # Phase 3-e § 1.5: provider config を runner 起動前に validate し、
+    # `[provider]` 不在を `IssueContextResolutionError` 経由 exit 3 に落とさず
+    # exit 2 で正規化する。`kaji issue` / `kaji pr` と契約を統一。
+    try:
+        get_provider(config)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+
+    _emit_provider_overlay_divergence_warning(config)
+
     project_root = config.repo_root
 
     # Load and validate workflow
@@ -217,6 +566,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return EXIT_DEFINITION_ERROR
+    # recovery child は ``--workdir`` を cwd として起動されるため、相対パスのままだと
+    # invocation cwd と ``--workdir`` が異なる場合に workflow を解決できない。
+    workflow_path = workflow_path.resolve()
 
     try:
         workflow = load_workflow(workflow_path)
@@ -224,40 +576,1763 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_DEFINITION_ERROR
 
+    # Phase 4: workflow ↔ provider 整合検証。``requires_provider != "any"`` の
+    # 場合のみ ``config.provider.type`` と突合し、不整合を ``EXIT_INVALID_INPUT``
+    # で fail-fast する。
+    rc = _validate_workflow_provider_match(workflow, config)
+    if rc != EXIT_OK:
+        return rc
+
     # Run workflow
+    artifacts_dir = resolve_artifacts_dir(config)
+    runner = WorkflowRunner(
+        workflow=workflow,
+        issue_number=args.issue,
+        project_root=project_root,
+        artifacts_dir=artifacts_dir,
+        config=config,
+        from_step=args.from_step,
+        single_step=args.single_step,
+        before_step=args.before_step,
+        reset_cycle=args.reset_cycle,
+        verbose=not args.quiet,
+        recovery_root=args.recovery_root,
+        recovery_parent=args.recovery_parent,
+    )
     try:
-        runner = WorkflowRunner(
-            workflow=workflow,
-            issue_number=args.issue,
-            project_root=project_root,
-            artifacts_dir=config.artifacts_dir,
-            config=config,
-            from_step=args.from_step,
-            single_step=args.single_step,
-            before_step=args.before_step,
-            verbose=not args.quiet,
-        )
         state = runner.run()
-    except (WorkflowValidationError, SkillNotFound, SecurityError) as e:
+    except (WorkflowValidationError, SkillNotFound, SecurityError, SkillFrontmatterError) as e:
         print(f"Error: {e}", file=sys.stderr)
-        return EXIT_DEFINITION_ERROR
+        exit_code = EXIT_DEFINITION_ERROR
     except HarnessError as e:
         print(f"Error: {e}", file=sys.stderr)
-        return EXIT_RUNTIME_ERROR
+        exit_code = EXIT_RUNTIME_ERROR
     except Exception as e:
         print(f"Unexpected error: {e}", file=sys.stderr)
-        return EXIT_ABORT
+        exit_code = EXIT_ABORT
+    else:
+        # Check for ABORT verdict
+        if state.last_transition_verdict and state.last_transition_verdict.status == "ABORT":
+            print(
+                f"Workflow aborted: {state.last_transition_verdict.reason}",
+                file=sys.stderr,
+            )
+            exit_code = EXIT_ABORT
+        else:
+            # Success summary: canonical_issue_ref を優先（Phase 3-d preflight § 1）。
+            # ``[provider]`` 未設定 fallback などで未確定の場合のみ raw 入力で整形する。
+            issue_ref = runner.canonical_issue_ref or _format_issue_ref(args.issue)
+            print(f"Workflow '{workflow.name}' completed for issue {issue_ref}")
+            return EXIT_OK
 
-    # Check for ABORT verdict
-    if state.last_transition_verdict and state.last_transition_verdict.status == "ABORT":
+    # Issue #288: ERROR / ABORT 終端でのみ failure triage を起動する。run_dir 作成前の
+    # 失敗（config / workflow validation / IssueContext 解決失敗）は artifact が無く
+    # 根拠のない Issue コメントになるため triage 対象外。
+    child_exit_code = _run_failure_triage(
+        config=config,
+        workflow=workflow,
+        workflow_path=workflow_path,
+        runner=runner,
+        artifacts_dir=artifacts_dir,
+        workdir=start_dir,
+    )
+    # child run を起動した場合、親プロセスの exit code は chain の最終結果に一致させる。
+    return child_exit_code if child_exit_code is not None else exit_code
+
+
+def _run_failure_triage(
+    *,
+    config: KajiConfig,
+    workflow: Workflow,
+    workflow_path: Path,
+    runner: WorkflowRunner,
+    artifacts_dir: Path,
+    workdir: Path,
+) -> int | None:
+    """失敗した run に対し failure triage handler を起動する（Issue #288）。
+
+    triage は best-effort であり、handler 側の失敗で元の run の exit code を変えない
+    （WARN を stderr に出して ``None`` を返す）。
+
+    Returns:
+        child run を起動した場合はその exit code、そうでなければ ``None``。
+    """
+    if not config.execution.failure_triage:
+        return None
+    run_dir = runner.last_run_dir
+    if run_dir is None or runner.canonical_issue_id is None:
+        return None
+
+    provider: IssueProvider | None
+    try:
+        provider = get_provider(config)
+    except ValueError as exc:
+        print(f"WARNING: failure triage cannot resolve a provider: {exc}", file=sys.stderr)
+        provider = None
+
+    handler = RecoveryHandler(
+        workflow=workflow,
+        workflow_path=workflow_path,
+        issue_id=runner.canonical_issue_id,
+        issue_ref=runner.canonical_issue_ref or runner.canonical_issue_id,
+        artifacts_dir=artifacts_dir,
+        run_dir=run_dir,
+        workdir=workdir,
+        provider=provider,
+        auto_recover=config.execution.auto_recover,
+    )
+    try:
+        result = handler.run()
+    except (OSError, HarnessError) as exc:
+        print(f"WARNING: failure triage failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return None
+    return result.child_exit_code
+
+
+def cmd_recover(args: argparse.Namespace) -> int:
+    """Execute the `recover` subcommand (Issue #288).
+
+    失敗 run の artifact に対して handler を手動起動する。triage が完了すれば decision に
+    かかわらず ``EXIT_OK``。対象 run 不在 / 進行中 run は ``EXIT_INVALID_INPUT``、
+    handler 内部エラーは ``EXIT_RUNTIME_ERROR``。
+    """
+    start_dir = args.workdir.resolve()
+    if not start_dir.is_dir():
+        print(f"Error: --workdir '{args.workdir}' is not a valid directory", file=sys.stderr)
+        return EXIT_DEFINITION_ERROR
+    try:
+        config = KajiConfig.discover(start_dir=start_dir)
+    except (ConfigNotFoundError, ConfigLoadError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_CONFIG_NOT_FOUND
+
+    try:
+        provider = get_provider(config)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+
+    if not args.workflow.exists():
+        print(f"Error: Workflow file not found: {args.workflow}", file=sys.stderr)
+        return EXIT_DEFINITION_ERROR
+    # child run と同じく ``--workdir`` を cwd として起動するため絶対化する（cmd_run と同様）。
+    workflow_path = args.workflow.resolve()
+    try:
+        workflow = load_workflow(workflow_path)
+    except WorkflowValidationError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_DEFINITION_ERROR
+
+    # cmd_run と同じ workflow ↔ provider 整合検証。これが無いと triage / wait を経て
+    # 起動した child が provider 不一致で必ず失敗する。
+    rc = _validate_workflow_provider_match(workflow, config)
+    if rc != EXIT_OK:
+        return rc
+
+    try:
+        issue_context = _resolve_recover_issue_context(config, provider, args.issue)
+    except (ValueError, HarnessError, GitHubProviderError, LocalProviderError) as e:
+        print(f"Error: cannot resolve issue {args.issue!r}: {e}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+
+    artifacts_dir = resolve_artifacts_dir(config)
+    runs_dir = artifacts_dir / issue_context.issue_id / "runs"
+    run_dir = _resolve_target_run_dir(runs_dir, args.run_id)
+    if run_dir is None:
+        return EXIT_INVALID_INPUT
+
+    handler = RecoveryHandler(
+        workflow=workflow,
+        workflow_path=workflow_path,
+        issue_id=issue_context.issue_id,
+        issue_ref=issue_context.issue_ref,
+        artifacts_dir=artifacts_dir,
+        run_dir=run_dir,
+        workdir=start_dir,
+        provider=provider,
+        auto_recover=args.auto_recover,
+    )
+    try:
+        handler.run()
+    except (OSError, HarnessError) as exc:
+        print(f"Error: failure triage failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME_ERROR
+    return EXIT_OK
+
+
+def _resolve_recover_issue_context(
+    config: KajiConfig, provider: IssueProvider, issue_input: str
+) -> IssueContext:
+    """``kaji recover`` 用に canonical Issue ID / ref を解決する。"""
+    assert config.provider is not None  # get_provider 成功後
+    provider_type = config.provider.type
+    machine_id = config.provider.local.machine_id if provider_type == "local" else None
+    rid = normalize_id(issue_input, provider_name=provider_type, machine_id=machine_id)
+    return provider.resolve_issue_context(rid.value)
+
+
+def _resolve_target_run_dir(runs_dir: Path, run_id: str | None) -> Path | None:
+    """triage 対象の run dir を解決する。不正な場合は stderr に理由を出して ``None``。
+
+    実行中 run（``workflow_end`` event が無い）への誤介入は拒否する。
+    """
+    if not runs_dir.is_dir():
+        print(f"Error: no runs found under {runs_dir}", file=sys.stderr)
+        return None
+    if run_id is not None:
+        run_dir = runs_dir / run_id
+        if not run_dir.is_dir():
+            print(f"Error: run dir not found: {run_dir}", file=sys.stderr)
+            return None
+    else:
+        candidates = sorted(p for p in runs_dir.iterdir() if p.is_dir())
+        if not candidates:
+            print(f"Error: no runs found under {runs_dir}", file=sys.stderr)
+            return None
+        run_dir = candidates[-1]
+
+    run_log = run_dir / "run.log"
+    if not run_log.is_file():
+        print(f"Error: run.log not found: {run_log}", file=sys.stderr)
+        return None
+    try:
+        events = read_run_log_events(run_log)
+    except OSError as exc:
+        print(f"Error: cannot read {run_log}: {exc}", file=sys.stderr)
+        return None
+    end = [e for e in events if e.get("event") == "workflow_end"]
+    if not end:
         print(
-            f"Workflow aborted: {state.last_transition_verdict.reason}",
+            f"Error: run {run_dir.name} is still in progress (no workflow_end event); "
+            "refusing to run failure triage against it",
             file=sys.stderr,
         )
-        return EXIT_ABORT
+        return None
+    if end[-1].get("status") not in ("ERROR", "ABORT"):
+        print(
+            f"Error: run {run_dir.name} ended with status {end[-1].get('status')!r}; "
+            "failure triage only applies to ERROR / ABORT runs",
+            file=sys.stderr,
+        )
+        return None
+    return run_dir
 
-    # Success summary
-    print(f"Workflow '{workflow.name}' completed for issue #{args.issue}")
+
+def _validate_workflow_provider_match(workflow: Workflow, config: KajiConfig) -> int:
+    """``workflow.requires_provider`` と ``config.provider.type`` の突合検証。
+
+    Phase 4 で導入。``requires_provider`` が ``"any"`` 以外で
+    ``config.provider.type`` と一致しない場合、``EXIT_INVALID_INPUT`` を返し、
+    切替手順を stderr に出力する。
+
+    本 helper は ``get_provider(config)`` が成功した直後に呼ぶことが前提
+    （``actual_provider_type(config)`` の narrowing 契約に従う）。
+    """
+    if workflow.requires_provider == "any":
+        return EXIT_OK
+    actual = actual_provider_type(config)
+    if workflow.requires_provider == actual:
+        return EXIT_OK
+    print(
+        f"Error: workflow '{workflow.name}' requires provider.type="
+        f"'{workflow.requires_provider}' but current config has "
+        f"provider.type='{actual}'.\n"
+        f"  - To run this workflow, switch provider in .kaji/config.local.toml.\n"
+        f"  - To use the current provider, choose a workflow with "
+        f"requires_provider='{actual}' or 'any'.",
+        file=sys.stderr,
+    )
+    return EXIT_INVALID_INPUT
+
+
+_FORGE_METHOD_FLAGS = {"--merge", "--squash", "--rebase"}
+
+
+def _user_specified_repo(args: list[str]) -> bool:
+    """argv 内に user 指定の ``--repo`` / ``-R`` 系トークンが含まれるかを返す。
+
+    pflag (gh の flag parser) が受理する以下 5 形式を検出する:
+
+    - 独立トークン long:  ``--repo owner/name``
+    - 独立トークン short: ``-R owner/name``
+    - インライン long:    ``--repo=owner/name``
+    - インライン short=:  ``-R=owner/name``
+    - 短縮連結:           ``-Rowner/name``
+    """
+    for a in args:
+        if a in ("--repo", "-R"):
+            return True
+        if a.startswith("--repo="):
+            return True
+        if a.startswith("-R") and len(a) > 2:
+            return True
+    return False
+
+
+def _forward_to_gh(group: str, raw_args: list[str], *, repo: str | None = None) -> int:
+    """`gh <group> ...` に引数を転送する wrapper。
+
+    `pr merge` の method flag は露出せず常に `--merge` (= no-ff) 固定で渡す。
+    詳細: ``docs/guides/git-commit-flow.md``。
+
+    `argparse.REMAINDER` は先頭の `--` を残したり残さなかったりするため、
+    user 入力の意味を変えないよう先頭の単独 `--` のみを除去する。
+
+    Phase 3-c rev #3（review #3 反映）:
+
+    - ``repo`` が指定されると ``--repo <owner/name>`` を末尾に強制注入する
+      （既に user が ``--repo`` を渡している場合は user 値を尊重し触らない）
+    - 用途: ``provider.type='github'`` の `[provider.github] repo` を
+      尊重し、worktree の git remote / fork による silent な書き先誤りを防ぐ
+    """
+    if not shutil.which("gh"):
+        print(
+            "Error: 'gh' CLI not found in PATH. "
+            "Install GitHub CLI to use 'kaji issue' / 'kaji pr'.",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME_ERROR
+
+    args = list(raw_args)
+    if args and args[0] == "--":
+        args = args[1:]
+
+    if group == "pr" and args and args[0] == "merge":
+        # method flag を除去し、常に --merge (= no-ff 相当) を強制する
+        # ``docs/guides/git-commit-flow.md`` の merge 規約に従う
+        head = [args[0]]
+        rest = [a for a in args[1:] if a not in _FORGE_METHOD_FLAGS]
+        args = head + rest + ["--merge"]
+
+    if repo and not _user_specified_repo(args):
+        # gh は --repo を sub の前後どちらでも受理する。末尾追加で副作用最小
+        args = [*args, "--repo", repo]
+
+    cmd = ["gh", group, *args]
+    try:
+        result = subprocess.run(cmd, check=False)
+    except OSError as exc:
+        print(f"Error: failed to invoke 'gh': {exc}", file=sys.stderr)
+        return EXIT_RUNTIME_ERROR
+    return result.returncode
+
+
+_PR_BUILTIN_SUBCOMMANDS = {"review-comments", "reviews", "reply-to-comment"}
+
+_PR_BARE_PROVIDER_ERROR = (
+    "Error: 'kaji pr' is a forge-only command and cannot run under "
+    "provider.type='local'.\n"
+    "Pull request concept does not exist in local mode (bare provider). "
+    "Use git/issue operations directly:\n\n"
+    "  - Code review:        /issue-review-code, /issue-fix-code, "
+    "/issue-verify-code\n"
+    "  - Merge + close:      /issue-close (executes 'git merge --no-ff' + "
+    "frontmatter update)\n"
+    "  - Branch listing:     git branch --list 'feat/local-*'\n\n"
+    "To switch back to GitHub mode (e.g. after the outage), edit\n"
+    '.kaji/config.local.toml and set [provider] type = "github" (or remove the\n'
+    "overlay so the tracked .kaji/config.toml takes effect).\n"
+)
+
+
+def _is_ascii_decimal(s: str) -> bool:
+    """True iff ``s`` is a non-empty ASCII decimal string.
+
+    ``str.isdigit()`` accepts Unicode digit characters (e.g. ``"１２３"``),
+    which would silently produce a malformed REST API path. GitHub
+    PR / comment IDs are always ASCII decimals, so reject anything else.
+    """
+    return bool(s) and s.isascii() and s.isdigit()
+
+
+_GH_MISSING_GUIDANCE = (
+    "Error: 'gh' CLI not found in PATH. "
+    "Install GitHub CLI to use 'kaji pr review-comments' / 'reviews' / "
+    "'reply-to-comment' / 'review-poll' (Phase 2).\n"
+)
+
+
+def _detect_repo(*, override: str | None = None) -> str | None:
+    """Return repository in `owner/name` form.
+
+    Phase 3-c rev #3 で ``override`` を追加（review #3 反映）:
+
+    - ``override`` が non-empty → そのまま採用（``[provider.github] repo`` 由来）
+    - 不在 → ``gh repo view`` で current repo を auto-detect する legacy 経路
+    """
+    if override:
+        return override
+    try:
+        result = subprocess.run(
+            ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    repo = result.stdout.strip()
+    return repo or None
+
+
+def _compose_json_and_jq(fields: list[str] | None, jq: str | None) -> str | None:
+    """Compose ``--json FIELDS`` and ``--jq EXPR`` into a single ``gh api --jq`` expression.
+
+    `gh api` does not accept ``--json`` (only ``--jq``), so kaji turns
+    ``--json`` into a jq projection and chains it before the user expression.
+
+    - fields only          -> ``[.[] | {f1: .f1, f2: .f2}]``
+    - jq only              -> ``<jq>``
+    - both                 -> ``[.[] | {f1: .f1, ...}] | <jq>``
+    - neither              -> None (do not pass ``--jq`` to gh)
+    """
+    if fields is None and jq is None:
+        return None
+    field_proj = "[.[] | {" + ", ".join(f"{f}: .{f}" for f in fields) + "}]" if fields else None
+    if field_proj and jq:
+        return f"{field_proj} | {jq}"
+    return field_proj or jq
+
+
+def _forward_pr_review_comments(
+    pr_id: str,
+    *,
+    json_fields: list[str] | None,
+    jq_expr: str | None,
+    repo_override: str | None = None,
+) -> int:
+    """Forward to ``gh api repos/<repo>/pulls/<N>/comments``."""
+    return _forward_pr_api_list(
+        pr_id,
+        path_suffix="comments",
+        json_fields=json_fields,
+        jq_expr=jq_expr,
+        repo_override=repo_override,
+    )
+
+
+def _forward_pr_reviews(
+    pr_id: str,
+    *,
+    json_fields: list[str] | None,
+    jq_expr: str | None,
+    repo_override: str | None = None,
+) -> int:
+    """Forward to ``gh api repos/<repo>/pulls/<N>/reviews``."""
+    return _forward_pr_api_list(
+        pr_id,
+        path_suffix="reviews",
+        json_fields=json_fields,
+        jq_expr=jq_expr,
+        repo_override=repo_override,
+    )
+
+
+def _forward_pr_api_list(
+    pr_id: str,
+    *,
+    path_suffix: str,
+    json_fields: list[str] | None,
+    jq_expr: str | None,
+    repo_override: str | None = None,
+) -> int:
+    if not _is_ascii_decimal(pr_id):
+        sys.stderr.write(f"Error: PR_ID must be ASCII decimal, got: {pr_id}\n")
+        return EXIT_INVALID_INPUT
+    if shutil.which("gh") is None:
+        sys.stderr.write(_GH_MISSING_GUIDANCE)
+        return EXIT_RUNTIME_ERROR
+    repo = _detect_repo(override=repo_override)
+    if repo is None:
+        sys.stderr.write(
+            "Error: failed to detect current repository.\n"
+            "Run 'gh repo view --json nameWithOwner' in a checked-out repo first.\n"
+        )
+        return EXIT_RUNTIME_ERROR
+    cmd = ["gh", "api", f"repos/{repo}/pulls/{pr_id}/{path_suffix}"]
+    effective_jq = _compose_json_and_jq(json_fields, jq_expr)
+    if effective_jq is not None:
+        cmd.extend(["--jq", effective_jq])
+    try:
+        return subprocess.run(cmd, check=False).returncode
+    except OSError as exc:
+        sys.stderr.write(f"Error: failed to invoke 'gh': {exc}\n")
+        return EXIT_RUNTIME_ERROR
+
+
+def _forward_pr_reply_to_comment(
+    pr_id: str,
+    *,
+    comment_id: str,
+    body: str,
+    repo_override: str | None = None,
+) -> int:
+    """POST a reply to a PR review comment."""
+    if not _is_ascii_decimal(pr_id):
+        sys.stderr.write(f"Error: PR_ID must be ASCII decimal, got: {pr_id}\n")
+        return EXIT_INVALID_INPUT
+    if not _is_ascii_decimal(comment_id):
+        sys.stderr.write(f"Error: --to COMMENT_ID must be ASCII decimal, got: {comment_id}\n")
+        return EXIT_INVALID_INPUT
+    if shutil.which("gh") is None:
+        sys.stderr.write(_GH_MISSING_GUIDANCE)
+        return EXIT_RUNTIME_ERROR
+    repo = _detect_repo(override=repo_override)
+    if repo is None:
+        sys.stderr.write(
+            "Error: failed to detect current repository.\n"
+            "Run 'gh repo view --json nameWithOwner' in a checked-out repo first.\n"
+        )
+        return EXIT_RUNTIME_ERROR
+    cmd = [
+        "gh",
+        "api",
+        "--method",
+        "POST",
+        f"repos/{repo}/pulls/{pr_id}/comments/{comment_id}/replies",
+        "-f",
+        f"body={body}",
+    ]
+    try:
+        return subprocess.run(cmd, check=False).returncode
+    except OSError as exc:
+        sys.stderr.write(f"Error: failed to invoke 'gh': {exc}\n")
+        return EXIT_RUNTIME_ERROR
+
+
+def _run_pr_review_poll(rest: list[str]) -> int:
+    """Run the review-poll workflow helper through the installed kaji package."""
+    p = argparse.ArgumentParser(prog="kaji pr review-poll", add_help=True)
+    p.parse_args(rest)
+
+    from .scripts import review_poll_entry
+
+    return review_poll_entry.main([])
+
+
+def _dispatch_pr_builtin(sub: str, rest: list[str], *, repo_override: str | None = None) -> int:
+    """Parse ``rest`` with a sub-specific argparse and dispatch to the handler.
+
+    ``gh api`` 直叩き builtin（``review-comments`` / ``reviews`` /
+    ``reply-to-comment``）専用。これらは ``repo_override``（config の
+    ``[provider.github] repo`` 由来）を尊重し、別 repo 運用を許す。
+    review-poll は workflow 専用 step で repo を取らないため、``_handle_pr``
+    側の独立分岐で処理し本関数には流さない（``_PR_BUILTIN_SUBCOMMANDS``
+    からも除外済み）。
+
+    ``--help`` / ``-h`` prints sub-specific usage. argparse's default exit
+    code on invalid args is 2, matching ``EXIT_INVALID_INPUT``.
+    """
+    p = argparse.ArgumentParser(prog=f"kaji pr {sub}", add_help=True)
+    p.add_argument("pr_id", type=str, help="PR number")
+    if sub in {"review-comments", "reviews"}:
+        p.add_argument(
+            "--json",
+            dest="json_fields",
+            default=None,
+            help="Comma-separated field list (composed into gh api --jq projection)",
+        )
+        p.add_argument(
+            "--jq",
+            "-q",
+            dest="jq_expr",
+            default=None,
+            help="jq expression applied after --json projection",
+        )
+    elif sub == "reply-to-comment":
+        p.add_argument("--to", dest="comment_id", required=True, type=str, help="Review comment ID")
+        p.add_argument("--body", required=True, type=str, help="Reply body")
+    ns = p.parse_args(rest)
+    raw_json = getattr(ns, "json_fields", None)
+    fields: list[str] | None
+    if raw_json is None:
+        fields = None
+    else:
+        parts = [f.strip() for f in raw_json.split(",")]
+        if not parts or any(not p_ for p_ in parts):
+            sys.stderr.write(
+                f"Error: --json must be a non-empty comma-separated list of "
+                f"fields, got: {raw_json!r}\n"
+            )
+            return EXIT_INVALID_INPUT
+        fields = parts
+    if sub == "review-comments":
+        return _forward_pr_review_comments(
+            ns.pr_id, json_fields=fields, jq_expr=ns.jq_expr, repo_override=repo_override
+        )
+    if sub == "reviews":
+        return _forward_pr_reviews(
+            ns.pr_id, json_fields=fields, jq_expr=ns.jq_expr, repo_override=repo_override
+        )
+    return _forward_pr_reply_to_comment(
+        ns.pr_id, comment_id=ns.comment_id, body=ns.body, repo_override=repo_override
+    )
+
+
+def _has_approve_flag(rest: list[str]) -> bool:
+    """``rest`` 中に ``--approve`` / ``--approve=...`` / ``-a`` が含まれるかを pre-scan する。
+
+    ``gh pr review`` の `-a` は ``--approve`` の正式 short alias（``gh pr review --help``）
+    のため、long form と同じく self-PR fallback dispatcher へ振り分ける。
+    ``--`` 以降は positional 扱いし無視する（``gh`` の慣習に合わせる）。
+    """
+    for tok in rest:
+        if tok == "--":
+            return False
+        if tok == "--approve" or tok.startswith("--approve=") or tok == "-a":
+            return True
+    return False
+
+
+def _has_request_changes_flag(rest: list[str]) -> bool:
+    """``rest`` 中に ``--request-changes`` / ``--request-changes=...`` / ``-r`` が含まれるかを pre-scan する。
+
+    ``gh pr review`` の ``-r`` は ``--request-changes`` の正式 short alias
+    （``gh pr review --help``）。``--`` 以降は positional 扱いし無視する。
+    ``_has_approve_flag`` と完全対称の構造。
+    """
+    for tok in rest:
+        if tok == "--":
+            return False
+        if tok == "--request-changes" or tok.startswith("--request-changes=") or tok == "-r":
+            return True
+    return False
+
+
+def _gh_capture_value(args: list[str]) -> str | None:
+    """``gh <args>`` を ``capture_output=True`` で叩き、rc=0 なら stdout.strip() を返す。
+
+    rc≠0 の場合は stderr を中継して ``None`` を返す（fail-loud。
+    silent fallthrough を回避するため、呼出側で ``EXIT_RUNTIME_ERROR`` に
+    昇格する責務を持つ）。
+    """
+    try:
+        result = subprocess.run(
+            ["gh", *args],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        sys.stderr.write(f"Error: failed to invoke 'gh': {exc}\n")
+        return None
+    if result.returncode != 0:
+        if result.stderr:
+            sys.stderr.write(result.stderr)
+        return None
+    return result.stdout.strip()
+
+
+def _gh_post_issue_comment_silent(*, repo: str, pr_id: str, body: str) -> int:
+    """``gh api --method POST repos/<repo>/issues/<pr>/comments -f body=<body>``.
+
+    ``gh api`` は POST response の JSON を stdout に書く既定挙動だが、
+    本関数は ``capture_output=True`` で stdout を捨て、rc のみを返す
+    （stdout contract は「空 + rc のみ」と定義する）。
+    """
+    cmd = [
+        "gh",
+        "api",
+        "--method",
+        "POST",
+        f"repos/{repo}/issues/{pr_id}/comments",
+        "-f",
+        f"body={body}",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except OSError as exc:
+        sys.stderr.write(f"Error: failed to invoke 'gh': {exc}\n")
+        return EXIT_RUNTIME_ERROR
+    if result.returncode != 0:
+        if result.stderr:
+            sys.stderr.write(result.stderr)
+        return EXIT_RUNTIME_ERROR
+    return EXIT_OK
+
+
+def _github_pr_review(rest: list[str], *, repo_override: str | None) -> int:
+    """``kaji pr review <pr_id> --approve|--request-changes`` 専用 dispatcher（GitHub mode）。
+
+    self-PR (PR author == authenticated user) では ``gh pr review --approve``
+    / ``--request-changes`` が GitHub API ``Can not approve your own pull
+    request`` / ``Can not request changes on your own pull request`` で 422
+    拒否されるため、 ``<!-- kaji-review: state=APPROVED|CHANGES_REQUESTED -->``
+    marker 付き comment を Issue comments API に投稿することで review シグナル
+    を表現する。
+
+    非 self-PR では従来通り ``gh pr review --approve|--request-changes`` を委譲する。
+    """
+    p = argparse.ArgumentParser(prog="kaji pr review", add_help=True)
+    p.add_argument("pr_id", type=str, nargs="?", default=None)
+    state_group = p.add_mutually_exclusive_group(required=True)
+    state_group.add_argument("-a", "--approve", action="store_true")
+    state_group.add_argument(
+        "-r",
+        "--request-changes",
+        dest="request_changes",
+        action="store_true",
+    )
+    p.add_argument("-b", "--body", default=None, type=str)
+    p.add_argument("-F", "--body-file", dest="body_file", default=None, type=str)
+    # `gh pr review` の inherited flag `-R/--repo` を吸収する。user 明示の
+    # `--repo owner/name` は config 由来 `repo_override` より優先する。これを
+    # unknown 扱いにすると self-PR fallback がスキップされ、`Can not approve
+    # your own pull request` が再発するため（codex review 指摘）。
+    p.add_argument("-R", "--repo", dest="repo", default=None, type=str)
+    ns, unknown = p.parse_known_args(rest)
+
+    # self-PR fallback は ASCII decimal の PR 番号 + 既知 flag のみで成立する。
+    # URL/branch target、PR 省略（current branch 解決）、未認識 flag
+    # の場合は従来契約を保つため `gh pr review` への passthrough にフォールバック
+    # する（self-PR fallback はかけない）。
+    if ns.pr_id is None or not _is_ascii_decimal(ns.pr_id) or unknown:
+        return _forward_to_gh("pr", ["review", *rest], repo=repo_override)
+
+    # user 明示 `--repo` を config override より優先する。
+    effective_repo_override = ns.repo if ns.repo else repo_override
+    try:
+        body = _read_body_arg(ns.body, ns.body_file)
+    except ValueError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+    except OSError as exc:
+        # `--body-file` の不在 / 読取不能 (`FileNotFoundError` /
+        # `PermissionError` 等) を未処理例外として露出させず、制御された
+        # 診断 + `EXIT_INVALID_INPUT` に変換する。`--request-changes` を
+        # `_github_pr_review` に routing したことで、従来 `gh pr review`
+        # passthrough が返していた制御エラーが traceback に置き換わる回帰を
+        # 防ぐ（Issue #199 review feedback）。
+        sys.stderr.write(f"Error: cannot read --body-file {ns.body_file!r}: {exc}\n")
+        return EXIT_INVALID_INPUT
+    if body is None:
+        body = ""
+
+    # body 必須契約: --request-changes は self / 非 self 一貫で body 必須
+    # （GitHub REST API event=REQUEST_CHANGES の body parameter requirement）。
+    # subprocess 呼び出し前に fail-fast することで `gh api user` / `gh pr view`
+    # を無駄に叩かない。--approve は GitHub API 側で body optional のため
+    # 本 validation を適用せず、Issue #186 の既存契約「--approve + 空 body は
+    # marker のみで rc=0」を維持する。
+    if ns.request_changes and not body.strip():
+        sys.stderr.write(
+            "Error: --request-changes requires --body or --body-file with non-empty content.\n"
+        )
+        return EXIT_INVALID_INPUT
+
+    if shutil.which("gh") is None:
+        sys.stderr.write(_GH_MISSING_GUIDANCE)
+        return EXIT_RUNTIME_ERROR
+    repo = _detect_repo(override=effective_repo_override)
+    if repo is None:
+        sys.stderr.write(
+            "Error: failed to detect current repository.\n"
+            "Run 'gh repo view --json nameWithOwner' in a checked-out repo first.\n"
+        )
+        return EXIT_RUNTIME_ERROR
+
+    pr_author = _gh_capture_value(
+        ["pr", "view", ns.pr_id, "--repo", repo, "--json", "author", "--jq", ".author.login"]
+    )
+    if pr_author is None:
+        return EXIT_RUNTIME_ERROR
+    me = _gh_capture_value(["api", "user", "--jq", ".login"])
+    if me is None:
+        return EXIT_RUNTIME_ERROR
+    is_self = pr_author == me
+
+    state = "APPROVED" if ns.approve else "CHANGES_REQUESTED"
+    marker = build_kaji_review_marker(state)
+    marked_body = f"{marker}\n{body}"
+
+    if is_self:
+        return _gh_post_issue_comment_silent(repo=repo, pr_id=ns.pr_id, body=marked_body)
+
+    flag = "--approve" if ns.approve else "--request-changes"
+    gh_args = ["review", ns.pr_id, flag]
+    if body:
+        gh_args.extend(["--body", body])
+    return _forward_to_gh("pr", gh_args, repo=repo)
+
+
+def _handle_pr(raw_args: list[str]) -> int:
+    """Two-stage dispatch for ``kaji pr``.
+
+    builtin sub (``review-comments`` / ``reviews`` / ``reply-to-comment``) →
+    dedicated handler; otherwise fall back to ``gh pr`` passthrough.
+
+    Phase 4: ``provider.type='local'`` 配下では bare-provider エラーで
+    fail-fast する。``_PR_BUILTIN_SUBCOMMANDS`` （``gh api`` 直叩き）も
+    同じガードで止める。GitHub mode の挙動は Phase 3-e と bit-exact に
+    維持する。
+
+    Note: ``kaji pr --help`` / ``-h`` は本関数に到達せず、argparse 上位の
+    ``unrecognized arguments`` エラーで先に止まる（``_register_pr`` が
+    ``add_help=False`` + ``REMAINDER`` で登録されている既存挙動）。
+    bare provider 配下でも GitHub mode でも同じ。設計書 § 1 設計判断
+    「`kaji pr --help` を bare で見せない」要件は本挙動で満たされる。
+    """
+    try:
+        config = _load_config_for_dispatch()
+    except (ConfigLoadError, ConfigNotFoundError) as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    try:
+        provider = get_provider(config)
+    except ValueError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    if isinstance(provider, LocalProvider):
+        sys.stderr.write(_PR_BARE_PROVIDER_ERROR)
+        return EXIT_INVALID_INPUT
+
+    repo_override: str | None = None
+    if config.provider is not None and config.provider.type == "github":
+        if not config.provider.github.repo:
+            sys.stderr.write(
+                "Error: provider.type='github' requires provider.github.repo (e.g. 'owner/name').\n"
+            )
+            return EXIT_INVALID_INPUT
+        repo_override = config.provider.github.repo
+    del provider  # PR routing は config 経由で済む
+
+    args = list(raw_args)
+    if args and args[0] == "--":
+        args = args[1:]
+    if (
+        args
+        and args[0] == "review"
+        and (_has_approve_flag(args[1:]) or _has_request_changes_flag(args[1:]))
+    ):
+        return _github_pr_review(args[1:], repo_override=repo_override)
+    # review-poll は workflow 専用 step（#234 で exec step 化）。repo は
+    # review_poll_entry が KAJI_GIT_REMOTE→`git remote get-url` から一意に
+    # 解決するため、CLI `-R` / config `repo_override` のいずれも受理しない。
+    # 他 builtin と違い repo_override を渡さないのはこのため（gh-api 直叩き
+    # builtin ではないので _PR_BUILTIN_SUBCOMMANDS からも除外している）。
+    # bare-provider ガードと repo 必須検証は上で通過済みなので挙動は不変。
+    if args and args[0] == "review-poll":
+        return _run_pr_review_poll(args[1:])
+    if args and args[0] in _PR_BUILTIN_SUBCOMMANDS:
+        return _dispatch_pr_builtin(args[0], args[1:], repo_override=repo_override)
+    return _forward_to_gh("pr", raw_args, repo=repo_override)
+
+
+def _emit_provider_overlay_divergence_warning(config: KajiConfig) -> None:
+    """provider overlay の worktree 間ズレを検出したら stderr に WARN を出す。
+
+    overlay が無い feature worktree から provider 解決が tracked 値へ沈黙で
+    フォールバックし、かつ main worktree の overlay と食い違う場合のみ発火する。
+    exit code・標準出力には影響しない。
+    """
+    warning = provider_overlay_divergence_warning(config)
+    if warning is not None:
+        sys.stderr.write(warning + "\n")
+
+
+def _load_config_for_dispatch() -> KajiConfig:
+    """Config を読み込む（``kaji issue`` / ``kaji pr`` dispatch 用）。
+
+    Phase 3-e: ``ConfigNotFoundError`` も propagate する（fail-fast 化）。
+    Phase 3-c までの「config 不在 → legacy gh passthrough」は廃止。
+    呼出側 dispatcher で ``ConfigNotFoundError`` / ``ConfigLoadError`` を
+    catch して exit 2 を返す契約。
+    """
+    config = KajiConfig.discover(start_dir=Path.cwd())
+    _emit_provider_overlay_divergence_warning(config)
+    return config
+
+
+def _handle_issue(raw_args: list[str]) -> int:
+    """``kaji issue`` の dispatcher。
+
+    Phase 3-c:
+
+    - ``provider.type == "local"`` → ``LocalProvider`` 経由の structured CRUD
+    - ``provider.type == "github"`` → ``gh issue`` passthrough。ただし
+      ``[provider.github] repo`` を ``--repo`` で強制注入する（review #3 反映）
+    - ``[provider]`` 未設定 → WARN + Phase 1 互換 passthrough（``--repo`` 無し）
+
+    fail-fast 経路（review #3 反映）:
+
+    - 壊れた config → exit 2
+    - ``provider`` 設定値の不整合（``machine_id`` 不在 / ``repo`` 不在等） → exit 2
+    """
+    try:
+        config = _load_config_for_dispatch()
+    except (ConfigLoadError, ConfigNotFoundError) as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    try:
+        provider = get_provider(config)
+    except ValueError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    # ``context`` subcommand は provider 共通で provider.resolve_issue_context()
+    # を呼ぶ helper（issue local-p1-17）。``gh issue context`` は存在しない
+    # ため、GitHub passthrough 前に捕捉する。
+    args = list(raw_args)
+    if args and args[0] == "--":
+        args = args[1:]
+    if args and args[0] == "context":
+        return _handle_issue_context(provider, args[1:])
+    # ``prepend-note`` も ``gh issue`` に存在しない provider 共通 helper のため、
+    # GitHub passthrough 前に捕捉する（Issue #200）。
+    if args and args[0] == "prepend-note":
+        return _handle_issue_prepend_note(provider, args[1:])
+
+    if isinstance(provider, LocalProvider):
+        return _handle_issue_local(provider, raw_args)
+    # verdict marker 付与要求（`--verdict-step` / `--verdict-status`）は gh へ
+    # passthrough せず構造化経路へ振り分ける。gh issue comment は verdict
+    # フラグを知らないため passthrough は unknown flag で fail するし、marker
+    # 合成を CLI 層で決定的に行う必要がある（ADR 008 決定 3）。
+    if args and args[0] == "comment" and _has_verdict_flags(args):
+        return _github_issue_comment_with_verdict(provider, args[1:])
+    # GitHubProvider 経路: 設定 repo を --repo で強制注入し cwd 推論を防ぐ。
+    # `--commit` は LocalProvider 専用フラグ（.kaji/issues/<id>/ への永続化と
+    # commit を atomic 化する用途）。skill は provider 型を意識せず付与できる
+    # ように設計したので、github mode では silent に剥がして gh に forward する
+    # （gh CLI に誤って渡ると unknown flag で fail する）。
+    forwarded = [a for a in raw_args if a != "--commit"]
+    assert config.provider is not None  # for type checker
+    return _forward_to_gh("issue", forwarded, repo=config.provider.github.repo)
+
+
+def _github_issue_comment_with_verdict(provider: object, rest: list[str]) -> int:
+    """``kaji issue comment <id> ... --verdict-step S --verdict-status ST`` (github)。
+
+    verdict marker を要求する comment は gh passthrough せず、marker を 1 行目
+    に前置した body を ``GitHubProvider.comment_issue`` で投稿する（repo は
+    provider が ``--repo`` で注入する）。``--commit`` は local 専用のため github
+    では silent に無視する（passthrough 経路と同じ扱い）。
+
+    片方のみのフラグ / 不正語彙 / body 不在は ``EXIT_INVALID_INPUT``（fail-loud）。
+    """
+    from .providers.github import GitHubProvider
+
+    assert isinstance(provider, GitHubProvider)  # github 経路のみ到達
+    p = argparse.ArgumentParser(prog="kaji issue comment", add_help=True)
+    p.add_argument("issue_id", type=str)
+    p.add_argument("--body", default=None, type=str)
+    p.add_argument("--body-file", dest="body_file", default=None, type=str)
+    # `--commit` は github では no-op（local 専用）だが、skill が provider 型を
+    # 意識せず付与できるよう受理して無視する。
+    p.add_argument("--commit", action="store_true")
+    p.add_argument("--verdict-step", dest="verdict_step", default=None, type=str)
+    p.add_argument("--verdict-status", dest="verdict_status", default=None, type=str)
+    ns = p.parse_args(rest)
+    try:
+        body = _read_body_arg(ns.body, ns.body_file)
+    except ValueError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+    except OSError as exc:
+        sys.stderr.write(f"Error: cannot read --body-file {ns.body_file!r}: {exc}\n")
+        return EXIT_INVALID_INPUT
+    if body is None:
+        sys.stderr.write("Error: 'kaji issue comment' requires --body or --body-file\n")
+        return EXIT_INVALID_INPUT
+    try:
+        marker = _resolve_verdict_marker(ns.verdict_step, ns.verdict_status)
+    except ValueError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+    # 本経路は `_has_verdict_flags` 検出後にのみ到達するため marker は非 None。
+    assert marker is not None
+    marked_body = f"{marker}\n{body}"
+    try:
+        provider.comment_issue(ns.issue_id, marked_body)
+    except GitHubProviderError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+    return EXIT_OK
+
+
+# ---------- LocalProvider dispatch ----------
+
+
+def _resolve_local_id(provider: LocalProvider, raw: str, *, write: bool) -> ResolvedId | int:
+    """``normalize_id`` 経由で input id を `ResolvedId` に解決する。
+
+    Phase 3-c の契約（review #1 反映）:
+
+    - ``"153"``       → ``local-<machine_id>-153``
+    - ``"pc1-3"``     → ``local-pc1-3``
+    - ``"local-..."`` → そのまま
+    - ``"gh:N"``      → remote_cache（read-only。write 系で受理 → exit 2）
+
+    解決失敗 / write 拒否は ``EXIT_INVALID_INPUT`` を返す。
+    """
+    try:
+        rid = normalize_id(raw, provider_name="local", machine_id=provider.machine_id)
+    except ValueError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+    if rid.kind == "remote_cache" and write:
+        sys.stderr.write(
+            f"Error: cannot modify {raw!r} under provider.type='local'. "
+            f"Cached GitHub issues (gh:N) are read-only.\n"
+        )
+        return EXIT_INVALID_INPUT
+    return rid
+
+
+def _read_body_arg(body: str | None, body_file: str | None) -> str | None:
+    """``--body`` / ``--body-file`` を解決する。両方指定 / 不在の扱いは呼出側。
+
+    ``body_file == "-"`` で stdin、それ以外はファイル読み込み。
+    """
+    if body is not None and body_file is not None:
+        raise ValueError("--body and --body-file are mutually exclusive")
+    if body is not None:
+        return body
+    if body_file is None:
+        return None
+    if body_file == "-":
+        return sys.stdin.read()
+    return Path(body_file).read_text(encoding="utf-8")
+
+
+def _resolve_verdict_marker(step: str | None, status: str | None) -> str | None:
+    """``--verdict-step`` / ``--verdict-status`` から marker 行を解決する。
+
+    両フラグは同時必須（片方のみは契約違反）。両方 ``None`` の従来呼び出しは
+    ``None`` を返し、呼出側は body を一切変更しない。
+
+    Returns:
+        marker 文字列（1 行目に前置する）、または verdict フラグ未指定なら ``None``。
+
+    Raises:
+        ValueError: 片方のみ指定 / 不正な step・status 語彙（fail-loud）。
+            呼出側で ``EXIT_INVALID_INPUT`` にマップする。
+    """
+    if step is None and status is None:
+        return None
+    if step is None or status is None:
+        raise ValueError("--verdict-step and --verdict-status must be specified together")
+    return build_kaji_verdict_marker(step, status)
+
+
+def _has_verdict_flags(args: list[str]) -> bool:
+    """``args`` に verdict marker フラグ（``--verdict-step`` / ``--verdict-status``）が含まれるか。
+
+    github passthrough を構造化経路へ切替えるかの判定に使う。``--flag=value``
+    形式も検出する。
+    """
+    return any(
+        a in ("--verdict-step", "--verdict-status")
+        or a.startswith("--verdict-step=")
+        or a.startswith("--verdict-status=")
+        for a in args
+    )
+
+
+def _apply_jq(json_text: str, expr: str) -> tuple[str, int]:
+    """Python ``jq`` package で ``json_text`` に式を適用する（``gh --jq`` 互換 raw 出力）。
+
+    Phase 3-d preflight: system ``jq`` バイナリ依存を撤去し、PyPI ``jq``
+    package を runtime dependency に格上げした（design.md / phase3d-preflight
+    § 2）。
+
+    `gh --jq` および `jq -r` と互換な raw 出力ルール:
+
+    - string         → 改行を含めてそのまま出力 + 末尾 newline 1
+    - number / bool  → decimal / ``true`` / ``false`` + newline
+    - null           → 空行（newline のみ）
+    - object / array → compact JSON + newline
+    - stream         → 各結果を上記ルールで整形し連結
+    - empty stream   → 出力なし、exit 0
+    - syntax/runtime → exit 3、stderr に jq 例外メッセージを user-facing 整形
+
+    Skill 群は ``CURRENT_BODY=$(kaji issue view N --json body -q '.body')``
+    のように shell 変数代入で raw 値を期待しているため、string は quote 無しで
+    出さなければならない。
+    """
+    import json as _json
+
+    try:
+        data = _json.loads(json_text)
+    except _json.JSONDecodeError as exc:
+        sys.stderr.write(f"Error: invalid JSON passed to jq: {exc}\n")
+        return "", EXIT_RUNTIME_ERROR
+
+    try:
+        import jq as _jq  # type: ignore[import-not-found]
+    except ImportError as exc:  # pragma: no cover — runtime dependency 化後は不到達
+        sys.stderr.write(
+            "Error: Python 'jq' package is required but not installed. "
+            f"Reinstall kaji ('uv sync' / 'pip install kaji'). Detail: {exc}\n"
+        )
+        return "", EXIT_RUNTIME_ERROR
+
+    try:
+        program = _jq.compile(expr)
+    except ValueError as exc:
+        sys.stderr.write(f"Error: jq compile failed: {exc}\n")
+        return "", EXIT_RUNTIME_ERROR
+
+    try:
+        results = program.input_value(data).all()
+    except ValueError as exc:
+        sys.stderr.write(f"Error: jq runtime error: {exc}\n")
+        return "", EXIT_RUNTIME_ERROR
+
+    return _format_jq_results(results), EXIT_OK
+
+
+def _format_jq_results(results: list[object]) -> str:
+    """``jq.compile(...).all()`` の結果配列を ``jq -r`` 互換 raw 出力に整形する。
+
+    各 result を 1 行として扱い末尾 newline を付ける。string は raw、null は
+    空行、object/array は compact JSON にする(design.md § jq 互換 / phase3d
+    preflight § 2 出力契約)。
+    """
+    import json as _json
+
+    parts: list[str] = []
+    for value in results:
+        if value is None:
+            parts.append("")
+        elif isinstance(value, str):
+            parts.append(value)
+        elif isinstance(value, bool):
+            parts.append("true" if value else "false")
+        elif isinstance(value, (int, float)):
+            parts.append(_json.dumps(value))
+        else:
+            parts.append(_json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+    if not parts:
+        return ""
+    return "\n".join(parts) + "\n"
+
+
+def _issue_to_json_dict(issue: object, *, include_comments: bool = True) -> dict[str, object]:
+    """``Issue`` → gh ``issue view --json ...`` 互換の dict に整形。"""
+    from .providers.models import Issue as _Issue  # local import to avoid cycle
+
+    assert isinstance(issue, _Issue)
+    out: dict[str, object] = {
+        "number": issue.id,
+        "title": issue.title,
+        "body": issue.body,
+        "state": issue.state,
+        "labels": [
+            {"name": label.name, "description": label.description, "color": label.color}
+            for label in issue.labels
+        ],
+    }
+    if include_comments:
+        out["comments"] = [
+            {"author": c.author, "body": c.body, "createdAt": c.created_at} for c in issue.comments
+        ]
+    return out
+
+
+def _emit_json(payload: object, *, jq_expr: str | None) -> int:
+    """JSON を ``--jq`` 経由で整形して stdout に書く。"""
+    import json as _json
+
+    text = _json.dumps(payload, ensure_ascii=False)
+    if jq_expr is None:
+        sys.stdout.write(text + "\n")
+        return EXIT_OK
+    out, rc = _apply_jq(text, jq_expr)
+    if rc != EXIT_OK:
+        return rc
+    # jq は末尾 newline を出すため二重出力を避けて write
+    sys.stdout.write(out)
+    return EXIT_OK
+
+
+def build_worktree_note_body(current_body: str, *, worktree: str, branch: str) -> str:
+    """``> [!NOTE]`` メタブロックを ``current_body`` 先頭へ決定的に合成する。
+
+    ``/issue-start`` Step 4 はかつて multi-line bash heredoc でメタブロックと既存
+    本文を結合していたため、エージェントの multi-line 忠実度に依存し、Haiku 等で
+    blockquote と本文 heading の境界 blank line が脱落していた（Issue #200 OB）。
+    本関数は blank line を Python 文字列リテラル ``\\n\\n`` に固定し、モデル非依存に
+    レイアウトを保証する。
+
+    Args:
+        current_body: 現在の Issue 本文。
+        worktree: NOTE に載せる worktree 相対パスの basename（例 ``kaji-fix-200``）。
+        branch: ブランチ名（例 ``fix/200``）。
+
+    Returns:
+        ``> [!NOTE]`` ブロック + 空行ちょうど 1 行 + 正規化済み本文。``current_body``
+        が空（改行のみを含む）の場合は NOTE ブロックのみ（末尾改行 1 つ）。
+    """
+    note = f"> [!NOTE]\n> **Worktree**: `../{worktree}`\n> **Branch**: `{branch}`"
+    # 本文先頭の余分な空行を剥がし、必ず空行 1 行だけを分離子として付与する。
+    body = current_body.lstrip("\n")
+    if not body:
+        return note + "\n"
+    return f"{note}\n\n{body}"
+
+
+def _handle_issue_prepend_note(provider: IssueProvider, rest: list[str]) -> int:
+    """``kaji issue prepend-note <id> --worktree W --branch B [--commit]``。
+
+    provider 共通: ``view_issue`` で現在本文を取得し、``build_worktree_note_body``
+    で NOTE ブロック + blank line + 本文を決定的に合成して ``edit_issue`` で更新する。
+    エージェントが multi-line 本文を組み立てる必要を排し、blank line 脱落
+    （Issue #200）をモデル非依存に防ぐ。
+
+    ``gh issue prepend-note`` は存在しないため、``context`` と同様に ``_handle_issue``
+    の provider 分岐より前で捕捉される。``--commit`` は local provider で ``issue.md``
+    を atomic commit する用途。github では silent に無視する（既存 ``edit`` と同契約）。
+    """
+    p = argparse.ArgumentParser(prog="kaji issue prepend-note", add_help=True)
+    p.add_argument("issue_id", type=str)
+    p.add_argument("--worktree", required=True, type=str)
+    p.add_argument("--branch", required=True, type=str)
+    p.add_argument(
+        "--commit",
+        action="store_true",
+        help=(
+            "Commit the resulting .kaji/issues/<id>/issue.md atomically "
+            "(local provider only; silently ignored for github)."
+        ),
+    )
+    ns = p.parse_args(rest)
+
+    # provider 別 ID 正規化（_handle_issue_context と同じ規則）
+    local_rid: ResolvedId | None = None
+    if isinstance(provider, LocalProvider):
+        rid_or_rc = _resolve_local_id(provider, ns.issue_id, write=True)
+        if isinstance(rid_or_rc, int):
+            return rid_or_rc
+        local_rid = rid_or_rc
+        issue_id_value = local_rid.value
+    else:
+        try:
+            rid = normalize_id(ns.issue_id, provider_name="github", machine_id=None)
+        except ValueError as exc:
+            sys.stderr.write(f"Error: {exc}\n")
+            return EXIT_INVALID_INPUT
+        issue_id_value = rid.value
+
+    try:
+        current = provider.view_issue(issue_id_value)
+        new_body = build_worktree_note_body(current.body, worktree=ns.worktree, branch=ns.branch)
+        provider.edit_issue(issue_id_value, body=new_body)
+    except IssueNotFoundError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+    except GitHubProviderError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+    except (LocalProviderError, ValueError) as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    # local provider の --commit のみ issue.md を atomic commit。github は silent 無視。
+    if ns.commit and isinstance(provider, LocalProvider) and local_rid is not None:
+        issue_dir = provider._resolve_issue_dir(issue_id_value)
+        _commit_local_issue_change(
+            provider=provider,
+            rid=local_rid,
+            action="edit",
+            paths=[issue_dir / "issue.md"],
+        )
+    return EXIT_OK
+
+
+def _handle_issue_context(provider: IssueProvider, rest: list[str]) -> int:
+    """``kaji issue context <id>`` の実装（local / github 共通）。
+
+    薄いラッパー: ``provider.resolve_issue_context()`` の戻り値を JSON
+    シリアライズして stdout に書く。``--json FIELDS`` でキー絞り込み、
+    ``-q EXPR`` で jq 式適用。未知 ``--json`` キーは ``null`` を返す
+    （``_local_issue_view`` の ``full.get(k)`` 挙動に揃える）。
+
+    issue local-p1-17 で導入。skill (`/issue-start`) が context 正本と
+    同期するために参照する。
+    """
+    p = argparse.ArgumentParser(prog="kaji issue context", add_help=True)
+    p.add_argument("issue_id", type=str)
+    p.add_argument("--json", dest="json_fields", default=None, type=str)
+    p.add_argument("--jq", "-q", dest="jq_expr", default=None, type=str)
+    ns = p.parse_args(rest)
+
+    # provider 別 ID 正規化（_resolve_local_id を local 経路で再利用）
+    if isinstance(provider, LocalProvider):
+        rid_or_rc = _resolve_local_id(provider, ns.issue_id, write=False)
+        if isinstance(rid_or_rc, int):
+            return rid_or_rc
+        issue_id_value = rid_or_rc.value
+    else:
+        # GitHub: 数値 / ``gh:N`` を受理し github の数値 ID に正規化
+        try:
+            rid = normalize_id(ns.issue_id, provider_name="github", machine_id=None)
+        except ValueError as exc:
+            sys.stderr.write(f"Error: {exc}\n")
+            return EXIT_INVALID_INPUT
+        issue_id_value = rid.value
+
+    try:
+        ctx = provider.resolve_issue_context(issue_id_value)
+    except IssueNotFoundError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+    except GitHubProviderError as exc:
+        # GitHub 経路の CLI 不在 / 非 0 終了 / 不正 JSON 等を
+        # user-facing なエラー出力 + EXIT_RUNTIME_ERROR に正規化する。
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+    except (LocalProviderError, ValueError) as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    payload: dict[str, object] = dataclasses.asdict(ctx)
+    if ns.json_fields:
+        fields = [f.strip() for f in ns.json_fields.split(",") if f.strip()]
+        if fields:
+            payload = {k: payload.get(k) for k in fields}
+
+    return _emit_json(payload, jq_expr=ns.jq_expr)
+
+
+_LOCAL_ISSUE_SUBS = {"view", "create", "edit", "comment", "close", "list", "context"}
+
+
+def _handle_issue_local(provider: LocalProvider, raw_args: list[str]) -> int:
+    """``kaji issue`` の LocalProvider 経由 CRUD dispatcher。
+
+    対応 sub: ``view`` / ``create`` / ``edit`` / ``comment`` / ``close`` /
+    ``list``。Skill が現在使用中のフラグはすべて受理する（review #2 反映）:
+
+    - ``--json FIELDS`` / ``--jq EXPR`` / ``-q EXPR``
+    - ``--comments``（plain view）
+    - ``--body`` / ``--body-file PATH`` (``-`` で stdin)
+    """
+    args = list(raw_args)
+    if args and args[0] == "--":
+        args = args[1:]
+    if not args:
+        sys.stderr.write(
+            "Error: 'kaji issue' requires a subcommand under provider.type='local'. "
+            f"Supported: {', '.join(sorted(_LOCAL_ISSUE_SUBS))}.\n"
+        )
+        return EXIT_INVALID_INPUT
+    sub, rest = args[0], args[1:]
+    if sub not in _LOCAL_ISSUE_SUBS:
+        sys.stderr.write(
+            f"Error: 'kaji issue {sub}' is not supported under provider.type='local' "
+            f"(Phase 3-c). Supported: {', '.join(sorted(_LOCAL_ISSUE_SUBS))}.\n"
+        )
+        return EXIT_INVALID_INPUT
+    from .sync import SyncError
+
+    try:
+        if sub == "view":
+            return _local_issue_view(provider, rest)
+        if sub == "create":
+            return _local_issue_create(provider, rest)
+        if sub == "edit":
+            return _local_issue_edit(provider, rest)
+        if sub == "comment":
+            return _local_issue_comment(provider, rest)
+        if sub == "close":
+            return _local_issue_close(provider, rest)
+        if sub == "context":
+            # 通常 top-level `_handle_issue` が context を先回り捕捉するが、
+            # `_handle_issue_local` が直接呼ばれた場合の保険として委譲する。
+            return _handle_issue_context(provider, rest)
+        # sub == "list"
+        return _local_issue_list(provider, rest)
+    except IssueReadOnlyError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+    except IssueNotFoundError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+    except SyncError as exc:
+        # Issue #191: list_issues / view_cached_issue が legacy forge cache を
+        # 検出した場合の fail-fast 経路。sync コマンド系と同じ contract
+        # (EXIT_INVALID_INPUT) に揃える。
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+    except (LocalProviderError, ValueError) as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+    except OSError as exc:
+        sys.stderr.write(f"Error: I/O failure: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+
+
+def _local_issue_view(provider: LocalProvider, rest: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="kaji issue view", add_help=True)
+    p.add_argument("issue_id", type=str)
+    p.add_argument("--json", dest="json_fields", default=None, type=str)
+    p.add_argument("--jq", "-q", dest="jq_expr", default=None, type=str)
+    p.add_argument("--comments", action="store_true")
+    ns = p.parse_args(rest)
+
+    rid_or_rc = _resolve_local_id(provider, ns.issue_id, write=False)
+    if isinstance(rid_or_rc, int):
+        return rid_or_rc
+    rid = rid_or_rc
+
+    if rid.kind == "remote_cache":
+        issue = provider.view_cached_issue(rid.value)
+    else:
+        issue = provider.view_issue(rid.value)
+
+    json_mode = ns.json_fields is not None or ns.jq_expr is not None
+    if json_mode:
+        full = _issue_to_json_dict(issue)
+        if ns.json_fields:
+            fields = [f.strip() for f in ns.json_fields.split(",") if f.strip()]
+            payload: object = {k: full.get(k) for k in fields} if fields else full
+        else:
+            payload = full
+        return _emit_json(payload, jq_expr=ns.jq_expr)
+
+    sys.stdout.write(f"# {issue.title}\n\n{issue.body}\n")
+    if ns.comments and issue.comments:
+        for c in issue.comments:
+            header = f"[{c.author or 'unknown'} @ {c.created_at or 'n/a'}]"
+            sys.stdout.write(f"\n---\n{header}\n{c.body}\n")
+    return EXIT_OK
+
+
+def _local_issue_create(provider: LocalProvider, rest: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="kaji issue create", add_help=True)
+    p.add_argument("--title", required=True, type=str)
+    p.add_argument("--body", default=None, type=str)
+    p.add_argument("--body-file", dest="body_file", default=None, type=str)
+    p.add_argument("--label", action="append", default=[], type=str)
+    p.add_argument(
+        "--slug",
+        default=None,
+        type=str,
+        help="kebab-case slug (optional; derived from title when omitted)",
+    )
+    ns = p.parse_args(rest)
+    body = _read_body_arg(ns.body, ns.body_file)
+    if body is None:
+        raise ValueError("'kaji issue create' requires --body or --body-file")
+    issue = provider.create_issue(title=ns.title, body=body, labels=ns.label, slug=ns.slug)
+    sys.stdout.write(f"{issue.id}\n")
+    return EXIT_OK
+
+
+def _commit_local_issue_change(
+    *,
+    provider: LocalProvider,
+    rid: ResolvedId,
+    action: str,
+    paths: list[Path],
+) -> None:
+    """Commit only the given ``paths`` atomically, leaving other staged changes untouched.
+
+    Two-step flow:
+      1. ``git add <paths>`` — register untracked targets (new comment markdown)
+         and update the index entry for tracked targets (modified ``issue.md``).
+         This only touches the listed paths; other entries already staged in the
+         user's index are not modified.
+      2. ``git commit --only -- <paths>`` — build a temporary index from HEAD
+         plus the listed paths and commit it. Pre-existing staged changes for
+         paths *not* listed are excluded from HEAD and remain staged in the
+         user's index after the commit (per ``man git-commit`` § ``--only``).
+
+    Together these guarantee the atomicity requirement: the resulting commit
+    contains only ``paths`` even when the user had unrelated files staged.
+    """
+    rel_paths = [str(p.relative_to(provider.repo_root)) for p in paths]
+    issue_ref = _format_issue_ref(rid.value)
+    msg = f"chore(local): {action} for {issue_ref}"
+    subprocess.run(
+        ["git", "add", "--", *rel_paths],
+        cwd=provider.repo_root,
+        check=True,
+    )
+    # `LocalProvider.edit_issue` は同一 body 再送でも `issue.md` を再書込するため、
+    # `kaji issue edit --commit` が no-op edit で呼ばれた場合は staged diff が空に
+    # なる。`git commit --only` をそのまま呼ぶと `nothing to commit` で exit 1 に
+    # 落ちるため、対象 path の staged diff を確認して空なら commit を skip する。
+    # `git diff --cached --quiet` の exit code: 0=差分なし / 1=差分あり / >1=エラー。
+    diff_check = subprocess.run(
+        ["git", "diff", "--cached", "--quiet", "--", *rel_paths],
+        cwd=provider.repo_root,
+    )
+    if diff_check.returncode == 0:
+        return
+    if diff_check.returncode != 1:
+        diff_check.check_returncode()
+    subprocess.run(
+        ["git", "commit", "--only", "-m", msg, "--", *rel_paths],
+        cwd=provider.repo_root,
+        check=True,
+    )
+
+
+def _local_issue_edit(provider: LocalProvider, rest: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="kaji issue edit", add_help=True)
+    p.add_argument("issue_id", type=str)
+    p.add_argument("--title", default=None, type=str)
+    p.add_argument("--body", default=None, type=str)
+    p.add_argument("--body-file", dest="body_file", default=None, type=str)
+    p.add_argument("--add-label", dest="add_label", action="append", default=[], type=str)
+    p.add_argument("--remove-label", dest="remove_label", action="append", default=[], type=str)
+    p.add_argument(
+        "--commit",
+        action="store_true",
+        help=(
+            "Commit the resulting .kaji/issues/<id>/issue.md atomically after "
+            "persistence (uses `git commit --only` so other staged changes are "
+            "not included in the new commit)."
+        ),
+    )
+    ns = p.parse_args(rest)
+    rid_or_rc = _resolve_local_id(provider, ns.issue_id, write=True)
+    if isinstance(rid_or_rc, int):
+        return rid_or_rc
+    rid = rid_or_rc
+    body = _read_body_arg(ns.body, ns.body_file)
+    issue = provider.edit_issue(
+        rid.value,
+        title=ns.title,
+        body=body,
+        add_labels=ns.add_label,
+        remove_labels=ns.remove_label,
+    )
+    if ns.commit:
+        issue_dir = provider._resolve_issue_dir(issue.id)
+        _commit_local_issue_change(
+            provider=provider,
+            rid=rid,
+            action="edit",
+            paths=[issue_dir / "issue.md"],
+        )
+    return EXIT_OK
+
+
+def _local_issue_comment(provider: LocalProvider, rest: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="kaji issue comment", add_help=True)
+    p.add_argument("issue_id", type=str)
+    p.add_argument("--body", default=None, type=str)
+    p.add_argument("--body-file", dest="body_file", default=None, type=str)
+    p.add_argument(
+        "--commit",
+        action="store_true",
+        help=(
+            "Commit the resulting .kaji/issues/<id>/comments/<ts>-<machine>.md "
+            "atomically after persistence (uses `git commit --only` so other "
+            "staged changes are not included in the new commit)."
+        ),
+    )
+    p.add_argument("--verdict-step", dest="verdict_step", default=None, type=str)
+    p.add_argument("--verdict-status", dest="verdict_status", default=None, type=str)
+    ns = p.parse_args(rest)
+    rid_or_rc = _resolve_local_id(provider, ns.issue_id, write=True)
+    if isinstance(rid_or_rc, int):
+        return rid_or_rc
+    rid = rid_or_rc
+    body = _read_body_arg(ns.body, ns.body_file)
+    if body is None:
+        raise ValueError("'kaji issue comment' requires --body or --body-file")
+    # verdict marker（ADR 008 決定 3: cross-skill 契約を CLI 層に置く）。
+    # 片方のみ / 不正語彙は ValueError → _handle_issue_local が exit 2 にマップ。
+    marker = _resolve_verdict_marker(ns.verdict_step, ns.verdict_status)
+    if marker is not None:
+        body = f"{marker}\n{body}"
+    comment = provider.comment_issue(rid.value, body)
+    sys.stdout.write(f"{comment.seq}-{comment.machine_id}\n")
+    if ns.commit:
+        issue_dir = provider._resolve_issue_dir(rid.value)
+        comment_path = issue_dir / "comments" / f"{comment.seq}-{comment.machine_id}.md"
+        _commit_local_issue_change(
+            provider=provider,
+            rid=rid,
+            action="comment",
+            paths=[comment_path],
+        )
+    return EXIT_OK
+
+
+def _local_issue_close(provider: LocalProvider, rest: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="kaji issue close", add_help=True)
+    p.add_argument("issue_id", type=str)
+    p.add_argument("--reason", default=None, type=str)
+    ns = p.parse_args(rest)
+    rid_or_rc = _resolve_local_id(provider, ns.issue_id, write=True)
+    if isinstance(rid_or_rc, int):
+        return rid_or_rc
+    rid = rid_or_rc
+    provider.close_issue(rid.value, reason=ns.reason)
+    return EXIT_OK
+
+
+def _local_issue_list(provider: LocalProvider, rest: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="kaji issue list", add_help=True)
+    p.add_argument("--state", default="open", type=str, choices=["open", "closed", "all"])
+    p.add_argument("--label", action="append", default=[], type=str)
+    p.add_argument("--limit", default=None, type=int)
+    p.add_argument("--json", dest="json_fields", default=None, type=str)
+    p.add_argument("--jq", "-q", dest="jq_expr", default=None, type=str)
+    ns = p.parse_args(rest)
+    issues = provider.list_issues(state=ns.state, labels=ns.label or None, limit=ns.limit)
+    json_mode = ns.json_fields is not None or ns.jq_expr is not None
+    if json_mode:
+        items: list[dict[str, object]] = [
+            _issue_to_json_dict(i, include_comments=False) for i in issues
+        ]
+        if ns.json_fields:
+            fields = [f.strip() for f in ns.json_fields.split(",") if f.strip()]
+            if fields:
+                items = [{k: it.get(k) for k in fields} for it in items]
+        return _emit_json(items, jq_expr=ns.jq_expr)
+    for issue in issues:
+        sys.stdout.write(f"{issue.id}\t{issue.state}\t{issue.title}\n")
+    return EXIT_OK
+
+
+def cmd_config_provider_type(args: argparse.Namespace) -> int:
+    """Print resolved ``provider.type`` ("github" / "local") to stdout.
+
+    Phase 4 で導入。Skill / 自動化スクリプトが overlay 込みの provider type を
+    副作用なく取得するための read-only エントリ。``KajiConfig.discover()``
+    と ``get_provider()`` の検証を経由するため、`_handle_pr` / `_handle_issue`
+    / `cmd_run` と同じ config resolution path を共有する。
+
+    Exit codes:
+        0: 解決成功（stdout に ``"github\\n"`` / ``"local\\n"``）
+        2: config 不在 or 不正（stderr に診断メッセージ）
+    """
+    start_dir = args.workdir.resolve()
+    if not start_dir.is_dir():
+        print(
+            f"Error: --workdir '{args.workdir}' is not a valid directory",
+            file=sys.stderr,
+        )
+        return EXIT_INVALID_INPUT
+    try:
+        config = KajiConfig.discover(start_dir=start_dir)
+    except (ConfigNotFoundError, ConfigLoadError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    try:
+        get_provider(config)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    _emit_provider_overlay_divergence_warning(config)
+    sys.stdout.write(f"{actual_provider_type(config)}\n")
+    return EXIT_OK
+
+
+def cmd_sync_from_github(args: argparse.Namespace) -> int:
+    """``kaji sync from-github`` の dispatcher。
+
+    将来予約 flag（``--include-closed`` / ``--state`` / ``--since``）は exit 2 で
+    fail-fast する。
+    """
+    from .sync import SyncError, sync_from_github
+
+    if args.include_closed:
+        sys.stderr.write(
+            "error: --include-closed is not implemented in this release; "
+            "reopen tracking issue to add it.\n"
+        )
+        return EXIT_INVALID_INPUT
+    if args.state is not None:
+        sys.stderr.write(
+            "error: --state is not implemented in this release; "
+            "this command always fetches state=open.\n"
+        )
+        return EXIT_INVALID_INPUT
+    if args.since is not None:
+        sys.stderr.write(
+            "error: --since is not implemented in this release; "
+            "this command always performs a full sync.\n"
+        )
+        return EXIT_INVALID_INPUT
+
+    try:
+        config = KajiConfig.discover(start_dir=Path.cwd())
+    except (ConfigNotFoundError, ConfigLoadError) as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    try:
+        result = sync_from_github(
+            config=config,
+            repo_override=args.repo,
+            quiet=args.quiet,
+        )
+    except SyncError as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return EXIT_INVALID_INPUT
+    except OSError as exc:
+        sys.stderr.write(f"error: cache write failed: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+
+    sys.stdout.write(
+        f"Sync completed at {result.last_sync_at} "
+        f"({result.issue_count} issues, {result.pages_fetched} pages, "
+        f"{result.elapsed_seconds:.1f}s).\n"
+    )
+    return EXIT_OK
+
+
+def cmd_sync_status(args: argparse.Namespace) -> int:
+    """``kaji sync status`` の dispatcher (issue ``local-p1-8``)。"""
+    import json as _json
+
+    from .sync import SyncError, format_elapsed_human, read_sync_status
+
+    try:
+        config = KajiConfig.discover(start_dir=Path.cwd())
+    except (ConfigNotFoundError, ConfigLoadError) as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    try:
+        status = read_sync_status(config=config)
+    except SyncError as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    elapsed_human: str | None = (
+        format_elapsed_human(status.elapsed_seconds) if status.elapsed_seconds is not None else None
+    )
+
+    if args.json_mode:
+        payload: dict[str, object] = {
+            "forge": status.forge,
+            "repo": status.repo,
+            "last_sync_at": status.last_sync_at,
+            "elapsed_seconds": (
+                int(status.elapsed_seconds) if status.elapsed_seconds is not None else None
+            ),
+            "elapsed_human": elapsed_human,
+            "issue_count": status.issue_count,
+        }
+        sys.stdout.write(_json.dumps(payload, ensure_ascii=False) + "\n")
+        return EXIT_OK
+
+    forge_disp = status.forge or "(none)"
+    repo_disp = status.repo or "(none)"
+    last_disp = status.last_sync_at or "(never)"
+    if status.elapsed_seconds is None:
+        elapsed_disp = "n/a"
+    else:
+        elapsed_disp = f"{elapsed_human} ({int(status.elapsed_seconds)}s)"
+    sys.stdout.write(f"forge        {forge_disp}\n")
+    sys.stdout.write(f"repo         {repo_disp}\n")
+    sys.stdout.write(f"last_sync    {last_disp}\n")
+    sys.stdout.write(f"elapsed      {elapsed_disp}\n")
+    cache_glob = "gh-*.json"
+    sys.stdout.write(f"cached       {status.issue_count} ({cache_glob} under .kaji/cache/)\n")
     return EXIT_OK
 
 
@@ -266,10 +2341,32 @@ def main(argv: list[str] | None = None) -> int:
     parser = create_parser()
     args = parser.parse_args(argv)
 
+    if args.command == "recover":
+        return cmd_recover(args)
     if args.command == "run":
         return cmd_run(args)
     if args.command == "validate":
         return cmd_validate(args)
+    if args.command == "issue":
+        return _handle_issue(args.args)
+    if args.command == "pr":
+        return _handle_pr(args.args)
+    if args.command == "config":
+        if args.config_command == "provider-type":
+            return cmd_config_provider_type(args)
+        parser.print_help()
+        return EXIT_ABORT
+    if args.command == "sync":
+        if args.sync_command == "from-github":
+            return cmd_sync_from_github(args)
+        if args.sync_command == "status":
+            return cmd_sync_status(args)
+        parser.print_help()
+        return EXIT_ABORT
+    if args.command == "local":
+        from .local_init import cmd_local
+
+        return cmd_local(args)
 
     parser.print_help()
     return EXIT_ABORT

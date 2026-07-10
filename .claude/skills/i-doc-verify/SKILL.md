@@ -24,7 +24,8 @@ docs 修正後の確認を行う。
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_number` | int | GitHub Issue 番号 |
+| `issue_id` | str | 正規化済み Issue ID（GitHub 数値または local ID） |
+| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID） |
 | `step_id` | str | 現在のステップ ID |
 | `cycle_count` | int | 現在のイテレーション |
 | `max_iterations` | int | 上限回数 |
@@ -33,13 +34,15 @@ docs 修正後の確認を行う。
 ### 手動実行（スラッシュコマンド）
 
 ```
-$ARGUMENTS = <issue-number>
+$ARGUMENTS = <issue_id>
 ```
 
 ### 解決ルール
 
-コンテキスト変数 `issue_number` が存在すればそちらを使用。
-なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
+コンテキスト変数 `issue_id` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
+
+`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
 
 ## 前提知識の読み込み
 
@@ -50,10 +53,10 @@ $ARGUMENTS = <issue-number>
 
 1. 前回の `i-doc-review` / `i-doc-fix` コメントを確認
 2. 指摘事項ごとに OK / NG を判定
-3. 必要最小限で根拠となる実装 / docs / workflow / CLAUDE.md を再確認
+3. 必要最小限で根拠となる実装 / docs / workflow / AGENTS.md / CLAUDE.md を再確認
 4. 変更ファイルに絞ったリンクチェック結果を確認:
    ```bash
-   cd [worktree-absolute-path] && python3 scripts/check_doc_links.py [changed-markdown-files...]
+   cd [worktree_dir] && python3 scripts/check_doc_links.py [changed-markdown-files...]
    ```
 5. 新規発見事項があっても今回の判定には含めない
 6. 結果を Issue にコメント

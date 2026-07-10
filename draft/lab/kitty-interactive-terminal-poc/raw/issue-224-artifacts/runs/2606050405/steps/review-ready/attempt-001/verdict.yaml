@@ -1,0 +1,11 @@
+status: PASS
+reason: "Issue #224 は review-ready の共通観点および type:feature 追加観点を満たしているため、作業着手に進行可能。"
+evidence: |
+  Issue #224 の本文には `## 概要`, `## 目的`, `## 完了条件` が存在し、いずれも空ではない。
+  概要では `kaji run` の agent step に `interactive_terminal` runner を追加すること、対象ファイル/ディレクトリとして `kaji_harness/config.py`, `kaji_harness/runner.py`, `kaji_harness/cli.py`, `kaji_harness/verdict.py`, `kaji_harness/interactive_terminal.py`, `assets/interactive-terminal/wrapper.sh`, 関連テスト、docs 更新が列挙されている。
+  目的では現行 runner の実コマンド `claude -p --output-format stream-json --verbose` と `codex exec --json`、および Issue #220 / PR #221 / `docs/adr/005-artifact-primary-verdict.md` を根拠として、artifact-primary verdict resolution と attempt layout を前提にする理由が説明されている。
+  type ラベルは `type:feature` の 1 件のみで、追加観点 8/9 の対象として確定できる。
+  feature のユースケースは「`kaji run` 利用者が repository config または CLI option で `interactive_terminal` runner を選択できる」などの到達状態として具体化されている。
+  feature のスコープ境界は「本 Issue は `interactive_terminal` runner の追加だけを扱う」と明記され、既存 headless runner の削除、既存 headless runner の CLI 起動引数変更、handoff runner、kitty 以外の terminal backend、CI で real Claude / real Codex を実行するテスト等を実装しない対象として列挙している。
+  完了条件は config overlay、CLI option 優先順位、dispatch、invalid config fail-fast、kitty 未インストール時 fail-fast、wrapper 引数順、verdict polling、cleanup、Claude/Codex command、session fallback、docs 更新、`make check`、real kitty + real Claude/Codex 手動検証など、客観的に確認できる項目で構成されている。
+suggestion: "次の step_id=start に進み、worktree `/home/aki/dev/kaji-feat-224` の作成と Issue メタ情報追記を行う。"

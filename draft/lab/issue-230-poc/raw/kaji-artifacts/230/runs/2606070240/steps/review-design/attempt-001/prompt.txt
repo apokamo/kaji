@@ -1,0 +1,42 @@
+スキル `issue-review-design` を実行してください。
+
+## セッション開始プロトコル
+1. Issue #230 を読み、現在の進捗を把握する
+2. git log --oneline -10 で最近の変更を確認する
+3. 以下のコンテキスト変数を確認する
+4. 上記を踏まえて、スキルの指示に従って作業を実行する
+
+## コンテキスト変数
+- issue_id: 230
+- issue_ref: #230
+- step_id: review-design
+- issue_input: 230
+- branch_prefix: feat
+- branch_name: feat/230
+- worktree_dir: /home/aki/dev/kaji-feat-230
+- design_path: draft/design/issue-230-feat-harness-interactive-terminal-runner.md
+- provider_type: github
+- default_branch: main
+- git_remote: origin
+- verdict_path: /home/aki/dev/kaji/.kaji-artifacts/230/runs/2606070240/steps/review-design/attempt-001/verdict.yaml
+- cycle_count: 1
+- max_iterations: 3
+
+## 出力要件
+作業完了後、以下を必ず実施してください:
+
+1. 次の YAML を `/home/aki/dev/kaji/.kaji-artifacts/230/runs/2606070240/steps/review-design/attempt-001/verdict.yaml` に保存する（pure YAML。`---VERDICT---` delimiter は付けない）:
+   status: PASS | RETRY | ABORT のいずれか
+   reason: 判定理由
+   evidence: 具体的根拠（複数行可。抽象表現禁止）
+   suggestion: 次のアクション提案（ABORT/BACK 時必須）
+2. 作業報告 Issue comment の末尾に、同じ内容を次の `---VERDICT---` block として追記する。
+3. 互換のため、同じ block を stdout にも出力する:
+
+---VERDICT---
+status: PASS | RETRY | ABORT
+reason: "判定理由"
+evidence: |
+  具体的根拠（複数行可。抽象表現禁止）
+suggestion: "次のアクション提案"（ABORT/BACK時必須）
+---END_VERDICT---

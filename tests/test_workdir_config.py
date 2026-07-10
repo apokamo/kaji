@@ -407,12 +407,17 @@ class TestWorkdirRunnerIntegration:
     """WorkflowRunner passes correct workdir to execute_cli."""
 
     def _write_config(self, tmp_path: Path) -> Path:
+        import subprocess as _sp
+
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir(exist_ok=True)
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
+        # gl:21: provider.type='local' requires a git repo.
+        if not (tmp_path / ".git").exists():
+            _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
         return config_file
 
     def test_runner_passes_step_workdir(self, tmp_path: Path) -> None:
@@ -448,7 +453,7 @@ class TestWorkdirRunnerIntegration:
         ):
             runner = WorkflowRunner(
                 workflow=wf,
-                issue_number=1,
+                issue_number="1",
                 project_root=tmp_path,
                 artifacts_dir=tmp_path / ".kaji-artifacts",
                 config=config,
@@ -491,7 +496,7 @@ class TestWorkdirRunnerIntegration:
         ):
             runner = WorkflowRunner(
                 workflow=wf,
-                issue_number=1,
+                issue_number="1",
                 project_root=tmp_path,
                 artifacts_dir=tmp_path / ".kaji-artifacts",
                 config=config,
@@ -531,7 +536,7 @@ class TestWorkdirRunnerIntegration:
         ):
             runner = WorkflowRunner(
                 workflow=wf,
-                issue_number=1,
+                issue_number="1",
                 project_root=tmp_path,
                 artifacts_dir=tmp_path / ".kaji-artifacts",
                 config=config,
@@ -576,7 +581,7 @@ class TestWorkdirRunnerIntegration:
             mock_formatter.return_value = lambda raw: raw
             runner = WorkflowRunner(
                 workflow=wf,
-                issue_number=1,
+                issue_number="1",
                 project_root=tmp_path,
                 artifacts_dir=tmp_path / ".kaji-artifacts",
                 config=config,
@@ -602,7 +607,7 @@ class TestWorkdirRunnerIntegration:
         with patch("kaji_harness.runner.validate_skill_exists"):
             runner = WorkflowRunner(
                 workflow=wf,
-                issue_number=1,
+                issue_number="1",
                 project_root=tmp_path,
                 artifacts_dir=tmp_path / ".kaji-artifacts",
                 config=config,
@@ -627,7 +632,7 @@ class TestWorkdirConfigE2E:
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         skills_dir = project_dir / ".claude" / "skills" / "test-skill"
@@ -674,7 +679,7 @@ class TestWorkdirConfigE2E:
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         wf_path = tmp_path / "workflow.yaml"

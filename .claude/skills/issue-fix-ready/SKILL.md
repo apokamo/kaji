@@ -22,13 +22,15 @@ worktree 不要（メインリポジトリから実行可能）。
 ## 引数
 
 ```
-$ARGUMENTS = <issue-number>
+$ARGUMENTS = <issue_id>
 ```
 
 ### 解決ルール
 
-コンテキスト変数 `issue_number` が存在すればそちらを使用。
-なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
+コンテキスト変数 `issue_id` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
+
+`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
 
 ## 共通ルール
 
@@ -40,12 +42,12 @@ $ARGUMENTS = <issue-number>
 
 1. **Issue 本文の取得**:
    ```bash
-   gh issue view [issue-number] --json title,body,labels --jq '{title: .title, body: .body, labels: [.labels[].name]}'
+   kaji issue view [issue_id] --json title,body,labels --jq '{title: .title, body: .body, labels: [.labels[].name]}'
    ```
 
 2. **レビュー指摘の取得**:
    ```bash
-   gh issue view [issue-number] --comments
+   kaji issue view [issue_id] --comments
    ```
    最新の「レディネスレビュー」コメントから RETRY の指摘事項を抽出する。
 
@@ -65,10 +67,10 @@ $ARGUMENTS = <issue-number>
 
 ### Step 3: Issue 本文の修正
 
-`gh issue edit` で Issue 本文を更新する。
+`kaji issue edit` で Issue 本文を更新する。
 
 ```bash
-gh issue edit [issue-number] --body "[updated-body]"
+kaji issue edit [issue_id] --commit --body "[updated-body]"
 ```
 
 **注意事項**:
@@ -81,7 +83,7 @@ gh issue edit [issue-number] --body "[updated-body]"
 修正内容と反論を Issue コメントに記録する。
 
 ```bash
-gh issue comment [issue-number] --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit --body-file - <<'EOF'
 ## レディネス指摘への対応報告
 
 ### 対応済み
@@ -96,7 +98,7 @@ gh issue comment [issue-number] --body-file - <<'EOF'
 
 ### 次のステップ
 
-`/issue-review-ready [issue-number]` で再レビューを実施してください。
+`/issue-review-ready [issue_id]` で再レビューを実施してください。
 EOF
 ```
 
@@ -109,13 +111,13 @@ EOF
 
 | 項目 | 値 |
 |------|-----|
-| Issue | #[issue-number] |
+| Issue | [issue_ref] |
 | 対応済み | N 件 |
 | 見送り | M 件 |
 
 ### 次のステップ
 
-`/issue-review-ready [issue-number]` で再レビューを実施してください。
+`/issue-review-ready [issue_id]` で再レビューを実施してください。
 ```
 
 ## Verdict 出力

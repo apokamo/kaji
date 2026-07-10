@@ -5,7 +5,7 @@ docs-only Issue 向けのワークフロー。
 
 ## 対象
 
-- `docs/`, `README.md`, `CLAUDE.md`, `workflows/`, `.claude/skills/` の整理が主目的
+- `docs/`, `README.md`, `AGENTS.md`, `CLAUDE.md`, `.kaji/wf/`, `.claude/skills/` の整理が主目的
 - 実装変更なしで整合性を回復できる Issue
 
 コード変更が必要になった場合は docs-only のまま進めず、dev workflow に切り替える。
@@ -35,6 +35,18 @@ flowchart TB
     close --> done([end])
 ```
 
+> **provider 別の運用**: 上図の `/i-pr` は **github / local 両対応** のフロー
+> 中の最終 PR 作成 step。`provider=github` の場合は `/i-pr` がそのまま実行
+> される。`provider=local` の場合は `/i-pr` が Phase 4 の bare-provider
+> ガードで停止するため、以下のいずれかで対応する：
+>
+> - `kaji run .kaji/wf/docs-local.yaml <issue_id>` を使う
+>   （Phase 5 追加の local 用 workflow YAML。`kaji run` はファイル
+>   パス必須で basename 探索はしない。`/i-pr` 相当の step を持たず
+>   `/issue-close` で終端する）
+> - `/i-doc-update` 〜 `/issue-close` を Skill 単位で手動実行する
+>   （`docs/operations/local-mode-runbook.md` § 3.1a 参照）
+
 ## フェーズ概要
 
 | フェーズ | コマンド | 主な責務 |
@@ -47,7 +59,7 @@ flowchart TB
 | docs 修正 | `/i-doc-fix` | レビュー指摘への対応（新規指摘なし） |
 | docs 再確認 | `/i-doc-verify` | 修正確認（新規指摘不可） |
 | 最終チェック | `/i-doc-final-check` | docs-only として PR に進めるか最終判定（`make verify-docs`） |
-| PR 作成 | `/i-pr` | push、`gh pr create`（`--no-ff` merge 前提） |
+| PR 作成 | `/i-pr` | push、`kaji pr create`（`--no-ff` merge 前提） |
 | 完了 | `/issue-close` | PR merge、worktree cleanup、Issue close（※手動実行） |
 
 ## 実行制約
@@ -64,11 +76,11 @@ flowchart TB
 |------|----------|
 | 事実整合性 | 現行コード・CLI・コマンド出力との一致 |
 | 実装整合性 | コード差分との対応関係（実装に対して docs が遅れていないか） |
-| 運用整合性 | CLAUDE.md / workflow / skill 構成との一致、リンク切れ・古いコマンド例の有無 |
+| 運用整合性 | AGENTS.md / CLAUDE.md / workflow / skill 構成との一致、リンク切れ・古いコマンド例の有無 |
 
 ## docs-only final-check の責務
 
-- リンク、参照パス、コマンド例の整合確認（`make verify-docs`）
+- リンク、参照パス、コマンド例の整合確認（`make verify-docs`。検査対象には root `AGENTS.md` も含まれる）
 - 現行実装・CLI・運用方針との整合確認
 - docs-only の完了条件確認
 - Issue 本文・コメントの状態更新

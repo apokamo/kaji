@@ -1,0 +1,12 @@
+status: RETRY
+reason: "設計修正が必要: close_on_verdict=false の pane_dead=1 metadata 要件が verdict-trigger 単一契約と矛盾している"
+evidence: |
+  Issue #230 は type:feature ラベル 1 件で、設計レビュー対象として妥当。
+  設計書 draft/design/issue-230-feat-harness-interactive-terminal-runner.md には Primary Sources があり、ADR 007 v2、tmux man page、tmux CHANGES、現行 runner/wrapper を確認した。
+  tmux man page は split-window -h/-P/-F、pipe-pane -o、set-option -p、remain-on-exit、pane_dead format を裏付けている。
+  tmux CHANGES は CHANGES FROM 2.9 TO 3.0 に「Add pane options, set with set-option -p」と記載しており、tmux >= 3.0 要件の根拠になる。
+  しかし設計書 lines 146-147 は「終了トリガは verdict.yaml の出現のみ」「agent プロセスの自然終了は待たない」「verdict 時点で agent CLI は生存（pane_dead=0）」と定義している。
+  同じ設計書 lines 194-196 と lines 257-261 は close_on_verdict=false 時に kill-pane せず remain-on-exit on を設定し、metadata に pane_dead=1 を保存すると定義している。
+  tmux man page の remain-on-exit は「program running in it exits」した pane を破棄せず残すための option であり、agent exit を待たない verdict-trigger 単一契約のままでは verdict 検知時点の pane_dead=1 を保証できない。
+  この矛盾により、Issue 完了条件「close_on_verdict=false ... pane_dead=1 metadata 保存」とテスト戦略を実装可能な契約に落とせない。
+suggestion: "設計書で close_on_verdict=false の metadata 契約を修正してください。例: verdict 検知時点の snapshot は pane_dead=0/1 の実値を保存する、または pane_dead=1 を必須にするなら bounded wait など agent exit を観測する明示経路を追加し、verdict-trigger 単一契約との関係を再定義してください。"

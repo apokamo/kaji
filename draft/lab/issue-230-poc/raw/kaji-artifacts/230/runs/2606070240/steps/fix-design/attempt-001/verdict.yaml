@@ -1,0 +1,11 @@
+status: PASS
+reason: "設計修正完了。verdict-trigger 単一契約と close_on_verdict=false の metadata 要件の矛盾を Option A（verdict 検知時点の実値 snapshot 記録）で解消した"
+evidence: |
+  指摘の矛盾（設計 line 146-147 の「verdict 時点 pane_dead=0」と line 194-196/257-261 の「metadata に pane_dead=1 保存」の両立不能）を解消。
+  draft/design/issue-230-feat-harness-interactive-terminal-runner.md を 4 箇所修正（commit 9e59064、1 file changed, 24 insertions, 6 deletions）:
+  - 出力 副作用: metadata = verdict 検知時点の #{pane_dead} 実値 snapshot（契約下では通常 0）と再定義。
+  - 方針 step 5: 契約 = remain-on-exit on 設定 + kill-pane 抑止 / metadata = verdict 時点実値 snapshot に分離。[dead]/pane_dead=1 は agent 自然終了後の最終 pane 状態（契約外・runner 戻り時点では非観測）と区別。
+  - Issue 完了条件との整合ノートを追加し、完了条件の pane_dead=1 が最終 pane 状態を指すことを明記。
+  - スコープ決定表と Medium テストを実値 snapshot 前提に更新。
+  grep 確認: 残る #{pane_dead}=1 言及は verdict 前 dead の error 経路（line 135/280）と整合ノート/最終状態テスト（line 199/205-206/278）のみで、verdict 時点の metadata=1 保証は全て除去済み。
+suggestion: "/issue-verify-design 230 で修正確認"

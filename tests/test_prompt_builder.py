@@ -14,7 +14,10 @@ import pytest
 
 from kaji_harness.models import CycleDefinition, Step, Verdict, Workflow
 from kaji_harness.prompt import build_prompt
+from kaji_harness.providers import PRContext
 from kaji_harness.state import SessionState
+
+from .conftest import make_issue_context
 
 # ============================================================
 # Helpers
@@ -55,7 +58,7 @@ def _make_workflow(
 
 
 def _make_state(
-    issue: int = 42,
+    issue: str = "42",
     last_transition_verdict: Verdict | None = None,
 ) -> SessionState:
     """Create a SessionState without filesystem side effects."""
@@ -86,7 +89,13 @@ class TestPromptContainsSkillName:
         workflow = _make_workflow(steps=[step])
         state = _make_state()
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+        )
 
         assert "design-skill" in prompt
 
@@ -103,11 +112,57 @@ class TestPromptContainsIssueNumber:
     def test_prompt_contains_issue(self) -> None:
         step = _make_step()
         workflow = _make_workflow(steps=[step])
-        state = _make_state(issue=123)
+        state = _make_state(issue="123")
 
-        prompt = build_prompt(step, issue=123, state=state, workflow=workflow)
+        prompt = build_prompt(
+            step,
+            issue="123",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="123"),
+        )
 
         assert "123" in prompt
+
+    def test_prompt_emits_only_issue_id_and_issue_ref(self) -> None:
+        """Phase 2: provider 中立変数 issue_id / issue_ref のみを注入する。
+
+        Phase 1 で過渡的に併存していた issue_number alias は撤去済みのため、
+        注入辞書に残っていないことを明示的に検証する。
+        """
+        step = _make_step()
+        workflow = _make_workflow(steps=[step])
+        state = _make_state(issue="123")
+
+        prompt = build_prompt(
+            step,
+            issue="123",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="123"),
+        )
+
+        assert "- issue_id: 123" in prompt
+        assert "- issue_ref: #123" in prompt
+        assert "issue_number" not in prompt
+
+    def test_prompt_local_id_uses_bare_ref_without_hash(self) -> None:
+        """local-<machine>-<n> 形式は #-prefix を付けず生 ID を ref として出す。"""
+        step = _make_step()
+        workflow = _make_workflow(steps=[step])
+        state = _make_state(issue="local-pc1-1")
+
+        prompt = build_prompt(
+            step,
+            issue="local-pc1-1",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(provider_type="local", issue_id="local-pc1-1"),
+        )
+
+        assert "- issue_id: local-pc1-1" in prompt
+        assert "- issue_ref: local-pc1-1" in prompt
+        assert "- issue_ref: #local-pc1-1" not in prompt
 
 
 # ============================================================
@@ -124,7 +179,13 @@ class TestPromptContainsStepId:
         workflow = _make_workflow(steps=[step])
         state = _make_state()
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+        )
 
         assert "review-step" in prompt
 
@@ -143,7 +204,13 @@ class TestPromptContainsValidStatuses:
         workflow = _make_workflow(steps=[step])
         state = _make_state()
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+        )
 
         assert "PASS" in prompt
         assert "RETRY" in prompt
@@ -164,7 +231,13 @@ class TestPromptContainsVerdictFormat:
         workflow = _make_workflow(steps=[step])
         state = _make_state()
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+        )
 
         assert "---VERDICT---" in prompt
         assert "---END_VERDICT---" in prompt
@@ -192,7 +265,13 @@ class TestCycleVariablesInjected:
         state = _make_state()
         state.cycle_counts["impl-loop"] = 1
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+        )
 
         # Should contain the current iteration count and max
         assert "1" in prompt
@@ -213,7 +292,13 @@ class TestNoCycleVariablesWhenNotInCycle:
         workflow = _make_workflow(steps=[step], cycles=[])
         state = _make_state()
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+        )
 
         assert "max_iterations" not in prompt.lower()
         assert "cycle_count" not in prompt.lower()
@@ -239,7 +324,13 @@ class TestPreviousVerdictInjected:
         workflow = _make_workflow(steps=[step])
         state = _make_state(last_transition_verdict=prev_verdict)
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+        )
 
         assert "RETRY" in prompt
         assert "Tests failed" in prompt
@@ -265,7 +356,13 @@ class TestNoPreviousVerdictWithoutResume:
         workflow = _make_workflow(steps=[step])
         state = _make_state(last_transition_verdict=prev_verdict)
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+        )
 
         # The previous verdict's specific reason should NOT appear
         assert "Tests failed" not in prompt
@@ -285,7 +382,13 @@ class TestNoPreviousVerdictWhenStateEmpty:
         workflow = _make_workflow(steps=[step])
         state = _make_state(last_transition_verdict=None)
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+        )
 
         # Should not contain previous verdict markers
         # (The prompt should still be valid, just without previous verdict section)
@@ -312,7 +415,13 @@ class TestPreviousVerdictInjectedViaInjectVerdict:
         workflow = _make_workflow(steps=[step])
         state = _make_state(last_transition_verdict=prev_verdict)
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+        )
 
         assert "Design issues found" in prompt
         assert "Missing error handling" in prompt
@@ -338,7 +447,13 @@ class TestNoPreviousVerdictWhenInjectVerdictFalse:
         workflow = _make_workflow(steps=[step])
         state = _make_state(last_transition_verdict=prev_verdict)
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+        )
 
         assert "Design issues found" not in prompt
 
@@ -363,7 +478,13 @@ class TestResumeStillInjectsVerdictRegardlessOfFlag:
         workflow = _make_workflow(steps=[step])
         state = _make_state(last_transition_verdict=prev_verdict)
 
-        prompt = build_prompt(step, issue=42, state=state, workflow=workflow)
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+        )
 
         assert "Tests failed" in prompt
 
@@ -380,3 +501,118 @@ class TestStepModelInjectVerdictDefault:
     def test_default_is_false(self) -> None:
         step = Step(id="test", skill="test-skill", agent="claude", on={"PASS": "end"})
         assert step.inject_verdict is False
+
+
+# ============================================================
+# 15. pr_context (Issue local-pc5090-7)
+# ============================================================
+
+
+@pytest.mark.small
+class TestPrContextInjection:
+    """Issue local-pc5090-7: pr_id / pr_ref are conditionally injected via pr_context."""
+
+    def test_pr_context_none_omits_pr_variables(self) -> None:
+        step = _make_step()
+        workflow = _make_workflow(steps=[step])
+        state = _make_state(issue="42")
+
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+        )
+
+        assert "- pr_id:" not in prompt
+        assert "- pr_ref:" not in prompt
+
+    def test_pr_context_present_injects_pr_variables(self) -> None:
+        step = _make_step()
+        workflow = _make_workflow(steps=[step])
+        state = _make_state(issue="42")
+
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+            pr_context=PRContext(pr_id="42", pr_ref="gl:42"),
+        )
+
+        assert "- pr_id: 42" in prompt
+        assert "- pr_ref: gl:42" in prompt
+
+    def test_pr_context_default_is_none(self) -> None:
+        """Backward compatibility: no-arg call works with default None."""
+        step = _make_step()
+        workflow = _make_workflow(steps=[step])
+        state = _make_state(issue="42")
+
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+        )
+
+        assert "- issue_id: 42" in prompt
+
+
+# ============================================================
+# 16. verdict_path injection + 出力要件契約 (Issue #220)
+# ============================================================
+
+
+@pytest.mark.small
+class TestVerdictPathInjection:
+    """Issue #220: verdict_path 注入と verdict.yaml 保存 + comment 末尾追記契約。"""
+
+    def test_verdict_path_present_injects_variable_and_contract(self) -> None:
+        step = _make_step()
+        workflow = _make_workflow(steps=[step])
+        state = _make_state(issue="42")
+
+        path = "/abs/.kaji-artifacts/42/runs/2606041200/steps/implement/attempt-001/verdict.yaml"
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+            verdict_path=path,
+        )
+
+        # context 変数として注入される
+        assert f"- verdict_path: {path}" in prompt
+        # 出力要件に保存先 path と comment 末尾追記契約が含まれる
+        assert f"`{path}`" in prompt
+        assert "作業報告 Issue comment の末尾" in prompt
+        assert "harness の完了トリガ" in prompt
+        assert prompt.index("作業報告 Issue comment の末尾") < prompt.index(
+            f"pure YAML を `{path}` に保存"
+        )
+        # stdout 互換 block も残る
+        assert "---VERDICT---" in prompt
+        assert "---END_VERDICT---" in prompt
+
+    def test_verdict_path_none_uses_placeholder_and_omits_variable(self) -> None:
+        step = _make_step()
+        workflow = _make_workflow(steps=[step])
+        state = _make_state(issue="42")
+
+        prompt = build_prompt(
+            step,
+            issue="42",
+            state=state,
+            workflow=workflow,
+            issue_context=make_issue_context(issue_id="42"),
+        )
+
+        # 注入されない（context header に出ない）
+        assert "- verdict_path:" not in prompt
+        # placeholder で契約はレンダリングされる
+        assert "[verdict_path]" in prompt

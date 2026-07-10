@@ -21,6 +21,8 @@ import pytest
 
 from kaji_harness.adapters import CodexAdapter
 from kaji_harness.cli import stream_and_log
+from kaji_harness.errors import VerdictNotFound
+from kaji_harness.models import CLIResult, CostInfo
 from kaji_harness.verdict import create_verdict_formatter, parse_verdict
 
 VALID_STATUSES = {"PASS", "RETRY", "BACK", "ABORT"}
@@ -371,6 +373,8 @@ class TestPreviousVerdictPropagation:
         from kaji_harness.prompt import build_prompt
         from kaji_harness.state import SessionState
 
+        from .conftest import make_issue_context
+
         # Create a state with a relaxed verdict recorded
         output = (
             "Result: BACK\n"
@@ -401,7 +405,13 @@ class TestPreviousVerdictPropagation:
             steps=[step],
         )
 
-        prompt = build_prompt(step, 99999, state, workflow)
+        prompt = build_prompt(
+            step,
+            "99999",
+            state,
+            workflow,
+            issue_context=make_issue_context(issue_id="99999"),
+        )
         assert "設計に問題あり" in prompt
         assert "API仕様不整合" in prompt
 
@@ -464,3 +474,125 @@ class TestSkillOutputTemplateParsing:
         )
         result = parse_verdict(output, VALID_STATUSES)
         assert result.status == "PASS"
+
+
+# ============================================================
+# Issue #193: runner propagates VerdictNotFound on silent agent exit
+# ============================================================
+
+
+@pytest.mark.medium
+class TestRunnerVerdictNotFoundPropagation:
+    """When an agent exits without emitting any verdict delimiter, runner.run()
+    must raise VerdictNotFound (HarnessError subclass) rather than recording a
+    fabricated PASS via the AI formatter (Issue #193 / #184)."""
+
+    def test_runner_propagates_verdict_not_found_on_silent_agent_exit(self, tmp_path: Path) -> None:
+        from unittest.mock import patch
+
+        from kaji_harness.config import KajiConfig
+        from kaji_harness.models import Step, Workflow
+        from kaji_harness.runner import WorkflowRunner
+
+        # Minimal one-step workflow.
+        workflow = Workflow(
+            name="silent-exit-test",
+            description="t",
+            execution_policy="auto",
+            steps=[
+                Step(
+                    id="implement",
+                    skill="issue-implement",
+                    agent="claude",
+                    on={"PASS": "end", "ABORT": "end"},
+                ),
+            ],
+        )
+
+        # Minimal local-provider repo.
+        import subprocess as _sp
+
+        kaji_dir = tmp_path / ".kaji"
+        kaji_dir.mkdir()
+        (kaji_dir / "config.toml").write_text(
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n'
+            "[execution]\ndefault_timeout = 1800\n\n"
+            '[provider]\ntype = "local"\n\n'
+            '[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+        )
+        _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
+        config = KajiConfig._load(kaji_dir / "config.toml")
+
+        # Seed a local issue so IssueContext resolution succeeds.
+        from kaji_harness.providers import LocalProvider
+
+        counter = kaji_dir / "counters" / "pc1.txt"
+        counter.parent.mkdir(parents=True, exist_ok=True)
+        counter.write_text("98")
+        (kaji_dir / "issues").mkdir(exist_ok=True)
+        LocalProvider(repo_root=tmp_path, machine_id="pc1").create_issue(
+            title="silent", body="b", labels=["type:bug"], slug="silent-exit"
+        )
+
+        # Agent output mirrors Issue #184: progress report, no delimiter at all.
+        silent_output = (
+            "baseline 改善確認OK。pytest 完了待ち。\n"
+            "Phase A-G の実装完了、品質ゲート改善確認、続行中\n"
+        )
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            return CLIResult(
+                full_output=silent_output,
+                session_id="sess-silent",
+                cost=CostInfo(usd=0.0),
+                stderr="",
+            )
+
+        # Stub formatter to confirm it is NOT called: if it were, it would
+        # fabricate a PASS verdict.
+        formatter_calls = []
+
+        def stub_formatter(agent, valid_statuses, **kwargs):  # type: ignore[no-untyped-def]
+            def _f(raw: str) -> str:
+                formatter_calls.append(raw)
+                return (
+                    "---VERDICT---\nstatus: PASS\n"
+                    'reason: "fabricated"\nevidence: "fabricated"\n---END_VERDICT---\n'
+                )
+
+            return _f
+
+        runner = WorkflowRunner(
+            workflow=workflow,
+            issue_number=99,
+            project_root=tmp_path,
+            artifacts_dir=tmp_path / ".kaji-artifacts",
+            config=config,
+        )
+
+        with (
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.runner.create_verdict_formatter", side_effect=stub_formatter),
+            pytest.raises(VerdictNotFound),
+        ):
+            runner.run()
+
+        assert formatter_calls == [], (
+            "AI formatter must not be invoked on silent agent exit (delimiter gate)"
+        )
+
+        # 設計書 §Medium テスト 8: VerdictNotFound 経路では
+        # state.last_transition_verdict に捏造 PASS が書き込まれないこと。
+        # session_id 保存時に state.json が永続化されるため必ず読み戻して検証する。
+        from kaji_harness.state import SessionState
+
+        reloaded = SessionState.load_or_create("99", tmp_path / ".kaji-artifacts")
+        assert reloaded.last_transition_verdict is None, (
+            "永続化された state に fabricated verdict が残ってはならない: "
+            f"got {reloaded.last_transition_verdict!r}"
+        )
+        assert all(rec.verdict_status != "PASS" for rec in reloaded.step_history), (
+            "step_history に fabricated PASS が記録されてはならない: "
+            f"got {[rec.verdict_status for rec in reloaded.step_history]!r}"
+        )

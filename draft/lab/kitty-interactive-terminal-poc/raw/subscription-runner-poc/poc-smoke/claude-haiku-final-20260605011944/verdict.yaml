@@ -1,0 +1,4 @@
+status: PASS
+reason: cheap model final smoke test inside project directory
+evidence: claude haiku wrote artifact verdict inside the project worktree
+suggestion: ""

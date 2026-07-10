@@ -45,7 +45,7 @@ class TestKajiConfigLoadValid:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "custom-artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "custom-artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         config = KajiConfig._load(config_file)
@@ -58,7 +58,7 @@ class TestKajiConfigLoadValid:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         with pytest.raises(ConfigLoadError, match="skill_dir is required"):
@@ -69,7 +69,7 @@ class TestKajiConfigLoadValid:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         with pytest.raises(ConfigLoadError, match="artifacts_dir is required"):
@@ -80,7 +80,7 @@ class TestKajiConfigLoadValid:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ""\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ""\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         with pytest.raises(ConfigLoadError, match="artifacts_dir is required"):
@@ -91,7 +91,7 @@ class TestKajiConfigLoadValid:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "   "\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "   "\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         with pytest.raises(ConfigLoadError, match="artifacts_dir is required"):
@@ -102,7 +102,7 @@ class TestKajiConfigLoadValid:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "out"\nunknown_key = "value"\n\n[unknown_section]\nfoo = 42\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "out"\nunknown_key = "value"\n\n[unknown_section]\nfoo = 42\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         config = KajiConfig._load(config_file)
@@ -128,7 +128,7 @@ class TestKajiConfigLoadInvalid:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "/tmp/outside"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "/tmp/outside"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         config = KajiConfig._load(config_file)
@@ -139,7 +139,7 @@ class TestKajiConfigLoadInvalid:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "../escape"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "../escape"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         with pytest.raises(ConfigLoadError, match="escape repo root"):
@@ -150,7 +150,7 @@ class TestKajiConfigLoadInvalid:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "sub/../../escape"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "sub/../../escape"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         with pytest.raises(ConfigLoadError, match="escape repo root"):
@@ -161,7 +161,7 @@ class TestKajiConfigLoadInvalid:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         config = KajiConfig._load(config_file)
@@ -174,7 +174,7 @@ class TestKajiConfigLoadInvalid:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         with patch("pathlib.Path.expanduser", side_effect=RuntimeError("no home")):
@@ -186,7 +186,7 @@ class TestKajiConfigLoadInvalid:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = 42\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = 42\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         with pytest.raises(ConfigLoadError, match="must be a string"):
@@ -202,7 +202,7 @@ class TestKajiConfigRepoRoot:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         config = KajiConfig._load(config_file)
@@ -219,7 +219,7 @@ class TestKajiConfigArtifactsDir:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         with pytest.raises(ConfigLoadError, match="artifacts_dir is required"):
@@ -230,7 +230,7 @@ class TestKajiConfigArtifactsDir:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         config = KajiConfig._load(config_file)
@@ -243,7 +243,7 @@ class TestKajiConfigArtifactsDir:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "/tmp/my-artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "/tmp/my-artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         config = KajiConfig._load(config_file)
@@ -255,7 +255,7 @@ class TestKajiConfigArtifactsDir:
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "build/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "build/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         config = KajiConfig._load(config_file)
@@ -291,7 +291,7 @@ class TestKajiConfigDiscover:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         config = KajiConfig.discover(start_dir=tmp_path)
@@ -303,7 +303,7 @@ class TestKajiConfigDiscover:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         subdir = tmp_path / "src" / "deep" / "nested"
@@ -328,7 +328,7 @@ class TestKajiConfigDiscover:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "my-output"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "my-output"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         config = KajiConfig.discover(start_dir=tmp_path)
@@ -340,7 +340,7 @@ class TestKajiConfigDiscover:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         config = KajiConfig.discover(start_dir=tmp_path)
@@ -353,7 +353,7 @@ class TestKajiConfigDiscover:
         config_dir.mkdir()
         abs_dir = tmp_path / "external"
         (config_dir / "config.toml").write_text(
-            f'[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "{abs_dir}"\n\n[execution]\ndefault_timeout = 1800\n'
+            f'[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "{abs_dir}"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         config = KajiConfig.discover(start_dir=tmp_path)
@@ -365,7 +365,7 @@ class TestKajiConfigDiscover:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         with pytest.raises(ConfigLoadError, match="artifacts_dir is required"):
@@ -377,7 +377,7 @@ class TestKajiConfigDiscover:
         root_config = tmp_path / ".kaji"
         root_config.mkdir()
         (root_config / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "root-arts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "root-arts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         # Create a subdirectory with its own .kaji/config.toml
@@ -386,7 +386,7 @@ class TestKajiConfigDiscover:
         inner_config = inner / ".kaji"
         inner_config.mkdir()
         (inner_config / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "inner-arts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "inner-arts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         # Discover from inner - should find inner's config
@@ -405,7 +405,7 @@ class TestSessionStateWithArtifactsDir:
         arts_dir = tmp_path / "custom-artifacts"
         state = SessionState.load_or_create(42, artifacts_dir=arts_dir)
 
-        assert state.issue_number == 42
+        assert state.issue_number == "42"
 
     def test_persist_writes_to_artifacts_dir(self, tmp_path: Path) -> None:
         from kaji_harness.models import Verdict
@@ -493,14 +493,18 @@ class TestRunnerWithConfig:
             ],
         )
 
+        import subprocess as _sp
+
         project_root = tmp_path / "project"
         project_root.mkdir()
+        # gl:21: provider.type='local' requires a git repo.
+        _sp.run(["git", "init", "-q", "--initial-branch=main", str(project_root)], check=True)
         artifacts_dir = tmp_path / "artifacts"
 
         kaji_dir = project_root / ".kaji"
         kaji_dir.mkdir()
         (kaji_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
         config = KajiConfig._load(kaji_dir / "config.toml")
 
@@ -523,7 +527,7 @@ class TestRunnerWithConfig:
         ):
             runner = WorkflowRunner(
                 workflow=workflow,
-                issue_number=99,
+                issue_number="99",
                 project_root=project_root,
                 artifacts_dir=artifacts_dir,
                 config=config,
@@ -532,7 +536,7 @@ class TestRunnerWithConfig:
 
         assert state.last_completed_step == "step1"
         # Verify artifacts were written to artifacts_dir
-        assert (artifacts_dir / "99").exists()
+        assert (artifacts_dir / "local-pc1-99").exists()
 
     def test_runner_passes_project_root_to_cli(self, tmp_path: Path) -> None:
         from unittest.mock import patch
@@ -554,14 +558,18 @@ class TestRunnerWithConfig:
             ],
         )
 
+        import subprocess as _sp
+
         project_root = tmp_path / "project"
         project_root.mkdir()
+        # gl:21: provider.type='local' requires a git repo.
+        _sp.run(["git", "init", "-q", "--initial-branch=main", str(project_root)], check=True)
         artifacts_dir = tmp_path / "artifacts"
 
         kaji_dir = project_root / ".kaji"
         kaji_dir.mkdir()
         (kaji_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
         config = KajiConfig._load(kaji_dir / "config.toml")
 
@@ -587,7 +595,7 @@ class TestRunnerWithConfig:
         ):
             runner = WorkflowRunner(
                 workflow=workflow,
-                issue_number=99,
+                issue_number="99",
                 project_root=project_root,
                 artifacts_dir=artifacts_dir,
                 config=config,
@@ -602,16 +610,19 @@ class TestCLIConfigIntegration:
     """CLI cmd_run integrates with config discovery."""
 
     def test_cmd_run_discovers_config(self, tmp_path: Path) -> None:
+        import subprocess as _sp
         from unittest.mock import MagicMock, patch
 
         from kaji_harness.cli_main import cmd_run, create_parser
         from kaji_harness.models import Verdict
 
+        # gl:21: provider.type='local' requires a git repo.
+        _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
         # Create config
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         # Create workflow file
@@ -705,15 +716,18 @@ class TestCLIConfigIntegration:
         assert "invalid TOML" in captured.err
 
     def test_cmd_run_tilde_artifacts_dir(self, tmp_path: Path) -> None:
+        import subprocess as _sp
         from unittest.mock import MagicMock, patch
 
         from kaji_harness.cli_main import cmd_run, create_parser
         from kaji_harness.models import Verdict
 
+        # gl:21: provider.type='local' requires a git repo.
+        _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         wf = tmp_path / "workflow.yaml"
@@ -736,16 +750,19 @@ class TestCLIConfigIntegration:
         assert call_kwargs["artifacts_dir"] == Path("~/.kaji/artifacts").expanduser()
 
     def test_cmd_run_absolute_artifacts_dir_accepted(self, tmp_path: Path) -> None:
+        import subprocess as _sp
         from unittest.mock import MagicMock, patch
 
         from kaji_harness.cli_main import cmd_run, create_parser
         from kaji_harness.models import Verdict
 
+        # gl:21: provider.type='local' requires a git repo.
+        _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         abs_artifacts = tmp_path / "external-artifacts"
         (config_dir / "config.toml").write_text(
-            f'[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "{abs_artifacts}"\n\n[execution]\ndefault_timeout = 1800\n'
+            f'[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "{abs_artifacts}"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         wf = tmp_path / "workflow.yaml"
@@ -801,7 +818,7 @@ class TestCLIConfigIntegration:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         # Create workflow inside .kaji/workflows/
@@ -837,11 +854,16 @@ class TestConfigE2E:
 
     def test_kaji_run_with_config(self, tmp_path: Path) -> None:
         """kaji run with .kaji/config.toml creates artifacts in correct location."""
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(tmp_path)],
+            check=True,
+        )
         # Create config
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         # Create workflow
@@ -859,9 +881,18 @@ class TestConfigE2E:
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("# Test\n")
 
+        # Phase 3-e: pre-create local issue 999 for IssueContext resolution.
+        from tests.conftest import ensure_local_issue
+
+        ensure_local_issue(tmp_path, "999")
+
         # Run with restricted PATH so agent CLI is not found (expected exit 3)
         python_dir = str(Path(sys.executable).parent)
-        env = {**__import__("os").environ, "PATH": python_dir}
+        env = {
+            **__import__("os").environ,
+            "PATH": f"{python_dir}:"
+            + str(Path(__import__("shutil").which("git") or "/usr/bin/git").parent),
+        }
 
         result = subprocess.run(
             [
@@ -948,12 +979,17 @@ class TestConfigE2E:
 
     def test_kaji_run_with_absolute_artifacts_dir(self, tmp_path: Path) -> None:
         """kaji run with absolute artifacts_dir places artifacts at specified path."""
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(tmp_path)],
+            check=True,
+        )
         arts_dir = tmp_path / "external-artifacts"
 
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            f'[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "{arts_dir}"\n\n[execution]\ndefault_timeout = 1800\n'
+            f'[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "{arts_dir}"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         wf_dir = tmp_path / ".kaji" / "workflows"
@@ -969,8 +1005,16 @@ class TestConfigE2E:
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("# Test\n")
 
+        from tests.conftest import ensure_local_issue
+
+        ensure_local_issue(tmp_path, "999")
+
         python_dir = str(Path(sys.executable).parent)
-        env = {**__import__("os").environ, "PATH": python_dir}
+        env = {
+            **__import__("os").environ,
+            "PATH": f"{python_dir}:"
+            + str(Path(__import__("shutil").which("git") or "/usr/bin/git").parent),
+        }
 
         result = subprocess.run(
             [
@@ -994,7 +1038,7 @@ class TestConfigE2E:
         assert "not found" in result.stderr.lower()
 
         # Artifacts must be created at the specified external path, not under repo
-        issue_dir = arts_dir / "999"
+        issue_dir = arts_dir / "local-pc1-999"
         runs_dirs = list((issue_dir / "runs").iterdir()) if (issue_dir / "runs").exists() else []
         assert len(runs_dirs) >= 1, f"Expected run directory under {issue_dir / 'runs'}"
         assert (runs_dirs[0] / "run.log").exists(), "run.log must exist at external artifacts path"
@@ -1010,12 +1054,17 @@ class TestConfigE2E:
 
         workdir = tmp_path / "worktree"
         workdir.mkdir()
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(workdir)],
+            check=True,
+        )
         arts_dir = tmp_path / "external-artifacts"
 
         config_dir = workdir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            f'[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "{arts_dir}"\n\n[execution]\ndefault_timeout = 1800\n'
+            f'[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "{arts_dir}"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         wf_dir = workdir / ".kaji" / "workflows"
@@ -1031,8 +1080,16 @@ class TestConfigE2E:
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("# Test\n")
 
+        from tests.conftest import ensure_local_issue
+
+        ensure_local_issue(workdir, "42")
+
         python_dir = str(Path(sys.executable).parent)
-        env = {**__import__("os").environ, "PATH": python_dir}
+        env = {
+            **__import__("os").environ,
+            "PATH": f"{python_dir}:"
+            + str(Path(__import__("shutil").which("git") or "/usr/bin/git").parent),
+        }
 
         result = subprocess.run(
             [
@@ -1055,7 +1112,7 @@ class TestConfigE2E:
         assert result.returncode == 3
 
         # Verify artifacts were created at external location before deletion
-        issue_dir = arts_dir / "42"
+        issue_dir = arts_dir / "local-pc1-42"
         runs_dir = issue_dir / "runs"
         assert runs_dir.exists(), f"runs directory must exist at {runs_dir}"
         run_dirs = list(runs_dir.iterdir())
@@ -1070,7 +1127,7 @@ class TestConfigE2E:
         from kaji_harness.models import Verdict
         from kaji_harness.state import SessionState
 
-        state = SessionState.load_or_create(42, arts_dir)
+        state = SessionState.load_or_create("local-pc1-42", arts_dir)
         state.record_step(
             "s1",
             Verdict(
@@ -1108,11 +1165,16 @@ class TestConfigE2E:
 
         repo_dir = tmp_path / "repo"
         repo_dir.mkdir()
+        # gl:21: provider.type='local' requires a git repo.
+        subprocess.run(
+            ["git", "init", "-q", "--initial-branch=main", str(repo_dir)],
+            check=True,
+        )
 
         config_dir = repo_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = "~/.kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
 
         wf_dir = repo_dir / ".kaji" / "workflows"
@@ -1128,8 +1190,17 @@ class TestConfigE2E:
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("# Test\n")
 
+        from tests.conftest import ensure_local_issue
+
+        ensure_local_issue(repo_dir, "999")
+
         python_dir = str(Path(sys.executable).parent)
-        env = {**__import__("os").environ, "PATH": python_dir, "HOME": str(fake_home)}
+        git_dir = str(Path(__import__("shutil").which("git") or "/usr/bin/git").parent)
+        env = {
+            **__import__("os").environ,
+            "PATH": f"{python_dir}:{git_dir}",
+            "HOME": str(fake_home),
+        }
 
         result = subprocess.run(
             [
@@ -1152,7 +1223,7 @@ class TestConfigE2E:
         assert result.returncode == 3
 
         # Artifacts must be created under fake HOME's ~/.kaji/artifacts
-        default_arts = fake_home / ".kaji" / "artifacts" / "999"
+        default_arts = fake_home / ".kaji" / "artifacts" / "local-pc1-999"
         assert default_arts.exists(), f"Default artifacts must be at {default_arts}, not under repo"
         runs_dir = default_arts / "runs"
         assert runs_dir.exists(), f"runs directory must exist at {runs_dir}"
@@ -1194,3 +1265,134 @@ class TestConfigE2E:
         )
 
         assert result.returncode == 1
+
+
+# ============================================================
+# Small tests — [execution] runner backend (Issue #224)
+# ============================================================
+
+
+def _write_config(tmp_path: Path, *, execution_body: str, local_body: str | None = None) -> Path:
+    """Write a minimal .kaji/config.toml (and optional config.local.toml)."""
+    config_dir = tmp_path / ".kaji"
+    config_dir.mkdir(exist_ok=True)
+    config_file = config_dir / "config.toml"
+    config_file.write_text(
+        '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n'
+        f"[execution]\n{execution_body}\n\n"
+        '[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+    )
+    if local_body is not None:
+        (config_dir / "config.local.toml").write_text(local_body)
+    return config_file
+
+
+@pytest.mark.small
+class TestExecutionRunnerConfig:
+    """ExecutionConfig parses agent_runner / interactive_terminal_close_on_verdict."""
+
+    def test_defaults_when_runner_keys_absent(self, tmp_path: Path) -> None:
+        config = KajiConfig._load(_write_config(tmp_path, execution_body="default_timeout = 1800"))
+        assert config.execution.agent_runner == "headless"
+        assert config.execution.interactive_terminal_close_on_verdict is True
+
+    def test_explicit_interactive_terminal(self, tmp_path: Path) -> None:
+        config = KajiConfig._load(
+            _write_config(
+                tmp_path,
+                execution_body=(
+                    "default_timeout = 2400\n"
+                    'agent_runner = "interactive_terminal"\n'
+                    "interactive_terminal_close_on_verdict = false"
+                ),
+            )
+        )
+        assert config.execution.agent_runner == "interactive_terminal"
+        assert config.execution.interactive_terminal_close_on_verdict is False
+
+    def test_invalid_agent_runner_fails_fast(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigLoadError, match="agent_runner must be"):
+            KajiConfig._load(
+                _write_config(
+                    tmp_path,
+                    execution_body='default_timeout = 1800\nagent_runner = "foo"',
+                )
+            )
+
+    def test_non_bool_close_on_verdict_fails_fast(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigLoadError, match="interactive_terminal_close_on_verdict must be"):
+            KajiConfig._load(
+                _write_config(
+                    tmp_path,
+                    execution_body=(
+                        'default_timeout = 1800\ninteractive_terminal_close_on_verdict = "yes"'
+                    ),
+                )
+            )
+
+    def test_non_string_agent_runner_fails_fast(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigLoadError, match="agent_runner must be a string"):
+            KajiConfig._load(
+                _write_config(
+                    tmp_path,
+                    execution_body="default_timeout = 1800\nagent_runner = 42",
+                )
+            )
+
+
+@pytest.mark.medium
+class TestExecutionOverlay:
+    """config.local.toml [execution] overlays config.toml per key."""
+
+    def test_overlay_overrides_runner_key_only(self, tmp_path: Path) -> None:
+        # Tracked config uses headless; overlay only flips agent_runner.
+        config = KajiConfig._load(
+            _write_config(
+                tmp_path,
+                execution_body='default_timeout = 1800\nagent_runner = "headless"',
+                local_body='[execution]\nagent_runner = "interactive_terminal"\n',
+            )
+        )
+        # default_timeout is kept from tracked; agent_runner comes from overlay.
+        assert config.execution.default_timeout == 1800
+        assert config.execution.agent_runner == "interactive_terminal"
+        assert config.execution.interactive_terminal_close_on_verdict is True
+
+    def test_overlay_overrides_close_on_verdict(self, tmp_path: Path) -> None:
+        config = KajiConfig._load(
+            _write_config(
+                tmp_path,
+                execution_body=(
+                    "default_timeout = 1800\n"
+                    'agent_runner = "interactive_terminal"\n'
+                    "interactive_terminal_close_on_verdict = true"
+                ),
+                local_body="[execution]\ninteractive_terminal_close_on_verdict = false\n",
+            )
+        )
+        assert config.execution.agent_runner == "interactive_terminal"
+        assert config.execution.interactive_terminal_close_on_verdict is False
+
+    def test_overlay_invalid_value_reports_overlay_path(self, tmp_path: Path) -> None:
+        # An invalid runner value coming from the overlay should point at the
+        # overlay file in the error message.
+        with pytest.raises(ConfigLoadError, match="config.local.toml") as exc_info:
+            KajiConfig._load(
+                _write_config(
+                    tmp_path,
+                    execution_body="default_timeout = 1800",
+                    local_body='[execution]\nagent_runner = "bogus"\n',
+                )
+            )
+        assert "agent_runner must be" in str(exc_info.value)
+
+    def test_overlay_without_execution_section_keeps_tracked(self, tmp_path: Path) -> None:
+        # Overlay defines only [provider]; tracked [execution] is untouched.
+        config = KajiConfig._load(
+            _write_config(
+                tmp_path,
+                execution_body='default_timeout = 1800\nagent_runner = "interactive_terminal"',
+                local_body='[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc2"\n',
+            )
+        )
+        assert config.execution.agent_runner == "interactive_terminal"

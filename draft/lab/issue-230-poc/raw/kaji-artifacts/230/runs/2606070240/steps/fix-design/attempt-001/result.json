@@ -1,0 +1,13 @@
+{
+  "step_id": "fix-design",
+  "attempt": 1,
+  "status": "PASS",
+  "exit_code": 0,
+  "signal": null,
+  "started_at": "2026-06-06T17:57:35.295436+00:00",
+  "ended_at": "2026-06-06T18:01:30.437033+00:00",
+  "duration_ms": 235141,
+  "session_id": "c2396e95-182d-409e-8d6d-eba25c163914",
+  "dispatch": "agent",
+  "error": null
+}

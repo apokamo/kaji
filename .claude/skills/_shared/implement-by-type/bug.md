@@ -23,9 +23,11 @@
    - 外部 API / E2E → `@pytest.mark.large`
 5. 実行して FAIL を確認:
    ```bash
-   cd [worktree-absolute-path] && source .venv/bin/activate && pytest tests/<path> -k <test_name> -v
+   cd [worktree_dir] && source .venv/bin/activate && pytest tests/<path> -k <test_name> -v
    ```
    - 誤って PASS してしまう場合: 再現条件が違う → 設計書「再現手順」に戻る
+
+> **escape clause（実ログによる実装前 Red 代替）**: Issue 本文またはリンク先に OB を直接示す実世界障害ログ（失敗コマンド・エラー文言・exit code・API 応答・関連 Issue/PR の実行ログ等）が既に存在する場合、合成再現テストの実装前 FAIL ログ取得（手順 5）を省略し、その実ログを実装前 Red 証跡の代替として扱ってよい。ただし恒久回帰テスト自体は必須で、Step B2〜B3 で修正後に Green になることを必ず確認する。実ログが OB と対応しない場合、単なる省力化・実行時間短縮・後付け都合を理由とする場合は代替不可。
 
 ### Step B2: 根本原因箇所の修正（Green）
 
@@ -36,7 +38,7 @@
 ### Step B3: 再現テストの Green 確認
 
 ```bash
-cd [worktree-absolute-path] && source .venv/bin/activate && pytest tests/<path> -v
+cd [worktree_dir] && source .venv/bin/activate && pytest tests/<path> -v
 ```
 
 - 再現テストが PASS することを確認
@@ -59,12 +61,12 @@ cd [worktree-absolute-path] && source .venv/bin/activate && pytest tests/<path> 
 `make check` を実行し、ruff / mypy / pytest がすべて green になることを確認する。
 
 ```bash
-cd [worktree-absolute-path] && source .venv/bin/activate && make check
+cd [worktree_dir] && source .venv/bin/activate && make check
 ```
 
 ## コミット前チェックリスト
 
-- [ ] 再現テストが Red → Green に遷移したログが手元にある（コピー用）
+- [ ] 再現テストが Red → Green に遷移したログが手元にある（コピー用）。**実ログ代替を用いる場合**: OB を直接示す実世界障害ログ（Issue 本文/リンク先）＋ 修正後に回帰テストが Green になったログが手元にある（実装前 FAIL ログは省略可）
 - [ ] 設計書「再現手順」と実装テストの assert が一致
 - [ ] 影響モジュール全体のテストを流し、他テストが壊れていない
 - [ ] リファクタが混入していない（`git diff` で無関係な変更がないか確認）

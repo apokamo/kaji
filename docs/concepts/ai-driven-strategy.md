@@ -1,61 +1,70 @@
-# AI 駆動開発戦略
+# AI-Driven Development Strategy
 
-## 概要
+Language: English | [日本語](ai-driven-strategy.ja.md)
 
-kaji は **95% AI / 5% 人間** の開発モデルを採用する。AI エージェントが設計・実装・レビュー・ドキュメント更新を実行し、人間は意思決定・承認・方向修正に集中する。
+## Overview
 
-## 原則
+kaji adopts a **95% AI / 5% human** development model. AI agents execute design,
+implementation, review, and documentation updates; humans focus on decisions,
+approval, and direction changes.
 
-### 1. AI がプロセスを実行する
+## Principles
 
-- 設計書の作成（`/issue-design`）
-- TDD による実装（`/issue-implement`）
-- コードレビュー・設計レビュー
-- ドキュメント更新・整合性チェック
+### 1. AI executes the process
 
-### 2. 人間が判断する
+- Create design documents (`/issue-design`)
+- Implement with TDD (`/issue-implement`)
+- Run code reviews and design reviews
+- Update documentation and check consistency
 
-- Issue の優先度決定
-- 設計方針の最終承認
-- PR のマージ判断
-- ワークフローからの逸脱の許可
+### 2. Humans make judgments
 
-### 3. ワークフローで品質を担保する
+- Set issue priorities
+- Give final approval to design direction
+- Decide whether to merge PRs
+- Permit deviations from the workflow
 
-AI の出力品質はワークフローの設計に依存する。スキルファイルが AI への指示書として機能し、品質ゲート（レビューサイクル・`make check`・final-check）が品質を担保する。
+### 3. Workflows preserve quality
 
-## ワークフローの構造
+AI output quality depends on workflow design. Skill files work as instructions
+to AI, and quality gates (review cycles, `make check`, and final-check) preserve
+quality.
+
+## Workflow structure
 
 ```
-Issue 起票 → 着手前ゲート → 設計 → レビュー → 実装 → レビュー
-          → 品質ゲート → PR → PR レビュー後サイクル → マージ
+Issue creation -> pre-start gate -> design -> review -> implementation -> review
+               -> quality gate -> PR -> post-PR review cycle -> merge
 ```
 
-各ステップで AI が実行し、verdict（PASS/RETRY/BACK/ABORT）で次のステップへの遷移を制御する。
+AI executes each step, and verdicts (PASS/RETRY/BACK/ABORT) control transitions
+to the next step.
 
-### 着手前ゲートと PR レビュー後サイクルの位置付け
+### Role of the pre-start gate and post-PR review cycle
 
-`issue-create` 後に直接実装フェーズへ進むのではなく、Issue 本文の品質を 1 度ふるいにかける。同様に PR 作成後も、レビュー指摘の処理を「収束保証されたサイクル」として閉じる。
+Rather than moving directly from `issue-create` to implementation, the workflow
+first filters the issue body's quality once. Similarly, after PR creation,
+review feedback handling is closed as a convergence-guaranteed cycle.
 
-| スキル | 位置付け |
-|--------|----------|
-| `issue-review-ready` | **着手前ゲート**: Issue 本文が作業着手に足る記述品質かを判定する全 workflow 共通ゲート |
-| `issue-fix-ready` | **ゲート修正**: `issue-review-ready` が RETRY を返した指摘に基づき Issue 本文を修正 |
-| `pr-fix` | **PR レビュー対応**: PR レビューコメントに対する修正と反論の使い分けを行う |
-| `pr-verify` | **PR レビュー収束**: 修正の妥当性のみを確認し、新規指摘は禁止することでサイクルを閉じる |
+| Skill | Role |
+|-------|------|
+| `issue-review-ready` | **Pre-start gate**: determines whether the issue body has enough description quality to start work (common to GitHub workflows; local workflows assume manual issue creation and start from design) |
+| `issue-fix-ready` | **Gate fix**: updates the issue body based on RETRY feedback from `issue-review-ready` |
+| `review-poll` | **PR review entry**: polls codex auto-review results and decides PASS / RETRY / fallback (`/review`) |
+| `pr-fix` | **PR review handling**: chooses between fixing and rebutting PR review comments |
+| `pr-verify` | **PR review convergence**: verifies only the validity of fixes and forbids new findings, closing the cycle |
 
-## 人間の介入ポイント
+## Human intervention points
 
-| ポイント | 介入内容 |
-|---------|---------|
-| Issue 作成 | 要件定義・優先度設定 |
-| 設計レビュー結果の確認 | 方針の妥当性判断 |
-| PR レビュー | 最終品質確認 |
-| PR レビュー指摘の妥当性判断 | `pr-fix` での修正・反論の選別、レビュアーとの合意形成 |
-| `/issue-close` の実行 | マージの意思決定 |
+| Point | Intervention |
+|-------|--------------|
+| Issue creation | Requirements definition and priority setting |
+| Design review result confirmation | Judgment on the validity of the direction |
+| PR review feedback judgment | Final quality confirmation; selecting fix vs rebuttal in `pr-fix` and reaching agreement with reviewers (the first review is handled by codex auto-review) |
+| Running `/issue-close` | Merge decision |
 
-## 前提条件
+## Prerequisites
 
-- AI エージェントがリポジトリに対して読み書きアクセスを持つ
-- `gh` CLI が認証済みである
-- ワークフロー定義（YAML）とスキルファイル（Markdown）が整備されている
+- AI agents have read/write access to the repository
+- `gh` CLI is authenticated (for GitHub mode; unnecessary in local mode)
+- Workflow definitions (YAML) and skill files (Markdown) are prepared

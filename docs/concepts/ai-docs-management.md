@@ -1,65 +1,66 @@
-# AI ドキュメント管理方針
+# AI Documentation Management Policy
 
-## 概要
+Language: English | [日本語](ai-docs-management.ja.md)
 
-kaji における Docs-as-Code 運用ルール。ドキュメントはコードと同じリポジトリで管理し、同じレビュープロセスを通す。
+## Overview
 
-## 原則
+Docs-as-Code operating rules for kaji. Documentation is managed in the same
+repository as code and goes through the same review process.
 
-### 1. ドキュメントはコードの一部
+## Principles
 
-- `docs/` 配下で Markdown 管理
-- コード変更に伴うドキュメント更新は同一 PR に含める
-- 各フェーズでドキュメント影響を確認し、`/i-dev-final-check` で最終確定
+### 1. Documentation is part of the code
 
-### 2. 段階的開示
+- Manage Markdown under `docs/`
+- Include documentation updates caused by code changes in the same PR
+- Check documentation impact in each phase and finalize it in `/i-dev-final-check`
 
-- ドキュメントは小さく保つ
-- 大きくなるなら構造化して分割する
-- コードから推論できる情報は書かない
+### 2. Progressive disclosure
 
-### 3. 追加より削除が難しい
+- Keep documents small
+- If they grow, structure and split them
+- Do not write information that can be inferred from code
 
-- 追加時に本当に必要か判断する
-- 不要な情報は積極的に削除・スリム化する
-- 具体的なコードはドキュメントに書かず、実コードへのポインターを記載する
+### 3. Deleting is harder than adding
 
-## ドキュメント構成
+- Decide whether a new addition is truly necessary
+- Actively delete and slim down unnecessary information
+- Do not write concrete code in documentation; point to the real code instead
 
-[Diataxis フレームワーク](https://diataxis.fr/) に基づく分類:
+## Documentation structure
 
-| カテゴリ | ディレクトリ | 用途 |
-|---------|-------------|------|
-| Tutorials | docs/guides/ | 手順ガイド（Git worktree、コミット戦略等） |
-| How-to | docs/dev/ | 開発ワークフロー・規約 |
-| Reference | docs/reference/ | テストサイズガイド等 |
-| Explanation | docs/concepts/ | 設計思想・戦略の説明 |
-| ADR | docs/adr/ | アーキテクチャ決定記録 |
-| RFC | docs/rfc/ | 提案・標準化方針 |
-| CLI | docs/cli-guides/ | CLI 操作ガイド |
+Documentation is categorized based on the
+[Diataxis framework](https://diataxis.fr/). The source of truth for category to
+directory mapping is [docs/README.md](../README.md) (documentation index). This
+document does not duplicate that table.
 
-## ワークフローとの統合
+## Workflow integration
 
-ドキュメント更新の要否判断は [documentation_update_criteria.md](../dev/documentation_update_criteria.md) を一次情報源とする。本節はそのワークフローへの組み込みを述べる。
+The primary source for deciding whether documentation updates are needed is
+[documentation_update_criteria.md](../dev/documentation_update_criteria.md).
+This section describes how that decision is integrated into workflows.
 
-### feature-development
+### dev / dev-thorough
 
-ドキュメント整合性は 3 段階の防衛線で担保する:
+Documentation consistency is protected by three lines of defense:
 
-1. **設計書のテーブル**: 設計書に「影響ドキュメント」テーブルを記載し、想定スコープを明示する
-2. **各サイクル内の影響確認**: 設計・実装・レビュー各サイクルで影響範囲の差分を確認する
-3. **`/i-dev-final-check`**: PR 作成前に網羅性をゲートし、漏れがあれば差し戻す
+1. **Design document table**: include an "Affected documentation" table in the
+   design document and make the expected scope explicit
+2. **Impact checks inside each cycle**: check impact-scope diffs in the design,
+   implementation, and review cycles
+3. **`/i-dev-final-check`**: gate completeness before PR creation and send work
+   back if anything is missing
 
-### docs-maintenance
+### docs
 
-1. `/i-doc-update` でドキュメントを更新
-2. `/i-doc-review` で整合性レビュー
-3. `/i-doc-final-check` でリンクチェック・完了条件検証
+1. Update documentation with `/i-doc-update`
+2. Review consistency with `/i-doc-review`
+3. Run link checks and completion-condition verification with `/i-doc-final-check`
 
-## 設計書のライフサイクル
+## Design document lifecycle
 
-| フェーズ | 場所 | 説明 |
-|---------|------|------|
-| 作業中 | `draft/design/issue-XXX-*.md` | worktree 内、コミット対象 |
-| final-check 時 | Issue 本文にアーカイブ | `<details>` タグで折りたたんで本文末尾に追記（[shared_skill_rules.md の「設計書アーカイブ」節](../dev/shared_skill_rules.md) を参照） |
-| 恒久化 | `docs/adr/` | ADR として永続化（該当する場合のみ） |
+| Phase | Location | Description |
+|-------|----------|-------------|
+| In progress | `draft/design/issue-XXX-*.md` | In the worktree; committed |
+| At final-check | Archived in the issue body | Appended to the body under a collapsible `<details>` tag (responsibility of the `/i-dev-final-check` skill) |
+| Permanent | `docs/adr/` or `docs/dev/` | Promoted as an ADR / general guide only when applicable (procedure: `.claude/skills/_shared/promote-design.md`) |

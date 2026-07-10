@@ -15,7 +15,16 @@ class ConfigNotFoundError(HarnessError):
 
     def __init__(self, start_dir: Path):
         self.start_dir = start_dir
-        super().__init__(f".kaji/config.toml not found. Searched from {self.start_dir} to /.")
+        super().__init__(
+            f".kaji/config.toml not found. Searched from {self.start_dir} to /.\n\n"
+            "`kaji issue` / `kaji pr` / `kaji run` require a kaji repository.\n"
+            "First create `.kaji/config.toml` with `[paths]` and `[execution]`\n"
+            "sections (template in `docs/cli-guides/local-mode.md` § 2),\n"
+            "then add a `[provider]` section:\n"
+            '  - For GitHub:    type = "github" + [provider.github] repo = "<owner>/<repo>"\n'
+            '  - For local-first: type = "local"  (then run `kaji local init`\n'
+            "                    to write the gitignored machine_id overlay)."
+        )
 
 
 class ConfigLoadError(HarnessError):
@@ -65,12 +74,49 @@ class CLINotFoundError(HarnessError):
     """CLI コマンドが見つからない（FileNotFoundError をラップ）。"""
 
 
-class StepTimeoutError(HarnessError):
-    """ステップがタイムアウト。SIGTERM → SIGKILL 後に raise。"""
+class ScriptExecutionError(HarnessError):
+    """決定論 command の subprocess が非ゼロ終了。verdict 有無を問わず fail-loud。
 
-    def __init__(self, step_id: str, timeout: int):
+    ``exec_script`` skill 経路（``execute_script``）と ``exec:`` step 経路
+    （``execute_exec``）の双方で共有する（Issue #205）。``command_label`` は
+    失敗 artifact 上の調査用ラベルで、``execute_script`` は module 名、
+    ``execute_exec`` は ``" ".join(argv)`` を渡す。経路に依存しない中立表現に
+    することで、どちらの dispatch の失敗かを誤解させない。
+    """
+
+    def __init__(self, step_id: str, command_label: str, returncode: int, stderr: str):
+        self.step_id = step_id
+        self.command_label = command_label
+        self.returncode = returncode
+        self.stderr = stderr
+        super().__init__(
+            f"Step '{step_id}' deterministic command '{command_label}' exited with "
+            f"code {returncode}: {stderr[:200]}"
+        )
+
+
+class SkillFrontmatterError(HarnessError):
+    """SKILL.md frontmatter のパース / 検証エラー。"""
+
+    def __init__(self, skill_name: str, reason: str):
+        self.skill_name = skill_name
+        self.reason = reason
+        super().__init__(f"Skill '{skill_name}' frontmatter invalid: {reason}")
+
+
+class StepTimeoutError(HarnessError):
+    """ステップがタイムアウト。SIGTERM → SIGKILL 後に raise。
+
+    Issue #222: kill 後に観測した ``process.returncode`` を ``returncode`` として
+    運ぶ（best-effort）。timeout の kill は SIGTERM が初手のため通常 ``-15``、
+    SIGKILL までエスカレートした場合は ``-9``。取得不能なら ``None``。
+    runner はこの値から attempt result.json の ``exit_code`` / ``signal`` を導出する。
+    """
+
+    def __init__(self, step_id: str, timeout: int, returncode: int | None = None):
         self.step_id = step_id
         self.timeout = timeout
+        self.returncode = returncode
         super().__init__(f"Step '{step_id}' timed out after {timeout}s")
 
 
@@ -81,6 +127,27 @@ class WorkdirNotFoundError(HarnessError):
         self.step_id = step_id
         self.workdir = workdir
         super().__init__(f"Step '{step_id}' workdir does not exist: {workdir}")
+
+
+class IssueContextResolutionError(HarnessError):
+    """`provider.resolve_issue_context` が失敗した。
+
+    Phase 3-c で導入、Phase 3-e で `[provider]` セクションが必須化されたため、
+    Issue 解決失敗（machine_id 不在 / Issue dir 不在 / cache 不整合 等）は
+    agent 起動前に常に fail-fast する。``cmd_run`` では `EXIT_RUNTIME_ERROR
+    (= 3)` にマップされる。``[provider]`` 未設定 / 設定不整合の問題は
+    ``ValueError`` として `cmd_run` 冒頭で `EXIT_INVALID_INPUT (= 2)` に
+    正規化されるため、本例外には到達しない。
+    """
+
+    def __init__(self, issue_input: str, provider_type: str, cause: BaseException):
+        self.issue_input = issue_input
+        self.provider_type = provider_type
+        self.cause = cause
+        super().__init__(
+            f"Failed to resolve IssueContext for {issue_input!r} under "
+            f"provider.type={provider_type!r}: {type(cause).__name__}: {cause}"
+        )
 
 
 class MissingResumeSessionError(HarnessError):

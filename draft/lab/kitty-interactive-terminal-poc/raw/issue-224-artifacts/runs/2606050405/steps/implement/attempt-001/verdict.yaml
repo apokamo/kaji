@@ -1,0 +1,19 @@
+status: PASS
+reason: |
+  設計書どおり interactive_terminal runner を TDD で実装し、テスト・品質チェックが全て green。
+  Pre-Handoff Review 自己評価も Yes。既定 headless runner の挙動は不変。
+evidence: |
+  - 実装: kaji_harness/interactive_terminal.py（新規）+ assets/interactive-terminal/wrapper.sh（新規）
+    + config.py（ExecutionConfig 2 フィールド + [execution] overlay）+ cli_main.py（CLI option precedence 1）
+    + runner.py（agent_runner dispatch 分岐）。
+  - 設計契約一致: execute_interactive_terminal IF / Wrapper 9 引数順 / Agent Command（Claude・Codex fresh/resume）
+    / Session ID（Claude launch UUID, Codex terminal.log→session store fallback）/ Cleanup（process group + /proc marker）
+    / timeout 経路 cleanup。設計明示の PoC 逸脱（--title, util-linux script 判定+fail-soft, [execution] overlay, timeout cleanup）を反映。
+  - テスト: 新規 47 件（test_interactive_terminal.py 25 / test_run_execution_overrides.py 11
+    / test_runner_interactive_dispatch.py 2 / test_config.py +9）。Small/Medium/Large(large_local E2E 1) を網羅。
+  - pytest: 1739 passed, 2 skipped（baseline 1692 passed,2 skipped → +47, regression 0）。
+  - 品質: ruff check / ruff format --check / mypy すべて pass、make verify-docs link OK。
+  - Pre-Handoff Review: PHR_COUNT=1, verdict Yes（self-check fallback。subagent 起動は成功したが最終 verdict が harness 戻り値に未捕捉）。
+suggestion: |
+  /issue-review-code 224 でコードレビューへ。
+  残課題: trusted worktree 上の real kitty + real Claude/Codex 手動検証（自動化対象外。CLI guide § 手動検証手順）。

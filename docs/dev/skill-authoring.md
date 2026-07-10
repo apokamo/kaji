@@ -58,9 +58,66 @@ suggestion: ""
 ---END_VERDICT---
 ```
 
+### exec_script: LLM 中継なしの deterministic skill
+
+LLM の判断を必要としない決定論的 skill（GitHub API polling、固定アルゴリズム計算など）は、
+frontmatter に `exec_script` フィールドを追加することで agent spawn を skip し、harness が
+直接 `python -m <module>` として subprocess 実行する経路を選択できる。
+
+> **inline 用途には workflow.yaml の `exec:` を検討**: SKILL.md を介さず、その workflow に
+> 閉じた ad-hoc な決定論 step（metrics 収集 / artifact dump / 外部 CLI 呼び出し）を宣言したい
+> 場合は、skill ファイルを増やさず workflow.yaml の step に `exec:` を書ける（Issue #205）。
+> named・再利用・ドキュメント価値がある決定論処理は `exec_script` skill、その場限りの inline
+> 処理は `exec:` step、という使い分けが目安。両者の比較は
+> [`workflow-authoring.md` § exec-step（script step）](workflow-authoring.md) を参照。
+
+```markdown
+---
+name: review-poll
+description: codex auto-review polling
+exec_script: kaji_harness.scripts.review_poll_entry
+---
+```
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| `exec_script` | str | 任意 | Python module dotted path。`python -m <value>` で実行される |
+
+**制約**:
+- 値は Python identifier の `.` 区切り表記（`[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*`）のみ。
+  違反は skill load 時に `SkillFrontmatterError` で fail-fast（path traversal / shell metachar を
+  構文段階で遮断）。
+- 設定された skill を呼ぶ step では workflow YAML の `agent` / `model` / `effort` が無視される
+  （harness が WARN を出す）。step 側で `agent` を省略してよい。
+
+**入力（harness が env として注入）**:
+
+| env 変数 | 説明 |
+|----------|------|
+| `KAJI_ISSUE_ID` | canonical issue id |
+| `KAJI_ISSUE_REF` | 人間可読の Issue 参照 |
+| `KAJI_STEP_ID` | 実行中の step id |
+| `KAJI_WORKTREE_DIR` | Issue worktree の絶対パス |
+| `KAJI_BRANCH_NAME` | Issue branch 名 |
+| `KAJI_PROVIDER_TYPE` | `github` / `local` |
+| `KAJI_GIT_REMOTE` | git remote 名（既定 `origin`） |
+| `KAJI_DEFAULT_BRANCH` | default branch 名 |
+| `KAJI_PR_ID` | PR 解決済みなら数値文字列、未解決なら未注入 |
+| `KAJI_PR_REF` | `#<n>` 形式の PR 参照 |
+
+**出力契約**:
+- verdict ブロックを stdout に出力する責務は script 側にある（既存 `kaji_harness.scripts.codex_review_poll.emit_verdict()` 同型）。
+- exec_script 経路では **AI formatter fallback は呼ばれない**（fabrication 防止 + 決定論性維持）。
+  delimiter 不在は `VerdictNotFound` で fail-loud。
+- script は verdict を emit したら **必ず `return 0`** で終了する。ABORT / RETRY 等の業務失敗は
+  verdict status で表現し、`sys.exit(1)` で表現してはならない。
+- catastrophic 失敗（依存 CLI 不在、import エラー等）は raise させてよい。harness が
+  `ScriptExecutionError` として ERROR 扱いする（non-zero exit は stdout の verdict 有無を
+  問わず常に fail-loud）。
+
 ## verdict 出力規約
 
-すべてのスキルは最終出力として以下の形式の verdict ブロックを含めなければならない。
+すべてのスキルは作業完了時に、以下の verdict を **3 経路** で残さなければならない（Issue #220）。
 
 ```
 ---VERDICT---
@@ -74,9 +131,27 @@ suggestion: |
 ---END_VERDICT---
 ```
 
-verdict ブロックは **stdout にそのまま出力** すること。ハーネスは CLI の標準出力から verdict を抽出するため、`gh issue comment --body` の引数や別コマンドの入力にだけ verdict を埋めても判定されない。
+スキルが各経路へ書き込む順序は次のとおり。これは後述の harness verdict 解決順とは別概念である。
 
-Issue コメントや Issue 本文更新は別途行ってよいが、それは verdict 出力の代替ではない。コメント投稿を行う場合でも、最終的な verdict ブロックは stdout に残すこと。
+1. **作業報告 Issue comment 末尾（fallback）**: 作業報告コメントの末尾に、上記 `---VERDICT---` block をそのまま追記する。verdict 専用コメントを新設せず、既存の作業報告コメントの末尾に足すだけでよい。
+2. **stdout（互換 fallback）**: 同じ `---VERDICT---` block を stdout にも出力する。
+3. **artifact `verdict.yaml`（primary / 書き込みは最後）**: コンテキスト変数 `verdict_path`（exec_script では env `KAJI_VERDICT_PATH`）が指す絶対パスへ、`status` / `reason` / `evidence` / `suggestion` の **pure YAML**（`---VERDICT---` delimiter なし）を保存する。
+
+ハーネスはこの 3 経路を **artifact → comment → stdout** の順で解決する（詳細は [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) § Verdict 判定機構）。`verdict_path` への保存が primary 経路であり、`kaji issue comment --body` の引数や別コマンドの入力にだけ verdict を埋めても、artifact / 作業報告コメント末尾 / stdout のいずれにも残っていなければ判定されない。
+interactive terminal runner では `verdict.yaml` の出現が次 step への完了トリガになるため、agent は Issue comment 投稿などの外部副作用を完了してから、最後に `verdict.yaml` を保存する。
+
+`verdict.yaml` の例（pure YAML）:
+
+```yaml
+status: PASS
+reason: 設計書と整合し品質基準を満たす
+evidence: ruff / mypy / pytest すべて pass
+suggestion: ""
+```
+
+**verdict 不在は fail-loud** (Issue #193 / #220): artifact `verdict.yaml` も、現在 attempt 以降の作業報告コメント末尾 block も、stdout の `---VERDICT---` delimiter も一切無いままセッションが終了した場合、ハーネスは AI formatter で穴埋めせず `VerdictNotFound` を `HarnessError` として raise する（`EXIT_RUNTIME_ERROR (= 3)` にマップ）。逆に `verdict.yaml` が「存在するが壊れている / 必須欠落 / invalid status」場合も fail-loud（comment / stdout へは fallthrough しない）。`ScheduleWakeup` 等で再起動を期待する場合でも、メインセッション終了時点で verdict を上記 3 経路に残す責務はスキル側にある。
+
+> **stdout 経路の段階廃止方針**: stdout への verdict 出力は、未移行スキル・stdout ベースの既存テストとの互換のための fallback として当面残す。全スキルが `verdict.yaml` を書く運用に移行した後、stdout 経路の段階廃止を別 Issue で検討する。
 
 ### verdict の選択基準
 
@@ -117,8 +192,10 @@ suggestion: |
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_number` | int | GitHub Issue 番号 |
+| `issue_id` | str | 正規化済み Issue ID（GitHub 数値または local ID。例: `"153"` / `"local-pc1-1"`） |
+| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID。例: `"#153"` / `"local-pc1-1"`） |
 | `step_id` | str | 現在のステップ ID |
+| `verdict_path` | str | 当該 attempt の `verdict.yaml` 絶対パス（Issue #220）。スキルはここへ pure YAML の verdict を保存する。exec_script 経路では env `KAJI_VERDICT_PATH` として注入される |
 | `previous_verdict` | str | 前ステップの verdict 要約（resume ステップ等） |
 | `cycle_count` | int | 現在のサイクルイテレーション（サイクル内ステップのみ） |
 | `max_iterations` | int | サイクルの上限回数（サイクル内ステップのみ） |
@@ -131,13 +208,30 @@ suggestion: |
 
 ```bash
 # 作業結果を Issue にコメント
-gh issue comment <issue_number> --body "..."
+kaji issue comment <issue_id> --body "..."
 
 # Issue 本文を更新（状態の記録）
-gh issue edit <issue_number> --body "..."
+kaji issue edit <issue_id> --body "..."
 ```
 
 **ルール**: レビュー系スキル（review-\*, verify-\*）は Issue にコメントで結果を記録する。実装系スキルは完了報告をコメントする。
+
+### cross-skill 契約は CLI / harness 層に置く（ADR 008 決定 3）
+
+あるスキルの出力を別のスキルが機械的に消費する契約（producer / consumer 契約）は、
+**SKILL.md の散文ではなく CLI / harness 層（コード）に置く**。散文契約は producer と
+consumer が別々に管理され、突き合わせる機構がないため silent に壊れる（不一致でも
+エラーにならず、検出ゼロがそのまま「該当なし」として振る舞う）。
+
+- 悪い例: consumer が「producer はコメントに `[x] Changes Requested / BACK` と書くはず」と
+  regex で期待するが、producer テンプレートにその表現が存在せず検出が一度も機能しない
+  （Issue #261 の根本原因）。
+- 良い例: producer は `kaji issue comment --verdict-step/--verdict-status` を無条件付与し、
+  CLI が決定的にマーカー行を埋め込む。consumer はそのマーカーのみを参照する。契約の
+  正本は CLI コード（語彙検証つき）にあり、下流 repo のスキルカスタマイズでも壊れにくい。
+  BREAKING の適用指針も「呼び出し 1 行の追加・差し替え」で説明が完結する。
+
+詳細な運用は [`shared_skill_rules.md`](shared_skill_rules.md) § verdict マーカー契約 を参照。
 
 ## 推奨パターン
 
@@ -174,17 +268,20 @@ git add <files> && git commit -m "test: add tests for X"
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_number` | int | GitHub Issue 番号 |
+| `issue_id` | str | 正規化済み Issue ID（GitHub 数値または local ID） |
+| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID） |
 | `step_id` | str | 現在のステップ ID |
 
 ### 手動実行（スラッシュコマンド）
 
-$ARGUMENTS = <issue-number>
+$ARGUMENTS = <issue_id>
 
 ### 解決ルール
 
-コンテキスト変数 `issue_number` が存在すればそちらを使用。
-なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
+コンテキスト変数 `issue_id` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
+
+`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
 ```
 
 **優先順位**: コンテキスト変数 > `$ARGUMENTS`。ハーネスが変数を注入している場合はそちらを使い、手動実行時は従来通り `$ARGUMENTS` から取得する。
@@ -206,12 +303,12 @@ $ARGUMENTS = <issue-number>
 
 ### 品質チェックコマンドの汎用化
 
-スキル内で品質チェックコマンドを記述する場合、プロジェクト固有のパス（例: `bugfix_agent/`）をハードコードしない。代わりに CLAUDE.md を参照する形にする。
+スキル内で品質チェックコマンドを記述する場合、プロジェクト固有のパス（例: `bugfix_agent/`）をハードコードしない。代わりに AGENTS.md を参照する形にする。
 
 ```markdown
 **品質チェック（コミット前必須）**:
 
-CLAUDE.md の「Pre-Commit (REQUIRED)」セクションに記載されたコマンドを実行すること。
+AGENTS.md の pre-commit 契約（`source .venv/bin/activate && make check`）を実行すること。
 ```
 
 ## 関連ドキュメント

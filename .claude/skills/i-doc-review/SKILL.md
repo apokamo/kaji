@@ -25,7 +25,8 @@ docs-only の変更をレビューする。新規指摘を行ってよい。
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_number` | int | GitHub Issue 番号 |
+| `issue_id` | str | 正規化済み Issue ID（GitHub 数値または local ID） |
+| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID） |
 | `step_id` | str | 現在のステップ ID |
 | `cycle_count` | int | 現在のイテレーション |
 | `max_iterations` | int | サイクルの上限回数 |
@@ -33,13 +34,15 @@ docs-only の変更をレビューする。新規指摘を行ってよい。
 ### 手動実行（スラッシュコマンド）
 
 ```
-$ARGUMENTS = <issue-number>
+$ARGUMENTS = <issue_id>
 ```
 
 ### 解決ルール
 
-コンテキスト変数 `issue_number` が存在すればそちらを使用。
-なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
+コンテキスト変数 `issue_id` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
+
+`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
 
 ## 前提知識の読み込み
 
@@ -54,11 +57,11 @@ $ARGUMENTS = <issue-number>
 2. Issue コメントから直近の docs-only 更新報告を確認
 3. 設計書を確認:
    ```bash
-   cat [worktree-absolute-path]/draft/design/issue-[number]-*.md
+   cat [worktree_dir]/draft/design/issue-[issue_id]-*.md
    ```
 4. 差分を確認:
    ```bash
-   cd [worktree-absolute-path] && git diff main...HEAD
+   cd [worktree_dir] && git diff main...HEAD
    ```
 
 ### Step 2: レビュー
@@ -68,7 +71,7 @@ $ARGUMENTS = <issue-number>
 
 1. 現行実装と一致しているか
 2. CLI コマンド例が現行仕様と一致するか
-3. `CLAUDE.md` の運用方針と矛盾しないか
+3. `AGENTS.md` / `CLAUDE.md` の運用方針と矛盾しないか
 4. workflow / skill / docs 間で記述が矛盾しないか
 5. リンク切れ、古いパス、読者導線の破綻がないか
 
@@ -77,7 +80,7 @@ $ARGUMENTS = <issue-number>
 変更された Markdown ファイルに絞って以下を実行する。
 
 ```bash
-cd [worktree-absolute-path] && python3 scripts/check_doc_links.py [changed-markdown-files...]
+cd [worktree_dir] && python3 scripts/check_doc_links.py [changed-markdown-files...]
 ```
 
 ### Step 4: 結果を Issue にコメント

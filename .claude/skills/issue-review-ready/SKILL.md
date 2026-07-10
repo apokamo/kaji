@@ -30,19 +30,22 @@ worktree 不要（メインリポジトリから実行可能）。
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_number` | int | GitHub Issue 番号 |
+| `issue_id` | str | 正規化済み Issue ID（GitHub 数値または local ID） |
+| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID） |
 | `step_id` | str | 現在のステップ ID |
 
 ### 手動実行（スラッシュコマンド）
 
 ```
-$ARGUMENTS = <issue-number>
+$ARGUMENTS = <issue_id>
 ```
 
 ### 解決ルール
 
-コンテキスト変数 `issue_number` が存在すればそちらを使用。
-なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
+コンテキスト変数 `issue_id` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
+
+`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
 
 ## 共通ルール
 
@@ -69,7 +72,7 @@ Issue のラベル（`type:feature` / `type:bug` / `type:refactor` / `type:docs`
 ラベル取得（`type:` ラベルを全件、改行区切りで取得する）:
 
 ```bash
-gh issue view [issue-number] --json labels --jq '[.labels[].name] | map(select(startswith("type:"))) | .[]'
+kaji issue view [issue_id] --json labels --jq '[.labels[].name] | map(select(startswith("type:"))) | .[]'
 ```
 
 **判定の優先順（「未付与」「複数付与」「canonical 外」を区別）**:
@@ -103,7 +106,10 @@ gh issue view [issue-number] --json labels --jq '[.labels[].name] | map(select(s
 - **OB**: ログ、コマンド出力のいずれかが根拠として含まれていること
 - **EB**: 仕様書パス / 既存テスト名 / Issue / ドキュメントパスなど 1 次情報の根拠があること
 - **再現手順**: 前提条件 + 操作 + 観測結果が番号付きで書かれていること
-- 再現不能と本文に書かれている bug は本スキルで ABORT（調査 Issue に格下げを推奨）
+- bug の admissibility は以下の 2 区分で判定する:
+  - **(a) 証跡が一切ない**（再現不能と本文に書かれている / OB を示すログ・出力が全くない）→ 本スキルで ABORT（調査 Issue に格下げを推奨）
+  - **(b) 実世界障害ログで証明済み**（本文またはリンク先に OB を直接示す実ログ＝失敗コマンド・エラー文言・exit code・API 応答・関連 Issue/PR の実行ログ等が存在し、かつ **その OB に対応する EB を検証する恒久回帰テストが構築可能**）→ 合成再現テストの Red→Green ログが本文に無くても **admissible**（ABORT しない）。実ログを実装前 Red 証跡の代替として扱ってよい
+- この代替は**実装前 Red ログのみの例外**であり、再現可能性そのもの（OB に対応する EB を検証する回帰テストが書けること）は免除しない。実ログがあっても回帰テストで OB を検証できない genuinely 再現不能な bug は (a) として ABORT する。下流の design（番号付き再現手順）/ implement（OB 対応の回帰テスト）の要求は緩めない。修正後の回帰テスト Green・影響範囲の品質ゲート・同根欠陥確認も免除しない。実ログが OB と対応しない場合、単なる省力化・実行時間短縮・後付け都合を理由とする場合は代替不可
 
 #### 観点 11（refactor）: 測定可能性の例
 
@@ -144,7 +150,7 @@ gh issue view [issue-number] --json labels --jq '[.labels[].name] | map(select(s
 ### Step 1: Issue 本文の取得
 
 ```bash
-gh issue view [issue-number] --json title,body,labels --jq '{title: .title, body: .body, labels: [.labels[].name]}'
+kaji issue view [issue_id] --json title,body,labels --jq '{title: .title, body: .body, labels: [.labels[].name]}'
 ```
 
 取得した本文を以降のステップで分析する。
@@ -188,7 +194,7 @@ Verdict に応じて以下の形式で Issue コメントに投稿する。
 **PASS の場合:**
 
 ```bash
-gh issue comment [issue-number] --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit --body-file - <<'EOF'
 ## レディネスレビュー
 
 全観点クリア。作業着手に進行可。
@@ -198,7 +204,7 @@ EOF
 **RETRY の場合:**
 
 ```bash
-gh issue comment [issue-number] --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit --body-file - <<'EOF'
 ## レディネスレビュー
 
 ### 指摘事項
@@ -208,14 +214,14 @@ gh issue comment [issue-number] --body-file - <<'EOF'
 
 ### 判定
 
-RETRY — 上記を修正後、再度 `/issue-review-ready [number]` を実行してください。
+RETRY — 上記を修正後、再度 `/issue-review-ready [issue_id]` を実行してください。
 EOF
 ```
 
 **ABORT の場合:**
 
 ```bash
-gh issue comment [issue-number] --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit --body-file - <<'EOF'
 ## レディネスレビュー
 
 ### 理由
@@ -237,13 +243,13 @@ EOF
 
 | 項目 | 値 |
 |------|-----|
-| Issue | #[issue-number] |
+| Issue | [issue_ref] |
 | 判定 | PASS / RETRY / ABORT |
 
 ### 次のステップ
 
-- PASS: `/issue-start [issue-number]` で worktree をセットアップ
-- RETRY: Issue 本文を修正後、再度 `/issue-review-ready [issue-number]` を実行
+- PASS: `/issue-start [issue_id]` で worktree をセットアップ
+- RETRY: Issue 本文を修正後、再度 `/issue-review-ready [issue_id]` を実行
 - ABORT: Issue を close するか、内容を根本的に見直し
 ```
 

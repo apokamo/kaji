@@ -234,6 +234,44 @@ class TestBackWithoutSuggestion:
 
 
 # ============================================================
+# 8b. BACK_DESIGN / BACK_IMPLEMENT suggestion requirement
+# ============================================================
+
+
+@pytest.mark.small
+class TestBackPrefixSuggestionRequired:
+    """BACK_* prefixed statuses require non-empty suggestion (same as BACK)."""
+
+    def test_back_design_missing_suggestion_raises(self) -> None:
+        valid = {"PASS", "RETRY", "BACK_DESIGN", "BACK_IMPLEMENT", "ABORT"}
+        body = 'status: BACK_DESIGN\nreason: "設計起因"\nevidence: "影響ドキュメント漏れ"'
+        output = _wrap_verdict(body)
+
+        with pytest.raises(VerdictParseError):
+            parse_verdict(output, valid)
+
+    def test_back_implement_missing_suggestion_raises(self) -> None:
+        valid = {"PASS", "RETRY", "BACK_DESIGN", "BACK_IMPLEMENT", "ABORT"}
+        body = 'status: BACK_IMPLEMENT\nreason: "実装起因"\nevidence: "テスト証跡欠落"'
+        output = _wrap_verdict(body)
+
+        with pytest.raises(VerdictParseError):
+            parse_verdict(output, valid)
+
+    def test_back_design_with_suggestion_succeeds(self) -> None:
+        valid = {"PASS", "RETRY", "BACK_DESIGN", "BACK_IMPLEMENT", "ABORT"}
+        body = (
+            'status: BACK_DESIGN\nreason: "設計起因"\n'
+            'evidence: "影響ドキュメント漏れ"\nsuggestion: "/issue-design に戻る"'
+        )
+        output = _wrap_verdict(body)
+        result = parse_verdict(output, valid)
+
+        assert result.status == "BACK_DESIGN"
+        assert result.suggestion == "/issue-design に戻る"
+
+
+# ============================================================
 # 9. PASS without suggestion → defaults to empty string
 # ============================================================
 
@@ -664,7 +702,8 @@ class TestAIFormatterSuccess:
         def mock_formatter(text: str) -> str:
             return _make_verdict_block(status="PASS", reason="formatted OK", evidence="AI fixed it")
 
-        output = "garbage that can't be parsed at all"
+        # delimiter exists but inner YAML is malformed → Step 3 gate passes
+        output = "---VERDICT---\nstatus: ???\n---END_VERDICT---"
         result = parse_verdict(output, VALID_STATUSES, ai_formatter=mock_formatter, max_retries=2)
         assert result.status == "PASS"
         assert result.reason == "formatted OK"
@@ -684,7 +723,8 @@ class TestAIFormatterRelaxedSuccess:
                 "--- END VERDICT ---"
             )
 
-        output = "unparseable text"
+        # delimiter exists but inner YAML is malformed → Step 3 gate passes
+        output = "---VERDICT---\nstatus: ???\n---END_VERDICT---"
         result = parse_verdict(output, VALID_STATUSES, ai_formatter=mock_formatter, max_retries=2)
         assert result.status == "RETRY"
 
@@ -701,8 +741,10 @@ class TestAIFormatterAllRetriesFail:
             call_count += 1
             return "still garbage"
 
+        # delimiter exists but inner YAML is malformed → Step 3 gate passes
+        output = "---VERDICT---\nstatus: ???\n---END_VERDICT---"
         with pytest.raises(VerdictParseError):
-            parse_verdict("unparseable", VALID_STATUSES, ai_formatter=mock_formatter, max_retries=3)
+            parse_verdict(output, VALID_STATUSES, ai_formatter=mock_formatter, max_retries=3)
         assert call_count == 3
 
 
@@ -728,8 +770,10 @@ class TestAIFormatterMaxRetries1:
             call_count += 1
             return "bad"
 
+        # delimiter exists but inner YAML is malformed → Step 3 gate passes
+        output = "---VERDICT---\nstatus: ???\n---END_VERDICT---"
         with pytest.raises(VerdictParseError):
-            parse_verdict("unparseable", VALID_STATUSES, ai_formatter=mock_formatter, max_retries=1)
+            parse_verdict(output, VALID_STATUSES, ai_formatter=mock_formatter, max_retries=1)
         assert call_count == 1
 
 
@@ -833,9 +877,11 @@ class TestInvalidVerdictValueFormatterRaise:
                 evidence="bad",
             )
 
+        # delimiter exists but inner YAML is malformed → Step 3 gate passes
+        output = "---VERDICT---\nstatus: ???\n---END_VERDICT---"
         with pytest.raises(InvalidVerdictValue):
             parse_verdict(
-                "unparseable",
+                output,
                 VALID_STATUSES,
                 ai_formatter=mock_formatter,
                 max_retries=2,
@@ -876,7 +922,13 @@ class TestInputTruncation:
             call_args.append(text)
             return _make_verdict_block(status="PASS", reason="OK", evidence="green")
 
-        long_output = "x" * (AI_FORMATTER_MAX_INPUT_CHARS + 5000)
+        # Tail must contain a delimiter so the Step 3 gate passes, otherwise
+        # the truncation strategy is never exercised (head/tail strategy keeps
+        # the tail, where the delimiter lives, intact).
+        long_output = (
+            "x" * (AI_FORMATTER_MAX_INPUT_CHARS + 5000)
+            + "\n---VERDICT---\nstatus: ???\n---END_VERDICT---"
+        )
         result = parse_verdict(
             long_output,
             VALID_STATUSES,
@@ -886,6 +938,8 @@ class TestInputTruncation:
         assert result.status == "PASS"
         assert len(call_args[0]) <= AI_FORMATTER_MAX_INPUT_CHARS
         assert "[truncated]" in call_args[0]
+        # The trailing delimiter must survive truncation (gate prerequisite).
+        assert "---VERDICT---" in call_args[0]
 
 
 # ============================================================
@@ -1033,3 +1087,150 @@ class TestParseRelaxedFields:
         text = "Result: PASS"
         with pytest.raises(VerdictParseError):
             _parse_relaxed_fields(text, VALID_STATUSES)
+
+
+# ============================================================
+# Issue #193: delimiter-presence-only Step 3 gate
+# ============================================================
+
+
+@pytest.mark.small
+class TestStep3DelimiterGate:
+    """Step 3 (AI formatter) must only run when a verdict delimiter was extracted.
+
+    Without this gate, the formatter has been observed to fabricate PASS
+    verdicts from natural-language progress reports (Issue #193 / #184).
+    """
+
+    def test_step3_rejects_output_without_delimiter_natural_language_only(self) -> None:
+        """Issue #184 reproduction: progress report only, no delimiter, no status keyword."""
+        call_count = 0
+
+        def mock_formatter(text: str) -> str:
+            nonlocal call_count
+            call_count += 1
+            return _make_verdict_block(status="PASS", reason="fabricated", evidence="fabricated")
+
+        # Synthetic sample mirroring Issue #184 console.log tail.
+        output = (
+            "Phase A-G の実装完了、品質ゲート改善確認、pytest baseline clean から続行中\n"
+            "baseline 改善確認OK。pytest 完了待ち。\n"
+        )
+        with pytest.raises(VerdictNotFound):
+            parse_verdict(output, VALID_STATUSES, ai_formatter=mock_formatter)
+        assert call_count == 0, "Step 3 must not be invoked when no delimiter is present"
+
+    def test_step3_rejects_output_with_status_keyword_only_no_delimiter(self) -> None:
+        """Status keyword in natural language without delimiter → VerdictNotFound, no formatter."""
+        call_count = 0
+
+        def mock_formatter(text: str) -> str:
+            nonlocal call_count
+            call_count += 1
+            return _make_verdict_block(status="PASS", reason="fabricated", evidence="fabricated")
+
+        output = "I will set Status: PASS once tests finish.\npytest waiting"
+        with pytest.raises(VerdictNotFound):
+            parse_verdict(output, VALID_STATUSES, ai_formatter=mock_formatter)
+        assert call_count == 0, "Step 3 must not be invoked from status keyword alone"
+
+    def test_step3_invoked_when_delimiter_present_but_malformed(self) -> None:
+        """Delimiter present + malformed YAML → formatter IS invoked (gate passes)."""
+        call_count = 0
+
+        def mock_formatter(text: str) -> str:
+            nonlocal call_count
+            call_count += 1
+            return _make_verdict_block(status="PASS", reason="recovered", evidence="recovered")
+
+        output = "prefix\n---VERDICT---\nstatus: ???\nmalformed yaml :: ::\n---END_VERDICT---\n"
+        result = parse_verdict(output, VALID_STATUSES, ai_formatter=mock_formatter)
+        assert result.status == "PASS"
+        assert call_count == 1
+
+    def test_step3_invoked_when_relaxed_delimiter_only_present(self) -> None:
+        """Relaxed delimiter (space / case variation) + malformed → formatter invoked."""
+        call_count = 0
+
+        def mock_formatter(text: str) -> str:
+            nonlocal call_count
+            call_count += 1
+            return _make_verdict_block(status="RETRY", reason="recovered", evidence="recovered")
+
+        output = "--- VERDICT ---\nstatus: ???\nbroken\n--- END VERDICT ---\n"
+        result = parse_verdict(output, VALID_STATUSES, ai_formatter=mock_formatter)
+        assert result.status == "RETRY"
+        assert call_count == 1
+
+    def test_step2b_still_succeeds_with_status_and_fields_no_delimiter(self) -> None:
+        """V5/V6 compat: Status + Reason + Evidence without delimiter → Step 2b success."""
+        call_count = 0
+
+        def mock_formatter(text: str) -> str:
+            nonlocal call_count
+            call_count += 1
+            return _make_verdict_block(status="PASS", reason="should not be called", evidence="x")
+
+        output = "Status: PASS\nReason: tests passed\nEvidence: 1384 passed"
+        result = parse_verdict(output, VALID_STATUSES, ai_formatter=mock_formatter)
+        assert result.status == "PASS"
+        assert result.reason == "tests passed"
+        assert call_count == 0, "Step 2b should succeed without invoking the formatter"
+
+
+@pytest.mark.small
+class TestFormatterSentinel:
+    """Formatter may emit NO_VERDICT_SENTINEL to signal that no verdict exists."""
+
+    def test_formatter_sentinel_response_raises_verdict_not_found(self) -> None:
+        """Formatter returning the sentinel alone → VerdictNotFound."""
+
+        def mock_formatter(text: str) -> str:
+            return "---NO_VERDICT_FOUND---"
+
+        # Delimiter exists so Step 3 runs; formatter then returns sentinel.
+        output = "---VERDICT---\n(progress report only)\n---END_VERDICT---"
+        with pytest.raises(VerdictNotFound):
+            parse_verdict(output, VALID_STATUSES, ai_formatter=mock_formatter)
+
+    def test_formatter_prompt_contains_sentinel_instruction(self) -> None:
+        """FORMATTER_PROMPT documents the NO_VERDICT_FOUND sentinel for the AI."""
+        from kaji_harness.verdict import FORMATTER_PROMPT
+
+        assert "---NO_VERDICT_FOUND---" in FORMATTER_PROMPT.template
+
+    def test_formatter_sentinel_with_surrounding_whitespace(self) -> None:
+        """Sentinel surrounded by whitespace/newlines is still treated as sentinel."""
+
+        def mock_formatter(text: str) -> str:
+            return "\n\n---NO_VERDICT_FOUND---\n"
+
+        output = "---VERDICT---\n(progress report only)\n---END_VERDICT---"
+        with pytest.raises(VerdictNotFound):
+            parse_verdict(output, VALID_STATUSES, ai_formatter=mock_formatter)
+
+    def test_valid_verdict_quoting_sentinel_literal_is_not_misclassified(self) -> None:
+        """A valid verdict whose body quotes the sentinel literal must parse normally.
+
+        Regression: previously ``NO_VERDICT_SENTINEL in formatted`` used substring
+        matching, so any verdict referencing the literal sentinel in reason /
+        evidence (e.g. when documenting the failure mode) was misclassified as
+        ``VerdictNotFound``.
+        """
+
+        def mock_formatter(text: str) -> str:
+            return (
+                "---VERDICT---\n"
+                "status: PASS\n"
+                'reason: "documented the ---NO_VERDICT_FOUND--- sentinel handling"\n'
+                'evidence: "tests/test_verdict_parser.py mentions ---NO_VERDICT_FOUND---"\n'
+                'suggestion: ""\n'
+                "---END_VERDICT---\n"
+            )
+
+        # Delimiter present so Step 3 runs; strict/relaxed body parsing fails
+        # (empty body) so the formatter is invoked.
+        output = "---VERDICT---\n\n---END_VERDICT---"
+        result = parse_verdict(output, VALID_STATUSES, ai_formatter=mock_formatter)
+        assert result.status == "PASS"
+        assert "---NO_VERDICT_FOUND---" in result.reason

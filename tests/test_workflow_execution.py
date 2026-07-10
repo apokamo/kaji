@@ -5,12 +5,14 @@ Verifies state transitions, retry cycles, abort handling, --from resume,
 --step single execution, MissingResumeSessionError, and run log terminal state.
 """
 
+import logging
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from kaji_harness.config import KajiConfig
+from kaji_harness.console_log import configure_console_logging
 from kaji_harness.errors import MissingResumeSessionError, WorkflowValidationError
 from kaji_harness.models import CLIResult, CostInfo, CycleDefinition, Step, Workflow
 from kaji_harness.runner import WorkflowRunner
@@ -110,14 +112,46 @@ def _cycle_workflow() -> Workflow:
 
 def _make_config(tmp_path: Path) -> KajiConfig:
     """Create a minimal KajiConfig for use in tests."""
+    import subprocess as _sp
+
     kaji_dir = tmp_path / ".kaji"
     kaji_dir.mkdir(exist_ok=True)
     config_file = kaji_dir / "config.toml"
     if not config_file.exists():
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
         )
+    # gl:21: provider.type='local' requires a git repo for main worktree resolution.
+    if not (tmp_path / ".git").exists():
+        _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
     return KajiConfig._load(config_file)
+
+
+def _ensure_local_issue(tmp_path: Path, issue: int) -> None:
+    """provider=local 用に `local-pc1-<issue>` が存在することを保証する。
+
+    Phase 3-e 以降は `WorkflowRunner.run()` 前に IssueContext 解決が走るため、
+    Issue dir が無いと IssueContextResolutionError で fail-fast する。
+
+    counter file を ``issue - 1`` に固定してから 1 度 create_issue を呼ぶ
+    ことで、`issue` を直接採番させる（O(1) で目的の id を作る）。
+    """
+    from kaji_harness.providers import LocalProvider
+
+    counter_path = tmp_path / ".kaji" / "counters" / "pc1.txt"
+    counter_path.parent.mkdir(parents=True, exist_ok=True)
+    issues_root = tmp_path / ".kaji" / "issues"
+    issues_root.mkdir(parents=True, exist_ok=True)
+    if any(d.name.startswith(f"local-pc1-{issue}-") for d in issues_root.iterdir()):
+        return
+    counter_path.write_text(str(issue - 1))
+    provider = LocalProvider(repo_root=tmp_path, machine_id="pc1")
+    provider.create_issue(
+        title=f"test issue {issue}",
+        body="body",
+        labels=["type:feature"],
+        slug=f"test-{issue}",
+    )
 
 
 def _make_runner(
@@ -130,6 +164,8 @@ def _make_runner(
     """Create a WorkflowRunner with project_root and artifacts_dir."""
     if config is None:
         config = _make_config(tmp_path)
+    if config.provider is not None and config.provider.type == "local":
+        _ensure_local_issue(tmp_path, issue)
     return WorkflowRunner(
         workflow=workflow,
         issue_number=issue,
@@ -412,3 +448,84 @@ class TestWorkflowEndLogging:
         assert len(logged_calls) == 1
         assert logged_calls[0]["status"] == "ERROR"
         assert "RuntimeError" in logged_calls[0]["error"]
+
+
+@pytest.mark.medium
+class TestConsoleProgress:
+    """Issue #235: 起動コンソール向け console progress（kaji.* logging）の検証。"""
+
+    def test_progress_lines_routed_to_stdout(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        workflow = _simple_workflow()
+        results = [
+            _make_cli_result("PASS", session_id="sess-1"),
+            _make_cli_result("PASS", session_id="sess-2"),
+        ]
+        call_count = 0
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            nonlocal call_count
+            r = results[call_count]
+            call_count += 1
+            return r
+
+        configure_console_logging(logging.INFO)
+        with (
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+        ):
+            runner = _make_runner(tmp_path, workflow)
+            runner.run()
+        out = capsys.readouterr().out
+
+        assert "[kaji] workflow start: test-workflow" in out
+        assert "step start: design attempt-001 dispatch=agent agent=claude" in out
+        assert "verdict detected: design source=" in out
+        assert "step end: design status=PASS" in out and "next=review" in out
+        assert "step end: review status=PASS" in out and "next=end" in out
+        assert "workflow end: status=COMPLETE" in out
+
+    def test_run_log_jsonl_unchanged_by_console_progress(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """console progress を有効化しても run.log の JSONL イベント列は不変。"""
+        import json as _json
+
+        workflow = _simple_workflow()
+        results = [
+            _make_cli_result("PASS", session_id="sess-1"),
+            _make_cli_result("PASS", session_id="sess-2"),
+        ]
+        call_count = 0
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            nonlocal call_count
+            r = results[call_count]
+            call_count += 1
+            return r
+
+        configure_console_logging(logging.INFO)
+        with (
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+        ):
+            runner = _make_runner(tmp_path, workflow)
+            runner.run()
+
+        run_logs = list((tmp_path / ".kaji-artifacts").rglob("run.log"))
+        assert run_logs, "run.log not found"
+        events = [
+            _json.loads(line)["event"]
+            for line in run_logs[0].read_text().splitlines()
+            if line.strip()
+        ]
+        # console progress 行は run.log（JSONL 機械可読ログ）に混入しない。
+        assert "workflow_start" in events
+        assert "workflow_end" in events
+        for ev in events:
+            assert not ev.startswith("[kaji]")

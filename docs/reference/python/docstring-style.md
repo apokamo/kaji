@@ -6,7 +6,7 @@ kaji における docstring・コメントの記述規約。Google Style docstri
 
 ## 基本方針
 
-- **Google Style 準拠**: CLAUDE.md 既定の「Google docstrings」に従う
+- **Google Style 準拠**: kaji の docstring 規約は Google Style を採用する（本ドキュメントが正本）
 - **型ヒントと重複しない**: 型情報は型アノテーションで表現し、docstring では意味・制約を記述する
 - **AI エージェントが参照する規約**: grep しやすく、機械的に適用できる粒度で記述する
 - **モジュール冒頭の docstring は必須**（PEP 257 準拠）

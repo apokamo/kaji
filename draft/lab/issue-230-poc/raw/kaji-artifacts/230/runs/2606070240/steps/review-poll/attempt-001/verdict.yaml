@@ -1,0 +1,4 @@
+status: RETRY
+reason: codex auto-review が現在 head に対し COMMENTED review を投稿
+evidence: bot review on head 0784f83
+suggestion: /pr-fix を実行して codex auto-review 指摘に対応する。

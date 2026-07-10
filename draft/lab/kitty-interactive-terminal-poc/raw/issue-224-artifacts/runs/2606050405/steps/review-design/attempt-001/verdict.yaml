@@ -1,0 +1,11 @@
+status: RETRY
+reason: "設計は主要な IF とテスト戦略を満たしているが、任意依存として扱う script(1) の互換性条件が不足しており、想定環境の macOS native で wrapper が agent 起動前に失敗しうるため。"
+evidence: |
+  設計書 draft/design/issue-224-feat-interactive-terminal-runner.md は type:feature として、repository config / CLI option / execute_interactive_terminal の公開 IF / wrapper の 9 引数契約 / session ID 契約 / cleanup 契約 / S-M-L テスト戦略 / 影響ドキュメントを定義している。
+  一次情報 docs/adr/005-artifact-primary-verdict.md と kaji_harness/verdict.py の resolve_verdict() は artifact verdict.yaml primary を実装しており、stdout を持たない runner でも verdict 解決できるという設計前提と整合している。
+  現行 kaji_harness/runner.py:632-671 は prompt.txt 保存、execute_cli dispatch、session 保存、resolve_verdict の統合点を持ち、設計書が示す runner dispatch 差し替え箇所と整合している。
+  現行 kaji_harness/config.py:143-160 は [execution] default_timeout のみを読むため、agent_runner / interactive_terminal_close_on_verdict と [execution] overlay の追加スコープは明確である。
+  ローカルの claude --help / codex --help / codex resume --help / kitty --help では、設計書の Claude/Codex/kitty 起動 option は現在の CLI と整合している。
+  ただし設計書は script(1) を「任意」とし、PATH にあれば `script --quiet --flush --command <cmd> <terminal_log_path>` を使い、無ければ直接起動するとしている。ローカル util-linux script --help では --quiet/--flush/--command が存在する一方、OpenBSD/FreeBSD 系 script(1) は短い option 体系（例: -c command, -q）で、GNU long option 前提ではない。設計書は macOS native を kitty 単独採用の想定環境に含めているため、macOS のように script が存在するが GNU long option 非互換の環境では「script 不在時 fallback」に入らず、wrapper が agent 起動前に失敗する可能性がある。
+  テスト戦略も script(1) が「ある場合」と「無い場合」だけを検証しており、「存在するが GNU option 非対応」の fallback または fail-soft を検証しない。
+suggestion: "script(1) は `script --help` 等で GNU util-linux 互換を検出して使う、非互換なら直接起動へ fallback する、または transcript は Linux-only と明記して macOS 手動検証条件から外す。あわせて fake script で long option を拒否する Medium テストを追加し、wrapper が agent 直接起動へ進むことを検証してください。"

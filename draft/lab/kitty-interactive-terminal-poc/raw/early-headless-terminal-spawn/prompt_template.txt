@@ -1,0 +1,13 @@
+次のセルフチェックタスクを実行してください。
+
+- run_id: {run_id}
+- agent_kind: {agent}
+- run_dir: {run_dir}
+
+手順:
+1. シェルツールを使い、{run_dir}/output.txt に **そのまま** 次の1行を書き込んでください（前後に余計な文字を入れない）:
+   HELLO_FROM_{agent_upper}_{run_id}
+2. 続けてシェルツールで {run_dir}/sentinel を touch してください。
+3. 最後に、画面には「done」とだけ表示してください。長い説明は不要です。
+
+このタスクの目的はハーネスから別ターミナルを spawn して agent を起動する経路の検証です。output.txt と sentinel が正しく作成されることが合格条件です。

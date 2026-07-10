@@ -1,110 +1,319 @@
-# kaji「舵」
+# kaji
 
-AI-driven software development workflow orchestrator. Claude Code / Codex / Gemini CLI のスキルをワークフロー YAML に従って実行する。
+Language: English | [Japanese](README.ja.md)
 
-> **V7 (kaji_harness) が現在の正規エントリポイントです。** `legacy/` は V5/V6 の参照用アーカイブであり、サポート対象外です。
+[![Release](https://img.shields.io/github/v/release/apokamo/kaji?include_prereleases)](https://github.com/apokamo/kaji/releases)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](pyproject.toml)
+[![License](https://img.shields.io/badge/License-Apache--2.0-blue)](LICENSE)
 
-## アーキテクチャ概要
+https://github.com/user-attachments/assets/b1e3fb2e-6b92-4798-8f4c-0227b0727ce1
 
-3層アーキテクチャでAIエージェントを制御:
+<p align="center">
+  <a href="docs/assets/demo.mp4">Watch the terminal demo (MP4)</a>
+</p>
 
+Closed-loop agentic development for Claude Code, Codex, and Gemini CLI.
+
+kaji turns an issue into a resumable design -> implement -> review -> fix
+-> verify -> PR loop, with human-in-the-loop gates and artifact-backed
+verdicts. It is built for developers who want AI agents to do real work without
+turning the development process into a black box.
+
+> `kaji` means "rudder" in Japanese: the human keeps direction, agents do the
+> rowing.
+
+## Why kaji
+
+AI coding agents are powerful, but one-shot prompting is hard to govern. The
+missing layer is often the workflow around the agent: when to design, when to
+review, when to fix, when to stop, and when a human should decide.
+
+kaji provides that layer.
+
+- Define the development process as workflow YAML.
+- Route each step to Claude Code, Codex, or Gemini CLI.
+- Use bounded review/fix/verify loops instead of endless chat.
+- Capture decisions as structured verdict artifacts.
+- Resume from a specific step when work is interrupted.
+- Keep human approval at the points that matter.
+
+Beyond vibe coding: kaji gives AI-assisted development a loop, a log, and a
+quality gate.
+
+## How it works
+
+```mermaid
+flowchart TB
+  Issue["Issue"] --> Ready{"Ready gate"}
+  Ready -- "PASS" --> Start["Issue start"]
+  Ready -- "RETRY" --> FixReady["Fix ready"]
+  FixReady --> Ready
+
+  Start --> Design["Design"]
+  Design --> DesignReview{"Design review"}
+  DesignReview -- "PASS" --> Implement["Implement"]
+  DesignReview -- "RETRY" --> FixDesign["Fix design"]
+  FixDesign --> VerifyDesign["Verify design"]
+  VerifyDesign -- "PASS" --> Implement
+  VerifyDesign -- "RETRY" --> FixDesign
+
+  Implement -- "PASS" --> CodeReview{"Code review"}
+  Implement -- "RETRY" --> Implement
+  Implement -- "BACK" --> Design
+  CodeReview -- "PASS" --> FinalCheck["Final check"]
+  CodeReview -- "RETRY" --> FixCode["Fix code"]
+  CodeReview -- "BACK" --> Design
+  CodeReview -- "BACK_IMPLEMENT" --> Implement
+  FixCode --> VerifyCode["Verify code"]
+  VerifyCode -- "PASS" --> FinalCheck
+  VerifyCode -- "RETRY" --> FixCode
+
+  FinalCheck -- "PASS" --> PR["Pull request"]
+  FinalCheck -- "RETRY" --> FinalCheck
+  FinalCheck -- "BACK_DESIGN" --> Design
+  FinalCheck -- "BACK_IMPLEMENT" --> Implement
+
+  PR -- "PASS" --> ReviewPoll{"PR review poll"}
+  PR -- "RETRY" --> PR
+  ReviewPoll -- "PASS" --> Close["Issue close"]
+  ReviewPoll -- "RETRY" --> PRFix["PR fix"]
+  ReviewPoll -- "BACK_FALLBACK" --> Review["Fallback review"]
+  PRFix --> PRVerify["PR verify"]
+  PRVerify -- "PASS" --> Close
+  PRVerify -- "RETRY" --> PRFix
+  Review -- "PASS" --> Close
+  Review -- "RETRY" --> PRFix
 ```
-┌─────────────────────────────────────────────┐
-│  ハーネス (kaji_harness/)                     │
-│  ワークフロー YAML を解釈し CLI を順次呼出  │
-├─────────────────────────────────────────────┤
-│  スキル (.claude/skills/, .agents/skills/)   │
-│  実体は .claude、.agents は symlink         │
-├─────────────────────────────────────────────┤
-│  CLI (Claude Code / Codex / Gemini)          │
-│  スキルをロードし PJ コンテキストで実行     │
-└─────────────────────────────────────────────┘
-```
 
-詳細: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+Every agent step returns a verdict:
 
-## セットアップ（開発者向け）
+| Verdict | Meaning |
+|---------|---------|
+| `PASS` | Continue to the next step. |
+| `RETRY` | Fix the current problem and verify again. |
+| `BACK` | Return to an earlier phase, such as design or implementation. |
+| `ABORT` | Stop the workflow with an explicit reason. |
+
+The harness reads structured outputs such as `verdict.yaml`, records attempt
+artifacts, and advances the workflow deterministically from each verdict.
+
+## Core features
+
+- **Multi-agent workflow orchestration**: run Claude Code, Codex, and Gemini CLI
+  from one workflow definition.
+- **Closed review loops**: model review feedback as explicit
+  review -> fix -> verify cycles.
+- **Interactive tmux runner**: run normal CLI agents in tmux panes while kaji
+  watches for artifact-backed verdicts.
+- **Headless runner**: keep existing non-interactive automation paths for CI-like
+  execution.
+- **Deterministic exec steps**: run subprocess steps directly when no LLM is
+  needed.
+- **Artifact-primary verdicts**: prefer `verdict.yaml`, then fall back to issue
+  comments or stdout parsing.
+- **Issue and PR lifecycle**: coordinate GitHub issue, branch, PR, review, and
+  close workflows.
+- **TDD and docs-as-code**: keep implementation, review, tests, and docs in the
+  same process.
+
+## Extensibility
+
+kaji currently focuses on Claude Code, Codex, and Gemini CLI. The runner and
+workflow model are designed to support additional coding-agent CLIs when there
+is real demand.
+
+Have another coding agent you want to plug into the loop? Open an issue and
+tell us what workflow you want to run.
+
+## Quick start
+
+### Prerequisites
+
+- Python 3.11 or newer
+- `uv`
+- Claude Code, Codex, or Gemini CLI installed for the agents you want to run
+- `gh` authenticated if you use GitHub-backed issue and PR operations
+- `tmux` 3.1 or newer if you use the interactive terminal runner
+- A target repository with kaji skills under `.claude/skills/`
+
+### Install kaji
+
+Install from PyPI:
 
 ```bash
-uv sync
-source .venv/bin/activate
+uv tool install kaji
+kaji --help
 ```
 
-## 開発ワークフロー
+For unreleased development builds, install from Git:
 
-Issue 駆動の TDD 開発フロー。`/issue-review-ready` を着手前ゲートとして全 workflow 共通で適用し、PR 作成後は `/pr-verify` / `/pr-fix` のレビュー収束サイクルを経て `/issue-close` に到達する:
-
-```
-/issue-create → /issue-review-ready → /issue-start → /issue-design → /issue-implement
-              → /issue-pr → /pr-fix → /pr-verify → /issue-close
+```bash
+uv tool install git+https://github.com/apokamo/kaji.git
 ```
 
-ワークフローガイド: [docs/dev/workflow_guide.md](docs/dev/workflow_guide.md)
+### Configure your repository
 
-## 最小導入
-
-対象プロジェクトには `.kaji/config.toml` を配置する（コロケーテッドモデル）:
+In the repository where you want to run kaji, add `.kaji/config.toml`.
+The default workflow below, `.kaji/wf/dev.yaml`, is GitHub-backed because it
+opens PRs, polls review state, and closes issues.
 
 ```toml
-# .kaji/config.toml
 [paths]
-artifacts_dir = ".kaji/artifacts"    # 必須: アーティファクト保存先
-skill_dir = ".claude/skills"         # 必須: スキルディレクトリ
+artifacts_dir = ".kaji-artifacts"
+skill_dir = ".claude/skills"
+worktree_prefix = "kaji"
 
 [execution]
-default_timeout = 1800  # 必須: タイムアウトのデフォルト値（秒）
+default_timeout = 1800
+agent_runner = "headless"
+interactive_terminal_close_on_verdict = true
+
+[provider]
+type = "github"
+
+[provider.github]
+repo = "<owner>/<name>"
+default_branch = "main"
+git_remote = "origin"
 ```
 
-skill の実体は `.claude/skills/` に置き、`.agents/skills/` はそれを参照する symlink として扱う。
+For the full `.kaji/config.toml` reference, including overlays and all
+available keys, see
+[Configuration Reference](docs/reference/configuration.md).
 
-```text
-.claude/skills/
-  implement/
-    SKILL.md
-  review-code/
-    SKILL.md
-  fix-code/
-    SKILL.md
-  verify-code/
-    SKILL.md
+For local issue storage without GitHub, use a local provider config and create a
+gitignored machine overlay:
 
-.agents/skills/
-  review-code -> ../../.claude/skills/review-code
-  verify-code -> ../../.claude/skills/verify-code
+```toml
+[provider]
+type = "local"
 ```
 
-最小の workflow は次のようになる。
+```bash
+kaji local init
+```
+
+`kaji local init` creates `.kaji/config.local.toml` for the current machine; it
+does not replace the tracked base config. Local mode uses local-specific
+workflows such as `.kaji/wf/dev-local.yaml`. See
+[Local Mode CLI Guide](docs/cli-guides/local-mode.md)
+([Japanese](docs/cli-guides/local-mode.ja.md)) for the local provider setup.
+
+Skills live under `.claude/skills/`. Other agent-specific skill directories can
+point to the same canonical skill files with symlinks.
+
+### Run a workflow
+
+Workflow files are run from `.kaji/wf/` in each repository. This repository
+ships `.kaji/wf/dev.yaml`, `.kaji/wf/dev-thorough.yaml`, and `.kaji/wf/docs.yaml`
+as the current GitHub-backed workflow set. To start a new Python project with
+these workflows preconfigured, create it from the
+[kaji-starter-python](https://github.com/apokamo/kaji-starter-python) template
+repository and follow the
+[Python Starter Guide](docs/guides/python-starter.md).
+
+The `dev.yaml` example assumes that a GitHub issue already exists, required
+skills are available, selected agent CLIs are installed, and `/issue-create` has
+already been completed. The workflow runs `issue-start` itself.
+
+Run a workflow:
+
+```bash
+kaji run .kaji/wf/dev.yaml <issue-id>
+```
+
+Resume from a specific step:
+
+```bash
+kaji run .kaji/wf/dev.yaml <issue-id> --from fix-code
+```
+
+Run only one step:
+
+```bash
+kaji run .kaji/wf/dev.yaml <issue-id> --step review-code
+```
+
+### Develop kaji itself
+
+Use this path only when you want to work on kaji, not just run it in another
+repository:
+
+```bash
+git clone https://github.com/apokamo/kaji.git
+cd kaji
+uv sync
+source .venv/bin/activate
+kaji --help
+```
+
+## tmux interactive terminal runner
+
+Use this when you want kaji to launch normal Claude Code or Codex CLI sessions
+inside tmux panes instead of using the headless runner.
+
+```toml
+[execution]
+default_timeout = 2400
+agent_runner = "interactive_terminal"
+interactive_terminal_close_on_verdict = true
+```
+
+Then run from inside a tmux session:
+
+```bash
+tmux new-session
+kaji run .kaji/wf/dev.yaml <issue-id> --agent-runner interactive-terminal
+```
+
+The runner opens managed panes, records terminal transcripts, waits for
+`verdict.yaml`, and advances the workflow. This is useful for live observation,
+subscription CLI usage, and debugging agent behavior.
+
+Read more:
+[Interactive Terminal Runner](docs/cli-guides/interactive-terminal-runner.md)
+([Japanese](docs/cli-guides/interactive-terminal-runner.ja.md))
+
+## Workflow example
 
 ```yaml
 name: minimal-code-review
-description: "最小のコードレビュー付きフロー"
+description: "Bounded implement -> review -> fix -> verify loop"
 execution_policy: auto
+
+cycles:
+  code-review:
+    entry: review-code
+    loop: [fix-code, verify-code]
+    max_iterations: 3
+    on_exhaust: ABORT
 
 steps:
   - id: implement
-    skill: implement
+    skill: issue-implement
     agent: claude
     on:
       PASS: review-code
       ABORT: end
 
   - id: review-code
-    skill: review-code
+    skill: issue-review-code
     agent: codex
     on:
       PASS: end
       RETRY: fix-code
+      BACK_IMPLEMENT: implement
       ABORT: end
 
   - id: fix-code
-    skill: fix-code
+    skill: issue-fix-code
     agent: claude
     on:
       PASS: verify-code
       ABORT: end
 
   - id: verify-code
-    skill: verify-code
+    skill: issue-verify-code
     agent: codex
     resume: review-code
     on:
@@ -113,80 +322,55 @@ steps:
       ABORT: end
 ```
 
-`resume` は、同じ agent の前段ステップのコンテキストを引き継いで続きから実行するための指定。
+The review loop is bounded by `cycles.code-review.max_iterations`. The skill
+names above match kaji's standard skill set; your repository must provide those
+skill files. `model` and `effort` are optional in the YAML schema and omitted in
+this compact example; production workflows often pin them.
 
-## ワークフロー実行
+`resume` tells kaji to continue from a previous session for the same agent when
+the runner supports it.
 
-```bash
-# 最小 workflow を実行
-kaji run workflows/minimal-code-review.yaml 57
+## Documentation
 
-# 途中から再開
-kaji run workflows/minimal-code-review.yaml 57 --from fix-code
+| Topic | Link |
+|-------|------|
+| Architecture | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| Workflow overview | [docs/dev/workflow_overview.md](docs/dev/workflow_overview.md) |
+| Workflow authoring | [docs/dev/workflow-authoring.md](docs/dev/workflow-authoring.md) |
+| Skill authoring | [docs/dev/skill-authoring.md](docs/dev/skill-authoring.md) |
+| Interactive terminal runner | [docs/cli-guides/interactive-terminal-runner.md](docs/cli-guides/interactive-terminal-runner.md) ([Japanese](docs/cli-guides/interactive-terminal-runner.ja.md)) |
+| AI-driven development strategy | [docs/concepts/ai-driven-strategy.md](docs/concepts/ai-driven-strategy.md) ([Japanese](docs/concepts/ai-driven-strategy.ja.md)) |
+| CLI guides | [docs/cli-guides/](docs/cli-guides/) |
 
-# 単一ステップ実行
-kaji run workflows/minimal-code-review.yaml 57 --step review-code
+## AI-readable docs
 
-# 指定ステップの直前で停止（exclusive barrier。指定ステップは実行されない）
-kaji run workflows/feature-development.yaml 57 --before implement
+For AI assistants and crawlers, [llms.txt](llms.txt) provides a compact index of
+the most important docs, commands, and workflow concepts.
 
-# `--from` と組み合わせ: A から B の手前まで
-kaji run workflows/feature-development.yaml 57 --from fix-design --before implement
-```
+## Project status
 
-詳細:
-- [docs/dev/workflow-authoring.md](docs/dev/workflow-authoring.md)
-- [docs/dev/skill-authoring.md](docs/dev/skill-authoring.md)
+Current release: v0.12.0. kaji is under active development, and the supported
+user-facing entry point is the `kaji` CLI.
 
-## 品質チェック
+The `legacy/` directory contains historical code and is not part of the current
+supported runtime.
 
-コミット前に必ず実行:
+## Development
 
 ```bash
 source .venv/bin/activate
-make check                            # lint → format → typecheck → test
+make check
 ```
 
-変更タイプに応じた追加検証:
+Individual targets:
 
 ```bash
-make verify-docs                      # docs-only: リンク・参照整合チェック
-make verify-packaging                 # packaging/metadata: 隔離環境で uv install + metadata 確認
-```
-
-個別ターゲット: `make lint` / `make format` / `make typecheck` / `make test`
-
-## ドキュメント
-
-| ドキュメント | 内容 |
-|-------------|------|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | V7 アーキテクチャ詳細 |
-| [docs/adr/](docs/adr/) | アーキテクチャ決定記録 |
-| [docs/dev/workflow_overview.md](docs/dev/workflow_overview.md) | ワークフロー選択のエントリポイント |
-| [docs/dev/workflow_guide.md](docs/dev/workflow_guide.md) | ワークフロー選択基準 |
-| [docs/dev/workflow_completion_criteria.md](docs/dev/workflow_completion_criteria.md) | フェーズ別完了条件チェックリスト |
-| [docs/dev/documentation_update_criteria.md](docs/dev/documentation_update_criteria.md) | ドキュメント更新要否の判断フレームワーク |
-| [docs/dev/shared_skill_rules.md](docs/dev/shared_skill_rules.md) | スキル横断の責務境界ルール |
-| [docs/dev/testing-convention.md](docs/dev/testing-convention.md) | テスト規約 (S/M/L) |
-| [docs/dev/workflow-authoring.md](docs/dev/workflow-authoring.md) | ワークフロー YAML 定義 |
-| [docs/dev/skill-authoring.md](docs/dev/skill-authoring.md) | スキル作成ガイド |
-| [docs/concepts/ai-driven-strategy.md](docs/concepts/ai-driven-strategy.md) | 95% AI / 5% 人間の開発モデル |
-| [docs/concepts/ai-docs-management.md](docs/concepts/ai-docs-management.md) | Docs-as-Code 運用ルール |
-| [docs/cli-guides/](docs/cli-guides/) | CLI ツールガイド (Claude/Codex/Gemini) |
-
-## `legacy/` ディレクトリ
-
-V5/V6 の旧コード・テスト・ドキュメントを参照用に保持。
-
-```
-legacy/
-├── bugfix_agent/                  # V5/V6 パッケージ
-├── bugfix_agent_orchestrator.py   # V5 エントリポイント
-├── prompts/                       # V6 プロンプト
-├── tests/                         # V5 テスト
-├── docs/                          # V5 ドキュメント
-├── config.toml                    # V5 設定
-└── AGENT.md                       # V5 エージェント指示書
+make lint
+make format
+make typecheck
+make test
+make verify-docs
+make verify-packaging
 ```
 
 ## License

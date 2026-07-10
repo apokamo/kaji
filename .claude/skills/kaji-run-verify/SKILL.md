@@ -13,7 +13,7 @@ name: kaji-run-verify
 | タイミング | このスキルを使用 |
 |-----------|-----------------|
 | ワークフロー変更後の実機検証 | ✅ 必須 |
-| 「`kaji run workflows/... <issue>` を実行して、結果を Issue に残して」と依頼されたとき | ✅ 推奨 |
+| 「`kaji run .kaji/wf/... <issue>` を実行して、結果を Issue に残して」と依頼されたとき | ✅ 推奨 |
 | 通常の feature 開発をそのまま進めたいだけ | ⚠️ 任意 |
 | 単に YAML の静的検証だけしたい | ❌ `kaji validate` のみで十分 |
 
@@ -22,19 +22,19 @@ name: kaji-run-verify
 ### 手動実行（スラッシュコマンド）
 
 ```
-$ARGUMENTS = <workflow-path> <issue-number> [kaji run options...]
+$ARGUMENTS = <workflow-path> <issue_id> [kaji run options...]
 ```
 
-- `workflow-path` (必須): 例 `workflows/feature-development.yaml`
-- `issue-number` (必須): GitHub Issue 番号
+- `workflow-path` (必須): 例 `.kaji/wf/dev.yaml`
+- `issue_id` (必須): GitHub Issue 番号
 - `kaji run options...` (任意): `--from` / `--step` / `--workdir` / `--quiet` などをそのまま後続に渡す
 
 ### 例
 
 ```bash
-/kaji-run-verify workflows/feature-development.yaml 73
-/kaji-run-verify workflows/feature-development.yaml 73 --from fix-code
-/kaji-run-verify workflows/feature-development.yaml 73 --workdir ../kaji-feat-73
+/kaji-run-verify .kaji/wf/dev.yaml 73
+/kaji-run-verify .kaji/wf/dev.yaml 73 --from fix-code
+/kaji-run-verify .kaji/wf/dev.yaml 73 --workdir ../kaji-feat-73
 ```
 
 ## 前提知識の読み込み
@@ -61,7 +61,7 @@ $ARGUMENTS = <workflow-path> <issue-number> [kaji run options...]
 `$ARGUMENTS` から以下を取得する。
 
 1. `workflow_path`
-2. `issue_number`
+2. `issue_id`
 3. `extra_args` (`kaji run` にそのまま渡す残りの引数)
 
 `workflow_path` はメインリポジトリ基準の相対パスとして解決し、ファイルが存在することを確認する。
@@ -95,7 +95,7 @@ cd [main-repo-absolute-path] && source .venv/bin/activate && kaji validate [work
 ```bash
 LOG_FILE=$(mktemp)
 cd [main-repo-absolute-path] && source .venv/bin/activate && \
-  kaji run [workflow-path] [issue-number] [extra_args...] 2>&1 | tee "$LOG_FILE"
+  kaji run [workflow-path] [issue_id] [extra_args...] 2>&1 | tee "$LOG_FILE"
 RUN_EXIT=${PIPESTATUS[0]}
 ```
 
@@ -137,26 +137,26 @@ RUN_EXIT=${PIPESTATUS[0]}
 
 ```bash
 sed -n '1,220p' [workflow-path]
-gh issue view [issue-number] --comments
+kaji issue view [issue_id] --comments
 git worktree list
 ```
 
 ### Step 6: Issue コメント
 
 成功・失敗のどちらでも、Issue に必ずコメントする。
-`gh issue comment --body-file - <<'EOF'` を使い、以下のテンプレートをベースに記録すること。
+`kaji issue comment --body-file - <<'EOF'` を使い、以下のテンプレートをベースに記録すること。
 
 #### 成功テンプレート
 
 ````bash
-gh issue comment [issue-number] --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit --body-file - <<'EOF'
 # ワークフロー実行検証結果
 
 ## 実行コマンド
 
 ```bash
 kaji validate [workflow-path]
-kaji run [workflow-path] [issue-number] [extra_args...]
+kaji run [workflow-path] [issue_id] [extra_args...]
 ```
 
 ## 結果
@@ -164,7 +164,7 @@ kaji run [workflow-path] [issue-number] [extra_args...]
 | 項目 | 値 |
 |------|-----|
 | Workflow | `[workflow-path]` |
-| Issue | #[issue-number] |
+| Issue | [issue_ref] |
 | Exit Code | 0 |
 | Workdir | `[resolved-or-explicit-workdir]` |
 | Validation | PASS |
@@ -188,14 +188,14 @@ EOF
 #### 失敗テンプレート
 
 ````bash
-gh issue comment [issue-number] --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit --body-file - <<'EOF'
 # ワークフロー実行検証結果
 
 ## 実行コマンド
 
 ```bash
 kaji validate [workflow-path]
-kaji run [workflow-path] [issue-number] [extra_args...]
+kaji run [workflow-path] [issue_id] [extra_args...]
 ```
 
 ## 失敗概要
@@ -203,7 +203,7 @@ kaji run [workflow-path] [issue-number] [extra_args...]
 | 項目 | 値 |
 |------|-----|
 | Workflow | `[workflow-path]` |
-| Issue | #[issue-number] |
+| Issue | [issue_ref] |
 | Exit Code | `[exit-code]` |
 | 停止位置 | `[step-or-phase]` |
 | Workdir | `[resolved-or-explicit-workdir]` |
@@ -253,7 +253,7 @@ EOF
 | 項目 | 値 |
 |------|-----|
 | Workflow | [workflow-path] |
-| Issue | #[issue-number] |
+| Issue | [issue_ref] |
 | 判定 | PASS |
 
 Issue に検証結果とノウハウをコメント済み。
@@ -267,7 +267,7 @@ Issue に検証結果とノウハウをコメント済み。
 | 項目 | 値 |
 |------|-----|
 | Workflow | [workflow-path] |
-| Issue | #[issue-number] |
+| Issue | [issue_ref] |
 | 判定 | ABORT |
 
 Issue に失敗原因の調査結果をコメント済み。

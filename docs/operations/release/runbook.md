@@ -1,137 +1,200 @@
-# Release Runbook (Release-Please)
+# Release Runbook (`/release` skill)
 
-kaji のリリース運用 runbook。Release-Please (Issue #153) 導入以降の新フロー。
+kaji のリリース運用 runbook。`/release` skill を使った maintainer 手元実行と、
+GitHub Actions + PyPI Trusted Publisher による PyPI publish のフロー。
 
-- **対象**: リリース担当者（Release PR を merge する者）
-- **admin 初期設定**: [`admin-setup.md`](./admin-setup.md) を先に完了していること（token 登録・Actions permissions）
+- **対象**: リリース担当者（maintainer）
+- **前提**: kaji 開発環境セットアップ済み（`uv sync` / `.venv` 有効化可）。`gh` CLI が認証済み（`gh auth status`）
+- **方針**: maintainer が手元で `/release` skill を起動して version / tag / GitHub Release を作成し、PyPI publish は `publish-pypi.yml` に引き継ぐ
 
 ## リリースフロー全体像
-
-Release-Please の導入（Issue #153）以降、バージョンバンプ・タグ打鍵・GitHub Release 作成は自動化されている。リリース担当者の操作は **Release PR の merge 1 操作** に圧縮される。
 
 ```
 [日常]
 releasable な PR を main に merge
-※ release-type=python のため、CHANGELOG / version bump 対象は Conventional Commits 全般
-   （feat: は minor bump、fix:/その他は patch bump、BREAKING CHANGE: は major bump）
-    ↓ (release-please が自動起動)
-Release PR (vX.Y.Z) が自動生成・更新される
-    ↓ (pyproject.toml / CHANGELOG.md / .release-please-manifest.json を自動更新)
-uv-lock follow-up workflow が uv.lock を自動同期
-    ↓
+  ※ Conventional Commits 厳守（feat: → minor、fix: → patch、BREAKING CHANGE → major）
+
 [リリース時]
-リリース担当者が Release PR を merge
-    ↓ (release-please が自動実行)
-git tag vX.Y.Z + GitHub Release 公開 + manifest 更新
+maintainer が main worktree で `/release` を起動
+    ↓
+skill が pre-flight check → version 提案 → CHANGELOG → version bump → make check
+    ↓ user 承認
+skill が commit + tag → push（main / tag）→ gh release create
+    ↓
+GitHub Actions `publish-pypi.yml` が release published event で起動
+    ↓
+GitHub environment `pypi` approval
+    ↓
+Trusted Publisher + uv publish で PyPI に公開
+    ↓
+consumer (kamo2 等) が `uv lock --upgrade-package kaji` で新版取得
 ```
+
+## リリース担当者の操作
+
+```bash
+# main worktree で skill を起動
+cd /path/to/kaji  # main worktree（feature branch ではない）
+# GitHub を指す remote 名は skill が Step 1 で `git remote -v` の URL から動的解決する
+# （通常は `origin`。`.kaji/config.toml` の `provider.github.git_remote` 値と
+#  整合する remote 名であることが前提）
+git checkout main && git pull --ff-only "$GITHUB_REMOTE" main
+
+# 通常実行
+/release
+
+# dry-run（push と Release ページ作成手前まで確認）
+/release --dry-run
+```
+
+skill 側で以下を guide する:
+
+1. pre-flight check（GitHub remote 解決 / main / clean / sync / gh 認証）
+2. 直近 tag からの commit を Conventional Commits で解釈 → 次 version 提案（**user 承認**）
+3. CHANGELOG.md の `[Unreleased]` を新 version section に整える（**user 承認**）
+4. `pyproject.toml` の version を書き換え → `uv lock` → `make check`
+5. `chore(release): vX.Y.Z` で commit + annotated tag
+6. `git push --atomic "$GITHUB_REMOTE" main vX.Y.Z`（main と tag を 1 トランザクションで push）
+7. `gh release create vX.Y.Z --notes "<CHANGELOG 抜粋>"`
+8. GitHub Actions `publish-pypi.yml` の起動と `pypi` environment approval を確認
+9. PyPI 公開後、`uv tool install kaji && kaji --help` をクリーン環境で確認
+
+詳細は [`.claude/skills/release/SKILL.md`](../../../.claude/skills/release/SKILL.md) を参照。
 
 ## バージョン管理対象
 
 | ファイル | 用途 | 更新主体 |
 |---------|------|----------|
-| `pyproject.toml` | Python パッケージバージョン（**source of truth**） | Release-Please が自動更新 |
-| `.release-please-manifest.json` | Release-Please 内部の version 状態 | Release-Please が自動更新 |
-| `CHANGELOG.md` | リリースノート | Release-Please が自動生成・追記 |
-| `uv.lock` | Python 依存 lockfile | `release-please-lock.yml` が `uv sync --locked` 失敗時に自動再生成 |
+| `pyproject.toml` | Python パッケージバージョン（**source of truth**） | `/release` skill が user 承認後に書き換え |
+| `CHANGELOG.md` | リリースノート | `/release` skill が user 承認後に追記 |
+| `uv.lock` | Python 依存 lockfile | `/release` skill が `uv lock` で同期 |
+| git tag `vX.Y.Z` | release marker | `/release` skill が annotated tag を作成 |
+| GitHub Release ページ | consumer 向け配布点 | `/release` skill が `gh release create` で公開 |
+| `.github/workflows/publish-pypi.yml` | PyPI publish workflow | GitHub Release published event で起動 |
+| PyPI project `kaji` | PyPI 配布点 | Trusted Publisher 経由の `uv publish` で公開 |
 
-> **Note**: `kaji_harness/__init__.py` の `__version__` は Issue #153 で削除済み。CLI の `kaji --version` は `importlib.metadata.version("kaji")` 経由で `pyproject.toml` の値を読む。手動編集は非推奨。
+> **Note**: `kaji_harness/__init__.py` の `__version__` は存在しない。`kaji --version` は `importlib.metadata.version("kaji")` 経由で `pyproject.toml` の値を読む。手動編集は非推奨。
 
-## リリース担当者の操作
+## Conventional Commits とバージョン判定
 
-```bash
-# 保留中の Release PR を確認
-gh pr list --label "autorelease: pending"
+skill が直近 tag (`git describe --tags --abbrev=0`) 〜 HEAD の commit を解釈する。
 
-# Release PR を merge するだけ
-gh pr merge <release-pr> --merge
-# → tag vX.Y.Z と GitHub Release が自動作成される
-```
+| 検出条件 | bump |
+|---------|------|
+| commit body に `BREAKING CHANGE:` または `<type>!:` 形式 | major |
+| `feat:` / `feat(...)` を 1 件以上含む | minor |
+| `fix:` / `docs:` / `chore:` / `refactor:` / `test:` 等のみ | patch |
+| commit 0 件 | ABORT（release 対象なし） |
 
-> **Note**: commit message は Conventional Commits を厳守すること。違反時は CHANGELOG に反映されず、version bump 判定も行われない。kaji の commit 規約は CLAUDE.md の "Git & GitHub" セクションを参照。
+判定根拠（どの commit が決定打か）は skill が user に提示し、最終判断は user 承認で決定する。Conventional Commits 違反の commit は判定対象から外れるため、commit message 規約を main merge 時に徹底すること。
 
-## ad-hoc 実行（workflow_dispatch）
-
-main 上に release-please.yml が存在する状態（本 PR merge 後）であれば、`workflow_dispatch` で再実行できる。
-
-```bash
-gh workflow run release-please.yml -R apokamo/kaji
-# target-branch を変えたい場合
-gh workflow run release-please.yml -R apokamo/kaji -f target-branch=main
-```
+> **release 必要性の確認**: 候補 commit が `docs:` / `test:` / `chore:` のみ（`feat:` / `fix:` / BREAKING CHANGE を含まない）の場合、patch bump は SemVer 的には冗長で consumer 側 lockfile を無用に更新させる。skill は Step 2 の user 承認時に「本当に release するか」を明示的に問いかける。release を見送る場合は ABORT を選択し、次の `feat:` / `fix:` を待つ運用が望ましい。
 
 ## Dry-run 手順
 
-admin が token 登録・Actions permissions 設定・dry-run 実施・cleanup を行う。詳細は [`admin-setup.md`](./admin-setup.md) §Step 4 / §Step 5 を参照。
-
-概要（**post-merge / 初回リリース前**に実施）:
-1. `chore/release-please-dryrun` branch を main（既に release-please workflow が存在）から切って push
-2. `gh workflow run release-please.yml -f target-branch=chore/release-please-dryrun` で `workflow_dispatch` 起動
-3. Release PR 生成・version 提案・CHANGELOG 更新・`uv.lock` 追従を確認
-4. Release PR は **close のみ**（merge すると tag が打たれる）、検証 branch と自動生成 branch を削除
-
-## 初回リリース前チェックリスト
-
-本 Issue (#153) merge 後、初回 Release PR を merge する**前**に必ず以下を確認する。dry-run（`admin-setup.md` §Step 4）を未実施で初回 Release PR に進む場合は、以下を Release PR 上で同等に確認すること（dry-run を実施済みの場合も、本番 Release PR に対してはもう一度突き合わせる）。
-
-### A. 前提作業（admin / user 実施）
-
-- [ ] **GitHub App `kaji-release-please`** を作成し、`apokamo/kaji` に install 済み（[`admin-setup.md`](./admin-setup.md) §Step 1 Option A）
-- [ ] **repo secret** に `RELEASE_PLEASE_APP_ID` / `RELEASE_PLEASE_APP_PRIVATE_KEY` が登録済み（`gh secret list -R apokamo/kaji` で確認）
-- [ ] **Actions permissions**: 「Read and write」+「Allow GitHub Actions to create and approve pull requests」が ON（`apokamo/kaji` Settings → Actions → General）
-- [ ] **dry-run の実施 or 同等確認の完了**: `admin-setup.md` §Step 4 を実施済み、または初回 Release PR で B / C / D を確認する旨を意識している
-
-### B. Release PR の構造確認
-
-- [ ] Release PR の **head branch** が `release-please--branches--main--components--kaji`（または target-branch に応じた前方一致）になっている
-- [ ] **提案 version** が期待どおり（初回は `0.10.0` 想定。manifest `0.9.1` + feat 起因の minor bump）
-- [ ] **CHANGELOG.md** が新規生成され、`v0.9.1..main` の commits が `changelog-sections`（✨ Features / 🐛 Bug Fixes / 📝 Documentation など）で section 別に分類されている
-- [ ] `pyproject.toml` の `version` が提案 version に書き換わっている
-- [ ] `.release-please-manifest.json` が提案 version に書き換わっている
-
-### C. lock 追従 workflow の動作確認
-
-- [ ] `release-please-lock.yml` run が Release PR の opened / synchronize に応じて起動している（`gh run list -R apokamo/kaji -w release-please-lock.yml`）
-- [ ] `uv sync --locked` 結果が `in_sync=true`、または `uv lock` による自動 commit が Release PR に追加されている
-- [ ] Release PR head に GitHub App bot 名義の commit のみが追加されている（人手 push が混入していない）
-
-### D. version SoT / CLI 動作確認
-
-- [ ] `kaji_harness/__init__.py` に `__version__` が**ない**（Issue #153 で削除済み。`importlib.metadata.version("kaji")` 経由に統一）
-- [ ] Release PR を base に隔離環境で `uv pip install -e .` → `kaji --version` が提案 version を返す（任意 / 不安なときの追加確認）
-
-### E. Release PR merge 後の事後確認（参考）
-
-- [ ] tag `v0.10.0`（または採番された値）が自動付与されている（`gh release list -R apokamo/kaji`）
-- [ ] GitHub Release が公開され、CHANGELOG の該当セクションが Release notes として転記されている
-- [ ] 次回以降、main への conventional commits の merge ごとに Release PR が自動更新されることを最初の数本で目視確認する
-
-> **未充足が見つかった場合**: 原因が config / workflow 側にあれば別 Issue を起票して修正 PR を出す（本 Issue は merge 済み）。secret / permissions 起因であれば admin が `admin-setup.md` の該当 Step を再確認する。
-
-## 緊急時の手動バンプ（fallback）
-
-Release-Please / GitHub Actions が停止している場合のみ使用する。通常運用では使わない。
+本番 push 前にローカルで動作確認したい場合:
 
 ```bash
-git checkout -b chore/manual-version-bump-${VERSION}
-# pyproject.toml の version を手動編集
-uv lock
-git add pyproject.toml uv.lock
-make check
-git commit -m "chore: bump version to ${VERSION} (manual fallback)"
-git push -u origin chore/manual-version-bump-${VERSION}
-gh pr create --title "chore: bump version to ${VERSION}" --base main
-# merge 後
-git tag ${VERSION} && git push origin ${VERSION}
-gh release create ${VERSION} --title "${VERSION}" --generate-notes
+/release --dry-run
 ```
 
-> **Note**: `${VERSION}` は `vX.Y.Z` 形式（例: `v0.10.0`）。復旧後は通常フロー（Release-Please）に戻すこと。
+skill が Step 1-5 までを実行し、Step 6 (push)、Step 7 (Release ページ)、PyPI publish workflow 確認を **スキップ**。
+dry-run では tag push / GitHub Release 作成を行わないため、PyPI publish workflow も起動しない。
+終了時に skill が以下を提示する:
+
+- 作成された commit と tag の確認方法（`git show vX.Y.Z --stat`）
+- rollback 手順（dry-run のみ。本番経路では使わない）
+- 本番実行への進み方（dry-run 結果に問題がなければ手で push、または rollback してから `/release` 再実行）
+
+## 緊急時の手動フォールバック
+
+`/release` skill が使えない（claude harness が起動しない等）場合の手動手順。**通常運用では使わない**。
+
+事前に GitHub を指す remote 名を `git remote -v` で確認しておく（通常は `origin`）。以下は `$GITHUB_REMOTE` に解決済み remote 名を入れた前提。
+
+```bash
+# 0. GitHub remote を特定（通常 GITHUB_REMOTE=origin）
+GITHUB_REMOTE=$(git remote -v | awk '/github\.com.*\(push\)/{print $1; exit}')
+
+# 1. main を最新化
+git checkout main && git pull --ff-only "$GITHUB_REMOTE" main
+
+# 2. CHANGELOG.md と pyproject.toml の version を手で編集
+#    [Unreleased] → [X.Y.Z] - YYYY-MM-DD に整える
+
+# 3. lockfile 同期 + 品質チェック
+uv lock
+source .venv/bin/activate && make check
+
+# 4. commit + tag
+git add pyproject.toml uv.lock CHANGELOG.md
+git commit -m "chore(release): vX.Y.Z"
+git tag -a vX.Y.Z -m "Release vX.Y.Z"
+
+# 5. push（force push 禁止 / main と tag を atomic に push）
+git push --atomic "$GITHUB_REMOTE" main vX.Y.Z
+
+# 6. GitHub Release ページ
+gh release create vX.Y.Z --title "vX.Y.Z" --notes "<CHANGELOG 抜粋>"
+
+# 7. PyPI publish workflow の確認
+gh run list --workflow publish-pypi.yml --limit 3
+```
+
+> **絶対禁止**: `git push --force "$GITHUB_REMOTE" main` / tag の force push。tag を上書きすると consumer 側 lockfile が壊れる。
+
+## PyPI publish setup
+
+初回 PyPI 公開前に maintainer が以下を設定する。
+
+### PyPI account
+
+- PyPI account `apokamo` の email verification を完了する
+- 2FA を有効化する
+- recovery codes を生成し、安全な場所に保存する
+- account profile の表示名を `apokamo` に統一する
+
+### GitHub environment
+
+GitHub repository settings で environment `pypi` を作成し、approval rule を設定する。
+これにより GitHub Release 作成直後に publish されず、maintainer の承認を挟める。
+
+### PyPI Trusted Publisher
+
+PyPI project `kaji` が存在しない初回公開では、PyPI account settings から Pending Trusted Publisher を作成する。
+設定値は workflow と厳密に一致させる。
+
+| 項目 | 値 |
+|------|-----|
+| project name | `kaji` |
+| owner | `apokamo` |
+| repository | `kaji` |
+| workflow filename | `publish-pypi.yml` |
+| environment | `pypi` |
+
+Pending Trusted Publisher は project name を予約しないため、設定後は初回 release / publish まで速やかに進める。
+初回 publish 後は project `kaji` の Trusted Publisher 設定として管理される。
+
+通常運用では PyPI API token を使わない。API token による `uv publish` は emergency fallback のみとし、
+token を `.pypirc`、shell history、Issue コメント、docs、repo 内ファイルに残さない。
 
 ## トラブルシューティング
 
 | 症状 | 対処 |
 |------|------|
-| Release PR が立たない | releasable commit が 1 本も merge されていない可能性。`git log main --grep '^(feat\|fix\|docs\|chore):' --oneline` で確認 |
-| Release PR の `uv.lock` が追従しない | [`admin-setup.md`](./admin-setup.md) §トラブルシューティング を参照（token / permissions 起因が大半） |
-| version が乖離している | `pyproject.toml` を SoT として Release-Please が一括管理する。merge 前の手動編集は行わない |
-| `kaji --version` が想定値と異なる | `importlib.metadata.version("kaji")` 経由で読まれる。隔離環境で `uv pip install -e . && kaji --version` を実行して確認 |
+| `/release` が Step 1 で stop（main 以外） | `git checkout main && git pull --ff-only "$GITHUB_REMOTE" main` してから再実行（`GITHUB_REMOTE` は Step 1 で skill が動的解決する remote 名） |
+| `/release` が Step 1 で stop（GitHub remote 未発見） | `.kaji/config.toml` の `provider.github.git_remote`（仕様は [設定リファレンス](../../reference/configuration.md#providergithub) 参照）と `git remote -v` 出力を確認し、必要なら `git remote add origin <github-url>` で remote を追加 |
+| Step 1 で working tree dirty | 別 branch / stash で退避してから再実行（skill は破壊操作を一切しない） |
+| Step 2 で commit 0 件 ABORT | 前回 tag 以降に release 対象の変更が無い。merge を待つ |
+| Step 4 で `make check` 失敗 | release を中断し、修正 commit を main に入れてから再実行 |
+| Step 6 で `non-fast-forward` 拒否 | 他者 push で main が進んでいる。`--atomic` のため tag も remote には残らない。`/release` を一度中断 → tag/commit を rollback → `git pull --ff-only` → `/release` 再実行（force push は禁止） |
+| Step 6 で 同名 tag 衝突 / 権限拒否で reject | `--atomic` のため main も remote 反映されていない。`git tag -d vX.Y.Z` で local tag を消し、原因確認後に再試行 |
+| Step 7 で `gh release create` 失敗 | tag は push 済みなので rollback しない。`gh release create` を再試行、または GitHub UI から Release ページを手動作成 |
+| `publish-pypi.yml` が起動しない | GitHub Release が `published` 状態か、workflow filename が `.github/workflows/publish-pypi.yml` か確認 |
+| PyPI publish が OIDC / Trusted Publisher エラーで失敗 | PyPI 側の owner / repository / workflow filename / environment が workflow と一致しているか確認。特に workflow filename は `publish-pypi.yml` |
+| `twine check --strict dist/*` が失敗 | README render / metadata を修正し、次の patch release で再 publish |
+| consumer 側で新版が取れない | PyPI 公開後に consumer に `uv lock --upgrade-package kaji` を案内 |
+
+## 関連
+
+- skill 本体: [`.claude/skills/release/SKILL.md`](../../../.claude/skills/release/SKILL.md)

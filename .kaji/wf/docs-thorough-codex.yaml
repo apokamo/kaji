@@ -1,0 +1,173 @@
+name: docs-thorough-codex
+description: |
+  docs-only 作業用 workflow。GitHub Issue から docs 更新、PR review、close まで進める。
+  issue-create は事前に完了していることが前提。
+  PR 作成後、review-poll / pr-fix / pr-verify / issue-close まで実行する。
+execution_policy: auto
+requires_provider: github
+
+cycles:
+  ready-review:
+    entry: review-ready
+    loop: [fix-ready, review-ready]
+    max_iterations: 3
+    on_exhaust: ABORT
+  doc-review:
+    entry: doc-review
+    loop: [doc-fix, doc-verify]
+    max_iterations: 3
+    on_exhaust: ABORT
+  final-check:
+    entry: final-check
+    loop: [final-check]
+    max_iterations: 3
+    on_exhaust: ABORT
+  pr-create:
+    entry: pr
+    loop: [pr]
+    max_iterations: 3
+    on_exhaust: ABORT
+  pr-review:
+    entry: review-poll
+    loop: [pr-fix, pr-verify]
+    max_iterations: 3
+    on_exhaust: ABORT
+
+steps:
+  - id: review-ready
+    skill: issue-review-ready
+    agent: codex
+    model: gpt-5.6-sol
+    effort: medium
+    on:
+      PASS: start
+      RETRY: fix-ready
+      ABORT: end
+
+  - id: fix-ready
+    skill: issue-fix-ready
+    agent: codex
+    model: gpt-5.6-sol
+    effort: medium
+    inject_verdict: true
+    on:
+      PASS: review-ready
+      ABORT: end
+
+  - id: start
+    skill: issue-start
+    agent: codex
+    model: gpt-5.6-luna
+    effort: medium
+    on:
+      PASS: doc-update
+      ABORT: end
+
+  - id: doc-update
+    skill: i-doc-update
+    agent: codex
+    model: gpt-5.6-sol
+    effort: high
+    on:
+      PASS: doc-review
+      ABORT: end
+
+  - id: doc-review
+    skill: i-doc-review
+    agent: codex
+    model: gpt-5.6-sol
+    effort: high
+    on:
+      PASS: final-check
+      RETRY: doc-fix
+      ABORT: end
+
+  - id: doc-fix
+    skill: i-doc-fix
+    agent: codex
+    model: gpt-5.6-sol
+    effort: high
+    inject_verdict: true
+    resume: doc-update
+    on:
+      PASS: doc-verify
+      ABORT: end
+
+  - id: doc-verify
+    skill: i-doc-verify
+    agent: codex
+    model: gpt-5.6-sol
+    effort: high
+    resume: doc-review
+    on:
+      PASS: final-check
+      RETRY: doc-fix
+      ABORT: end
+
+  - id: final-check
+    skill: i-doc-final-check
+    agent: codex
+    model: gpt-5.6-sol
+    effort: medium
+    on:
+      PASS: pr
+      RETRY: final-check
+      BACK: doc-update
+      ABORT: end
+
+  - id: pr
+    skill: i-pr
+    agent: codex
+    model: gpt-5.6-luna
+    effort: medium
+    on:
+      PASS: review-poll
+      RETRY: pr
+      ABORT: end
+
+  - id: review-poll
+    exec: [kaji, pr, review-poll]
+    on:
+      PASS: close
+      RETRY: pr-fix
+      BACK_FALLBACK: review
+      ABORT: end
+
+  - id: review
+    skill: review
+    agent: codex
+    model: gpt-5.6-sol
+    effort: high
+    on:
+      PASS: close
+      RETRY: pr-fix
+      ABORT: end
+
+  - id: pr-fix
+    skill: pr-fix
+    agent: codex
+    model: gpt-5.6-sol
+    effort: medium
+    inject_verdict: true
+    on:
+      PASS: pr-verify
+      ABORT: end
+
+  - id: pr-verify
+    skill: pr-verify
+    agent: codex
+    model: gpt-5.6-sol
+    effort: medium
+    on:
+      PASS: close
+      RETRY: pr-fix
+      ABORT: end
+
+  - id: close
+    skill: issue-close
+    agent: codex
+    model: gpt-5.6-luna
+    effort: medium
+    on:
+      PASS: end
+      ABORT: end

@@ -36,8 +36,9 @@ WORKFLOW_SKILLS = [
     "issue-review-code",
     "issue-fix-code",
     "issue-verify-code",
-    "issue-doc-check",
-    "issue-pr",
+    "i-dev-final-check",
+    "i-doc-final-check",
+    "i-pr",
     "issue-close",
 ]
 
@@ -82,7 +83,7 @@ class TestInputSectionDualMode:
     @pytest.mark.parametrize("skill_name", WORKFLOW_SKILLS)
     def test_workflow_skill_has_context_variables(self, skill_name: str) -> None:
         content = _read_skill(skill_name)
-        assert "issue_number" in content, f"{skill_name} missing issue_number context variable"
+        assert "issue_id" in content, f"{skill_name} missing issue_id context variable"
 
     @pytest.mark.parametrize("skill_name", WORKFLOW_SKILLS)
     def test_workflow_skill_has_arguments(self, skill_name: str) -> None:
@@ -216,8 +217,9 @@ class TestSkillVerdictParseable:
         "issue-review-code": {"PASS", "RETRY", "BACK", "ABORT"},
         "issue-fix-code": {"PASS", "ABORT"},
         "issue-verify-code": {"PASS", "RETRY", "ABORT"},
-        "issue-doc-check": {"PASS"},
-        "issue-pr": {"PASS", "RETRY", "ABORT"},
+        "i-dev-final-check": {"PASS", "RETRY", "BACK", "ABORT"},
+        "i-doc-final-check": {"PASS", "RETRY", "BACK", "ABORT"},
+        "i-pr": {"PASS", "RETRY", "ABORT"},
         "issue-close": {"PASS", "RETRY", "ABORT"},
     }
 

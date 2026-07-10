@@ -19,21 +19,35 @@ PR レビュー修正後の確認を行う。
 |-----------|-----------------|
 | `/pr-fix` 後の修正確認 | ✅ 必須 |
 | 新規レビューが必要な場合 | ❌ PR 上で直接レビューを実施 |
+| `provider.type='github'` 配下 | ✅ 受理（gh CLI 経由） |
+| `provider.type='local'` 配下 | ❌ Step 0 で ABORT。代替は `/issue-verify-code` |
 
 **ワークフロー内の位置**: i-pr → [PR review] → (pr-fix → **pr-verify**) → close
 
 ## 引数
 
 ```
-$ARGUMENTS = <issue-number>
+$ARGUMENTS = <issue_id>
 ```
 
 - Issue 番号を受け付ける（関連 PR を自動解決する）
 
+### コンテキスト変数
+
+| 変数 | 型 | 説明 |
+|------|-----|------|
+| `issue_id` | str | 正規化済み Issue ID（GitHub 数値、または `local-*`） |
+| `issue_ref` | str | 人間可読の Issue 参照 |
+| `provider_type` | str | `github` / `local` のいずれか。Step 0 のガード判定に使用 |
+
 ### 解決ルール
 
-コンテキスト変数 `issue_number` が存在すればそちらを使用。
-なければ `$ARGUMENTS` の第1引数を `issue_number` として使用。
+コンテキスト変数 `issue_id` が存在すればそちらを使用。
+なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
+
+`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
+
+`pr_id` / `pr_ref` はハーネス経由ではプロンプトに自動注入される（`runner.py` の `_resolve_pr_context_safe` が `GitHubProvider.resolve_pr_context()` 経由でブランチから PR を逆引きして展開する）。手動実行時、および auto-resolve が失敗した（branch 未 push / PR 未作成）場合は Step 1 で fallback として `kaji pr list --head` から取得する。`pr_ref` は `gh:<pr_id>` 形式で組み立てる（`kaji_harness/providers/models.py` `PRContext` 準拠）。
 
 ## 前提知識の読み込み
 
@@ -58,33 +72,89 @@ $ARGUMENTS = <issue-number>
 
 ## 実行手順
 
+### Step 0: provider check
+
+本 Skill は forge provider 専用。最初に `provider_type` を解決し、
+`github` 以外なら **以降のステップに進まず ABORT verdict を出力して終了** する。
+
+**手順**:
+
+1. **`provider_type` の解決**（ハーネス注入 → 手動 fallback の優先順）:
+
+   ```bash
+   PROVIDER_TYPE="${provider_type:-$(kaji config provider-type 2>/dev/null || true)}"
+   ```
+
+   `|| true` は手動実行で `[provider]` 不在時に `kaji config provider-type` が
+   exit 2 を返しても shell 全体を落とさないため。空文字に縮退する。
+
+2. **判定と verdict 出力**:
+
+   - `PROVIDER_TYPE` が `github` → Step 1 に進む
+   - `PROVIDER_TYPE` が `local` → 以下の ABORT verdict を **そのまま stdout に
+     出力**して以降のステップは実行しない:
+
+     ```text
+     ---VERDICT---
+     status: ABORT
+     reason: |
+       pr-verify is forge-only and cannot run under provider.type='local'.
+     evidence: |
+       Pull request concept does not exist in local mode (bare provider).
+     suggestion: |
+       Use /issue-verify-code instead.
+     ---END_VERDICT---
+     ```
+
+   - `PROVIDER_TYPE` がそれ以外（空文字 / 不明値）→ 以下の ABORT verdict を
+     出力して終了:
+
+     ```text
+     ---VERDICT---
+     status: ABORT
+     reason: |
+       pr-verify could not resolve provider_type.
+     evidence: |
+       provider_type was not injected and `kaji config provider-type` failed
+       (likely missing `[provider]` section in .kaji/config.toml).
+     suggestion: |
+       Add `[provider]` to .kaji/config.toml. See docs/cli-guides/local-mode.md.
+     ---END_VERDICT---
+     ```
+
+> **重要**: ABORT verdict は **shell の `exit` に任せず agent 自身が stdout に
+> 出力する**こと。workflow runner はその verdict を読み取って `on: ABORT: end`
+> で workflow を終わらせる。
+
 ### Step 1: コンテキスト取得
 
 1. **PR の特定**:
-   Issue 番号から関連 PR を解決する。
+   `pr_id` / `pr_ref` はハーネス注入時にプロンプトへ展開済み（`{{pr_id}}` / `{{pr_ref}}`）。手動実行、または auto-resolve が失敗した場合のみ fallback として Issue 本文の `> **Branch**:` 行からブランチ名を取得し:
+
    ```bash
-   gh pr list --search "[issue-number]" --json number,title,headRefName --jq '.'
-   ```
-   見つからない場合は Issue 本文の `> **Branch**:` 行からブランチ名を取得し:
-   ```bash
-   gh pr list --head "[branch-name]" --json number,title --jq '.'
+   PR_JSON=$(kaji pr list --head "[branch_name]" --json number,title --jq '.[0]')
+   pr_id=$(echo "$PR_JSON" | jq -r '.number')
+   pr_ref="gh:${pr_id}"
    ```
 
 2. **Worktree パスの解決**:
    [_shared/worktree-resolve.md](../_shared/worktree-resolve.md) の手順に従い、Worktree の絶対パスを取得。
 
 3. **前回の指摘と対応報告の取得**:
+
    ```bash
-   gh pr view [pr-number] --comments
-   gh api repos/{owner}/{repo}/pulls/[pr-number]/reviews --jq '.[] | {user: .user.login, state: .state, body: .body}'
-   gh api repos/{owner}/{repo}/pulls/[pr-number]/comments --jq '.[] | {path: .path, line: .line, body: .body, user: .user.login}'
+   kaji pr view [pr_id] --comments
+   kaji pr reviews [pr_id] --jq '.[] | {user: .user.login, state: .state, body: .body}'
+   kaji pr review-comments [pr_id] --jq '.[] | {path: .path, line: .line, body: .body, user: .user.login}'
    ```
+
    「レビュー指摘への対応報告」コメントを確認する。
 
 4. **修正差分の確認**:
+
    ```bash
-   cd [worktree-absolute-path] && git log --oneline -5
-   cd [worktree-absolute-path] && git diff HEAD~1
+   cd [worktree_dir] && git log --oneline -5
+   cd [worktree_dir] && git diff HEAD~1
    ```
 
 ### Step 2: 修正確認
@@ -124,12 +194,12 @@ $ARGUMENTS = <issue-number>
 
 - **判定には含めない**（verify の収束保証のため）
 - **報告は行う**（情報損失を防ぐため）
-- **推奨対応を添える**（放置されないように）
+- **推奨対応を添える**(放置されないように)
 
 ### Step 3: 品質チェック
 
 ```bash
-cd [worktree-absolute-path] && source .venv/bin/activate && make check
+cd [worktree_dir] && source .venv/bin/activate && make check
 ```
 
 ### Step 4: 確認結果の投稿と PR レビュー状態の更新
@@ -139,7 +209,7 @@ cd [worktree-absolute-path] && source .venv/bin/activate && make check
 #### Approve の場合
 
 ```bash
-gh pr review [pr-number] --approve --body-file - <<'EOF'
+kaji pr review [pr_id] --approve --body-file - <<'EOF'
 ## PR レビュー修正確認結果
 
 ### 修正項目の確認
@@ -171,7 +241,7 @@ EOF
 #### Changes Requested の場合
 
 ```bash
-gh pr review [pr-number] --request-changes --body-file - <<'EOF'
+kaji pr review [pr_id] --request-changes --body-file - <<'EOF'
 ## PR レビュー修正確認結果
 
 ### 修正項目の確認
@@ -203,14 +273,14 @@ EOF
 
 | 項目 | 値 |
 |------|-----|
-| PR | #[pr-number] |
-| Issue | #[issue-number] |
+| PR | [pr_ref] |
+| Issue | [issue_ref] |
 | 判定 | Approve / Changes Requested |
 
 ### 次のステップ
 
-- Approve: `/issue-close [issue-number]` で PR マージ & クリーンアップ
-- Changes Requested: `/pr-fix [issue-number]` で再修正
+- Approve: `/issue-close [issue_id]` で PR マージ & クリーンアップ
+- Changes Requested: `/pr-fix [issue_id]` で再修正
 ```
 
 ## Verdict 出力
@@ -236,4 +306,4 @@ suggestion: |
 |--------|------|
 | PASS | Approve |
 | RETRY | 修正不十分 |
-| ABORT | 重大な問題 |
+| ABORT | 重大な問題 / Step 0 で provider mismatch |

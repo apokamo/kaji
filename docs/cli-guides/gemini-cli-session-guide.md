@@ -5,9 +5,9 @@
 Gemini CLI のセッション管理機能に関する調査結果をまとめた資料。
 非インタラクティブモードでのセッション引き継ぎやJSON出力の詳細を記載。
 
-**調査日**: 2026-03-09
-**--help 取得バージョン**: v0.31.0（ローカル環境、2026-03-09 取得）
-**Web検索による最新情報**: v0.32.1（2026-03-04 リリース）
+**調査日**: 2026-05-23
+**--help 取得バージョン**: v0.39.1（ローカル環境、2026-05-23 取得）
+**Web検索による最新情報**: v0.39.1（現行 stable）
 **公式ドキュメント**: https://geminicli.com/docs/
 **GitHub**: https://github.com/google-gemini/gemini-cli
 
@@ -24,12 +24,12 @@ gemini [OPTIONS]
 ### 1.2 非インタラクティブモード
 
 ```bash
-gemini "プロンプト"                    # 位置引数（推奨）
-gemini -p "プロンプト"                 # -p オプション（非推奨）
+gemini "プロンプト"                    # 位置引数 → interactive モードで開始（プロンプトを初期入力として渡す）
+gemini -p "プロンプト"                 # -p オプション → headless（非インタラクティブ）モードで実行して終了
 echo "プロンプト" | gemini             # stdin
 ```
 
-**注意**: `-p` / `--prompt` は非推奨。位置引数の使用が推奨されている。
+**注意**: v0.39.1 の `gemini --help` では `-p, --prompt` に deprecated 表記はない。位置引数 (`gemini "..."`) は interactive モード、`-p` は headless 実行という役割分担。比較として `--experimental-acp` / `--allowed-tools` には help 上で明示的に `deprecated` / `[DEPRECATED: ...]` が付いており、`-p` には付かない。
 
 ---
 
@@ -42,7 +42,7 @@ echo "プロンプト" | gemini             # stdin
 | `--model` | `-m` | string | `auto` | 使用モデル |
 | `--output-format` | `-o` | string | `text` | 出力形式（`text` / `json` / `stream-json`） |
 | `--resume` | `-r` | string | — | セッション再開 |
-| `--prompt` | `-p` | string | — | プロンプト（**非推奨**） |
+| `--prompt` | `-p` | string | — | プロンプト（headless モード。v0.39.1 help で deprecated 表記なし） |
 | `--prompt-interactive` | `-i` | string | — | プロンプト実行後インタラクティブ継続 |
 | `--sandbox` | `-s` | boolean | `false` | サンドボックスモード |
 | `--approval-mode` | — | string | `default` | ツール承認モード |
@@ -1112,8 +1112,8 @@ DEBUG=1 gemini -s -p "command"
 
 | 情報 | 一次情報源 | 検証方法 | 検証日 |
 |------|-----------|---------|--------|
-| コマンドオプション | `gemini --help` (v0.31.0) | ローカル実行 | 2026-03-09 |
-| サブコマンド | `gemini skills --help`, `gemini hooks --help` (v0.31.0) | ローカル実行 | 2026-03-09 |
+| コマンドオプション | `gemini --help` (v0.39.1) | ローカル実行 | 2026-05-23 |
+| サブコマンド | `gemini skills --help`, `gemini hooks --help` (v0.39.1) | ローカル実行 | 2026-05-23 |
 | JSON出力フォーマット | 実機検証（v0.18.0時点） | ローカル実行 | 2025-11-27 |
 | stream-json フォーマット | 実機検証（v0.18.0時点） | ローカル実行 | 2025-11-27 |
 | セッション管理 | 実機検証（v0.18.0時点） | ローカル実行 | 2025-11-27 |
@@ -1140,3 +1140,4 @@ DEBUG=1 gemini -s -p "command"
 | 2025-11-30 | セクション 2.6「非インタラクティブモードでのツール制限」追加。`--allowed-tools` フラグによる `run_shell_command` 有効化手順、`gh`/`uv` 等の検証結果、セキュリティ考慮事項を詳細に記載。bugfix-agent での実装方法を追加。 |
 | 2026-03-09 | v0.32.1 対応に全面更新。主な変更: (1) Policy Engine（v0.30.0+）セクション追加、`--allowed-tools` 非推奨化を反映、(2) モデル一覧を Gemini 3/3.1 Pro Preview 追加で更新、(3) サンドボックスモード詳細セクション追加（Docker/Podman/gVisor/Seatbelt/LXC）、(4) MCP サーバーサポート詳細セクション追加（Stdio/SSE/HTTP Streaming）、(5) 拡張機能セクション追加、(6) Plan Mode（v0.29.0+）セクション追加、(7) Agent Skills（v0.23.0+）セクション追加、(8) インタラクティブコマンド一覧追加、(9) 3CLI比較表を更新、(10) トラブルシューティングを拡充。v0.18.0 から v0.32.1 間の主要な変更（14バージョン分）を反映。 |
 | 2026-03-09 | `--raw-output` / `--accept-raw-output-risk` 追加、バージョン表記を `--help` 取得版（v0.31.0）とWeb検索版（v0.32.1）に分離、`--experimental-zed-integration` に未記載注記追加、`gemini hooks` コマンドセクション追加、一次情報と検証状況セクション追加。 |
+| 2026-05-23 | v0.39.1 追従。対象バージョンを v0.39.1 に更新。`-p` / `--prompt` の「非推奨」表記を是正（v0.39.1 `gemini --help` で deprecated 表記なしを確認）。位置引数 = interactive / `-p` = headless の関係を明示。 |
