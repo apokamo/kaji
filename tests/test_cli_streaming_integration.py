@@ -284,6 +284,61 @@ class TestStreamAndLog:
         raw = (log_dir / "stdout.log").read_text()
         assert "\\u306e" in raw
 
+    def test_codex_mcp_tool_call_outer_lone_surrogate_does_not_crash(self, tmp_path: Path) -> None:
+        """Issue #137 review 回帰: 外側 JSONL の孤立サロゲートで stream_and_log が停止しない。
+
+        `{"text": "\\ud83d"}` を JSON 行に含めると `cli.py` の行全体 `json.loads` で値が
+        実サロゲート `'\\ud83d'` になる。修正前はこの値が console.log 書き込みで
+        `UnicodeEncodeError` を起こして stream_and_log を破壊した。修正後は adapter 出口で
+        literal escape へ戻り、(1) crash せず、(2) raw stdout.log は元の literal escape を
+        保持し、(3) console.log / full_output も UTF-8 書き出し可能な literal escape になる。
+        """
+        lone_surrogate = "\ud83d"  # literal `\u` を含まない実サロゲート 1 文字
+        assert "\\u" not in lone_surrogate
+        # json.dumps(ensure_ascii=True) で行内は literal `\ud83d` として直列化される。
+        jsonl_lines = [
+            json.dumps({"type": "thread.started", "thread_id": "thread-137-lone"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "mcp_tool_call",
+                        "result": {
+                            "content": [{"type": "text", "text": f"pre {lone_surrogate} post"}]
+                        },
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                }
+            ),
+        ]
+        script = _create_mock_cli_script(tmp_path, jsonl_lines)
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+
+        process = subprocess.Popen(
+            [str(script)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        adapter = CodexAdapter()
+        # 修正前はここで UnicodeEncodeError により例外送出（回帰の核心）。
+        result = stream_and_log(process, adapter, "verify-design", log_dir, verbose=False)
+        process.wait()
+
+        # sink 1 + 2: literal escape へ正規化され UTF-8 書き出し可能。
+        assert "pre \\ud83d post" in result.full_output
+        result.full_output.encode("utf-8")
+        console = (log_dir / "console.log").read_text()
+        assert "pre \\ud83d post" in console
+        console.encode("utf-8")
+
+        # raw sink: stdout.log は元 JSONL の literal escape をそのまま保持する。
+        raw = (log_dir / "stdout.log").read_text()
+        assert "\\ud83d" in raw
+
     def test_stderr_captured(self, tmp_path: Path) -> None:
         """stderr from CLI process is captured in result and log."""
         script = tmp_path / "mock_cli.sh"

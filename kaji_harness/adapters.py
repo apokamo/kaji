@@ -41,16 +41,31 @@ def decode_unicode_escapes(text: str) -> str:
     - サロゲートペアは正しく結合する（`\\uD83D\\uDE00` → 😀 等）
     - 孤立サロゲートは原表記のまま維持し、戻り値は常に `.encode("utf-8")` 可能
     - 置換対象が存在しない通常テキストはそのまま返す
+
+    Args:
+        text: adapter が抽出した tool result テキスト。外側 JSONL を `json.loads`
+            済みのため、literal `\\uXXXX` だけでなく実サロゲート文字を含み得る。
+
+    Returns:
+        `\\uXXXX` を展開し孤立サロゲートを escape 表記へ戻した文字列。全 return 経路が
+        `_escape_lone_surrogates` を通るため、戻り値は常に `.encode("utf-8")` 可能。
     """
+    # 全 return 経路をこの helper で包み、実サロゲート（literal でなく decode 済み）が
+    # 残っても最終 sanitize されることを保証する。
+    return _escape_lone_surrogates(_decode_unicode_escapes(text))
+
+
+def _decode_unicode_escapes(text: str) -> str:
+    """`decode_unicode_escapes` の復号本体（sanitize は呼び出し側で行う）。"""
     if "\\u" not in text:
         return text
     # 第一段: JSON 値全体として parse できれば re-serialize（構造を保ったまま日本語化）
     try:
         parsed = json.loads(text)
         if isinstance(parsed, (dict, list)):
-            return _escape_lone_surrogates(json.dumps(parsed, ensure_ascii=False, indent=2))
+            return json.dumps(parsed, ensure_ascii=False, indent=2)
         if isinstance(parsed, str):
-            return _escape_lone_surrogates(parsed)
+            return parsed
     except json.JSONDecodeError:
         pass
 

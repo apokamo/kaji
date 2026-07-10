@@ -576,6 +576,27 @@ class TestDecodeUnicodeEscapes:
         """全体が JSON 文字列スカラのケースも復号する。"""
         assert decode_unicode_escapes('"\\u3042\\u3044"') == "あい"
 
+    @pytest.mark.small
+    def test_raw_lone_high_surrogate_input_escaped(self) -> None:
+        """外側 JSONL decode 済みの実サロゲート文字（literal `\\u` を含まない）も escape する。
+
+        `cli.py` は行全体を `json.loads` するため、`{"text":"\\ud83d"}` の値は helper へ
+        実サロゲート `'\\ud83d'` として渡る。early return 経路もこれを sanitize し、戻り値が
+        UTF-8 書き出し可能であることを固定する（review #137 の未処理経路回帰）。
+        """
+        raw = "\ud83d"  # literal `\u` を含まない実サロゲート 1 文字
+        assert "\\u" not in raw
+        out = decode_unicode_escapes(raw)
+        assert out == "\\ud83d"
+        out.encode("utf-8")  # raises if surrogate leaks
+
+    @pytest.mark.small
+    def test_raw_lone_low_surrogate_mixed_with_plain_escaped(self) -> None:
+        """通常文字に紛れた実 low surrogate も escape され UTF-8 書き出し可能。"""
+        out = decode_unicode_escapes("pre \udc00 post")
+        assert out == "pre \\udc00 post"
+        out.encode("utf-8")
+
 
 # ==========================================
 # Gemini Adapter
