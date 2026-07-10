@@ -37,7 +37,7 @@ steps:
   - id: review-ready
     skill: issue-review-ready
     agent: codex
-    model: gpt-5.5
+    model: gpt-5.6-sol
     effort: medium
     on:
       PASS: start
@@ -75,7 +75,7 @@ steps:
   - id: doc-review
     skill: i-doc-review
     agent: codex
-    model: gpt-5.5
+    model: gpt-5.6-sol
     effort: high
     on:
       PASS: final-check
@@ -96,7 +96,7 @@ steps:
   - id: doc-verify
     skill: i-doc-verify
     agent: codex
-    model: gpt-5.5
+    model: gpt-5.6-sol
     effort: medium
     resume: doc-review
     on:
@@ -107,7 +107,7 @@ steps:
   - id: final-check
     skill: i-doc-final-check
     agent: codex
-    model: gpt-5.5
+    model: gpt-5.6-sol
     effort: medium
     on:
       PASS: pr
@@ -136,7 +136,7 @@ steps:
   - id: review
     skill: review
     agent: codex
-    model: gpt-5.5
+    model: gpt-5.6-sol
     effort: high
     on:
       PASS: close
@@ -156,7 +156,7 @@ steps:
   - id: pr-verify
     skill: pr-verify
     agent: codex
-    model: gpt-5.5
+    model: gpt-5.6-sol
     effort: medium
     on:
       PASS: close

@@ -33,7 +33,7 @@ steps:
   - id: doc-review
     skill: i-doc-review
     agent: codex
-    model: gpt-5.4
+    model: gpt-5.6-luna
     effort: medium
     on:
       PASS: final-check
@@ -53,7 +53,7 @@ steps:
   - id: doc-verify
     skill: i-doc-verify
     agent: codex
-    model: gpt-5.4
+    model: gpt-5.6-luna
     effort: medium
     resume: doc-review
     on:

@@ -49,7 +49,7 @@ steps:
   - id: review-ready
     skill: issue-review-ready
     agent: codex
-    model: gpt-5.5
+    model: gpt-5.6-sol
     effort: medium
     on:
       PASS: start
@@ -69,7 +69,7 @@ steps:
   - id: start
     skill: issue-start
     agent: codex
-    model: gpt-5.4
+    model: gpt-5.6-luna
     effort: medium
     on:
       PASS: design
@@ -87,7 +87,7 @@ steps:
   - id: review-design
     skill: issue-review-design
     agent: codex
-    model: gpt-5.5
+    model: gpt-5.6-sol
     effort: high
     on:
       PASS: implement
@@ -107,7 +107,7 @@ steps:
   - id: verify-design
     skill: issue-verify-design
     agent: codex
-    model: gpt-5.5
+    model: gpt-5.6-sol
     effort: medium
     on:
       PASS: implement
@@ -129,7 +129,7 @@ steps:
   - id: review-code
     skill: issue-review-code
     agent: codex
-    model: gpt-5.5
+    model: gpt-5.6-sol
     effort: high
     on:
       PASS: final-check
@@ -151,7 +151,7 @@ steps:
   - id: verify-code
     skill: issue-verify-code
     agent: codex
-    model: gpt-5.5
+    model: gpt-5.6-sol
     effort: medium
     on:
       PASS: final-check
@@ -161,7 +161,7 @@ steps:
   - id: final-check
     skill: i-dev-final-check
     agent: codex
-    model: gpt-5.5
+    model: gpt-5.6-sol
     effort: medium
     on:
       PASS: pr
@@ -173,7 +173,7 @@ steps:
   - id: pr
     skill: i-pr
     agent: codex
-    model: gpt-5.4
+    model: gpt-5.6-luna
     effort: medium
     on:
       PASS: review-poll
@@ -191,7 +191,7 @@ steps:
   - id: review
     skill: review
     agent: codex
-    model: gpt-5.5
+    model: gpt-5.6-sol
     effort: high
     on:
       PASS: close
@@ -211,7 +211,7 @@ steps:
   - id: pr-verify
     skill: pr-verify
     agent: codex
-    model: gpt-5.5
+    model: gpt-5.6-sol
     effort: medium
     on:
       PASS: close
@@ -221,7 +221,7 @@ steps:
   - id: close
     skill: issue-close
     agent: codex
-    model: gpt-5.4
+    model: gpt-5.6-luna
     effort: medium
     on:
       PASS: end

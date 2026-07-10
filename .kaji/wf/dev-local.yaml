@@ -42,7 +42,7 @@ steps:
   - id: review-design
     skill: issue-review-design
     agent: codex
-    model: gpt-5.4
+    model: gpt-5.6-luna
     effort: high
     on:
       PASS: implement
@@ -62,7 +62,7 @@ steps:
   - id: verify-design
     skill: issue-verify-design
     agent: codex
-    model: gpt-5.4
+    model: gpt-5.6-luna
     effort: medium
     resume: review-design
     on:
@@ -84,7 +84,7 @@ steps:
   - id: review-code
     skill: issue-review-code
     agent: codex
-    model: gpt-5.4
+    model: gpt-5.6-luna
     effort: high
     on:
       PASS: final-check
@@ -107,7 +107,7 @@ steps:
   - id: verify-code
     skill: issue-verify-code
     agent: codex
-    model: gpt-5.4
+    model: gpt-5.6-luna
     effort: medium
     resume: review-code
     on:
