@@ -597,6 +597,33 @@ class TestDecodeUnicodeEscapes:
         assert out == "pre \\udc00 post"
         out.encode("utf-8")
 
+    @pytest.mark.small
+    def test_partial_escape_control_char_kept_literal(self) -> None:
+        """fallback 経路の \\u001b (ESC) は復号せず原表記を維持する（端末操作防止）。"""
+        out = decode_unicode_escapes("pre \\u001b[2J post")
+        assert out == "pre \\u001b[2J post"
+        assert "\x1b" not in out
+
+    @pytest.mark.small
+    def test_partial_escape_newline_control_kept_literal(self) -> None:
+        """fallback 経路の \\u000a (LF) も復号しない（verdict/ログ行の偽装防止）。"""
+        out = decode_unicode_escapes("first \\u000afake-verdict")
+        assert out == "first \\u000afake-verdict"
+        assert "\n" not in out
+
+    @pytest.mark.small
+    def test_partial_escape_control_mixed_with_bmp(self) -> None:
+        """制御文字は原表記維持しつつ非制御 BMP (\\u3042) は復号する。"""
+        out = decode_unicode_escapes("\\u3042 \\u001b tail")
+        assert out == "あ \\u001b tail"
+
+    @pytest.mark.small
+    def test_json_string_scalar_control_char_reescaped(self) -> None:
+        """全体が JSON 文字列スカラでも制御文字は再エスケープする。"""
+        out = decode_unicode_escapes('"\\u3042\\u001b\\u3044"')
+        assert out == "あ\\u001bい"
+        assert "\x1b" not in out
+
 
 # ==========================================
 # Gemini Adapter
