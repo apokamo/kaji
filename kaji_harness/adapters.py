@@ -31,12 +31,31 @@ def _escape_controls(s: str) -> str:
 
     復号後のスカラ文字列に ESC (U+001B) や改行 (U+000A) 等の制御文字が残ると、
     `stream_and_log` が `console.log` / verbose stdout へ書き出す際に端末制御列や
-    verdict 風の偽行として解釈され得る。JSON-object 経路は `json.dumps` が同種の
-    制御文字を再エスケープするため、本 helper で他経路の出力挙動を揃える。
+    verdict 風の偽行として解釈され得る。JSON-object 経路は構造の改行を保つため
+    `_escape_dump_controls` を使い分ける。本 helper は非 JSON スカラ全体を対象に
+    C0/C1/DEL を一括 escape する。
     """
     if not any(_is_control_cp(ord(c)) for c in s):
         return s
     return "".join(f"\\u{ord(c):04x}" if _is_control_cp(ord(c)) else c for c in s)
+
+
+def _escape_dump_controls(s: str) -> str:
+    """`json.dumps(ensure_ascii=False)` の出力に残る DEL/C1 を `\\uXXXX` へ戻す（Issue #137）。
+
+    `json.dumps` は string 値内の C0 (U+0000–U+001F) を常に `\\uXXXX` へ escape する一方、
+    DEL (U+007F) と C1 (U+0080–U+009F) は `ensure_ascii=False` では raw のまま残す。これらが
+    nested value に含まれると復号後の JSON にも raw 制御文字として漏れ、`console.log` /
+    verbose stdout で端末操作・verdict/ログ行偽装に悪用され得る。
+
+    対象を U+007F–U+009F に限定するのは、(1) C0 は `json.dumps` が string 内で escape 済みで、
+    (2) indent 由来の構造的改行 (U+000A) 等の C0 空白を壊さないため。dump 前に個々の string を
+    `_escape_controls` すると backslash が `json.dumps` で二重 escape され `\\\\uXXXX` になるため、
+    dump 後に範囲限定で適用する。
+    """
+    if not any(0x7F <= ord(c) <= 0x9F for c in s):
+        return s
+    return "".join(f"\\u{ord(c):04x}" if 0x7F <= ord(c) <= 0x9F else c for c in s)
 
 
 def _escape_lone_surrogates(s: str) -> str:
@@ -83,7 +102,7 @@ def _decode_unicode_escapes(text: str) -> str:
     try:
         parsed = json.loads(text)
         if isinstance(parsed, (dict, list)):
-            return json.dumps(parsed, ensure_ascii=False, indent=2)
+            return _escape_dump_controls(json.dumps(parsed, ensure_ascii=False, indent=2))
         if isinstance(parsed, str):
             return _escape_controls(parsed)
     except json.JSONDecodeError:

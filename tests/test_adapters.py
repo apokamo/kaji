@@ -624,6 +624,36 @@ class TestDecodeUnicodeEscapes:
         assert out == "あ\\u001bい"
         assert "\x1b" not in out
 
+    @pytest.mark.small
+    def test_json_object_nested_c1_control_reescaped(self) -> None:
+        """JSON object の nested value の C1 (U+0085) は raw 化せず literal 維持する。"""
+        out = decode_unicode_escapes('{"value": "pre \\u0085 post"}')
+        assert "\\u0085" in out
+        assert "\x85" not in out
+
+    @pytest.mark.small
+    def test_json_object_nested_del_control_reescaped(self) -> None:
+        """JSON object の nested value の DEL (U+007F) も literal 維持する。"""
+        out = decode_unicode_escapes('{"x": "\\u007f"}')
+        assert "\\u007f" in out
+        assert "\x7f" not in out
+
+    @pytest.mark.small
+    def test_json_list_nested_c1_control_reescaped(self) -> None:
+        """JSON list の nested value の C1 も literal 維持する。"""
+        out = decode_unicode_escapes('["pre \\u009f post"]')
+        assert "\\u009f" in out
+        assert "\x9f" not in out
+
+    @pytest.mark.small
+    def test_json_object_c0_reescaped_and_bmp_decoded(self) -> None:
+        """C0 (ESC) は escape 維持、非制御 BMP は復号、indent 構造改行は保持する。"""
+        out = decode_unicode_escapes('{"a": "\\u3042\\u001b"}')
+        assert "あ" in out  # 非制御 BMP は復号
+        assert "\\u001b" in out  # C0 は json.dumps が escape 維持
+        assert "\x1b" not in out
+        assert "\n" in out  # indent 由来の構造的改行は破壊しない
+
 
 # ==========================================
 # Gemini Adapter
