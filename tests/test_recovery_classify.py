@@ -24,6 +24,8 @@ def _snapshot(**overrides: object) -> FailureSnapshot:
     base: dict[str, object] = {
         "run_id": "260710120000",
         "run_dir": Path("/tmp/runs/260710120000"),
+        # 既定は failure_event 契約下の run（本機能導入以降に生成された run.log）。
+        "run_log_schema_version": 1,
         "workflow_end_status": "ERROR",
         "state_loaded": True,
         "attempt_result_present": True,
@@ -295,6 +297,49 @@ def test_unreadable_artifact_is_kaji_bug_suspected() -> None:
 def test_abort_without_failure_event_is_kaji_bug_suspected() -> None:
     c = classify_failure(_snapshot(workflow_end_status="ABORT", failure_event=None))
     assert c.cause == "kaji_bug_suspected"
+
+
+def test_legacy_abort_without_schema_version_is_not_kaji_bug_suspected() -> None:
+    # 本機能導入前の run.log は failure_event を持たないのが正常。`kaji recover` を
+    # 向けただけで harness のバグと断定し bug issue を起票してはならない。
+    c = classify_failure(
+        _snapshot(
+            run_log_schema_version=None,
+            workflow_end_status="ABORT",
+            failure_event=None,
+        )
+    )
+    assert c.cause == "unknown_external_error"
+    assert c.recoverability_hint == "no"
+
+
+def test_legacy_run_still_reports_genuine_artifact_contradiction() -> None:
+    # schema version 不明でも、読めない artifact / state 欠損は決定論的矛盾のまま。
+    c = classify_failure(
+        _snapshot(
+            run_log_schema_version=None,
+            workflow_end_status="ABORT",
+            failure_event=None,
+            state_loaded=False,
+        )
+    )
+    assert c.cause == "kaji_bug_suspected"
+
+
+def test_dispatch_cli_not_found_is_non_candidate_dispatch_failure() -> None:
+    # runner の except 節が捕捉する型。`unknown_external_error` に落ちてはならない。
+    c = classify_failure(
+        _snapshot(
+            failure_event=FailureEvent(
+                kind="dispatch_exception", step_id="implement", exception_type="CLINotFoundError"
+            ),
+            failed_step="implement",
+            attempt_error="CLI 'claude' not found. Is it installed?",
+        )
+    )
+    assert c.cause == "dispatch_failure"
+    assert c.source == "external"
+    assert c.recoverability_hint == "no"
 
 
 def test_classifier_never_emits_reserved_external_upstream_anomaly() -> None:

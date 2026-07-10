@@ -32,11 +32,12 @@ from .models import (
     derive_child_final_status,
     read_recovery_chain,
     read_recovery_json,
+    recovery_budget_consumed,
     select_newer_run_ids,
     write_recovery_chain,
     write_recovery_json,
 )
-from .report import render_stderr_summary, render_triage_comment
+from .report import render_child_result_comment, render_stderr_summary, render_triage_comment
 from .snapshot import FailureEvent, FailureSnapshot, GitStateSummary, collect_snapshot
 
 __all__ = [
@@ -61,6 +62,8 @@ __all__ = [
     "plan_recovery",
     "read_recovery_chain",
     "read_recovery_json",
+    "recovery_budget_consumed",
+    "render_child_result_comment",
     "render_stderr_summary",
     "render_triage_comment",
     "select_newer_run_ids",

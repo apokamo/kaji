@@ -64,6 +64,10 @@ kaji recover <workflow.yaml> <issue> [--run-id <run_id>] [--auto-recover] [--wor
 - 対象 run の終了 status が `ERROR` / `ABORT` 以外の場合も exit 2。
 - `<workflow.yaml>` は再開点の解決と resume command の構築に使う。対象 run と同じ workflow を
   指定する責務は運用者側にある（workflow path は `recovery.json` に記録される）。
+- 同じ run に対して再実行しても、既に自動再開を実行した run は `decision: exhausted` になる
+  （budget は 1 recovery chain につき 1 回。`recovery.json` と child run dir が判定入力）。
+- 本機能の導入**前**に生成された run（`run.log` の `workflow_start` に `schema_version` が無い）
+  では、`failure_event` の不在を harness の矛盾と見なさない。bug issue は起票されない。
 
 ```bash
 kaji recover .kaji/wf/dev.yaml 288
@@ -89,7 +93,7 @@ kaji recover .kaji/wf/dev.yaml 288 --run-id 260710120000
 | `runs/<run_id>/recovery.json` | `RecoveryDecision`（`schema_version: 1`）。decision 更新のたびに上書き |
 | `runs/<run_id>/recovery-chain.json` | `{root_run_id, parent_run_id}`。recovery child run が起動直後に書く |
 | `runs/<run_id>/run.log` | `failure_event` / `recovery_decision` / `recovery_scheduled` / `recovery_attempt_start` / `recovery_attempt_end` |
-| Issue コメント | 機械生成 triage report。kaji-verdict マーカーは付けない（step verdict ではないため） |
+| Issue コメント | 機械生成 triage report（child 起動前）と、自動再開した場合の結果報告 follow-up。kaji-verdict マーカーは付けない（step verdict ではないため） |
 | stderr | 既存の終端表示の直後に出る `--- failure triage ---` の数行サマリ |
 
 stderr サマリの `comment:` 行は `Comment.ref` をそのまま表示する。GitHub provider では作成コメント

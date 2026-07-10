@@ -17,8 +17,16 @@ from unittest.mock import patch
 import pytest
 
 from kaji_harness.config import KajiConfig
-from kaji_harness.errors import StepTimeoutError, VerdictNotFound
+from kaji_harness.errors import (
+    CLINotFoundError,
+    StepTimeoutError,
+    VerdictNotFound,
+    WorkflowValidationError,
+)
+from kaji_harness.logger import RUN_LOG_SCHEMA_VERSION
 from kaji_harness.models import CLIResult, CostInfo, CycleDefinition, Step, Workflow
+from kaji_harness.recovery.classify import classify_failure
+from kaji_harness.recovery.snapshot import collect_snapshot
 from kaji_harness.result import AttemptResult
 from kaji_harness.runner import WorkflowRunner
 from kaji_harness.worktree_discovery import AmbiguousWorktreeError
@@ -167,6 +175,77 @@ def test_dispatch_exception_event_and_synthetic_result(tmp_path: Path) -> None:
     assert events[0]["step_id"] == "implement"
     assert events[0]["synthetic"] is True
     assert _result_json(run_dir, "implement")["synthetic"] is True
+
+
+def test_cli_not_found_emits_dispatch_exception_event(tmp_path: Path) -> None:
+    # CLINotFoundError も dispatch 失敗であり、構造化記録経路から漏れてはならない
+    # （漏れると failure_event 無しの ERROR 終端になり、triage が原因を特定できない）。
+    _seed_state(tmp_path, {})
+    runner = _make_runner(tmp_path, _single_step_workflow())
+    err = CLINotFoundError("CLI 'claude' not found. Is it installed?")
+    with (
+        patch("kaji_harness.runner.execute_cli", side_effect=err),
+        patch("kaji_harness.runner.validate_skill_exists"),
+        pytest.raises(CLINotFoundError),
+    ):
+        runner.run()
+
+    run_dir = _run_dir(tmp_path)
+    events = _events(run_dir, "failure_event")
+    assert len(events) == 1
+    assert events[0]["kind"] == "dispatch_exception"
+    assert events[0]["exception_type"] == "CLINotFoundError"
+    assert events[0]["step_id"] == "implement"
+    assert events[0]["synthetic"] is True
+    assert _result_json(run_dir, "implement")["synthetic"] is True
+
+    snapshot = collect_snapshot(
+        run_dir=run_dir,
+        artifacts_dir=tmp_path / ".kaji-artifacts",
+        issue_id=_CANONICAL,
+        provider_available=True,
+    )
+    classification = classify_failure(snapshot)
+    assert classification.cause == "dispatch_failure"
+    assert classification.recoverability_hint == "no"
+
+
+def test_unknown_from_step_creates_no_incomplete_run(tmp_path: Path) -> None:
+    # 開始 step の検証は run_dir 作成前に済ませる。workflow_end の無い run.log を残すと
+    # failure triage がそれを artifact 破損（kaji_bug_suspected）と誤読する。
+    runner = _make_runner(tmp_path, _single_step_workflow(), from_step="no-such-step")
+    with (
+        patch("kaji_harness.runner.validate_skill_exists"),
+        pytest.raises(WorkflowValidationError),
+    ):
+        runner.run()
+
+    assert runner.last_run_dir is None
+    assert not (tmp_path / ".kaji-artifacts" / _CANONICAL / "runs").exists()
+
+
+def test_unknown_single_step_creates_no_incomplete_run(tmp_path: Path) -> None:
+    runner = _make_runner(tmp_path, _single_step_workflow(), single_step="no-such-step")
+    with (
+        patch("kaji_harness.runner.validate_skill_exists"),
+        pytest.raises(WorkflowValidationError),
+    ):
+        runner.run()
+
+    assert runner.last_run_dir is None
+    assert not (tmp_path / ".kaji-artifacts" / _CANONICAL / "runs").exists()
+
+
+def test_workflow_start_records_run_log_schema_version(tmp_path: Path) -> None:
+    runner = _make_runner(tmp_path, _single_step_workflow())
+    with (
+        patch("kaji_harness.runner.execute_cli", return_value=_cli_result(_verdict_block("PASS"))),
+        patch("kaji_harness.runner.validate_skill_exists"),
+    ):
+        runner.run()
+
+    starts = _events(_run_dir(tmp_path), "workflow_start")
+    assert starts[0]["schema_version"] == RUN_LOG_SCHEMA_VERSION
 
 
 def test_verdict_exception_event(tmp_path: Path) -> None:

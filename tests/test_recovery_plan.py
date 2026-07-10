@@ -54,6 +54,7 @@ def _snapshot(**overrides: object) -> FailureSnapshot:
     base: dict[str, object] = {
         "run_id": "260710120000",
         "run_dir": Path("/repo/.kaji-artifacts/288/runs/260710120000"),
+        "run_log_schema_version": 1,
         "workflow_end_status": "ERROR",
         "failure_event": FailureEvent(
             kind="verdict_exception", step_id="review-code", exception_type="VerdictNotFound"
@@ -292,6 +293,14 @@ def test_config_error_is_not_resumable() -> None:
         )
     )
     assert d.decision == "not_resumable"
+
+
+def test_budget_consumed_root_run_is_exhausted() -> None:
+    # recovery child でなくても、自 run が過去に budget を消費していれば再開しない。
+    d = _plan(_snapshot(is_recovery_child=False, budget_consumed=True))
+    assert d.decision == "exhausted"
+    assert d.recoverable is False
+    assert "already consumed by a previous triage" in d.reason
 
 
 def test_kaji_bug_suspected_with_evidence_plans_bug_issue() -> None:

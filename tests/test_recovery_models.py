@@ -20,6 +20,7 @@ from kaji_harness.recovery.models import (
     FailureClassification,
     RecoveryDecision,
     derive_child_final_status,
+    recovery_budget_consumed,
     select_newer_run_ids,
 )
 
@@ -40,6 +41,37 @@ def test_module_constants_are_fixed() -> None:
     assert RECOVERY_BUDGET == 1
     assert RECOVERY_WAIT_SECONDS == 600
     assert NON_RESUMABLE_STEPS == frozenset({"issue-start", "i-pr", "issue-close"})
+
+
+def _decision(**overrides: object) -> RecoveryDecision:
+    base: dict[str, object] = {
+        "run_id": "260710120000",
+        "recoverable": False,
+        "decision": "comment_only",
+        "classification": _classification(),
+        "failed_step": "review-code",
+    }
+    base.update(overrides)
+    return RecoveryDecision(**base)  # type: ignore[arg-type]
+
+
+def test_recovery_budget_not_consumed_by_non_resuming_decision() -> None:
+    assert recovery_budget_consumed(_decision(decision="comment_only")) is False
+    assert recovery_budget_consumed(_decision(decision="not_resumable")) is False
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        # child 起動を確約した時点で budget は消費済み（ウェイト中の強制終了に fail-closed）。
+        {"decision": "resume"},
+        {"auto_recovery_attempted": True},
+        {"auto_recovery_attempt_no": RECOVERY_BUDGET},
+        {"recovery_child_run_id": "260710121500"},
+    ],
+)
+def test_recovery_budget_consumed_markers(overrides: dict[str, object]) -> None:
+    assert recovery_budget_consumed(_decision(**overrides)) is True
 
 
 def test_failure_cause_domain() -> None:

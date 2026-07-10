@@ -67,6 +67,12 @@ kaji recover <workflow.yaml> <issue> [--run-id <run_id>] [--auto-recover] [--wor
 - `<workflow.yaml>` is used to resolve the resume point and to build the resume command; pointing at
   a different workflow than the one the run used is the operator's responsibility (the workflow path
   is recorded in `recovery.json`).
+- Re-running it against a run that already performed an auto recovery yields `decision: exhausted`.
+  The budget is one resume per recovery chain; `recovery.json` and the child run directory are the
+  inputs to that decision.
+- For runs produced **before** this feature (their `run.log` `workflow_start` carries no
+  `schema_version`), a missing `failure_event` is not treated as a harness contradiction, so no bug
+  issue is filed.
 
 ```bash
 kaji recover .kaji/wf/dev.yaml 288
@@ -92,7 +98,7 @@ The existing map (`0 = OK`, `1 = ABORT`, `2 = definition error`, `3 = runtime er
 | `runs/<run_id>/recovery.json` | `RecoveryDecision` (`schema_version: 1`), overwritten on every decision update |
 | `runs/<run_id>/recovery-chain.json` | `{root_run_id, parent_run_id}`, written by a recovery child run at startup |
 | `runs/<run_id>/run.log` | `failure_event`, `recovery_decision`, `recovery_scheduled`, `recovery_attempt_start`, `recovery_attempt_end` |
-| Issue comment | Machine-generated triage report. No kaji-verdict marker (it is not a step verdict) |
+| Issue comment | Machine-generated triage report (posted before the child launch) plus a follow-up result comment when an auto recovery ran. No kaji-verdict marker (it is not a step verdict) |
 | stderr | A short `--- failure triage ---` summary printed after the existing terminal message |
 
 The `comment:` line of the stderr summary shows `Comment.ref`: the created comment URL for the

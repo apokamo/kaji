@@ -19,7 +19,14 @@ from pathlib import Path
 from typing import Any
 
 from ..state import STATE_FILE
-from .models import RECOVERY_CHAIN_FILE, read_recovery_chain, select_newer_run_ids
+from .models import (
+    RECOVERY_CHAIN_FILE,
+    RECOVERY_FILE,
+    read_recovery_chain,
+    read_recovery_json,
+    recovery_budget_consumed,
+    select_newer_run_ids,
+)
 from .report import sanitize_evidence
 
 _logger = logging.getLogger(__name__)
@@ -61,6 +68,7 @@ class FailureSnapshot:
 
     run_id: str
     run_dir: Path
+    run_log_schema_version: int | None = None
     workflow_end_status: str | None = None
     workflow_end_error: str | None = None
     failure_event: FailureEvent | None = None
@@ -76,6 +84,8 @@ class FailureSnapshot:
     is_recovery_child: bool = False
     recovery_root_run_id: str | None = None
     recovery_parent_run_id: str | None = None
+    budget_consumed: bool = False
+    prior_recovery_child_run_id: str | None = None
     provider_available: bool = True
     artifact_read_errors: tuple[str, ...] = ()
     newer_run_ids: tuple[str, ...] = ()
@@ -85,6 +95,15 @@ class FailureSnapshot:
     def failure_error_text(self) -> str:
         """分類 / sensitive pattern 判定に使うエラー文字列（attempt 優先）。"""
         return "\n".join(t for t in (self.attempt_error, self.workflow_end_error) if t)
+
+    @property
+    def emits_failure_events(self) -> bool:
+        """この run.log が ``failure_event`` 契約（Issue #288）下で書かれたか。
+
+        契約以前の run では ABORT 終端に ``failure_event`` が無いのが正常であり、
+        その不在を harness の矛盾と断定してはならない。
+        """
+        return self.run_log_schema_version is not None and self.run_log_schema_version >= 1
 
     @property
     def workflow_end_exception_type(self) -> str | None:
@@ -159,6 +178,45 @@ def _last_event(events: list[dict[str, Any]], name: str) -> dict[str, Any] | Non
         if entry.get("event") == name:
             return entry
     return None
+
+
+def _run_log_schema_version(events: list[dict[str, Any]]) -> int | None:
+    """``workflow_start`` に記録された run.log の event 契約バージョンを返す。"""
+    entry = _last_event(events, "workflow_start")
+    if entry is None:
+        return None
+    version = entry.get("schema_version")
+    return version if isinstance(version, int) else None
+
+
+def _prior_recovery_state(run_dir: Path) -> tuple[bool, str | None, list[str]]:
+    """同一 run に対する過去の handler 実行痕跡から budget 消費状況を読む。
+
+    Returns:
+        ``(budget_consumed, child_run_id, evidence)``。``recovery.json`` が存在するのに
+        読めない場合は fail-closed で消費済みとして扱う（読めないことを理由に二重起動を
+        許すと「1 chain 1 回」の契約が壊れるため）。
+    """
+    path = run_dir / RECOVERY_FILE
+    if not path.is_file():
+        return False, None, []
+    try:
+        prior = read_recovery_json(path)
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        return (
+            True,
+            None,
+            [f"{RECOVERY_FILE}: unreadable ({exc}); recovery budget treated as spent"],
+        )
+    if not recovery_budget_consumed(prior):
+        return False, prior.recovery_child_run_id, []
+    evidence = [
+        f"{RECOVERY_FILE}: prior decision={prior.decision} "
+        f"auto_recovery_attempted={str(prior.auto_recovery_attempted).lower()} "
+        f"attempt_no={prior.auto_recovery_attempt_no} "
+        f"child_run_id={prior.recovery_child_run_id}"
+    ]
+    return True, prior.recovery_child_run_id, evidence
 
 
 def _parse_failure_event(entry: dict[str, Any] | None) -> FailureEvent | None:
@@ -269,6 +327,15 @@ def collect_snapshot(
     chain = read_recovery_chain(run_dir / RECOVERY_CHAIN_FILE)
     root_run_id, parent_run_id = chain if chain else (None, None)
 
+    # budget guard の入力は 2 系統。(1) 過去の recovery.json、(2) この run を parent と
+    # する child run dir の実在。(2) は recovery.json の書き込みが失敗した場合の裏取り。
+    budget_consumed, prior_child, budget_evidence = _prior_recovery_state(run_dir)
+    launched_child = find_child_run_id(runs_dir, run_id) if runs_dir.is_dir() else None
+    if launched_child is not None:
+        budget_consumed = True
+        prior_child = prior_child or launched_child
+        budget_evidence.append(f"runs/: recovery child run already launched: {launched_child}")
+
     newer = select_newer_run_ids(_list_run_ids(runs_dir), run_id)
 
     # --- evidence（すべて sanitize 済み。credential 形跡を伏字化し 500 文字で切る） ---
@@ -299,6 +366,8 @@ def collect_snapshot(
                 f"git: branch {git.branch}; porcelain: {git.changed_files} changed [{preview}]"
             )
         )
+    for item in budget_evidence:
+        evidence.append(sanitize_evidence(item))
     for err in read_errors:
         evidence.append(sanitize_evidence(f"artifact: {err}"))
     if newer:
@@ -307,6 +376,7 @@ def collect_snapshot(
     return FailureSnapshot(
         run_id=run_id,
         run_dir=run_dir,
+        run_log_schema_version=_run_log_schema_version(events),
         workflow_end_status=end_status,
         workflow_end_error=end_error,
         failure_event=failure_event,
@@ -322,6 +392,8 @@ def collect_snapshot(
         is_recovery_child=chain is not None,
         recovery_root_run_id=root_run_id,
         recovery_parent_run_id=parent_run_id,
+        budget_consumed=budget_consumed,
+        prior_recovery_child_run_id=prior_child,
         provider_available=provider_available,
         artifact_read_errors=tuple(read_errors),
         newer_run_ids=tuple(newer),

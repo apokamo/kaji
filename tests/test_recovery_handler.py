@@ -103,7 +103,7 @@ def _build_run(
     run_dir = tmp_path / ".kaji-artifacts" / _ISSUE / "runs" / run_id
     run_dir.mkdir(parents=True)
     events = [
-        {"event": "workflow_start", "issue": _ISSUE, "workflow": "dev"},
+        {"event": "workflow_start", "issue": _ISSUE, "workflow": "dev", "schema_version": 1},
         {
             "event": "failure_event",
             "kind": "verdict_exception",
@@ -203,7 +203,8 @@ def test_comment_is_posted_before_wait_and_child_launch(tmp_path: Path) -> None:
     )
     result = handler.run()
 
-    assert rec.calls == ["comment", "sleep", "child"]
+    # 末尾の comment は child 終了後の結果報告（follow-up）。
+    assert rec.calls == ["comment", "sleep", "child", "comment"]
     assert result.decision.decision == "resume"
     assert result.child_exit_code == 0
     assert "resume_scheduled_at" in provider.comments[0]
@@ -244,6 +245,44 @@ def test_resume_writes_child_run_id_and_status_back(tmp_path: Path) -> None:
     assert "recovery_scheduled" in kinds
     assert "recovery_attempt_start" in kinds
     assert "recovery_attempt_end" in kinds
+
+
+def test_child_result_is_reported_as_follow_up_comment(tmp_path: Path) -> None:
+    # triage コメントは child 起動前に投稿するため child_run_status=pending で固定される。
+    # 成否は follow-up コメントで Issue から追える。
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_run(tmp_path)
+    provider = _FakeProvider()
+
+    handler = _handler(tmp_path, run_dir, provider=provider, child_launcher=lambda _a, _c: 0)
+    handler.run()
+
+    assert len(provider.comments) == 2
+    assert "child_run_status | `pending`" in provider.comments[0]
+    assert provider.comments[1].startswith("## Workflow auto recovery result")
+    assert "child_run_status | `COMPLETE`" in provider.comments[1]
+
+
+def test_child_result_comment_failure_does_not_break_run(tmp_path: Path) -> None:
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_run(tmp_path)
+    stderr = io.StringIO()
+
+    class _P(_FakeProvider):
+        def comment_issue(self, issue_id: str, body: str) -> Comment:
+            if body.startswith("## Workflow auto recovery result"):
+                raise RuntimeError("gh down")
+            return super().comment_issue(issue_id, body)
+
+    result = _handler(
+        tmp_path, run_dir, provider=_P(), child_launcher=lambda _a, _c: 0, stderr=stderr
+    ).run()
+
+    assert result.decision.decision == "resume"
+    assert result.child_exit_code == 0
+    assert "recovery result comment posting failed" in stderr.getvalue()
 
 
 def test_child_launch_argv_carries_chain_flags(tmp_path: Path) -> None:
@@ -289,6 +328,118 @@ def test_recovery_child_failure_is_exhausted_without_relaunch(tmp_path: Path) ->
     assert result.decision.decision == "exhausted"
     assert result.child_exit_code is None
     assert launched == []
+
+
+def test_second_triage_of_same_root_run_is_exhausted(tmp_path: Path) -> None:
+    # child が run_dir を作る前に落ちると chain / newer-run では再入を検出できない。
+    # 同じ root run に handler を 2 回かけても child 起動は 1 回に留まること。
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_run(tmp_path)
+    launched: list[list[str]] = []
+
+    def _launch(argv: list[str], _cwd: Path) -> int:
+        launched.append(argv)
+        return 3  # run_dir も recovery-chain.json も作らずに死んだ child
+
+    first = _handler(tmp_path, run_dir, provider=_FakeProvider(), child_launcher=_launch).run()
+    second = _handler(tmp_path, run_dir, provider=_FakeProvider(), child_launcher=_launch).run()
+
+    assert first.decision.decision == "resume"
+    assert second.decision.decision == "exhausted"
+    assert second.child_exit_code is None
+    assert len(launched) == 1
+    persisted = read_recovery_json(run_dir / RECOVERY_FILE)
+    assert persisted.decision == "exhausted"
+
+
+def test_unreadable_recovery_json_is_fail_closed_to_exhausted(tmp_path: Path) -> None:
+    # 過去の triage 痕跡が壊れていた場合、読めないことを理由に再開してはならない。
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_run(tmp_path)
+    (run_dir / RECOVERY_FILE).write_text("{ not json", encoding="utf-8")
+    launched: list[list[str]] = []
+
+    result = _handler(
+        tmp_path,
+        run_dir,
+        provider=_FakeProvider(),
+        child_launcher=lambda argv, _cwd: (launched.append(argv), 0)[1],
+    ).run()
+
+    assert result.decision.decision == "exhausted"
+    assert launched == []
+
+
+def test_existing_child_run_dir_blocks_relaunch(tmp_path: Path) -> None:
+    # recovery.json が失われても、この run を parent とする child run dir が
+    # budget 消費の裏取りになる（child run_id を親より小さくして newer-run gate と分離）。
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_run(tmp_path)
+    child = run_dir.parent / "260710110000"
+    child.mkdir()
+    write_recovery_chain(
+        child / RECOVERY_CHAIN_FILE, root_run_id=run_dir.name, parent_run_id=run_dir.name
+    )
+    launched: list[list[str]] = []
+
+    result = _handler(
+        tmp_path,
+        run_dir,
+        provider=_FakeProvider(),
+        child_launcher=lambda argv, _cwd: (launched.append(argv), 0)[1],
+    ).run()
+
+    assert result.decision.decision == "exhausted"
+    assert launched == []
+
+
+def test_comment_only_triage_does_not_consume_budget(tmp_path: Path) -> None:
+    # 再開しなかった triage（auto_recover 無効）は budget を消費しない。
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_run(tmp_path)
+    launched: list[list[str]] = []
+
+    first = _handler(tmp_path, run_dir, provider=_FakeProvider(), auto_recover=False).run()
+    second = _handler(
+        tmp_path,
+        run_dir,
+        provider=_FakeProvider(),
+        child_launcher=lambda argv, _cwd: (launched.append(argv), 0)[1],
+    ).run()
+
+    assert first.decision.decision == "comment_only"
+    assert second.decision.decision == "resume"
+    assert len(launched) == 1
+
+
+# --- legacy artifact（failure_event 契約以前の run） ---
+
+
+def test_legacy_abort_run_is_not_reported_as_kaji_bug(tmp_path: Path) -> None:
+    # 本機能導入前の ABORT 終端 run に `kaji recover` を向けても bug issue を起票しない。
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = tmp_path / ".kaji-artifacts" / _ISSUE / "runs" / "260710120000"
+    run_dir.mkdir(parents=True)
+    events = [
+        {"event": "workflow_start", "issue": _ISSUE, "workflow": "dev"},
+        {"event": "workflow_end", "status": "ABORT", "error": None},
+    ]
+    (run_dir / "run.log").write_text(
+        "".join(json.dumps(e) + "\n" for e in events), encoding="utf-8"
+    )
+    provider = _FakeProvider()
+
+    result = _handler(tmp_path, run_dir, provider=provider).run()
+
+    assert result.decision.classification.cause == "unknown_external_error"
+    assert result.decision.decision == "comment_only"
+    assert result.decision.bug_issue is None
+    assert provider.created == []
 
 
 # --- ウェイト明けの再チェック / 中断 ---

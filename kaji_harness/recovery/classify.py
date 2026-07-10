@@ -61,6 +61,11 @@ def _detect_contradiction(snapshot: FailureSnapshot) -> bool:
         if not snapshot.attempt_result_present:
             return True
     # ABORT 終端は必ず agent_abort / cycle_exhausted / ambiguous_worktree のいずれかを伴う。
+    # ただしこれは failure_event 契約下で書かれた run.log に限った不変条件であり、契約以前の
+    # run（``kaji recover`` の調査対象になりうる）に適用すると harness バグでないものを
+    # bug issue に仕立ててしまう。schema version を確認できた run にだけ適用する。
+    if not snapshot.emits_failure_events:
+        return False
     return snapshot.workflow_end_status == "ABORT" and event is None
 
 

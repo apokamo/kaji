@@ -16,6 +16,10 @@ from .models import CostInfo, Verdict
 if TYPE_CHECKING:  # pragma: no cover
     from .recovery.models import RecoveryDecision
 
+#: run.log の event 契約バージョン。``workflow_start`` に記録する。
+#: 1 = Issue #288 の ``failure_event`` 契約（ABORT / ERROR 終端は必ず failure_event を伴う）。
+RUN_LOG_SCHEMA_VERSION = 1
+
 
 @dataclass
 class RunLogger:
@@ -38,8 +42,19 @@ class RunLogger:
             f.flush()
 
     def log_workflow_start(self, issue: str, workflow: str) -> None:
-        """ワークフロー開始イベントを記録。"""
-        self._write("workflow_start", issue=issue, workflow=workflow)
+        """ワークフロー開始イベントを記録。
+
+        ``schema_version`` は run.log が満たす event 契約の版。Issue #288 の
+        ``failure_event`` を必ず emit する runner でのみ記録されるため、recovery
+        classifier は「この run に failure_event が無いのは矛盾である」と断定して
+        よいかをこの値で判別する（本機能導入前の run には存在しない）。
+        """
+        self._write(
+            "workflow_start",
+            issue=issue,
+            workflow=workflow,
+            schema_version=RUN_LOG_SCHEMA_VERSION,
+        )
 
     def log_step_start(
         self,

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 
-from .models import RECOVERY_WAIT_SECONDS, RecoveryDecision
+from .models import RECOVERY_BUDGET, RECOVERY_WAIT_SECONDS, RecoveryDecision
 
 #: 各根拠の引用上限（文字数）。
 EVIDENCE_LIMIT = 500
@@ -117,8 +117,8 @@ def _next_action_lines(decision: RecoveryDecision) -> list[str]:
             lines.append("- 先に手動で `kaji run` を起動した場合、自動再開は中止される。")
         case "exhausted":
             lines.append(
-                "- この run は recovery chain の child であり、自動再開の budget "
-                "（1 chain 1 回）を消費済み。分類が誤っている可能性を人手で確認する。"
+                f"- この recovery chain は自動再開の budget（1 chain {RECOVERY_BUDGET} 回）を"
+                "消費済み。分類が誤っている可能性を人手で確認する。"
             )
         case "cancelled_newer_run_detected":
             lines.append(
@@ -198,6 +198,30 @@ def render_triage_comment(*, decision: RecoveryDecision, issue_ref: str) -> str:
 
     lines += ["", "### 次アクション", ""]
     lines += _next_action_lines(decision)
+    return "\n".join(lines) + "\n"
+
+
+def render_child_result_comment(*, decision: RecoveryDecision, issue_ref: str) -> str:
+    """自動再開した child run の終了結果を報告する follow-up コメントを返す。
+
+    triage コメントは child 起動前に投稿するため ``child_run_status`` が常に ``pending``
+    になる。Issue から自動再開の成否を追跡できるよう、child 終了後にこの 1 通を足す。
+    """
+    rows = [
+        ("issue", f"`{issue_ref}`"),
+        ("run_id", f"`{decision.run_id}`"),
+        ("recovery_root_run_id", f"`{_na(decision.recovery_root_run_id)}`"),
+        ("child_run_id", f"`{_na(decision.recovery_child_run_id)}`"),
+        ("child_run_status", f"`{_na(decision.recovery_child_final_status)}`"),
+        ("resume_started_at", f"`{_na(decision.resume_started_at)}`"),
+    ]
+    lines = ["## Workflow auto recovery result", "", "| 項目 | 値 |", "|------|----|"]
+    lines += [f"| {key} | {value} |" for key, value in rows]
+    lines += [
+        "",
+        "自動再開の budget（1 recovery chain "
+        f"{RECOVERY_BUDGET} 回）は消費済み。以降の再開は手動で判断する。",
+    ]
     return "\n".join(lines) + "\n"
 
 

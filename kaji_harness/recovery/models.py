@@ -220,6 +220,24 @@ class RecoveryDecision:
         )
 
 
+def recovery_budget_consumed(decision: RecoveryDecision) -> bool:
+    """既存の ``recovery.json`` が recovery budget を消費済みかを判定する。
+
+    「1 recovery chain あたり ``RECOVERY_BUDGET`` 回」の契約は、chain identity
+    （``recovery-chain.json``）だけでなく **同一 run に対する handler 再入**からも
+    守る必要がある。``decision == "resume"`` は child 起動を確約した時点で書き出される
+    ため、ウェイト中に handler が強制終了された場合でも budget は消費済みとして扱う
+    （fail-closed。再開の取りこぼしより二重起動の回避を優先する）。
+    """
+    if decision.auto_recovery_attempted:
+        return True
+    if decision.auto_recovery_attempt_no >= RECOVERY_BUDGET:
+        return True
+    if decision.recovery_child_run_id is not None:
+        return True
+    return decision.decision == "resume"
+
+
 def write_recovery_json(path: Path, decision: RecoveryDecision) -> None:
     """``RecoveryDecision`` を pure JSON で書き出す（親ディレクトリは必要なら作成）。"""
     path.parent.mkdir(parents=True, exist_ok=True)

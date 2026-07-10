@@ -5,9 +5,15 @@
 ``recovery.json`` / ``run.log`` / Issue コメント / stderr サマリへ証跡を固定し、
 ``decision: resume`` のときだけ固定ウェイト後に child run を 1 回起動する。
 
-自動再開の budget は **recovery chain 単位で 1**。budget 判定は「自 run が recovery
-child か」だけで機械的に決まるため、scan も counter も要らず、「別 run_id だからもう
-1 回」という抜け道が構造的に消える（決定 1 / 4）。
+自動再開の budget は **recovery chain 単位で 1**。判定入力は artifact 上の 2 つの事実
+だけで、counter の走査は要らない:
+
+1. 自 run が recovery child か（``recovery-chain.json`` の実在）→ chain 内 2 回目を封じる
+2. 自 run が過去に triage 済みで budget を消費したか（``recovery.json`` / child run dir）
+   → 同一 run への handler 再入（``kaji recover`` の再実行など）を封じる
+
+これにより「別 run_id だからもう 1 回」「同じ run にもう一度 handler をかければもう 1 回」の
+どちらの抜け道も構造的に消える（決定 1 / 4）。
 """
 
 from __future__ import annotations
@@ -28,6 +34,7 @@ from ..models import Workflow
 from .classify import classify_failure
 from .models import (
     NON_RESUMABLE_STEPS,
+    RECOVERY_BUDGET,
     RECOVERY_FILE,
     RECOVERY_WAIT_SECONDS,
     FailureClassification,
@@ -36,7 +43,12 @@ from .models import (
     derive_child_final_status,
     write_recovery_json,
 )
-from .report import render_stderr_summary, render_triage_comment, sanitize_evidence
+from .report import (
+    render_child_result_comment,
+    render_stderr_summary,
+    render_triage_comment,
+    sanitize_evidence,
+)
 from .snapshot import FailureSnapshot, collect_snapshot, find_child_run_id, list_newer_run_ids
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -143,7 +155,7 @@ def plan_recovery(
 
     1. ``kaji_bug_suspected`` かつ根拠 artifact を列挙できる → ``bug_issue_created``
     2. ``recoverability_hint != candidate`` → cause 別の ``comment_only`` / ``not_resumable``
-    3. budget guard（自身が recovery child）→ ``exhausted``
+    3. budget guard（自身が recovery child / 自 run が budget 消費済み）→ ``exhausted``
     4. safety gate 抵触 → ``not_resumable``（抵触 gate を evidence に記録）
     5. ``auto_recover`` 無効 → ``comment_only``（``resume_command`` は提示する）
     6. すべて通過 → ``resume``（``resume_scheduled_at`` を確定）
@@ -207,7 +219,22 @@ def plan_recovery(
         return build(
             "exhausted",
             recoverable=False,
-            reason="recovery budget (1 per recovery chain) already consumed by this chain",
+            reason=(
+                f"recovery budget ({RECOVERY_BUDGET} per recovery chain) "
+                "already consumed by this chain"
+            ),
+        )
+
+    # handler の再入（同一 run に対する 2 回目の triage）でも budget を守る。chain identity は
+    # child 側にしか無いため、root run では過去の recovery.json / child run dir を根拠にする。
+    if snapshot.budget_consumed:
+        return build(
+            "exhausted",
+            recoverable=False,
+            reason=(
+                f"recovery budget ({RECOVERY_BUDGET} per recovery chain) already consumed "
+                "by a previous triage of this run"
+            ),
         )
 
     resume_from, discarded = _resume_point(workflow, snapshot.failed_step)
@@ -439,7 +466,7 @@ class RecoveryHandler:
         decision = replace(
             decision,
             auto_recovery_attempted=True,
-            auto_recovery_attempt_no=1,
+            auto_recovery_attempt_no=RECOVERY_BUDGET,
             resume_started_at=started_at,
         )
         self._record(decision)
@@ -460,7 +487,22 @@ class RecoveryHandler:
         self._run_logger.log_recovery_attempt_end(
             child_run_id=child_run_id, child_final_status=final_status, exit_code=exit_code
         )
+        self._post_child_result_comment(decision)
         return RecoveryResult(decision, child_exit_code=exit_code)
+
+    def _post_child_result_comment(self, decision: RecoveryDecision) -> None:
+        """child 終了後の結果を Issue に追記する（best-effort）。
+
+        triage コメントは child 起動前に投稿するため ``child_run_status`` が ``pending``
+        のまま固定される。投稿失敗は既に確定した child の結果を変えないため、警告のみ。
+        """
+        if self.provider is None:
+            return
+        body = render_child_result_comment(decision=decision, issue_ref=self.issue_ref)
+        try:
+            self.provider.comment_issue(self.issue_id, body)
+        except Exception as exc:  # noqa: BLE001 — provider 実装ごとの例外型を跨ぐ best-effort
+            self.stderr.write(f"WARNING: recovery result comment posting failed: {exc}\n")
 
     def _child_argv(self, decision: RecoveryDecision) -> list[str]:
         """child run の argv。``kaji`` entry point ではなく module 実行で PATH 非依存にする。"""

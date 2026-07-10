@@ -19,6 +19,7 @@ from .cli import execute_cli
 from .config import KajiConfig
 from .errors import (
     CLIExecutionError,
+    CLINotFoundError,
     InvalidTransition,
     InvalidVerdictValue,
     IssueContextResolutionError,
@@ -514,7 +515,24 @@ class WorkflowRunner:
                 branch_prefix=prefix,
             )
 
-        # 4. run ログディレクトリを作成（canonical id ベース）
+        # 4. 開始ステップの決定
+        # Issue #288: run_dir 作成より前に検証する。run_dir を作ってから WorkflowValidationError
+        # で抜けると workflow_end の無い run.log が残り、failure triage がそれを artifact 破損
+        # （= kaji_bug_suspected）と誤読して無関係な bug issue を起票しうる。
+        # 開始 step の解決は workflow 定義だけに依存する純粋な処理なので、artifact を
+        # 作る前に済ませられる。
+        if self.single_step:
+            current_step = self.workflow.find_step(self.single_step)
+            if not current_step:
+                raise WorkflowValidationError(f"Step '{self.single_step}' not found")
+        elif self.from_step:
+            current_step = self.workflow.find_step(self.from_step)
+            if not current_step:
+                raise WorkflowValidationError(f"Step '{self.from_step}' not found")
+        else:
+            current_step = self.workflow.find_start_step()
+
+        # 5. run ログディレクトリを作成（canonical id ベース）
         run_dir = allocate_run_dir(self.artifacts_dir / run_ctx.canonical_id / "runs")
         self.last_run_dir = run_dir
         # Issue #288: recovery child は起動直後に chain identity を artifact 化する。
@@ -529,18 +547,6 @@ class WorkflowRunner:
         logger = RunLogger(log_path=run_dir / "run.log")
         logger.log_workflow_start(run_ctx.canonical_id, self.workflow.name)
         _console.info("workflow start: %s issue %s", self.workflow.name, run_ctx.issue_ref)
-
-        # 4. 開始ステップの決定
-        if self.single_step:
-            current_step = self.workflow.find_step(self.single_step)
-            if not current_step:
-                raise WorkflowValidationError(f"Step '{self.single_step}' not found")
-        elif self.from_step:
-            current_step = self.workflow.find_step(self.from_step)
-            if not current_step:
-                raise WorkflowValidationError(f"Step '{self.from_step}' not found")
-        else:
-            current_step = self.workflow.find_start_step()
 
         total_cost = 0.0
         workflow_start = time.monotonic()
@@ -580,10 +586,10 @@ class WorkflowRunner:
             _console.info("workflow end: status=%s duration=%dms", end_status, total_duration_ms)
             return state
 
-        # 4.5. --reset-cycle の適用（state / logger が確定済み、メインループ前）
+        # 6. --reset-cycle の適用（state / logger が確定済み、メインループ前）
         self._apply_cycle_reset(cycle_reset_target, state, logger)
 
-        # 5. メインループ
+        # 7. メインループ
         try:
             while current_step and current_step.id != "end":
                 # --before barrier: dispatch 直前で停止（開始 step / --from 開始 step も含む）
@@ -857,6 +863,7 @@ class WorkflowRunner:
                     except (
                         StepTimeoutError,
                         CLIExecutionError,
+                        CLINotFoundError,
                         ScriptExecutionError,
                         VerdictNotFound,
                         VerdictParseError,
@@ -865,8 +872,8 @@ class WorkflowRunner:
                         # best-effort で異常終了情報を記録 → 元例外を re-raise。
                         # 二系統の失敗を 1 箇所で扱う:
                         #   1. dispatch 失敗（StepTimeoutError / CLIExecutionError /
-                        #      ScriptExecutionError）: result 未取得。exc.returncode を
-                        #      終了コードとして運ぶ（取得不能なら None）。
+                        #      CLINotFoundError / ScriptExecutionError）: result 未取得。
+                        #      exc.returncode を終了コードとして運ぶ（取得不能なら None）。
                         #   2. verdict 解決失敗（VerdictNotFound / VerdictParseError /
                         #      InvalidVerdictValue）: dispatch は成功し CLI/script は
                         #      正常 exit している。L651-652 で result から捕捉済みの
