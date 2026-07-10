@@ -182,11 +182,11 @@ best-effort で記録される。cycle 上限 exhaust の合成 verdict では d
 | `log_verdict_source(step_id, source, attempt)` | `resolve_verdict()` 直後（verdict 解決経路の記録、Issue #220） |
 | `log_step_end(step_id, verdict, duration_ms, cost, *, attempt=None, exit_code=None, signal=None, dispatch="agent")` | CLI / subprocess 終了・verdict 解析後（異常終了でも合成 ABORT で発火、Issue #222） |
 | `log_cycle_iteration(cycle_name, iteration, max_iter)` | サイクル内の各反復開始時 |
+| `log_workflow_end(status, cycle_counts, total_duration_ms, total_cost, error)` | ワークフロー終了時（正常・異常問わず） |
 
 > **step log の出力先（Issue #220）**: `stdout.log` / `console.log` / `stderr.log` / `run.log` 以外の step 単位ログ（`prompt.txt` 等）と verdict は、従来の `runs/<run_id>/<step_id>/` ではなく `runs/<run_id>/steps/<step_id>/attempt-NNN/` 配下に出力される。`run.log` は従来どおり `runs/<run_id>/` 直下。詳細は [`docs/ARCHITECTURE.md`](../../ARCHITECTURE.md) § 実行アーティファクトの layout。
 
 > **`console.log` の可読性正規化（Issue #137）**: `console.log` は人間が読むための表示用アーティファクトであり、adapter は tool result text に含まれる `\uXXXX` エスケープ（Codex の `mcp_tool_call` 二重エンコード等）を人間可読な文字へ正規化して書き出し得る。一方 `stdout.log` は CLI が出力した raw JSONL をそのまま保持するため、正規化前の生イベントの検証可能性は失われない。
-| `log_workflow_end(status, cycle_counts, total_duration_ms, total_cost, error)` | ワークフロー終了時（正常・異常問わず） |
 
 ```python
 # 典型的な呼び出し順序
