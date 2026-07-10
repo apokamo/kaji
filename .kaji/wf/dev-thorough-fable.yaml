@@ -119,6 +119,7 @@ steps:
     agent: claude
     model: opus
     effort: high
+    timeout: 6000
     on:
       PASS: review-code
       RETRY: implement
