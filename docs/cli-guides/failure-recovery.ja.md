@@ -83,7 +83,7 @@ kaji recover .kaji/wf/dev.yaml 288 --run-id 260710120000
 | `kaji run` で triage のみ（child run 未起動） | 元の失敗の exit code |
 | `kaji run` が child run を起動した | child の exit code（chain の最終結果） |
 | `kaji recover` で triage 完了（decision 問わず） | `0` |
-| `kaji recover` で対象 run 不在 / 進行中 run / flag 不整合 | `2` |
+| `kaji recover` で対象 run 不在 / 進行中 run / flag 不整合 / `requires_provider` 不一致 | `2` |
 | `kaji recover` で handler 内部エラー | `3` |
 
 ## artifact

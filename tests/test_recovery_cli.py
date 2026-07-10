@@ -371,3 +371,41 @@ class TestCmdRecover:
         rc = main(["recover", str(repo / "wf.yaml"), "99", "--workdir", str(repo)])
         assert rc == EXIT_INVALID_INPUT
         assert "no runs found" in capsys.readouterr().err
+
+    def test_recover_records_absolute_workflow_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """相対 workflow path は絶対化して記録する。
+
+        child run は ``--workdir`` を cwd として起動するため、相対のまま渡すと
+        invocation cwd と ``--workdir`` が異なる場合に workflow を解決できない。
+        """
+        repo = _repo(tmp_path)
+        run_dir = self._failed_run(repo)
+        monkeypatch.chdir(tmp_path)
+
+        rc = main(["recover", "repo/wf.yaml", "99", "--workdir", str(repo)])
+
+        assert rc == EXIT_OK
+        decision = json.loads((run_dir / RECOVERY_FILE).read_text(encoding="utf-8"))
+        assert decision["workflow_path"] == str(repo / "wf.yaml")
+        assert str(repo / "wf.yaml") in decision["resume_command"]
+
+    def test_recover_rejects_provider_mismatch(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``requires_provider`` 不一致は triage 前に fail-fast する（cmd_run と同挙動）。"""
+        repo = _repo(tmp_path)
+        run_dir = self._failed_run(repo)
+        wf = repo / "wf-github.yaml"
+        wf.write_text(
+            (repo / "wf.yaml")
+            .read_text()
+            .replace("requires_provider: any", "requires_provider: github")
+        )
+
+        rc = main(["recover", str(wf), "99", "--workdir", str(repo)])
+
+        assert rc == EXIT_INVALID_INPUT
+        assert "requires provider.type='github'" in capsys.readouterr().err
+        assert not (run_dir / RECOVERY_FILE).exists()

@@ -88,7 +88,7 @@ The existing map (`0 = OK`, `1 = ABORT`, `2 = definition error`, `3 = runtime er
 | `kaji run` with triage only (no child run) | the original failure's exit code |
 | `kaji run` that started a child run | the child's exit code (the chain's final result) |
 | `kaji recover`, triage completed (any decision) | `0` |
-| `kaji recover`, run not found / still in progress / flag mismatch | `2` |
+| `kaji recover`, run not found / still in progress / flag mismatch / `requires_provider` mismatch | `2` |
 | `kaji recover`, handler internal error | `3` |
 
 ## Artifacts

@@ -566,6 +566,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return EXIT_DEFINITION_ERROR
+    # recovery child は ``--workdir`` を cwd として起動されるため、相対パスのままだと
+    # invocation cwd と ``--workdir`` が異なる場合に workflow を解決できない。
+    workflow_path = workflow_path.resolve()
 
     try:
         workflow = load_workflow(workflow_path)
@@ -712,11 +715,19 @@ def cmd_recover(args: argparse.Namespace) -> int:
     if not args.workflow.exists():
         print(f"Error: Workflow file not found: {args.workflow}", file=sys.stderr)
         return EXIT_DEFINITION_ERROR
+    # child run と同じく ``--workdir`` を cwd として起動するため絶対化する（cmd_run と同様）。
+    workflow_path = args.workflow.resolve()
     try:
-        workflow = load_workflow(args.workflow)
+        workflow = load_workflow(workflow_path)
     except WorkflowValidationError as e:
         print(f"Error: {e}", file=sys.stderr)
         return EXIT_DEFINITION_ERROR
+
+    # cmd_run と同じ workflow ↔ provider 整合検証。これが無いと triage / wait を経て
+    # 起動した child が provider 不一致で必ず失敗する。
+    rc = _validate_workflow_provider_match(workflow, config)
+    if rc != EXIT_OK:
+        return rc
 
     try:
         issue_context = _resolve_recover_issue_context(config, provider, args.issue)
@@ -732,7 +743,7 @@ def cmd_recover(args: argparse.Namespace) -> int:
 
     handler = RecoveryHandler(
         workflow=workflow,
-        workflow_path=args.workflow,
+        workflow_path=workflow_path,
         issue_id=issue_context.issue_id,
         issue_ref=issue_context.issue_ref,
         artifacts_dir=artifacts_dir,
