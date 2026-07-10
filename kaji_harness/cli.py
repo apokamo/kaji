@@ -40,10 +40,28 @@ _TRANSIENT_PATTERNS = [
 ]
 
 
+def is_transient_error_text(text: str | None) -> bool:
+    """エラー文字列が一時的障害（retry する価値がある）かを判定する。
+
+    Issue #288: attempt-level retry（``execute_cli``）と run-level recovery classifier
+    が同一 pattern list を参照するための公開 helper。二重実装を作らないため、
+    ``_is_transient`` はこの関数へ委譲する。
+
+    Args:
+        text: 判定対象。``None`` / 空文字は ``False``。
+
+    Returns:
+        ``_TRANSIENT_PATTERNS`` のいずれかを（大小文字無視で）含めば ``True``。
+    """
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(p in lowered for p in _TRANSIENT_PATTERNS)
+
+
 def _is_transient(error: CLIExecutionError) -> bool:
     """Return True if the error is likely transient and worth retrying."""
-    msg = (error.stderr or str(error)).lower()
-    return any(p in msg for p in _TRANSIENT_PATTERNS)
+    return is_transient_error_text(error.stderr or str(error))
 
 
 def _now_stamp() -> str:

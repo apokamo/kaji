@@ -9,9 +9,16 @@ import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .models import CostInfo, Verdict
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .recovery.models import RecoveryDecision
+
+#: run.log の event 契約バージョン。``workflow_start`` に記録する。
+#: 1 = Issue #288 の ``failure_event`` 契約（ABORT / ERROR 終端は必ず failure_event を伴う）。
+RUN_LOG_SCHEMA_VERSION = 1
 
 
 @dataclass
@@ -35,8 +42,19 @@ class RunLogger:
             f.flush()
 
     def log_workflow_start(self, issue: str, workflow: str) -> None:
-        """ワークフロー開始イベントを記録。"""
-        self._write("workflow_start", issue=issue, workflow=workflow)
+        """ワークフロー開始イベントを記録。
+
+        ``schema_version`` は run.log が満たす event 契約の版。Issue #288 の
+        ``failure_event`` を必ず emit する runner でのみ記録されるため、recovery
+        classifier は「この run に failure_event が無いのは矛盾である」と断定して
+        よいかをこの値で判別する（本機能導入前の run には存在しない）。
+        """
+        self._write(
+            "workflow_start",
+            issue=issue,
+            workflow=workflow,
+            schema_version=RUN_LOG_SCHEMA_VERSION,
+        )
 
     def log_step_start(
         self,
@@ -130,6 +148,78 @@ class RunLogger:
     def log_barrier_missed(self, before_step: str) -> None:
         """`--before` barrier 未到達（workflow が自然完了）を記録。"""
         self._write("barrier_missed", before_step=before_step)
+
+    def log_failure_event(
+        self,
+        *,
+        kind: str,
+        step_id: str | None = None,
+        exception_type: str | None = None,
+        cycle_name: str | None = None,
+        synthetic: bool = True,
+    ) -> None:
+        """Issue #288: run を終端させた失敗を構造化記録する。
+
+        ``kind`` は ``dispatch_exception`` / ``verdict_exception`` / ``cycle_exhausted`` /
+        ``ambiguous_worktree`` / ``agent_abort``。recovery classifier はこの event を
+        一次入力とし、reason 文字列マッチには依存しない。``synthetic`` は failure record
+        が runner 生成かを表す直交属性（agent の正規 ABORT のみ ``False``）。
+        """
+        self._write(
+            "failure_event",
+            kind=kind,
+            step_id=step_id,
+            exception_type=exception_type,
+            cycle_name=cycle_name,
+            synthetic=synthetic,
+        )
+
+    def log_recovery_decision(self, decision: RecoveryDecision) -> None:
+        """Issue #288: failure triage の判定結果を記録する（更新のたびに追記）。"""
+        self._write(
+            "recovery_decision",
+            run_id=decision.run_id,
+            decision=decision.decision,
+            recoverable=decision.recoverable,
+            cause=decision.classification.cause,
+            synthetic=decision.classification.synthetic,
+            failed_step=decision.failed_step,
+            resume_from=decision.resume_from,
+            recovery_root_run_id=decision.recovery_root_run_id,
+            recovery_parent_run_id=decision.recovery_parent_run_id,
+            reason=decision.reason,
+        )
+
+    def log_recovery_scheduled(self, *, resume_scheduled_at: str, wait_seconds: int) -> None:
+        """Issue #288: 自動再開の予定時刻とウェイト長を記録する。"""
+        self._write(
+            "recovery_scheduled",
+            resume_scheduled_at=resume_scheduled_at,
+            wait_seconds=wait_seconds,
+        )
+
+    def log_recovery_attempt_start(self, *, resume_command: str, resume_started_at: str) -> None:
+        """Issue #288: ウェイト明けに child run 起動を開始した時刻を記録する。"""
+        self._write(
+            "recovery_attempt_start",
+            resume_command=resume_command,
+            resume_started_at=resume_started_at,
+        )
+
+    def log_recovery_attempt_end(
+        self,
+        *,
+        child_run_id: str | None,
+        child_final_status: str | None,
+        exit_code: int | None,
+    ) -> None:
+        """Issue #288: child run の終了と、その run_id / 導出 status を記録する。"""
+        self._write(
+            "recovery_attempt_end",
+            child_run_id=child_run_id,
+            child_final_status=child_final_status,
+            exit_code=exit_code,
+        )
 
     def log_workflow_end(
         self,

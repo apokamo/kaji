@@ -110,6 +110,77 @@ kaji run .kaji/wf/dev.yaml 184 --from review-ready --reset-cycle
 step が cycle に属さない場合（linear step）も誤用としてエラーになる。詳細な意味論は
 [workflow-authoring.md § `--reset-cycle` の意味論](workflow-authoring.md) を参照。
 
+## failure triage と自動再開（Issue #288）
+
+`kaji run` が `ERROR`、または triage 対象の `ABORT` で終了すると、run artifact を根拠に原因を
+機械分類し、証跡を固定する **failure triage** が走る。失敗対処は 2 層に分かれる。
+
+| 層 | 対象 | 時間スケール | 挙動 |
+|----|------|-------------|------|
+| attempt retry | 1 step dispatch 内の transient CLI failure | 数十秒〜数分 | `execute_cli()` が in-process で最大 3 回リトライ |
+| run recovery | workflow process の `ERROR` / triage 対象 `ABORT` 終端 | 固定 10 分ウェイト + 新規 `kaji run` | 本節の handler。**1 recovery chain につき 1 回だけ** |
+
+### triage が残すもの
+
+- Issue コメント: 機械生成の triage report（原因・根拠・次アクション。LLM は使わない）
+- `runs/<run_id>/recovery.json`: 判定結果（`decision` / `classification` / `resume_command` 等）
+- `run.log`: `failure_event` / `recovery_decision` / `recovery_scheduled` / `recovery_attempt_start` / `recovery_attempt_end`
+- stderr: 既存の `Error:` / `Workflow aborted:` 表示の直後に数行のサマリ
+
+triage は default 有効（`[execution] failure_triage = true`）。証跡を残すだけで destructive な
+操作は行わない。無効化は `--no-failure-triage`。
+
+### 自動再開（opt-in）
+
+自動再開は default 無効（`[execution] auto_recover = false`）。`--auto-recover` で有効にすると、
+`decision: resume` の場合のみ **固定 10 分ウェイト後に child run を 1 回だけ**起動する。
+
+```bash
+kaji run .kaji/wf/dev.yaml 288                 # triage のみ（default）
+kaji run .kaji/wf/dev.yaml 288 --auto-recover  # 復旧可能なら 10 分後に 1 回だけ自動再開
+```
+
+- **budget は recovery chain 単位で 1**。自動再開で作られた child run が再び失敗しても、
+  「別 run_id だからもう 1 回」は成立しない（`recovery-chain.json` の有無で機械的に決まる）。
+  手動で起動した独立 run は新しい chain の root になり、budget は復活する。
+- **10 分ウェイトの理由**: attempt retry が既にバックオフ込みで諦めた直後に即時再開すると、
+  同じ API / agent 障害を踏んで唯一の budget を消費しやすい。triage コメントはウェイト開始
+  **前**に投稿され、`resume_scheduled_at` で再開予定時刻が Issue 上に残る。
+- **並行実行は常に新しい run が優先される**。child 起動直前に `runs/` を再走査し、自 run より
+  新しい run dir があれば起動を中止して `decision: cancelled_newer_run_detected` に更新する
+  （再チェックと起動の間に手動 run が割り込む数百 ms の race は既知の許容範囲。child 側も
+  同一 Issue の state を追記型で扱うため破壊はしない）。
+- ウェイト中に中断（SIGINT）した場合は `decision: cancelled_interrupted` で停止する。
+
+### 自動再開しないケース
+
+以下は再開せず、triage コメントに次アクションを残して停止する。
+
+- 正規の `ABORT` verdict（agent の安全停止・手動確認要求）→ `comment_only`
+- cycle exhaust → `not_resumable`。`--reset-cycle` は **自動付与しない**（安全弁の自動解除は
+  無制限 retry の実質的迂回になるため、手動の次アクション候補として提示するに留める）
+- config / workflow 定義 / workdir / resume session の不備 → `not_resumable`
+- worktree 不在 / branch 不一致 / provider 解決失敗 / auth・secret・permission 形跡 /
+  副作用 step（`issue-start` / `i-pr` / `issue-close`）→ `not_resumable`
+- 既に自動再開済みの chain → `exhausted`
+- artifact と runner event の決定論的矛盾 → `bug_issue_created`（`type:bug` の Issue を起票）
+- triage コメントの投稿に失敗した場合も自動再開しない（handler が必要操作を完遂できていないため）
+
+`resume:` step が失敗した場合は、異常セッションを引き継がず **session 生成元 step へ巻き戻して**
+再開する（`discarded_resume_session: true`）。
+
+### 失敗 artifact からの手動 triage（`kaji recover`）
+
+```bash
+kaji recover .kaji/wf/dev.yaml 288                      # 最新 run を対象に triage を再実行
+kaji recover .kaji/wf/dev.yaml 288 --run-id 260710120000
+```
+
+対象 run に `workflow_end`（status `ERROR` / `ABORT`）が無い場合は、実行中 run への誤介入を
+防ぐため exit 2 で停止する。triage が完了すれば decision にかかわらず exit 0。
+
+CLI 仕様の詳細は [Failure Triage / Recovery CLI](../cli-guides/failure-recovery.ja.md) を参照。
+
 ## runner backend（headless / interactive-terminal）
 
 agent step を headless CLI で起動するか tmux pane 上の対話 CLI で起動するかは

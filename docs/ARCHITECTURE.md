@@ -91,7 +91,27 @@ kaji_harness/
   state.py        # セッション状態永続化 (artifacts_dir ベース)
   logger.py       # JSONL 構造化ログ
   runner.py       # WorkflowRunner (自動遷移・サイクル管理)
+  recovery/       # failure triage / recovery handler (Issue #288)
+    models.py     # RecoveryDecision / FailureClassification / 定数 (budget, wait, denylist)
+    snapshot.py   # 失敗 run の artifact / state / git state 収集
+    classify.py   # cause 軸の分類 (純関数)
+    report.py     # triage コメント / stderr サマリ生成 (純関数)
+    handler.py    # decision planner (純関数) + orchestrator
 ```
+
+### 失敗リカバリの層構造（Issue #288）
+
+失敗への対処は 2 層に分離され、時間スケールと責務が重ならない。
+
+| 層 | 対象 | 時間スケール | 実装 |
+|----|------|-------------|------|
+| **attempt retry** | 1 step dispatch 内の transient CLI failure | 数十秒〜数分、in-process | `cli.py` `execute_cli()`（`_MAX_RETRIES` / `_TRANSIENT_PATTERNS`） |
+| **run recovery** | workflow process の `ERROR` / triage 対象 `ABORT` 終端 | 固定 10 分ウェイト + 新規 `kaji run`、1 chain 1 回 | `recovery/` package（`cmd_run` 終端 / `kaji recover` から起動） |
+
+transient 判定は `cli.is_transient_error_text()` を単一情報源として両層が共有する。
+runner は失敗の構造化記録（`run.log` の `failure_event` / `result.json` の `synthetic`）だけを担い、
+分類・判定・副作用は CLI 層の handler が持つ。運用ルールは
+[`docs/dev/workflow_guide.md`](dev/workflow_guide.md) を参照。
 
 ---
 
@@ -360,6 +380,8 @@ run / step / attempt の成果物は attempt 単位で分離される（Issue #2
   progress.md
   runs/<run_id>/
     run.log                       # workflow 全体ログ
+    recovery.json                 # failure triage の判定結果（失敗 run のみ。Issue #288）
+    recovery-chain.json           # recovery child run の chain identity（自動再開で作られた run のみ）
     steps/<step_id>/
       attempt-001/
         prompt.txt                # agent step の build_prompt 結果（再現用）
@@ -392,9 +414,28 @@ run / step / attempt の成果物は attempt 単位で分離される（Issue #2
 | `session_id` | `str \| null` | agent session id（exec / exec_script / 未取得は null） |
 | `dispatch` | `str` | `"agent"` / `"exec_script"` / `"exec"`（exec-step・Issue #205） |
 | `error` | `str \| null` | 異常終了時の例外クラス名 + 短いメッセージ（正常時 null） |
+| `synthetic` | `bool` | 合成 ABORT record（dispatch / verdict の except 経路）なら `true`、agent が返した verdict なら `false`（Issue #288） |
 
 - 読み手は `result.json` の **欠落を許容**する（旧 run / best-effort 書き出し前に死んだ attempt）。verdict 解決（`resolve_verdict`）は `result.json` に依存しないため、旧 run に無くても影響しない（migration 不要）。
+- `synthetic` は末尾に default 付きで追加されたフィールド。旧 `result.json`（キーなし）は `false` として読める。
 - `run.log` の `step_start` / `step_end` には `attempt` が付与され、`step_end` は `exit_code` / `signal` も持つ（異常終了経路でも合成 `ABORT` verdict で発火）。詳細は [`docs/reference/python/logging.md`](reference/python/logging.md)。
+
+#### `recovery.json` / `recovery-chain.json`（failure triage, Issue #288）
+
+`recovery.json` は失敗 run の triage 結果（`kaji_harness/recovery/models.py` の `RecoveryDecision`）を
+`schema_version: 1` の pure JSON で保存する。decision が更新されるたびに上書きされ、`run.log` には
+`failure_event` / `recovery_decision` / `recovery_scheduled` / `recovery_attempt_start` /
+`recovery_attempt_end` が追記される（append-only なので decision の変遷は run.log 側に残る）。
+
+主なフィールド: `decision`（`resume` / `not_resumable` / `exhausted` / `comment_only` /
+`bug_issue_created` / `cancelled_newer_run_detected` / `cancelled_interrupted`）、
+`classification`（`cause` と直交属性 `synthetic`）、`resume_command`、`resume_scheduled_at` /
+`resume_started_at`、`recovery_root_run_id` / `recovery_parent_run_id` /
+`recovery_child_run_id` / `recovery_child_final_status`、`triage_comment_ref`、`bug_issue`。
+
+`recovery-chain.json` は自動再開で作られた child run が起動直後に書く `{root_run_id, parent_run_id}`。
+そのファイルの存在だけで「この run は recovery child である」= budget 消費済みが決まるため、
+chain をまたいだ retry storm が構造的に起きない。
 
 ---
 

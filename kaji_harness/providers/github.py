@@ -56,6 +56,16 @@ def build_kaji_review_marker(state: str) -> str:
     return f"{_KAJI_REVIEW_MARKER_PREFIX}{state}{_KAJI_REVIEW_MARKER_SUFFIX}"
 
 
+def _comment_url(stdout: str) -> str:
+    """``gh issue comment`` stdout から作成コメント URL を取り出す。
+
+    Issue #288: 取得できない場合（空 stdout / URL 形式でない）は空文字を返し、
+    コメント投稿自体は失敗させない（``ref`` は best-effort な参照値）。
+    """
+    first_line = stdout.strip().splitlines()[0].strip() if stdout.strip() else ""
+    return first_line if first_line.startswith(("http://", "https://")) else ""
+
+
 @dataclass
 class GitHubProvider:
     """``gh`` CLI を subprocess で叩く provider。
@@ -241,7 +251,9 @@ class GitHubProvider:
             )
         # gh issue comment は created_at / author を返さない。Phase 3-ab では
         # 詳細不要として最小情報のみ返す。詳細が要る呼び出しは view_issue 経由。
-        return Comment(author="", body=body, created_at="")
+        # Issue #288: stdout 1 行目の作成コメント URL を `Comment.ref` に載せる
+        # （gh CLI の `CommentableRun` が `--quiet` 以外で必ず出力する）。
+        return Comment(author="", body=body, created_at="", ref=_comment_url(proc.stdout))
 
     def close_issue(self, issue_id: str, reason: str | None = None) -> Issue:
         args = ["issue", "close", issue_id, "--repo", self.repo]

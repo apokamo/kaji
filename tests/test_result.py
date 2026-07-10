@@ -91,6 +91,9 @@ class TestAttemptResultRoundTrip:
             "session_id": "abc123",
             "dispatch": "agent",
             "error": None,
+            # Issue #288: except 経路の合成 ABORT record と agent 由来 verdict を
+            # result.json 単体で区別するための直交属性。
+            "synthetic": False,
         }
 
     def test_null_fields_serialized_as_json_null(self, tmp_path: Path) -> None:

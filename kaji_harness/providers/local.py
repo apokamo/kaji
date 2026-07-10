@@ -637,6 +637,9 @@ class LocalProvider:
                 created_at=created_at,
                 seq=ts,
                 machine_id=self.machine_id,
+                # Issue #288: provider 中立な投稿先参照。GitHub の URL に対応する
+                # local 表現として repo-root 相対の comment file path を載せる。
+                ref=self._comment_ref(path),
             )
         raise LocalProviderError(
             f"failed to allocate unique comment filename in {cdir} after "
@@ -644,6 +647,17 @@ class LocalProvider:
             f"Another process may be writing comments concurrently; retry later "
             f"or inspect the directory."
         )
+
+    def _comment_ref(self, path: Path) -> str:
+        """comment file の repo-root 相対 posix path。相対化できなければ絶対 path。
+
+        Issue #288: ``Comment.ref`` は consumer が形式に依存しない不透明文字列なので、
+        symlink 等で相対化に失敗しても投稿を失敗させず参照値を返す。
+        """
+        try:
+            return path.relative_to(self.repo_root).as_posix()
+        except ValueError:
+            return path.as_posix()
 
     def close_issue(self, issue_id: str, reason: str | None = None) -> Issue:
         issue_dir = self._resolve_issue_dir(issue_id)
