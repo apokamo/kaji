@@ -5,9 +5,68 @@ Each adapter extracts session_id, text, and cost from CLI-specific JSONL events.
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Any, Protocol
 
 from .models import CostInfo
+
+# 順序が重要: 連続 2 個のサロゲートペア (high + low) を優先的に 1 マッチとして拾い、
+# それに当てはまらない場合のみ単独 \uXXXX として拾う。
+# - high surrogate: U+D800..U+DBFF → \uD[89AB][0-9A-F]{2}
+# - low surrogate:  U+DC00..U+DFFF → \uD[CDEF][0-9A-F]{2}
+_ESCAPE_RE = re.compile(
+    r"\\u[dD][89aAbB][0-9a-fA-F]{2}\\u[dD][cdefCDEF][0-9a-fA-F]{2}"  # surrogate pair
+    r"|\\u[0-9a-fA-F]{4}"  # BMP 単独
+)
+
+
+def _escape_lone_surrogates(s: str) -> str:
+    """孤立サロゲート(U+D800..U+DFFF)を 16 進エスケープ表記へ戻し UTF-8 書き出し可能にする。
+
+    valid surrogate pair は json.loads 時点で単一コードポイント(>=U+10000)へ結合済みのため、
+    復号後の str に残る U+D800..U+DFFF は必ず孤立サロゲートである。これにより
+    decode_unicode_escapes の戻り値は常に .encode("utf-8") 可能という不変条件を保つ。
+    """
+    if not any(0xD800 <= ord(c) <= 0xDFFF for c in s):
+        return s
+    return "".join(f"\\u{ord(c):04x}" if 0xD800 <= ord(c) <= 0xDFFF else c for c in s)
+
+
+def decode_unicode_escapes(text: str) -> str:
+    """ツール結果テキストに含まれる `\\uXXXX` リテラルを実文字へ展開する（Issue #137）。
+
+    - 全体が JSON 値として parse 可能な場合: ensure_ascii=False で再シリアライズ
+    - parse 不可な場合: 正規表現でサロゲートペア優先に個別復号
+    - サロゲートペアは正しく結合する（`\\uD83D\\uDE00` → 😀 等）
+    - 孤立サロゲートは原表記のまま維持し、戻り値は常に `.encode("utf-8")` 可能
+    - 置換対象が存在しない通常テキストはそのまま返す
+    """
+    if "\\u" not in text:
+        return text
+    # 第一段: JSON 値全体として parse できれば re-serialize（構造を保ったまま日本語化）
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, (dict, list)):
+            return _escape_lone_surrogates(json.dumps(parsed, ensure_ascii=False, indent=2))
+        if isinstance(parsed, str):
+            return _escape_lone_surrogates(parsed)
+    except json.JSONDecodeError:
+        pass
+
+    # 第二段: 部分的に \uXXXX を含む通常テキスト → サロゲートペア優先で個別復号
+    def _sub(m: re.Match[str]) -> str:
+        token = m.group(0)
+        try:
+            decoded: str = json.loads(f'"{token}"')
+        except json.JSONDecodeError:
+            return token
+        # 孤立サロゲート（high のみ / low のみ）は UTF-8 で書けないので原文維持
+        if any(0xD800 <= ord(c) <= 0xDFFF for c in decoded):
+            return token
+        return decoded
+
+    return _ESCAPE_RE.sub(_sub, text)
 
 
 class CLIEventAdapter(Protocol):
@@ -167,7 +226,11 @@ class CodexAdapter:
                 if not result:
                     return None
                 contents = result.get("content", [])
-                extracted = [c["text"] for c in contents if c.get("type") == "text" and "text" in c]
+                extracted = [
+                    decode_unicode_escapes(c["text"])
+                    for c in contents
+                    if c.get("type") == "text" and "text" in c
+                ]
                 return "\n".join(extracted) if extracted else None
         return None
 

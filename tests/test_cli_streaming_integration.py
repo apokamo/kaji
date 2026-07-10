@@ -233,6 +233,57 @@ class TestStreamAndLog:
         console = (log_dir / "console.log").read_text()
         assert "decoded text" in console
 
+    def test_codex_mcp_tool_call_unicode_decoded_across_sinks(self, tmp_path: Path) -> None:
+        """Issue #137: mcp_tool_call の二重エンコード text が両 sink で可読化される。
+
+        adapter → stream_and_log → console.log / CLIResult.full_output の配線を固定。
+        raw の stdout.log には literal escape が残ることも同時に確認する。
+        """
+        double_encoded = '{"title": "config/workflow \\u306e\\u6697\\u9ed9"}'
+        jsonl_lines = [
+            json.dumps({"type": "thread.started", "thread_id": "thread-137"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "mcp_tool_call",
+                        "result": {"content": [{"type": "text", "text": double_encoded}]},
+                    },
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                }
+            ),
+        ]
+        script = _create_mock_cli_script(tmp_path, jsonl_lines)
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+
+        process = subprocess.Popen(
+            [str(script)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        adapter = CodexAdapter()
+        result = stream_and_log(process, adapter, "verify-design", log_dir, verbose=False)
+        process.wait()
+
+        # sink 1: CLIResult.full_output
+        assert "config/workflow の暗黙" in result.full_output
+        for esc in ("\\u306e", "\\u6697", "\\u9ed9"):
+            assert esc not in result.full_output
+
+        # sink 2: console.log
+        console = (log_dir / "console.log").read_text()
+        assert "config/workflow の暗黙" in console
+        for esc in ("\\u306e", "\\u6697", "\\u9ed9"):
+            assert esc not in console
+
+        # raw sink: stdout.log は二重エンコードされた literal escape を保持する
+        raw = (log_dir / "stdout.log").read_text()
+        assert "\\u306e" in raw
+
     def test_stderr_captured(self, tmp_path: Path) -> None:
         """stderr from CLI process is captured in result and log."""
         script = tmp_path / "mock_cli.sh"

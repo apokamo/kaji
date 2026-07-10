@@ -5,7 +5,12 @@ Each adapter extracts session_id, text, and cost from JSONL events.
 
 import pytest
 
-from kaji_harness.adapters import ClaudeAdapter, CodexAdapter, GeminiAdapter
+from kaji_harness.adapters import (
+    ClaudeAdapter,
+    CodexAdapter,
+    GeminiAdapter,
+    decode_unicode_escapes,
+)
 from kaji_harness.models import CostInfo
 
 # ==========================================
@@ -336,6 +341,23 @@ class TestClaudeAdapter:
         }
         assert adapter.extract_text(event) is None
 
+    @pytest.mark.small
+    def test_extract_text_from_user_tool_result_returns_none(self, adapter: ClaudeAdapter) -> None:
+        """Issue #137: Claude は tool_result を表示経路に流さない（対象外の固定）。
+
+        将来 tool_result 抽出を追加した場合は本テストが落ち、decode_unicode_escapes
+        適用の必要性に気付ける。
+        """
+        event = {
+            "type": "user",
+            "message": {
+                "content": [
+                    {"type": "tool_result", "content": [{"type": "text", "text": "\\u306e"}]}
+                ]
+            },
+        }
+        assert adapter.extract_text(event) is None
+
 
 # ==========================================
 # Codex Adapter
@@ -402,6 +424,158 @@ class TestCodexAdapter:
         }
         assert adapter.extract_text(event) == "thinking"
 
+    @pytest.mark.small
+    def test_extract_text_from_mcp_tool_call_decodes_unicode_escapes(
+        self, adapter: CodexAdapter
+    ) -> None:
+        """mcp_tool_call の result.content[].text 内の literal \\uXXXX を可読化する。
+
+        Issue #137 の再現テスト: 二重 JSON エンコードで残った `\\u306e` 等が
+        console.log / full_output に流れる前にデコードされる（修正前は FAIL）。
+        """
+        event = {
+            "type": "item.completed",
+            "item": {
+                "type": "mcp_tool_call",
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": '{"title": "config/workflow \\u306e\\u6697\\u9ed9"}',
+                        }
+                    ]
+                },
+            },
+        }
+        out = adapter.extract_text(event)
+        assert out is not None
+        assert "の暗黙" in out
+        assert "\\u306e" not in out
+        assert "\\u6697" not in out
+        assert "\\u9ed9" not in out
+
+    @pytest.mark.small
+    def test_extract_text_from_mcp_tool_call_none_result_returns_none(
+        self, adapter: CodexAdapter
+    ) -> None:
+        """result:null（tool call 失敗）は None を返す（既存挙動の維持）。"""
+        event = {
+            "type": "item.completed",
+            "item": {"type": "mcp_tool_call", "result": None},
+        }
+        assert adapter.extract_text(event) is None
+
+    @pytest.mark.small
+    def test_extract_text_from_mcp_tool_call_plain_text_unchanged(
+        self, adapter: CodexAdapter
+    ) -> None:
+        """エスケープを含まない tool result はそのまま返す。"""
+        event = {
+            "type": "item.completed",
+            "item": {
+                "type": "mcp_tool_call",
+                "result": {"content": [{"type": "text", "text": "plain output"}]},
+            },
+        }
+        assert adapter.extract_text(event) == "plain output"
+
+
+# ==========================================
+# decode_unicode_escapes helper
+# ==========================================
+
+
+class TestDecodeUnicodeEscapes:
+    """decode_unicode_escapes: tool result text の \\uXXXX 展開（Issue #137）。"""
+
+    @pytest.mark.small
+    def test_full_json_object_decoded_and_reserialized(self) -> None:
+        """JSON 全体として parse 可能なら ensure_ascii=False で再整形する。"""
+        out = decode_unicode_escapes('{"title": "config/workflow \\u306e\\u6697\\u9ed9"}')
+        assert "の暗黙" in out
+        assert "\\u306e" not in out
+
+    @pytest.mark.small
+    def test_partial_escape_in_plain_text(self) -> None:
+        """JSON parse 不能な部分エスケープは個別に復号する。"""
+        assert decode_unicode_escapes("prefix \\u3042 suffix") == "prefix あ suffix"
+
+    @pytest.mark.small
+    def test_plain_text_without_escape_returned_as_is(self) -> None:
+        """エスケープを含まない通常テキストはそのまま返す。"""
+        assert decode_unicode_escapes("hello world") == "hello world"
+
+    @pytest.mark.small
+    def test_surrogate_pair_decoded_to_supplementary_char(self) -> None:
+        """連続サロゲートペアは補助平面 1 文字へ復号する。"""
+        assert decode_unicode_escapes("emoji \\uD83D\\uDE00 end") == "emoji 😀 end"
+
+    @pytest.mark.small
+    def test_lone_high_surrogate_kept_literal(self) -> None:
+        """孤立 high surrogate は原表記のまま維持する（UTF-8 書き出し不能を回避）。"""
+        out = decode_unicode_escapes("lone \\uD83D end")
+        assert out == "lone \\uD83D end"
+
+    @pytest.mark.small
+    def test_lone_low_surrogate_kept_literal(self) -> None:
+        """孤立 low surrogate も原表記のまま維持する。"""
+        out = decode_unicode_escapes("lone \\uDE00 end")
+        assert out == "lone \\uDE00 end"
+
+    @pytest.mark.small
+    def test_return_value_always_utf8_encodable(self) -> None:
+        """戻り値は常に UTF-8 で書き出し可能（stream_and_log 経路の不変条件）。"""
+        for text in (
+            "lone \\uD83D end",
+            "lone \\uDE00 end",
+            '{"title": "lone \\uD83D"}',
+            "prefix \\uD83D\\uDE00 mid \\u3042 lone \\uD800 tail",
+        ):
+            decode_unicode_escapes(text).encode("utf-8")  # raises if surrogate leaks
+
+    @pytest.mark.small
+    def test_broken_escape_sequence_kept(self) -> None:
+        """不正なエスケープ（\\uZZZZ）はクラッシュせずそのまま残す。"""
+        assert decode_unicode_escapes("broken \\uZZZZ end") == "broken \\uZZZZ end"
+
+    @pytest.mark.small
+    def test_mixed_pair_bmp_lone_and_plain(self) -> None:
+        """ペア + 単独 BMP + 孤立 + 通常テキストの混在ケース。"""
+        out = decode_unicode_escapes("prefix \\uD83D\\uDE00 mid \\u3042 lone \\uD800 tail")
+        assert "😀" in out
+        assert "あ" in out
+        assert "\\uD800" in out  # 孤立サロゲートはリテラル維持
+        assert "prefix " in out
+        assert " tail" in out
+        out.encode("utf-8")
+
+    @pytest.mark.small
+    def test_nested_json_object_lone_high_surrogate(self) -> None:
+        """object の nested value に high-only surrogate（第一段 dict 分岐の固定）。"""
+        out = decode_unicode_escapes('{"title": "lone \\uD83D"}')
+        encoded = out.encode("utf-8")  # UTF-8 書き出し可能
+        assert b"\\ud83d" in encoded.lower()  # 孤立サロゲートはリテラル escape で保持
+
+    @pytest.mark.small
+    def test_nested_json_list_lone_low_surrogate(self) -> None:
+        """list の nested value に low-only surrogate（第一段 list 分岐の固定）。"""
+        out = decode_unicode_escapes('["ok \\uDE00"]')
+        encoded = out.encode("utf-8")
+        assert b"\\ude00" in encoded.lower()
+
+    @pytest.mark.small
+    def test_nested_json_object_valid_bmp_and_lone_mixed(self) -> None:
+        """valid BMP + high-only 混在の object: BMP は復号、孤立はリテラル維持。"""
+        out = decode_unicode_escapes('{"a": "\\u3042", "b": "\\uD800"}')
+        assert "あ" in out
+        encoded = out.encode("utf-8")
+        assert b"\\ud800" in encoded.lower()
+
+    @pytest.mark.small
+    def test_json_string_scalar_decoded(self) -> None:
+        """全体が JSON 文字列スカラのケースも復号する。"""
+        assert decode_unicode_escapes('"\\u3042\\u3044"') == "あい"
+
 
 # ==========================================
 # Gemini Adapter
@@ -443,6 +617,15 @@ class TestGeminiAdapter:
     def test_extract_text_returns_none_for_non_matching(self, adapter: GeminiAdapter) -> None:
         """Non-message event returns None."""
         event = {"type": "other"}
+        assert adapter.extract_text(event) is None
+
+    @pytest.mark.small
+    def test_extract_text_from_tool_result_event_returns_none(self, adapter: GeminiAdapter) -> None:
+        """Issue #137: Gemini も tool result 類似イベントを表示経路に流さない。"""
+        event = {
+            "type": "tool_result",
+            "content": [{"type": "text", "text": "\\u306e"}],
+        }
         assert adapter.extract_text(event) is None
 
     @pytest.mark.small
