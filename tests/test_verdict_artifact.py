@@ -16,6 +16,7 @@ import pytest
 from kaji_harness.errors import InvalidVerdictValue, VerdictNotFound, VerdictParseError
 from kaji_harness.models import Verdict
 from kaji_harness.verdict import (
+    ControlCharFinding,
     load_verdict_yaml,
     parse_verdict_block,
     resolve_verdict,
@@ -200,7 +201,7 @@ class TestResolveVerdict:
             called = True
             return []
 
-        verdict, source = resolve_verdict(
+        verdict, source, findings = resolve_verdict(
             attempt_dir=tmp_path,
             full_output="(stdout に別の verdict があっても無視)"
             + _block(status="ABORT", suggestion="x"),
@@ -211,12 +212,13 @@ class TestResolveVerdict:
         assert source == "artifact"
         assert verdict.status == "PASS"
         assert called is False, "artifact 解決時は comment_loader を呼ばない"
+        assert findings == []
 
     def test_current_comment_adopted(self, tmp_path: Path) -> None:
         started = self._started()
         newer = (started + timedelta(seconds=120)).strftime("%Y-%m-%dT%H:%M:%SZ")
         comment = _FakeComment(body="作業報告\n\n" + _block(status="PASS"), created_at=newer)
-        verdict, source = resolve_verdict(
+        verdict, source, findings = resolve_verdict(
             attempt_dir=tmp_path,
             full_output="",
             valid_statuses=VALID,
@@ -225,6 +227,7 @@ class TestResolveVerdict:
         )
         assert source == "comment"
         assert verdict.status == "PASS"
+        assert findings == []
 
     def test_same_second_comment_adopted(self, tmp_path: Path) -> None:
         # dispatch はマイクロ秒精度（12:00:00.5）、comment は秒精度（12:00:00Z）。
@@ -232,7 +235,7 @@ class TestResolveVerdict:
         started = self._started().replace(microsecond=500_000)
         same_second = self._started().strftime("%Y-%m-%dT%H:%M:%SZ")
         comment = _FakeComment(body="作業報告\n\n" + _block(status="PASS"), created_at=same_second)
-        verdict, source = resolve_verdict(
+        verdict, source, findings = resolve_verdict(
             attempt_dir=tmp_path,
             full_output="",
             valid_statuses=VALID,
@@ -241,6 +244,7 @@ class TestResolveVerdict:
         )
         assert source == "comment"
         assert verdict.status == "PASS"
+        assert findings == []
 
     def test_old_comment_only_no_stdout_raises_not_found(self, tmp_path: Path) -> None:
         started = self._started()
@@ -260,7 +264,7 @@ class TestResolveVerdict:
         older = (started - timedelta(seconds=300)).strftime("%Y-%m-%dT%H:%M:%SZ")
         # 古い comment は RETRY だが、stdout は PASS。古い comment を採らず stdout 採用。
         comment = _FakeComment(body=_block(status="RETRY"), created_at=older)
-        verdict, source = resolve_verdict(
+        verdict, source, findings = resolve_verdict(
             attempt_dir=tmp_path,
             full_output="報告\n\n" + _block(status="PASS"),
             valid_statuses=VALID,
@@ -269,9 +273,10 @@ class TestResolveVerdict:
         )
         assert source == "stdout"
         assert verdict.status == "PASS"
+        assert findings == []
 
     def test_no_comment_with_stdout_uses_stdout(self, tmp_path: Path) -> None:
-        verdict, source = resolve_verdict(
+        verdict, source, findings = resolve_verdict(
             attempt_dir=tmp_path,
             full_output="報告\n\n" + _block(status="RETRY"),
             valid_statuses=VALID,
@@ -280,6 +285,7 @@ class TestResolveVerdict:
         )
         assert source == "stdout"
         assert verdict.status == "RETRY"
+        assert findings == []
 
     def test_all_empty_raises_not_found(self, tmp_path: Path) -> None:
         with pytest.raises(VerdictNotFound):
@@ -316,7 +322,7 @@ class TestResolveVerdict:
         def loader() -> list[_FakeComment]:
             raise RuntimeError("provider down")
 
-        verdict, source = resolve_verdict(
+        verdict, source, findings = resolve_verdict(
             attempt_dir=tmp_path,
             full_output="報告\n\n" + _block(status="PASS"),
             valid_statuses=VALID,
@@ -325,6 +331,7 @@ class TestResolveVerdict:
         )
         assert source == "stdout"
         assert verdict.status == "PASS"
+        assert findings == []
 
     def test_unparseable_created_at_excluded(self, tmp_path: Path) -> None:
         # created_at が parse 不能な comment は fail-safe で除外し、stdout へ。
@@ -337,3 +344,85 @@ class TestResolveVerdict:
                 attempt_started_at=self._started(),
                 comment_loader=lambda: [comment],
             )
+
+
+# ============================================================
+# Issue #298: 禁止制御文字混入 verdict の findings 伝播（3 経路）
+# ============================================================
+
+
+@pytest.mark.small
+class TestResolveVerdictControlCharFindings:
+    def _started(self) -> datetime:
+        return datetime(2026, 6, 4, 12, 0, 0, tzinfo=UTC)
+
+    def test_artifact_path_surfaces_findings_and_resolves_pass(self, tmp_path: Path) -> None:
+        (tmp_path / "verdict.yaml").write_text(
+            'status: PASS\nreason: "ok"\nevidence: "done\x1bhere"\nsuggestion: ""\n',
+            encoding="utf-8",
+        )
+        verdict, source, findings = resolve_verdict(
+            attempt_dir=tmp_path,
+            full_output="",
+            valid_statuses=VALID,
+            attempt_started_at=self._started(),
+            comment_loader=None,
+        )
+        assert source == "artifact"
+        assert verdict.status == "PASS"
+        assert findings == [ControlCharFinding(position=41, codepoint=0x1B)]
+
+    def test_comment_path_surfaces_findings(self, tmp_path: Path) -> None:
+        newer = (self._started() + timedelta(seconds=120)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        comment = _FakeComment(
+            body="作業報告\n\n" + _block(status="PASS", evidence="done\x1bhere"),
+            created_at=newer,
+        )
+        verdict, source, findings = resolve_verdict(
+            attempt_dir=tmp_path,
+            full_output="",
+            valid_statuses=VALID,
+            attempt_started_at=self._started(),
+            comment_loader=lambda: [comment],
+        )
+        assert source == "comment"
+        assert verdict.status == "PASS"
+        assert len(findings) == 1
+        assert findings[0].codepoint == 0x1B
+
+    def test_stdout_path_surfaces_findings(self, tmp_path: Path) -> None:
+        verdict, source, findings = resolve_verdict(
+            attempt_dir=tmp_path,
+            full_output="報告\n\n" + _block(status="PASS", evidence="done\x1bhere"),
+            valid_statuses=VALID,
+            attempt_started_at=self._started(),
+            comment_loader=lambda: [],
+        )
+        assert source == "stdout"
+        assert verdict.status == "PASS"
+        assert len(findings) == 1
+        assert findings[0].codepoint == 0x1B
+
+
+@pytest.mark.small
+class TestLoadVerdictYamlFindingsSink:
+    def test_findings_sink_receives_control_char_findings(self, tmp_path: Path) -> None:
+        path = tmp_path / "verdict.yaml"
+        path.write_text(
+            'status: PASS\nreason: "ok"\nevidence: "done\x1bhere"\nsuggestion: ""\n',
+            encoding="utf-8",
+        )
+        sink: list[ControlCharFinding] = []
+        verdict = load_verdict_yaml(path, VALID, findings_sink=sink)
+        assert verdict.status == "PASS"
+        assert len(sink) == 1
+        assert sink[0].codepoint == 0x1B
+
+    def test_no_findings_sink_behavior_unchanged(self, tmp_path: Path) -> None:
+        path = tmp_path / "verdict.yaml"
+        path.write_text(
+            'status: PASS\nreason: "ok"\nevidence: "done\x1bhere"\nsuggestion: ""\n',
+            encoding="utf-8",
+        )
+        verdict = load_verdict_yaml(path, VALID)
+        assert verdict.status == "PASS"

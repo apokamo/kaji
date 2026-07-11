@@ -13,6 +13,7 @@ import logging
 import re
 import subprocess
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from string import Template
@@ -109,14 +110,58 @@ def _extract_block_relaxed(output: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _parse_yaml_fields(block: str) -> Verdict:
+# YAML 1.2 の c-printable 範囲外の制御文字。PyYAML `Reader.NON_PRINTABLE` と一致させる
+# 否定文字クラス（`yaml.reader.Reader.NON_PRINTABLE.pattern` 実測値と同一）。
+_YAML_FORBIDDEN = re.compile("[^\t\n\r\x20-\x7e\x85\xa0-퟿-�\U00010000-\U0010ffff]")
+
+
+@dataclass(frozen=True)
+class ControlCharFinding:
+    """sanitize 時に検出した YAML 禁止制御文字 1 個の診断情報（生文字は保持しない）。"""
+
+    position: int
+    codepoint: int
+
+    @property
+    def label(self) -> str:
+        """安全表記。生の制御文字を出さず ``U+001B`` 形式で返す。"""
+        return f"U+{self.codepoint:04X}"
+
+
+def _sanitize_yaml_control_chars(text: str) -> tuple[str, list[ControlCharFinding]]:
+    """YAML 1.2 printable 範囲外の制御文字を U+FFFD へ置換する。
+
+    Returns:
+        (sanitized_text, findings)。findings は検出順の ``ControlCharFinding`` 列。
+        forbidden 文字が無ければ text はそのまま、findings は空リスト。
+    """
+    findings = [
+        ControlCharFinding(position=m.start(), codepoint=ord(m.group()))
+        for m in _YAML_FORBIDDEN.finditer(text)
+    ]
+    if not findings:
+        return text, []
+    return _YAML_FORBIDDEN.sub("�", text), findings
+
+
+def _parse_yaml_fields(
+    block: str, *, findings_sink: list[ControlCharFinding] | None = None
+) -> Verdict:
     """Parse a verdict block body as YAML and extract 4 fields.
+
+    YAML 1.2 printable 範囲外の制御文字は parse 前に ``U+FFFD`` へ正規化する
+    （Issue #298）。検出した ``ControlCharFinding`` は ``findings_sink`` が渡された
+    場合のみ追記する（``None`` の既存呼び出しは挙動不変）。
 
     Raises:
         VerdictParseError: YAML parse failure or missing required fields.
     """
+    sanitized, findings = _sanitize_yaml_control_chars(block)
+    if findings and findings_sink is not None:
+        findings_sink.extend(findings)
+
     try:
-        fields: Any = yaml.safe_load(block)
+        fields: Any = yaml.safe_load(sanitized)
     except yaml.YAMLError as e:
         raise VerdictParseError(f"YAML parse error in verdict block: {e}") from e
 
@@ -221,6 +266,7 @@ def parse_verdict(
     *,
     ai_formatter: Callable[[str], str] | None = None,
     max_retries: int = 2,
+    findings_sink: list[ControlCharFinding] | None = None,
 ) -> Verdict:
     """Extract and validate a verdict from CLI output.
 
@@ -235,6 +281,8 @@ def parse_verdict(
         valid_statuses: Set of valid verdict status values.
         ai_formatter: Optional AI formatting function for Step 3.
         max_retries: Max retry count for Step 3 (must be >= 1).
+        findings_sink: 渡された場合、YAML 禁止制御文字の sanitize findings を
+            検出順に追記する（Issue #298）。``None``（既定）なら挙動不変。
 
     Returns:
         Verdict with validated status, reason, evidence, suggestion.
@@ -248,13 +296,20 @@ def parse_verdict(
     if max_retries < 1:
         raise ValueError(f"max_retries must be >= 1, got {max_retries}")
 
+    # findings は「採用が確定した候補」の分だけを ``findings_sink`` へ commit する。
+    # 各 Step は local sink で findings を受け、parse+validate が成功した経路でのみ
+    # 共有 sink へ移す。これにより Step 1→2a のように同一 block を複数回 sanitize しても、
+    # 失敗した候補の findings が二重計上されない（Issue #298）。
     # Step 1: Strict Parse
     block = _extract_block_strict(output)
     if block is not None:
+        step1_findings: list[ControlCharFinding] = []
         try:
-            verdict = _parse_yaml_fields(block)
+            verdict = _parse_yaml_fields(block, findings_sink=step1_findings)
             _validate(verdict, valid_statuses)
             logger.debug("Step 1 (strict) succeeded")
+            if findings_sink is not None:
+                findings_sink.extend(step1_findings)
             return verdict
         except InvalidVerdictValue:
             raise
@@ -264,10 +319,13 @@ def parse_verdict(
     # Step 2a: Relaxed delimiter + YAML
     relaxed_block = _extract_block_relaxed(output)
     if relaxed_block is not None:
+        step2a_findings: list[ControlCharFinding] = []
         try:
-            verdict = _parse_yaml_fields(relaxed_block)
+            verdict = _parse_yaml_fields(relaxed_block, findings_sink=step2a_findings)
             _validate(verdict, valid_statuses)
             logger.info("Step 2a (relaxed delimiter) succeeded — strict parse was insufficient")
+            if findings_sink is not None:
+                findings_sink.extend(step2a_findings)
             return verdict
         except InvalidVerdictValue:
             raise
@@ -275,12 +333,19 @@ def parse_verdict(
             logger.debug("Step 2a (relaxed delimiter) failed: %s", e)
 
     # Step 2b: Key-value pattern extraction
+    #
+    # YAML fallback（Step 2b）は正規表現で行末まで抽出するため、生の禁止制御文字が
+    # そのまま Verdict フィールドへ残る。YAML 経路と同様に **sanitize 済み入力** を
+    # 解析し、raw 制御文字が最終 Verdict に残存しないようにする（Issue #298）。
+    step2b_text, step2b_findings = _sanitize_yaml_control_chars(output)
     try:
-        verdict = _parse_relaxed_fields(output, valid_statuses)
+        verdict = _parse_relaxed_fields(step2b_text, valid_statuses)
         _validate(verdict, valid_statuses)
         logger.info(
             "Step 2b (key-value pattern) succeeded — delimiter-based parse was insufficient"
         )
+        if findings_sink is not None:
+            findings_sink.extend(step2b_findings)
         return verdict
     except InvalidVerdictValue:
         raise
@@ -312,7 +377,9 @@ def parse_verdict(
         try:
             formatted = ai_formatter(truncated_text)
             # Re-run Step 1 + 2 on formatted output
-            verdict = _parse_formatted_output(formatted, valid_statuses)
+            verdict = _parse_formatted_output(
+                formatted, valid_statuses, findings_sink=findings_sink
+            )
             logger.info("Step 3 succeeded on attempt %d/%d", attempt + 1, max_retries)
             return verdict
         except (InvalidVerdictValue, VerdictNotFound):
@@ -346,7 +413,12 @@ def _truncate_for_formatter(text: str) -> str:
     return text[:head_limit] + truncate_delimiter + text[-tail_limit:]
 
 
-def _parse_formatted_output(formatted: str, valid_statuses: set[str]) -> Verdict:
+def _parse_formatted_output(
+    formatted: str,
+    valid_statuses: set[str],
+    *,
+    findings_sink: list[ControlCharFinding] | None = None,
+) -> Verdict:
     """Parse AI formatter output through Step 1 → 2a → 2b.
 
     Recognizes ``NO_VERDICT_SENTINEL`` as the formatter's explicit signal that
@@ -362,12 +434,17 @@ def _parse_formatted_output(formatted: str, valid_statuses: set[str]) -> Verdict
     if formatted.strip() == NO_VERDICT_SENTINEL:
         raise VerdictNotFound("AI formatter reported no verdict block in agent output")
 
+    # parse_verdict と同様、findings は採用が確定した候補の分だけを ``findings_sink``
+    # へ commit する（失敗候補の二重計上を防ぐ。Issue #298）。
     # Try strict
     block = _extract_block_strict(formatted)
     if block is not None:
+        strict_findings: list[ControlCharFinding] = []
         try:
-            verdict = _parse_yaml_fields(block)
+            verdict = _parse_yaml_fields(block, findings_sink=strict_findings)
             _validate(verdict, valid_statuses)
+            if findings_sink is not None:
+                findings_sink.extend(strict_findings)
             return verdict
         except InvalidVerdictValue:
             raise
@@ -377,18 +454,24 @@ def _parse_formatted_output(formatted: str, valid_statuses: set[str]) -> Verdict
     # Try relaxed delimiter
     block = _extract_block_relaxed(formatted)
     if block is not None:
+        relaxed_findings: list[ControlCharFinding] = []
         try:
-            verdict = _parse_yaml_fields(block)
+            verdict = _parse_yaml_fields(block, findings_sink=relaxed_findings)
             _validate(verdict, valid_statuses)
+            if findings_sink is not None:
+                findings_sink.extend(relaxed_findings)
             return verdict
         except InvalidVerdictValue:
             raise
         except (VerdictParseError, VerdictNotFound):
             pass
 
-    # Try key-value patterns
-    verdict = _parse_relaxed_fields(formatted, valid_statuses)
+    # Try key-value patterns（sanitize 済み入力で raw 制御文字の残存を防ぐ。Issue #298）
+    kv_text, kv_findings = _sanitize_yaml_control_chars(formatted)
+    verdict = _parse_relaxed_fields(kv_text, valid_statuses)
     _validate(verdict, valid_statuses)
+    if findings_sink is not None:
+        findings_sink.extend(kv_findings)
     return verdict
 
 
@@ -494,7 +577,12 @@ class CommentLike(Protocol):
     def created_at(self) -> str: ...
 
 
-def load_verdict_yaml(path: Path, valid_statuses: set[str]) -> Verdict:
+def load_verdict_yaml(
+    path: Path,
+    valid_statuses: set[str],
+    *,
+    findings_sink: list[ControlCharFinding] | None = None,
+) -> Verdict:
     """artifact の ``verdict.yaml`` (delimiter 無しの pure YAML) を読み込む。
 
     既存 stdout verdict と同じ検証規則（``_parse_yaml_fields`` + ``_validate``）を
@@ -504,6 +592,8 @@ def load_verdict_yaml(path: Path, valid_statuses: set[str]) -> Verdict:
     Args:
         path: ``verdict.yaml`` の絶対パス。存在前提（存在確認は呼び出し側）。
         valid_statuses: 当該 step の ``on:`` キー集合。
+        findings_sink: 渡された場合、YAML 禁止制御文字の sanitize findings を
+            検出順に追記する（Issue #298）。``None``（既定）なら挙動不変。
 
     Returns:
         検証済み ``Verdict``。
@@ -513,7 +603,7 @@ def load_verdict_yaml(path: Path, valid_statuses: set[str]) -> Verdict:
         InvalidVerdictValue: status が ``valid_statuses`` 外。
     """
     text = path.read_text(encoding="utf-8")
-    verdict = _parse_yaml_fields(text)
+    verdict = _parse_yaml_fields(text, findings_sink=findings_sink)
     _validate(verdict, valid_statuses)
     return verdict
 
@@ -541,7 +631,12 @@ def write_verdict_yaml(path: Path, verdict: Verdict) -> None:
     )
 
 
-def parse_verdict_block(text: str, valid_statuses: set[str]) -> Verdict | None:
+def parse_verdict_block(
+    text: str,
+    valid_statuses: set[str],
+    *,
+    findings_sink: list[ControlCharFinding] | None = None,
+) -> Verdict | None:
     """comment 本文から末尾の ``---VERDICT---`` block を抽出して検証する。
 
     作業報告 comment の契約は「本文末尾に verdict block を追記」であるため、
@@ -551,6 +646,8 @@ def parse_verdict_block(text: str, valid_statuses: set[str]) -> Verdict | None:
     Args:
         text: comment 本文。
         valid_statuses: 当該 step の ``on:`` キー集合。
+        findings_sink: 渡された場合、YAML 禁止制御文字の sanitize findings を
+            検出順に追記する（Issue #298）。``None``（既定）なら挙動不変。
 
     Returns:
         末尾 block の ``Verdict``。block が 1 つも無ければ ``None``。
@@ -565,7 +662,7 @@ def parse_verdict_block(text: str, valid_statuses: set[str]) -> Verdict | None:
     if not matches:
         return None
     block = matches[-1].group(1)
-    verdict = _parse_yaml_fields(block)
+    verdict = _parse_yaml_fields(block, findings_sink=findings_sink)
     _validate(verdict, valid_statuses)
     return verdict
 
@@ -614,7 +711,7 @@ def resolve_verdict(
     comment_loader: Callable[[], Sequence[CommentLike]] | None,
     ai_formatter: Callable[[str], str] | None = None,
     max_retries: int = 2,
-) -> tuple[Verdict, str]:
+) -> tuple[Verdict, str, list[ControlCharFinding]]:
     """verdict を artifact → comment → stdout の順で解決する。
 
     1. ``attempt_dir/verdict.yaml`` が存在 → ``load_verdict_yaml``（壊れていれば
@@ -631,6 +728,9 @@ def resolve_verdict(
     attempt が verdict.yaml も stdout verdict も出さなかった場合に前 attempt の
     作業報告 comment を誤採用しない（Issue #220 完了条件）。
 
+    採用した経路で検出した YAML 禁止制御文字（Issue #298）は ``findings`` として
+    まとめて返す。呼び出し元（runner）はこれを ``RunLogger`` へ永続化する。
+
     Args:
         attempt_dir: 当該 attempt のディレクトリ（``verdict.yaml`` の親）。
         full_output: CLI / script の stdout 全文（stdout fallback 用）。
@@ -644,15 +744,19 @@ def resolve_verdict(
         max_retries: stdout 経路の AI formatter retry 回数。
 
     Returns:
-        ``(Verdict, source)``。source は ``"artifact"`` / ``"comment"`` / ``"stdout"``。
+        ``(Verdict, source, findings)``。source は ``"artifact"`` / ``"comment"`` /
+        ``"stdout"``。``findings`` は検出順の ``ControlCharFinding`` 列（無ければ空）。
 
     Raises:
         VerdictNotFound: 全 source で verdict が成立しない。
         VerdictParseError / InvalidVerdictValue: artifact が壊れている / status 不正。
     """
+    findings: list[ControlCharFinding] = []
+
     artifact_path = attempt_dir / "verdict.yaml"
     if artifact_path.exists():
-        return load_verdict_yaml(artifact_path, valid_statuses), "artifact"
+        verdict = load_verdict_yaml(artifact_path, valid_statuses, findings_sink=findings)
+        return verdict, "artifact", findings
 
     if comment_loader is not None:
         try:
@@ -662,13 +766,17 @@ def resolve_verdict(
             comments = []
         current = [c for c in comments if _is_current_comment(c, attempt_started_at)]
         for comment in reversed(current):  # newest-first
-            verdict = parse_verdict_block(comment.body, valid_statuses)
-            if verdict is not None:
-                return verdict, "comment"
+            comment_verdict = parse_verdict_block(
+                comment.body, valid_statuses, findings_sink=findings
+            )
+            if comment_verdict is not None:
+                return comment_verdict, "comment", findings
 
-    return (
-        parse_verdict(
-            full_output, valid_statuses, ai_formatter=ai_formatter, max_retries=max_retries
-        ),
-        "stdout",
+    verdict = parse_verdict(
+        full_output,
+        valid_statuses,
+        ai_formatter=ai_formatter,
+        max_retries=max_retries,
+        findings_sink=findings,
     )
+    return verdict, "stdout", findings

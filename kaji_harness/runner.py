@@ -838,7 +838,7 @@ class WorkflowRunner:
                                 model=current_step.model,
                                 workdir=effective_workdir,
                             )
-                        verdict, verdict_source = resolve_verdict(
+                        verdict, verdict_source, verdict_findings = resolve_verdict(
                             attempt_dir=attempt_dir,
                             full_output=result.full_output,
                             valid_statuses=valid,
@@ -850,6 +850,10 @@ class WorkflowRunner:
                             ai_formatter=formatter,
                         )
                         logger.log_verdict_source(current_step.id, verdict_source, attempt_dir.name)
+                        if verdict_findings:
+                            logger.log_verdict_sanitization(
+                                current_step.id, attempt_dir.name, verdict_findings
+                            )
                         _console.info(
                             "verdict detected: %s source=%s status=%s",
                             current_step.id,
@@ -858,7 +862,12 @@ class WorkflowRunner:
                         )
                         # 解決 source が artifact 以外なら正規化保存（legacy skill が
                         # stdout しか出さなくても attempt-NNN/verdict.yaml を必ず残す）。
-                        if verdict_source != "artifact":
+                        # artifact source でも sanitize が発生した場合（verdict_findings
+                        # 非空）は、agent が書いた生の禁止制御文字入り verdict.yaml を
+                        # 正規化後の内容で上書きする。これで生禁止文字がどの artifact にも
+                        # 残らず（完了条件: 診断証跡の永続化）、generic YAML reader でも
+                        # 読める verdict.yaml が保証される（comment / stdout 経路と対称）。
+                        if verdict_source != "artifact" or verdict_findings:
                             write_verdict_yaml(verdict_yaml_path, verdict)
                     except (
                         StepTimeoutError,

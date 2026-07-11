@@ -325,6 +325,51 @@ class TestRunnerStdoutNormalization:
         # prompt.txt も保存される
         assert (attempt / "prompt.txt").exists()
 
+    def test_control_char_in_stdout_verdict_resolves_without_abort(self, tmp_path: Path) -> None:
+        """Issue #298: verdict evidence への生 ESC 混入は step を ABORT に落とさず、
+        run.log に ``verdict_sanitization`` event として永続記録される（生制御文字は
+        run.log のバイト列に含まれない）。"""
+        workflow = _single_step_workflow()
+        output = _verdict_block("PASS", evidence="done\x1bhere")
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            return CLIResult(
+                full_output=output,
+                session_id="sess",
+                cost=CostInfo(usd=0.0),
+                stderr="",
+                exit_code=0,
+                signal=None,
+            )
+
+        with (
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+        ):
+            state = _make_runner(tmp_path, workflow).run()
+
+        assert state.last_completed_step == "implement"
+        run_dir = _run_root(tmp_path)
+
+        attempt = run_dir / "steps" / "implement" / "attempt-001"
+        loaded = load_verdict_yaml(attempt / "verdict.yaml", VALID)
+        assert loaded.status == "PASS"
+        assert loaded.evidence == "done�here"
+
+        failure_events = _events(run_dir, "failure_event")
+        assert not any(e.get("kind") == "verdict_exception" for e in failure_events)
+
+        sanitization_events = _events(run_dir, "verdict_sanitization")
+        assert len(sanitization_events) == 1
+        ev = sanitization_events[0]
+        assert ev["step_id"] == "implement"
+        assert ev["attempt"] == "attempt-001"
+        assert ev["count"] == 1
+        assert ev["findings"] == [{"codepoint": "U+001B", "position": 41}]
+
+        raw_log_bytes = (run_dir / "run.log").read_bytes()
+        assert b"\x1b" not in raw_log_bytes
+
     def test_two_runs_in_same_second_use_distinct_run_dirs(self, tmp_path: Path) -> None:
         """同一秒 base id の 2 run が同じ run.log / steps を共有しない。"""
         workflow = _single_step_workflow()
@@ -376,6 +421,47 @@ class TestRunnerArtifactPrimary:
         run_dir = _run_root(tmp_path)
         sources = _verdict_sources(run_dir)
         assert sources[-1]["source"] == "artifact"
+
+    def test_control_char_in_artifact_verdict_rewritten_clean(self, tmp_path: Path) -> None:
+        """Issue #298 (Codex P2): artifact source でも sanitize が発生したら、
+        agent が書いた生 ESC 入り verdict.yaml を正規化後の内容で上書きし、
+        生禁止制御文字を artifact に残さない（stdout / comment 経路と対称）。"""
+        workflow = _single_step_workflow()
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            log_dir = kwargs["log_dir"]
+            assert isinstance(log_dir, Path)
+            # write_verdict_yaml を経由せず生 ESC 入り verdict.yaml を直接書く
+            # （agent が生成した壊れた artifact を再現）。
+            (log_dir / "verdict.yaml").write_bytes(
+                b'status: PASS\nreason: "ok"\nevidence: "done\x1bhere"\nsuggestion: ""\n'
+            )
+            return _cli_result(None)  # stdout には verdict を出さない → artifact 採用
+
+        with (
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+        ):
+            state = _make_runner(tmp_path, workflow).run()
+
+        assert state.last_completed_step == "implement"
+        run_dir = _run_root(tmp_path)
+        sources = _verdict_sources(run_dir)
+        assert sources[-1]["source"] == "artifact"
+
+        attempt = run_dir / "steps" / "implement" / "attempt-001"
+        vfile = attempt / "verdict.yaml"
+        # 上書き後の artifact に生の禁止制御文字が残らない。
+        raw_bytes = vfile.read_bytes()
+        assert b"\x1b" not in raw_bytes
+        # generic YAML reader でも再読込でき、意味は PASS のまま保持される。
+        loaded = load_verdict_yaml(vfile, VALID)
+        assert loaded.status == "PASS"
+        assert loaded.evidence == "done�here"
+
+        sanitization_events = _events(run_dir, "verdict_sanitization")
+        assert len(sanitization_events) == 1
+        assert sanitization_events[0]["findings"] == [{"codepoint": "U+001B", "position": 41}]
 
 
 @pytest.mark.medium
