@@ -19,8 +19,10 @@ from kaji_harness.cli import (
     is_transient_error_text,
 )
 from kaji_harness.errors import CLIExecutionError
+from kaji_harness.interactive_terminal import _terminal_exit_detail
 from kaji_harness.recovery.classify import classify_failure
 from kaji_harness.recovery.snapshot import FailureEvent, FailureSnapshot
+from tests.conftest import capacity_terminal_log_text
 
 pytestmark = pytest.mark.small
 
@@ -81,19 +83,26 @@ def test_is_transient_error_text_delegates_to_find_transient_pattern() -> None:
         assert is_transient_error_text(text) == (find_transient_pattern(text) is not None)
 
 
-def test_classify_dispatch_candidate_with_canonical_only_capacity_message() -> None:
-    # Issue #296: 焦点化契約（transcript 部分文字列を含まず pattern literal のみを
-    # 載せたメッセージ）でも既存の classify ロジックが無改修で candidate 化することの固定。
+def test_classify_dispatch_candidate_with_canonical_only_capacity_message(
+    tmp_path: Path,
+) -> None:
+    # Issue #296: attempt_error はハンドライトの文字列ではなく、実 ANSI/TUI
+    # terminal.log fixture に対して実装関数 _terminal_exit_detail を呼んで生成した
+    # ものを使う。焦点化契約（transcript 部分文字列を含まず pattern literal の
+    # みを載せる）と既存 classify ロジックの接続を、生成元から一続きで固定する。
+    terminal_log = tmp_path / "terminal.log"
+    terminal_log.write_text(capacity_terminal_log_text(), encoding="utf-8")
+    message = _terminal_exit_detail(terminal_log)
+    assert "at capacity" in message
+    assert "Token usage" not in message
+
     c = classify_failure(
         _snapshot(
             failure_event=FailureEvent(
                 kind="dispatch_exception", step_id="start", exception_type="CLIExecutionError"
             ),
             failed_step="start",
-            attempt_error=(
-                "tmux pane exited before writing verdict.yaml; "
-                "transient provider error detected (pattern: 'at capacity')"
-            ),
+            attempt_error=message,
         )
     )
     assert c.cause == "dispatch_failure"

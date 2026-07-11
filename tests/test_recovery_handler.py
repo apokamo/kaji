@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from kaji_harness.interactive_terminal import _terminal_exit_detail
 from kaji_harness.models import Step, Workflow
 from kaji_harness.providers.models import Comment, Issue
 from kaji_harness.recovery.handler import RecoveryHandler
@@ -24,6 +25,7 @@ from kaji_harness.recovery.models import (
     read_recovery_json,
     write_recovery_chain,
 )
+from tests.conftest import capacity_terminal_log_text
 
 pytestmark = pytest.mark.medium
 
@@ -625,20 +627,31 @@ def test_provider_none_blocks_resume_but_still_writes_artifact(tmp_path: Path) -
 
 # --- Issue #296: interactive terminal model capacity (canonical-only focused message) ---
 
-_CAPACITY_ERROR = (
-    "tmux pane exited before writing verdict.yaml; "
-    "transient provider error detected (pattern: 'at capacity')"
-)
-
 
 def _build_capacity_run(
-    tmp_path: Path, run_id: str = "260710120000", *, error: str = _CAPACITY_ERROR
+    tmp_path: Path, run_id: str = "260710120000", *, with_terminal_log: bool = True
 ) -> Path:
-    """A failed `implement` run whose ``attempt_error`` is the canonical-only
-    focused message `_terminal_exit_detail` produces for a pane that died with a
-    provider capacity error buried in its transcript (Issue #296)."""
+    """A failed `implement` run whose ``attempt_error`` is produced by calling
+    the real ``_terminal_exit_detail`` against an actual ``terminal.log`` fixture
+    placed in the attempt dir (Issue #296), not a hand-typed message. The
+    fixture (``capacity_terminal_log_text``) reproduces the real OB artifact
+    shape: capacity and ``Token usage`` connected on one physical line, buried
+    well before the tail window pre-#296 extraction scanned. This connects
+    extract_terminal_diagnostic -> _terminal_exit_detail -> result.json ->
+    collect_snapshot -> classify_failure -> RecoveryHandler.run in one fixture.
+
+    ``with_terminal_log=False`` omits the file entirely, exercising the real
+    ``no_log`` extraction-failure path (EB 5) instead of a hand-typed message.
+    """
     run_dir = tmp_path / ".kaji-artifacts" / _ISSUE / "runs" / run_id
     run_dir.mkdir(parents=True)
+    attempt = run_dir / "steps" / "implement" / "attempt-001"
+    attempt.mkdir(parents=True)
+    terminal_log = attempt / "terminal.log"
+    if with_terminal_log:
+        terminal_log.write_text(capacity_terminal_log_text(), encoding="utf-8")
+    error = _terminal_exit_detail(terminal_log)
+
     events = [
         {"event": "workflow_start", "issue": _ISSUE, "workflow": "dev", "schema_version": 1},
         {
@@ -654,8 +667,6 @@ def _build_capacity_run(
     (run_dir / "run.log").write_text(
         "".join(json.dumps(e) + "\n" for e in events), encoding="utf-8"
     )
-    attempt = run_dir / "steps" / "implement" / "attempt-001"
-    attempt.mkdir(parents=True)
     (attempt / "result.json").write_text(
         json.dumps(
             {
@@ -697,6 +708,12 @@ def test_capacity_auto_recover_true_launches_child_once_with_candidate(tmp_path:
     assert result.decision.classification.recoverability_hint == "candidate"
     assert result.decision.decision == "resume"
     assert len(launched) == 1
+    argv = launched[0]
+    assert argv[argv.index("--from") + 1] == "implement"
+    assert argv[argv.index("--recovery-root") + 1] == "260710120000"
+    assert argv[argv.index("--recovery-parent") + 1] == "260710120000"
+    # triage コメント（child 起動前）+ child 終了後の follow-up コメントで計 2 回。
+    assert len(provider.comments) == 2
     persisted = read_recovery_json(run_dir / RECOVERY_FILE)
     assert persisted.auto_recovery_attempted is True
     assert persisted.auto_recovery_attempt_no == 1
@@ -744,12 +761,36 @@ def test_capacity_diagnostic_extraction_failure_is_not_resumable(tmp_path: Path)
     # provider capacity candidate とは語彙上・判定上区別される。
     wt = _git_repo(tmp_path)
     _seed_state(tmp_path, wt)
-    no_log_error = (
-        "tmux pane exited before writing verdict.yaml; diagnostic unavailable: no terminal.log"
-    )
-    run_dir = _build_capacity_run(tmp_path, error=no_log_error)
+    run_dir = _build_capacity_run(tmp_path, with_terminal_log=False)
 
     result = _handler(tmp_path, run_dir, provider=_FakeProvider()).run()
 
     assert result.decision.classification.recoverability_hint == "no"
     assert result.decision.decision == "not_resumable"
+
+
+def test_capacity_second_triage_of_same_run_is_exhausted_without_relaunch(
+    tmp_path: Path,
+) -> None:
+    # Issue #296 完了条件: 同一 run に対する再 triage は budget を二重消費しない。
+    # extract_terminal_diagnostic -> _terminal_exit_detail -> result.json ->
+    # collect_snapshot -> classify_failure -> RecoveryHandler.run の同じ fixture
+    # 経路で、1 回目は resume・child 起動、2 回目は exhausted で child 追加起動なし。
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_capacity_run(tmp_path)
+    launched: list[list[str]] = []
+
+    def _launch(argv: list[str], _cwd: Path) -> int:
+        launched.append(argv)
+        return 3  # run_dir も recovery-chain.json も作らずに死んだ child
+
+    first = _handler(tmp_path, run_dir, provider=_FakeProvider(), child_launcher=_launch).run()
+    second = _handler(tmp_path, run_dir, provider=_FakeProvider(), child_launcher=_launch).run()
+
+    assert first.decision.decision == "resume"
+    assert second.decision.decision == "exhausted"
+    assert second.child_exit_code is None
+    assert len(launched) == 1
+    persisted = read_recovery_json(run_dir / RECOVERY_FILE)
+    assert persisted.decision == "exhausted"
