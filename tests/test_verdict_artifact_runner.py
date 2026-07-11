@@ -422,6 +422,47 @@ class TestRunnerArtifactPrimary:
         sources = _verdict_sources(run_dir)
         assert sources[-1]["source"] == "artifact"
 
+    def test_control_char_in_artifact_verdict_rewritten_clean(self, tmp_path: Path) -> None:
+        """Issue #298 (Codex P2): artifact source でも sanitize が発生したら、
+        agent が書いた生 ESC 入り verdict.yaml を正規化後の内容で上書きし、
+        生禁止制御文字を artifact に残さない（stdout / comment 経路と対称）。"""
+        workflow = _single_step_workflow()
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            log_dir = kwargs["log_dir"]
+            assert isinstance(log_dir, Path)
+            # write_verdict_yaml を経由せず生 ESC 入り verdict.yaml を直接書く
+            # （agent が生成した壊れた artifact を再現）。
+            (log_dir / "verdict.yaml").write_bytes(
+                b'status: PASS\nreason: "ok"\nevidence: "done\x1bhere"\nsuggestion: ""\n'
+            )
+            return _cli_result(None)  # stdout には verdict を出さない → artifact 採用
+
+        with (
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+        ):
+            state = _make_runner(tmp_path, workflow).run()
+
+        assert state.last_completed_step == "implement"
+        run_dir = _run_root(tmp_path)
+        sources = _verdict_sources(run_dir)
+        assert sources[-1]["source"] == "artifact"
+
+        attempt = run_dir / "steps" / "implement" / "attempt-001"
+        vfile = attempt / "verdict.yaml"
+        # 上書き後の artifact に生の禁止制御文字が残らない。
+        raw_bytes = vfile.read_bytes()
+        assert b"\x1b" not in raw_bytes
+        # generic YAML reader でも再読込でき、意味は PASS のまま保持される。
+        loaded = load_verdict_yaml(vfile, VALID)
+        assert loaded.status == "PASS"
+        assert loaded.evidence == "done�here"
+
+        sanitization_events = _events(run_dir, "verdict_sanitization")
+        assert len(sanitization_events) == 1
+        assert sanitization_events[0]["findings"] == [{"codepoint": "U+001B", "position": 41}]
+
 
 @pytest.mark.medium
 class TestRunnerCycleAttemptSeparation:
