@@ -227,15 +227,17 @@ fixture terminal.log（ANSI + 中盤に実データ同一行の capacity+Token u
 - **classify → plan_recovery（EB 2/4/6）**:
   - `auto_recover=False` → `decision="comment_only"`, `recoverable=True`, reason に auto recovery disabled、resume_command 提示（EB 4）。
   - `auto_recover=True` → `decision="resume"`, `resume_scheduled_at == now + 600s`、`resume_from="start"`、sensitive gate（`Token usage` 由来 `\btoken\b`）が **発火せず** 予約成立（EB 3/6）。
-- **RecoveryHandler 副作用（review-design 指摘 4。`tests/test_recovery_handler.py` の `_FakeProvider` + injectable `child_launcher` / `sleep` パターンを踏襲）**:
+- **RecoveryHandler 副作用（review-design 指摘 4。`tests/test_recovery_handler.py` の `_FakeProvider` + injectable `child_launcher` / `sleep` パターンを踏襲。すべて `RecoveryHandler.run()` を実行した handler-level assert）**:
+  - **`auto_recover=False`（EB 4、cycle 2 追加）**: capacity fixture で `RecoveryHandler.run()` を実行し、(a) triage コメントが **ちょうど 1 回** 投稿される（`provider.comments` に auto recovery disabled 相当の reason と `resume_command` 提示行が載る。follow-up コメントは無いので計 1 コメント）、(b) `child_launcher` が **0 回**（呼ばれたら記録する spy で `calls == []` を assert）、(c) `recovery.json` が永続化され `decision="comment_only"` / `recoverable=true` / `auto_recovery_attempted=false` / `auto_recovery_attempt_no=0` / `resume_scheduled_at=null` / `resume_command` 非 null であること（`read_recovery_json` で読み戻して assert）。これにより「候補判定だが opt-in 無効で自動再開しない」を handler 副作用レベルで固定する。
   - `auto_recover=True`: triage コメントが child 起動 **前** に 1 回投稿される（provider.comments に `resume_scheduled_at` 行）。`child_launcher` が **ちょうど 1 回** 呼ばれ、child argv に `--from start` / `--recovery-root` / `--recovery-parent` が載る。`recovery.json` に `auto_recovery_attempted=true` / `auto_recovery_attempt_no=1` / `recovery_child_run_id` が書き戻される。child 終了後の follow-up コメントが投稿される（計 2 コメント）。
   - **budget guard（二重消費なし）**: 同一 run に対し handler を 2 度実行 → 2 度目は `snapshot.budget_consumed`（既存 `recovery.json` / child run dir 検出）により `decision="exhausted"`、`child_launcher` は追加で呼ばれない。
   - **extraction failure の区別（EB 5）**: terminal.log 不在の失敗 run → `attempt_error` が `diagnostic unavailable: …` → `recoverability_hint="no"` / `not_resumable`、triage report で capacity candidate / auto-disabled と語彙上区別できることを assert。
-- **`execute_interactive_terminal` の pane exit 区別（完了条件、fake-tmux `subprocess.run` パターン踏襲）**:
-  - pane_dead=1 / status=0 / verdict 不在 → `CLIExecutionError`（メッセージが `read_terminal_diagnostic` 由来）。
-  - pane_dead=1 / status 非 0 / verdict 不在 → `CLIExecutionError`。
-  - verdict 存在 → 正常終了（`CLIResult`、例外不発）。
-  - いずれも `pane-metadata.json` に `terminal_diagnostic` キーが記録される（観測可能性）。
+- **`execute_interactive_terminal` の pane exit 区別（完了条件、fake-tmux `subprocess.run` パターン踏襲。3 ケースを status 値まで観測可能にする、cycle 2 強化）**:
+  - fake-tmux は `display-message` 応答で `pane_dead` と **`pane_dead_status` を独立に** 差し替える（既存 `_PANE_METADATA.replace` を `pane_dead` だけでなく `pane_dead_status` にも適用し、ケースごとに異なる status を返す）。
+  - **ケース A** pane_dead=1 / `pane_dead_status=0` / verdict 不在 → `CLIExecutionError` が送出され、書き出された `pane-metadata.json` の `pane_dead_status == "0"` を assert。
+  - **ケース B** pane_dead=1 / `pane_dead_status=137`（非 0） / verdict 不在 → `CLIExecutionError` が送出され、`pane-metadata.json` の `pane_dead_status == "137"` を assert。A と B で **status 値が実際に異なる**ことを比較 assert し、0/非 0 の差が観測可能であることを固定する（前回は両者 CLIExecutionError の共通 assert のみで status 差が観測できなかった）。
+  - **ケース C** verdict 存在 → 正常終了（`CLIResult`、例外不発）。
+  - A/B いずれも `pane-metadata.json` に `terminal_diagnostic` キー（`kind` 等）が記録されることも併せて assert（診断の観測可能性）。
 
 ### Large テスト
 
