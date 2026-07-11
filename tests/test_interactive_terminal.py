@@ -1360,6 +1360,22 @@ class TestSensitiveMarkerCoexistsWithTransient:
         assert is_transient_error_text(message) is True
         assert _sensitive_failure_text(message) is True
 
+    def test_exit_detail_message_trips_sensitive_gate_for_invalid_token(
+        self, tmp_path: Path
+    ) -> None:
+        # PR #300 review: reproduces the reported gap directly — a transcript
+        # whose only sensitive marker is a compound "invalid token" phrase (no
+        # 401/403/credential/etc alongside it) must still trip the gate, even
+        # though bare `token` is excluded to avoid "Token usage" telemetry noise.
+        terminal_log = tmp_path / "terminal.log"
+        terminal_log.write_text("Please try again: invalid token\n", encoding="utf-8")
+
+        message = _terminal_exit_detail(terminal_log)
+
+        assert "try again" in message
+        assert is_transient_error_text(message) is True
+        assert _sensitive_failure_text(message) is True
+
 
 @pytest.mark.small
 class TestFalsePositiveBoundary:

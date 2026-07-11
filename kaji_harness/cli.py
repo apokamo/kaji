@@ -63,15 +63,20 @@ def find_transient_pattern(text: str | None) -> str | None:
 
 
 #: 自由記述 transcript 走査で使う高確信 auth/permission marker（Issue #296 review）。
-#: ``\btoken\b`` を含めないのは、agent transcript に頻出する無害な使用量表示
+#: bare ``\btoken\b`` を含めないのは、agent transcript に頻出する無害な使用量表示
 #: （"Token usage: 5000" 等）を誤検知するため（review-design 指摘 1 で確認済み）。
+#: 一方 "invalid token" は "Token usage" 系の使用量表示とは文字列として衝突せず、
+#: かつ credential 失陥を高確信で示すため個別に含める（PR #300 review 指摘: bare
+#: token 全除外だと transient+invalid-token 混在 transcript で sensitive gate が
+#: 構造的に迂回されていた）。
 #: 構造化エラー文字列（result.json / run.log）向けの完全な auth marker 一致は
-#: ``recovery.handler._SENSITIVE_FAILURE_PATTERNS`` を使うこと（token を含む）。
+#: ``recovery.handler._SENSITIVE_FAILURE_PATTERNS`` を使うこと（bare token を含む）。
 _SENSITIVE_FAILURE_PATTERNS_HIGH_CONFIDENCE: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?i)credential"), "credential"),
     (re.compile(r"(?i)permission denied"), "permission denied"),
     (re.compile(r"(?i)unauthorized"), "unauthorized"),
     (re.compile(r"(?i)authentication failed"), "authentication failed"),
+    (re.compile(r"(?i)invalid token"), "invalid token"),
     (re.compile(r"\b401\b"), "401"),
     (re.compile(r"\b403\b"), "403"),
 ]
@@ -81,9 +86,10 @@ def find_high_confidence_sensitive_pattern(text: str | None) -> str | None:
     """自由記述 transcript から高確信の auth/permission marker を検索する。
 
     Issue #296 review: interactive terminal の transient pattern スキャンは
-    transcript 全文を対象にするため、同じ全文走査で ``token`` を含む sensitive
+    transcript 全文を対象にするため、同じ全文走査で bare ``token`` を含む sensitive
     pattern まで見ると "Token usage" のような無害な表示を誤検知する。この関数は
-    誤検知の少ない部分集合（token を除く）のみを対象にした transcript 走査専用 IF。
+    誤検知の少ない部分集合（bare token を除き、"invalid token" の高確信複合語は
+    含む）のみを対象にした transcript 走査専用 IF。
 
     Args:
         text: 判定対象。``None`` / 空文字は ``None``。

@@ -107,7 +107,19 @@ def test_find_high_confidence_sensitive_pattern_excludes_bare_token() -> None:
     # usage counters ("Token usage: 5000"); a bare `token` match would make the
     # full-transcript scan trip on nearly every capacity/transient failure.
     assert find_high_confidence_sensitive_pattern("Token usage: total=32,386") is None
-    assert find_high_confidence_sensitive_pattern("invalid token") is None
+    assert find_high_confidence_sensitive_pattern("token count: 128") is None
+
+
+def test_find_high_confidence_sensitive_pattern_matches_invalid_token_compound() -> None:
+    # PR #300 review: bare `token` exclusion previously swallowed genuine
+    # credential failures too ("invalid token" never surfaced), letting a
+    # transient+invalid-token transcript bypass the sensitive gate entirely.
+    # "invalid token" is string-disjoint from "Token usage" style telemetry,
+    # so it can be included without reintroducing the review-design 指摘 1 false positive.
+    assert find_high_confidence_sensitive_pattern("Please try again: invalid token") == (
+        "invalid token"
+    )
+    assert find_high_confidence_sensitive_pattern("Token usage: total=32,386") is None
 
 
 def test_find_high_confidence_sensitive_pattern_returns_none_for_unrelated_or_empty() -> None:

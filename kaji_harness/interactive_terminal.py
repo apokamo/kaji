@@ -112,9 +112,10 @@ class TerminalDiagnostic:
     ``clean_excerpt`` / ``clean_tail`` は ``pane-metadata.json`` 専用の人間向け参考情報
     であり、classification / sensitive gate の入力には使わない。
     ``sensitive_marker`` は ``kind == "provider_error"`` の transcript に高確信 auth/
-    permission marker（token を除く）が同居する場合のみ非 ``None``。transient と
-    sensitive が同一 transcript に共存するケースで safety gate を構造的に迂回しない
-    ため、``_terminal_exit_detail`` が組み立てるメッセージにこの値を含める。
+    permission marker（bare token は除くが、``invalid token`` の高確信複合語は含む）
+    が同居する場合のみ非 ``None``。transient と sensitive が同一 transcript に共存
+    するケースで safety gate を構造的に迂回しないため、``_terminal_exit_detail`` が
+    組み立てるメッセージにこの値を含める。
     """
 
     kind: str
@@ -178,8 +179,9 @@ def _terminal_exit_detail(terminal_log: Path) -> str:
     Issue #296: ``kind`` で分岐する。``provider_error`` は transcript の部分文字列を
     一切載せず、一致した canonical transient pattern の literal のみを載せる
     （sensitive gate の誤発火を構造的に避けるため）。ただし transcript に高確信
-    auth/permission marker（token を除く）が同居する場合は、その canonical marker
-    literal も併記する。safety gate（``recovery.handler._safety_gates``）は
+    auth/permission marker（bare token は除くが、``invalid token`` の高確信複合語は
+    含む）が同居する場合は、その canonical marker literal も併記する。
+    safety gate（``recovery.handler._safety_gates``）は
     result.json / run.log の構造化エラー文字列のみを読み、pane-metadata.json の
     生 transcript は読まないため、ここで literal を残さないと transient+sensitive
     混在 failure の gate が構造的に迂回されてしまう。
