@@ -40,7 +40,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .cli import find_transient_pattern
+from .cli import find_high_confidence_sensitive_pattern, find_transient_pattern
 from .errors import CLIExecutionError, CLINotFoundError, StepTimeoutError
 from .models import CLIResult, Step
 
@@ -111,12 +111,17 @@ class TerminalDiagnostic:
     ``matched_pattern`` は ``kind == "provider_error"`` のときのみ非 ``None``。
     ``clean_excerpt`` / ``clean_tail`` は ``pane-metadata.json`` 専用の人間向け参考情報
     であり、classification / sensitive gate の入力には使わない。
+    ``sensitive_marker`` は ``kind == "provider_error"`` の transcript に高確信 auth/
+    permission marker（token を除く）が同居する場合のみ非 ``None``。transient と
+    sensitive が同一 transcript に共存するケースで safety gate を構造的に迂回しない
+    ため、``_terminal_exit_detail`` が組み立てるメッセージにこの値を含める。
     """
 
     kind: str
     matched_pattern: str | None
     clean_excerpt: str | None
     clean_tail: str
+    sensitive_marker: str | None = None
 
 
 def _strip_ansi(text: str) -> str:
@@ -153,6 +158,7 @@ def extract_terminal_diagnostic(text: str) -> TerminalDiagnostic:
         matched_pattern=matched,
         clean_excerpt=clean[start:end],
         clean_tail=tail,
+        sensitive_marker=find_high_confidence_sensitive_pattern(clean),
     )
 
 
@@ -171,14 +177,25 @@ def _terminal_exit_detail(terminal_log: Path) -> str:
 
     Issue #296: ``kind`` で分岐する。``provider_error`` は transcript の部分文字列を
     一切載せず、一致した canonical transient pattern の literal のみを載せる
-    （sensitive gate の誤発火を構造的に避けるため）。
+    （sensitive gate の誤発火を構造的に避けるため）。ただし transcript に高確信
+    auth/permission marker（token を除く）が同居する場合は、その canonical marker
+    literal も併記する。safety gate（``recovery.handler._safety_gates``）は
+    result.json / run.log の構造化エラー文字列のみを読み、pane-metadata.json の
+    生 transcript は読まないため、ここで literal を残さないと transient+sensitive
+    混在 failure の gate が構造的に迂回されてしまう。
     """
     prefix = "tmux pane exited before writing verdict.yaml"
     diagnostic = read_terminal_diagnostic(terminal_log)
     if diagnostic.kind == "provider_error":
-        return (
+        detail = (
             f"{prefix}; transient provider error detected (pattern: '{diagnostic.matched_pattern}')"
         )
+        if diagnostic.sensitive_marker is not None:
+            detail += (
+                f"; sensitive marker also detected in transcript "
+                f"(pattern: '{diagnostic.sensitive_marker}')"
+            )
+        return detail
     if diagnostic.kind == "no_pattern":
         return f"{prefix}; no known provider error pattern in transcript; log tail:\n{diagnostic.clean_tail}"
     if diagnostic.kind == "no_log":

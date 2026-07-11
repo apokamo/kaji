@@ -15,6 +15,7 @@ import pytest
 from kaji_harness.cli import (
     _TRANSIENT_PATTERNS,
     _is_transient,
+    find_high_confidence_sensitive_pattern,
     find_transient_pattern,
     is_transient_error_text,
 )
@@ -81,6 +82,38 @@ def test_is_transient_error_text_delegates_to_find_transient_pattern() -> None:
     # 二重実装ではなく、find_transient_pattern の有無へ委譲していることの回帰。
     for text in ["at capacity", "unrelated text", "", None]:
         assert is_transient_error_text(text) == (find_transient_pattern(text) is not None)
+
+
+# --- find_high_confidence_sensitive_pattern（PR #300 review: transient+sensitive 混在対策） ---
+
+
+def test_find_high_confidence_sensitive_pattern_matches_auth_markers() -> None:
+    assert find_high_confidence_sensitive_pattern("upstream returned 401 status") == "401"
+    assert find_high_confidence_sensitive_pattern("403 Forbidden") == "403"
+    assert find_high_confidence_sensitive_pattern("invalid credential supplied") == "credential"
+    assert (
+        find_high_confidence_sensitive_pattern("permission denied for this resource")
+        == "permission denied"
+    )
+    assert find_high_confidence_sensitive_pattern("request unauthorized") == "unauthorized"
+    assert (
+        find_high_confidence_sensitive_pattern("authentication failed, aborting")
+        == "authentication failed"
+    )
+
+
+def test_find_high_confidence_sensitive_pattern_excludes_bare_token() -> None:
+    # Issue #296 review-design 指摘 1: agent transcripts routinely print benign
+    # usage counters ("Token usage: 5000"); a bare `token` match would make the
+    # full-transcript scan trip on nearly every capacity/transient failure.
+    assert find_high_confidence_sensitive_pattern("Token usage: total=32,386") is None
+    assert find_high_confidence_sensitive_pattern("invalid token") is None
+
+
+def test_find_high_confidence_sensitive_pattern_returns_none_for_unrelated_or_empty() -> None:
+    assert find_high_confidence_sensitive_pattern("let me proceed with the next step") is None
+    assert find_high_confidence_sensitive_pattern("") is None
+    assert find_high_confidence_sensitive_pattern(None) is None
 
 
 def test_classify_dispatch_candidate_with_canonical_only_capacity_message(

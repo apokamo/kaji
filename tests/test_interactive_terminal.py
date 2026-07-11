@@ -1310,6 +1310,57 @@ class TestSensitiveSafeFocusedMessage:
             assert _sensitive_failure_text(message) is False, pattern
 
 
+def _ansi_noisy_capacity_and_401_line() -> str:
+    """One physical transcript line combining a transient capacity phrase with a
+    genuine auth marker (PR #300 review: providers can emit ``rate limit ... 401``
+    / ``try again ... invalid token`` style lines where transient and sensitive
+    markers share one line).
+    """
+    raw = (
+        "⚠ Selected model is at capacity. Please try a different model. "
+        "› upstream returned 401 status"
+    )
+    chars = []
+    for i, ch in enumerate(raw):
+        r, g, b = (i * 7) % 256, (i * 13) % 256, (i * 19) % 256
+        chars.append(f"\x1b[38;2;{r};{g};{b};49m{ch}")
+    chars.append("\x1b[39m\n")
+    return "".join(chars)
+
+
+def _buried_capacity_and_401_transcript() -> str:
+    header = "assistant is thinking...\n" * 60
+    line = _ansi_noisy_capacity_and_401_line()
+    footer = ("\x1b[2K\x1b[1A" * 400) + "\n"
+    return header + line + footer
+
+
+@pytest.mark.small
+class TestSensitiveMarkerCoexistsWithTransient:
+    """PR #300 review (P2): a transcript carrying both a transient literal and a
+    high-confidence auth marker (401/403/credential/permission denied/unauthorized/
+    authentication failed) must let the sensitive marker reach the message that
+    becomes ``result.json.error``, so ``_safety_gates`` can still trip
+    ``sensitive_failure_pattern`` instead of being structurally bypassed.
+    """
+
+    def test_diagnostic_records_high_confidence_sensitive_marker(self) -> None:
+        diagnostic = extract_terminal_diagnostic(_buried_capacity_and_401_transcript())
+        assert diagnostic.kind == "provider_error"
+        assert diagnostic.matched_pattern == "at capacity"
+        assert diagnostic.sensitive_marker == "401"
+
+    def test_exit_detail_message_trips_sensitive_gate(self, tmp_path: Path) -> None:
+        terminal_log = tmp_path / "terminal.log"
+        terminal_log.write_text(_buried_capacity_and_401_transcript(), encoding="utf-8")
+
+        message = _terminal_exit_detail(terminal_log)
+
+        assert "at capacity" in message
+        assert is_transient_error_text(message) is True
+        assert _sensitive_failure_text(message) is True
+
+
 @pytest.mark.small
 class TestFalsePositiveBoundary:
     """review-design 指摘 3: generic pattern の transcript 全体走査の境界。"""
