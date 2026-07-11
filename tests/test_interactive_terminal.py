@@ -19,6 +19,7 @@ from unittest.mock import patch
 
 import pytest
 
+from kaji_harness.cli import _TRANSIENT_PATTERNS, is_transient_error_text
 from kaji_harness.errors import CLIExecutionError, CLINotFoundError, StepTimeoutError
 from kaji_harness.interactive_terminal import (
     KajiAgentPane,
@@ -27,9 +28,13 @@ from kaji_harness.interactive_terminal import (
     _pane_dead,
     _parse_kaji_pane_marker,
     _prune_kaji_agent_panes,
+    _terminal_exit_detail,
     execute_interactive_terminal,
+    extract_terminal_diagnostic,
+    read_terminal_diagnostic,
 )
 from kaji_harness.models import Step
+from kaji_harness.recovery.handler import _sensitive_failure_text
 from kaji_harness.verdict import load_verdict_yaml
 
 WRAPPER = (
@@ -66,6 +71,7 @@ def _make_fake_tmux(
     version: str = "tmux 3.4\n",
     pane_id: str = "%99",
     pane_dead: str = "0",
+    pane_dead_status: str = "",
     pipe_returncode: int = 0,
     list_panes_output: str = "",
     list_panes_returncode: int = 0,
@@ -79,7 +85,9 @@ def _make_fake_tmux(
     test can write ``verdict.yaml`` / ``terminal.log`` at pane-launch time.
     ``list_panes_output`` is the stdout for the kaji-pane discovery call (empty =
     no existing managed panes); ``set_option_returncode`` lets a test simulate a
-    failed kaji marker write.
+    failed kaji marker write. ``pane_dead`` and ``pane_dead_status`` are set
+    independently (Issue #296) so a test can distinguish a clean pane exit
+    (status 0) from a crashed one (status non-zero) in ``pane-metadata.json``.
     """
 
     def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -102,9 +110,9 @@ def _make_fake_tmux(
         if argv[:2] == [tmux, "display-message"]:
             if argv[-1] == "#{pane_dead}":
                 return _completed(stdout=f"{pane_dead}\n")
-            return _completed(
-                stdout=_PANE_METADATA.replace("pane_dead=0", f"pane_dead={pane_dead}")
-            )
+            metadata = _PANE_METADATA.replace("pane_dead=0", f"pane_dead={pane_dead}")
+            metadata = metadata.replace("pane_dead_status=", f"pane_dead_status={pane_dead_status}")
+            return _completed(stdout=metadata)
         raise AssertionError(f"unexpected tmux call: {argv}")
 
     return fake_run
@@ -1194,6 +1202,238 @@ class TestRightColumnPanePlacement:
         assert metadata["split_direction"] == "vertical"
         assert metadata["kaji_agent_panes_before"] == ["%1"]
         assert metadata["kaji_agent_panes_pruned"] == []
+
+
+def _ansi_noisy_capacity_line() -> str:
+    """One physical transcript line with capacity + shutdown + Token usage, each
+    character wrapped in a truecolor ANSI escape (Issue #296 real-artifact shape:
+    the OB terminal.log has these three phrases connected on a single physical
+    line via TUI redraw cursor-movement/color codes).
+    """
+    raw = (
+        "⚠ Selected model is at capacity. Please try a different model. "
+        "› Shutting down... Token usage: total=32,386 input=31,159 output=1,227"
+    )
+    chars = []
+    for i, ch in enumerate(raw):
+        r, g, b = (i * 7) % 256, (i * 13) % 256, (i * 19) % 256
+        chars.append(f"\x1b[38;2;{r};{g};{b};49m{ch}")
+    chars.append("\x1b[39m\n")
+    return "".join(chars)
+
+
+def _buried_capacity_transcript() -> str:
+    """A large TUI transcript with the capacity line buried well before the
+    ``_TERMINAL_LOG_TAIL_CHARS`` (2000-char) tail window, matching the real
+    298KB OB artifact where the capacity line was near the head and the tail
+    was pure ANSI redraw noise.
+    """
+    header = "assistant is thinking...\n" * 60
+    capacity_line = _ansi_noisy_capacity_line()
+    footer = ("\x1b[2K\x1b[1A" * 400) + "\n"
+    return header + capacity_line + footer
+
+
+@pytest.mark.small
+class TestExtractTerminalDiagnostic:
+    """`extract_terminal_diagnostic` (Issue #296): full-transcript transient scan."""
+
+    def test_detects_capacity_line_buried_before_tail_window(self) -> None:
+        text = _buried_capacity_transcript()
+        # Regression demonstration: the pre-#296 tail-only extraction
+        # (`text[-2000:]`) does not contain the capacity phrase at all.
+        assert "at capacity" not in text[-2000:].lower()
+
+        diagnostic = extract_terminal_diagnostic(text)
+        assert diagnostic.kind == "provider_error"
+        assert diagnostic.matched_pattern == "at capacity"
+
+    def test_kind_no_pattern_for_transient_free_transcript(self) -> None:
+        diagnostic = extract_terminal_diagnostic("let me proceed with the next step\n")
+        assert diagnostic.kind == "no_pattern"
+        assert diagnostic.matched_pattern is None
+
+    def test_kind_empty_for_blank_text(self) -> None:
+        diagnostic = extract_terminal_diagnostic("   \n\t  ")
+        assert diagnostic.kind == "empty"
+        assert diagnostic.clean_tail == ""
+
+    @pytest.mark.parametrize("phrase", ["rate limit", "overloaded"])
+    def test_reuses_cli_transient_patterns_consistently(self, phrase: str) -> None:
+        diagnostic = extract_terminal_diagnostic(f"provider said: {phrase} exceeded\n")
+        assert diagnostic.kind == "provider_error"
+        assert diagnostic.matched_pattern == phrase
+
+    def test_ansi_escape_fragments_are_removed_from_excerpt_and_tail(self) -> None:
+        diagnostic = extract_terminal_diagnostic(_buried_capacity_transcript())
+        assert diagnostic.clean_excerpt is not None
+        assert "\x1b" not in diagnostic.clean_excerpt
+        assert "\x1b" not in diagnostic.clean_tail
+        assert "at capacity" in diagnostic.clean_excerpt.lower()
+
+
+@pytest.mark.small
+class TestSensitiveSafeFocusedMessage:
+    """Canonical-only focalization keeps ``Token usage`` out of the gate input."""
+
+    def test_capacity_message_is_transient_but_not_sensitive(self, tmp_path: Path) -> None:
+        # This is the core regression guard for review-design 指摘 1: the same
+        # physical line carries both "at capacity" and "Token usage", but the
+        # CLIExecutionError message built by `_terminal_exit_detail` must only
+        # ever surface the canonical pattern literal.
+        terminal_log = tmp_path / "terminal.log"
+        terminal_log.write_text(_buried_capacity_transcript(), encoding="utf-8")
+
+        message = _terminal_exit_detail(terminal_log)
+
+        assert "at capacity" in message
+        assert "Token usage" not in message
+        assert is_transient_error_text(message) is True
+        assert _sensitive_failure_text(message) is False
+
+    def test_no_pattern_message_keeps_raw_tail_but_is_not_a_candidate(self, tmp_path: Path) -> None:
+        terminal_log = tmp_path / "terminal.log"
+        terminal_log.write_text("agent failed at launch\n", encoding="utf-8")
+
+        message = _terminal_exit_detail(terminal_log)
+
+        assert "agent failed at launch" in message
+        assert is_transient_error_text(message) is False
+
+    def test_no_transient_pattern_is_ever_sensitive(self) -> None:
+        # Canonical-only healthiness (review-design 指摘 1): every literal
+        # `_TRANSIENT_PATTERNS` can produce must never trip the sensitive gate,
+        # independent of any single sample. Breaks loudly if a future pattern
+        # addition collides with `_SENSITIVE_FAILURE_PATTERNS`.
+        for pattern in _TRANSIENT_PATTERNS:
+            message = f"tmux pane exited before writing verdict.yaml; transient provider error detected (pattern: '{pattern}')"
+            assert _sensitive_failure_text(message) is False, pattern
+
+
+@pytest.mark.small
+class TestFalsePositiveBoundary:
+    """review-design 指摘 3: generic pattern の transcript 全体走査の境界。"""
+
+    def test_benign_transcript_without_transient_words_is_no_pattern(self) -> None:
+        # negative: prose with no transient vocabulary must not be misclassified
+        # as a candidate, even though the scan covers the entire transcript.
+        benign = "let me proceed with the next step and finish up the review.\n" * 5
+        diagnostic = extract_terminal_diagnostic(benign)
+        assert diagnostic.kind == "no_pattern"
+        message = f"tmux pane exited before writing verdict.yaml; no known provider error pattern in transcript; log tail:\n{diagnostic.clean_tail}"
+        assert is_transient_error_text(message) is False
+
+    def test_generic_try_again_phrase_is_characterized_as_provider_error(self) -> None:
+        # characterization: `try again` is a generic transient pattern shared
+        # with headless (cli.py single source of truth). This scan only runs on
+        # the verdict-not-written abnormal pane-death path, and the blast radius
+        # of a false positive is bounded by RECOVERY_BUDGET=1 (one extra resume).
+        diagnostic = extract_terminal_diagnostic("connection reset, please try again\n")
+        assert diagnostic.kind == "provider_error"
+        assert diagnostic.matched_pattern == "try again"
+
+
+@pytest.mark.small
+class TestReadTerminalDiagnostic:
+    """`read_terminal_diagnostic` extraction-failure kinds (no_log / empty)."""
+
+    def test_missing_file_is_no_log(self, tmp_path: Path) -> None:
+        diagnostic = read_terminal_diagnostic(tmp_path / "missing-terminal.log")
+        assert diagnostic.kind == "no_log"
+
+    def test_empty_file_is_empty(self, tmp_path: Path) -> None:
+        terminal_log = tmp_path / "terminal.log"
+        terminal_log.write_text("", encoding="utf-8")
+        assert read_terminal_diagnostic(terminal_log).kind == "empty"
+
+    def test_missing_file_message_is_diagnostic_unavailable(self, tmp_path: Path) -> None:
+        message = _terminal_exit_detail(tmp_path / "missing-terminal.log")
+        assert "diagnostic unavailable" in message
+        assert is_transient_error_text(message) is False
+
+
+@pytest.mark.medium
+class TestPaneExitStatusDistinguishable:
+    """完了条件: pane exit 0 / 非 0 / verdict 有りが観測可能に区別できること。"""
+
+    def _run_pane_dead(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, pane_dead_status: str
+    ) -> None:
+        prompt = tmp_path / "prompt.txt"
+        prompt.write_text("prompt", encoding="utf-8")
+        (tmp_path / "terminal.log").write_text("agent failed at launch\n", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        fake_run = _make_fake_tmux(pane_dead="1", pane_dead_status=pane_dead_status)
+
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=fake_run),
+        ):
+            with pytest.raises(CLIExecutionError):
+                execute_interactive_terminal(
+                    step=_step("claude"),
+                    prompt_path=prompt,
+                    verdict_path=tmp_path / "verdict.yaml",
+                    workdir=tmp_path,
+                    timeout=600,
+                )
+
+    def test_pane_dead_status_zero_is_recorded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._run_pane_dead(tmp_path, monkeypatch, pane_dead_status="0")
+        metadata = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
+        assert metadata["pane_dead_status"] == "0"
+        assert metadata["terminal_diagnostic"]["kind"] == "no_pattern"
+
+    def test_pane_dead_status_non_zero_is_recorded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._run_pane_dead(tmp_path, monkeypatch, pane_dead_status="137")
+        metadata = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
+        assert metadata["pane_dead_status"] == "137"
+        assert metadata["terminal_diagnostic"]["kind"] == "no_pattern"
+
+    def test_status_zero_and_non_zero_are_distinguishable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._run_pane_dead(tmp_path, monkeypatch, pane_dead_status="0")
+        metadata_a = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
+
+        self._run_pane_dead(tmp_path, monkeypatch, pane_dead_status="137")
+        metadata_b = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
+
+        assert metadata_a["pane_dead_status"] != metadata_b["pane_dead_status"]
+
+    def test_verdict_present_is_normal_exit_without_diagnostic(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        prompt = tmp_path / "prompt.txt"
+        verdict = tmp_path / "verdict.yaml"
+        prompt.write_text("prompt", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        fake_run = _make_fake_tmux(
+            on_split=lambda: verdict.write_text(_PASS_VERDICT, encoding="utf-8")
+        )
+
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=fake_run),
+        ):
+            execute_interactive_terminal(
+                step=_step("claude"),
+                prompt_path=prompt,
+                verdict_path=verdict,
+                workdir=tmp_path,
+                timeout=5,
+            )
+
+        metadata = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
+        # Verdict-trigger contract: no CLIExecutionError, no terminal_diagnostic
+        # attached (that key is only written on the pane-death fail-loud path).
+        assert "terminal_diagnostic" not in metadata
 
 
 def _tmux_at_least_3_1() -> bool:

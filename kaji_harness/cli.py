@@ -40,6 +40,27 @@ _TRANSIENT_PATTERNS = [
 ]
 
 
+def find_transient_pattern(text: str | None) -> str | None:
+    """``_TRANSIENT_PATTERNS`` のうち最初に（大小文字無視で）一致した literal を返す。
+
+    Issue #296: interactive terminal の診断抽出が ``matched_pattern`` を二重実装なしに
+    得るための正本 IF。``is_transient_error_text`` はこの戻り値の有無へ委譲する。
+
+    Args:
+        text: 判定対象。``None`` / 空文字は ``None``。
+
+    Returns:
+        一致した ``_TRANSIENT_PATTERNS`` の literal。一致がなければ ``None``。
+    """
+    if not text:
+        return None
+    lowered = text.lower()
+    for pattern in _TRANSIENT_PATTERNS:
+        if pattern in lowered:
+            return pattern
+    return None
+
+
 def is_transient_error_text(text: str | None) -> bool:
     """エラー文字列が一時的障害（retry する価値がある）かを判定する。
 
@@ -53,10 +74,7 @@ def is_transient_error_text(text: str | None) -> bool:
     Returns:
         ``_TRANSIENT_PATTERNS`` のいずれかを（大小文字無視で）含めば ``True``。
     """
-    if not text:
-        return False
-    lowered = text.lower()
-    return any(p in lowered for p in _TRANSIENT_PATTERNS)
+    return find_transient_pattern(text) is not None
 
 
 def _is_transient(error: CLIExecutionError) -> bool:

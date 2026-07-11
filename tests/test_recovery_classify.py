@@ -12,7 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from kaji_harness.cli import _TRANSIENT_PATTERNS, _is_transient, is_transient_error_text
+from kaji_harness.cli import (
+    _TRANSIENT_PATTERNS,
+    _is_transient,
+    find_transient_pattern,
+    is_transient_error_text,
+)
 from kaji_harness.errors import CLIExecutionError
 from kaji_harness.recovery.classify import classify_failure
 from kaji_harness.recovery.snapshot import FailureEvent, FailureSnapshot
@@ -53,6 +58,46 @@ def test_private_is_transient_delegates_to_public_helper() -> None:
     # attempt retry と recovery classifier が同一 pattern list を参照する保証。
     assert _is_transient(CLIExecutionError("s", 1, "Overloaded, try later")) is True
     assert _is_transient(CLIExecutionError("s", 1, "fatal: not a git repository")) is False
+
+
+# --- find_transient_pattern（Issue #296: matched_pattern 取得の正本 IF） ---
+
+
+def test_find_transient_pattern_returns_matched_literal() -> None:
+    assert find_transient_pattern("Selected model is at capacity.") == "at capacity"
+    assert find_transient_pattern("HTTP 429: rate limit exceeded") == "rate limit"
+    assert find_transient_pattern("provider overloaded, please retry") == "overloaded"
+
+
+def test_find_transient_pattern_returns_none_for_unrelated_or_empty() -> None:
+    assert find_transient_pattern("syntax error near token") is None
+    assert find_transient_pattern("") is None
+    assert find_transient_pattern(None) is None
+
+
+def test_is_transient_error_text_delegates_to_find_transient_pattern() -> None:
+    # 二重実装ではなく、find_transient_pattern の有無へ委譲していることの回帰。
+    for text in ["at capacity", "unrelated text", "", None]:
+        assert is_transient_error_text(text) == (find_transient_pattern(text) is not None)
+
+
+def test_classify_dispatch_candidate_with_canonical_only_capacity_message() -> None:
+    # Issue #296: 焦点化契約（transcript 部分文字列を含まず pattern literal のみを
+    # 載せたメッセージ）でも既存の classify ロジックが無改修で candidate 化することの固定。
+    c = classify_failure(
+        _snapshot(
+            failure_event=FailureEvent(
+                kind="dispatch_exception", step_id="start", exception_type="CLIExecutionError"
+            ),
+            failed_step="start",
+            attempt_error=(
+                "tmux pane exited before writing verdict.yaml; "
+                "transient provider error detected (pattern: 'at capacity')"
+            ),
+        )
+    )
+    assert c.cause == "dispatch_failure"
+    assert c.recoverability_hint == "candidate"
 
 
 # --- 分類表の行ごとの検証 ---

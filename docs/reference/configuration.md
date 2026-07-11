@@ -120,6 +120,14 @@ A relative `artifacts_dir` is resolved against the main worktree (the worktree t
   10-minute wait when the decision is `resume`. It is **disabled by default** because starting a
   child run is a strong side effect. Setting `failure_triage = false` forces `auto_recover` to
   `false` as well (the handler that would start the child run never runs).
+- `auto_recover` also governs interactive-terminal transient provider errors (Issue #296): when a
+  tmux pane dies with a known transient pattern (e.g. `"at capacity"`) buried in its transcript,
+  the failure is classified as a `dispatch_failure` candidate the same as any other transient
+  dispatch failure. With `auto_recover = true` and safety gates clear, a resume is scheduled after
+  the fixed 10-minute wait; with `auto_recover = false` (default), the triage comment and
+  `recovery.json` record the candidate classification with auto recovery disabled, and no child
+  run starts. See [Failure Triage / Recovery CLI](../cli-guides/failure-recovery.md) § Interactive
+  terminal.
 - The recovery budget (1 per chain) and the recovery wait (600s) are **not configurable**. They are
   module constants (`RECOVERY_BUDGET` / `RECOVERY_WAIT_SECONDS` in `kaji_harness/recovery/models.py`)
   so that "unlimited auto retry" cannot be reached through configuration.

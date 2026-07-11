@@ -621,3 +621,135 @@ def test_provider_none_blocks_resume_but_still_writes_artifact(tmp_path: Path) -
 
     assert result.decision.decision == "not_resumable"
     assert (run_dir / RECOVERY_FILE).exists()
+
+
+# --- Issue #296: interactive terminal model capacity (canonical-only focused message) ---
+
+_CAPACITY_ERROR = (
+    "tmux pane exited before writing verdict.yaml; "
+    "transient provider error detected (pattern: 'at capacity')"
+)
+
+
+def _build_capacity_run(
+    tmp_path: Path, run_id: str = "260710120000", *, error: str = _CAPACITY_ERROR
+) -> Path:
+    """A failed `implement` run whose ``attempt_error`` is the canonical-only
+    focused message `_terminal_exit_detail` produces for a pane that died with a
+    provider capacity error buried in its transcript (Issue #296)."""
+    run_dir = tmp_path / ".kaji-artifacts" / _ISSUE / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    events = [
+        {"event": "workflow_start", "issue": _ISSUE, "workflow": "dev", "schema_version": 1},
+        {
+            "event": "failure_event",
+            "kind": "dispatch_exception",
+            "step_id": "implement",
+            "exception_type": "CLIExecutionError",
+            "cycle_name": None,
+            "synthetic": True,
+        },
+        {"event": "workflow_end", "status": "ERROR", "error": error},
+    ]
+    (run_dir / "run.log").write_text(
+        "".join(json.dumps(e) + "\n" for e in events), encoding="utf-8"
+    )
+    attempt = run_dir / "steps" / "implement" / "attempt-001"
+    attempt.mkdir(parents=True)
+    (attempt / "result.json").write_text(
+        json.dumps(
+            {
+                "step_id": "implement",
+                "attempt": 1,
+                "status": "ERROR",
+                "exit_code": 1,
+                "signal": None,
+                "started_at": "t",
+                "ended_at": "t",
+                "duration_ms": 1,
+                "session_id": None,
+                "dispatch": "agent",
+                "error": error,
+                "synthetic": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return run_dir
+
+
+def test_capacity_auto_recover_true_launches_child_once_with_candidate(tmp_path: Path) -> None:
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_capacity_run(tmp_path)
+    launched: list[list[str]] = []
+    provider = _FakeProvider()
+
+    handler = _handler(
+        tmp_path,
+        run_dir,
+        provider=provider,
+        child_launcher=lambda argv, _cwd: (launched.append(argv), 0)[1],
+    )
+    result = handler.run()
+
+    assert result.decision.classification.cause == "dispatch_failure"
+    assert result.decision.classification.recoverability_hint == "candidate"
+    assert result.decision.decision == "resume"
+    assert len(launched) == 1
+    persisted = read_recovery_json(run_dir / RECOVERY_FILE)
+    assert persisted.auto_recovery_attempted is True
+    assert persisted.auto_recovery_attempt_no == 1
+    assert persisted.resume_scheduled_at is not None
+    # sensitive gate（`\btoken\b`）が焦点化メッセージには一切現れないため誤発火しない。
+    assert "Token usage" not in "\n".join(provider.comments)
+
+
+def test_capacity_auto_recover_false_posts_candidate_disabled_without_child(
+    tmp_path: Path,
+) -> None:
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_capacity_run(tmp_path)
+    launched: list[list[str]] = []
+    provider = _FakeProvider()
+
+    handler = _handler(
+        tmp_path,
+        run_dir,
+        provider=provider,
+        auto_recover=False,
+        child_launcher=lambda argv, _cwd: (launched.append(argv), 0)[1],
+    )
+    result = handler.run()
+
+    assert result.decision.decision == "comment_only"
+    assert result.decision.recoverable is True
+    assert result.child_exit_code is None
+    assert launched == []
+    assert len(provider.comments) == 1
+
+    persisted = read_recovery_json(run_dir / RECOVERY_FILE)
+    assert persisted.decision == "comment_only"
+    assert persisted.recoverable is True
+    assert persisted.auto_recovery_attempted is False
+    assert persisted.auto_recovery_attempt_no == 0
+    assert persisted.resume_scheduled_at is None
+    assert persisted.resume_command is not None
+
+
+def test_capacity_diagnostic_extraction_failure_is_not_resumable(tmp_path: Path) -> None:
+    # Issue #296 EB 5: kaji の診断抽出失敗（terminal.log 不在由来の
+    # "diagnostic unavailable"）は transient pattern を含まないため、
+    # provider capacity candidate とは語彙上・判定上区別される。
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    no_log_error = (
+        "tmux pane exited before writing verdict.yaml; diagnostic unavailable: no terminal.log"
+    )
+    run_dir = _build_capacity_run(tmp_path, error=no_log_error)
+
+    result = _handler(tmp_path, run_dir, provider=_FakeProvider()).run()
+
+    assert result.decision.classification.recoverability_hint == "no"
+    assert result.decision.decision == "not_resumable"
