@@ -24,6 +24,27 @@ Two layers exist and do not overlap:
 | attempt retry | transient CLI failure inside one step dispatch | seconds to minutes, in-process | `execute_cli()` |
 | run recovery | `ERROR` / triage-eligible `ABORT` at the end of the workflow process | fixed 10-minute wait, then a new `kaji run` | this document |
 
+### Interactive terminal: transient provider errors buried in the transcript (Issue #296)
+
+When `agent_runner = "interactive_terminal"` and a tmux pane dies before writing
+`verdict.yaml`, kaji scans the **entire** `terminal.log` transcript (not just the last 2000
+characters) for a known transient pattern (`"at capacity"`, `"rate limit"`, `"overloaded"`, …
+— the same list `execute_cli()` uses). TUI redraw can bury a one-line provider error deep in a
+transcript far larger than the old tail window, so a full-transcript scan is required to avoid
+misclassifying a transient capacity error as non-recoverable.
+
+Only the matched pattern **literal** is placed in `CLIExecutionError` / `result.json.error`
+(e.g. `"...transient provider error detected (pattern: 'at capacity')"`) — never a transcript
+substring. This keeps unrelated text on the same physical line (such as a `Token usage:`
+telemetry line) out of the classifier/sensitive-gate input, so it cannot accidentally trip the
+credential-leak gate. The full ANSI-stripped excerpt and tail are kept for humans only, in
+`pane-metadata.json`'s `terminal_diagnostic` key (`kind`: `provider_error` / `no_pattern` /
+`no_log` / `empty`), which the classifier never reads.
+
+The resulting `dispatch_failure` classification and `--auto-recover` behavior (candidate →
+resume after 10 minutes, or `comment_only` when auto recovery is off) follow the same rules as
+any other transient dispatch failure described below.
+
 ## `kaji run` options
 
 | flag | Default | Meaning |

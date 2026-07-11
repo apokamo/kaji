@@ -23,6 +23,27 @@ failure triage / 自動再開レイヤ（Issue #288）の CLI リファレンス
 | attempt retry | 1 step dispatch 内の transient CLI failure | 数十秒〜数分、in-process | `execute_cli()` |
 | run recovery | workflow process の `ERROR` / triage 対象 `ABORT` 終端 | 固定 10 分ウェイト + 新規 `kaji run` | 本ドキュメント |
 
+### Interactive terminal: transcript に埋もれた transient provider error（Issue #296）
+
+`agent_runner = "interactive_terminal"` で tmux pane が `verdict.yaml` を書かずに終了した場合、
+kaji は `terminal.log` の transcript **全文**（末尾 2000 文字に限らない）を走査し、既知の
+transient pattern（`"at capacity"` / `"rate limit"` / `"overloaded"` など、`execute_cli()` と
+同一の pattern list）を検出する。TUI redraw により transcript は旧来の tail window よりはるかに
+大きくなり得るため、1行の provider エラーが深く埋もれる。全文走査でなければ、一時的な capacity
+エラーを非復旧対象と誤分類してしまう。
+
+`CLIExecutionError` / `result.json.error` に載せるのは一致した pattern **literal のみ**（例:
+`"...transient provider error detected (pattern: 'at capacity')"`）で、transcript の部分文字列は
+一切載せない。これにより、同一物理行にある無関係なテキスト（`Token usage:` テレメトリ等）が
+classifier / sensitive gate の入力に混入せず、credential-leak gate を誤って発火させない。
+ANSI 除去済みの人間向け抜粋・末尾は `pane-metadata.json` の `terminal_diagnostic` キー
+（`kind`: `provider_error` / `no_pattern` / `no_log` / `empty`）にのみ保存され、classifier は
+これを読まない。
+
+結果として得られる `dispatch_failure` 分類と `--auto-recover` の挙動（candidate → 10 分後に
+resume、または auto recovery 無効時は `comment_only`）は、他の transient dispatch failure と
+同じルールに従う（以下参照）。
+
 ## `kaji run` の option
 
 | flag | default | 意味 |

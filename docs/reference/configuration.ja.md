@@ -108,6 +108,13 @@ worktree）基準で解決される（Issue #177、[ワークフロー作成](..
 - `interactive_terminal_close_on_verdict` は `agent_runner = "interactive_terminal"` のときのみ作用する
   （verdict 検知後に pane を閉じるか）。headless 運用では無効。
 
+> **`failure_triage` / `auto_recover`（Issue #288 / #296）**: 本節の日本語訳はこの2 keyに
+> 追随できていない（正本は英語版）。詳細は英語正本 [configuration.md](configuration.md)
+> § `[execution]` の `failure_triage` / `auto_recover` 行を参照。`auto_recover` は
+> interactive terminal 経路で tmux pane が transient provider error（例: `"at capacity"`）と
+> ともに終了した場合の自動再開挙動にも及ぶ（[Failure Triage / Recovery CLI（日本語）]
+> (../cli-guides/failure-recovery.ja.md) § Interactive terminal を参照）。
+
 `timeout` の解決順位は step.timeout → workflow.default_timeout → `config.execution.default_timeout`
 （[ワークフロー作成](../dev/workflow-authoring.md) § ステップフィールド 参照）。
 

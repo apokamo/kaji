@@ -15,15 +15,18 @@ from pathlib import Path
 
 import pytest
 
+from kaji_harness.interactive_terminal import _terminal_exit_detail
 from kaji_harness.models import Step, Workflow
 from kaji_harness.providers.models import Comment, Issue
 from kaji_harness.recovery.handler import RecoveryHandler
 from kaji_harness.recovery.models import (
     RECOVERY_CHAIN_FILE,
     RECOVERY_FILE,
+    RECOVERY_WAIT_SECONDS,
     read_recovery_json,
     write_recovery_chain,
 )
+from tests.conftest import capacity_terminal_log_text
 
 pytestmark = pytest.mark.medium
 
@@ -158,6 +161,7 @@ def _handler(
     *,
     provider: object,
     auto_recover: bool = True,
+    wait_seconds: int = 0,
     sleep=None,
     child_launcher=None,
     stderr: io.StringIO | None = None,
@@ -172,7 +176,7 @@ def _handler(
         workdir=tmp_path,
         provider=provider,  # type: ignore[arg-type]
         auto_recover=auto_recover,
-        wait_seconds=0,
+        wait_seconds=wait_seconds,
         sleep=sleep or (lambda _s: None),
         child_launcher=child_launcher or (lambda _argv, _cwd: 0),
         stderr=stderr or io.StringIO(),
@@ -621,3 +625,179 @@ def test_provider_none_blocks_resume_but_still_writes_artifact(tmp_path: Path) -
 
     assert result.decision.decision == "not_resumable"
     assert (run_dir / RECOVERY_FILE).exists()
+
+
+# --- Issue #296: interactive terminal model capacity (canonical-only focused message) ---
+
+
+def _build_capacity_run(
+    tmp_path: Path, run_id: str = "260710120000", *, with_terminal_log: bool = True
+) -> Path:
+    """A failed `implement` run whose ``attempt_error`` is produced by calling
+    the real ``_terminal_exit_detail`` against an actual ``terminal.log`` fixture
+    placed in the attempt dir (Issue #296), not a hand-typed message. The
+    fixture (``capacity_terminal_log_text``) reproduces the real OB artifact
+    shape: capacity and ``Token usage`` connected on one physical line, buried
+    well before the tail window pre-#296 extraction scanned. This connects
+    extract_terminal_diagnostic -> _terminal_exit_detail -> result.json ->
+    collect_snapshot -> classify_failure -> RecoveryHandler.run in one fixture.
+
+    ``with_terminal_log=False`` omits the file entirely, exercising the real
+    ``no_log`` extraction-failure path (EB 5) instead of a hand-typed message.
+    """
+    run_dir = tmp_path / ".kaji-artifacts" / _ISSUE / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    attempt = run_dir / "steps" / "implement" / "attempt-001"
+    attempt.mkdir(parents=True)
+    terminal_log = attempt / "terminal.log"
+    if with_terminal_log:
+        terminal_log.write_text(capacity_terminal_log_text(), encoding="utf-8")
+    error = _terminal_exit_detail(terminal_log)
+
+    events = [
+        {"event": "workflow_start", "issue": _ISSUE, "workflow": "dev", "schema_version": 1},
+        {
+            "event": "failure_event",
+            "kind": "dispatch_exception",
+            "step_id": "implement",
+            "exception_type": "CLIExecutionError",
+            "cycle_name": None,
+            "synthetic": True,
+        },
+        {"event": "workflow_end", "status": "ERROR", "error": error},
+    ]
+    (run_dir / "run.log").write_text(
+        "".join(json.dumps(e) + "\n" for e in events), encoding="utf-8"
+    )
+    (attempt / "result.json").write_text(
+        json.dumps(
+            {
+                "step_id": "implement",
+                "attempt": 1,
+                "status": "ERROR",
+                "exit_code": 1,
+                "signal": None,
+                "started_at": "t",
+                "ended_at": "t",
+                "duration_ms": 1,
+                "session_id": None,
+                "dispatch": "agent",
+                "error": error,
+                "synthetic": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return run_dir
+
+
+def test_capacity_auto_recover_true_launches_child_once_with_candidate(tmp_path: Path) -> None:
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_capacity_run(tmp_path)
+    launched: list[list[str]] = []
+    slept: list[float] = []
+    provider = _FakeProvider()
+
+    handler = _handler(
+        tmp_path,
+        run_dir,
+        provider=provider,
+        wait_seconds=RECOVERY_WAIT_SECONDS,
+        sleep=slept.append,
+        child_launcher=lambda argv, _cwd: (launched.append(argv), 0)[1],
+    )
+    result = handler.run()
+
+    assert result.decision.classification.cause == "dispatch_failure"
+    assert result.decision.classification.recoverability_hint == "candidate"
+    assert result.decision.decision == "resume"
+    assert len(launched) == 1
+    argv = launched[0]
+    assert argv[argv.index("--from") + 1] == "implement"
+    assert argv[argv.index("--recovery-root") + 1] == "260710120000"
+    assert argv[argv.index("--recovery-parent") + 1] == "260710120000"
+    # triage コメント（child 起動前）+ child 終了後の follow-up コメントで計 2 回。
+    assert len(provider.comments) == 2
+    persisted = read_recovery_json(run_dir / RECOVERY_FILE)
+    assert persisted.auto_recovery_attempted is True
+    assert persisted.auto_recovery_attempt_no == 1
+    assert persisted.resume_scheduled_at is not None
+    # 決定 9（固定 wait）どおり、実際に注入された sleep も厳密に 600 秒であること。
+    assert slept == [600]
+    # sensitive gate（`\btoken\b`）が焦点化メッセージには一切現れないため誤発火しない。
+    assert "Token usage" not in "\n".join(provider.comments)
+
+
+def test_capacity_auto_recover_false_posts_candidate_disabled_without_child(
+    tmp_path: Path,
+) -> None:
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_capacity_run(tmp_path)
+    launched: list[list[str]] = []
+    provider = _FakeProvider()
+
+    handler = _handler(
+        tmp_path,
+        run_dir,
+        provider=provider,
+        auto_recover=False,
+        child_launcher=lambda argv, _cwd: (launched.append(argv), 0)[1],
+    )
+    result = handler.run()
+
+    assert result.decision.decision == "comment_only"
+    assert result.decision.recoverable is True
+    assert result.child_exit_code is None
+    assert launched == []
+    assert len(provider.comments) == 1
+
+    persisted = read_recovery_json(run_dir / RECOVERY_FILE)
+    assert persisted.decision == "comment_only"
+    assert persisted.recoverable is True
+    assert persisted.auto_recovery_attempted is False
+    assert persisted.auto_recovery_attempt_no == 0
+    assert persisted.resume_scheduled_at is None
+    assert persisted.resume_command is not None
+
+
+def test_capacity_diagnostic_extraction_failure_is_not_resumable(tmp_path: Path) -> None:
+    # Issue #296 EB 5: kaji の診断抽出失敗（terminal.log 不在由来の
+    # "diagnostic unavailable"）は transient pattern を含まないため、
+    # provider capacity candidate とは語彙上・判定上区別される。
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_capacity_run(tmp_path, with_terminal_log=False)
+
+    result = _handler(tmp_path, run_dir, provider=_FakeProvider()).run()
+
+    assert result.decision.classification.recoverability_hint == "no"
+    assert result.decision.decision == "not_resumable"
+
+
+def test_capacity_second_triage_of_same_run_is_exhausted_without_relaunch(
+    tmp_path: Path,
+) -> None:
+    # Issue #296 完了条件: 同一 run に対する再 triage は budget を二重消費しない。
+    # extract_terminal_diagnostic -> _terminal_exit_detail -> result.json ->
+    # collect_snapshot -> classify_failure -> RecoveryHandler.run の同じ fixture
+    # 経路で、1 回目は resume・child 起動、2 回目は exhausted で child 追加起動なし。
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_capacity_run(tmp_path)
+    launched: list[list[str]] = []
+
+    def _launch(argv: list[str], _cwd: Path) -> int:
+        launched.append(argv)
+        return 3  # run_dir も recovery-chain.json も作らずに死んだ child
+
+    first = _handler(tmp_path, run_dir, provider=_FakeProvider(), child_launcher=_launch).run()
+    second = _handler(tmp_path, run_dir, provider=_FakeProvider(), child_launcher=_launch).run()
+
+    assert first.decision.decision == "resume"
+    assert second.decision.decision == "exhausted"
+    assert second.child_exit_code is None
+    assert len(launched) == 1
+    persisted = read_recovery_json(run_dir / RECOVERY_FILE)
+    assert persisted.decision == "exhausted"

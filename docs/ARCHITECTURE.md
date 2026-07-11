@@ -200,6 +200,25 @@ agent 経路の起動 backend は repository config の `[execution] agent_runne
 [Interactive Terminal Runner ガイド](./cli-guides/interactive-terminal-runner.md) を参照。
 技術選定の経緯は [ADR 007](./adr/007-interactive-terminal-runner.md)。
 
+#### pane 早期終了時の transient error 診断（Issue #296）
+
+pane が `verdict.yaml` を書かずに終了した場合、`_terminal_exit_detail()` は
+`extract_terminal_diagnostic()` で transcript **全文**（tail 2000 文字に限らない）を
+ANSI/制御除去した上で `cli.find_transient_pattern()`（`_TRANSIENT_PATTERNS` 単一情報源、
+attempt retry / run recovery と共有）を走査する。TUI redraw で肥大した transcript でも
+中盤〜先頭にある provider エラー（例: `"at capacity"`）を取りこぼさない。
+
+`CLIExecutionError` / `result.json.error` に載せるのは **一致した pattern literal のみ**
+（例: `"...transient provider error detected (pattern: 'at capacity')"`）で、transcript の
+部分文字列は一切載せない。これにより `recovery/handler.py` の sensitive gate
+（`\btoken\b` 等）が同一物理行にある `Token usage:` のようなノイズへ誤発火することを
+構造的に避ける。ANSI 除去済みの人間向け抜粋・末尾（`Token usage` を含みうる）は
+classifier / sensitive gate が読まない `pane-metadata.json` の `terminal_diagnostic`
+キーにのみ保存される。`kind` は `"provider_error"` / `"no_pattern"` / `"no_log"` /
+`"empty"` の4値で、provider 側の一時障害と kaji 側の診断抽出失敗を区別する。
+`recovery/classify.py` / `recovery/handler.py` はこの焦点化により無改修で
+`recoverability_hint: candidate` を成立させる。
+
 ---
 
 ## Verdict 判定機構

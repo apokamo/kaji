@@ -40,6 +40,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .cli import find_high_confidence_sensitive_pattern, find_transient_pattern
 from .errors import CLIExecutionError, CLINotFoundError, StepTimeoutError
 from .models import CLIResult, Step
 
@@ -56,6 +57,15 @@ _SESSION_ID_GRACE_SECONDS = 5.0
 _CODEX_SESSION_SCAN_LIMIT = 100
 _VERDICT_POLL_INTERVAL_SECONDS = 2
 _TERMINAL_LOG_TAIL_CHARS = 2000
+# Issue #296: provider エラー行の周辺を人間向け抜粋として保つ半径（文字数）。
+_DIAGNOSTIC_EXCERPT_RADIUS = 200
+# TUI redraw が撒き散らす ANSI CSI / OSC / その他 escape シーケンス。
+_ANSI_OSC_RE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+_ANSI_CSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_ANSI_OTHER_ESCAPE_RE = re.compile(r"\x1b[@-Z\\\]^_]")
+# 改行/タブ以外の C0 制御文字、DEL、C1 制御文字（Issue #137 の JSON エスケープ規約とは
+# 別目的: こちらは可読な診断テキストを作るための除去）。
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 # Issue #238: pane scoped user options (`set-option -p`) are used as the kaji
 # marker; they were added in tmux 3.1, so the minimum is raised from 3.0.
 _MIN_TMUX_VERSION = (3, 1)
@@ -92,14 +102,107 @@ class _PaneLaunch:
     panes_pruned: list[str] = field(default_factory=list)
 
 
-def _terminal_exit_detail(terminal_log: Path) -> str:
-    """Build a diagnostic string from the terminal log tail for early pane exits."""
+@dataclass(frozen=True)
+class TerminalDiagnostic:
+    """pane 早期終了時の transcript 診断結果。
+
+    ``kind`` は ``"provider_error"`` / ``"no_pattern"`` / ``"no_log"`` / ``"empty"`` の
+    4 値で、provider 側の一時障害と kaji 側の診断抽出失敗を語彙上区別する。
+    ``matched_pattern`` は ``kind == "provider_error"`` のときのみ非 ``None``。
+    ``clean_excerpt`` / ``clean_tail`` は ``pane-metadata.json`` 専用の人間向け参考情報
+    であり、classification / sensitive gate の入力には使わない。
+    ``sensitive_marker`` は ``kind == "provider_error"`` の transcript に高確信 auth/
+    permission marker（bare token は除くが、``invalid token`` の高確信複合語は含む）
+    が同居する場合のみ非 ``None``。transient と sensitive が同一 transcript に共存
+    するケースで safety gate を構造的に迂回しないため、``_terminal_exit_detail`` が
+    組み立てるメッセージにこの値を含める。
+    """
+
+    kind: str
+    matched_pattern: str | None
+    clean_excerpt: str | None
+    clean_tail: str
+    sensitive_marker: str | None = None
+
+
+def _strip_ansi(text: str) -> str:
+    """ANSI CSI/OSC escape と C0/C1 制御文字を除去し、可読テキストにする。"""
+    text = _ANSI_OSC_RE.sub("", text)
+    text = _ANSI_CSI_RE.sub("", text)
+    text = _ANSI_OTHER_ESCAPE_RE.sub("", text)
+    return _CONTROL_CHARS_RE.sub("", text)
+
+
+def extract_terminal_diagnostic(text: str) -> TerminalDiagnostic:
+    """transcript 全文から transient provider error を走査する純関数。
+
+    ANSI/制御除去後の全文に対し ``find_transient_pattern`` を適用する。末尾窓に
+    限定しないため、TUI redraw で肥大した transcript でも中盤〜先頭のエラーを
+    取りこぼさない。
+    """
+    clean = _strip_ansi(text).strip()
+    if not clean:
+        return TerminalDiagnostic(
+            kind="empty", matched_pattern=None, clean_excerpt=None, clean_tail=""
+        )
+    tail = clean[-_TERMINAL_LOG_TAIL_CHARS:]
+    matched = find_transient_pattern(clean)
+    if matched is None:
+        return TerminalDiagnostic(
+            kind="no_pattern", matched_pattern=None, clean_excerpt=None, clean_tail=tail
+        )
+    idx = clean.lower().find(matched.lower())
+    start = max(0, idx - _DIAGNOSTIC_EXCERPT_RADIUS)
+    end = min(len(clean), idx + len(matched) + _DIAGNOSTIC_EXCERPT_RADIUS)
+    return TerminalDiagnostic(
+        kind="provider_error",
+        matched_pattern=matched,
+        clean_excerpt=clean[start:end],
+        clean_tail=tail,
+        sensitive_marker=find_high_confidence_sensitive_pattern(clean),
+    )
+
+
+def read_terminal_diagnostic(terminal_log: Path) -> TerminalDiagnostic:
+    """``terminal_log`` を読み、診断抽出失敗（no_log/empty）も含めて判定する薄い I/O ラッパ。"""
     if not terminal_log.is_file():
-        return f"tmux pane exited before writing verdict.yaml (no {terminal_log.name})"
-    text = terminal_log.read_text(encoding="utf-8", errors="replace").strip()
-    if not text:
-        return f"tmux pane exited before writing verdict.yaml ({terminal_log.name} empty)"
-    return f"tmux pane exited before writing verdict.yaml; log tail:\n{text[-_TERMINAL_LOG_TAIL_CHARS:]}"
+        return TerminalDiagnostic(
+            kind="no_log", matched_pattern=None, clean_excerpt=None, clean_tail=""
+        )
+    text = terminal_log.read_text(encoding="utf-8", errors="replace")
+    return extract_terminal_diagnostic(text)
+
+
+def _terminal_exit_detail(terminal_log: Path) -> str:
+    """Build a diagnostic string for early pane exits from the transcript.
+
+    Issue #296: ``kind`` で分岐する。``provider_error`` は transcript の部分文字列を
+    一切載せず、一致した canonical transient pattern の literal のみを載せる
+    （sensitive gate の誤発火を構造的に避けるため）。ただし transcript に高確信
+    auth/permission marker（bare token は除くが、``invalid token`` の高確信複合語は
+    含む）が同居する場合は、その canonical marker literal も併記する。
+    safety gate（``recovery.handler._safety_gates``）は
+    result.json / run.log の構造化エラー文字列のみを読み、pane-metadata.json の
+    生 transcript は読まないため、ここで literal を残さないと transient+sensitive
+    混在 failure の gate が構造的に迂回されてしまう。
+    """
+    prefix = "tmux pane exited before writing verdict.yaml"
+    diagnostic = read_terminal_diagnostic(terminal_log)
+    if diagnostic.kind == "provider_error":
+        detail = (
+            f"{prefix}; transient provider error detected (pattern: '{diagnostic.matched_pattern}')"
+        )
+        if diagnostic.sensitive_marker is not None:
+            detail += (
+                f"; sensitive marker also detected in transcript "
+                f"(pattern: '{diagnostic.sensitive_marker}')"
+            )
+        return detail
+    if diagnostic.kind == "no_pattern":
+        return f"{prefix}; no known provider error pattern in transcript; log tail:\n{diagnostic.clean_tail}"
+    if diagnostic.kind == "no_log":
+        return f"{prefix}; diagnostic unavailable: no {terminal_log.name}"
+    return f"{prefix}; diagnostic unavailable: {terminal_log.name} empty"
 
 
 def _wrapper_path() -> Path:
@@ -351,6 +454,7 @@ def execute_interactive_terminal(
                 target_pane=target_pane,
                 close_on_verdict=close_on_verdict,
                 layout=launch,
+                terminal_log=terminal_log,
             )
             raise CLIExecutionError(step.id, 1, _terminal_exit_detail(terminal_log))
         time.sleep(_VERDICT_POLL_INTERVAL_SECONDS)
@@ -645,8 +749,15 @@ def _write_pane_metadata(
     target_pane: str,
     close_on_verdict: bool,
     layout: _PaneLaunch | None = None,
+    terminal_log: Path | None = None,
 ) -> None:
-    """Snapshot the pane's ``#{pane_dead}`` (and related) fields for diagnostics."""
+    """Snapshot the pane's ``#{pane_dead}`` (and related) fields for diagnostics.
+
+    ``terminal_log`` is only passed at the pane-death call site (Issue #296): its
+    structured ``TerminalDiagnostic`` is attached under ``terminal_diagnostic`` so
+    the provider-error/no-pattern/extraction-failure distinction survives even
+    though the classifier-facing ``CLIExecutionError`` message stays canonical-only.
+    """
     destination.parent.mkdir(parents=True, exist_ok=True)
     metadata: dict[str, object] = {
         "tmux_version": _tmux_version_text(tmux),
@@ -654,6 +765,14 @@ def _write_pane_metadata(
         "target_pane": target_pane,
         "close_on_verdict": close_on_verdict,
     }
+    if terminal_log is not None:
+        diagnostic = read_terminal_diagnostic(terminal_log)
+        metadata["terminal_diagnostic"] = {
+            "kind": diagnostic.kind,
+            "matched_pattern": diagnostic.matched_pattern,
+            "clean_excerpt": diagnostic.clean_excerpt,
+            "clean_tail": diagnostic.clean_tail,
+        }
     if layout is not None:
         # Issue #238: pane placement diagnostics (right-column layout).
         metadata["layout_target_pane"] = target_pane

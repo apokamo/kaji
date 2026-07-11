@@ -12,10 +12,18 @@ from pathlib import Path
 
 import pytest
 
-from kaji_harness.cli import _TRANSIENT_PATTERNS, _is_transient, is_transient_error_text
+from kaji_harness.cli import (
+    _TRANSIENT_PATTERNS,
+    _is_transient,
+    find_high_confidence_sensitive_pattern,
+    find_transient_pattern,
+    is_transient_error_text,
+)
 from kaji_harness.errors import CLIExecutionError
+from kaji_harness.interactive_terminal import _terminal_exit_detail
 from kaji_harness.recovery.classify import classify_failure
 from kaji_harness.recovery.snapshot import FailureEvent, FailureSnapshot
+from tests.conftest import capacity_terminal_log_text
 
 pytestmark = pytest.mark.small
 
@@ -53,6 +61,97 @@ def test_private_is_transient_delegates_to_public_helper() -> None:
     # attempt retry と recovery classifier が同一 pattern list を参照する保証。
     assert _is_transient(CLIExecutionError("s", 1, "Overloaded, try later")) is True
     assert _is_transient(CLIExecutionError("s", 1, "fatal: not a git repository")) is False
+
+
+# --- find_transient_pattern（Issue #296: matched_pattern 取得の正本 IF） ---
+
+
+def test_find_transient_pattern_returns_matched_literal() -> None:
+    assert find_transient_pattern("Selected model is at capacity.") == "at capacity"
+    assert find_transient_pattern("HTTP 429: rate limit exceeded") == "rate limit"
+    assert find_transient_pattern("provider overloaded, please retry") == "overloaded"
+
+
+def test_find_transient_pattern_returns_none_for_unrelated_or_empty() -> None:
+    assert find_transient_pattern("syntax error near token") is None
+    assert find_transient_pattern("") is None
+    assert find_transient_pattern(None) is None
+
+
+def test_is_transient_error_text_delegates_to_find_transient_pattern() -> None:
+    # 二重実装ではなく、find_transient_pattern の有無へ委譲していることの回帰。
+    for text in ["at capacity", "unrelated text", "", None]:
+        assert is_transient_error_text(text) == (find_transient_pattern(text) is not None)
+
+
+# --- find_high_confidence_sensitive_pattern（PR #300 review: transient+sensitive 混在対策） ---
+
+
+def test_find_high_confidence_sensitive_pattern_matches_auth_markers() -> None:
+    assert find_high_confidence_sensitive_pattern("upstream returned 401 status") == "401"
+    assert find_high_confidence_sensitive_pattern("403 Forbidden") == "403"
+    assert find_high_confidence_sensitive_pattern("invalid credential supplied") == "credential"
+    assert (
+        find_high_confidence_sensitive_pattern("permission denied for this resource")
+        == "permission denied"
+    )
+    assert find_high_confidence_sensitive_pattern("request unauthorized") == "unauthorized"
+    assert (
+        find_high_confidence_sensitive_pattern("authentication failed, aborting")
+        == "authentication failed"
+    )
+
+
+def test_find_high_confidence_sensitive_pattern_excludes_bare_token() -> None:
+    # Issue #296 review-design 指摘 1: agent transcripts routinely print benign
+    # usage counters ("Token usage: 5000"); a bare `token` match would make the
+    # full-transcript scan trip on nearly every capacity/transient failure.
+    assert find_high_confidence_sensitive_pattern("Token usage: total=32,386") is None
+    assert find_high_confidence_sensitive_pattern("token count: 128") is None
+
+
+def test_find_high_confidence_sensitive_pattern_matches_invalid_token_compound() -> None:
+    # PR #300 review: bare `token` exclusion previously swallowed genuine
+    # credential failures too ("invalid token" never surfaced), letting a
+    # transient+invalid-token transcript bypass the sensitive gate entirely.
+    # "invalid token" is string-disjoint from "Token usage" style telemetry,
+    # so it can be included without reintroducing the review-design 指摘 1 false positive.
+    assert find_high_confidence_sensitive_pattern("Please try again: invalid token") == (
+        "invalid token"
+    )
+    assert find_high_confidence_sensitive_pattern("Token usage: total=32,386") is None
+
+
+def test_find_high_confidence_sensitive_pattern_returns_none_for_unrelated_or_empty() -> None:
+    assert find_high_confidence_sensitive_pattern("let me proceed with the next step") is None
+    assert find_high_confidence_sensitive_pattern("") is None
+    assert find_high_confidence_sensitive_pattern(None) is None
+
+
+def test_classify_dispatch_candidate_with_canonical_only_capacity_message(
+    tmp_path: Path,
+) -> None:
+    # Issue #296: attempt_error はハンドライトの文字列ではなく、実 ANSI/TUI
+    # terminal.log fixture に対して実装関数 _terminal_exit_detail を呼んで生成した
+    # ものを使う。焦点化契約（transcript 部分文字列を含まず pattern literal の
+    # みを載せる）と既存 classify ロジックの接続を、生成元から一続きで固定する。
+    terminal_log = tmp_path / "terminal.log"
+    terminal_log.write_text(capacity_terminal_log_text(), encoding="utf-8")
+    message = _terminal_exit_detail(terminal_log)
+    assert "at capacity" in message
+    assert "Token usage" not in message
+
+    c = classify_failure(
+        _snapshot(
+            failure_event=FailureEvent(
+                kind="dispatch_exception", step_id="start", exception_type="CLIExecutionError"
+            ),
+            failed_step="start",
+            attempt_error=message,
+        )
+    )
+    assert c.cause == "dispatch_failure"
+    assert c.recoverability_hint == "candidate"
 
 
 # --- 分類表の行ごとの検証 ---

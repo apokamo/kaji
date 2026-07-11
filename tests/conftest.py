@@ -180,6 +180,31 @@ def make_issue_context(
     )
 
 
+def capacity_terminal_log_text() -> str:
+    """ANSI/TUI ``terminal.log`` fixture matching the Issue #296 OB artifact shape.
+
+    The provider capacity phrase and ``Token usage`` are connected on a single
+    physical line via per-character truecolor cursor-movement escapes, and that
+    line is buried well before the 2000-char tail window that pre-#296
+    tail-only extraction scanned. Shared by ``test_recovery_classify.py`` and
+    ``test_recovery_handler.py`` so both call the real ``_terminal_exit_detail``
+    against the same fixture shape instead of hand-typing its output.
+    """
+    raw = (
+        "⚠ Selected model is at capacity. Please try a different model. "
+        "› Shutting down... Token usage: total=32,386 input=31,159 output=1,227"
+    )
+    chars = []
+    for i, ch in enumerate(raw):
+        r, g, b = (i * 7) % 256, (i * 13) % 256, (i * 19) % 256
+        chars.append(f"\x1b[38;2;{r};{g};{b};49m{ch}")
+    chars.append("\x1b[39m\n")
+    capacity_line = "".join(chars)
+    header = "assistant is thinking...\n" * 60
+    footer = ("\x1b[2K\x1b[1A" * 400) + "\n"
+    return header + capacity_line + footer
+
+
 def ensure_local_issue(repo_root: Path, issue: str, machine_id: str = "pc1") -> None:
     """provider=local 配下で ``local-<machine>-<issue>`` の Issue dir を作成する。
 
