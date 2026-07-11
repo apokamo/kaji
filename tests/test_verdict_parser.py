@@ -21,12 +21,15 @@ from kaji_harness.errors import InvalidVerdictValue, VerdictNotFound, VerdictPar
 from kaji_harness.models import Verdict
 from kaji_harness.verdict import (
     AI_FORMATTER_MAX_INPUT_CHARS,
+    ControlCharFinding,
     _build_relaxed_status_patterns,
     _extract_block_relaxed,
     _extract_block_strict,
     _parse_relaxed_fields,
     _parse_yaml_fields,
+    _sanitize_yaml_control_chars,
     parse_verdict,
+    parse_verdict_block,
 )
 
 VALID_STATUSES = {"PASS", "RETRY", "BACK", "ABORT"}
@@ -1037,6 +1040,158 @@ class TestParseYamlFields:
     def test_missing_status_raises(self) -> None:
         with pytest.raises(VerdictParseError):
             _parse_yaml_fields('reason: "OK"\nevidence: "green"')
+
+    def test_non_control_char_parse_failure_unaffected(self) -> None:
+        """禁止制御文字以外の parse 失敗（非 mapping）は従来どおり。"""
+        with pytest.raises(VerdictParseError):
+            _parse_yaml_fields("just a plain string, not a mapping")
+
+
+# ============================================================
+# Issue #298: YAML 禁止制御文字の sanitize 境界
+# ============================================================
+
+
+@pytest.mark.small
+class TestSanitizeYamlControlCharsBoundary:
+    """YAML 1.2 の c-printable 範囲外の制御文字を検出順に U+FFFD へ置換する。
+
+    許可 / 禁止の境界（0x1F禁止/0x20許可、0x7E許可/0x7F禁止、0x84禁止/0x85許可/
+    0x86禁止、0x9F禁止/0xA0許可）を明示的に固定する。
+    """
+
+    @pytest.mark.parametrize(
+        "codepoint",
+        [0x09, 0x0A, 0x0D, 0x20, 0x85, 0x7E],
+        ids=["TAB", "LF", "CR", "SPACE", "NEL", "TILDE"],
+    )
+    def test_allowed_codepoints_are_not_replaced(self, codepoint: int) -> None:
+        text = f"a{chr(codepoint)}b"
+        sanitized, findings = _sanitize_yaml_control_chars(text)
+        assert sanitized == text
+        assert findings == []
+
+    @pytest.mark.parametrize(
+        "codepoint",
+        [
+            0x00,
+            0x08,
+            0x0B,
+            0x0C,
+            0x0E,
+            0x1B,  # ESC — Issue #137/#298 の一次障害文字
+            0x1F,
+            0x7F,
+            0x80,
+            0x84,
+            0x86,
+            0x9F,
+        ],
+        ids=[
+            "NUL",
+            "BS",
+            "VT",
+            "FF",
+            "SO",
+            "ESC",
+            "US",
+            "DEL",
+            "0x80",
+            "0x84",
+            "0x86",
+            "0x9F",
+        ],
+    )
+    def test_forbidden_codepoints_are_replaced(self, codepoint: int) -> None:
+        text = f"a{chr(codepoint)}b"
+        sanitized, findings = _sanitize_yaml_control_chars(text)
+        assert sanitized == "a�b"
+        assert findings == [ControlCharFinding(position=1, codepoint=codepoint)]
+        assert findings[0].label == f"U+{codepoint:04X}"
+
+    def test_boundary_0x1f_forbidden_0x20_allowed(self) -> None:
+        text = f"{chr(0x1F)}{chr(0x20)}"
+        sanitized, findings = _sanitize_yaml_control_chars(text)
+        assert sanitized == "� "
+        assert [f.codepoint for f in findings] == [0x1F]
+
+    def test_boundary_0x7e_allowed_0x7f_forbidden(self) -> None:
+        text = f"{chr(0x7E)}{chr(0x7F)}"
+        sanitized, findings = _sanitize_yaml_control_chars(text)
+        assert sanitized == "~�"
+        assert [f.codepoint for f in findings] == [0x7F]
+
+    def test_boundary_0x84_forbidden_0x85_allowed_0x86_forbidden(self) -> None:
+        text = f"{chr(0x84)}{chr(0x85)}{chr(0x86)}"
+        sanitized, findings = _sanitize_yaml_control_chars(text)
+        assert sanitized == "�\x85�"
+        assert [f.codepoint for f in findings] == [0x84, 0x86]
+
+    def test_boundary_0x9f_forbidden_0xa0_allowed(self) -> None:
+        text = f"{chr(0x9F)}{chr(0xA0)}"
+        sanitized, findings = _sanitize_yaml_control_chars(text)
+        assert sanitized == "�\xa0"
+        assert [f.codepoint for f in findings] == [0x9F]
+
+    def test_no_forbidden_chars_returns_text_unchanged_and_empty_findings(self) -> None:
+        text = "plain ascii and 日本語"
+        sanitized, findings = _sanitize_yaml_control_chars(text)
+        assert sanitized == text
+        assert findings == []
+
+    def test_multiple_forbidden_chars_detected_in_order(self) -> None:
+        text = f"a{chr(0x1B)}b{chr(0x00)}c"
+        sanitized, findings = _sanitize_yaml_control_chars(text)
+        assert sanitized == "a�b�c"
+        assert [f.position for f in findings] == [1, 3]
+        assert [f.codepoint for f in findings] == [0x1B, 0x00]
+
+
+# ============================================================
+# Issue #298: 禁止制御文字混入 verdict の再現 → 修正後の意味的解決
+# ============================================================
+
+
+@pytest.mark.small
+class TestVerdictWithControlCharsResolvesSemantically:
+    """#137 実障害（evidence への生 ESC 混入）の再現と修正後の解決確認。"""
+
+    def test_esc_in_evidence_resolves_to_pass(self) -> None:
+        body = 'status: PASS\nreason: "ok"\nevidence: "done\x1bhere"\nsuggestion: ""'
+        verdict = _parse_yaml_fields(body)
+        assert verdict.status == "PASS"
+        assert verdict.evidence == "done�here"
+
+    def test_findings_sink_receives_sanitize_findings(self) -> None:
+        sink: list[ControlCharFinding] = []
+        body = 'status: PASS\nreason: "ok"\nevidence: "done\x1bhere"\nsuggestion: ""'
+        _parse_yaml_fields(body, findings_sink=sink)
+        assert len(sink) == 1
+        assert sink[0].codepoint == 0x1B
+        assert sink[0].label == "U+001B"
+
+    def test_no_findings_sink_leaves_sink_none_unaffected(self) -> None:
+        body = 'status: PASS\nreason: "ok"\nevidence: "done\x1bhere"\nsuggestion: ""'
+        verdict = _parse_yaml_fields(body, findings_sink=None)
+        assert verdict.status == "PASS"
+
+    def test_three_paths_converge_on_same_sanitize_boundary(self) -> None:
+        """stdout（parse_verdict）/ comment（parse_verdict_block）が同一入力を
+        同じ境界（_parse_yaml_fields）で救済すること。"""
+        control_char_block = (
+            "---VERDICT---\n"
+            'status: PASS\nreason: "ok"\nevidence: "done\x1bhere"\nsuggestion: ""\n'
+            "---END_VERDICT---"
+        )
+
+        stdout_result = parse_verdict(control_char_block, VALID_STATUSES)
+        comment_result = parse_verdict_block(control_char_block, VALID_STATUSES)
+
+        assert stdout_result.status == "PASS"
+        assert stdout_result.evidence == "done�here"
+        assert comment_result is not None
+        assert comment_result.status == "PASS"
+        assert comment_result.evidence == "done�here"
 
 
 # ============================================================

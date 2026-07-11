@@ -15,6 +15,7 @@ import pytest
 
 from kaji_harness.logger import RunLogger
 from kaji_harness.models import CostInfo, Verdict
+from kaji_harness.verdict import ControlCharFinding
 
 # ============================================================
 # Helpers
@@ -268,3 +269,34 @@ class TestRunLogger:
         assert deep_path.exists()
         events = _read_events(deep_path)
         assert len(events) == 1
+
+    @pytest.mark.small
+    def test_log_verdict_sanitization(self, tmp_path: Path) -> None:
+        """Issue #298: 禁止制御文字の正規化を run.log に永続記録する。
+
+        findings は ``{"codepoint": "U+XXXX", "position": <n>}`` 形式で、
+        行のバイト列に生の制御文字（``\\x1b`` 等）を含まない。
+        """
+        logger = RunLogger(log_path=tmp_path / "run.jsonl")
+        findings = [
+            ControlCharFinding(position=41, codepoint=0x1B),
+            ControlCharFinding(position=50, codepoint=0x00),
+        ]
+
+        logger.log_verdict_sanitization("implement", "attempt-001", findings)
+
+        events = _read_events(logger.log_path)
+        assert len(events) == 1
+        ev = events[0]
+        assert ev["event"] == "verdict_sanitization"
+        assert ev["step_id"] == "implement"
+        assert ev["attempt"] == "attempt-001"
+        assert ev["count"] == 2
+        assert ev["findings"] == [
+            {"codepoint": "U+001B", "position": 41},
+            {"codepoint": "U+0000", "position": 50},
+        ]
+
+        raw_bytes = logger.log_path.read_bytes()
+        assert b"\x1b" not in raw_bytes
+        assert b"\x00" not in raw_bytes

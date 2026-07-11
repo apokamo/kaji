@@ -96,6 +96,15 @@ def execute_cli(cmd: list[str], step_id: str, timeout: int) -> CLIResult:
 
 Verdict エラー（`VerdictNotFound` / `VerdictParseError` / `InvalidVerdictValue`）は回復不能なため、リトライせずに上位に伝播させる。
 
+> **YAML 禁止制御文字の正規化（Issue #298）**: `_parse_yaml_fields`（`verdict.py`）は
+> YAML 1.2 の printable 範囲外の制御文字（ESC 等）を `yaml.safe_load` に渡す前に
+> `U+FFFD` へ正規化する。このため `VerdictParseError` は「制御文字混入」を理由には
+> 発生しなくなり、TAB/LF/CR 等の許可文字はそのまま解釈される。正規化した文字の
+> コードポイント・位置は `RunLogger.log_verdict_sanitization`（`verdict_sanitization`
+> event）に記録される（[ロギング](./logging.md) 参照）。status / reason / evidence の
+> 必須性検証は従来どおり後段で行われるため、制御文字を除いても内容が verdict として
+> 不成立なら `VerdictParseError` は引き続き発生する。
+
 ```python
 def parse_verdict(output: str) -> Verdict:
     """出力から verdict を解析する。"""

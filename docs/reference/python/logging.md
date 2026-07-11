@@ -155,6 +155,25 @@ best-effort で記録される。cycle 上限 exhaust の合成 verdict では d
 {"ts": "2025-04-22T01:05:00+00:00", "event": "verdict_source", "step_id": "implement", "source": "artifact", "attempt": "attempt-001"}
 ```
 
+#### `verdict_sanitization`
+
+verdict parse 境界（`_parse_yaml_fields`）で正規化した YAML 禁止制御文字を記録する（Issue #298）。
+`resolve_verdict()` の戻り値 `findings` が非空の場合のみ発火する。
+
+| フィールド | 型 | 備考 |
+|-----------|-----|------|
+| `step_id` | `str` | |
+| `attempt` | `str` | `attempt-NNN` ディレクトリ名 |
+| `count` | `int` | 検出した禁止制御文字の件数 |
+| `findings` | `list[dict]` | `{"codepoint": "U+XXXX", "position": int}` の列。検出順。生の禁止文字は含まない |
+
+```json
+{"ts": "2025-04-22T01:05:00+00:00", "event": "verdict_sanitization", "step_id": "implement", "attempt": "attempt-001", "count": 1, "findings": [{"codepoint": "U+001B", "position": 41}]}
+```
+
+診断表記規約: コードポイントは常に `U+XXXX`（4桁大文字16進）形式。生の制御文字を event / ログへ
+再出力しない。
+
 #### `workflow_end`
 
 ワークフロー終了時に記録。
@@ -180,6 +199,7 @@ best-effort で記録される。cycle 上限 exhaust の合成 verdict では d
 | `log_workflow_start(issue, workflow)` | ワークフロー開始直後 |
 | `log_step_start(step_id, agent, model, effort, session_id, *, attempt=None, dispatch="agent")` | CLI / subprocess 実行前。決定論経路では `dispatch="exec_script"`（Issue #204）/ `dispatch="exec"`（exec-step・Issue #205）+ `agent=model=effort=None`。`attempt` は attempt-NNN の整数（Issue #222） |
 | `log_verdict_source(step_id, source, attempt)` | `resolve_verdict()` 直後（verdict 解決経路の記録、Issue #220） |
+| `log_verdict_sanitization(step_id, attempt, findings)` | `resolve_verdict()` の `findings` が非空の場合のみ、`log_verdict_source` と同じ場所で呼ぶ（YAML 禁止制御文字の正規化を永続記録、Issue #298） |
 | `log_step_end(step_id, verdict, duration_ms, cost, *, attempt=None, exit_code=None, signal=None, dispatch="agent")` | CLI / subprocess 終了・verdict 解析後（異常終了でも合成 ABORT で発火、Issue #222） |
 | `log_cycle_iteration(cycle_name, iteration, max_iter)` | サイクル内の各反復開始時 |
 | `log_workflow_end(status, cycle_counts, total_duration_ms, total_cost, error)` | ワークフロー終了時（正常・異常問わず） |

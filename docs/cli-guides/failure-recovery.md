@@ -45,6 +45,24 @@ The resulting `dispatch_failure` classification and `--auto-recover` behavior (c
 resume after 10 minutes, or `comment_only` when auto recovery is off) follow the same rules as
 any other transient dispatch failure described below.
 
+### Verdict YAML forbidden control characters no longer trigger re-execution (Issue #298)
+
+Previously, a raw control character outside the YAML 1.2 printable range (e.g. ESC / `U+001B`)
+inside a `verdict.yaml` evidence/reason field made `_parse_yaml_fields` raise `VerdictParseError`,
+even when the step's external side effects (commit, push, comment) had already completed. The
+runner converted this into a `verdict_exception` failure event and a synthetic `ABORT`, and
+recovery classified it as `verdict_resolution_failure` — presenting the same, already-completed
+step as the resume point.
+
+`_parse_yaml_fields` now sanitizes YAML-forbidden control characters (replacing them with
+`U+FFFD`) before parsing, so the artifact's real verdict resolves normally and this failure mode
+no longer reaches recovery at all. TAB / LF / CR and other characters YAML permits are left
+untouched. Sanitized codepoints and their position are recorded in `run.log` as a
+`verdict_sanitization` event (see [logging reference](../reference/python/logging.md) §
+`verdict_sanitization`) — never the raw control character itself. Verdict resolution failures
+unrelated to control characters (e.g. a missing `status` field) still raise `VerdictParseError`
+and are classified as `verdict_resolution_failure` exactly as before.
+
 ## `kaji run` options
 
 | flag | Default | Meaning |

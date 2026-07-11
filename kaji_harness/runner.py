@@ -838,7 +838,7 @@ class WorkflowRunner:
                                 model=current_step.model,
                                 workdir=effective_workdir,
                             )
-                        verdict, verdict_source = resolve_verdict(
+                        verdict, verdict_source, verdict_findings = resolve_verdict(
                             attempt_dir=attempt_dir,
                             full_output=result.full_output,
                             valid_statuses=valid,
@@ -850,6 +850,10 @@ class WorkflowRunner:
                             ai_formatter=formatter,
                         )
                         logger.log_verdict_source(current_step.id, verdict_source, attempt_dir.name)
+                        if verdict_findings:
+                            logger.log_verdict_sanitization(
+                                current_step.id, attempt_dir.name, verdict_findings
+                            )
                         _console.info(
                             "verdict detected: %s source=%s status=%s",
                             current_step.id,

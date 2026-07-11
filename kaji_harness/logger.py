@@ -15,6 +15,7 @@ from .models import CostInfo, Verdict
 
 if TYPE_CHECKING:  # pragma: no cover
     from .recovery.models import RecoveryDecision
+    from .verdict import ControlCharFinding
 
 #: run.log の event 契約バージョン。``workflow_start`` に記録する。
 #: 1 = Issue #288 の ``failure_event`` 契約（ABORT / ERROR 終端は必ず failure_event を伴う）。
@@ -122,6 +123,22 @@ class RunLogger:
         ``attempt-NNN`` ディレクトリ名。
         """
         self._write("verdict_source", step_id=step_id, source=source, attempt=attempt)
+
+    def log_verdict_sanitization(
+        self, step_id: str, attempt: str, findings: list[ControlCharFinding]
+    ) -> None:
+        """禁止制御文字の正規化を run.log に永続記録する（生文字は書かない）。
+
+        Issue #298: verdict parse 境界で正規化した YAML 禁止制御文字の診断証跡。
+        ``findings`` が空の場合は呼ばない（呼び出し側の責務）。
+        """
+        self._write(
+            "verdict_sanitization",
+            step_id=step_id,
+            attempt=attempt,
+            count=len(findings),
+            findings=[{"codepoint": f.label, "position": f.position} for f in findings],
+        )
 
     def log_cycle_iteration(self, cycle_name: str, iteration: int, max_iter: int) -> None:
         """サイクルイテレーションイベントを記録。"""

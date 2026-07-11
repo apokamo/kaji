@@ -325,6 +325,51 @@ class TestRunnerStdoutNormalization:
         # prompt.txt も保存される
         assert (attempt / "prompt.txt").exists()
 
+    def test_control_char_in_stdout_verdict_resolves_without_abort(self, tmp_path: Path) -> None:
+        """Issue #298: verdict evidence への生 ESC 混入は step を ABORT に落とさず、
+        run.log に ``verdict_sanitization`` event として永続記録される（生制御文字は
+        run.log のバイト列に含まれない）。"""
+        workflow = _single_step_workflow()
+        output = _verdict_block("PASS", evidence="done\x1bhere")
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            return CLIResult(
+                full_output=output,
+                session_id="sess",
+                cost=CostInfo(usd=0.0),
+                stderr="",
+                exit_code=0,
+                signal=None,
+            )
+
+        with (
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+        ):
+            state = _make_runner(tmp_path, workflow).run()
+
+        assert state.last_completed_step == "implement"
+        run_dir = _run_root(tmp_path)
+
+        attempt = run_dir / "steps" / "implement" / "attempt-001"
+        loaded = load_verdict_yaml(attempt / "verdict.yaml", VALID)
+        assert loaded.status == "PASS"
+        assert loaded.evidence == "done�here"
+
+        failure_events = _events(run_dir, "failure_event")
+        assert not any(e.get("kind") == "verdict_exception" for e in failure_events)
+
+        sanitization_events = _events(run_dir, "verdict_sanitization")
+        assert len(sanitization_events) == 1
+        ev = sanitization_events[0]
+        assert ev["step_id"] == "implement"
+        assert ev["attempt"] == "attempt-001"
+        assert ev["count"] == 1
+        assert ev["findings"] == [{"codepoint": "U+001B", "position": 41}]
+
+        raw_log_bytes = (run_dir / "run.log").read_bytes()
+        assert b"\x1b" not in raw_log_bytes
+
     def test_two_runs_in_same_second_use_distinct_run_dirs(self, tmp_path: Path) -> None:
         """同一秒 base id の 2 run が同じ run.log / steps を共有しない。"""
         workflow = _single_step_workflow()
