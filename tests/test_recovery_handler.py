@@ -22,6 +22,7 @@ from kaji_harness.recovery.handler import RecoveryHandler
 from kaji_harness.recovery.models import (
     RECOVERY_CHAIN_FILE,
     RECOVERY_FILE,
+    RECOVERY_WAIT_SECONDS,
     read_recovery_json,
     write_recovery_chain,
 )
@@ -160,6 +161,7 @@ def _handler(
     *,
     provider: object,
     auto_recover: bool = True,
+    wait_seconds: int = 0,
     sleep=None,
     child_launcher=None,
     stderr: io.StringIO | None = None,
@@ -174,7 +176,7 @@ def _handler(
         workdir=tmp_path,
         provider=provider,  # type: ignore[arg-type]
         auto_recover=auto_recover,
-        wait_seconds=0,
+        wait_seconds=wait_seconds,
         sleep=sleep or (lambda _s: None),
         child_launcher=child_launcher or (lambda _argv, _cwd: 0),
         stderr=stderr or io.StringIO(),
@@ -694,12 +696,15 @@ def test_capacity_auto_recover_true_launches_child_once_with_candidate(tmp_path:
     _seed_state(tmp_path, wt)
     run_dir = _build_capacity_run(tmp_path)
     launched: list[list[str]] = []
+    slept: list[float] = []
     provider = _FakeProvider()
 
     handler = _handler(
         tmp_path,
         run_dir,
         provider=provider,
+        wait_seconds=RECOVERY_WAIT_SECONDS,
+        sleep=slept.append,
         child_launcher=lambda argv, _cwd: (launched.append(argv), 0)[1],
     )
     result = handler.run()
@@ -718,6 +723,8 @@ def test_capacity_auto_recover_true_launches_child_once_with_candidate(tmp_path:
     assert persisted.auto_recovery_attempted is True
     assert persisted.auto_recovery_attempt_no == 1
     assert persisted.resume_scheduled_at is not None
+    # 決定 9（固定 wait）どおり、実際に注入された sleep も厳密に 600 秒であること。
+    assert slept == [600]
     # sensitive gate（`\btoken\b`）が焦点化メッセージには一切現れないため誤発火しない。
     assert "Token usage" not in "\n".join(provider.comments)
 
