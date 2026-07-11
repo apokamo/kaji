@@ -296,13 +296,20 @@ def parse_verdict(
     if max_retries < 1:
         raise ValueError(f"max_retries must be >= 1, got {max_retries}")
 
+    # findings は「採用が確定した候補」の分だけを ``findings_sink`` へ commit する。
+    # 各 Step は local sink で findings を受け、parse+validate が成功した経路でのみ
+    # 共有 sink へ移す。これにより Step 1→2a のように同一 block を複数回 sanitize しても、
+    # 失敗した候補の findings が二重計上されない（Issue #298）。
     # Step 1: Strict Parse
     block = _extract_block_strict(output)
     if block is not None:
+        step1_findings: list[ControlCharFinding] = []
         try:
-            verdict = _parse_yaml_fields(block, findings_sink=findings_sink)
+            verdict = _parse_yaml_fields(block, findings_sink=step1_findings)
             _validate(verdict, valid_statuses)
             logger.debug("Step 1 (strict) succeeded")
+            if findings_sink is not None:
+                findings_sink.extend(step1_findings)
             return verdict
         except InvalidVerdictValue:
             raise
@@ -312,10 +319,13 @@ def parse_verdict(
     # Step 2a: Relaxed delimiter + YAML
     relaxed_block = _extract_block_relaxed(output)
     if relaxed_block is not None:
+        step2a_findings: list[ControlCharFinding] = []
         try:
-            verdict = _parse_yaml_fields(relaxed_block, findings_sink=findings_sink)
+            verdict = _parse_yaml_fields(relaxed_block, findings_sink=step2a_findings)
             _validate(verdict, valid_statuses)
             logger.info("Step 2a (relaxed delimiter) succeeded — strict parse was insufficient")
+            if findings_sink is not None:
+                findings_sink.extend(step2a_findings)
             return verdict
         except InvalidVerdictValue:
             raise
@@ -323,12 +333,19 @@ def parse_verdict(
             logger.debug("Step 2a (relaxed delimiter) failed: %s", e)
 
     # Step 2b: Key-value pattern extraction
+    #
+    # YAML fallback（Step 2b）は正規表現で行末まで抽出するため、生の禁止制御文字が
+    # そのまま Verdict フィールドへ残る。YAML 経路と同様に **sanitize 済み入力** を
+    # 解析し、raw 制御文字が最終 Verdict に残存しないようにする（Issue #298）。
+    step2b_text, step2b_findings = _sanitize_yaml_control_chars(output)
     try:
-        verdict = _parse_relaxed_fields(output, valid_statuses)
+        verdict = _parse_relaxed_fields(step2b_text, valid_statuses)
         _validate(verdict, valid_statuses)
         logger.info(
             "Step 2b (key-value pattern) succeeded — delimiter-based parse was insufficient"
         )
+        if findings_sink is not None:
+            findings_sink.extend(step2b_findings)
         return verdict
     except InvalidVerdictValue:
         raise
@@ -417,12 +434,17 @@ def _parse_formatted_output(
     if formatted.strip() == NO_VERDICT_SENTINEL:
         raise VerdictNotFound("AI formatter reported no verdict block in agent output")
 
+    # parse_verdict と同様、findings は採用が確定した候補の分だけを ``findings_sink``
+    # へ commit する（失敗候補の二重計上を防ぐ。Issue #298）。
     # Try strict
     block = _extract_block_strict(formatted)
     if block is not None:
+        strict_findings: list[ControlCharFinding] = []
         try:
-            verdict = _parse_yaml_fields(block, findings_sink=findings_sink)
+            verdict = _parse_yaml_fields(block, findings_sink=strict_findings)
             _validate(verdict, valid_statuses)
+            if findings_sink is not None:
+                findings_sink.extend(strict_findings)
             return verdict
         except InvalidVerdictValue:
             raise
@@ -432,18 +454,24 @@ def _parse_formatted_output(
     # Try relaxed delimiter
     block = _extract_block_relaxed(formatted)
     if block is not None:
+        relaxed_findings: list[ControlCharFinding] = []
         try:
-            verdict = _parse_yaml_fields(block, findings_sink=findings_sink)
+            verdict = _parse_yaml_fields(block, findings_sink=relaxed_findings)
             _validate(verdict, valid_statuses)
+            if findings_sink is not None:
+                findings_sink.extend(relaxed_findings)
             return verdict
         except InvalidVerdictValue:
             raise
         except (VerdictParseError, VerdictNotFound):
             pass
 
-    # Try key-value patterns
-    verdict = _parse_relaxed_fields(formatted, valid_statuses)
+    # Try key-value patterns（sanitize 済み入力で raw 制御文字の残存を防ぐ。Issue #298）
+    kv_text, kv_findings = _sanitize_yaml_control_chars(formatted)
+    verdict = _parse_relaxed_fields(kv_text, valid_statuses)
     _validate(verdict, valid_statuses)
+    if findings_sink is not None:
+        findings_sink.extend(kv_findings)
     return verdict
 
 

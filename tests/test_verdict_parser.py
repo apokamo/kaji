@@ -1195,6 +1195,66 @@ class TestVerdictWithControlCharsResolvesSemantically:
 
 
 # ============================================================
+# Issue #298: key-value fallback（Step 2b）でも制御文字が残らない
+# ============================================================
+
+
+@pytest.mark.small
+class TestControlCharSurvivesNoFallbackPath:
+    """YAML parse が失敗し key-value fallback（Step 2b）が採用される経路でも、
+    生の禁止制御文字が最終 Verdict に残らず findings が二重計上されないこと。
+
+    再現条件: evidence 値が ``: `` を含み、かつ生 ESC を持つ block。
+    sanitize 後も ``done<FFFD>here: bad`` の ``: `` により YAML parse が失敗し、
+    Step 1/2a を素通りして Step 2b（正規表現抽出）が採用される。
+    """
+
+    # sanitize 後も YAML mapping として不正になる（値中に ": "）+ 生 ESC 混入。
+    _MALFORMED_BLOCK = (
+        "---VERDICT---\n"
+        "status: PASS\n"
+        "reason: ok\n"
+        "evidence: done\x1bhere: bad\n"
+        "suggestion:\n"
+        "---END_VERDICT---"
+    )
+
+    def test_fallback_verdict_has_no_raw_control_char(self) -> None:
+        verdict = parse_verdict(self._MALFORMED_BLOCK, VALID_STATUSES)
+        assert verdict.status == "PASS"
+        # 最終フィールドに raw 制御文字が残らず U+FFFD に正規化されている。
+        assert "\x1b" not in verdict.evidence
+        assert "�" in verdict.evidence
+        assert verdict.evidence == "done�here: bad"
+
+    def test_fallback_findings_not_double_counted(self) -> None:
+        sink: list[ControlCharFinding] = []
+        parse_verdict(self._MALFORMED_BLOCK, VALID_STATUSES, findings_sink=sink)
+        # Step 1/2a の失敗候補を混ぜず、実在の禁止制御文字 1 個だけを計上する。
+        assert len(sink) == 1
+        assert sink[0].codepoint == 0x1B
+        assert sink[0].label == "U+001B"
+
+    def test_finding_count_matches_actual_forbidden_chars(self) -> None:
+        block = (
+            "---VERDICT---\n"
+            "status: PASS\n"
+            "reason: ok\n"
+            "evidence: a\x1bb\x00c: d\n"
+            "suggestion:\n"
+            "---END_VERDICT---"
+        )
+        sink: list[ControlCharFinding] = []
+        verdict = parse_verdict(block, VALID_STATUSES, findings_sink=sink)
+        assert "\x1b" not in verdict.evidence
+        assert "\x00" not in verdict.evidence
+        assert verdict.evidence == "a�b�c: d"
+        # 入力の生禁止制御文字数（ESC + NUL = 2）と finding 数が一致する。
+        assert len(sink) == 2
+        assert [f.codepoint for f in sink] == [0x1B, 0x00]
+
+
+# ============================================================
 # Internal helpers: _build_relaxed_status_patterns
 # ============================================================
 
