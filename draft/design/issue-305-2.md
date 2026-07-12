@@ -369,6 +369,9 @@ tools: [Read, Grep, Glob, Bash, WebFetch, WebSearch]
   （転記と verdict は incident-review の main session が担う）
 - 出力は観点別判定＋指摘事項＋受理可否の**推奨**（`accept` / `needs-fix` / `reject`）まで
 
+出力義務: 報告 markdown の冒頭に**自セッションのモデル ID**（self-reported）を含める
+（§ 4 モデルメタデータの情報源契約。main session がこの申告値を artifact メタデータへ転記する）。
+
 ### 4. モデル分離と縮退メタデータ（#303 決定 B）
 
 - **デフォルト分離**: 提案役 = investigate step（`model: opus`）、査読役 =
@@ -382,6 +385,16 @@ tools: [Read, Grep, Glob, Bash, WebFetch, WebSearch]
   main-session）/ `縮退の有無` を追記する（メタデータセクションのみは review 側の書き込みを
   許可する。調査本文への変更は不可）。縮退時は verdict の evidence にも明記する
   （#303 決定 B「縮退した場合は verdict にその旨を明記」）。
+- **モデル値の情報源**: `prompt.py` の注入コンテキスト変数に agent / model は含まれないため、
+  記録するモデル値の取得元を次のとおり固定する。**主: セッションの自己申告値**
+  （Claude Code が system prompt で提示する実行中モデル ID。`--model` override 後の
+  「実際に選択されたモデル」を反映する）。査読役 subagent にも、報告 markdown に自セッションの
+  モデル ID を含める義務を agent 定義で課し、main session はその申告値を転記する。
+  **従: 設定値**（workflow YAML の `model` / agent frontmatter の `model`）。自己申告を取得
+  できない runtime では設定値を記録する。artifact のメタデータには値とあわせて
+  `情報源: self-reported | configured` を記録し、`configured` の場合は「実選択モデルと
+  一致しない可能性がある宣言値」であることを意味づける。縮退判定（提案役と査読役の
+  モデル同一性）はこの記録値どうしの比較で行う。
 - ハード要件にはしない: モデル同一でも workflow は停止しない（ソフト要件）。
 
 ### 5. 調査 artifact テンプレート `.claude/skills/incident-investigate/artifact-template.md`
@@ -395,6 +408,7 @@ Issue 完了条件「結論 6 値・棄却済み仮説・citation・モデル縮
 ## メタデータ
 - 対象インシデント / 調査対象 run_id 一覧 / 再発回数 N
 - 提案役モデル / 査読役モデル / 査読経路 / モデル縮退: あり・なし（理由）
+- モデル値の情報源: self-reported | configured（§ 方針 4 の取得元契約に従う）
 
 ## 可読サマリ
 （2〜3 文。人間向けの平易な要約）
@@ -469,6 +483,12 @@ Issue 完了条件「結論 6 値・棄却済み仮説・citation・モデル縮
   `.claude/agents/kaji-incident-reviewer.md`、`artifact-template.md` が存在し、
   テンプレートに必須セクション見出し（メタデータ / 可読サマリ / 結論 / 根拠 /
   棄却済み仮説 / 不足証拠）と conclusion 6 値の語彙が含まれること
+- **slash wrapper 契約 invariant**: `/incident-cycle` は incident.yaml から参照されない
+  手動入口のため、workflow 参照ベースの存在検証では欠落を検出できない。
+  `.claude/skills/incident-cycle/SKILL.md` を**明示的にテスト対象へ追加**し、
+  (a) ファイルが存在すること、(b) 起動対象が `.kaji/wf/incident.yaml` であること
+  （本文に起動コマンド文字列が含まれる）、(c) 引数欠落時の ABORT 経路の記述が存在すること、
+  (d) exit code → verdict の縮約契約（0 → PASS / 非 0 → ABORT）の記述が存在することを固定する
 - **禁止語彙 invariant**: テンプレート・agent 定義本文に `risk-accepted` が
   エージェント出力語彙として現れないこと（人間専用語彙。#303 決定 D）
 - 既存 `test_workflow_set_invariants.py` の `EXPECTED_WORKFLOWS` に `incident` を追加
@@ -484,16 +504,42 @@ Issue 完了条件「結論 6 値・棄却済み仮説・citation・モデル縮
 
 ### Large テスト
 
-- **実 LLM での incident.yaml E2E 実行は恒久テストにしない**。根拠: workflow engine の
+- **実 LLM での incident.yaml E2E 実行は恒久（CI）テストにしない**。根拠: workflow engine の
   dispatch / cycle / verdict 解決の E2E は既存テスト（`tests/test_e2e_cli.py` /
   `tests/test_dev_workflow.py` 等）が stub agent で保持しており、incident.yaml は同一 engine を
-  新しい宣言で駆動するのみ（新規結合面なし）。プロンプト資産の質は非決定的で CI の
-  合否判定になじまない。
-- **変更固有検証（一時検証）**: マージ後の初回運用で `/kaji-run-verify` により
-  `kaji run .kaji/wf/incident.yaml <実インシデント>` を手動実行し、成否・詰まりどころを
-  Issue に記録する（同 skill の契約）。検証観点: ①〜⑥手順の実施記録が artifact に残るか /
-  INCONCLUSIVE と PASS の別軸判定が機能するか / 最終提案コメントが処遇メニューを含むか /
-  査読役が書き込み禁止を守るか。
+  新しい宣言で駆動するのみ。プロンプト資産の質は非決定的で CI の合否判定になじまない。
+- ただし skill 間の artifact / comment / verdict 受け渡し・subagent 起動と fallback・
+  report 合流という**結合面は Small の構造 invariant では検証できない**ため、
+  以下の**マージ前の変更固有検証**で担保する（`.claude/skills/kaji-run-verify/SKILL.md` の
+  「workflow 変更後の実機検証」規約に従う）。
+
+#### 変更固有検証（マージ前・PR 作成前に必須）
+
+- **実施時期**: 実装完了（`make check` 通過）後、`/i-dev-final-check` → `/i-pr` に進む**前**。
+  失敗した場合は本 Issue 内で修正してから再検証する（別作業に送らない）。
+- **実施内容**: `/kaji-run-verify` により `kaji run .kaji/wf/incident.yaml <検証対象>` を
+  実行し、workflow が report step まで完走することを確認する。
+- **検証対象の選定（順序）**:
+  1. 実行時点で `incident` ラベルの Issue が存在すればそれを対象とする
+  2. 存在しない場合（2026-07-12 時点で該当。`gh issue list --label incident --state all` は 0 件）、
+     **検証用インシデントを明示的に用意する**: 実障害 run artifact
+     （`.kaji-artifacts/298/runs/260712010554/` 等、#301 の N=3 の実 run。ローカルに現存）を
+     入力に、第1層の純関数（`kaji_harness.recovery` の署名算出＋
+     `render_incident_issue` / `render_occurrence_comment`）を Python ワンライナーで呼んで
+     title / body / occurrence コメントを生成し、`kaji issue create` で起票する。
+     フォーマットの正しさ（identity marker・occurrence marker）は第1層コードが保証し、
+     evidence は実障害ログなので受理基準（実証）の検証にも使える。検証後の処遇
+     （クローズ等）は人間が判断する。
+- **検証観点**（Issue #305 完了条件との対応）: incident.yaml が `kaji run` で起動し完走するか /
+  ①〜⑥手順の実施記録が artifact に残るか / conclusion とレビュー verdict の別軸判定が機能するか
+  （結論が `INCONCLUSIVE` でも記述充足なら PASS になるか、を含む）/ 最終提案コメントが可読サマリ・
+  類似指摘・処遇メニューを含むか / 査読役が書き込み禁止を守り、査読経路とモデルメタデータが
+  artifact に記録されるか。
+- **証跡の記録先**: `/kaji-run-verify` の標準契約では結果は検証対象（インシデント Issue）に
+  記録されるため、それに**加えて #305 へ証跡コメントを投稿する**: 検証対象 Issue 番号 /
+  `kaji run` の run_id（`.kaji-artifacts/<検証対象>/runs/<run_id>/`）/ 各 step の verdict /
+  最終提案コメントへの参照 / 観点別の確認結果。`/i-dev-final-check` はこのコメントを
+  完了条件の証跡として確認する。
 
 ## 影響ドキュメント
 
@@ -523,5 +569,7 @@ Issue 完了条件「結論 6 値・棄却済み仮説・citation・モデル縮
 | workflow set invariant テスト | `tests/workflows/test_workflow_set_invariants.py` | `EXPECTED_WORKFLOWS` 集合検証。incident.yaml 追加時に本テストの更新が必須になる根拠 |
 | branch_prefix fallback | `kaji_harness/providers/_mappings.py` | 「label 不在時の fallback = `chore`」— type ラベルの無いインシデントイシューでも `kaji run` の IssueContext 構築が失敗しない根拠 |
 | テスト規約 | `docs/dev/testing-convention.md` | 恒久テスト不要の 4 条件・変更固有検証の記録義務。本設計のテスト戦略の判断基準 |
+| workflow 実機検証 skill | `.claude/skills/kaji-run-verify/SKILL.md` | workflow 変更後の実機検証を必須とし、結果を Issue に記録する契約。本設計の「変更固有検証（マージ前）」の実施手段と証跡契約の根拠 |
+| 実障害 run artifact | `.kaji-artifacts/298/runs/260712010554/` ほか（#296 / #298 の計 5 run、ローカル現存） | 検証用インシデント起票の素材（#301 の N=3 の実障害）。受理基準（実証）検証の一次情報 |
 | 上流不具合(#301 の真因) | <https://github.com/anthropics/claude-code/issues/59864> | wake 系 tool が print mode で advertise されるが実行 semantics がない。skill 共通規約「foreground ＋明示 timeout」の根拠 |
 
