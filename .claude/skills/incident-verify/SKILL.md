@@ -39,18 +39,28 @@ name: incident-verify
 
 ### Step 1: 指摘と対応の取得
 
+artifact root を解決する（共通ルール参照。以降のパスはこの絶対 root 基準）:
+
 ```bash
+ART="$(kaji config artifacts-dir)"
 kaji issue view [issue_id] --comments
 ```
 
 直近の査読結果コメント（`指摘 N`）と、直近の fix 対応表を突き合わせる。
+
+**さらに、調査 artifact 本体（`$ART/[issue_id]/investigation/report.md`）を必ず再読込する**。
+fix コメントの主張だけで解消判定してはならない。fix が「citation を追加した / conclusion を
+見直した」と報告していても、artifact 本体に実際に反映されているかを本文で確認する
+（未反映のまま report へ進むと stale な報告が最終提案として publish される）。
 
 ### Step 2: 解消確認
 
 指摘 N ごとに「解消 / 未解消 / 反論受理」を判定する。
 
 - **解消**: 修正内容が指摘意図を満たす（追加 citation・再現結果が受理基準を満たす等）。
-- **未解消**: 修正が不十分 / 意図と異なる。
+  **かつ** artifact 本体（`report.md`）に該当修正が実在すること。fix コメントの主張と
+  artifact 本文が食い違う場合は **未解消** とする。
+- **未解消**: 修正が不十分 / 意図と異なる / fix 報告と artifact 本文が不一致。
 - **反論受理**: fix の反論が技術的に妥当（根拠が明確・論理に飛躍なし）→ 指摘取り下げ。
 
 **新規指摘はしない**。確認中に前回指摘以外の問題を見つけた場合は、判定に含めず参考情報として記録する
