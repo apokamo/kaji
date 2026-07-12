@@ -130,6 +130,35 @@ step が cycle に属さない場合（linear step）も誤用としてエラー
 triage は default 有効（`[execution] failure_triage = true`）。証跡を残すだけで destructive な
 操作は行わない。無効化は `--no-failure-triage`。
 
+### 第1層: インシデント検知・集約（Issue #304）
+
+triage コメント投稿の**直後**に、同じ失敗を「識別署名」で照合してインシデントイシューに
+集約する第1層が走る（完全純コード・LLM なし・fail-open）。triage が「1 回の失敗の証跡」を
+残すのに対し、第1層は「同一障害の再発を 1 本のイシューに束ね、回数を自動で数える」層。
+
+- **識別署名** = `(failure_cause, exception_type, 正規化エラー指紋)`。run_id / タイムスタンプ /
+  絶対パス / issue 参照 / 可変 tail（`Last N chars:` 以降）などの occurrence 固有値は正規化で
+  除去し、HTTP status / exit code / errno などの識別的数値は allowlist で保持する。指紋 hash は
+  **redaction 後**のテキストから生成する（secrets を marker 経由で漏らさない）。
+- **照合と起票**（GitHub provider のみ。他 provider はローカル記録のみで起票 no-op）:
+  `incident` ラベルで全件検索し、identity marker を厳格 parse して署名同値を探す。
+  - open 一致 → occurrence コメントを追記（回数 +1）
+  - closed かつ `incident:cause:transient` 一致 → reopen せず occurrence 追記
+  - closed かつ人間 resolve 済み一致 → 新規起票し旧イシューへリンク（リグレッション検知）
+  - 一致なし → `incident` + `incident:investigating` で新規起票し、初回 occurrence コメントを投稿
+- **再発回数**は可変カウンタを持たず、イシュー全コメント中の occurrence marker の
+  **ユニーク `run_id` 件数**から導出する。crash window（remote 投稿成功 → ローカル保存前に中断）で
+  同一 run のコメントが二重投稿されても回数は汚れない（at-least-once + 読み取り時 dedupe）。
+- **transient 即クローズ**: `--auto-recover` の child run が `COMPLETE`（自己回復）し、かつ
+  この run が起票したインシデントなら、`incident:cause:transient` を付与して即クローズする。
+- **fail-open**: 起票・照合の失敗は triage コメント生成・recovery 判断・exit code を一切変えない。
+  失敗しても `<artifacts_dir>/incidents/occurrences.jsonl` にローカル記録が残り、次回の同一署名
+  失敗時に backfill で自然回復する。
+- **無効化**: 第1層は failure triage の内部ステップであり、`--no-failure-triage`
+  （`[execution] failure_triage = false`）で triage ごと無効になる。「全失敗を例外なく記録」は
+  triage が有効な失敗に対する契約。
+- ラベル 2 軸の意味と遷移意図は [incident-labels.md](./incident-labels.md) を参照。
+
 ### 自動再開（opt-in）
 
 自動再開は default 無効（`[execution] auto_recover = false`）。`--auto-recover` で有効にすると、

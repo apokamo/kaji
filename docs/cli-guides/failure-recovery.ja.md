@@ -111,11 +111,16 @@ kaji recover .kaji/wf/dev.yaml 288 --run-id 260710120000
 
 | パス | 内容 |
 |------|------|
-| `runs/<run_id>/recovery.json` | `RecoveryDecision`（`schema_version: 1`）。decision 更新のたびに上書き |
+| `runs/<run_id>/recovery.json` | `RecoveryDecision`（`schema_version: 1`）。decision 更新のたびに上書き。第1層の `incident_ref` / `incident_action` / `incident_transient_closed` を含む（Issue #304） |
 | `runs/<run_id>/recovery-chain.json` | `{root_run_id, parent_run_id}`。recovery child run が起動直後に書く |
-| `runs/<run_id>/run.log` | `failure_event` / `recovery_decision` / `recovery_scheduled` / `recovery_attempt_start` / `recovery_attempt_end` |
-| Issue コメント | 機械生成 triage report（child 起動前）と、自動再開した場合の結果報告 follow-up。kaji-verdict マーカーは付けない（step verdict ではないため） |
+| `runs/<run_id>/run.log` | `failure_event` / `recovery_decision` / `recovery_scheduled` / `recovery_attempt_start` / `recovery_attempt_end` / `incident_recorded` / `incident_recording_failed` |
+| `incidents/occurrences.jsonl` | 第1層のローカル occurrence 記録（`<artifacts_dir>` 直下・append-only）。全 provider・全失敗で必ず 1 行追記。GitHub 起票の成否と無関係（fail-open の受け皿・backfill 元） |
+| Issue コメント | 機械生成 triage report（child 起動前）と、自動再開した場合の結果報告 follow-up。第1層のインシデントイシュー本文 / occurrence コメント。kaji-verdict マーカーは付けない（step verdict ではないため） |
 | stderr | 既存の終端表示の直後に出る `--- failure triage ---` の数行サマリ |
+
+第1層（インシデント検知・集約）の詳細は [workflow guide](../dev/workflow_guide.md) § 第1層 と
+[incident-labels.md](../dev/incident-labels.md) を参照。`incidents/occurrences.jsonl` は triage が
+有効な失敗に対して必ず生成され、GitHub provider では加えてインシデントイシューへ集約される。
 
 stderr サマリの `comment:` 行は `Comment.ref` をそのまま表示する。GitHub provider では作成コメント
 URL、local provider では comment file の repo-root 相対パス、取得不能時は `n/a`。
