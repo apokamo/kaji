@@ -6,6 +6,67 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-07-13
+
+This release adds two-layer incident management, automated workflow failure
+triage and one-shot recovery, and explicit recovery from exhausted workflow
+cycles. It also improves provider-error handling, run artifact isolation, and
+Codex tool-result readability.
+
+### Added
+
+- Incident detection and aggregation based on redacted failure signatures.
+  New incidents open GitHub Issues, recurring occurrences append comments, and
+  transient incidents can be closed automatically; local fail-open occurrence
+  records and an incident label taxonomy are included (#304).
+- A second-layer incident investigation workflow with investigate, review, fix,
+  verify, and report stages, structured evidence artifacts, and a convergent
+  review cycle (#305).
+- Workflow failure triage for ERROR and eligible ABORT outcomes, including
+  structured reports, recovery-chain budgeting, Issue comments, and an optional
+  one-shot automatic resume after transient failures (#288).
+- `kaji run --reset-cycle`, used with `--from <step>`, as the supported way to
+  reset an exhausted target cycle before resuming a workflow (#189).
+- `kaji config artifacts-dir` so incident workflows resolve their shared
+  artifact root from the main worktree instead of the current feature worktree
+  (#305).
+
+### Fixed
+
+- Treat model-capacity errors embedded in interactive-terminal transcripts as
+  transient recovery candidates while preserving authentication and permission
+  markers for the sensitive-failure safety gate (#296).
+- Normalize YAML-forbidden control characters at the verdict parsing boundary,
+  record sanitization findings without leaking raw control characters, and
+  persist sanitized verdict artifacts (#298).
+- Decode doubly encoded Unicode escapes in Codex MCP tool results for human
+  readable console output while retaining raw logs and safely handling control
+  characters and lone surrogates (#137).
+- Allocate unique, second-resolution run directories with deterministic numeric
+  suffixes, preventing rapid reruns from sharing logs and artifacts (#292).
+- Retry Claude Extended Thinking block-mutation responses through the existing
+  transient CLI retry path (#213).
+- Resolve recovery child workflow paths before changing working directory,
+  enforce provider requirements during recovery, and strengthen recovery budget
+  and state validation (#288).
+
+### Docs
+
+- Added incident operations, failure recovery, cycle-reset, logging, workflow,
+  and configuration guidance together with the corresponding design records
+  (#137, #189, #288, #296, #298, #304, #305).
+- Added the `epic` metadata label and documented handling for Epic parent Issues
+  (#287).
+
+### Internal
+
+- Expanded `cli_main` characterization coverage and added a reproducible patch
+  target inventory ahead of its planned decomposition (#282).
+- Updated Codex workflow model assignments and tuned implement / fix-code
+  timeouts for thorough workflows.
+- Removed redundant verdict injection from fix steps that already use Issue
+  comment fallback.
+
 ## [0.13.0] - 2026-07-09
 
 This release publishes kaji as an installable PyPI package, adds the Trusted
