@@ -1,0 +1,66 @@
+name: incident
+description: |
+  第2層: インシデント原因調査・対応策提案のレビュー収束サイクル（手動起動）。
+  第1層（インシデント検知・集約）が起票したインシデントイシューを入力とする。
+  調査 → 査読 → 修正 → 確認 → 最終提案を回し、暫定原因分析・対応策・分類・統合提案を出力する。
+  全終端は「提案」であり、ラベル遷移・クローズ・バグイシュー化・統合の実行は人間が行う。
+execution_policy: auto
+requires_provider: github        # v1 は第1層と同じく GitHub provider のみ
+default_timeout: 3600            # 再現実験を含むため標準より長め
+
+cycles:
+  incident-review:
+    entry: review
+    loop: [fix, verify]
+    max_iterations: 3
+    on_exhaust: ABORT
+
+steps:
+  - id: investigate              # 提案役（調査）
+    skill: incident-investigate
+    agent: claude
+    model: opus                  # 調査は最難度の認知タスク（#301 の実績）
+    effort: high
+    on:
+      PASS: review
+      ABORT: end
+
+  - id: review                   # 査読（実行型査読役 subagent を起動）
+    skill: incident-review
+    agent: claude
+    model: sonnet                # 提案役 opus と分離（#303 決定 B）
+    effort: high
+    on:
+      PASS: report
+      RETRY: fix
+      ABORT: end
+
+  - id: fix                      # 指摘対応（調査セッションを継続）
+    skill: incident-fix
+    agent: claude
+    model: opus
+    effort: medium
+    resume: investigate
+    inject_verdict: true
+    on:
+      PASS: verify
+      ABORT: end
+
+  - id: verify                   # 確認（新規指摘なし）
+    skill: incident-verify
+    agent: claude
+    model: sonnet
+    effort: medium
+    on:
+      PASS: report
+      RETRY: fix
+      ABORT: end
+
+  - id: report                   # 最終提案コメントの投稿
+    skill: incident-report
+    agent: claude
+    model: sonnet
+    effort: medium
+    on:
+      PASS: end
+      ABORT: end

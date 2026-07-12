@@ -6,7 +6,8 @@
 ## 通常運用 workflow（5 本）
 
 通常運用で使う workflow は GitHub provider 3 本 + local provider 緊急 fallback 2 本の
-計 5 本に固定する。
+計 5 本に固定する。failure triage 第2層の `incident.yaml`（手動起動・調査専用。§ 第2層: 調査・提案）は
+通常運用の 5 本には含めない別系統の workflow。
 
 | ファイル | provider | 用途 |
 |----------|----------|------|
@@ -45,6 +46,7 @@
 | `docs.yaml` | `github` | `issue-close` | forge 必須。docs-only |
 | `dev-local.yaml` | `local` | `issue-close` | local merge (`--no-ff`) 前提。GitHub 前提 step を持たない |
 | `docs-local.yaml` | `local` | `issue-close` | docs-only / local。GitHub 前提 step を持たない |
+| `incident.yaml` | `github` | `report` | 通常運用ではない failure triage 第2層（手動起動）。調査 → 査読 → 修正 → 確認 → 最終提案。終端は「提案」で close step を持たない（§ 第2層: 調査・提案） |
 
 custom workflow への `requires_provider` 追加は推奨（[workflow-authoring.md](workflow-authoring.md)
 § `requires_provider` 参照）。
@@ -158,6 +160,32 @@ triage コメント投稿の**直後**に、同じ失敗を「識別署名」で
   （`[execution] failure_triage = false`）で triage ごと無効になる。「全失敗を例外なく記録」は
   triage が有効な失敗に対する契約。
 - ラベル 2 軸の意味と遷移意図は [incident-labels.md](./incident-labels.md) を参照。
+
+### 第2層: 調査・提案（Issue #305）
+
+第1層が起票したインシデントイシューを入力に、**原因調査 → 査読 → 修正 → 確認 → 最終提案**の
+レビュー収束サイクルを回す第2層。第1層が完全純コード（LLM なし）なのに対し、第2層は LLM の付加価値
+（可読サマリ・意味的類似の指摘・統合提案）を担う。**手動起動・人間ゲート**であり、自動起動・自動昇格は
+しない（EPIC #303「自動化への移行条件」が未解消のため）。
+
+- **起動**: `/incident-cycle <incident_issue_id>`（slash wrapper）または
+  `kaji run .kaji/wf/incident.yaml <incident_issue_id>`。`requires_provider: github`。
+- **workflow**: `.kaji/wf/incident.yaml`。step 構成は investigate（調査・提案役 opus）→
+  review（実行型査読役 subagent。提案役と別モデル sonnet）→ cycle `incident-review`
+  （`loop: [fix, verify]` / `max_iterations: 3` / `on_exhaust: ABORT`）→ report（最終提案）。
+- **調査結論とレビュー verdict は別軸**（#303 決定 D）: 調査結論は
+  `internal-bug` / `upstream` / `environment` / `transient` / `duplicate` / `INCONCLUSIVE` の 6 値。
+  レビュー verdict（`PASS` / `RETRY` / `ABORT`）は調査品質のみを判定する。証拠不足のときは無理な断定を
+  せず `INCONCLUSIVE`（棄却済み仮説＋不足証拠）を返し、記述が十分ならレビュー verdict は PASS になり得る。
+- **受理基準は実証**（#303 決定 A）: 断定には実再現または実障害ログの引用（citation）が必須。
+  査読役は反証義務＋一次情報の独立検証（ログ再読・再現の再実行・独立検索）を課され、`gh` 書き込み系・
+  push・issue 操作は指示レベルで禁止される（機械的強制はスコープ外）。
+- **全終端は「提案」**: ラベル遷移・クローズ・バグイシュー化・統合の**実行は人間**。conclusion →
+  推奨ラベル・後続アクションの処遇メニューは [incident-labels.md](./incident-labels.md) § 調査フローと処遇判断（第2層）を参照。
+- **cycle exhaust からの復旧**: 査読 cycle が `max_iterations`（3）到達で ABORT した場合は、人間が
+  artifact を確認してから `kaji run .kaji/wf/incident.yaml <id> --from review --reset-cycle` で再開する。
+- skill 群: `incident-investigate` / `incident-review` / `incident-fix` / `incident-verify` /
+  `incident-report` / `incident-cycle`、実行型査読役 agent `kaji-incident-reviewer`。
 
 ### 自動再開（opt-in）
 

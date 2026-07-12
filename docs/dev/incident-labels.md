@@ -63,6 +63,36 @@ status 軸・classification 軸の遷移順序（例: investigating → mitigate
 **機械的に強制しない**。第1層は初期状態と transient 自動クローズだけを担い、以降の運用判断
 （原因分類・緩和・解決の宣言）は人間と第2層（調査・提案。Issue #305）に委ねる。
 
+## 調査フローと処遇判断（第2層・Issue #305）
+
+第2層（インシデント原因調査・対応策提案。手動起動）は、第1層が起票したインシデントイシューを入力に
+**調査 → 査読 → 修正 → 確認 → 最終提案**のレビュー収束サイクルを回す。詳細は
+[workflow_guide.md](./workflow_guide.md) § 第2層: 調査・提案。
+
+- **起動**: `/incident-cycle <incident_issue_id>`（手動のみ）。
+- **出力**: 調査結論（conclusion）＋対応策＋処遇メニューを含む最終提案コメント。**ラベル遷移・
+  クローズ・バグイシュー化・統合の実行は行わない**（すべて人間の処遇判断）。
+- **調査結論とレビュー verdict は別軸**（EPIC #303 決定 D）: 証拠不足のときは `INCONCLUSIVE`
+  （棄却済み仮説＋不足証拠）を返し、記述が十分ならレビュー品質としては PASS になり得る。
+
+### conclusion → 推奨ラベル・後続アクション（処遇メニュー）
+
+最終提案コメントが提示する対応表。**実行はすべて人間**。第2層はラベルに触れない。
+
+| 調査結論（conclusion） | 推奨 classification ラベル | status 軸の目安 | 後続アクション（人間が実行） |
+|------------------------|----------------------------|-----------------|------------------------------|
+| `internal-bug` | `incident:cause:internal` | `incident:mitigated` → `incident:resolved` | バグイシュー化ドラフトの起票、緩和策 / 恒久対策の判断 |
+| `upstream` | `incident:cause:upstream` | `incident:mitigated` 等 | 上流 issue への報告 / watch、回避策の適用 |
+| `environment` | `incident:cause:environment` | `incident:mitigated` 等 | 実行環境の修正、運用手順の更新 |
+| `transient` | `incident:cause:transient`（第1層が自動付与済みの場合あり） | closed 維持が多い | 再発頻度を監視し、頻発なら昇格判断 |
+| `duplicate` | 統合先に準ずる | 統合先に集約 | 統合先イシューへの集約（実行は人間） |
+| `INCONCLUSIVE` | 付与しない | `incident:investigating` 維持 | 不足証拠を収集後に再調査 |
+
+- `incident:cause:*` の付与、`incident:mitigated` / `incident:resolved` への遷移は、第2層の提案を
+  受けて**人間が付与する**（第1層の transient 自動付与を除く）。第2層はラベルを自動で操作しない。
+- `risk-accepted` は人間専用の処遇語彙であり、第2層エージェントの出力（conclusion / 提案文面）には
+  現れない。リスク受容の宣言は人間が行う。
+
 ## 関連ドキュメント
 
 - [labels.md](./labels.md) — GitHub ラベル全体の運用ガイド

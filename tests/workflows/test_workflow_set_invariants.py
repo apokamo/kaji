@@ -26,6 +26,7 @@ EXPECTED_WORKFLOWS = {
     "docs-fable",
     "docs-local",
     "docs-thorough-codex",
+    "incident",
 }
 
 

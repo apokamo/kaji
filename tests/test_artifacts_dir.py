@@ -8,7 +8,9 @@ feature worktree 配下から ``kaji run`` しても artifacts/log が
 
 from __future__ import annotations
 
+import io
 import subprocess
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -274,3 +276,78 @@ class TestFallbackPaths:
         cfg = _make_config(repo_root=repo_root, provider=None)
         result = resolve_artifacts_dir(cfg)
         assert result == repo_root / ".kaji-artifacts"
+
+
+# ============================================================
+# Issue #305: `kaji config artifacts-dir` — incident-* skill 群が
+# feature worktree の cwd に依存せず main 集約の artifact root を取得する経路を固定する。
+# ============================================================
+
+
+def _run_cli(argv: list[str]) -> tuple[int, str, str]:
+    """Invoke ``cli_main.main`` and capture stdout/stderr/exit code."""
+    out = io.StringIO()
+    err = io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        try:
+            rc = cli_main.main(argv)
+        except SystemExit as e:  # argparse may raise SystemExit
+            rc = int(e.code) if isinstance(e.code, int) else 1
+    return rc, out.getvalue(), err.getvalue()
+
+
+@pytest.mark.medium
+class TestConfigArtifactsDirCommand:
+    """`kaji config artifacts-dir` の read-only 契約を固定する回帰テスト。"""
+
+    def test_feature_worktree_prints_main_artifacts_dir(
+        self, bare_with_two_worktrees: tuple[Path, Path, Path]
+    ) -> None:
+        """回帰: feature worktree から呼んでも main 集約の絶対 root を stdout に返す。
+
+        incident-* skill は feature worktree（例 `kaji-feat-305`）の cwd から起動され得る。
+        そこには `.kaji-artifacts` が存在しないため、cwd 相対参照では source run / 台帳 /
+        調査 report に到達できない。本コマンドが `kaji run` と同一の `resolve_artifacts_dir()`
+        を経由して main worktree 基準の絶対パスを返すことで、この不整合を解消する。
+        """
+        _bare, main_wt, feat_wt = bare_with_two_worktrees
+        _seed_kaji_config(main_wt)
+        _seed_kaji_config(feat_wt)
+
+        rc, stdout, stderr = _run_cli(["config", "artifacts-dir", "--workdir", str(feat_wt)])
+        assert rc == 0, stderr
+        assert stdout == f"{main_wt.resolve() / '.kaji-artifacts'}\n"
+        assert stderr == ""
+        # cwd 相対では feature worktree 配下を指してしまうことの明示（回帰の核心）。
+        assert stdout.strip() != str(feat_wt / ".kaji-artifacts")
+
+    def test_absolute_artifacts_dir_returned_as_is(self, tmp_path: Path) -> None:
+        """絶対 `artifacts_dir` は worktree 解決を経ずそのまま出力される。"""
+        abs_dir = tmp_path / "abs-artifacts"
+        cfg_dir = tmp_path / ".kaji"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "config.toml").write_text(
+            "[paths]\n"
+            'skill_dir = ".claude/skills"\n'
+            f'artifacts_dir = "{abs_dir}"\n\n'
+            "[execution]\ndefault_timeout = 1800\n\n"
+            '[provider]\ntype = "github"\n\n'
+            "[provider.github]\n"
+            'repo = "owner/name"\n'
+        )
+        rc, stdout, stderr = _run_cli(["config", "artifacts-dir", "--workdir", str(tmp_path)])
+        assert rc == 0, stderr
+        assert stdout == f"{abs_dir}\n"
+
+    def test_missing_config_exits_2(self, tmp_path: Path) -> None:
+        rc, stdout, stderr = _run_cli(["config", "artifacts-dir", "--workdir", str(tmp_path)])
+        assert rc == 2
+        assert stdout == ""
+        assert "Error:" in stderr
+
+    def test_invalid_workdir_exits_2(self, tmp_path: Path) -> None:
+        bogus = tmp_path / "does-not-exist"
+        rc, stdout, stderr = _run_cli(["config", "artifacts-dir", "--workdir", str(bogus)])
+        assert rc == 2
+        assert stdout == ""
+        assert "is not a valid directory" in stderr
