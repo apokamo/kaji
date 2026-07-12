@@ -44,7 +44,6 @@ steps:
     skill: i-doc-fix
     agent: claude
     model: opus
-    inject_verdict: true
     resume: doc-update
     on:
       PASS: doc-verify

@@ -41,7 +41,6 @@ steps:
     model: opus
     effort: medium
     resume: investigate
-    inject_verdict: true
     on:
       PASS: verify
       ABORT: end

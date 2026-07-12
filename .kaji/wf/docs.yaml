@@ -49,7 +49,6 @@ steps:
     agent: claude
     model: opus
     effort: medium
-    inject_verdict: true
     on:
       PASS: review-ready
       ABORT: end
@@ -87,7 +86,6 @@ steps:
     agent: claude
     model: opus
     effort: medium
-    inject_verdict: true
     resume: doc-update
     on:
       PASS: doc-verify
@@ -148,7 +146,6 @@ steps:
     agent: claude
     model: opus
     effort: medium
-    inject_verdict: true
     on:
       PASS: pr-verify
       ABORT: end
