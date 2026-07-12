@@ -32,6 +32,12 @@ name: incident-fix
 
 ### Step 1: 指摘の抽出
 
+artifact root を解決する（共通ルール参照。以降のパスはこの絶対 root 基準）:
+
+```bash
+ART="$(kaji config artifacts-dir)"
+```
+
 直近の査読 RETRY コメント（verdict マーカー `step=review` または `step=verify` の最新）から
 指摘リスト（`指摘 N`）を抽出する:
 
@@ -47,7 +53,7 @@ kaji issue view [issue_id] --comments
   棄却仮説・不足証拠の補強、conclusion の見直し。使い捨て検証環境を使う場合は調査後に破棄する。
 - **技術的根拠を示した反論**: 指摘が不当と判断する場合、根拠（citation / 再現結果）を添えて反論する。
 
-調査 artifact（`.kaji-artifacts/[issue_id]/investigation/report.md`）を更新する。**新しい調査論点の
+調査 artifact（`$ART/[issue_id]/investigation/report.md`）を更新する。**新しい調査論点の
 追加（scope 拡大）はしない**。
 
 ### Step 3: 対応表のコメント投稿

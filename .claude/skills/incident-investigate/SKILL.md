@@ -6,7 +6,7 @@ name: incident-investigate
 # Incident Investigate（調査・提案役）
 
 第1層（#304）が起票したインシデントイシューを入力に、原因を調査し、調査 artifact
-（`.kaji-artifacts/<incident_issue_id>/investigation/report.md`）を作成して全文をコメント投稿する。
+（`<artifact_root>/<incident_issue_id>/investigation/report.md`）を作成して全文をコメント投稿する。
 
 > **結論を断定できないことは失敗ではない。** 証拠が不足するときは無理に断定せず、`INCONCLUSIVE`
 > を選び、棄却済み仮説・不足証拠・再現の記録を充足させること。**調査結論（conclusion）と
@@ -41,13 +41,23 @@ $ARGUMENTS = <incident_issue_id>
 - **`worktree_dir` を参照しない**: インシデントイシューには `type:*` ラベルも worktree も無く、
   注入される `worktree_dir` は実在しないパスを指す。作業場所は main repo（読み取り）＋調査 artifact
   ディレクトリ（書き込み）＋使い捨て検証環境に限定する。
+- **artifact root は main worktree 基準で一意に解決する**（Issue #305）: `kaji run` は
+  `resolve_artifacts_dir()` により run/state artifact を **main worktree の `.kaji-artifacts`** へ
+  集約する。skill が feature worktree（例 `kaji-feat-305`）の cwd から起動されると、そこには
+  `.kaji-artifacts` が存在しない。したがって **cwd 相対の `.kaji-artifacts` を参照してはならない**。
+  各 skill は最初に絶対 root を解決し、source run・台帳・investigation report の全読み書きに同じ
+  root を用いる:
+  ```bash
+  ART="$(kaji config artifacts-dir)"   # main worktree 基準の絶対パス（副作用なし）
+  ```
+  以降、本ドキュメントの `<artifact_root>` は `$ART` を指す。
 - **verdict 3 経路**: 作業報告コメント末尾 → stdout → artifact `verdict.yaml`。コメントには
   `kaji issue comment <id> --verdict-step <step> --verdict-status <STATUS>` を無条件付与する。
 - **長時間コマンドは foreground ＋明示 timeout** で待ち切る。background 実行・wake 系 tool に依存しない
   （#301 の上流不具合 [anthropics/claude-code#59864](https://github.com/anthropics/claude-code/issues/59864) を踏まないため）。
 - **副作用の禁止**（全終端は「提案」。#303 決定 D）: ラベル付与・除去、イシューのクローズ / reopen、
   バグイシューの起票、統合の実行、コード変更・commit・push・PR 作成を**行わない**。
-- **ログの sanitize**: `.kaji-artifacts/<issue>/runs/<run_id>/run.log` は生ログである。コメント /
+- **ログの sanitize**: `<artifact_root>/<issue>/runs/<run_id>/run.log` は生ログである。コメント /
   artifact に引用する際はトークン・資格情報・秘匿 URL を既存 `sanitize_evidence` と同方針でマスクする。
 - **auto-close hazard 回避**: `docs/dev/shared_skill_rules.md` § auto close keyword 回避規約に従う。
 
@@ -66,13 +76,17 @@ kaji issue view [issue_id] --json labels,body
 
 ### Step 1: 入力の読み込み
 
+0. artifact root を解決する（共通ルール参照。以降のパスはこの絶対 root 基準）:
+   ```bash
+   ART="$(kaji config artifacts-dir)"
+   ```
 1. インシデントイシュー本文・全コメント（occurrence marker 群）を読む:
    ```bash
    kaji issue view [issue_id] --comments
    ```
 2. occurrence marker から調査対象 run_id 一覧と再発回数 N（ユニーク `run_id` 件数）を導出する。
-3. ローカル run artifact（`.kaji-artifacts/<source_issue>/runs/<run_id>/` の
-   `run.log` / `result.json` / `steps/`）と台帳 `.kaji-artifacts/incidents/occurrences.jsonl` を読む。
+3. ローカル run artifact（`$ART/<source_issue>/runs/<run_id>/` の
+   `run.log` / `result.json` / `steps/`）と台帳 `$ART/incidents/occurrences.jsonl` を読む。
 
 ### Step 2: 調査手順①〜⑥の実施（#301 の実施記録が素材）
 
@@ -91,7 +105,7 @@ kaji issue view [issue_id] --json labels,body
 ### Step 3: 調査 artifact の作成
 
 `.claude/skills/incident-investigate/artifact-template.md` をテンプレートとして、
-`.kaji-artifacts/[issue_id]/investigation/report.md` を作成する。必須セクション:
+`$ART/[issue_id]/investigation/report.md` を作成する（親ディレクトリは `mkdir -p` で用意）。必須セクション:
 
 - メタデータ（対象 / run_id 一覧 / N / 提案役モデル / モデル値の情報源）
 - 可読サマリ / 結論（conclusion 6 値） / 根拠（citation） / 調査手順の実施記録①〜⑥ /
@@ -116,7 +130,7 @@ override 後の実選択モデルを反映）、**従: 設定値**（workflow YA
 ```bash
 kaji issue comment [issue_id] --commit \
   --verdict-step investigate --verdict-status <STATUS> \
-  --body-file .kaji-artifacts/[issue_id]/investigation/report.md
+  --body-file "$ART/[issue_id]/investigation/report.md"
 ```
 
 ## Verdict 出力

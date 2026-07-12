@@ -44,13 +44,19 @@ auto-close hazard 回避）。
 
 ### Step 0: 前提ガード
 
-調査 artifact（`.kaji-artifacts/[issue_id]/investigation/report.md`）と直近の調査報告コメントが
+artifact root を解決する（共通ルール参照。以降のパスはこの絶対 root 基準）:
+
+```bash
+ART="$(kaji config artifacts-dir)"
+```
+
+調査 artifact（`$ART/[issue_id]/investigation/report.md`）と直近の調査報告コメントが
 存在することを確認する。対象が非インシデント（`incident` ラベルなし / identity marker なし）と判明した
 場合は ABORT。
 
 ### Step 1: 入力の収集
 
-1. 調査 artifact 全文・インシデントイシュー本文・直近の調査報告コメントを読む。
+1. 調査 artifact 全文（`$ART/[issue_id]/investigation/report.md`）・インシデントイシュー本文・直近の調査報告コメントを読む。
 2. artifact のメタデータから調査対象 run_id 一覧・提案役モデルを取得する。
 
 ### Step 2: 使い捨て検証環境の準備

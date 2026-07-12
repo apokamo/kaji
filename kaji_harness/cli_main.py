@@ -144,6 +144,20 @@ def _register_config(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         default=Path.cwd(),
         help="Starting directory for config discovery (default: current directory)",
     )
+    # Issue #305: incident-* skill 群が main worktree 基準の artifact root を
+    # 副作用なく取得するための read-only エントリ。`kaji run` と同じ
+    # `resolve_artifacts_dir()` を経由するため、feature worktree から呼んでも
+    # main worktree に集約された run/state artifact の絶対パスを返す。
+    ad = config_subs.add_parser(
+        "artifacts-dir",
+        help="Print resolved artifacts dir (main-worktree-based absolute path)",
+    )
+    ad.add_argument(
+        "--workdir",
+        type=Path,
+        default=Path.cwd(),
+        help="Starting directory for config discovery (default: current directory)",
+    )
 
 
 def _register_run(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -2230,6 +2244,35 @@ def cmd_config_provider_type(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_config_artifacts_dir(args: argparse.Namespace) -> int:
+    """Print the resolved artifacts dir (main-worktree-based) to stdout.
+
+    Issue #305 で導入。incident-* skill 群が feature worktree の cwd に依存せず、
+    ``kaji run`` が run/state を書き込む同一の絶対 artifact root を副作用なく
+    取得するための read-only エントリ。``resolve_artifacts_dir(config)`` を
+    共有するため、``cmd_run`` と同じ解決契約（相対 ``artifacts_dir`` を main
+    worktree 基準へ解決、絶対パスはそのまま）に従う。
+
+    Exit codes:
+        0: 解決成功（stdout に絶対パス + ``"\\n"``）
+        2: config 不在 or 不正（stderr に診断メッセージ）
+    """
+    start_dir = args.workdir.resolve()
+    if not start_dir.is_dir():
+        print(
+            f"Error: --workdir '{args.workdir}' is not a valid directory",
+            file=sys.stderr,
+        )
+        return EXIT_INVALID_INPUT
+    try:
+        config = KajiConfig.discover(start_dir=start_dir)
+    except (ConfigNotFoundError, ConfigLoadError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    sys.stdout.write(f"{resolve_artifacts_dir(config)}\n")
+    return EXIT_OK
+
+
 def cmd_sync_from_github(args: argparse.Namespace) -> int:
     """``kaji sync from-github`` の dispatcher。
 
@@ -2354,6 +2397,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "config":
         if args.config_command == "provider-type":
             return cmd_config_provider_type(args)
+        if args.config_command == "artifacts-dir":
+            return cmd_config_artifacts_dir(args)
         parser.print_help()
         return EXIT_ABORT
     if args.command == "sync":

@@ -31,7 +31,13 @@ review PASS（初回受理）と verify PASS（修正後受理）の 2 経路が
 
 ### Step 1: 調査 artifact の読み込み
 
-`.kaji-artifacts/[issue_id]/investigation/report.md`（収束済み）を正本として読み込む。
+artifact root を解決する（共通ルール参照）:
+
+```bash
+ART="$(kaji config artifacts-dir)"
+```
+
+`$ART/[issue_id]/investigation/report.md`（収束済み）を正本として読み込む。
 
 ### Step 2: 最終提案コメントの構成
 
