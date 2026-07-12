@@ -1,0 +1,1 @@
+GitHubProviderError: gh failed (exit 1): HTTP 429: API rate limit exceeded (https://api.github.com/repos/owner/name/issues) at 2026-07-12T02:05:00+09:00 run 260712020500

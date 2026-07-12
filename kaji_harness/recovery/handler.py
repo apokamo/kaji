@@ -31,7 +31,22 @@ from typing import IO, TYPE_CHECKING
 
 from ..logger import RunLogger
 from ..models import Workflow
+from ..providers.base import IncidentSearchCapable
 from .classify import classify_failure
+from .incident import (
+    INCIDENT_CAUSE_TRANSIENT,
+    INCIDENT_LABEL,
+    INCIDENT_STATUS_INVESTIGATING,
+    OCCURRENCE_SCHEMA_VERSION,
+    IncidentContext,
+    OccurrenceRecord,
+    append_occurrence,
+    compute_fuzzy_candidates,
+    execute_incident_action,
+    parse_candidates,
+    plan_incident_action,
+    read_occurrences,
+)
 from .models import (
     NON_RESUMABLE_STEPS,
     RECOVERY_BUDGET,
@@ -48,7 +63,9 @@ from .report import (
     render_stderr_summary,
     render_triage_comment,
     sanitize_evidence,
+    truncate,
 )
+from .signature import compute_signature
 from .snapshot import FailureSnapshot, collect_snapshot, find_child_run_id, list_newer_run_ids
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -340,6 +357,11 @@ class RecoveryHandler:
 
         decision = self._post_triage_comment(decision)
         self._record(decision)
+
+        # Issue #304 第1層: triage コメント投稿後に incident 記録を行う（fail-open）。
+        decision = self._record_incident(decision, snapshot, classification)
+        self._record(decision)
+
         self.stderr.write(render_stderr_summary(decision))
 
         if decision.decision != "resume":
@@ -429,6 +451,114 @@ class RecoveryHandler:
             )
         return replace(decision, triage_comment_ref=comment.ref or None)
 
+    # --- incident 検知・集約（Issue #304 第1層） ---
+
+    def _record_incident(
+        self,
+        decision: RecoveryDecision,
+        snapshot: FailureSnapshot,
+        classification: FailureClassification,
+    ) -> RecoveryDecision:
+        """識別署名で照合し、新規起票 / 再発追記を行う（fail-open）。
+
+        いかなる例外も外へ漏らさない。失敗時は ``incident_recording_failed`` を run.log に
+        記録し、stderr WARNING を出して triage / recovery 判断をそのまま続行する。ローカル
+        occurrence 記録は全 provider・全失敗で必ず append する（GitHub 起票の成否と無関係）。
+        """
+        try:
+            # 再入ガード: 過去の handler 実行で既に incident を記録済みならスキップする
+            # （remote への二重投稿を避ける。``triage_comment_ref`` と同型のローカルガード）。
+            # 新規 plan の decision は incident 系フィールドが None のため、そのまま返すと直後の
+            # ``_record`` が recovery.json を上書きしガードを消す。過去値を復元して保持する。
+            if snapshot.prior_incident_ref is not None:
+                return replace(
+                    decision,
+                    incident_ref=snapshot.prior_incident_ref,
+                    incident_action=snapshot.prior_incident_action,
+                )
+
+            signature = compute_signature(snapshot, classification)
+            record = OccurrenceRecord(
+                schema_version=OCCURRENCE_SCHEMA_VERSION,
+                signature=signature,
+                run_id=snapshot.run_id,
+                source_issue=self.issue_id,
+                failed_step=snapshot.failed_step or "",
+                workflow_path=str(self.workflow_path),
+                recorded_at=datetime.now(UTC).isoformat(),
+            )
+            append_occurrence(self.artifacts_dir, record)  # 常に実行
+
+            # v1 は GitHub provider のみ remote 起票・追記に進む。それ以外はローカル記録のみ。
+            if not isinstance(self.provider, IncidentSearchCapable) or getattr(
+                self.provider, "is_readonly", False
+            ):
+                return decision
+
+            candidates = parse_candidates(
+                self.provider.search_issues_all(labels=[INCIDENT_LABEL], state="all")
+            )
+            action = plan_incident_action(signature, candidates)
+            fuzzy = compute_fuzzy_candidates(signature, candidates)
+            existing = (
+                self.provider.list_issue_comments_all(action.target_id)
+                if action.kind == "recur" and action.target_id is not None
+                else []
+            )
+            ctx = IncidentContext(
+                signature=signature,
+                run_id=snapshot.run_id,
+                source_issue=self.issue_id,
+                source_issue_ref=self.issue_ref,
+                failed_step=snapshot.failed_step or "",
+                workflow_path=str(self.workflow_path),
+                evidence=snapshot.evidence,
+                error_excerpt=truncate(snapshot.attempt_error or snapshot.workflow_end_error or ""),
+                fuzzy=tuple(fuzzy),
+            )
+            outcome = execute_incident_action(
+                self.provider,
+                action=action,
+                ctx=ctx,
+                local_records=read_occurrences(self.artifacts_dir),
+                existing_comments=existing,
+            )
+            self._run_logger.log_incident_recorded(
+                incident_ref=outcome.incident_ref,
+                action=outcome.action,
+                count=outcome.count,
+                also_matched=list(outcome.also_matched),
+            )
+            return replace(
+                decision,
+                incident_ref=outcome.incident_ref,
+                incident_action=outcome.action,
+            )
+        except Exception as exc:  # noqa: BLE001 — fail-open: triage / recovery を一切阻害しない
+            self._run_logger.log_incident_recording_failed(exc)
+            self.stderr.write(f"WARNING: incident recording failed: {exc}\n")
+            return decision
+
+    def _close_transient_incident(self, decision: RecoveryDecision) -> RecoveryDecision:
+        """auto-resume 自己回復時、この run が起票した incident を transient として即クローズする。
+
+        ``incident:cause:transient`` を付与し ``incident:investigating`` を外して close する
+        （fail-open・best-effort・冪等）。close 完了で ``incident_transient_closed=True``。
+        """
+        if decision.incident_ref is None or self.provider is None:
+            return decision
+        try:
+            self.provider.edit_issue(
+                decision.incident_ref,
+                add_labels=[INCIDENT_CAUSE_TRANSIENT],
+                remove_labels=[INCIDENT_STATUS_INVESTIGATING],
+            )
+            self.provider.close_issue(decision.incident_ref, reason="completed")
+        except Exception as exc:  # noqa: BLE001 — best-effort。修復は人間 1 操作で足りる
+            self.stderr.write(f"WARNING: transient incident close failed: {exc}\n")
+            return decision
+        return replace(decision, incident_transient_closed=True)
+
     # --- 自動再開 ---
 
     def _resume(self, decision: RecoveryDecision) -> RecoveryResult:
@@ -487,6 +617,17 @@ class RecoveryHandler:
         self._run_logger.log_recovery_attempt_end(
             child_run_id=child_run_id, child_final_status=final_status, exit_code=exit_code
         )
+
+        # Issue #304: child が自己回復（COMPLETE）し、かつこの run が起票した incident は
+        # transient として即クローズする（recurred / None は対象外）。
+        if (
+            final_status == "COMPLETE"
+            and decision.incident_action in {"created", "regression_created"}
+            and not decision.incident_transient_closed
+        ):
+            decision = self._close_transient_incident(decision)
+            self._record(decision)
+
         self._post_child_result_comment(decision)
         return RecoveryResult(decision, child_exit_code=exit_code)
 

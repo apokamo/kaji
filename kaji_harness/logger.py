@@ -238,6 +238,36 @@ class RunLogger:
             exit_code=exit_code,
         )
 
+    def log_incident_recorded(
+        self,
+        *,
+        incident_ref: str,
+        action: str,
+        count: int,
+        also_matched: list[str],
+    ) -> None:
+        """Issue #304: incident の起票 / 再発追記が完了したことを記録する。
+
+        ``action`` は ``created`` / ``recurred`` / ``regression_created``。``count`` は
+        marker 件数から導出した再発回数。``also_matched`` は同分岐で複数一致した際に
+        追記先に選ばなかった issue（決定論の監査痕跡）。
+        """
+        self._write(
+            "incident_recorded",
+            incident_ref=incident_ref,
+            action=action,
+            count=count,
+            also_matched=list(also_matched),
+        )
+
+    def log_incident_recording_failed(self, exc: BaseException) -> None:
+        """Issue #304: incident 記録が失敗した（fail-open で triage は続行）ことを記録する。"""
+        self._write(
+            "incident_recording_failed",
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+
     def log_workflow_end(
         self,
         status: str,

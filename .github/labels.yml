@@ -3,9 +3,10 @@
 # 配色: Catppuccin Mocha パレット（https://catppuccin.com/palette）
 # 同期: .github/workflows/labels-sync.yml が main への push / 手動 / 週次 cron で実行
 #
-# 管理対象は type:* (11) + meta (9) = 合計 20 ラベルのみ。
+# 管理対象は type:* (11) + meta (9) + incident (8) = 合計 28 ラベルのみ。
 # release-please が自動生成する `autorelease:*` / `release-please:*` は bot 所有で
 # 管理対象外（運用ガイド: docs/dev/labels.md を参照）。
+# incident 2 軸（status / classification）の意味と遷移意図: docs/dev/incident-labels.md。
 
 labels:
   # ============================================================
@@ -95,3 +96,44 @@ labels:
   - name: "wontfix"
     color: "45475a"
     description: "対応しない"
+
+  # ============================================================
+  # incident (8) — 障害検知・集約層（第1層・Issue #304）の 2 軸ラベル
+  # 意味と遷移意図の正本: docs/dev/incident-labels.md
+  # ============================================================
+
+  - name: "incident"
+    color: "eba0ac"
+    description: "検知・集約層が起票した障害インシデント（種別キー / 検索キー）"
+
+  # -- status 軸（第1層は起票時に investigating のみ自動付与。以降の遷移は人間）--
+
+  - name: "incident:investigating"
+    color: "f9e2af"
+    description: "status 軸: 調査中（第1層が起票時に自動付与する初期値）"
+
+  - name: "incident:mitigated"
+    color: "fab387"
+    description: "status 軸: 暫定緩和済み（人間が付与）"
+
+  - name: "incident:resolved"
+    color: "a6e3a1"
+    description: "status 軸: 恒久解決済み（人間が付与）"
+
+  # -- classification 軸（cause:transient のみ第1層が自動付与。他は人間）--
+
+  - name: "incident:cause:internal"
+    color: "89b4fa"
+    description: "classification 軸: kaji 内部起因（人間が第2層の調査結論を受けて付与）"
+
+  - name: "incident:cause:upstream"
+    color: "cba6f7"
+    description: "classification 軸: 上流（外部 CLI / API）起因（人間が付与）"
+
+  - name: "incident:cause:environment"
+    color: "94e2d5"
+    description: "classification 軸: 実行環境起因（人間が付与）"
+
+  - name: "incident:cause:transient"
+    color: "9399b2"
+    description: "classification 軸: 一過性（auto-resume 自己回復。第1層が自動付与＋即クローズ）"

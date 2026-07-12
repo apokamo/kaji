@@ -99,3 +99,24 @@ class IssueProvider(Protocol):
             Provider 固有のエラー: 複数該当 / CLI / API 失敗時。
         """
         ...
+
+
+@runtime_checkable
+class IncidentSearchCapable(Protocol):
+    """incident 検知・集約層（第1層・Issue #304）が要求する全件検索能力。
+
+    v1 は GitHub provider のみが実装する。``isinstance(provider, IncidentSearchCapable)``
+    が False の provider では incident 起票・照合は no-op（ローカル occurrence 記録のみ）。
+    """
+
+    def search_issues_all(self, *, labels: list[str], state: str = "all") -> list[Issue]:
+        """label で絞った Issue を全件 pagination で返す（limit デフォルト依存禁止）。
+
+        注: GitHub REST の issue 一覧はコメント本文を内包しない（``comments_url`` のみ）ため、
+        戻り値の ``Issue.comments`` は空。コメントは ``list_issue_comments_all()`` で別途取得する。
+        """
+        ...
+
+    def list_issue_comments_all(self, issue_id: str) -> list[Comment]:
+        """対象 Issue の全コメントを pagination で取得する（100 件超でも全件）。"""
+        ...

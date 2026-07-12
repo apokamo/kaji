@@ -158,6 +158,10 @@ class RecoveryDecision:
     triage_comment_ref: str | None = None
     bug_issue: dict[str, str] | None = None
     workflow_path: str = ""
+    # Issue #304 第1層: incident 記録の再入ガード / 監査痕跡（additive・optional）。
+    incident_ref: str | None = None
+    incident_action: str | None = None
+    incident_transient_closed: bool = False
     schema_version: int = RECOVERY_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -189,6 +193,9 @@ class RecoveryDecision:
             "triage_comment_ref": self.triage_comment_ref,
             "bug_issue": self.bug_issue,
             "workflow_path": self.workflow_path,
+            "incident_ref": self.incident_ref,
+            "incident_action": self.incident_action,
+            "incident_transient_closed": self.incident_transient_closed,
         }
 
     @classmethod
@@ -216,6 +223,9 @@ class RecoveryDecision:
             triage_comment_ref=data.get("triage_comment_ref"),
             bug_issue=data.get("bug_issue"),
             workflow_path=data.get("workflow_path", ""),
+            incident_ref=data.get("incident_ref"),
+            incident_action=data.get("incident_action"),
+            incident_transient_closed=bool(data.get("incident_transient_closed", False)),
             schema_version=int(data.get("schema_version", RECOVERY_SCHEMA_VERSION)),
         )
 

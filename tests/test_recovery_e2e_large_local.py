@@ -136,6 +136,13 @@ def test_failure_triage_e2e_and_manual_recover(tmp_path: Path) -> None:
     assert any("## Workflow failure triage" in b for b in bodies)
     assert any("dispatch_failure" in b for b in bodies)
 
+    # Issue #304: 失敗 run E2E 後にローカル occurrence 記録が生成される（全 provider・全失敗）。
+    occurrences = repo / ".kaji-artifacts" / "incidents" / "occurrences.jsonl"
+    assert occurrences.is_file()
+    rec = json.loads(occurrences.read_text(encoding="utf-8").splitlines()[0])
+    assert rec["signature"]["cause"] == "dispatch_failure"
+    assert rec["source_issue"] == _ISSUE_DIR
+
     # `kaji recover` が失敗 artifact から handler を再起動できる（triage のみ、exit 0）。
     recovered = _kaji(
         repo,

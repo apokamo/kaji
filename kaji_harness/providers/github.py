@@ -128,6 +128,70 @@ class GitHubProvider:
         except json.JSONDecodeError as exc:
             raise GitHubProviderError(f"gh returned invalid JSON: {exc}") from exc
 
+    def _gh_json_slurp(self, *args: str) -> list[object]:
+        """``gh api --paginate --slurp`` の複数 page JSON を 1 段 flatten して返す（Issue #304）。
+
+        ``gh api --paginate`` は page ごとに別々の JSON を出力するため、既存 ``_gh_json``
+        （stdout 全体への単一 ``json.loads``）は 2 page 以上で invalid JSON になる。``--slurp``
+        は「各 page の JSON を要素として包んだ外側配列」を返すので、それを 1 回 parse して
+        1 段 flatten する（list endpoint 専用。page 数 1 でも同経路）。
+        """
+        proc = self._run_gh("api", "--paginate", "--slurp", *args)
+        if proc.returncode != 0:
+            raise GitHubProviderError(
+                f"gh api failed (exit {proc.returncode}): "
+                f"{proc.stderr.strip() or proc.stdout.strip()}"
+            )
+        try:
+            pages = json.loads(proc.stdout)
+        except json.JSONDecodeError as exc:
+            raise GitHubProviderError(f"gh api returned invalid JSON: {exc}") from exc
+        if not isinstance(pages, list):
+            raise GitHubProviderError("gh api --slurp did not return an outer array")
+        flattened: list[object] = []
+        for page in pages:
+            if isinstance(page, list):
+                flattened.extend(page)
+            else:
+                flattened.append(page)
+        return flattened
+
+    @staticmethod
+    def _parse_rest_issue(payload: dict[str, object]) -> Issue:
+        """GitHub REST ``GET /repos/{repo}/issues`` の 1 要素を `Issue` に写像する。"""
+        labels_raw = payload.get("labels", []) or []
+        labels: list[Label] = []
+        if isinstance(labels_raw, list):
+            for entry in labels_raw:
+                if isinstance(entry, dict):
+                    labels.append(Label(name=str(entry.get("name", "") or "")))
+                elif isinstance(entry, str):
+                    labels.append(Label(name=entry))
+        number = payload.get("number")
+        title = str(payload.get("title", "") or "")
+        return Issue(
+            id=str(number) if number is not None else "",
+            title=title,
+            body=str(payload.get("body", "") or ""),
+            state=str(payload.get("state", "open") or "open").lower(),
+            labels=labels,
+            comments=[],
+            slug=derive_slug_from_title(title),
+        )
+
+    @staticmethod
+    def _parse_rest_comment(payload: dict[str, object]) -> Comment:
+        """GitHub REST ``GET /repos/{repo}/issues/{n}/comments`` の 1 要素を `Comment` に写像する。"""
+        user = payload.get("user")
+        author = ""
+        if isinstance(user, dict):
+            author = str(user.get("login", "") or "")
+        return Comment(
+            author=author,
+            body=str(payload.get("body", "") or ""),
+            created_at=str(payload.get("created_at", "") or ""),
+        )
+
     @staticmethod
     def _parse_issue_payload(payload: dict[str, object]) -> Issue:
         """``gh issue view --json ...`` 出力を `Issue` に詰める。"""
@@ -320,6 +384,39 @@ class GitHubProvider:
                     )
                 )
         return out
+
+    # -------- Incident search (Issue #304) ----------
+
+    def search_issues_all(self, *, labels: list[str], state: str = "all") -> list[Issue]:
+        """label で絞った Issue を全件 pagination で返す（``gh api --paginate --slurp``）。
+
+        REST ``GET /repos/{repo}/issues`` は PR も返す（GitHub は全 PR を issue とみなす）ため、
+        ``pull_request`` キーを持つ要素は flatten 後に除外する。``gh issue list --limit`` は
+        上限依存があるため使わない（全件 pagination の契約 — #303 決定 F）。
+        """
+        query = f"repos/{self.repo}/issues?state={state}"
+        if labels:
+            query += "&labels=" + ",".join(labels)
+        query += "&per_page=100"
+        raw = self._gh_json_slurp(query)
+        result: list[Issue] = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            if "pull_request" in entry:
+                continue
+            result.append(self._parse_rest_issue(entry))
+        return result
+
+    def list_issue_comments_all(self, issue_id: str) -> list[Comment]:
+        """対象 Issue の全コメントを pagination で取得する（``gh api --paginate --slurp``）。"""
+        query = f"repos/{self.repo}/issues/{issue_id}/comments?per_page=100"
+        raw = self._gh_json_slurp(query)
+        result: list[Comment] = []
+        for entry in raw:
+            if isinstance(entry, dict):
+                result.append(self._parse_rest_comment(entry))
+        return result
 
     # -------- Context ----------
 
