@@ -4,9 +4,9 @@ Issue ``gl:34``。``provider.type='local'`` 配下から ``gh:N`` で GitHub
 Issue を参照できるようにするため、本 module は GitHub repo の open Issue を
 全件取得して ``.kaji/cache/gh-<number>.json`` に atomic write する。
 
-Issue #191 で legacy forge cache migration detector
-(``_detect_legacy_forge_cache``) のみが過去 forge リテラルを保持する（許容除外
-規則 § 2、設計書 § Cache artifact 移行ポリシー）。
+Issue #191 で導入した legacy forge cache migration detector は Issue #285 で
+``providers.cache_guard`` へ移設した（過去 forge リテラルは同 module のみが
+保持する。許容除外規則 § 2、設計書 § Cache artifact 移行ポリシー）。
 """
 
 from __future__ import annotations
@@ -20,7 +20,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .providers.local import _atomic_write
+from .errors import SyncError
+from .fsio import atomic_write
+from .providers.cache_guard import SYNC_META_FILENAME, detect_legacy_forge_cache
 
 if TYPE_CHECKING:
     from .config import KajiConfig
@@ -28,12 +30,7 @@ if TYPE_CHECKING:
 
 _PER_PAGE = 100
 _MAX_PAGES = 200
-_SYNC_META_FILENAME = ".sync-meta.json"
 _CACHE_SCHEMA_VERSION = 1
-
-
-class SyncError(RuntimeError):
-    """``kaji sync`` 固有のエラー（config 不在 / gh CLI 不在 / API 失敗等）。"""
 
 
 @dataclass(frozen=True)
@@ -74,7 +71,7 @@ def _cache_dir_root(repo_root: Path) -> Path:
 
 
 def _sync_meta_path(repo_root: Path) -> Path:
-    return _cache_dir_root(repo_root) / _SYNC_META_FILENAME
+    return _cache_dir_root(repo_root) / SYNC_META_FILENAME
 
 
 def _list_existing_cached_numbers(cache_dir: Path, *, prefix: str) -> set[str]:
@@ -115,7 +112,7 @@ def _mark_cache_stale(path: Path, now_iso: str) -> None:
     if "last_seen_at" not in kl:
         kl["last_seen_at"] = None
     payload["kaji_local"] = kl
-    _atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
 
 
 def _write_sync_meta(
@@ -135,65 +132,7 @@ def _write_sync_meta(
         "issue_count": issue_count,
         "pages_fetched": pages_fetched,
     }
-    _atomic_write(path, json.dumps(meta, ensure_ascii=False, indent=2) + "\n")
-
-
-# ---------- legacy forge cache fail-fast (Issue #191 撤去) ----------
-
-# 過去 forge のリテラル（Issue #191 で撤去された forge の名称）。
-# 本 module 以外で参照しない（設計書 § ベースライン計測 § 許容除外規則 § 2）。
-_LEGACY_FORGE_LITERAL = "gitlab"
-_LEGACY_FORGE_DISPLAY = "GitLab"
-
-
-def _detect_legacy_forge_cache(cache_dir: Path) -> None:
-    """legacy forge cache を検出し ``SyncError`` で fail-fast (Issue #191)。
-
-    検出条件は **OR 結合** (設計書 § Cache artifact 移行ポリシー):
-
-    - (a) ``.sync-meta.json`` の ``forge`` が撤去済 forge
-    - (b) ``cache_dir/gl-*.json`` の存在
-
-    いずれか成立で recovery 手順を含む ``SyncError`` を raise する。
-    両条件不成立（GitHub cache のみ / cache 空）は無音で通過する。
-    ``sync_status`` / ``view_cached_*`` / ``list_issues`` の cache 統合経路の
-    **すべての entry point** から先頭で呼び出す。
-    """
-    if not cache_dir.is_dir():
-        return
-    meta_path = cache_dir / _SYNC_META_FILENAME
-    meta_legacy = False
-    if meta_path.is_file():
-        try:
-            payload = json.loads(meta_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            payload = None
-        if isinstance(payload, dict) and payload.get("forge") == _LEGACY_FORGE_LITERAL:
-            meta_legacy = True
-    gl_files = sorted(cache_dir.glob("gl-*.json"))
-    gl_count = len(gl_files)
-    if not meta_legacy and gl_count == 0:
-        return
-    detail_lines: list[str] = []
-    if meta_legacy:
-        detail_lines.append(f"  - .sync-meta.json forge='{_LEGACY_FORGE_LITERAL}'")
-    if gl_count:
-        detail_lines.append(f"  - gl-*.json files: {gl_count} file(s)")
-    recovery_lines = ["To recover:", "  1. Remove the legacy cache:"]
-    if gl_count:
-        recovery_lines.append(f"       rm -f {cache_dir}/gl-*.json")
-    if meta_legacy:
-        recovery_lines.append(f"       rm -f {cache_dir}/{_SYNC_META_FILENAME}")
-    recovery_lines.append("  2. Re-sync from GitHub:")
-    recovery_lines.append("       kaji sync from-github")
-    message = (
-        f"legacy {_LEGACY_FORGE_DISPLAY} cache detected at {cache_dir}/\n"
-        + "\n".join(detail_lines)
-        + "\n\n"
-        + f"{_LEGACY_FORGE_DISPLAY} forge support has been removed in this version of kaji.\n"
-        + "\n".join(recovery_lines)
-    )
-    raise SyncError(message)
+    atomic_write(path, json.dumps(meta, ensure_ascii=False, indent=2) + "\n")
 
 
 # ---------- public API ----------
@@ -330,7 +269,7 @@ def _write_fresh_github_cache_file(entry: dict[str, object], cache_dir: Path, no
         },
         "issue": entry,
     }
-    _atomic_write(path, json.dumps(wrapped, ensure_ascii=False, indent=2) + "\n")
+    atomic_write(path, json.dumps(wrapped, ensure_ascii=False, indent=2) + "\n")
 
 
 def sync_from_github(
@@ -347,7 +286,7 @@ def sync_from_github(
     """
     repo = _resolve_repo_github(config, repo_override)
     cache_dir = _cache_dir_root(config.repo_root)
-    _detect_legacy_forge_cache(cache_dir)
+    detect_legacy_forge_cache(cache_dir)
 
     import sys
 
@@ -419,11 +358,11 @@ def read_sync_status(*, config: KajiConfig) -> SyncStatus:
     ``.sync-meta.json`` 不在時は ``forge=None / issue_count=0`` を返す
     （error にしない。未 sync は正常状態の 1 種）。
 
-    Issue #191 撤去後は ``_detect_legacy_forge_cache()`` を冒頭で呼び、
+    Issue #191 撤去後は ``detect_legacy_forge_cache()`` を冒頭で呼び、
     legacy cache が残っていれば ``SyncError`` で fail-fast する。
     """
     cache_dir = _cache_dir_root(config.repo_root)
-    _detect_legacy_forge_cache(cache_dir)
+    detect_legacy_forge_cache(cache_dir)
     meta_path = _sync_meta_path(config.repo_root)
     gh_count = len(_list_existing_cached_numbers(cache_dir, prefix="gh-"))
     if not meta_path.is_file():

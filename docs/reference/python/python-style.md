@@ -81,6 +81,21 @@ MAX_RETRY_COUNT = 3
 | 定数 | `UPPER_SNAKE_CASE` | `DEFAULT_TIMEOUT` |
 | モジュール | `snake_case` | `workflow.py`, `runner.py` |
 
+## モジュール境界と private import
+
+`_` 始まりのシンボル / private module（`_*.py`）を **package を跨いで import してはならない**。
+他 package が必要とするシンボルは、その package の `__init__.py` facade の `__all__` に
+必要最小限だけを載せて公開する。同一 package 内の implementation detail は private のまま維持する
+（`_` で始まるという理由だけで public 化しない）。
+
+依存は下位層から上位層へ向かってはならない（foundation → provider → application → command）。
+循環回避のための関数内 deferred import は、依存の向きが誤っている兆候として扱う。
+
+規則の全文・分類ルール・時限許容の allowlist 運用は
+[ADR 009: モジュール境界と private import 規約](../../adr/009-module-boundary-private-import.md) が正本。
+`__all__` に強制力はないため、境界は `tests/test_private_imports.py` の fitness test が
+`make check` で機械的に検証する。
+
 ## コメント・文字列
 
 コメントはコードで表現できない「なぜ」のみ書く。動作の説明はコードと docstring で行う。

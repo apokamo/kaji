@@ -10,11 +10,11 @@ from pathlib import Path
 
 import pytest
 
+from kaji_harness.fsio import atomic_write
 from kaji_harness.providers.local import (
     IssueNotFoundError,
     LocalProvider,
     LocalProviderError,
-    _atomic_write,
     _parse_frontmatter,
     _serialize_frontmatter,
     validate_machine_id,
@@ -87,7 +87,7 @@ class TestFrontmatter:
 class TestAtomicWrite:
     def test_writes_and_no_tmp_left(self, tmp_path: Path) -> None:
         target = tmp_path / "sub" / "file.md"
-        _atomic_write(target, "hello")
+        atomic_write(target, "hello")
         assert target.read_text() == "hello"
         assert not target.with_suffix(".md.tmp").exists()
 

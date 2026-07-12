@@ -10,6 +10,7 @@ from pathlib import Path
 
 from ..errors import ConfigLoadError, ConfigNotFoundError
 from ..providers import IssueProvider, ResolvedId, get_provider, normalize_id
+from ..providers.context import format_issue_ref
 from ..providers.github import GitHubProviderError
 from ..providers.local import (
     IssueNotFoundError,
@@ -18,7 +19,6 @@ from ..providers.local import (
     LocalProviderError,
 )
 from ..providers.markers import build_kaji_verdict_marker
-from ..state import _format_issue_ref
 from .config import _load_config_for_dispatch
 from .exit_codes import EXIT_INVALID_INPUT, EXIT_OK, EXIT_RUNTIME_ERROR
 from .output import _emit_json, _issue_to_json_dict, _read_body_arg
@@ -374,7 +374,7 @@ def _handle_issue_local(provider: LocalProvider, raw_args: list[str]) -> int:
             f"(Phase 3-c). Supported: {', '.join(sorted(_LOCAL_ISSUE_SUBS))}.\n"
         )
         return EXIT_INVALID_INPUT
-    from ..sync import SyncError
+    from ..errors import SyncError
 
     try:
         if sub == "view":
@@ -493,7 +493,7 @@ def _commit_local_issue_change(
     contains only ``paths`` even when the user had unrelated files staged.
     """
     rel_paths = [str(p.relative_to(provider.repo_root)) for p in paths]
-    issue_ref = _format_issue_ref(rid.value)
+    issue_ref = format_issue_ref(rid.value)
     msg = f"chore(local): {action} for {issue_ref}"
     subprocess.run(
         ["git", "add", "--", *rel_paths],

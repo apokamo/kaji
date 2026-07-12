@@ -21,8 +21,8 @@ from kaji_harness.config import (
     PathsConfig,
     ProviderConfig,
 )
+from kaji_harness.errors import SyncError
 from kaji_harness.sync import (
-    SyncError,
     SyncResult,
     _fetch_open_issues_github_paginated,
     _list_existing_cached_numbers,

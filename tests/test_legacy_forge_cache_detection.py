@@ -1,7 +1,7 @@
 """Bridging tests: legacy forge cache detection (Issue #191 撤去後の fail-fast)。
 
 設計書 § テスト戦略 § Medium § 新規 bridging test (MF-4 / MF-2 round 3) を実装する。
-``_detect_legacy_forge_cache()`` が以下 3 ケースで ``SyncError`` を raise する
+``detect_legacy_forge_cache()`` が以下 3 ケースで ``SyncError`` を raise する
 ことを確認する。
 
 case (a) AND (b): meta + gl-*.json 両方残存
@@ -30,12 +30,10 @@ from kaji_harness.config import (
     PathsConfig,
     ProviderConfig,
 )
+from kaji_harness.errors import SyncError
+from kaji_harness.providers.cache_guard import detect_legacy_forge_cache
 from kaji_harness.providers.local import LocalProvider
-from kaji_harness.sync import (
-    SyncError,
-    _detect_legacy_forge_cache,
-    read_sync_status,
-)
+from kaji_harness.sync import read_sync_status
 
 
 def _seed_legacy_meta(cache_dir: Path) -> None:
@@ -223,13 +221,13 @@ def test_github_only_cache_passes(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     # raise しない
-    _detect_legacy_forge_cache(cache_dir)
+    detect_legacy_forge_cache(cache_dir)
 
 
 @pytest.mark.medium
 def test_empty_cache_dir_passes(tmp_path: Path) -> None:
     """cache_dir 不在では通過する（OR 結合不成立）。"""
-    _detect_legacy_forge_cache(tmp_path / "nonexistent")
+    detect_legacy_forge_cache(tmp_path / "nonexistent")
 
 
 @pytest.mark.medium
@@ -237,7 +235,7 @@ def test_empty_existing_cache_dir_passes(tmp_path: Path) -> None:
     """cache_dir 存在するが空なら通過する。"""
     cache_dir = tmp_path / ".kaji" / "cache"
     cache_dir.mkdir(parents=True)
-    _detect_legacy_forge_cache(cache_dir)
+    detect_legacy_forge_cache(cache_dir)
 
 
 # ---------------------------------------------------------------------------

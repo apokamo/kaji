@@ -443,7 +443,7 @@ class TestCommentWriteRetry:
         # 永続的に FileExistsError を返す mock で耐久試験
         from kaji_harness.providers import local as _local_mod
 
-        with patch.object(_local_mod, "_atomic_write_new", side_effect=FileExistsError):
+        with patch.object(_local_mod, "atomic_write_new", side_effect=FileExistsError):
             with pytest.raises(LocalProviderError, match="failed to allocate"):
                 provider.comment_issue("local-pc1-1", "x")
 
@@ -591,7 +591,7 @@ class TestAtomicWriteNewShortWrite:
             return real_write(fd, chunk)
 
         with patch.object(_local_mod.os, "write", side_effect=short_write):
-            _local_mod._atomic_write_new(target, full_payload.decode("utf-8"))
+            _local_mod.atomic_write_new(target, full_payload.decode("utf-8"))
         assert target.read_bytes() == full_payload
 
     def test_non_positive_return_raises(self, tmp_path: Path) -> None:
@@ -601,4 +601,4 @@ class TestAtomicWriteNewShortWrite:
         target = tmp_path / "out.md"
         with patch.object(_local_mod.os, "write", return_value=0):
             with pytest.raises(OSError, match="non-positive"):
-                _local_mod._atomic_write_new(target, "hello")
+                _local_mod.atomic_write_new(target, "hello")

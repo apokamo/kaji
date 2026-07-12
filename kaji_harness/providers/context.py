@@ -106,8 +106,11 @@ def build_design_path(issue_id: str, slug: str) -> str:
 def format_issue_ref(issue_id: str) -> str:
     """``#153`` / ``local-pc1-3`` 形式の人間可読参照を返す。
 
-    `kaji_harness.state._format_issue_ref` と同じロジック。本 module は
-    provider package として state.py に依存させたくないため独立に持つ。
-    将来の統合時は本実装を正本にする。
+    数値のみ（GitHub Issue 番号）→ ``#153``。
+    それ以外（local-pc1-1 等）→ そのまま返す。
+
+    Issue #285 で ``kaji_harness.state._format_issue_ref`` を統合し、本実装を正本に
+    した（重複していた 2 実装のロジックは一致していた）。`state` / `commands` は
+    本関数を呼ぶ。
     """
     return f"#{issue_id}" if issue_id.isdigit() else issue_id

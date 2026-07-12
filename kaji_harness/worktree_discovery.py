@@ -12,7 +12,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from .providers._mappings import DEFAULT_BRANCH_PREFIX, LABEL_TO_PREFIX
+from .providers import DEFAULT_BRANCH_PREFIX, LABEL_TO_PREFIX
 
 
 class AmbiguousWorktreeError(Exception):

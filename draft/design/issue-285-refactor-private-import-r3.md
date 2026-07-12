@@ -323,9 +323,9 @@ from .cache_guard import detect_legacy_forge_cache                 # providers/l
 | ファイル | 変更内容 |
 |---|---|
 | `kaji_harness/fsio.py` | **新設**。`atomic_write` / `atomic_write_new`（`providers/local.py` から移動、public 化） |
-| `kaji_harness/providers/cache_guard.py` | **新設**。`detect_legacy_forge_cache`（`sync.py` から移動、public 化） |
+| `kaji_harness/providers/cache_guard.py` | **新設**。`detect_legacy_forge_cache`（`sync.py` から移動、public 化）。あわせて `_SYNC_META_FILENAME`（`.sync-meta.json`）を `SYNC_META_FILENAME` として本 module へ移し、cache layout 契約の正本にする（detector と `sync` の双方が必要とするため。定数を二重定義しない） |
 | `kaji_harness/errors.py` | `SyncError` を移設（基底 `RuntimeError` を維持） |
-| `kaji_harness/sync.py` | `_atomic_write` / `_detect_legacy_forge_cache` / `SyncError` の定義を削除し、新配置から import |
+| `kaji_harness/sync.py` | `_atomic_write` / `_detect_legacy_forge_cache` / `SyncError` / `_SYNC_META_FILENAME` の定義を削除し、新配置から import |
 | `kaji_harness/providers/local.py` | `_atomic_write` / `_atomic_write_new` 定義を削除し `..fsio` から import。deferred import 2 箇所を `from .cache_guard import ...` の top-level import へ |
 | `kaji_harness/providers/__init__.py` | facade 強化: `_mappings` の 2 定数を re-export、`__all__` に `resolve_main_worktree` / `LABEL_TO_PREFIX` / `DEFAULT_BRANCH_PREFIX` を明示 |
 | `kaji_harness/providers/context.py` | `format_issue_ref` を正本化（docstring の「将来の統合時は本実装を正本にする」を実行） |
@@ -339,6 +339,8 @@ from .cache_guard import detect_legacy_forge_cache                 # providers/l
 | `tests/test_providers_local.py` | `_atomic_write` の import 元・名前を機械的修正 |
 | `tests/test_preflight.py` | patch target 名を `_atomic_write_new` → `atomic_write_new` に機械的修正 |
 | `tests/test_legacy_forge_cache_detection.py` | `_detect_legacy_forge_cache` / `SyncError` の import 元を機械的修正 |
+| `tests/test_artifacts_dir.py` | patch target を `providers._worktree.resolve_main_worktree` → `providers.resolve_main_worktree` に機械的修正。F1 で `artifacts.py` が facade 経由の参照に変わるため、[Primary Sources] 4「Where to patch」に従い**参照側の名前空間**へ合わせる（定義元を patch しても facade 経由の lookup を差し替えられない） |
+| `tests/test_sync_from_github.py` | `SyncError` の import 元を `kaji_harness.errors` へ機械的修正（ADR 008「呼び出し側を移行する」） |
 | `docs/adr/009-*.md` | **新設**。モジュール境界と private import 規約 |
 | `docs/ARCHITECTURE.md` | パッケージ構成に新 module と層の依存方向を追記 |
 | `docs/reference/python/python-style.md` | ADR 009 への参照を 1 節追加 |

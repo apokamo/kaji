@@ -21,7 +21,9 @@ from typing import IO
 
 import yaml
 
+from ..fsio import atomic_write, atomic_write_new
 from ._mappings import DEFAULT_BRANCH_PREFIX
+from .cache_guard import detect_legacy_forge_cache
 from .context import (
     build_branch_name,
     build_design_path,
@@ -69,47 +71,7 @@ def validate_machine_id(machine_id: str) -> None:
         )
 
 
-# -------- atomic write & flock --------
-
-
-def _atomic_write(path: Path, content: str) -> None:
-    """``*.tmp`` → ``os.replace`` による atomic な text 書き込み。
-
-    部分書き込みが残らないため、git の add/commit 段で中間状態を取り込まない
-    （phase3-design.md § Issue ファイル / コメントファイルの atomic 書き込み）。
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(content, encoding="utf-8")
-    os.replace(tmp, path)
-
-
-def _atomic_write_new(path: Path, content: str) -> None:
-    """``O_CREAT | O_EXCL`` で新規ファイルとして atomic に書き込む。
-
-    既存ファイルがある場合は ``FileExistsError`` を投げる。``path.open("x")`` は
-    buffering / kill 時の 0 byte file 懸念があるため、``os.open`` で fd を作って
-    bytes を loop で書ききる（phase3d-preflight-design § 5）。
-
-    POSIX ``write(2)`` は short write を許す契約なので、返り値が要求 byte 数より
-    少ない場合に備えて残バイトを再 write する。``n <= 0`` は通常起きないが、
-    EINTR を裸で晒さないため最低限の defensive な扱いとする。
-
-    既存 ``_atomic_write()`` は edit / close 等の上書き用として残す。
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-    fd = os.open(path, flags, 0o644)
-    try:
-        data = content.encode("utf-8")
-        written = 0
-        while written < len(data):
-            n = os.write(fd, data[written:])
-            if n <= 0:
-                raise OSError(f"os.write returned non-positive count {n}")
-            written += n
-    finally:
-        os.close(fd)
+# -------- flock --------
 
 
 def _emit_windows_warning() -> None:
@@ -545,7 +507,7 @@ class LocalProvider:
             "labels": list(labels or []),
             "created_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
-        _atomic_write(issue_dir / "issue.md", self._build_issue_md(meta, body))
+        atomic_write(issue_dir / "issue.md", self._build_issue_md(meta, body))
         return self._read_issue(issue_dir)
 
     def view_issue(self, issue_id: str) -> Issue:
@@ -578,7 +540,7 @@ class LocalProvider:
                     updated.append(label)
             meta["labels"] = updated
         new_body = body if body is not None else current_body
-        _atomic_write(issue_path, self._build_issue_md(meta, new_body))
+        atomic_write(issue_path, self._build_issue_md(meta, new_body))
         return self._read_issue(issue_dir)
 
     def comment_issue(self, issue_id: str, body: str) -> Comment:
@@ -624,7 +586,7 @@ class LocalProvider:
             last_attempted = ts
             path = cdir / f"{ts}-{self.machine_id}.md"
             try:
-                _atomic_write_new(path, content)
+                atomic_write_new(path, content)
             except FileExistsError:
                 continue
             except OSError as exc:
@@ -674,7 +636,7 @@ class LocalProvider:
         # Phase 3-d: default を "completed" に変更（design.md L985 / 状態遷移図
         # L1011-L1015 と整合）。明示値 ("not-planned" 等) はそのまま採用。
         meta["close_reason"] = reason if reason else "completed"
-        _atomic_write(issue_path, self._build_issue_md(meta, current_body))
+        atomic_write(issue_path, self._build_issue_md(meta, current_body))
         return self._read_issue(issue_dir)
 
     def list_issues(
@@ -687,10 +649,8 @@ class LocalProvider:
         # Issue #191: legacy GitLab cache 残存時は entry 列挙より先に
         # fail-fast する。local issue 1 件 + gl-*.json で limit=1 を渡されたとき
         # に early return で guard を bypass する経路を塞ぐ（silent regression
-        # 防止）。詳細は ``sync._detect_legacy_forge_cache`` 参照。
-        from ..sync import _detect_legacy_forge_cache as _detect
-
-        _detect(self._cache_dir_root)
+        # 防止）。詳細は ``cache_guard.detect_legacy_forge_cache`` 参照。
+        detect_legacy_forge_cache(self._cache_dir_root)
         out: list[Issue] = []
         if self._issues_dir.exists():
             for entry in sorted(self._issues_dir.iterdir()):
@@ -787,11 +747,9 @@ class LocalProvider:
         ``gh-<n>.json`` wrapper schema へ移行した。
 
         Issue #191 撤去後は legacy cache 残存時に ``SyncError`` で
-        fail-fast する（``_detect_legacy_forge_cache`` 経由）。
+        fail-fast する（``cache_guard.detect_legacy_forge_cache`` 経由）。
         """
-        from ..sync import _detect_legacy_forge_cache as _detect
-
-        _detect(self._cache_dir_root)
+        detect_legacy_forge_cache(self._cache_dir_root)
         if not _POS_INT_RE.match(number):
             raise ValueError(
                 f"cached issue number must be a positive integer (no leading zero): {number!r}"

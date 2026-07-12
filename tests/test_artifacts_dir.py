@@ -107,7 +107,7 @@ class TestTryResolveMainWorktreeSmall:
     def test_local_provider_error_swallowed(self, tmp_path: Path) -> None:
         cfg = _make_config(repo_root=tmp_path, provider=_local_provider())
         with patch(
-            "kaji_harness.providers._worktree.resolve_main_worktree",
+            "kaji_harness.providers.resolve_main_worktree",
             side_effect=LocalProviderError("no git"),
         ):
             assert _try_resolve_main_worktree(cfg) is None
@@ -116,7 +116,7 @@ class TestTryResolveMainWorktreeSmall:
         cfg = _make_config(repo_root=tmp_path, provider=_local_provider())
         resolved = tmp_path / "main"
         with patch(
-            "kaji_harness.providers._worktree.resolve_main_worktree",
+            "kaji_harness.providers.resolve_main_worktree",
             return_value=resolved,
         ):
             assert _try_resolve_main_worktree(cfg) == resolved
