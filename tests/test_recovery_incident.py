@@ -11,9 +11,10 @@ import pytest
 
 from kaji_harness.providers.models import Comment, Issue, Label
 from kaji_harness.recovery.incident import (
+    BackfillEntry,
     IncidentCandidate,
     IncidentContext,
-    backfill_run_ids,
+    backfill_entries,
     compute_fuzzy_candidates,
     parse_candidates,
     parse_identity_marker,
@@ -214,17 +215,53 @@ def test_backfill_excludes_posted_run_ids() -> None:
 
     sig = _sig()
     records = [
-        OccurrenceRecord(1, sig, "r_old", "304", "implement", "dev.yaml", "t"),
+        OccurrenceRecord(1, sig, "r_old", "296", "implement", "dev.yaml", "t"),
         OccurrenceRecord(1, _sig(_HASH_B), "r_other", "304", "implement", "dev.yaml", "t"),
     ]
-    ids = backfill_run_ids(
+    entries = backfill_entries(
         current_run_id="r_new",
+        current_source_issue="304",
         local_records=records,
-        fingerprint_hash=sig.fingerprint_hash,
+        signature=sig,
         posted={"r_posted"},
     )
-    # 今回 + 同一 hash のローカル記録、posted 除外、hash 不一致除外。
-    assert ids == ["r_new", "r_old"]
+    # 今回 + 同一署名のローカル記録、posted 除外、署名不一致除外。
+    assert [e.run_id for e in entries] == ["r_new", "r_old"]
+    # 元 run の source_issue を保持する（現在 Issue へ書き換えない）。
+    assert entries[0].source_issue == "304"  # current
+    assert entries[1].source_issue == "296"  # backfill 元
+
+
+def test_backfill_excludes_hash_collision_with_different_signature() -> None:
+    """同じ fingerprint_hash でも cause / exception_type / schema が異なれば別インシデント。"""
+    from kaji_harness.recovery.incident import OccurrenceRecord
+
+    sig = _sig(_HASH_A, cause="internal", exc="VerdictNotFound")
+    # 同一 hash だが cause / exception_type が異なる過去 run（別インシデント）。
+    other_cause = _sig(_HASH_A, cause="environment", exc="VerdictNotFound")
+    other_exc = _sig(_HASH_A, cause="internal", exc="OSError")
+    other_schema = IncidentSignature(
+        schema_version=2,
+        cause="internal",
+        exception_type="VerdictNotFound",
+        fingerprint="normalized fingerprint text",
+        fingerprint_hash=_HASH_A,
+    )
+    records = [
+        OccurrenceRecord(1, other_cause, "r_env", "296", "implement", "dev.yaml", "t"),
+        OccurrenceRecord(1, other_exc, "r_os", "297", "implement", "dev.yaml", "t"),
+        OccurrenceRecord(1, other_schema, "r_v2", "298", "implement", "dev.yaml", "t"),
+        OccurrenceRecord(1, sig, "r_same", "299", "implement", "dev.yaml", "t"),
+    ]
+    entries = backfill_entries(
+        current_run_id="r_new",
+        current_source_issue="304",
+        local_records=records,
+        signature=sig,
+        posted=set(),
+    )
+    # 完全一致（sig）のみ backfill。hash 衝突の別署名は除外。
+    assert [e.run_id for e in entries] == ["r_new", "r_same"]
 
 
 # --- あいまい照合（助言専用） ---
@@ -283,12 +320,33 @@ def test_incident_issue_regression_links_prior() -> None:
 
 def test_occurrence_comment_markers_at_line_start() -> None:
     sig = _sig()
-    body = render_occurrence_comment(_ctx(sig), marker_run_ids=["r_new", "r_old"], count=2)
+    entries = [
+        BackfillEntry(run_id="r_new", source_issue="304"),
+        BackfillEntry(run_id="r_old", source_issue="304"),
+    ]
+    body = render_occurrence_comment(_ctx(sig), marker_entries=entries, count=2)
     lines = body.splitlines()
     assert lines[0] == render_occurrence_marker(sig, run_id="r_new", source_issue="304")
     assert lines[1] == render_occurrence_marker(sig, run_id="r_old", source_issue="304")
     assert "`2`" in body  # N=2
     assert not _AUTO_CLOSE_RE.search(body)
+
+
+def test_occurrence_comment_preserves_backfill_source_issue() -> None:
+    """backfill marker は元 run の source_issue を保持し、現在 Issue へ改変しない。"""
+    sig = _sig()
+    entries = [
+        BackfillEntry(run_id="r_new", source_issue="304"),  # current
+        BackfillEntry(run_id="r_old", source_issue="296"),  # backfill 元
+    ]
+    body = render_occurrence_comment(_ctx(sig), marker_entries=entries, count=2)
+    lines = body.splitlines()
+    # current run は現在 Issue、backfill 元は元の source_issue=296 のまま。
+    assert lines[0] == render_occurrence_marker(sig, run_id="r_new", source_issue="304")
+    assert lines[1] == render_occurrence_marker(sig, run_id="r_old", source_issue="296")
+    assert "source_issue=296" in body
+    # 過去 run の source_issue が current の 304 に書き換わっていない。
+    assert "run_id=r_old source_issue=304" not in body
 
 
 # --- incident 状態の直列化 ---

@@ -441,13 +441,17 @@ def render_incident_issue(
 
 
 def render_occurrence_comment(
-    ctx: IncidentContext, *, marker_run_ids: list[str], count: int
+    ctx: IncidentContext, *, marker_entries: list[BackfillEntry], count: int
 ) -> str:
-    """occurrence コメント本文を返す（marker が行頭・1 run_id 1 行、backfill 分を含む）。"""
+    """occurrence コメント本文を返す（marker が行頭・1 run 1 行、backfill 分を含む）。
+
+    各 marker は entry が保持する **元 run の source_issue** で描画する（backfill が
+    一次情報＝発生元 issue を現在 Issue へ改変しない）。
+    """
     sig = ctx.signature
     markers = [
-        render_occurrence_marker(sig, run_id=rid, source_issue=ctx.source_issue)
-        for rid in marker_run_ids
+        render_occurrence_marker(sig, run_id=e.run_id, source_issue=e.source_issue)
+        for e in marker_entries
     ]
     lines = [*markers, "", "## インシデント再発", "", "| 項目 | 値 |", "|------|----|"]
     lines += [
@@ -456,8 +460,8 @@ def render_occurrence_comment(
         f"| failed_step | `{ctx.failed_step or 'n/a'}` |",
         f"| 再発回数 (N) | `{count}` |",
     ]
-    if len(marker_run_ids) > 1:
-        backfilled = ", ".join(r for r in marker_run_ids if r != ctx.run_id)
+    if len(marker_entries) > 1:
+        backfilled = ", ".join(e.run_id for e in marker_entries if e.run_id != ctx.run_id)
         lines += ["", f"backfill した過去 run_id: {backfilled}"]
     lines += ["", "## 根拠", ""]
     if ctx.evidence:
@@ -487,29 +491,49 @@ def posted_run_ids(comments: list[Comment], fingerprint_hash: str) -> set[str]:
     return seen
 
 
-def backfill_run_ids(
+@dataclass(frozen=True)
+class BackfillEntry:
+    """backfill 対象 1 件。``run_id`` と **元 run の ``source_issue``** を対で保持する。
+
+    marker 描画時に各 run の一次情報（発生元 issue）を保つための最小構造。current run も
+    同型で表し、描画側が current / backfill を区別せず扱えるようにする。
+    """
+
+    run_id: str
+    source_issue: str
+
+
+def backfill_entries(
     *,
     current_run_id: str,
+    current_source_issue: str,
     local_records: list[OccurrenceRecord],
-    fingerprint_hash: str,
+    signature: IncidentSignature,
     posted: set[str],
-) -> list[str]:
-    """今回 + ローカル記録のうち、remote に未投稿の run_id を投稿順に列挙する（重複排除）。
+) -> list[BackfillEntry]:
+    """今回 + ローカル記録のうち、remote に未投稿の run を投稿順に列挙する（run_id で重複排除）。
 
-    起票失敗 → ローカル記録 → 次回失敗時の照合で拾う、を専用 flush キューなしで成立させる。
+    ローカル記録は **完全な識別署名の一致**（schema_version / cause / exception_type /
+    fingerprint_hash）で絞る。``fingerprint_hash`` だけで絞ると、同一の正規化エラー文でも
+    cause / exception_type が異なる別インシデント（例: ``environment/OSError`` と
+    ``internal/VerdictNotFound``）を混入させ、再発回数まで汚染するため。
+
+    各 entry は元 run の ``source_issue`` を保持し、backfill marker が一次情報を改変しない
+    ようにする。起票失敗 → ローカル記録 → 次回失敗時の照合で拾う、を専用 flush キューなしで
+    成立させる。
     """
-    ordered: list[str] = []
+    ordered: list[BackfillEntry] = []
     seen: set[str] = set()
 
-    def _add(run_id: str) -> None:
+    def _add(run_id: str, source_issue: str) -> None:
         if run_id and run_id not in seen and run_id not in posted:
             seen.add(run_id)
-            ordered.append(run_id)
+            ordered.append(BackfillEntry(run_id=run_id, source_issue=source_issue))
 
-    _add(current_run_id)
+    _add(current_run_id, current_source_issue)
     for rec in local_records:
-        if rec.signature.fingerprint_hash == fingerprint_hash:
-            _add(rec.run_id)
+        if rec.signature.matches(signature):
+            _add(rec.run_id, rec.source_issue)
     return ordered
 
 
@@ -551,17 +575,18 @@ def execute_incident_action(
         target_id = action.target_id
         assert target_id is not None
         posted = posted_run_ids(existing_comments, fingerprint_hash)
-        marker_run_ids = backfill_run_ids(
+        marker_entries = backfill_entries(
             current_run_id=ctx.run_id,
+            current_source_issue=ctx.source_issue,
             local_records=local_records,
-            fingerprint_hash=fingerprint_hash,
+            signature=ctx.signature,
             posted=posted,
         )
-        count = len(posted | set(marker_run_ids))
+        count = len(posted | {e.run_id for e in marker_entries})
         # crash window: 今回 run_id が既に投稿済みでも N を汚さない（marker は再投稿しない）。
-        if not marker_run_ids:
-            marker_run_ids = [ctx.run_id]
-        body = render_occurrence_comment(ctx, marker_run_ids=marker_run_ids, count=count)
+        if not marker_entries:
+            marker_entries = [BackfillEntry(run_id=ctx.run_id, source_issue=ctx.source_issue)]
+        body = render_occurrence_comment(ctx, marker_entries=marker_entries, count=count)
         comment = provider.comment_issue(target_id, body)  # type: ignore[attr-defined]
         return IncidentOutcome(
             incident_ref=comment.ref or target_id,
@@ -579,16 +604,17 @@ def execute_incident_action(
         labels=[INCIDENT_LABEL, INCIDENT_STATUS_INVESTIGATING],
     )
     # 起票直後の初回 occurrence コメント（remote は空集合 = 全 backfill 対象）。
-    marker_run_ids = backfill_run_ids(
+    marker_entries = backfill_entries(
         current_run_id=ctx.run_id,
+        current_source_issue=ctx.source_issue,
         local_records=local_records,
-        fingerprint_hash=fingerprint_hash,
+        signature=ctx.signature,
         posted=set(),
     )
-    if not marker_run_ids:
-        marker_run_ids = [ctx.run_id]
-    count = len(set(marker_run_ids))
-    comment_body = render_occurrence_comment(ctx, marker_run_ids=marker_run_ids, count=count)
+    if not marker_entries:
+        marker_entries = [BackfillEntry(run_id=ctx.run_id, source_issue=ctx.source_issue)]
+    count = len({e.run_id for e in marker_entries})
+    comment_body = render_occurrence_comment(ctx, marker_entries=marker_entries, count=count)
     provider.comment_issue(issue.id, comment_body)  # type: ignore[attr-defined]
     return IncidentOutcome(
         incident_ref=issue.id,

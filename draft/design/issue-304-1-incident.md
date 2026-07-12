@@ -127,6 +127,11 @@ fingerprint は固定文字列 `"<no-error-text>"`（空指紋でも署名は成
    （**hash は redaction 後の text から生成**。署名 marker 経由で secrets が漏れない）
 2. ANSI エスケープシーケンス除去
 3. traceback のフレーム行（`File "...", line N, in ...`）を除去（例外メッセージ行は残す）
+3.5. **可変 payload の tail の除去**: `Last <n> chars:` 以降を `<TAIL>` に置換
+   （#301 の 3 再発を同値にする要の規則。kaji 自身の例外メッセージ構造に対応する
+   除去 pattern として fixture で固定する）。**allowlist 保護（4.）より前に行う**のは、
+   `Last 500 chars:` の桁数 `500` が既知 HTTP status として誤って sentinel 保護され、
+   tail 正規表現の `\d+` を割って tail が丸ごと残るのを防ぐため。
 4. **保持 allowlist の保護**: 原因を識別する数値を sentinel 化して 5. の置換から守る
    - 文脈付き数値: `HTTP <n>` / `status [code] <n>` / `exit [code] <n>` / `errno <n>` /
      `code <n>`
@@ -135,9 +140,6 @@ fingerprint は固定文字列 `"<no-error-text>"`（空指紋でも署名は成
    - run_id（`YYMMDDHHMMSS[-NNN]`）→ `<RUN_ID>`、ISO 8601 時刻 → `<TS>`
    - 絶対パス → `<PATH>`、`#<数字>`（issue 参照）→ `<ISSUE>`、`port <n>` → `port <N>`
    - UUID / 8 桁以上の hex 列 → `<HEX>`、上記以外の 4 桁以上の数字列 → `<N>`
-   - **可変 payload の tail**: `Last <n> chars:` 以降を `<TAIL>` に置換
-     （#301 の 3 再発を同値にする要の規則。kaji 自身の例外メッセージ構造に対応する
-     除去 pattern として fixture で固定する）
 6. allowlist sentinel の復元
 7. 空白正規化（改行含む連続 whitespace → 単一スペース、前後 strip）
 8. `FINGERPRINT_LIMIT` で切り詰め
@@ -247,9 +249,16 @@ fingerprint は固定文字列 `"<no-error-text>"`（空指紋でも署名は成
   では issue 起票は no-op とし、この記録のみ行う（v1 の provider 契約）。
 - 読み取り時、parse できない行は skip する（fail-open）。posted フラグの更新等の
   **書き換えは行わない**（remote marker が「投稿済み集合」の正本）。
-- **backfill**: occurrence コメント投稿時、同一署名のローカル記録のうち remote の occurrence
-  marker に存在しない `run_id` を同じコメントに marker 行として同梱する。これにより
+- **backfill**: occurrence コメント投稿時、**完全な識別署名**（`schema_version` / `cause` /
+  `exception_type` / `fingerprint_hash` の 4 値一致）が一致するローカル記録のうち、remote の
+  occurrence marker に存在しない `run_id` を同じコメントに marker 行として同梱する。これにより
   「起票失敗 → ローカル記録 → 次回失敗時の照合で拾う」が専用 flush キューなしで成立する。
+  - **署名は完全一致で絞る**（`fingerprint_hash` 単独では不可）。同一の正規化エラー文でも
+    `cause` / `exception_type` / `schema_version` が異なれば別インシデントであり、hash だけで
+    拾うと異なる障害を混入させ再発回数 N を汚染する。
+  - **各 backfill marker は元 run の `source_issue` を保持する**。marker の `source_issue` は
+    その run が属した Issue（一次情報）であり、backfill する現在 run の Issue へ書き換えない。
+    したがって backfill 対象は `(run_id, source_issue)` の対で保持・描画する。
 
 ### provider 拡張（v1: GitHub のみ）
 

@@ -408,6 +408,98 @@ def test_backfill_includes_prior_run_id_after_create_failure(tmp_path: Path) -> 
     assert "260712010000" in run_ids  # backfill された過去 run
 
 
+def test_backfill_marker_preserves_original_source_issue(tmp_path: Path) -> None:
+    """別 Issue の過去 run を backfill しても marker は元の source_issue を保持する。"""
+    from kaji_harness.recovery.classify import classify_failure
+    from kaji_harness.recovery.incident import (
+        OCCURRENCE_SCHEMA_VERSION,
+        OccurrenceRecord,
+        append_occurrence,
+    )
+
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_run(tmp_path)  # 今回 = Issue #304 の run
+
+    # 別 Issue #296 の過去 run を、同一署名でローカル occurrence 記録へ事前 seed。
+    snap = collect_snapshot(
+        run_dir=run_dir,
+        artifacts_dir=tmp_path / ".kaji-artifacts",
+        issue_id=_ISSUE,
+        provider_available=True,
+    )
+    sig = compute_signature(snap, classify_failure(snap))
+    append_occurrence(
+        tmp_path / ".kaji-artifacts",
+        OccurrenceRecord(
+            schema_version=OCCURRENCE_SCHEMA_VERSION,
+            signature=sig,
+            run_id="260711000000",
+            source_issue="296",
+            failed_step="implement",
+            workflow_path="dev.yaml",
+            recorded_at="t",
+        ),
+    )
+
+    provider = _IncidentProvider()
+    _handler(tmp_path, run_dir, provider=provider).run()
+
+    occ = _occurrence_comments(provider)
+    markers = parse_occurrence_markers(occ[0][1])
+    by_run = {m.run_id: m.source_issue for m in markers}
+    assert by_run["260712010000"] == "304"  # 今回 run は現在 Issue
+    assert by_run["260711000000"] == "296"  # backfill 元 run は元の source_issue を保持
+
+
+def test_backfill_excludes_hash_collision_different_cause(tmp_path: Path) -> None:
+    """同一 hash でも cause が異なる過去 run は別インシデントとして backfill から除外する。"""
+    from dataclasses import replace as _replace
+
+    from kaji_harness.recovery.classify import classify_failure
+    from kaji_harness.recovery.incident import (
+        OCCURRENCE_SCHEMA_VERSION,
+        OccurrenceRecord,
+        append_occurrence,
+    )
+
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_run(tmp_path)  # 今回 = Issue #304 の run
+
+    snap = collect_snapshot(
+        run_dir=run_dir,
+        artifacts_dir=tmp_path / ".kaji-artifacts",
+        issue_id=_ISSUE,
+        provider_available=True,
+    )
+    sig = compute_signature(snap, classify_failure(snap))
+    # 同一 fingerprint_hash だが cause が異なる別インシデントの過去 run。
+    other_sig = _replace(sig, cause="environment")
+    assert other_sig.fingerprint_hash == sig.fingerprint_hash
+    append_occurrence(
+        tmp_path / ".kaji-artifacts",
+        OccurrenceRecord(
+            schema_version=OCCURRENCE_SCHEMA_VERSION,
+            signature=other_sig,
+            run_id="260711000000",
+            source_issue="296",
+            failed_step="implement",
+            workflow_path="dev.yaml",
+            recorded_at="t",
+        ),
+    )
+
+    provider = _IncidentProvider()
+    _handler(tmp_path, run_dir, provider=provider).run()
+
+    occ = _occurrence_comments(provider)
+    markers = parse_occurrence_markers(occ[0][1])
+    run_ids = {m.run_id for m in markers}
+    assert "260712010000" in run_ids  # 今回のみ
+    assert "260711000000" not in run_ids  # 別 cause の同一 hash run は混入しない
+
+
 # --- transient 即クローズ ---
 
 
