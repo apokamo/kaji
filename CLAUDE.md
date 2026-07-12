@@ -22,6 +22,7 @@ PR 作成後のレビュー収束サイクルを管理する。
 | PR 作成 | `/i-pr` |
 | PR レビュー後 | `/pr-fix` / `/pr-verify` / `/review-cycle` |
 | 完了 | `/issue-close` |
+| インシデント調査（第2層・手動起動） | `/incident-cycle`（内部: `incident-investigate` → `incident-review` → (`incident-fix` → `incident-verify`) → `incident-report`） |
 | Release | `/release` |
 
 各スキルの役割詳細: [docs/dev/workflow_guide.md](docs/dev/workflow_guide.md)
