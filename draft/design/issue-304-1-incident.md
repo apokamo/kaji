@@ -57,11 +57,11 @@ classification）を新設する。**完全純コード（LLM を含めない）
 |------|------|
 | `kaji_harness/recovery/signature.py` | **新規**。識別署名の正規化・算出・あいまい類似（すべて純関数） |
 | `kaji_harness/recovery/incident.py` | **新規**。marker 生成/厳格 parse、照合判定（純関数）、テンプレート描画（純関数）、ローカル occurrence 記録、起票/追記 orchestrator |
-| `kaji_harness/recovery/models.py` | `RecoveryDecision` に `incident_ref: str \| None` を追加（additive。`RECOVERY_SCHEMA_VERSION` は 1 のまま） |
+| `kaji_harness/recovery/models.py` | `RecoveryDecision` に `incident_ref: str \| None` / `incident_action: str \| None` / `incident_transient_closed: bool` を追加（additive。`RECOVERY_SCHEMA_VERSION` は 1 のまま） |
 | `kaji_harness/recovery/handler.py` | triage コメント投稿後に incident 記録を呼ぶ統合（fail-open）、auto-resume 成功時の transient 即クローズ |
 | `kaji_harness/recovery/__init__.py` | 新規公開シンボルの re-export |
-| `kaji_harness/providers/base.py` | `IncidentSearchCapable` protocol（`search_issues_all`）を追加 |
-| `kaji_harness/providers/github.py` | `search_issues_all()`（全件 pagination の incident 検索）を追加 |
+| `kaji_harness/providers/base.py` | `IncidentSearchCapable` protocol（`search_issues_all` / `list_issue_comments_all`）を追加 |
+| `kaji_harness/providers/github.py` | `search_issues_all()`（全件 pagination の incident 検索）/ `list_issue_comments_all()`（コメント全件 pagination）/ `_gh_json_slurp()`（複数 page JSON の decode）を追加 |
 | `kaji_harness/logger.py` | `incident_recorded` / `incident_recording_failed` の run.log event を追加 |
 | `.github/labels.yml` | incident 2 軸ラベル 8 件を追加 |
 | `tests/` | S / M / L（後述） |
@@ -81,10 +81,10 @@ classification）を新設する。**完全純コード（LLM を含めない）
 
 1. **ローカル occurrence 記録**（全 provider・全失敗で必ず）:
    `<artifacts_dir>/incidents/occurrences.jsonl` に 1 行 append
-2. **GitHub provider のみ**: インシデントイシュー新規起票 or 既存イシューへの occurrence
-   コメント追記（下記照合規則）
-3. `recovery.json` の `incident_ref` 更新、`run.log` への `incident_recorded` /
-   `incident_recording_failed` event
+2. **GitHub provider のみ**: インシデントイシュー新規起票（＋初回 occurrence コメント投稿）
+   or 既存イシューへの occurrence コメント追記（下記照合規則）
+3. `recovery.json` の `incident_ref` / `incident_action` / `incident_transient_closed` 更新、
+   `run.log` への `incident_recorded` / `incident_recording_failed` event
 4. auto-resume が成功（child run `COMPLETE`）し、かつ **この run が起票した** インシデントに
    対する `incident:cause:transient` 付与＋クローズ
 
@@ -109,7 +109,10 @@ def compute_signature(
 
 def normalize_error_text(text: str) -> str: ...   # 正規化パイプライン単体（fixture で固定）
 
-def similarity(a: str, b: str) -> float: ...       # difflib.SequenceMatcher(None, a, b).ratio()
+def similarity(current: str, candidate: str) -> float: ...
+    # difflib.SequenceMatcher(None, a=current, b=candidate).ratio()
+    # ratio() は autojunk 等のヒューリスティクスにより引数順で結果が変わりうるため、
+    # 「第1引数 = 今回の fingerprint、第2引数 = 候補側 fingerprint」を公開契約として固定する
 ```
 
 **canonical input の優先順位**（#303 決定 E）: `attempt_error` を主とし、空のときのみ
@@ -144,7 +147,8 @@ fingerprint は固定文字列 `"<no-error-text>"`（空指紋でも署名は成
 作らない。旧インシデントへのリンクは人間が 1 回張れば済む — #303 決定 E）。
 
 **あいまい照合（助言専用）**: 完全一致しなかった候補のうち同一 `exception_type` **または**
-同一 `cause` のものに対し `similarity(fingerprint, candidate_fingerprint)` を取り、
+同一 `cause` のものに対し `similarity(current_fingerprint, candidate_fingerprint)`（引数順は
+上記契約で固定）を取り、
 `SIMILARITY_THRESHOLD` 以上を score 降順で最大 5 件列挙する。**起票・カウントの判断には
 一切使わない**。resolved 済み候補も列挙対象（リグレッション示唆として価値がある）。
 候補側 fingerprint はインシデント本文の fenced block（後述）から取得し、block が無い /
@@ -175,9 +179,18 @@ fingerprint は固定文字列 `"<no-error-text>"`（空指紋でも署名は成
   ```
   ````
 
-**再発回数の導出**: 対象イシューの全コメント中、hash が一致する valid occurrence marker の
-**ユニーク `run_id` 件数**。可変カウンタは持たない（crash window で同一 run のコメントが
-二重投稿されてもカウントが汚れない — at-least-once ＋ 読み取り時 dedupe、#303 決定 F）。
+**再発回数の導出（count の正本は「コメント」に一本化する）**:
+
+- 正本 = 対象イシューの**全コメント**（`list_issue_comments_all()` で pagination 取得）中、
+  hash が一致する valid occurrence marker の**ユニーク `run_id` 件数**。
+- **イシュー本文には occurrence marker を置かない**（identity marker と fingerprint block
+  のみ）。本文をカウント対象に混ぜない。
+- **新規起票時にも、起票直後に初回 occurrence コメントを投稿する**（起票した run の marker
+  を含む）。これにより導出が一様になる: 起票直後 N=1、初回再発で N=2。起票成功後に初回
+  occurrence コメント投稿が失敗した場合は N=0 のままだが、ローカル記録が残るため次回の
+  同一署名失敗時の backfill で当該 run_id の marker が投稿され自己修復する（at-least-once）。
+- 可変カウンタは持たない。crash window で同一 run のコメントが二重投稿されてもユニーク
+  `run_id` 件数は不変（読み取り時 dedupe、#303 決定 F）。
 
 ### 照合規則（`plan_incident_action()`、純関数）
 
@@ -194,6 +207,11 @@ fingerprint は固定文字列 `"<no-error-text>"`（空指紋でも署名は成
 - 分岐は上から評価する（open 一致が最優先）。同分岐内に複数一致した場合は **issue 番号最小
   （最古）を追記先に選び**、残りを run.log に記録する（決定論を保つ）。
 - `create_regression` の新規イシューは通常の `create` と同型＋「関連」節に旧イシュー参照を持つ。
+- **コメント全件取得のタイミング**: `recur` 確定後、**追記先に選んだ 1 件に対してのみ**
+  `list_issue_comments_all()` を呼ぶ（候補全件のコメントは取得しない）。取得した全コメント
+  から既投稿ユニーク `run_id` 集合を求め、backfill 差分と投稿後の N を導出する。
+  `create` / `create_regression` 経路では remote marker 集合は空集合として扱い、コメント
+  取得は行わない（backfill 対象はローカル記録の同一署名全件）。
 
 ### イシュー・コメントのテンプレート（純関数、LLM なし）
 
@@ -205,11 +223,15 @@ fingerprint は固定文字列 `"<no-error-text>"`（空指紋でも署名は成
 - **本文**: identity marker（1 行目）→ 概要テーブル（cause / exception_type / schema /
   hash / 初回 run_id / 発生元 issue / failed_step / workflow）→ fingerprint block →
   根拠（`sanitize_evidence()` 済みの snapshot evidence ＋ attempt_error 抜粋 ≤500 字）→
-  関連の可能性（あいまい候補、score 付き）→ ラベル運用ガイドへのリンク
+  関連の可能性（あいまい候補、score 付き）→ ラベル運用ガイドへのリンク。
+  **occurrence marker は本文に置かない**（count の正本はコメントのみ）
 - **occurrence コメント**: occurrence marker（行頭、backfill 分を含め 1 run_id 1 行）→
   再発情報テーブル（今回 run_id / 発生元 issue / failed_step / 導出した再発回数 N）→
   根拠抜粋 → あいまい候補（あれば）
-- **起票時ラベル**: `incident` ＋ `incident:investigating`（status 軸の初期値）
+- **起票フロー**: `create_issue`（ラベル `incident` ＋ `incident:investigating`）→ 直後に
+  **初回 occurrence コメントを投稿**（起票 run の marker ＋ ローカル記録の同一署名
+  backfill 分。投稿後 N=1 以上）。`recur` フローは既存イシューへの occurrence コメント
+  1 通のみ
 
 ### ローカル occurrence 記録（fail-open の受け皿）
 
@@ -236,16 +258,36 @@ fingerprint は固定文字列 `"<no-error-text>"`（空指紋でも署名は成
 @runtime_checkable
 class IncidentSearchCapable(Protocol):
     def search_issues_all(self, *, labels: list[str], state: str = "all") -> list[Issue]:
-        """label で絞った Issue を全件 pagination で返す（limit デフォルト依存禁止）。"""
+        """label で絞った Issue を全件 pagination で返す（limit デフォルト依存禁止）。
+
+        注: GitHub REST の issue 一覧はコメント本文を内包しない（comments_url のみ）ため、
+        戻り値の Issue.comments は空。コメントは list_issue_comments_all() で別途取得する。
+        """
+
+    def list_issue_comments_all(self, issue_id: str) -> list[Comment]:
+        """対象 Issue の全コメントを pagination で取得する（100 件超でも全件）。"""
 
 # providers/github.py — GitHubProvider に追加
 def search_issues_all(self, *, labels, state="all") -> list[Issue]: ...
+def list_issue_comments_all(self, issue_id) -> list[Comment]: ...
+def _gh_json_slurp(self, *args) -> list[object]: ...   # --paginate --slurp 用 decode helper
 ```
 
-- 実装は `gh api --paginate repos/{repo}/issues?labels=...&state=...`（GitHub REST
+- **複数 page JSON の decode 契約**: `gh api --paginate` は page ごとに**別々の JSON**を順次
+  出力するため、既存 `_gh_json()`（stdout 全体への単一 `json.loads()`）は 2 page 以上で
+  invalid JSON になり使えない。新設 `_gh_json_slurp()` は **`--paginate --slurp` を併用**し、
+  「各 page の JSON を要素として包んだ外側配列」を 1 回の `json.loads()` で読み、
+  **1 段 flatten** して全要素を返す（list endpoint 専用。page 数 1 でも同じ経路）。
+  `search_issues_all` / `list_issue_comments_all` は必ずこの helper を経由する。
+- `search_issues_all` の実装は `gh api --paginate --slurp
+  repos/{repo}/issues?labels=...&state=...`（GitHub REST
   `GET /repos/{owner}/{repo}/issues`）。このエンドポイントは PR も返すため
-  `pull_request` キーを持つ要素を除外する。`gh issue list --limit` は上限依存があるため
-  使わない（全件 pagination の契約 — #303 決定 F）。
+  `pull_request` キーを持つ要素を flatten 後に除外する。`gh issue list --limit` は上限依存が
+  あるため使わない（全件 pagination の契約 — #303 決定 F）。
+- `list_issue_comments_all` の実装は `gh api --paginate --slurp
+  repos/{repo}/issues/{issue_id}/comments`（GitHub REST
+  `GET /repos/{owner}/{repo}/issues/{issue_number}/comments`）。REST payload
+  （`body` / `created_at` / `user.login`）を既存 `Comment` に写像する。
 - incident 記録は `isinstance(provider, IncidentSearchCapable)` かつ `not is_readonly` の
   場合のみ remote 起票・追記に進む。それ以外はローカル記録のみで `skipped_provider`。
 - 既存 `edit_issue(add_labels=...)` / `close_issue(reason="completed")` / `comment_issue` /
@@ -271,21 +313,45 @@ def _record_incident(self, decision):
             return decision
         candidates = self.provider.search_issues_all(labels=["incident"], state="all")
         action = plan_incident_action(sig, parse_candidates(candidates))   # 純関数
-        outcome = execute_incident_action(self.provider, action, ...)     # create / comment
+        # recur のみ: 追記先 1 件の全コメントを取得し、既投稿 run_id 集合と N を導出
+        existing = (self.provider.list_issue_comments_all(action.target_id)
+                    if action.kind == "recurred" else [])
+        outcome = execute_incident_action(self.provider, action, existing, ...)
+        # create / create_regression は起票直後に初回 occurrence コメントも投稿する
         self._run_logger.log_incident_recorded(outcome)
-        return replace(decision, incident_ref=outcome.incident_ref)
+        return replace(decision,
+                       incident_ref=outcome.incident_ref,
+                       incident_action=outcome.action)   # "created"/"recurred"/"regression_created"
     except Exception as exc:   # fail-open: triage / recovery 判断を一切阻害しない
         self._run_logger.log_incident_recording_failed(exc)
         self.stderr.write(f"WARNING: incident recording failed: {exc}\n")
         return decision
 ```
 
+**incident 状態の永続化**（`RecoveryDecision` への additive フィールド）:
+
+| フィールド | 型 | 意味 |
+|-----------|-----|------|
+| `incident_ref` | `str \| None` | occurrence を記録した incident issue への参照（再入ガード。`triage_comment_ref` と同型） |
+| `incident_action` | `str \| None` | 実行したアクション: `created` / `recurred` / `regression_created`。未実施・失敗・スキップは `None` |
+| `incident_transient_closed` | `bool` | transient 即クローズが完了済みか（close 再入の冪等ガード） |
+
+3 フィールドとも `to_dict` / `from_dict` で直列化し、`from_dict` は欠落時にデフォルト
+（`None` / `False`）へ倒す（旧 `recovery.json` を読める。`RECOVERY_SCHEMA_VERSION` は 1 のまま）。
+`_record_incident` の直後に `_record()` で `recovery.json` へ書き出すため、プロセス中断後の
+再読でも create/recur の判別が復元できる。
+
 **transient 即クローズ経路**: `_resume()` で child run の final_status が `COMPLETE` になった
-とき、**この run の incident アクションが `create` / `create_regression`（= 自分が起票した）
-だった場合のみ**、`incident:cause:transient` を付与し `incident:investigating` を外して
-`close_issue(reason="completed")` する（fail-open）。既存イシューへの `recur` だった場合は
-何もしない（集約先の履歴が transient とは限らないため）。閉じた transient インシデントは
-照合規則により以後も closed のまま occurrence が追記され、頻発パターンの昇格判断材料になる。
+とき、**`decision.incident_action in {"created", "regression_created"}`（= この run が起票した）
+かつ `incident_transient_closed` が `False` の場合のみ**、`incident:cause:transient` を付与し
+`incident:investigating` を外して `close_issue(reason="completed")` する（fail-open）。
+`recurred` / `None` は対象外（集約先の履歴が transient とは限らない／起票していない）。
+close 完了後に `incident_transient_closed=True` を `recovery.json` へ書き出す。close 処理
+途中で中断され再入した場合（`kaji recover` 等）は budget guard により `_resume()` 自体が
+再実行されないため二重 close は構造的に起きないが、ラベル付与と close の間で中断した場合の
+部分状態は許容する（ラベル操作・close はいずれも冪等または「既に closed」を成功扱いにする
+best-effort で、修復は人間 1 操作で足りる）。閉じた transient インシデントは照合規則により
+以後も closed のまま occurrence が追記され、頻発パターンの昇格判断材料になる。
 
 ### エラーハンドリング（fail-open 契約）
 
@@ -311,8 +377,15 @@ def _record_incident(self, decision):
 - **ラベルは宣言的管理**: `.github/labels.yml` ＋ `labels-sync.yml` が正本。runtime での
   ラベル自動作成はしない。ラベル不在で起票が失敗しても fail-open ＋ ローカル記録で回復する
   （merge 後の labels-sync（main push トリガ）で解消する運用）
-- **recovery.json の互換**: `incident_ref` は additive・optional。`from_dict` は欠落時
-  `None`（旧 artifact を読める）。`RECOVERY_SCHEMA_VERSION` は 1 のまま
+- **recovery.json の互換**: `incident_ref` / `incident_action` / `incident_transient_closed`
+  は additive・optional。`from_dict` は欠落時にデフォルト（`None` / `False`）へ倒す
+  （旧 artifact を読める）。`RECOVERY_SCHEMA_VERSION` は 1 のまま
+- **gh CLI バージョン**: `gh api --slurp` は gh 2.40（2023-12）以降。既存の gh 前提
+  （provider.type=github は gh CLI 必須）に含まれる範囲とし、`--slurp` 非対応の古い gh では
+  `_gh_json_slurp` が invalid flag エラー → fail-open でローカル記録のみに縮退する
+- **`--no-failure-triage` との関係**: 第1層は failure triage の内部ステップであり、
+  `--no-failure-triage`（`[execution] failure_triage = false`）で triage ごと無効になる。
+  「全失敗を例外なく記録」は triage が有効な失敗に対する契約である（運用ガイドにも明記する）
 - 依存追加なし（`difflib` / `hashlib` / `re` は標準ライブラリ）
 
 ## 方針（Minimal How / データフロー）
@@ -325,12 +398,16 @@ kaji run 失敗
        ├─ ★ _record_incident                                    （新規・fail-open）
        │    ├─ compute_signature（純関数: 正規化→redaction 済み hash）
        │    ├─ append_occurrence（ローカル jsonl、全 provider）
-       │    ├─ GitHub のみ: search_issues_all（incident ラベル・全件 pagination）
+       │    ├─ GitHub のみ: search_issues_all（incident ラベル・全件 pagination・--slurp）
        │    │    → identity marker 厳格 parse → plan_incident_action（純関数）
-       │    ├─ create（新規/リグレッション）or comment（occurrence + backfill markers）
-       │    └─ recovery.json.incident_ref 更新・run.log event
-       └─ decision: resume → child run 起動 → COMPLETE かつ自分が起票
-            → ★ transient 即クローズ（cause:transient 付与＋close）
+       │    ├─ recur: list_issue_comments_all（全件 pagination）→ 既投稿 run_id 集合
+       │    │    → occurrence コメント（今回 + backfill markers）
+       │    ├─ create/regression: create_issue → 初回 occurrence コメント（N=1）
+       │    └─ recovery.json の incident_ref / incident_action 更新・run.log event
+       └─ decision: resume → child run 起動 → COMPLETE
+            かつ incident_action ∈ {created, regression_created}
+            → ★ transient 即クローズ（cause:transient 付与＋close＋
+               incident_transient_closed=True）
 ```
 
 新設モジュールの責務（名前と責務のみ）:
@@ -385,9 +462,14 @@ kaji run 失敗
 - **`plan_incident_action` の分岐**: open 一致 / closed+transient 一致 / closed 人間 resolve
   一致（→ regression 新規）/ 一致なし / 複数一致時の最小 issue 番号選択 / schema version
   不一致 → 新規 / 読めない identity marker の候補 skip
-- **再発回数導出**: 同一 run_id の重複 marker がカウントを増やさない（ユニーク件数）
+- **再発回数導出**: 起票直後（初回 occurrence コメントのみ）で N=1、初回再発で N=2、
+  同一 run_id の重複 marker（crash window の二重投稿）で N 不変、本文の marker 類似文字列を
+  カウントに含めない（正本はコメントのみ）
+- **incident 状態の直列化**: `incident_ref` / `incident_action` / `incident_transient_closed`
+  の to_dict/from_dict round-trip と、旧 `recovery.json`（フィールド欠落）読込時のデフォルト
 - **あいまい照合**: 閾値 0.8 の境界、同一 exception_type / cause フィルタ、score 降順、
-  起票判断に影響しないこと（助言専用）
+  起票判断に影響しないこと（助言専用）、`similarity(current, candidate)` の引数順契約
+  （非対称になる入力例を fixture に含める）
 - **テンプレート描画**: identity / occurrence marker が行頭 1 行目に来る、auto-close hazard
   pattern（`(Clos|Fix|Resolv|Implement)...#N`）を含まない（既存 report テストと同型の regex 検証）
 - `labels.yml` の機械的妥当性は既存 `test_labels_yml.py` が担保（追加分も自動で対象になる）
@@ -396,10 +478,12 @@ kaji run 失敗
 
 - **occurrence store**: append / read の round-trip、破損行 skip、ディレクトリ自動作成
 - **handler 統合（新規起票経路)**: 失敗 run artifact ＋ FakeProvider → incident 起票・
-  ラベル `incident`+`incident:investigating`・`recovery.json.incident_ref` 更新・
+  ラベル `incident`+`incident:investigating`・**起票直後の初回 occurrence コメント（N=1）**・
+  `recovery.json` の `incident_ref` / `incident_action="created"` 更新・
   run.log `incident_recorded` を検証
-- **再発経路**: 既存 incident（identity marker 持ち）を FakeProvider に置き、occurrence
-  コメント追記・回数導出・reopen しないことを検証
+- **再発経路**: 既存 incident（identity marker 持ち）を FakeProvider に置き、
+  `list_issue_comments_all` 経由の既投稿 run_id 集合導出・occurrence コメント追記（N=2）・
+  `incident_action="recurred"`・reopen しないことを検証
 - **crash window の再実行テスト**（完了条件の指定項目）: remote への occurrence 投稿成功後、
   `recovery.json` 保存前に中断したと仮定した状態（remote に marker あり・local の
   `incident_ref` なし）で handler を再実行 → occurrence コメントは再投稿されうるが
@@ -410,15 +494,21 @@ kaji run 失敗
   不変で、ローカル occurrence 記録と `incident_recording_failed` event が残ること
 - **backfill**: 起票失敗 → ローカル記録のみ → 次回失敗（同一署名）で新規起票と同時に
   過去 run_id の marker が同梱されること
-- **transient 即クローズ**: `create` 後に child `COMPLETE` → `cause:transient` 付与＋
-  close 呼び出し。`recur` 後の child `COMPLETE` → close されないこと
+- **transient 即クローズ**: `incident_action` 別の child `COMPLETE` 挙動を網羅 —
+  `created` / `regression_created` → `cause:transient` 付与＋close＋
+  `incident_transient_closed=True` の永続化、`recurred` / `None` → close されないこと。
+  close 済み（`incident_transient_closed=True`）状態での再入で二重 close しないこと、
+  ラベル付与と close の間で中断した部分状態から fail-open で続行できること
 - **非 GitHub provider（LocalProvider / provider=None）**: 起票 no-op・ローカル記録のみ
 
 ### Large テスト
 
 - **large_local（subprocess あり・ネットワークなし）**:
-  - PATH 上の stub `gh` 実行ファイルを使い、`GitHubProvider.search_issues_all` の
-    `gh api --paginate` 呼び出し契約（引数・PR 除外・JSON parse）を実プロセス境界で検証
+  - PATH 上の stub `gh` 実行ファイルを使い、`GitHubProvider.search_issues_all` /
+    `list_issue_comments_all` の `gh api --paginate --slurp` 呼び出し契約を実プロセス境界で
+    検証する。**2 page 以上の出力**（`--slurp` の外側配列に複数 page を格納した stdout）の
+    flatten・全件保持・PR 除外（`pull_request` キー）、および **100 件超コメント**
+    （2 page）のユニーク run_id 導出を含める
   - 既存 `test_recovery_e2e_large_local.py` の系で、失敗 run E2E 後に
     `<artifacts_dir>/incidents/occurrences.jsonl` が生成されることを検証
 - **large_forge（実 GitHub API 疎通）は追加しない**。理由: このテストは production repo に
@@ -455,8 +545,9 @@ kaji run 失敗
 | #301（手動集約の実施記録） | GitHub Issue #301 | 3 再発を 1 本に手動集約した実例。署名キーに step/issue を入れない根拠（#296/`pr-fix`、#298/`implement`×2） |
 | 発生 run artifact | `.kaji-artifacts/296/runs/260711151512/` / `.kaji-artifacts/298/runs/260712010554/` / `.kaji-artifacts/298/runs/260712015008/` | 3 件とも `failure_event.kind=verdict_exception` / `exception_type=VerdictNotFound`、エラー本文は `No verdict delimiter found ... Last 500 chars:` 以降のみ相違（正規化 fixture の正例。本設計書 § 背景に転記済み） |
 | 既存 recovery 実装 | `kaji_harness/recovery/`（`classify.py` / `snapshot.py` / `handler.py` / `report.py` / `models.py`） | pure classify → 副作用は handler の層構造、`sanitize_evidence` / `mask_secrets`、`triage_comment_ref` 再入ガード、best-effort 契約（`cli_main._run_failure_triage`）。本機能はこの延長として設計 |
-| GitHub REST API: List repository issues | https://docs.github.com/en/rest/issues/issues#list-repository-issues | 「GitHub's REST API considers every pull request an issue」— PR が混入するため `pull_request` キーで除外する設計根拠。`labels` / `state` / pagination パラメータの仕様 |
-| gh CLI: `gh api --paginate` | https://cli.github.com/manual/gh_api | `--paginate` が「Make additional HTTP requests to fetch all pages of results」— `gh issue list --limit` のデフォルト依存を避け全件取得する手段 |
+| GitHub REST API: List repository issues | https://docs.github.com/en/rest/issues/issues#list-repository-issues | 「GitHub's REST API considers every pull request an issue」— PR が混入するため `pull_request` キーで除外する設計根拠。一覧レスポンスはコメント本文を内包せず `comments_url` を返す — コメント全件取得を別契約（`list_issue_comments_all`）に分離する根拠 |
+| GitHub REST API: List issue comments | https://docs.github.com/en/rest/issues/comments#list-issue-comments | `GET /repos/{owner}/{repo}/issues/{issue_number}/comments` が `per_page`（最大 100）の pagination 対象 — 100 件超コメントで全件 pagination が必須になる根拠 |
+| gh CLI: `gh api --paginate` / `--slurp` | https://cli.github.com/manual/gh_api | `--paginate` は「Make additional HTTP requests to fetch all pages of results」だが各 page は別々の JSON として出力される。`--slurp` は「Use with \"--paginate\" to return an array of all pages of either JSON arrays or objects」— 複数 page を単一 `json.loads()` で読むために `--slurp` ＋ 1 段 flatten を採用する根拠（gh 2.40 以降） |
 | Python `difflib.SequenceMatcher` | https://docs.python.org/3/library/difflib.html | `ratio()` が 0..1 の類似度を返す（「a measure of the sequences' similarity as a float in the range [0, 1]」）。あいまい照合（助言専用・閾値 0.8）の実装基盤 |
 | Python `hashlib` | https://docs.python.org/3/library/hashlib.html | sha256 hexdigest による fingerprint hash 生成 |
 | Sentry: Fingerprints / grouping | https://docs.sentry.io/concepts/data-management/event-grouping/ | 「Events with the same fingerprint are grouped into a single issue」— 可変部を正規化した指紋でイベントを 1 イシューに集約するクラッシュ集約系の先行事例（正規化指紋の考え方の出典） |
