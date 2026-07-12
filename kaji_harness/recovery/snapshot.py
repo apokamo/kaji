@@ -92,6 +92,8 @@ class FailureSnapshot:
     evidence: tuple[str, ...] = ()
     #: Issue #304: 過去の handler 実行で記録済みの incident 参照（再入ガード）。
     prior_incident_ref: str | None = None
+    #: Issue #304: 過去の handler 実行で記録済みの incident action（再入スキップ時に復元）。
+    prior_incident_action: str | None = None
 
     @property
     def failure_error_text(self) -> str:
@@ -221,20 +223,22 @@ def _prior_recovery_state(run_dir: Path) -> tuple[bool, str | None, list[str]]:
     return True, prior.recovery_child_run_id, evidence
 
 
-def _prior_incident_ref(run_dir: Path) -> str | None:
-    """過去の handler 実行が ``recovery.json`` に残した ``incident_ref`` を読む（Issue #304）。
+def _prior_incident_state(run_dir: Path) -> tuple[str | None, str | None]:
+    """過去の handler 実行が ``recovery.json`` に残した incident 参照を読む（Issue #304）。
 
-    incident 記録の再入ガード用。ファイル不在 / 破損は ``None``（= 未記録扱い）。同一 run への
-    handler 再入（``kaji recover`` の再実行）で remote への二重投稿を避ける。
+    incident 記録の再入ガード用。``(incident_ref, incident_action)`` を返す。ファイル不在 /
+    破損は ``(None, None)``（= 未記録扱い）。同一 run への handler 再入（``kaji recover`` の
+    再実行）で remote への二重投稿を避ける。再入スキップ時に両フィールドを復元し、
+    ``recovery.json`` 上のガードが失われないようにする。
     """
     path = run_dir / RECOVERY_FILE
     if not path.is_file():
-        return None
+        return None, None
     try:
         prior = read_recovery_json(path)
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
-        return None
-    return prior.incident_ref
+        return None, None
+    return prior.incident_ref, prior.incident_action
 
 
 def _parse_failure_event(entry: dict[str, Any] | None) -> FailureEvent | None:
@@ -348,7 +352,7 @@ def collect_snapshot(
     # budget guard の入力は 2 系統。(1) 過去の recovery.json、(2) この run を parent と
     # する child run dir の実在。(2) は recovery.json の書き込みが失敗した場合の裏取り。
     budget_consumed, prior_child, budget_evidence = _prior_recovery_state(run_dir)
-    prior_incident_ref = _prior_incident_ref(run_dir)
+    prior_incident_ref, prior_incident_action = _prior_incident_state(run_dir)
     launched_child = find_child_run_id(runs_dir, run_id) if runs_dir.is_dir() else None
     if launched_child is not None:
         budget_consumed = True
@@ -418,6 +422,7 @@ def collect_snapshot(
         newer_run_ids=tuple(newer),
         evidence=tuple(evidence),
         prior_incident_ref=prior_incident_ref,
+        prior_incident_action=prior_incident_action,
     )
 
 

@@ -468,8 +468,14 @@ class RecoveryHandler:
         try:
             # 再入ガード: 過去の handler 実行で既に incident を記録済みならスキップする
             # （remote への二重投稿を避ける。``triage_comment_ref`` と同型のローカルガード）。
+            # 新規 plan の decision は incident 系フィールドが None のため、そのまま返すと直後の
+            # ``_record`` が recovery.json を上書きしガードを消す。過去値を復元して保持する。
             if snapshot.prior_incident_ref is not None:
-                return decision
+                return replace(
+                    decision,
+                    incident_ref=snapshot.prior_incident_ref,
+                    incident_action=snapshot.prior_incident_action,
+                )
 
             signature = compute_signature(snapshot, classification)
             record = OccurrenceRecord(

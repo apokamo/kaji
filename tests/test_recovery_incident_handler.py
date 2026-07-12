@@ -356,6 +356,15 @@ def test_reentry_guard_skips_remote_when_incident_ref_present(tmp_path: Path) ->
     _handler(tmp_path, run_dir, provider=provider2).run()
     assert provider2.created == []
     assert _occurrence_comments(provider2) == []
+    # 再入スキップ後も recovery.json のガード（incident_ref/action）は保持される。
+    persisted = read_recovery_json(run_dir / RECOVERY_FILE)
+    assert persisted.incident_ref == "901"
+    assert persisted.incident_action == "created"
+    # 3 回目: 2 回目がガードを消していない限り、ここでも remote 起票は起きない。
+    provider3 = _IncidentProvider()
+    _handler(tmp_path, run_dir, provider=provider3).run()
+    assert provider3.created == []
+    assert _occurrence_comments(provider3) == []
 
 
 # --- fail-open ---
