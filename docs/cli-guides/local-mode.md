@@ -216,8 +216,8 @@ for the default and type specification of `provider.local.git_remote`.
 Under LocalProvider, passing `--commit` to `kaji issue edit` or
 `kaji issue comment` performs the issue-file update and `git stage + commit`
 **atomically in the same process**. The implementation is the
-`_commit_local_issue_change` helper in `kaji_harness/cli_main.py` (active only
-when `provider.type='local'`).
+`_commit_local_issue_change` helper in `kaji_harness/commands/issue.py` (active
+only when `provider.type='local'`).
 
 Key behavior:
 
@@ -229,7 +229,7 @@ Key behavior:
   `--only`).
 - Commit messages are `chore(local): edit for <issue_ref>` or
   `chore(local): comment for <issue_ref>` (implementation:
-  `kaji_harness/cli_main.py` `_commit_local_issue_change`).
+  `kaji_harness/commands/issue.py` `_commit_local_issue_change`).
 - For a no-op edit through `kaji issue edit --commit`, the command checks staged
   diff with `git diff --cached --quiet` and skips the commit when empty, avoiding
   exit 1 from `nothing to commit`.

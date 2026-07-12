@@ -891,7 +891,7 @@ class TestForwardToGhRepoInjection:
             # _detect_repo の auto-detect 経路（subprocess gh repo view）が
             # 呼ばれてはならない。override が機能していれば fallback しない
             patch(
-                "kaji_harness.cli_main._detect_repo",
+                "kaji_harness.commands.pr._detect_repo",
                 wraps=__import__("kaji_harness.cli_main", fromlist=["_detect_repo"])._detect_repo,
             ) as spy_detect,
         ):

@@ -211,11 +211,13 @@ class TestCmdRunWiring:
                 state.last_transition_verdict = Verdict("PASS", "ok", "", "")
                 return state
 
-        monkeypatch.setattr("kaji_harness.cli_main.WorkflowRunner", _StubRunner)
+        monkeypatch.setattr("kaji_harness.commands.run.WorkflowRunner", _StubRunner)
         # provider=local は skill 存在検証を行うため、test-skill を validate 段階で
         # 通過させるため validate_workflow_provider_match のみ最小限通過する設計に
         # しているが、念のため skill validation はそのまま走らせる前にここで弾く。
-        monkeypatch.setattr("kaji_harness.cli_main.validate_skill_exists", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            "kaji_harness.commands.validate.validate_skill_exists", lambda *a, **kw: None
+        )
 
         rc = cli_main.main(
             [

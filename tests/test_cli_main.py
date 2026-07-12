@@ -173,7 +173,7 @@ class TestMutualExclusionSmall:
 
     @pytest.mark.small
     def test_from_alone_is_valid(self, workflow_file: Path, workdir: Path) -> None:
-        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.commands.run.WorkflowRunner") as mock_runner:
             # Issue #288: run_dir 未作成（= failure triage 対象外）を明示する。
             # MagicMock の auto attribute だと triage が起動してしまう。
             mock_runner.return_value.last_run_dir = None
@@ -192,7 +192,7 @@ class TestMutualExclusionSmall:
 
     @pytest.mark.small
     def test_step_alone_is_valid(self, workflow_file: Path, workdir: Path) -> None:
-        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.commands.run.WorkflowRunner") as mock_runner:
             # Issue #288: run_dir 未作成（= failure triage 対象外）を明示する。
             # MagicMock の auto attribute だと triage が起動してしまう。
             mock_runner.return_value.last_run_dir = None
@@ -284,7 +284,7 @@ class TestExitCodeMappingSmall:
         exception: HarnessError,
         expected_code: int,
     ) -> None:
-        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.commands.run.WorkflowRunner") as mock_runner:
             # Issue #288: run_dir 未作成（= failure triage 対象外）を明示する。
             # MagicMock の auto attribute だと triage が起動してしまう。
             mock_runner.return_value.last_run_dir = None
@@ -299,7 +299,7 @@ class TestExitCodeMappingSmall:
 
     @pytest.mark.small
     def test_unexpected_exception_exit_code(self, workflow_file: Path, workdir: Path) -> None:
-        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.commands.run.WorkflowRunner") as mock_runner:
             # Issue #288: run_dir 未作成（= failure triage 対象外）を明示する。
             # MagicMock の auto attribute だと triage が起動してしまう。
             mock_runner.return_value.last_run_dir = None
@@ -314,7 +314,7 @@ class TestExitCodeMappingSmall:
 
     @pytest.mark.small
     def test_abort_verdict_exit_code(self, workflow_file: Path, workdir: Path) -> None:
-        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.commands.run.WorkflowRunner") as mock_runner:
             # Issue #288: run_dir 未作成（= failure triage 対象外）を明示する。
             # MagicMock の auto attribute だと triage が起動してしまう。
             mock_runner.return_value.last_run_dir = None
@@ -342,7 +342,7 @@ class TestCmdRunMedium:
     def test_successful_run(
         self, workflow_file: Path, workdir: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.commands.run.WorkflowRunner") as mock_runner:
             # Issue #288: run_dir 未作成（= failure triage 対象外）を明示する。
             # MagicMock の auto attribute だと triage が起動してしまう。
             mock_runner.return_value.last_run_dir = None
@@ -395,7 +395,7 @@ class TestCmdRunMedium:
     def test_cli_execution_error_exit_3(
         self, workflow_file: Path, workdir: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.commands.run.WorkflowRunner") as mock_runner:
             # Issue #288: run_dir 未作成（= failure triage 対象外）を明示する。
             # MagicMock の auto attribute だと triage が起動してしまう。
             mock_runner.return_value.last_run_dir = None
@@ -414,7 +414,7 @@ class TestCmdRunMedium:
     def test_abort_verdict_exit_1(
         self, workflow_file: Path, workdir: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.commands.run.WorkflowRunner") as mock_runner:
             # Issue #288: run_dir 未作成（= failure triage 対象外）を明示する。
             # MagicMock の auto attribute だと triage が起動してしまう。
             mock_runner.return_value.last_run_dir = None
@@ -447,7 +447,7 @@ class TestCmdRunMedium:
 
     @pytest.mark.medium
     def test_quiet_flag_passed_to_runner(self, workflow_file: Path, workdir: Path) -> None:
-        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.commands.run.WorkflowRunner") as mock_runner:
             # Issue #288: run_dir 未作成（= failure triage 対象外）を明示する。
             # MagicMock の auto attribute だと triage が起動してしまう。
             mock_runner.return_value.last_run_dir = None
@@ -489,7 +489,7 @@ class TestMainMedium:
 
     @pytest.mark.medium
     def test_main_returns_exit_code(self, workflow_file: Path, workdir: Path) -> None:
-        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.commands.run.WorkflowRunner") as mock_runner:
             # Issue #288: run_dir 未作成（= failure triage 対象外）を明示する。
             # MagicMock の auto attribute だと triage が起動してしまう。
             mock_runner.return_value.last_run_dir = None
@@ -699,13 +699,13 @@ class TestPrReviewCommentsBuiltin:
     @pytest.fixture(autouse=True)
     def _isolate_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            "kaji_harness.cli_main._load_config_for_dispatch",
+            "kaji_harness.commands.pr._load_config_for_dispatch",
             _stub_github_config,
         )
 
     def _patches(self, repo: str | None = "owner/repo"):
         which = patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh")
-        detect = patch("kaji_harness.cli_main._detect_repo", return_value=repo)
+        detect = patch("kaji_harness.commands.pr._detect_repo", return_value=repo)
         run = patch("kaji_harness.cli_main.subprocess.run")
         return which, detect, run
 
@@ -753,7 +753,7 @@ class TestPrReviewCommentsBuiltin:
 
         with (
             patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main._detect_repo", return_value="o/r"),
+            patch("kaji_harness.commands.pr._detect_repo", return_value="o/r"),
             patch("kaji_harness.cli_main.subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)
@@ -767,7 +767,7 @@ class TestPrReviewCommentsBuiltin:
 
         with (
             patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main._detect_repo", return_value="o/r"),
+            patch("kaji_harness.commands.pr._detect_repo", return_value="o/r"),
             patch("kaji_harness.cli_main.subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)
@@ -787,7 +787,7 @@ class TestPrReviewCommentsBuiltin:
 
         with (
             patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main._detect_repo", return_value=None),
+            patch("kaji_harness.commands.pr._detect_repo", return_value=None),
         ):
             rc = _handle_pr(["review-comments", "153"])
             assert rc == EXIT_RUNTIME_ERROR
@@ -798,7 +798,7 @@ class TestPrReviewsBuiltin:
     @pytest.fixture(autouse=True)
     def _isolate_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            "kaji_harness.cli_main._load_config_for_dispatch",
+            "kaji_harness.commands.pr._load_config_for_dispatch",
             _stub_github_config,
         )
 
@@ -807,7 +807,7 @@ class TestPrReviewsBuiltin:
 
         with (
             patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main._detect_repo", return_value="o/r"),
+            patch("kaji_harness.commands.pr._detect_repo", return_value="o/r"),
             patch("kaji_harness.cli_main.subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)
@@ -822,7 +822,7 @@ class TestPrReplyToCommentBuiltin:
     @pytest.fixture(autouse=True)
     def _isolate_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            "kaji_harness.cli_main._load_config_for_dispatch",
+            "kaji_harness.commands.pr._load_config_for_dispatch",
             _stub_github_config,
         )
 
@@ -831,7 +831,7 @@ class TestPrReplyToCommentBuiltin:
 
         with (
             patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main._detect_repo", return_value="o/r"),
+            patch("kaji_harness.commands.pr._detect_repo", return_value="o/r"),
             patch("kaji_harness.cli_main.subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)
@@ -847,7 +847,7 @@ class TestPrReplyToCommentBuiltin:
 
         with (
             patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main._detect_repo", return_value="o/r"),
+            patch("kaji_harness.commands.pr._detect_repo", return_value="o/r"),
         ):
             rc = _handle_pr(["reply-to-comment", "10", "--to", "abc", "--body", "x"])
             assert rc == EXIT_INVALID_INPUT
@@ -864,7 +864,7 @@ class TestPrReviewPollBuiltin:
     @pytest.fixture(autouse=True)
     def _isolate_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            "kaji_harness.cli_main._load_config_for_dispatch",
+            "kaji_harness.commands.pr._load_config_for_dispatch",
             _stub_github_config,
         )
 
@@ -922,7 +922,7 @@ class TestPrReviewPollBuiltin:
             )
 
         monkeypatch.setattr(
-            "kaji_harness.cli_main._load_config_for_dispatch",
+            "kaji_harness.commands.pr._load_config_for_dispatch",
             _stub_github_config_no_repo,
         )
         with patch("kaji_harness.scripts.review_poll_entry.main") as mock_main:
@@ -1068,7 +1068,7 @@ class TestGithubPrReviewHandler:
 
     def _patches(self, repo: str = "owner/repo"):
         which = patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh")
-        detect = patch("kaji_harness.cli_main._detect_repo", return_value=repo)
+        detect = patch("kaji_harness.commands.pr._detect_repo", return_value=repo)
         run = patch("kaji_harness.cli_main.subprocess.run")
         return which, detect, run
 
@@ -1167,7 +1167,7 @@ class TestGithubPrReviewHandler:
         """
         from kaji_harness.cli_main import _github_pr_review
 
-        with patch("kaji_harness.cli_main._forward_to_gh") as mock_forward:
+        with patch("kaji_harness.commands.pr._forward_to_gh") as mock_forward:
             mock_forward.return_value = 0
             rc = _github_pr_review(["１２３", "--approve"], repo_override="owner/repo")
             assert rc == 0
@@ -1197,7 +1197,7 @@ class TestGithubPrReviewHandler:
 
         with (
             patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main._detect_repo", return_value=None),
+            patch("kaji_harness.commands.pr._detect_repo", return_value=None),
         ):
             rc = _github_pr_review(["185", "--approve"], repo_override=None)
             assert rc == EXIT_RUNTIME_ERROR
@@ -1298,7 +1298,7 @@ class TestGithubPrReviewHandler:
         """URL target は self-PR fallback に入れず、従来通り `gh pr review` に passthrough する。"""
         from kaji_harness.cli_main import _github_pr_review
 
-        with patch("kaji_harness.cli_main._forward_to_gh") as mock_forward:
+        with patch("kaji_harness.commands.pr._forward_to_gh") as mock_forward:
             mock_forward.return_value = 0
             rc = _github_pr_review(
                 ["https://github.com/o/r/pull/185", "--approve"],
@@ -1317,7 +1317,7 @@ class TestGithubPrReviewHandler:
         """pr_id 省略（current branch 解決）は self-PR fallback ではなく `gh` に passthrough する。"""
         from kaji_harness.cli_main import _github_pr_review
 
-        with patch("kaji_harness.cli_main._forward_to_gh") as mock_forward:
+        with patch("kaji_harness.commands.pr._forward_to_gh") as mock_forward:
             mock_forward.return_value = 0
             rc = _github_pr_review(["--approve"], repo_override="owner/repo")
             assert rc == 0
@@ -1328,7 +1328,7 @@ class TestGithubPrReviewHandler:
         """本 dispatcher 未認識 flag があれば passthrough にフォールバックする。"""
         from kaji_harness.cli_main import _github_pr_review
 
-        with patch("kaji_harness.cli_main._forward_to_gh") as mock_forward:
+        with patch("kaji_harness.commands.pr._forward_to_gh") as mock_forward:
             mock_forward.return_value = 0
             rc = _github_pr_review(
                 ["185", "--approve", "--unknown-flag"], repo_override="owner/repo"
@@ -1507,7 +1507,7 @@ class TestGithubPrReviewHandler:
 
         with (
             patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main._detect_repo", return_value="owner/repo"),
+            patch("kaji_harness.commands.pr._detect_repo", return_value="owner/repo"),
             patch("kaji_harness.cli_main.subprocess.run") as mock_run,
         ):
             rc = _github_pr_review(["199", "--request-changes"], repo_override="owner/repo")
@@ -1520,7 +1520,7 @@ class TestGithubPrReviewHandler:
 
         with (
             patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main._detect_repo", return_value="owner/repo"),
+            patch("kaji_harness.commands.pr._detect_repo", return_value="owner/repo"),
             patch("kaji_harness.cli_main.subprocess.run") as mock_run,
         ):
             rc = _github_pr_review(
@@ -1538,7 +1538,7 @@ class TestGithubPrReviewHandler:
         f.write_text("")
         with (
             patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main._detect_repo", return_value="owner/repo"),
+            patch("kaji_harness.commands.pr._detect_repo", return_value="owner/repo"),
             patch("kaji_harness.cli_main.subprocess.run") as mock_run,
         ):
             rc = _github_pr_review(
@@ -1554,7 +1554,7 @@ class TestGithubPrReviewHandler:
 
         with (
             patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main._detect_repo", return_value="owner/repo"),
+            patch("kaji_harness.commands.pr._detect_repo", return_value="owner/repo"),
             patch("kaji_harness.cli_main.subprocess.run") as mock_run,
         ):
             # mock があっても呼ばれない（validation 段で停止）
@@ -1656,7 +1656,7 @@ class TestGithubPrReviewHandler:
         assert not missing.exists()
         with (
             patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main._detect_repo", return_value="owner/repo"),
+            patch("kaji_harness.commands.pr._detect_repo", return_value="owner/repo"),
             patch("kaji_harness.cli_main.subprocess.run") as mock_run,
         ):
             rc = _github_pr_review(
@@ -1679,7 +1679,7 @@ class TestGithubPrReviewHandler:
         missing = tmp_path / "does-not-exist.md"
         with (
             patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main._detect_repo", return_value="owner/repo"),
+            patch("kaji_harness.commands.pr._detect_repo", return_value="owner/repo"),
             patch("kaji_harness.cli_main.subprocess.run") as mock_run,
         ):
             rc = _github_pr_review(
@@ -1706,7 +1706,7 @@ class TestGithubPrReviewRouting:
     @pytest.fixture(autouse=True)
     def _isolate_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            "kaji_harness.cli_main._load_config_for_dispatch",
+            "kaji_harness.commands.pr._load_config_for_dispatch",
             _stub_github_config,
         )
 
@@ -1715,11 +1715,11 @@ class TestGithubPrReviewRouting:
 
         calls: list[tuple] = []
         monkeypatch.setattr(
-            "kaji_harness.cli_main._github_pr_review",
+            "kaji_harness.commands.pr._github_pr_review",
             lambda rest, *, repo_override: calls.append(("handler", rest, repo_override)) or 0,
         )
         monkeypatch.setattr(
-            "kaji_harness.cli_main._forward_to_gh",
+            "kaji_harness.commands.pr._forward_to_gh",
             lambda *a, **kw: calls.append(("forward", a, kw)) or 0,
         )
         rc = _handle_pr(["review", "185", "--approve", "--body", "x"])
@@ -1731,11 +1731,11 @@ class TestGithubPrReviewRouting:
 
         calls: list[tuple] = []
         monkeypatch.setattr(
-            "kaji_harness.cli_main._github_pr_review",
+            "kaji_harness.commands.pr._github_pr_review",
             lambda rest, *, repo_override: calls.append(("handler", rest, repo_override)) or 0,
         )
         monkeypatch.setattr(
-            "kaji_harness.cli_main._forward_to_gh",
+            "kaji_harness.commands.pr._forward_to_gh",
             lambda *a, **kw: calls.append(("forward", a, kw)) or 0,
         )
         rc = _handle_pr(["review", "185", "--comment", "--body", "x"])
@@ -1751,11 +1751,11 @@ class TestGithubPrReviewRouting:
 
         calls: list[tuple] = []
         monkeypatch.setattr(
-            "kaji_harness.cli_main._github_pr_review",
+            "kaji_harness.commands.pr._github_pr_review",
             lambda rest, *, repo_override: calls.append(("handler", rest, repo_override)) or 0,
         )
         monkeypatch.setattr(
-            "kaji_harness.cli_main._forward_to_gh",
+            "kaji_harness.commands.pr._forward_to_gh",
             lambda *a, **kw: calls.append(("forward", a, kw)) or 0,
         )
         rc = _handle_pr(["review", "199", "--request-changes", "--body", "y"])
@@ -1768,11 +1768,11 @@ class TestGithubPrReviewRouting:
 
         calls: list[tuple] = []
         monkeypatch.setattr(
-            "kaji_harness.cli_main._github_pr_review",
+            "kaji_harness.commands.pr._github_pr_review",
             lambda rest, *, repo_override: calls.append(("handler", rest, repo_override)) or 0,
         )
         monkeypatch.setattr(
-            "kaji_harness.cli_main._forward_to_gh",
+            "kaji_harness.commands.pr._forward_to_gh",
             lambda *a, **kw: calls.append(("forward", a, kw)) or 0,
         )
         rc = _handle_pr(["review", "199", "-r", "--body", "y"])
@@ -1787,11 +1787,11 @@ class TestGithubPrReviewRouting:
 
         calls: list[tuple] = []
         monkeypatch.setattr(
-            "kaji_harness.cli_main._github_pr_review",
+            "kaji_harness.commands.pr._github_pr_review",
             lambda rest, *, repo_override: calls.append(("handler", rest, repo_override)) or 0,
         )
         monkeypatch.setattr(
-            "kaji_harness.cli_main._forward_to_gh",
+            "kaji_harness.commands.pr._forward_to_gh",
             lambda *a, **kw: calls.append(("forward", a, kw)) or 0,
         )
         rc = _handle_pr(["review", "199", "--approve", "--request-changes", "--body", "x"])
@@ -1804,11 +1804,11 @@ class TestGithubPrReviewRouting:
 
         calls: list[tuple] = []
         monkeypatch.setattr(
-            "kaji_harness.cli_main._github_pr_review",
+            "kaji_harness.commands.pr._github_pr_review",
             lambda rest, *, repo_override: calls.append(("handler", rest, repo_override)) or 0,
         )
         monkeypatch.setattr(
-            "kaji_harness.cli_main._forward_to_gh",
+            "kaji_harness.commands.pr._forward_to_gh",
             lambda *a, **kw: calls.append(("forward", a, kw)) or 0,
         )
         rc = _handle_pr(["review", "185", "-a"])
@@ -1820,11 +1820,11 @@ class TestGithubPrReviewRouting:
 
         calls: list[tuple] = []
         monkeypatch.setattr(
-            "kaji_harness.cli_main._github_pr_review",
+            "kaji_harness.commands.pr._github_pr_review",
             lambda rest, *, repo_override: calls.append(("handler", rest, repo_override)) or 0,
         )
         monkeypatch.setattr(
-            "kaji_harness.cli_main._forward_to_gh",
+            "kaji_harness.commands.pr._forward_to_gh",
             lambda *a, **kw: calls.append(("forward", a, kw)) or 0,
         )
         rc = _handle_pr(["review", "185"])
@@ -1840,7 +1840,7 @@ class TestPrBuiltinDispatch:
     @pytest.fixture(autouse=True)
     def _isolate_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            "kaji_harness.cli_main._load_config_for_dispatch",
+            "kaji_harness.commands.pr._load_config_for_dispatch",
             _stub_github_config,
         )
 
@@ -1851,7 +1851,7 @@ class TestPrBuiltinDispatch:
 
         with (
             patch(
-                "kaji_harness.cli_main._load_config_for_dispatch",
+                "kaji_harness.commands.pr._load_config_for_dispatch",
                 side_effect=ConfigNotFoundError(Path("/tmp")),
             ),
             patch("kaji_harness.cli_main.subprocess.run") as mock_run,

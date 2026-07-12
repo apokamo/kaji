@@ -210,7 +210,7 @@ git_remote = "backup"
 LocalProvider 配下で `kaji issue edit` / `kaji issue comment` に `--commit`
 flag を渡すと、Issue ファイル（`issue.md` / コメントファイル）の書き換えと
 git stage + commit を **同一 process 内で atomic に** 行う。実装は
-`kaji_harness/cli_main.py` の `_commit_local_issue_change` ヘルパ
+`kaji_harness/commands/issue.py` の `_commit_local_issue_change` ヘルパ
 （`provider.type='local'` の場合のみ実体動作する）。
 
 挙動の要点:
@@ -223,7 +223,7 @@ git stage + commit を **同一 process 内で atomic に** 行う。実装は
   （`man git-commit` § `--only` 準拠）
 - commit message は `chore(local): edit for <issue_ref>`
   または `chore(local): comment for <issue_ref>` 形式
-  （実装: `kaji_harness/cli_main.py` `_commit_local_issue_change`）
+  （実装: `kaji_harness/commands/issue.py` `_commit_local_issue_change`）
 - `kaji issue edit --commit` で実体差分が無い no-op edit の場合は、
   `git diff --cached --quiet` で staged 差分を確認し、空なら commit を skip する
   （`nothing to commit` での exit 1 を避けるため）
