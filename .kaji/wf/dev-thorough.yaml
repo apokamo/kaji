@@ -119,6 +119,7 @@ steps:
     agent: claude
     model: opus
     effort: high
+    timeout: 3600
     on:
       PASS: review-code
       RETRY: implement
@@ -142,6 +143,7 @@ steps:
     agent: claude
     model: opus
     effort: high
+    timeout: 3600
     inject_verdict: true
     on:
       PASS: verify-code
