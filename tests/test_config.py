@@ -633,7 +633,7 @@ class TestCLIConfigIntegration:
             "    agent: claude\n    on:\n      PASS: end\n"
         )
 
-        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.commands.run.WorkflowRunner") as mock_runner:
             mock_runner.return_value.run.return_value = MagicMock(
                 last_transition_verdict=Verdict("PASS", "", "", "")
             )
@@ -737,7 +737,7 @@ class TestCLIConfigIntegration:
             "    agent: claude\n    on:\n      PASS: end\n"
         )
 
-        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.commands.run.WorkflowRunner") as mock_runner:
             mock_runner.return_value.run.return_value = MagicMock(
                 last_transition_verdict=Verdict("PASS", "", "", "")
             )
@@ -772,7 +772,7 @@ class TestCLIConfigIntegration:
             "    agent: claude\n    on:\n      PASS: end\n"
         )
 
-        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.commands.run.WorkflowRunner") as mock_runner:
             mock_runner.return_value.run.return_value = MagicMock(
                 last_transition_verdict=Verdict("PASS", "", "", "")
             )

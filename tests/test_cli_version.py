@@ -28,7 +28,7 @@ class TestGetVersionSmall:
         from importlib.metadata import PackageNotFoundError
 
         with patch(
-            "kaji_harness.cli_main.version",
+            "kaji_harness.commands.parser.version",
             side_effect=PackageNotFoundError("kaji"),
         ):
             assert _get_version() == "unknown"

@@ -228,7 +228,7 @@ class TestStepBeforeMutualExclusionSmall:
 
     @pytest.mark.small
     def test_from_and_before_compatible(self, workflow_file: Path, workdir: Path) -> None:
-        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.commands.run.WorkflowRunner") as mock_runner:
             mock_runner.return_value.run.return_value = MagicMock(
                 last_transition_verdict=Verdict("PASS", "", "", "")
             )
@@ -250,7 +250,7 @@ class TestStepBeforeMutualExclusionSmall:
 
     @pytest.mark.small
     def test_before_alone_passed_to_runner(self, workflow_file: Path, workdir: Path) -> None:
-        with patch("kaji_harness.cli_main.WorkflowRunner") as mock_runner:
+        with patch("kaji_harness.commands.run.WorkflowRunner") as mock_runner:
             mock_runner.return_value.run.return_value = MagicMock(
                 last_transition_verdict=Verdict("PASS", "", "", "")
             )
