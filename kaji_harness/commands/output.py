@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from ..providers.models import Issue
 from .exit_codes import EXIT_OK, EXIT_RUNTIME_ERROR
 
 
@@ -124,9 +125,7 @@ def _format_jq_results(results: list[object]) -> str:
 
 def _issue_to_json_dict(issue: object, *, include_comments: bool = True) -> dict[str, object]:
     """``Issue`` → gh ``issue view --json ...`` 互換の dict に整形。"""
-    from ..providers.models import Issue as _Issue  # local import to avoid cycle
-
-    assert isinstance(issue, _Issue)
+    assert isinstance(issue, Issue)
     out: dict[str, object] = {
         "number": issue.id,
         "title": issue.title,
