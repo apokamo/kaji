@@ -34,7 +34,6 @@ from kaji_harness.cli_main import (
     _is_ascii_decimal,
     _resolve_project_root_for_validate,
 )
-from kaji_harness.providers.markers import build_kaji_verdict_marker, resolve_verdict_marker
 
 
 def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> SimpleNamespace:
@@ -65,32 +64,6 @@ class TestIsAsciiDecimal:
         assert _is_ascii_decimal("12a") is False
         assert _is_ascii_decimal("-1") is False
         assert _is_ascii_decimal(" 1") is False
-
-
-# ---------------------------------------------------------------------------
-# _resolve_verdict_marker — verdict フラグ解決（両必須 / 片方は ValueError）
-# ---------------------------------------------------------------------------
-class TestResolveVerdictMarker:
-    @pytest.mark.small
-    def test_both_none_returns_none(self) -> None:
-        assert resolve_verdict_marker(None, None) is None
-
-    @pytest.mark.small
-    def test_both_given_returns_marker(self) -> None:
-        # 現挙動: build_kaji_verdict_marker の戻り値をそのまま返す。
-        assert resolve_verdict_marker("implement", "PASS") == build_kaji_verdict_marker(
-            "implement", "PASS"
-        )
-
-    @pytest.mark.small
-    def test_step_only_raises(self) -> None:
-        with pytest.raises(ValueError, match="must be specified together"):
-            resolve_verdict_marker("implement", None)
-
-    @pytest.mark.small
-    def test_status_only_raises(self) -> None:
-        with pytest.raises(ValueError, match="must be specified together"):
-            resolve_verdict_marker(None, "PASS")
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ from kaji_harness.providers.context import (
     build_branch_name,
     build_design_path,
     build_worktree_dir,
+    build_worktree_note_body,
     derive_slug_from_title,
     validate_slug,
 )
@@ -111,3 +112,51 @@ class TestPathBuilders:
             build_design_path("local-pc1-3", "local-mode")
             == "draft/design/issue-local-pc1-3-local-mode.md"
         )
+
+
+class TestBuildWorktreeNoteBody:
+    def test_blank_line_guaranteed_between_note_and_heading(self) -> None:
+        result = build_worktree_note_body(
+            "## 概要\n\n本文",
+            worktree="kaji-fix-200",
+            branch="fix/200",
+        )
+        assert "> **Branch**: `fix/200`\n\n## 概要" in result
+        assert "`fix/200`## 概要" not in result
+
+    def test_full_note_block_layout(self) -> None:
+        result = build_worktree_note_body(
+            "## 概要",
+            worktree="kaji-fix-200",
+            branch="fix/200",
+        )
+        assert result == (
+            "> [!NOTE]\n> **Worktree**: `../kaji-fix-200`\n> **Branch**: `fix/200`\n\n## 概要"
+        )
+
+    def test_leading_blank_lines_normalized_to_one(self) -> None:
+        result = build_worktree_note_body(
+            "\n\n\n## 概要",
+            worktree="kaji-fix-200",
+            branch="fix/200",
+        )
+        assert "> **Branch**: `fix/200`\n\n## 概要" in result
+        assert "`fix/200`\n\n\n" not in result
+
+    @pytest.mark.parametrize("body", ["", "\n\n"])
+    def test_empty_body_produces_note_only(self, body: str) -> None:
+        result = build_worktree_note_body(
+            body,
+            worktree="kaji-fix-200",
+            branch="fix/200",
+        )
+        assert result == ("> [!NOTE]\n> **Worktree**: `../kaji-fix-200`\n> **Branch**: `fix/200`\n")
+
+    def test_special_chars_in_body_preserved(self) -> None:
+        body = "## 概要\n\n`code` と $VAR を含む `inline`\n- 行 2"
+        result = build_worktree_note_body(
+            body,
+            worktree="kaji-fix-200",
+            branch="fix/200",
+        )
+        assert result.endswith(body)
