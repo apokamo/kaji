@@ -1,0 +1,4 @@
+interface:
+  display_name: "Series Create"
+  short_description: "Create validated sequential issue series plans"
+  default_prompt: "Use $series-create to generate a validated sequential issue series YAML without starting execution."

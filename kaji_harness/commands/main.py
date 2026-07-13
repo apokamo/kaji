@@ -9,6 +9,7 @@ from .parser import create_parser
 from .pr import _handle_pr
 from .recover import cmd_recover
 from .run import cmd_run
+from .series import cmd_run_series, cmd_validate_series
 from .sync import cmd_sync_from_github, cmd_sync_status
 from .validate import cmd_validate
 
@@ -24,6 +25,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_run(args)
     if args.command == "validate":
         return cmd_validate(args)
+    if args.command == "validate-series":
+        return cmd_validate_series(args)
+    if args.command == "run-series":
+        return cmd_run_series(args)
     if args.command == "issue":
         return _handle_issue(args.args)
     if args.command == "pr":

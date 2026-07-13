@@ -94,6 +94,11 @@ path 算出時に適用する**実効 fallback** が異なる key（`worktree_pr
 `artifacts_dir` の相対パスは main worktree（`provider.<type>.default_branch` を checkout している
 worktree）基準で解決される（Issue #177、[ワークフロー作成](../dev/workflow-authoring.md) § 前提条件 参照）。
 
+`kaji run-series` も同じ解決規則を使い、実行状態を
+`<artifacts_dir>/_series/<series-id>/state.json`、プロセス排他を同階層の `lock` に保存する。
+これらは tracked な `.kaji/series/<series-id>.yaml` 定義とは分離される。
+`validate-series` と `run-series --dry-run` はこのディレクトリを作成しない。
+
 ### `[execution]`
 
 | key | 必須/任意 | 型 | 既定 | 検証規則 | 一次情報 |

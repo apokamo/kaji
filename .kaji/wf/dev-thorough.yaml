@@ -1,5 +1,6 @@
 name: dev-thorough
 description: |
+  series 自動選択対象外の明示 override 専用 variant。
   開発作業の丁寧版 workflow。設計・実装・修正を厚めに行う高品質優先の構成。
   dev.yaml と同じ遷移グラフで、design/fix-design=xhigh, implement/fix-code=high。
   レビュー系は標準の dev.yaml と同じ high を維持する。

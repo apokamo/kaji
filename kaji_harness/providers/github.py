@@ -237,6 +237,7 @@ class GitHubProvider:
             labels=labels,
             comments=comments,
             slug=derive_slug_from_title(title),
+            state_reason=str(payload.get("stateReason", "") or "").lower(),
         )
 
     # -------- CRUD ----------
@@ -276,7 +277,7 @@ class GitHubProvider:
             "--repo",
             self.repo,
             "--json",
-            "number,title,body,state,labels,comments",
+            "number,title,body,state,stateReason,labels,comments",
         )
         if not isinstance(payload, dict):
             raise GitHubProviderError("gh issue view returned non-object JSON")

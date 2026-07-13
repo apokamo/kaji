@@ -95,6 +95,7 @@ kaji_harness/
   worktree_discovery.py  # worktree / branch 探索
   logger.py       # JSONL 構造化ログ
   runner.py       # WorkflowRunner (自動遷移・サイクル管理)
+  series/         # ordered Issue series の schema / state / lock / runner / generator
   providers/      # Issue provider 抽象 (GitHub / local) — foundation のみに依存
     __init__.py   # facade。__all__ が package の public API を宣言する
     base.py       # IssueProvider Protocol
@@ -126,7 +127,7 @@ kaji_harness/
       ▲
 [provider]    providers/                     ← foundation のみに依存
       ▲
-[application] sync.py / state.py / artifacts.py / worktree_discovery.py / runner.py …
+[application] sync.py / state.py / artifacts.py / worktree_discovery.py / runner.py / series/ …
       ▲
 [command]     commands/
       ▲
@@ -433,6 +434,12 @@ kaji run .kaji/wf/dev.yaml 184 --from review-ready --reset-cycle
 
 run / step / attempt の成果物は attempt 単位で分離される（Issue #220）。
 
+`kaji run-series` は Issue 単位の session state と分離した series state を main worktree
+基準の `<artifacts_dir>/_series/<series-id>/` に保存する。`state.json` は series fingerprint、
+member ごとの workflow / child PID / run ID / exit code / 成功ゲートを保持し、`lock` は
+`fcntl.flock` による同一 series ID の非ブロック排他に使う。series 定義そのものは
+`.kaji/series/<series-id>.yaml` に残り、state と混在しない。
+
 ```text
 <artifacts_dir>/<issue>/
   session-state.json
@@ -515,6 +522,10 @@ chain をまたいだ retry storm が構造的に起きない。
 ```
 HarnessError
 ├── WorkflowValidationError    # YAML 定義エラー
+├── SeriesValidationError      # series YAML / state schema エラー
+├── SeriesInputError           # lock / fingerprint / resume 起動条件エラー
+├── SeriesAbortedError         # member failure / 外部状態不整合による停止
+├── SeriesRuntimeError         # child 起動等の runtime error
 ├── MissingResumeSessionError  # resume 先セッションなし
 ├── InvalidTransition          # 未定義の verdict 遷移
 ├── VerdictNotFound            # verdict ブロックなし

@@ -1,6 +1,6 @@
 name: dev-local
 description: |
-  provider=local 用の開発 workflow。
+  series 自動選択対象外。provider=local 用の開発 workflow。
   issue-create / issue-start は事前に手動実行済みであることが前提。
   PR concept を持たないため、最終 step は issue-close
   （local merge + frontmatter 更新。design.md § local mode における /issue-close の手順）。
