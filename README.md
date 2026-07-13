@@ -40,6 +40,35 @@ kaji provides that layer.
 Beyond vibe coding: kaji gives AI-assisted development a loop, a log, and a
 quality gate.
 
+## How kaji compares
+
+kaji is intentionally narrower than a general-purpose agent platform or swarm
+framework. It focuses on making a repository's issue-to-PR development process
+explicit, bounded, resumable, and auditable across existing coding-agent CLIs.
+The comparison below is about each tool's primary abstraction, not a feature
+checklist.
+
+| Comparison | kaji | [Ruflo](https://github.com/ruvnet/ruflo) (formerly claude-flow) | [OpenHands](https://docs.openhands.dev/openhands/usage/agent-canvas/overview) | [Claude Code subagents](https://code.claude.com/docs/en/sub-agents) alone |
+|---|---|---|---|---|
+| Primary abstraction | A repository-owned issue-to-PR development workflow | An agent meta-harness for Claude Code and Codex | A coding-agent runtime and SDK, with Agent Canvas as a control surface | A specialized delegated agent inside a Claude Code session |
+| Orchestration model | Explicit workflow YAML with named steps and transitions; each step can route to Claude Code, Codex, or Gemini CLI | Routing, swarm topologies, plugins, loops, and shared memory | Agent conversations, automations, and programmable SDK workflows; Agent Canvas can also run ACP-compatible agents | The parent session delegates parallel or nested work to agents with separate contexts |
+| Review convergence | Explicit review -> fix -> verify cycles with iteration ceilings and defined exhaustion behavior | Autonomous loops, consensus mechanisms, and reusable workflow plugins | An [experimental Critic](https://docs.openhands.dev/openhands/usage/agent-canvas/critic) can score work and run bounded iterative refinement; the SDK also supports custom loops | Reviews can be composed with prompts, hooks, and delegated agents, but the subagent primitive does not prescribe an issue-to-PR review lifecycle |
+| State and resume | Structured `PASS`, `RETRY`, `BACK`, and `ABORT` verdicts, per-attempt artifacts, and restart from a named workflow step | Persistent memory, agent state, telemetry, and cross-session restoration | Typed conversation events, persisted or resumed conversations, critic scores, and automation history | Results return to the parent; subagent context and transcripts can be resumed within the retained Claude Code session |
+| Control boundary | Named transitions and explicit stop or exhaustion states keep human gates around issue and PR decisions | Hooks, security controls, audit features, and circuit breakers govern autonomous coordination | Action confirmation, pause and resume controls, sandbox choices, and automation management | Per-agent tools, permissions, hooks, and parent-session supervision |
+| Starting point | The complete [`kaji-starter-python`](https://github.com/apokamo/kaji-starter-python) repository connects workflows, skills, `AGENTS.md`, development conventions, tests, linting, type checking, and Make targets | `ruflo init` scaffolds agents, plugins, MCP integration, hooks, memory, and supporting services | SDK and platform quickstarts, plugins, automations, sandbox backends, and examples that teams assemble around their process | Reusable agent definitions; the repository workflow and quality gates remain project choices |
+| Best fit | Teams that want a governed, repeatable issue-to-PR process on top of their existing coding-agent CLIs | Broad or dynamic multi-agent systems centered on coordination, memory, and swarm behavior | Teams that need a coding-agent runtime, sandbox, browser UI, SDK, or hosted automation | Lightweight specialization and parallel delegation within Claude Code |
+
+These tools are not mutually exclusive. Claude Code subagents can perform work
+inside a kaji step. Ruflo or OpenHands may be the better center of gravity when
+the primary need is broad agent coordination, a programmable or managed
+runtime, or sandboxed execution.
+
+kaji keeps the development process itself at the center: phases, bounded
+feedback loops, durable verdicts, step-level resume, and human-controlled
+transitions are explicit. Its starter repository delivers those pieces as one
+connected system, so teams can begin with working workflow guards and quality
+gates instead of designing every connection from scratch.
+
 ## How it works
 
 ```mermaid

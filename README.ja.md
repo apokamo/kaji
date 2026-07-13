@@ -38,6 +38,32 @@ kajiはその層を提供します。
 
 Beyond vibe coding: kajiはAI支援開発に、loop、log、quality gateを与えます。
 
+## 他のツールとの違い
+
+kajiは、汎用的なagent platformやswarm frameworkよりも、意図的に対象を絞っています。
+既存のcoding-agent CLIを使いながら、リポジトリのIssueからPRまでの開発プロセスを
+明示的で、上限があり、再開可能で、監査可能なものにすることへ集中しています。
+以下は機能の有無ではなく、各ツールが第一級の抽象として何を中心に置くかの比較です。
+
+| 比較軸 | kaji | [Ruflo](https://github.com/ruvnet/ruflo)（旧claude-flow） | [OpenHands](https://docs.openhands.dev/openhands/usage/agent-canvas/overview) | [Claude Code subagents](https://code.claude.com/docs/en/sub-agents)単体 |
+|---|---|---|---|---|
+| 中心となる抽象 | リポジトリが所有するIssue-to-PR開発workflow | Claude CodeとCodexのためのagent meta-harness | coding-agent runtimeとSDK、およびcontrol surfaceとしてのAgent Canvas | Claude Code session内で委譲される専門agent |
+| オーケストレーションモデル | 名前付きstepと遷移を持つ明示的なworkflow YAML。各stepをClaude Code、Codex、Gemini CLIへ割り当て可能 | routing、swarm topology、plugin、loop、共有memory | agent conversation、automation、SDKでプログラム可能なworkflow。Agent CanvasはACP互換agentも実行可能 | 親sessionが、別contextを持つagentへ並列またはnestedな作業を委譲 |
+| レビューの収束 | review -> fix -> verify cycleに反復上限と上限到達時の挙動を明示 | autonomous loop、consensus mechanism、再利用可能なworkflow plugin | [実験的なCritic](https://docs.openhands.dev/openhands/usage/agent-canvas/critic)が作業をscore化し、上限付きiterative refinementを実行可能。SDKで独自loopも構成可能 | prompt、hook、委譲agentでレビューを構成できるが、subagentという仕組み自体はIssue-to-PRのreview lifecycleを規定しない |
+| 状態と再開 | 構造化された`PASS`、`RETRY`、`BACK`、`ABORT` verdict、attemptごとのartifact、名前付きworkflow stepからの再開 | 永続memory、agent state、telemetry、cross-session restoration | 型付きconversation event、conversationの永続化と再開、critic score、automation history | 結果を親へ返し、保持中のClaude Code session内でsubagent contextとtranscriptを再開可能 |
+| 制御境界 | 名前付き遷移と明示的な停止・上限到達状態により、IssueやPRの判断にhuman gateを維持 | hook、security control、audit機能、circuit breakerによりautonomous coordinationを統制 | action confirmation、pause/resume、sandbox選択、automation管理 | agentごとのtool、permission、hook、親sessionによる監督 |
+| 導入時の出発点 | [`kaji-starter-python`](https://github.com/apokamo/kaji-starter-python)リポジトリ一式がworkflow、skill、`AGENTS.md`、開発規約、test、lint、type check、Make targetを接続済み | `ruflo init`がagent、plugin、MCP連携、hook、memory、関連serviceをscaffold | SDKとplatformのquickstart、plugin、automation、sandbox backend、exampleを、teamのprocessに合わせて構成 | 再利用可能なagent定義。repository workflowとquality gateはproject側で選択 |
+| 適した用途 | 既存のcoding-agent CLI上に、統制された再現可能なIssue-to-PR processを置きたいteam | coordination、memory、swarm behaviorを中心とする広範または動的なmulti-agent system | coding-agent runtime、sandbox、browser UI、SDK、hosted automationが必要なteam | Claude Code内での軽量な専門化と並列委譲 |
+
+これらのツールは排他的ではありません。Claude Code subagentはkajiのstep内で作業できます。
+主な要件が広範なagent coordination、プログラム可能またはmanagedなruntime、sandbox実行で
+あれば、RufloやOpenHandsを中心に据える方が適する場合があります。
+
+kajiが中心に置くのは開発プロセスそのものです。phase、上限付きfeedback loop、永続的な
+verdict、step単位の再開、人間が制御する遷移を明示します。starter repositoryはこれらを
+接続済みのsystemとして提供するため、teamはすべての接続を一から設計せず、実際に動く
+workflow guardとquality gateから始められます。
+
 ## 仕組み
 
 ```mermaid
