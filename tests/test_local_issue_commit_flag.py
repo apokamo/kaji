@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from kaji_harness.cli_main import _local_issue_comment, _local_issue_edit
+from kaji_harness.commands.issue import _local_issue_comment, _local_issue_edit
 from kaji_harness.providers.local import LocalProvider
 
 pytestmark = pytest.mark.medium

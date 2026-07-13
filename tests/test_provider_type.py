@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from kaji_harness.cli_main import main as cli_main
+from kaji_harness.commands.main import main as cli_main
 from kaji_harness.config import KajiConfig
 from kaji_harness.providers import actual_provider_type
 

@@ -613,7 +613,8 @@ class TestCLIConfigIntegration:
         import subprocess as _sp
         from unittest.mock import MagicMock, patch
 
-        from kaji_harness.cli_main import cmd_run, create_parser
+        from kaji_harness.commands.parser import create_parser
+        from kaji_harness.commands.run import cmd_run
         from kaji_harness.models import Verdict
 
         # gl:21: provider.type='local' requires a git repo.
@@ -650,7 +651,8 @@ class TestCLIConfigIntegration:
     def test_cmd_run_config_not_found_exits_2(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        from kaji_harness.cli_main import cmd_run, create_parser
+        from kaji_harness.commands.parser import create_parser
+        from kaji_harness.commands.run import cmd_run
 
         # No .kaji/config.toml exists
         wf = tmp_path / "workflow.yaml"
@@ -670,7 +672,8 @@ class TestCLIConfigIntegration:
 
     def test_validate_without_config_fails(self, tmp_path: Path) -> None:
         """kaji validate fails without .kaji/config.toml (config is required)."""
-        from kaji_harness.cli_main import cmd_validate, create_parser
+        from kaji_harness.commands.parser import create_parser
+        from kaji_harness.commands.validate import cmd_validate
 
         # Create a valid workflow with matching skill but NO config
         wf = tmp_path / "workflow.yaml"
@@ -694,7 +697,8 @@ class TestCLIConfigIntegration:
     def test_cmd_run_broken_config_exits_2(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        from kaji_harness.cli_main import cmd_run, create_parser
+        from kaji_harness.commands.parser import create_parser
+        from kaji_harness.commands.run import cmd_run
 
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
@@ -719,7 +723,8 @@ class TestCLIConfigIntegration:
         import subprocess as _sp
         from unittest.mock import MagicMock, patch
 
-        from kaji_harness.cli_main import cmd_run, create_parser
+        from kaji_harness.commands.parser import create_parser
+        from kaji_harness.commands.run import cmd_run
         from kaji_harness.models import Verdict
 
         # gl:21: provider.type='local' requires a git repo.
@@ -753,7 +758,8 @@ class TestCLIConfigIntegration:
         import subprocess as _sp
         from unittest.mock import MagicMock, patch
 
-        from kaji_harness.cli_main import cmd_run, create_parser
+        from kaji_harness.commands.parser import create_parser
+        from kaji_harness.commands.run import cmd_run
         from kaji_harness.models import Verdict
 
         # gl:21: provider.type='local' requires a git repo.
@@ -787,7 +793,8 @@ class TestCLIConfigIntegration:
     def test_validate_broken_config_reports_error(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        from kaji_harness.cli_main import cmd_validate, create_parser
+        from kaji_harness.commands.parser import create_parser
+        from kaji_harness.commands.validate import cmd_validate
 
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
@@ -812,7 +819,8 @@ class TestCLIConfigIntegration:
 
     def test_validate_with_config_uses_config_root(self, tmp_path: Path) -> None:
         """kaji validate prefers .kaji/config.toml root over pyproject.toml."""
-        from kaji_harness.cli_main import cmd_validate, create_parser
+        from kaji_harness.commands.parser import create_parser
+        from kaji_harness.commands.validate import cmd_validate
 
         # Create config
         config_dir = tmp_path / ".kaji"

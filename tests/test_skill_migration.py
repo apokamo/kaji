@@ -148,13 +148,13 @@ class TestPrReviewCommentsCliRunnerIntegration:
         monkeypatch.setattr("kaji_harness.commands.pr._load_config_for_dispatch", _stub)
 
     def test_review_comments_invokes_gh_with_composed_jq(self) -> None:
-        from kaji_harness.cli_main import main
+        from kaji_harness.commands.main import main
 
         completed = subprocess.CompletedProcess(args=[], returncode=0)
         with (
-            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
+            patch("shutil.which", return_value="/usr/bin/gh"),
             patch("kaji_harness.commands.pr._detect_repo", return_value="acme/widgets"),
-            patch("kaji_harness.cli_main.subprocess.run", return_value=completed) as m,
+            patch("subprocess.run", return_value=completed) as m,
         ):
             rc = main(["pr", "review-comments", "153", "--json", "id,body", "--jq", ".[]"])
 

@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
-from kaji_harness.cli_main import _handle_issue
+from kaji_harness.commands.issue import _handle_issue
 from kaji_harness.providers import LocalProvider
 from kaji_harness.providers.models import IssueContext
 
@@ -296,7 +296,7 @@ class TestContextCLIMedium:
                 "kaji_harness.providers.GitHubProvider.resolve_issue_context",
                 return_value=stub,
             ),
-            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+            patch("subprocess.run") as mock_run,
         ):
             rc = _handle_issue(["context", "153"])
         assert rc == 0

@@ -11,7 +11,7 @@ import re
 
 import pytest
 
-from kaji_harness.cli_main import create_parser
+from kaji_harness.commands.parser import create_parser
 from kaji_harness.console_log import ROOT_LOGGER_NAME, configure_console_logging
 from tests.conftest import restore_kaji_root_logging, snapshot_kaji_root_logging
 

@@ -11,7 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from kaji_harness.cli_main import cmd_validate, create_parser, main
+from kaji_harness.commands.main import main
+from kaji_harness.commands.parser import create_parser
+from kaji_harness.commands.validate import cmd_validate
 
 # ============================================================
 # Shared fixtures

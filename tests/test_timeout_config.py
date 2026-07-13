@@ -743,7 +743,8 @@ class TestConfigMissingExecutionErrorPath:
 
     def test_cmd_run_fails_with_missing_execution_section(self, tmp_path: Path) -> None:
         """kaji run fails with exit code when [execution] missing from config."""
-        from kaji_harness.cli_main import cmd_run, create_parser
+        from kaji_harness.commands.parser import create_parser
+        from kaji_harness.commands.run import cmd_run
 
         # Setup workdir with config missing [execution]
         workdir = tmp_path / "project"

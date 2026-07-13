@@ -19,7 +19,8 @@ from unittest.mock import patch
 
 import pytest
 
-from kaji_harness.cli_main import _format_jq_results, _handle_issue
+from kaji_harness.commands.issue import _handle_issue
+from kaji_harness.commands.output import _format_jq_results
 from kaji_harness.config import KajiConfig
 from kaji_harness.providers.context import (
     derive_slug_from_title,
@@ -219,14 +220,16 @@ class TestApplyJqExitCodes:
     """``_apply_jq`` が syntax / runtime error を ``EXIT_RUNTIME_ERROR`` にする。"""
 
     def test_syntax_error_returns_exit_3(self) -> None:
-        from kaji_harness.cli_main import EXIT_RUNTIME_ERROR, _apply_jq
+        from kaji_harness.commands.exit_codes import EXIT_RUNTIME_ERROR
+        from kaji_harness.commands.output import _apply_jq
 
         out, rc = _apply_jq("{}", "..invalid..")
         assert rc == EXIT_RUNTIME_ERROR
         assert out == ""
 
     def test_runtime_error_returns_exit_3(self) -> None:
-        from kaji_harness.cli_main import EXIT_RUNTIME_ERROR, _apply_jq
+        from kaji_harness.commands.exit_codes import EXIT_RUNTIME_ERROR
+        from kaji_harness.commands.output import _apply_jq
 
         # 数値に対して .foo は jq runtime error
         out, rc = _apply_jq("123", ".foo")
@@ -234,7 +237,8 @@ class TestApplyJqExitCodes:
         assert out == ""
 
     def test_invalid_input_json_returns_exit_3(self) -> None:
-        from kaji_harness.cli_main import EXIT_RUNTIME_ERROR, _apply_jq
+        from kaji_harness.commands.exit_codes import EXIT_RUNTIME_ERROR
+        from kaji_harness.commands.output import _apply_jq
 
         out, rc = _apply_jq("not json", ".body")
         assert rc == EXIT_RUNTIME_ERROR

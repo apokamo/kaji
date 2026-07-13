@@ -23,7 +23,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from kaji_harness.cli_main import _handle_issue, _user_specified_repo
+from kaji_harness.commands.issue import _handle_issue
+from kaji_harness.commands.pr import _user_specified_repo
 from kaji_harness.config import KajiConfig
 from kaji_harness.providers import (
     GitHubProvider,
@@ -176,7 +177,7 @@ class TestHandleIssueDispatch:
         """Phase 3-e: `[provider]` 不在で `kaji issue` は exit 2 で stop し、gh は呼ばない。"""
         repo = _write_repo(tmp_path)
         monkeypatch.chdir(repo)
-        with patch("kaji_harness.cli_main.subprocess.run") as mock_run:
+        with patch("subprocess.run") as mock_run:
             rc = _handle_issue(["view", "42"])
         assert rc == 2
         mock_run.assert_not_called()
@@ -192,8 +193,8 @@ class TestHandleIssueDispatch:
         )
         monkeypatch.chdir(repo)
         with (
-            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+            patch("shutil.which", return_value="/usr/bin/gh"),
+            patch("subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)
             rc = _handle_issue(["view", "42", "--json", "title"])
@@ -217,8 +218,8 @@ class TestHandleIssueDispatch:
         )
         monkeypatch.chdir(repo)
         with (
-            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+            patch("shutil.which", return_value="/usr/bin/gh"),
+            patch("subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)
             rc = _handle_issue(["comment", "42", "--body", "x", "--commit"])
@@ -250,7 +251,7 @@ class TestHandleIssueDispatch:
         # 設計書 § 方針 §§ 2 系統 A（実 git 経由）を維持するため、subprocess.run は
         # passthrough し、gh が呼ばれていないことだけを spy で検証する。
         real_run = subprocess.run
-        with patch("kaji_harness.cli_main.subprocess.run", side_effect=real_run) as mock_run:
+        with patch("subprocess.run", side_effect=real_run) as mock_run:
             rc = _handle_issue(["view", "local-pc1-1"])
         assert rc == 0
         gh_calls = [c for c in mock_run.call_args_list if c[0] and c[0][0] and c[0][0][0] == "gh"]
@@ -569,7 +570,7 @@ class TestLocalDispatcherFlags:
         """
         monkeypatch.chdir(local_repo)
         with patch(
-            "kaji_harness.cli_main.shutil.which",
+            "shutil.which",
             side_effect=lambda name: None if name == "jq" else "/usr/bin/" + name,
         ):
             rc = _handle_issue(["view", "1", "--json", "body", "-q", ".body"])
@@ -701,7 +702,7 @@ class TestDispatcherFailFastOnConfig:
         """
         repo = _write_repo(tmp_path, provider_section='\n[provider]\ntype = "gitlab"\n')
         monkeypatch.chdir(repo)
-        with patch("kaji_harness.cli_main.subprocess.run") as mock_run:
+        with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             rc = _handle_issue(["view", "1"])
         assert rc == 2
@@ -720,7 +721,7 @@ class TestDispatcherFailFastOnConfig:
         (repo / ".kaji").mkdir(parents=True)
         (repo / ".kaji" / "config.toml").write_text("not = a [valid TOML\n")
         monkeypatch.chdir(repo)
-        with patch("kaji_harness.cli_main.subprocess.run") as mock_run:
+        with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             rc = _handle_issue(["view", "1"])
         assert rc == 2
@@ -805,8 +806,8 @@ class TestForwardToGhRepoInjection:
         )
         monkeypatch.chdir(repo)
         with (
-            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+            patch("shutil.which", return_value="/usr/bin/gh"),
+            patch("subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)
             rc = _handle_issue(["view", "42"])
@@ -828,8 +829,8 @@ class TestForwardToGhRepoInjection:
         )
         monkeypatch.chdir(repo)
         with (
-            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+            patch("shutil.which", return_value="/usr/bin/gh"),
+            patch("subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)
             _handle_issue(["view", "42", "--repo", "user/explicit"])
@@ -844,7 +845,7 @@ class TestForwardToGhRepoInjection:
         """Phase 3-e: `[provider]` 未設定では fail-fast し、gh subprocess を呼ばない。"""
         repo = _write_repo(tmp_path)  # provider なし
         monkeypatch.chdir(repo)
-        with patch("kaji_harness.cli_main.subprocess.run") as mock_run:
+        with patch("subprocess.run") as mock_run:
             rc = _handle_issue(["view", "42"])
         assert rc == 2
         mock_run.assert_not_called()
@@ -852,7 +853,7 @@ class TestForwardToGhRepoInjection:
     def test_pr_passthrough_injects_repo(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from kaji_harness.cli_main import _handle_pr
+        from kaji_harness.commands.pr import _handle_pr
 
         repo = _write_repo(
             tmp_path,
@@ -862,8 +863,8 @@ class TestForwardToGhRepoInjection:
         )
         monkeypatch.chdir(repo)
         with (
-            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+            patch("shutil.which", return_value="/usr/bin/gh"),
+            patch("subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)
             rc = _handle_pr(["view", "153"])
@@ -876,7 +877,7 @@ class TestForwardToGhRepoInjection:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """builtin (review-comments) も config repo を尊重し、cwd 推論を使わない。"""
-        from kaji_harness.cli_main import _handle_pr
+        from kaji_harness.commands.pr import _handle_pr
 
         repo = _write_repo(
             tmp_path,
@@ -886,8 +887,8 @@ class TestForwardToGhRepoInjection:
         )
         monkeypatch.chdir(repo)
         with (
-            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+            patch("shutil.which", return_value="/usr/bin/gh"),
+            patch("subprocess.run") as mock_run,
             # _detect_repo の auto-detect 経路（subprocess gh repo view）が
             # 呼ばれてはならない。override が機能していれば fallback しない
             patch(
@@ -971,8 +972,8 @@ class TestForwardToGhRepoInjectionInline:
 
     def test_inline_long_repo_not_double_injected(self, repo: Path) -> None:
         with (
-            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+            patch("shutil.which", return_value="/usr/bin/gh"),
+            patch("subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)
             _handle_issue(["view", "42", "--repo=user/explicit"])
@@ -986,8 +987,8 @@ class TestForwardToGhRepoInjectionInline:
 
     def test_inline_short_with_equals_not_double_injected(self, repo: Path) -> None:
         with (
-            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+            patch("shutil.which", return_value="/usr/bin/gh"),
+            patch("subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)
             _handle_issue(["view", "42", "-R=user/explicit"])
@@ -1001,8 +1002,8 @@ class TestForwardToGhRepoInjectionInline:
 
     def test_short_concatenated_not_double_injected(self, repo: Path) -> None:
         with (
-            patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-            patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+            patch("shutil.which", return_value="/usr/bin/gh"),
+            patch("subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)
             _handle_issue(["view", "42", "-Ruser/explicit"])

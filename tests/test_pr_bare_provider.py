@@ -19,8 +19,8 @@ from unittest.mock import patch
 
 import pytest
 
-from kaji_harness.cli_main import _PR_BARE_PROVIDER_ERROR
-from kaji_harness.cli_main import main as cli_main
+from kaji_harness.commands.main import main as cli_main
+from kaji_harness.commands.pr import _PR_BARE_PROVIDER_ERROR
 
 _BASE_CONFIG = """
 [paths]
@@ -108,7 +108,7 @@ def test_pr_local_provider_blocks_all_subcommands(tmp_path: Path, args: list[str
     # （設計書 § 方針 §§ 2 系統 B）。
     with (
         patch("kaji_harness.providers.resolve_main_worktree", return_value=tmp_path),
-        patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        patch("subprocess.run") as mock_run,
     ):
         rc, _, stderr = _run_at(tmp_path, args)
     assert rc == 2
@@ -131,8 +131,8 @@ def test_pr_github_passthrough_invokes_gh_with_repo_injection(tmp_path: Path) ->
     """provider=github 経路は Phase 3-e と同じく gh に ``--repo`` を末尾注入する。"""
     _setup_repo(tmp_path, provider="github")
     with (
-        patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-        patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch("subprocess.run") as mock_run,
     ):
         mock_run.return_value.returncode = 0
         rc, _, _ = _run_at(tmp_path, ["pr", "list"])
@@ -149,8 +149,8 @@ def test_pr_github_passthrough_invokes_gh_with_repo_injection(tmp_path: Path) ->
 def test_pr_github_pr_create_forwarded(tmp_path: Path) -> None:
     _setup_repo(tmp_path, provider="github")
     with (
-        patch("kaji_harness.cli_main.shutil.which", return_value="/usr/bin/gh"),
-        patch("kaji_harness.cli_main.subprocess.run") as mock_run,
+        patch("shutil.which", return_value="/usr/bin/gh"),
+        patch("subprocess.run") as mock_run,
     ):
         mock_run.return_value.returncode = 0
         rc, _, _ = _run_at(tmp_path, ["pr", "create", "--title", "t", "--body", "b"])

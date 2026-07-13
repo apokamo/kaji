@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from kaji_harness.cli_main import _get_version, create_parser
+from kaji_harness.commands.parser import _get_version, create_parser
 
 
 class TestGetVersionSmall:

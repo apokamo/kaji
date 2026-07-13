@@ -254,7 +254,7 @@ def test_handle_issue_local_list_translates_sync_error(
     legacy gl-*.json 残置 → `_handle_issue(["list"])` が rc=2 + stderr に
     'legacy GitLab cache' を出すことを確認する。
     """
-    from kaji_harness.cli_main import _handle_issue
+    from kaji_harness.commands.issue import _handle_issue
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -282,7 +282,7 @@ def test_handle_issue_local_view_cached_translates_sync_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """``kaji issue view gh:N`` 経路の SyncError も EXIT_INVALID_INPUT に翻訳。"""
-    from kaji_harness.cli_main import _handle_issue
+    from kaji_harness.commands.issue import _handle_issue
 
     repo = tmp_path / "repo"
     repo.mkdir()

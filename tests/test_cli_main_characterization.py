@@ -22,18 +22,18 @@ from unittest.mock import patch
 
 import pytest
 
-from kaji_harness.cli_main import (
-    EXIT_RUNTIME_ERROR,
-    _compose_json_and_jq,
+from kaji_harness.commands.exit_codes import EXIT_RUNTIME_ERROR
+from kaji_harness.commands.issue import _has_verdict_flags
+from kaji_harness.commands.output import _compose_json_and_jq
+from kaji_harness.commands.pr import (
     _detect_repo,
     _forward_to_gh,
     _gh_capture_value,
     _has_approve_flag,
     _has_request_changes_flag,
-    _has_verdict_flags,
     _is_ascii_decimal,
-    _resolve_project_root_for_validate,
 )
+from kaji_harness.commands.validate import _resolve_project_root_for_validate
 
 
 def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> SimpleNamespace:
