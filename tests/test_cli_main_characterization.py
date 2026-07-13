@@ -37,9 +37,8 @@ from kaji_harness.cli_main import (
     _resolve_project_root_for_validate,
     _resolve_recover_issue_context,
     _resolve_target_run_dir,
-    _resolve_verdict_marker,
 )
-from kaji_harness.providers.markers import build_kaji_verdict_marker
+from kaji_harness.providers.markers import build_kaji_verdict_marker, resolve_verdict_marker
 
 
 def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> SimpleNamespace:
@@ -78,24 +77,24 @@ class TestIsAsciiDecimal:
 class TestResolveVerdictMarker:
     @pytest.mark.small
     def test_both_none_returns_none(self) -> None:
-        assert _resolve_verdict_marker(None, None) is None
+        assert resolve_verdict_marker(None, None) is None
 
     @pytest.mark.small
     def test_both_given_returns_marker(self) -> None:
         # 現挙動: build_kaji_verdict_marker の戻り値をそのまま返す。
-        assert _resolve_verdict_marker("implement", "PASS") == build_kaji_verdict_marker(
+        assert resolve_verdict_marker("implement", "PASS") == build_kaji_verdict_marker(
             "implement", "PASS"
         )
 
     @pytest.mark.small
     def test_step_only_raises(self) -> None:
         with pytest.raises(ValueError, match="must be specified together"):
-            _resolve_verdict_marker("implement", None)
+            resolve_verdict_marker("implement", None)
 
     @pytest.mark.small
     def test_status_only_raises(self) -> None:
         with pytest.raises(ValueError, match="must be specified together"):
-            _resolve_verdict_marker(None, "PASS")
+            resolve_verdict_marker(None, "PASS")
 
 
 # ---------------------------------------------------------------------------

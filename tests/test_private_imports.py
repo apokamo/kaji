@@ -242,7 +242,6 @@ TRANSITIONAL_ALLOWLIST: frozenset[Signature] = frozenset(
                 "_local_issue_list",
                 "_local_issue_view",
                 "_resolve_local_id",
-                "_resolve_verdict_marker",
             ),
         ),
         (

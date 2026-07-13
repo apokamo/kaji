@@ -18,7 +18,7 @@ from ..providers.local import (
     LocalProvider,
     LocalProviderError,
 )
-from ..providers.markers import build_kaji_verdict_marker
+from ..providers.markers import resolve_verdict_marker
 from .config import _load_config_for_dispatch
 from .exit_codes import EXIT_INVALID_INPUT, EXIT_OK, EXIT_RUNTIME_ERROR
 from .output import _emit_json, _issue_to_json_dict, _read_body_arg
@@ -118,7 +118,7 @@ def _github_issue_comment_with_verdict(provider: object, rest: list[str]) -> int
         sys.stderr.write("Error: 'kaji issue comment' requires --body or --body-file\n")
         return EXIT_INVALID_INPUT
     try:
-        marker = _resolve_verdict_marker(ns.verdict_step, ns.verdict_status)
+        marker = resolve_verdict_marker(ns.verdict_step, ns.verdict_status)
     except ValueError as exc:
         sys.stderr.write(f"Error: {exc}\n")
         return EXIT_INVALID_INPUT
@@ -160,26 +160,6 @@ def _resolve_local_id(provider: LocalProvider, raw: str, *, write: bool) -> Reso
         )
         return EXIT_INVALID_INPUT
     return rid
-
-
-def _resolve_verdict_marker(step: str | None, status: str | None) -> str | None:
-    """``--verdict-step`` / ``--verdict-status`` から marker 行を解決する。
-
-    両フラグは同時必須（片方のみは契約違反）。両方 ``None`` の従来呼び出しは
-    ``None`` を返し、呼出側は body を一切変更しない。
-
-    Returns:
-        marker 文字列（1 行目に前置する）、または verdict フラグ未指定なら ``None``。
-
-    Raises:
-        ValueError: 片方のみ指定 / 不正な step・status 語彙（fail-loud）。
-            呼出側で ``EXIT_INVALID_INPUT`` にマップする。
-    """
-    if step is None and status is None:
-        return None
-    if step is None or status is None:
-        raise ValueError("--verdict-step and --verdict-status must be specified together")
-    return build_kaji_verdict_marker(step, status)
 
 
 def _has_verdict_flags(args: list[str]) -> bool:
@@ -587,7 +567,7 @@ def _local_issue_comment(provider: LocalProvider, rest: list[str]) -> int:
         raise ValueError("'kaji issue comment' requires --body or --body-file")
     # verdict marker（ADR 008 決定 3: cross-skill 契約を CLI 層に置く）。
     # 片方のみ / 不正語彙は ValueError → _handle_issue_local が exit 2 にマップ。
-    marker = _resolve_verdict_marker(ns.verdict_step, ns.verdict_status)
+    marker = resolve_verdict_marker(ns.verdict_step, ns.verdict_status)
     if marker is not None:
         body = f"{marker}\n{body}"
     comment = provider.comment_issue(rid.value, body)

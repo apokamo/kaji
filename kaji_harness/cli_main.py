@@ -41,7 +41,6 @@ from .commands.issue import (
     _local_issue_list,
     _local_issue_view,
     _resolve_local_id,
-    _resolve_verdict_marker,
     build_worktree_note_body,
 )
 from .commands.main import main
@@ -180,7 +179,6 @@ __all__ = [
     "_handle_issue",
     "_github_issue_comment_with_verdict",
     "_resolve_local_id",
-    "_resolve_verdict_marker",
     "_has_verdict_flags",
     "build_worktree_note_body",
     "_handle_issue_prepend_note",
