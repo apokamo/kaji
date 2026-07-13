@@ -106,8 +106,8 @@ kaji_harness/
     markers.py    # kaji-verdict marker の生成 / optional flag 解決
     _mappings.py  # label → branch_prefix mapping (private。facade 経由で公開)
     _worktree.py  # main worktree 解決 (private。facade 経由で公開)
-  commands/       # kaji CLI subcommand dispatcher (Issue #283 で cli_main.py から分割)
-  cli_main.py     # 互換 shim。console entry point `kaji`。最終削除は #284
+  commands/       # kaji CLI subcommand dispatcher の実体 (Issue #283/#286 で分割・分離)
+  cli_main.py     # console entry point `kaji` / `python -m` 専用 (#284 で互換 shim 撤去)
   recovery/       # failure triage / recovery handler (Issue #288)
     models.py     # RecoveryDecision / FailureClassification / 定数 (budget, wait, denylist)
     snapshot.py   # 失敗 run の artifact / state / git state 収集
@@ -130,7 +130,7 @@ kaji_harness/
       ▲
 [command]     commands/
       ▲
-[shim]        cli_main.py                    （#284 で削除）
+[shim]        cli_main.py                    （entrypoint のみ。#284 で re-export 撤去）
 ```
 
 private module（`_*.py`）を package 外から読むことは禁止し、外部公開が必要なら `__init__.py`

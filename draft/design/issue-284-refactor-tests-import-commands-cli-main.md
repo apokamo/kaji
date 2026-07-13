@@ -296,15 +296,27 @@ if __name__ == "__main__":
 書換え後に tests に残る `cli_main` 参照は **module 実行（`python -m
 kaji_harness.cli_main`）のみ** とし、in-process の実装シンボル import は 0 件にする:
 
-| ファイル | 参照形態 |
-|---------|---------|
-| `tests/test_cli_version.py:67` | `[sys.executable, "-m", "kaji_harness.cli_main", "--version"]` |
-| `tests/test_cli_validate.py`（8 箇所） | 同上（`validate` E2E） |
-| `tests/test_local_cli_large_local.py:21` | `_KAJI_CMD` 定数 |
-| `tests/test_provider_guard_large_local.py:20` | `_KAJI_CMD` 定数 |
-| `tests/test_migrate_comment_filenames.py:420` | module 実行 |
-| `tests/test_cli_main.py:513` | `run --help` の module 実行 |
-| `tests/test_recovery_e2e_large_local.py:84` | module 実行 |
+| ファイル | 件数 | 参照形態 |
+|---------|-----:|---------|
+| `tests/test_cli_main.py` | 2 | `run --help` / `run` の module 実行 |
+| `tests/test_cli_timestamp.py` | 2 | `run` の module 実行 |
+| `tests/test_cli_validate.py` | 7 | `validate` の module 実行 |
+| `tests/test_cli_version.py` | 1 | `[sys.executable, "-m", "kaji_harness.cli_main", "--version"]` |
+| `tests/test_config.py` | 7 | `run` / `validate` の module 実行 |
+| `tests/test_dispatcher.py` | 1 | `issue view` の module 実行 |
+| `tests/test_exec_step_e2e_large_local.py` | 1 | `run` の module 実行 |
+| `tests/test_local_cli_large_local.py` | 1 | `_KAJI_CMD` 定数 |
+| `tests/test_migrate_comment_filenames.py` | 3 | `issue` の module 実行 |
+| `tests/test_provider_guard_large_local.py` | 1 | `_KAJI_CMD` 定数 |
+| `tests/test_recovery_e2e_large_local.py` | 1 | module 実行 helper |
+| `tests/test_skill_validation.py` | 3 | `run` の module 実行 |
+| `tests/test_timeout_config.py` | 3 | `validate` / `run` の module 実行 |
+| `tests/test_verdict_artifact_e2e_large_local.py` | 1 | `run` の module 実行 |
+| `tests/test_verdict_e2e.py` | 4 | `validate` / `run` の module 実行 |
+| `tests/test_workdir_config.py` | 2 | `validate` の module 実行 |
+
+合計 16 ファイル / 40 箇所。AST で list / tuple 内に `"-m"` と
+`"kaji_harness.cli_main"` が共存する call argv を集計した。
 
 これらは entrypoint の継続動作検証そのものであり、実装シンボル参照ではない。
 このほか `tests/test_layer_imports.py` の module 分類 mapping key
