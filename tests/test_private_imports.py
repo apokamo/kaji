@@ -59,12 +59,24 @@ def is_private(name: str) -> bool:
     return name.startswith("_") and not name.startswith("__")
 
 
-def _pkg(module: str) -> str:
-    """module が属する package。末尾成分を落とすだけで済む。
+def _pkg(module: str, packages: frozenset[str]) -> str:
+    """module が属する package (ADR 009 の ``pkg(X)``)。
 
+    ``X`` が package 自身（``__init__`` を持つ dotted name）なら ``X`` そのもの、
+    通常の module なら末尾成分を落としたもの。この区別が無いと
+    ``from .providers import _internal`` のように sub-package の facade を
+    import 先とする境界違反を、親 package 同士の比較で許容と誤判定する。
+
+    ``kaji_harness.providers``          → ``kaji_harness.providers``（package 自身）
     ``kaji_harness.providers.__init__`` → ``kaji_harness.providers``（自 package）
     ``kaji_harness.providers.local``    → ``kaji_harness.providers``
+
+    Args:
+        module: 対象の dotted name。
+        packages: 実在する package の dotted name 集合（``__init__`` は含めない）。
     """
+    if module in packages:
+        return module
     return module.rsplit(".", 1)[0]
 
 
@@ -89,7 +101,9 @@ def _extract_dunder_all(tree: ast.Module) -> frozenset[str]:
     return frozenset(names)
 
 
-def classify_source(source_text: str, module_name: str) -> list[PrivateImport]:
+def classify_source(
+    source_text: str, module_name: str, packages: frozenset[str]
+) -> list[PrivateImport]:
     """ソース文字列中の private import を分類する（純関数・ディスクに触れない）。
 
     ``ast.Import``（``import a.b``）と ``ast.ImportFrom``（``from a import b``）は
@@ -101,6 +115,9 @@ def classify_source(source_text: str, module_name: str) -> list[PrivateImport]:
         source_text: 対象 module のソース。
         module_name: 対象 module の dotted name。package の ``__init__.py`` は
             ``__init__`` を末尾に含めて渡す。
+        packages: 実在する package の dotted name 集合。``pkg(T)`` を ADR 009 の
+            定義どおり解決するために必須（import 先が package 自身か通常 module か
+            は AST だけでは判別できない）。実ツリーでは `discover_packages` が返す。
 
     Returns:
         private import と判定された statement の分類結果（出現順）。
@@ -108,7 +125,7 @@ def classify_source(source_text: str, module_name: str) -> list[PrivateImport]:
     tree = ast.parse(source_text)
     dunder_all = _extract_dunder_all(tree)
     is_package_init = module_name.rsplit(".", 1)[-1] == "__init__"
-    self_pkg = _pkg(module_name)
+    self_pkg = _pkg(module_name, packages)
 
     results: list[PrivateImport] = []
     for node in ast.walk(tree):
@@ -135,7 +152,7 @@ def classify_source(source_text: str, module_name: str) -> list[PrivateImport]:
             if not (private_module or private_names):
                 continue
 
-            if self_pkg != _pkg(target):
+            if self_pkg != _pkg(target, packages):
                 classification: Classification = "forbidden"
             elif is_package_init and any(n in dunder_all for n in all_names):
                 classification = "public_reexport"
@@ -163,12 +180,22 @@ def module_name_for(path: pathlib.Path, package_root: pathlib.Path) -> str:
     return ".".join(rel.parts)
 
 
+def discover_packages(package_root: pathlib.Path) -> frozenset[str]:
+    """実ツリーから package の dotted name 集合を集める（``__init__.py`` を持つ dir）。"""
+    names = {ROOT_PACKAGE}
+    for init in package_root.rglob("__init__.py"):
+        rel = init.parent.relative_to(package_root.parent)
+        names.add(".".join(rel.parts))
+    return frozenset(names)
+
+
 def collect_private_imports(package_root: pathlib.Path) -> list[PrivateImport]:
     """実ツリーを走査して private import を集める（ここだけがファイル I/O）。"""
+    packages = discover_packages(package_root)
     found: list[PrivateImport] = []
     for path in sorted(package_root.rglob("*.py")):
         source = path.read_text(encoding="utf-8")
-        found.extend(classify_source(source, module_name_for(path, package_root)))
+        found.extend(classify_source(source, module_name_for(path, package_root), packages))
     return found
 
 
@@ -311,6 +338,15 @@ def _fmt(signatures: set[Signature]) -> str:
 # Small: 分類器の単体テスト（合成ソースのみ・ディスクに触れない）
 # ---------------------------------------------------------------------------
 
+# 合成ソース用の package 集合（実ツリーの package 構成に対応）。
+PACKAGES = frozenset(
+    {
+        "kaji_harness",
+        "kaji_harness.commands",
+        "kaji_harness.providers",
+    }
+)
+
 
 @pytest.mark.small
 def test_relative_import_level_resolution() -> None:
@@ -318,6 +354,7 @@ def test_relative_import_level_resolution() -> None:
     result = classify_source(
         "from ..state import _format_issue_ref\n",
         "kaji_harness.commands.issue",
+        PACKAGES,
     )
     assert len(result) == 1
     assert result[0].target == "kaji_harness.state"
@@ -334,6 +371,7 @@ def test_package_init_level_1_resolves_to_own_package() -> None:
     result = classify_source(
         '__all__ = ["resolve_main_worktree"]\nfrom ._worktree import resolve_main_worktree\n',
         "kaji_harness.providers.__init__",
+        PACKAGES,
     )
     assert len(result) == 1
     assert result[0].target == "kaji_harness.providers._worktree"
@@ -346,6 +384,7 @@ def test_package_init_private_import_not_in_dunder_all_is_allowed() -> None:
     result = classify_source(
         '__all__ = ["other"]\nfrom ._worktree import resolve_main_worktree\n',
         "kaji_harness.providers.__init__",
+        PACKAGES,
     )
     assert [r.classification for r in result] == ["allowed"]
 
@@ -355,6 +394,7 @@ def test_same_package_private_import_is_allowed() -> None:
     result = classify_source(
         "from ._mappings import LABEL_TO_PREFIX\n",
         "kaji_harness.providers.context",
+        PACKAGES,
     )
     assert [r.classification for r in result] == ["allowed"]
 
@@ -364,9 +404,55 @@ def test_cross_package_private_symbol_is_forbidden() -> None:
     result = classify_source(
         "from .providers.local import _atomic_write\n",
         "kaji_harness.sync",
+        PACKAGES,
     )
     assert [r.classification for r in result] == ["forbidden"]
     assert result[0].target == "kaji_harness.providers.local"
+
+
+@pytest.mark.small
+def test_sub_package_facade_private_symbol_is_forbidden_relative() -> None:
+    """sub-package の facade (`__init__`) から private symbol を取るのも境界違反。
+
+    ``pkg(T)`` は「T が package なら T 自身」なので、``kaji_harness.sync``
+    (所属 ``kaji_harness``) から見た ``kaji_harness.providers`` は別 package。
+    import 先を package 自身と判別しないと、末尾成分を落とした親 package 同士の
+    比較になって許容と誤判定する。
+    """
+    result = classify_source(
+        "from .providers import _internal\n",
+        "kaji_harness.sync",
+        PACKAGES,
+    )
+    assert len(result) == 1
+    assert result[0].target == "kaji_harness.providers"
+    assert result[0].private_names == ("_internal",)
+    assert result[0].classification == "forbidden"
+
+
+@pytest.mark.small
+def test_sub_package_facade_private_symbol_is_forbidden_absolute() -> None:
+    """絶対 import 形式でも sub-package facade 経由の private symbol は禁止。"""
+    result = classify_source(
+        "from kaji_harness.providers import _internal\n",
+        "kaji_harness.sync",
+        PACKAGES,
+    )
+    assert [r.classification for r in result] == ["forbidden"]
+    assert result[0].target == "kaji_harness.providers"
+
+
+@pytest.mark.small
+def test_own_package_facade_private_symbol_is_allowed() -> None:
+    """同一 package の facade (``from . import _x``) は package 内なので許容。"""
+    result = classify_source(
+        "from . import _internal\n",
+        "kaji_harness.providers.local",
+        PACKAGES,
+    )
+    assert len(result) == 1
+    assert result[0].target == "kaji_harness.providers"
+    assert result[0].classification == "allowed"
 
 
 @pytest.mark.small
@@ -374,6 +460,7 @@ def test_cross_package_private_module_is_forbidden() -> None:
     result = classify_source(
         "from .providers._mappings import DEFAULT_BRANCH_PREFIX, LABEL_TO_PREFIX\n",
         "kaji_harness.worktree_discovery",
+        PACKAGES,
     )
     assert [r.classification for r in result] == ["forbidden"]
     # private module 経由なので import される名前自体は public
@@ -389,6 +476,7 @@ def test_plain_import_of_private_module_is_forbidden() -> None:
     result = classify_source(
         "import kaji_harness.providers._mappings\n",
         "kaji_harness.worktree_discovery",
+        PACKAGES,
     )
     assert len(result) == 1
     assert result[0].target == "kaji_harness.providers._mappings"
@@ -401,6 +489,7 @@ def test_plain_import_of_public_module_is_out_of_scope() -> None:
     result = classify_source(
         "import kaji_harness.providers\nimport kaji_harness.sync\n",
         "kaji_harness.worktree_discovery",
+        PACKAGES,
     )
     assert result == []
 
@@ -410,6 +499,7 @@ def test_dunder_import_is_not_private() -> None:
     result = classify_source(
         "from __future__ import annotations\n",
         "kaji_harness.sync",
+        PACKAGES,
     )
     assert result == []
 
@@ -421,6 +511,7 @@ def test_public_symbol_and_third_party_imports_are_out_of_scope() -> None:
         "from .providers import get_provider\n"
         "from kaji_harness.errors import SyncError\n",
         "kaji_harness.sync",
+        PACKAGES,
     )
     assert result == []
 
@@ -431,11 +522,13 @@ def test_signature_is_line_and_order_independent() -> None:
     a = classify_source(
         "from .config import _load_config_for_dispatch, _emit_provider_overlay_divergence_warning\n",
         "kaji_harness.cli_main",
+        PACKAGES,
     )
     b = classify_source(
         "import os\n\n\n"
         "from .config import _emit_provider_overlay_divergence_warning, _load_config_for_dispatch\n",
         "kaji_harness.cli_main",
+        PACKAGES,
     )
     assert a[0].lineno != b[0].lineno
     assert a[0].signature == b[0].signature
@@ -448,7 +541,7 @@ def test_allowlist_filters_registered_forbidden_signature() -> None:
         "from .commands.recover import _resolve_recover_issue_context, "
         "_resolve_target_run_dir, cmd_recover\n"
     )
-    found = classify_source(source, "kaji_harness.cli_main")
+    found = classify_source(source, "kaji_harness.cli_main", PACKAGES)
     forbidden = {r.signature for r in found if r.classification == "forbidden"}
     assert forbidden <= TRANSITIONAL_ALLOWLIST
     assert forbidden - TRANSITIONAL_ALLOWLIST == set()
@@ -466,7 +559,7 @@ def test_unregistered_violation_in_shim_is_detected() -> None:
         "_resolve_target_run_dir, cmd_recover\n"
         "from .commands.output import _brand_new_violation\n"
     )
-    found = classify_source(source, "kaji_harness.cli_main")
+    found = classify_source(source, "kaji_harness.cli_main", PACKAGES)
     forbidden = {r.signature for r in found if r.classification == "forbidden"}
     residual = forbidden - TRANSITIONAL_ALLOWLIST
     assert residual == {
@@ -482,7 +575,7 @@ def test_stale_allowlist_entry_is_detected() -> None:
         "from .commands.recover import _resolve_recover_issue_context, "
         "_resolve_target_run_dir, cmd_recover\n"
     )
-    found = classify_source(source, "kaji_harness.cli_main")
+    found = classify_source(source, "kaji_harness.cli_main", PACKAGES)
     forbidden = {r.signature for r in found if r.classification == "forbidden"}
     stale = TRANSITIONAL_ALLOWLIST - forbidden
     assert len(stale) == 7
@@ -492,6 +585,17 @@ def test_stale_allowlist_entry_is_detected() -> None:
 # ---------------------------------------------------------------------------
 # Medium: 実 kaji_harness/ ツリーに対する fitness test（ディスク走査あり）
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.medium
+def test_discovered_packages_include_sub_packages() -> None:
+    """``discover_packages`` が sub-package を取りこぼさない。
+
+    取りこぼすと ``pkg(T)`` が親 package に落ち、facade 経由の境界違反が
+    許容と誤判定される（下の fitness test が黙って素通りする）。
+    """
+    packages = discover_packages(PACKAGE_ROOT)
+    assert {ROOT_PACKAGE, "kaji_harness.providers", "kaji_harness.commands"} <= packages
 
 
 @pytest.mark.medium
