@@ -18,7 +18,13 @@ from ..errors import (
 from ..providers import actual_provider_type, get_provider
 from ..providers.github import GitHubProviderError
 from ..series import SeriesRunner, load_series, series_fingerprint
-from .exit_codes import EXIT_ABORT, EXIT_INVALID_INPUT, EXIT_OK, EXIT_RUNTIME_ERROR
+from .exit_codes import (
+    EXIT_ABORT,
+    EXIT_INVALID_INPUT,
+    EXIT_OK,
+    EXIT_RUNTIME_ERROR,
+    EXIT_VALIDATION_ERROR,
+)
 
 
 def _discover_series_config(args: argparse.Namespace) -> KajiConfig:
@@ -48,7 +54,7 @@ def cmd_validate_series(args: argparse.Namespace) -> int:
                 print(f"  - {error}", file=sys.stderr)
         else:
             print(f"✓ {path} ({len(series.members)} members)")
-    return EXIT_ABORT if failed else EXIT_OK
+    return EXIT_VALIDATION_ERROR if failed else EXIT_OK
 
 
 def cmd_run_series(args: argparse.Namespace) -> int:
