@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from ._mappings import DEFAULT_BRANCH_PREFIX, LABEL_TO_PREFIX
 from ._worktree import resolve_main_worktree
 from .base import IssueProvider
 from .github import GitHubProvider
@@ -23,7 +24,16 @@ from .models import Comment, Issue, IssueContext, Label, PRContext
 if TYPE_CHECKING:
     from ..config import KajiConfig
 
+# package の public API。`_mappings` / `_worktree` は private module のまま維持し、
+# package 外が必要とするシンボルだけを本 facade 経由で公開する（ADR 009）。
+# `labels_to_branch_prefix` は package 外に消費者がいないため公開しない。
+#
+# `__all__` の実行時効果は `from kaji_harness.providers import *` の制御に限られ、
+# `from kaji_harness.providers._mappings import X` のような named import を禁止する
+# 強制力は持たない。境界の強制は tests/test_private_imports.py の fitness test が担う。
 __all__ = [
+    "DEFAULT_BRANCH_PREFIX",
+    "LABEL_TO_PREFIX",
     "Comment",
     "GitHubProvider",
     "Issue",
@@ -37,6 +47,7 @@ __all__ = [
     "get_provider",
     "normalize_id",
     "provider_overlay_divergence_warning",
+    "resolve_main_worktree",
 ]
 
 

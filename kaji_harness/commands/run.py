@@ -21,9 +21,9 @@ from ..errors import (
 )
 from ..models import Workflow
 from ..providers import IssueProvider, actual_provider_type, get_provider
+from ..providers.context import format_issue_ref
 from ..recovery.handler import RecoveryHandler
 from ..runner import WorkflowRunner
-from ..state import _format_issue_ref
 from ..workflow import load_workflow
 from .config import _emit_provider_overlay_divergence_warning
 from .exit_codes import (
@@ -218,7 +218,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         else:
             # Success summary: canonical_issue_ref を優先（Phase 3-d preflight § 1）。
             # ``[provider]`` 未設定 fallback などで未確定の場合のみ raw 入力で整形する。
-            issue_ref = runner.canonical_issue_ref or _format_issue_ref(args.issue)
+            issue_ref = runner.canonical_issue_ref or format_issue_ref(args.issue)
             print(f"Workflow '{workflow.name}' completed for issue {issue_ref}")
             return EXIT_OK
 

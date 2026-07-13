@@ -17,7 +17,8 @@ def cmd_sync_from_github(args: argparse.Namespace) -> int:
     将来予約 flag（``--include-closed`` / ``--state`` / ``--since``）は exit 2 で
     fail-fast する。
     """
-    from ..sync import SyncError, sync_from_github
+    from ..errors import SyncError
+    from ..sync import sync_from_github
 
     if args.include_closed:
         sys.stderr.write(
@@ -69,7 +70,8 @@ def cmd_sync_status(args: argparse.Namespace) -> int:
     """``kaji sync status`` の dispatcher (issue ``local-p1-8``)。"""
     import json as _json
 
-    from ..sync import SyncError, format_elapsed_human, read_sync_status
+    from ..errors import SyncError
+    from ..sync import format_elapsed_human, read_sync_status
 
     try:
         config = KajiConfig.discover(start_dir=Path.cwd())

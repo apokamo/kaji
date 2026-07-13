@@ -11,21 +11,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .models import Verdict
+from .providers.context import format_issue_ref
 
 STATE_FILE = "session-state.json"
-
-
-def _format_issue_ref(issue: str | int) -> str:
-    """Issue ID を人間可読な参照形式に整形する。
-
-    数値のみ（GitHub Issue 番号）→ ``#153``。
-    それ以外（local-pc1-1 等）→ そのまま返す。
-
-    Phase 1 では provider 抽象が未導入のため、形式から判別する。
-    int も受け付ける（既存呼び出し互換のための境界正規化）。
-    """
-    s = str(issue)
-    return f"#{s}" if s.isdigit() else s
 
 
 @dataclass
@@ -179,7 +167,7 @@ class SessionState:
 
     def _write_progress_md(self) -> None:
         """人間可読な進捗ファイルを更新する。"""
-        lines = [f"# Progress: Issue {_format_issue_ref(self.issue_number)}\n"]
+        lines = [f"# Progress: Issue {format_issue_ref(self.issue_number)}\n"]
         for record in self.step_history:
             mark = "x" if record.verdict_status == "PASS" else " "
             label = record.step_id

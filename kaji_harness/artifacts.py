@@ -48,7 +48,7 @@ def _try_resolve_main_worktree(config: KajiConfig) -> Path | None:
     if config.provider is None:
         return None
     default_branch: str = getattr(config.provider, config.provider.type).default_branch
-    from .providers._worktree import resolve_main_worktree
+    from .providers import resolve_main_worktree
     from .providers.local import LocalProviderError
 
     try:

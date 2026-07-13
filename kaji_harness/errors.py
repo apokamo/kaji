@@ -9,6 +9,21 @@ class HarnessError(Exception):
     """ハーネスの基底例外。"""
 
 
+# --- cache 同期エラー ---
+class SyncError(RuntimeError):
+    """``kaji sync`` 固有のエラー（config 不在 / gh CLI 不在 / API 失敗等）。
+
+    Issue #285 で ``sync.py`` から foundation 層へ移設した。``providers.cache_guard``
+    （下位層）が raise し ``sync`` / ``commands`` （上位層）が catch するため、
+    どちらにも属さない ``errors`` に置く。
+
+    基底は ``RuntimeError`` を維持する。``HarnessError`` に付け替えると
+    ``except RuntimeError`` の到達範囲が変わり振る舞い変更になるため、基底の統一は
+    本 Issue の scope 外（`draft/design/issue-285-refactor-private-import-r3.md`
+    § 制約・前提条件）。
+    """
+
+
 # --- 設定エラー ---
 class ConfigNotFoundError(HarnessError):
     """.kaji/config.toml が見つからない。"""
