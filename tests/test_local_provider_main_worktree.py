@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from kaji_harness.cli_main import (
+from kaji_harness.commands.issue import (
     _local_issue_close,
     _local_issue_comment,
     _local_issue_create,

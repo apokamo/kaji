@@ -355,7 +355,7 @@ class TestCliSyncFromGitHub:
     ) -> None:
         repo_root = _bootstrap_local_repo(tmp_path)
         monkeypatch.chdir(repo_root)
-        from kaji_harness.cli_main import main
+        from kaji_harness.commands.main import main
 
         rc = main(["sync", "from-github", "--include-closed"])
         assert rc == 2
@@ -366,7 +366,7 @@ class TestCliSyncFromGitHub:
     ) -> None:
         repo_root = _bootstrap_local_repo(tmp_path)
         monkeypatch.chdir(repo_root)
-        from kaji_harness.cli_main import main
+        from kaji_harness.commands.main import main
 
         rc = main(["sync", "from-github", "--state", "all"])
         assert rc == 2
@@ -377,7 +377,7 @@ class TestCliSyncFromGitHub:
     ) -> None:
         repo_root = _bootstrap_local_repo(tmp_path)
         monkeypatch.chdir(repo_root)
-        from kaji_harness.cli_main import main
+        from kaji_harness.commands.main import main
 
         rc = main(["sync", "from-github", "--since", "2026-01-01"])
         assert rc == 2
@@ -388,7 +388,7 @@ class TestCliSyncFromGitHub:
     ) -> None:
         repo_root = _bootstrap_local_repo(tmp_path)
         monkeypatch.chdir(repo_root)
-        from kaji_harness.cli_main import main
+        from kaji_harness.commands.main import main
 
         page = [{"number": 1, "state": "open", "title": "t"}]
         with _gh_present(), _patch_gh_pages([page, []]):
@@ -409,7 +409,7 @@ class TestCliSyncFromGitHub:
             captured.append(cmd)
             return _ok(stdout="[]")
 
-        from kaji_harness.cli_main import main
+        from kaji_harness.commands.main import main
 
         with _gh_present(), patch("kaji_harness.sync.subprocess.run", side_effect=fake_run):
             rc = main(["sync", "from-github", "--quiet", "--repo", "from/cli"])
@@ -426,7 +426,7 @@ class TestSyncStatusGitHubRoundTrip:
         repo_root = _bootstrap_local_repo(tmp_path)
         monkeypatch.chdir(repo_root)
         page = [{"number": 1, "state": "open", "title": "t"}]
-        from kaji_harness.cli_main import main
+        from kaji_harness.commands.main import main
 
         with _gh_present(), _patch_gh_pages([page, []]):
             assert main(["sync", "from-github", "--quiet"]) == 0
@@ -452,7 +452,7 @@ class TestSyncFromGitlabRemoved:
     ) -> None:
         repo_root = _bootstrap_local_repo(tmp_path)
         monkeypatch.chdir(repo_root)
-        from kaji_harness.cli_main import main
+        from kaji_harness.commands.main import main
 
         with pytest.raises(SystemExit) as exc_info:
             main(["sync", "from-gitlab"])

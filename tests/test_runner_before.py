@@ -15,7 +15,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from kaji_harness.cli_main import cmd_run, create_parser
+from kaji_harness.commands.parser import create_parser
+from kaji_harness.commands.run import cmd_run
 from kaji_harness.config import KajiConfig
 from kaji_harness.errors import WorkflowValidationError
 from kaji_harness.logger import RunLogger

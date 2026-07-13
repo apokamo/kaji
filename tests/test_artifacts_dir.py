@@ -16,8 +16,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from kaji_harness import cli_main
 from kaji_harness.artifacts import _try_resolve_main_worktree, resolve_artifacts_dir
+from kaji_harness.commands.main import main
 from kaji_harness.config import (
     ExecutionConfig,
     GitHubProviderConfig,
@@ -178,9 +178,9 @@ steps:
 
 @pytest.mark.medium
 class TestCmdRunWiring:
-    """再現テスト2-A: cli_main._cmd_run の差し替え漏れを検出する配線テスト。
+    """再現テスト2-A: commands.run.cmd_run の差し替え漏れを検出する配線テスト。
 
-    ``cli_main.main(["run", ...])`` を実際に駆動し、``WorkflowRunner.__init__`` に
+    ``main(["run", ...])`` を実際に駆動し、``WorkflowRunner.__init__`` に
     渡される ``artifacts_dir`` kwarg が ``main_wt / ".kaji-artifacts"`` で
     あることを assert する。``config.artifacts_dir`` のまま (差し替え忘れ) では
     ``feat_wt / ".kaji-artifacts"`` が渡り FAIL する。
@@ -219,7 +219,7 @@ class TestCmdRunWiring:
             "kaji_harness.commands.validate.validate_skill_exists", lambda *a, **kw: None
         )
 
-        rc = cli_main.main(
+        rc = main(
             [
                 "run",
                 str(workflow_path),
@@ -287,12 +287,12 @@ class TestFallbackPaths:
 
 
 def _run_cli(argv: list[str]) -> tuple[int, str, str]:
-    """Invoke ``cli_main.main`` and capture stdout/stderr/exit code."""
+    """Invoke ``commands.main.main`` and capture stdout/stderr/exit code."""
     out = io.StringIO()
     err = io.StringIO()
     with redirect_stdout(out), redirect_stderr(err):
         try:
-            rc = cli_main.main(argv)
+            rc = main(argv)
         except SystemExit as e:  # argparse may raise SystemExit
             rc = int(e.code) if isinstance(e.code, int) else 1
     return rc, out.getvalue(), err.getvalue()

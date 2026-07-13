@@ -14,15 +14,15 @@ from unittest.mock import patch
 
 import pytest
 
-from kaji_harness.cli_main import (
+from kaji_harness.commands.exit_codes import (
     EXIT_DEFINITION_ERROR,
     EXIT_INVALID_INPUT,
     EXIT_OK,
     EXIT_RUNTIME_ERROR,
-    _apply_execution_overrides,
-    create_parser,
-    main,
 )
+from kaji_harness.commands.main import main
+from kaji_harness.commands.parser import create_parser
+from kaji_harness.commands.run import _apply_execution_overrides
 from kaji_harness.config import ExecutionConfig, KajiConfig, PathsConfig
 from kaji_harness.errors import ConfigLoadError, StepTimeoutError
 from kaji_harness.recovery.models import RECOVERY_FILE

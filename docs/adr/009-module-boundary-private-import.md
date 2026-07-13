@@ -33,7 +33,7 @@ API 表面が広がるだけで、境界を守る効果はない。
 [provider]    providers/                     ← foundation のみに依存
 [application] sync.py / state.py / artifacts.py / worktree_discovery.py / runner.py …
 [command]     commands/
-[shim]        cli_main.py                    （#284 で削除）
+[shim]        cli_main.py                    （entrypoint のみ。#284 で re-export 撤去）
 ```
 
 下位層から上位層への依存を禁止する。循環回避のための deferred import（関数内 import）は、
@@ -78,8 +78,9 @@ fitness test は `ast.Import`（`import a.b`）と `ast.ImportFrom`（`from a im
 
 ### 決定 4: 時限許容は statement 単位の allowlist で管理し、stale を fail させる
 
-移行途上の shim（現状は #283 が作った `cli_main.py`、削除は #284）が持つ境界違反は、「許容」の
-subtype = **時限許容**として扱う。分類軸は 3 つのまま増やさない。
+移行途上の shim が持つ境界違反は、「許容」の subtype = **時限許容**として扱う。
+分類軸は 3 つのまま増やさない。#283 が作った `cli_main.py` の時限許容は #284 で
+re-export shim の撤去とともに全 entry を撤去済みで、module 自体は entrypoint として存続する。
 
 allowlist は **module 単位にしない**。`cli_main.py` を丸ごと除外すると、新しい境界違反が追加されても
 既存 1 件が残る限り検査を素通りしてしまう。代わりに statement 単位の正規化 signature を持つ:
@@ -93,11 +94,11 @@ signature(S) := (M, T, tuple(sorted(N のうち private な名前)))
 | 条件 | 検出する事象 | 判定 |
 |---|---|---|
 | 禁止 signature が allowlist に無い | 新規の境界違反 | fail |
-| allowlist entry に対応する statement が無い | 期限切れ / 変化（shim 削除、import 行の書き換え） | fail（stale） |
+| allowlist entry に対応する statement が無い | 期限切れ / 変化（shim 撤去、import 行の書き換え） | fail（stale） |
 
 両者を合わせると `{禁止 signature} == TRANSITIONAL_ALLOWLIST` の厳密一致になり、追加・変化・
-期限切れがすべて fail する。#284 が `cli_main.py` を削除した時点で全 entry が stale になり、
-allowlist の撤去が機械的に強制される。
+期限切れがすべて fail する。#284 では `cli_main.py` の re-export を削除した時点で全 entry が
+stale になり、allowlist の撤去が機械的に強制された。
 
 ADR 008（後方互換レイヤを提供しない）との関係: 本規約は互換レイヤを**新規に書かない**。stale 検出は
 むしろ shim の確実な除去を強制する装置である。

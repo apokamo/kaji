@@ -129,17 +129,24 @@ repo にコミットし、今後も継続実行するテスト。以下を満た
 | 「軽微な変更なのでテスト不要」 | 実行時コード変更なら変更の大小だけでは省略できない |
 | 「Large テストはステージング環境で検証」 | 恒久テストなら CI で再現できる構成にすること |
 
-## `subprocess.run` patch スコープ
+## `subprocess.run` / `shutil.which` patch スコープ
 
-`kaji_harness.cli_main.subprocess.run` / `kaji_harness.providers._worktree.subprocess.run` の
-名前空間 patch は、テスト対象に応じて以下のスコープで使い分ける。dispatch / provider 結合
-テストで安易に名前空間 patch を当てると、`MagicMock != 0` の truthy 評価などで暗黙の
-分岐依存が忍び込む（gl:21 で fail-fast 化した直前の構造）。
+`subprocess.run` / `shutil.which` の属性 patch（`patch("subprocess.run")` 等。#284 以前の
+旧表記 `kaji_harness.cli_main.subprocess.run` /
+`kaji_harness.providers._worktree.subprocess.run` も prefix module の束縛を経由するだけで
+同一 `sys.modules` singleton へ global に波及する）の許可/禁止は、表記ではなく
+**テストの実行経路が worktree 解決（`providers/_worktree.py` の git 呼び出し）に届くか**
+で判定する。
 
-| テスト層 | `subprocess.run` の名前空間 patch | 代替手段 |
-|---------|----------------------------------|---------|
-| dispatch / provider 結合（`get_provider()` / `_handle_issue` / `_handle_pr` 経路） | **禁止** | 系統 A: `git init -q --initial-branch=<default_branch>` fixture / 系統 B: `patch("kaji_harness.providers.resolve_main_worktree", return_value=...)` |
-| `resolve_main_worktree()` 自身の Small unit test | 許可 | （`subprocess.run` の戻り値・例外分岐を検証する経路では mock 必須） |
+dispatch / provider 結合テストで worktree 解決の git 経路まで盲目 stub すると、
+`MagicMock != 0` の truthy 評価などで暗黙の分岐依存が忍び込む
+（gl:21 で fail-fast 化した直前の構造）。
+
+| テスト層 | 属性 patch | 代替 / 条件 |
+|---------|-----------|-------------|
+| dispatch / provider 結合のうち **worktree 解決に届く経路**（local provider 構築・`--commit` の git 動線等）の盲目 stub | **禁止** | 系統 A: 実 git fixture / real-run passthrough spy。系統 B: `patch("kaji_harness.providers.resolve_main_worktree", return_value=...)` |
+| dispatch / provider 結合のうち worktree 解決に届かない経路（github passthrough の gh 転送境界検証・provider 構築前 fail-fast の不呼出し検証・転送層関数の直接駆動） | 許可 | 到達すれば必ず fail する assertion（`rc` / `call_count` / `argv[0] == "gh"` / `assert_not_called()`）を伴うこと。gl:21 の fail-fast により偶発到達は silent に通らない |
+| `resolve_main_worktree()` 自身の Small unit test | 許可 | `subprocess.run` の戻り値・例外分岐を検証する経路では mock 必須 |
 
 詳細は gl:21 設計書 [`draft/design/issue-21-refactor-drop-test-compat-fallback-in-re.md`](../../draft/design/issue-21-refactor-drop-test-compat-fallback-in-re.md)
 § 制約・前提条件 を参照。

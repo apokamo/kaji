@@ -311,7 +311,8 @@ class TestRunnerBackfillAndOverride:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """多重候補 ABORT が cmd_run 経由で EXIT_ABORT (=1) を返すこと。"""
-        from kaji_harness.cli_main import cmd_run, create_parser
+        from kaji_harness.commands.parser import create_parser
+        from kaji_harness.commands.run import cmd_run
 
         repo = tmp_path / "repo"
         repo.mkdir()

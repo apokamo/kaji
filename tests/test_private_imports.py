@@ -202,18 +202,13 @@ def collect_private_imports(package_root: pathlib.Path) -> list[PrivateImport]:
 # ---------------------------------------------------------------------------
 # 時限許容 (transitional) allowlist
 # ---------------------------------------------------------------------------
-# ``cli_main.py`` は #283 が作った互換 shim であり、その docstring 自身が最終削除先
-# (#284) を宣言している。shim 内の 7 statement は「許容」の subtype = 時限許容として
-# statement 単位の signature で登録する。module 単位の除外にはしない
-# （cli_main.py に新しい境界違反が追加されても既存 1 件が残る限り素通りするため）。
-#
-# 検証器は 2 条件を同時に課す:
-#   - 禁止 signature が allowlist に無い  → fail（新規の境界違反）
-#   - allowlist entry に対応する statement が無い → fail（stale = 期限切れ / 変化）
-# 両者を合わせると {禁止 signature} == TRANSITIONAL_ALLOWLIST の厳密一致になり、
-# #284 が cli_main.py を削除した時点で 7 entry すべてが stale になって本 allowlist の
-# 撤去が強制される。
-TRANSITIONAL_ALLOWLIST: frozenset[Signature] = frozenset(
+# #284 で cli_main の互換 shim を撤去したため、#285 が登録した時限許容 7 entry も撤去する。
+# 検証器は引き続き {禁止 signature} == TRANSITIONAL_ALLOWLIST の厳密一致を要求する。
+TRANSITIONAL_ALLOWLIST: frozenset[Signature] = frozenset()
+
+# allowlist 機構の Small test は、production の時限許容と独立した合成データで
+# filter / 未登録違反 / stale entry の検出を固定する。
+SYNTHETIC_TRANSITIONAL_ALLOWLIST: frozenset[Signature] = frozenset(
     {
         (
             "kaji_harness.cli_main",
@@ -533,8 +528,8 @@ def test_allowlist_filters_registered_forbidden_signature() -> None:
     )
     found = classify_source(source, "kaji_harness.cli_main", PACKAGES)
     forbidden = {r.signature for r in found if r.classification == "forbidden"}
-    assert forbidden <= TRANSITIONAL_ALLOWLIST
-    assert forbidden - TRANSITIONAL_ALLOWLIST == set()
+    assert forbidden <= SYNTHETIC_TRANSITIONAL_ALLOWLIST
+    assert forbidden - SYNTHETIC_TRANSITIONAL_ALLOWLIST == set()
 
 
 @pytest.mark.small
@@ -551,7 +546,7 @@ def test_unregistered_violation_in_shim_is_detected() -> None:
     )
     found = classify_source(source, "kaji_harness.cli_main", PACKAGES)
     forbidden = {r.signature for r in found if r.classification == "forbidden"}
-    residual = forbidden - TRANSITIONAL_ALLOWLIST
+    residual = forbidden - SYNTHETIC_TRANSITIONAL_ALLOWLIST
     assert residual == {
         ("kaji_harness.cli_main", "kaji_harness.commands.output", ("_brand_new_violation",))
     }
@@ -567,7 +562,7 @@ def test_stale_allowlist_entry_is_detected() -> None:
     )
     found = classify_source(source, "kaji_harness.cli_main", PACKAGES)
     forbidden = {r.signature for r in found if r.classification == "forbidden"}
-    stale = TRANSITIONAL_ALLOWLIST - forbidden
+    stale = SYNTHETIC_TRANSITIONAL_ALLOWLIST - forbidden
     assert len(stale) == 6
     assert all(m == "kaji_harness.cli_main" for m, _, _ in stale)
 
@@ -593,8 +588,7 @@ def test_no_forbidden_private_imports_in_package() -> None:
     """禁止 signature の集合が ``TRANSITIONAL_ALLOWLIST`` と厳密一致する。
 
     - 未登録の禁止 signature がある → 新規の境界違反 → fail
-    - allowlist entry に対応する statement が無い → stale（#284 の shim 削除 /
-      import 行の書き換え）→ fail（entry の撤去を強制する）
+    - allowlist entry に対応する statement が無い → stale → fail（entry の撤去を強制する）
     """
     found = collect_private_imports(PACKAGE_ROOT)
     forbidden = {r.signature for r in found if r.classification == "forbidden"}

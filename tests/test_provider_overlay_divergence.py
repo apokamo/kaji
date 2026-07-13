@@ -19,8 +19,8 @@ from pathlib import Path
 
 import pytest
 
-from kaji_harness.cli_main import _load_config_for_dispatch
-from kaji_harness.cli_main import main as cli_main
+from kaji_harness.commands.config import _load_config_for_dispatch
+from kaji_harness.commands.main import main as cli_main
 from kaji_harness.config import (
     ExecutionConfig,
     GitHubProviderConfig,

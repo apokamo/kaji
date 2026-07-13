@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from kaji_harness.cli_main import _apply_execution_overrides, create_parser
+from kaji_harness.commands.parser import create_parser
+from kaji_harness.commands.run import _apply_execution_overrides
 from kaji_harness.config import ExecutionConfig, KajiConfig, PathsConfig
 
 

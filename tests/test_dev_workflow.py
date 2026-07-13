@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from kaji_harness.cli_main import main
+from kaji_harness.commands.main import main
 from kaji_harness.workflow import load_workflow, validate_workflow
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
