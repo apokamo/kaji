@@ -100,10 +100,10 @@ kaji_harness/
     base.py       # IssueProvider Protocol
     models.py     # Issue / Comment / Label / IssueContext / PRContext
     github.py     # GitHubProvider (gh CLI 委譲)
-    local.py      # LocalProvider (.kaji/issues/ ベース CRUD + cache reader)
-    context.py    # branch / worktree / design path / issue ref の導出 (format_issue_ref の正本)
+    local.py      # LocalProvider (Issue CRUD + local issue change の atomic commit)
+    context.py    # branch / worktree / design path / issue ref / NOTE 本文の決定的合成
     cache_guard.py  # legacy forge cache の fail-fast 検出 (sync と LocalProvider が共有する契約)
-    markers.py    # kaji-verdict marker の生成 / 解析
+    markers.py    # kaji-verdict marker の生成 / optional flag 解決
     _mappings.py  # label → branch_prefix mapping (private。facade 経由で公開)
     _worktree.py  # main worktree 解決 (private。facade 経由で公開)
   commands/       # kaji CLI subcommand dispatcher (Issue #283 で cli_main.py から分割)
@@ -114,6 +114,7 @@ kaji_harness/
     classify.py   # cause 軸の分類 (純関数)
     report.py     # triage コメント / stderr サマリ生成 (純関数)
     handler.py    # decision planner (純関数) + orchestrator
+    target.py     # recover 対象 IssueContext / run の選択・検証
 ```
 
 ### 層の依存方向（Issue #285 / ADR 009）
@@ -133,8 +134,9 @@ kaji_harness/
 ```
 
 private module（`_*.py`）を package 外から読むことは禁止し、外部公開が必要なら `__init__.py`
-facade の `__all__` に必要最小限のシンボルだけを載せる。この規約は
-[`tests/test_private_imports.py`](../tests/test_private_imports.py) の fitness test が `make check` で
+facade の `__all__` に必要最小限のシンボルだけを載せる。private 境界は
+[`tests/test_private_imports.py`](../tests/test_private_imports.py)、runtime 層方向と module 分類の
+完全性は [`tests/test_layer_imports.py`](../tests/test_layer_imports.py) が `make check` で
 機械的に強制する。規則の全文は [ADR 009](adr/009-module-boundary-private-import.md) を参照。
 
 ### 失敗リカバリの層構造（Issue #288）

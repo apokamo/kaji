@@ -203,7 +203,7 @@ def collect_private_imports(package_root: pathlib.Path) -> list[PrivateImport]:
 # 時限許容 (transitional) allowlist
 # ---------------------------------------------------------------------------
 # ``cli_main.py`` は #283 が作った互換 shim であり、その docstring 自身が最終削除先
-# (#284) を宣言している。shim 内の 8 statement は「許容」の subtype = 時限許容として
+# (#284) を宣言している。shim 内の 7 statement は「許容」の subtype = 時限許容として
 # statement 単位の signature で登録する。module 単位の除外にはしない
 # （cli_main.py に新しい境界違反が追加されても既存 1 件が残る限り素通りするため）。
 #
@@ -542,7 +542,7 @@ def test_unregistered_violation_in_shim_is_detected() -> None:
     """allowlist に無い禁止 signature は 1 件でも検出される。
 
     ``cli_main.py`` は module 単位ではなく statement 単位で除外されるため、
-    新しい境界違反が追加されれば既存 8 件が残っていても検出される。
+    新しい境界違反が追加されれば既存 7 件が残っていても検出される。
     """
     source = (
         "from .commands.run import _apply_execution_overrides, _run_failure_triage, "

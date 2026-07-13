@@ -22,8 +22,16 @@ from unittest.mock import patch
 import pytest
 
 from kaji_harness.cli_main import _handle_issue
+from kaji_harness.cli_main import build_worktree_note_body as shim_note_body
 from kaji_harness.providers import LocalProvider
+from kaji_harness.providers.context import build_worktree_note_body
 from kaji_harness.providers.models import Issue
+
+
+@pytest.mark.small
+def test_legacy_shim_reexports_worktree_note_builder() -> None:
+    assert shim_note_body is build_worktree_note_body
+
 
 # ============================================================
 # Medium: kaji issue prepend-note dispatch 結合

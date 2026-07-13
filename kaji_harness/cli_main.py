@@ -98,6 +98,7 @@ from .commands.validate import (
     _resolve_project_root_for_validate,
     cmd_validate,
 )
+from .providers.context import build_worktree_note_body
 
 __all__ = [
     # stdlib module 束縛（属性 patch 68 件の target 解決に必須）
@@ -167,10 +168,11 @@ __all__ = [
     "_format_jq_results",
     "_issue_to_json_dict",
     "_emit_json",
-    # issue（16 関数 + 1 定数）
+    # issue（13 関数 + 1 定数）
     "_handle_issue",
     "_github_issue_comment_with_verdict",
     "_resolve_local_id",
+    "build_worktree_note_body",
     "_has_verdict_flags",
     "_handle_issue_prepend_note",
     "_handle_issue_context",
