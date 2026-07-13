@@ -5,13 +5,10 @@
 現挙動を写し取って固定する。既存 test が未カバーだった関数・分岐を優先対象とする。
 
 分割耐性（R1-robust）方針:
-    subprocess 分岐を検証する unit では ``kaji_harness.cli_main.subprocess`` の名前空間
-    patch を **新規に導入しない**。cli_main が常に stdlib ``subprocess`` module を import
-    する事実に依存し、stdlib 側（``subprocess.run`` / ``shutil.which``）を patch する。
+    subprocess 分岐を検証する unit では実装 module の名前空間 patch を導入せず、
+    stdlib 側（``subprocess.run`` / ``shutil.which``）を patch する。
     これは object identity 経由で解決されるため、対象関数が別 module へ移っても届く。
-    その結果、本 file は ``scripts/inventory_cli_main_patch_targets.sh`` が数える
-    ``kaji_harness.cli_main.<symbol>`` patch target を 1 件も増やさない（棚卸し baseline
-    を汚さない）。
+    その結果、本 file は実装 module の symbol patch target を増やさない。
 """
 
 from __future__ import annotations

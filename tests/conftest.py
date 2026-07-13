@@ -73,7 +73,7 @@ def clean_kaji_console_root() -> Iterator[None]:
     伝播停止により ``caplog.records`` が空になって flaky に FAILED していた。
 
     汚染源は ``configure_console_logging()`` を直接呼ぶテストだけではない。
-    ``cmd_run()`` が ``kaji_harness/cli_main.py`` で無条件に
+    ``cmd_run()`` が ``kaji_harness/commands/main.py`` で無条件に
     ``configure_console_logging()`` を呼ぶため、``main(["run", ...])`` を叩く
     in-process run-entry テスト（例: ``tests/test_cli_main.py`` の
     ``TestMainMedium``）も同じ global state を汚す。opt-in fixture では

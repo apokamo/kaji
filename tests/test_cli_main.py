@@ -1073,7 +1073,7 @@ class TestGithubPrReviewHandler:
     """`_github_pr_review` を `_handle_pr` 非経由で直接呼ぶ handler 単体テスト。
 
     testing-convention.md § patch スコープ表 § dispatch/provider 結合 の
-    禁止対象（``_handle_pr`` 経路の ``cli_main.subprocess.run`` namespace
+    禁止対象（worktree 解決へ届く経路の ``subprocess.run`` global
     patch）に該当しないため、本クラスでは subprocess.run mock を使用する。
     """
 
@@ -1724,7 +1724,7 @@ class TestGithubPrReviewRouting:
     """`_handle_pr` の ``review`` routing 振り分け。
 
     testing-convention.md § patch スコープ表 § dispatch/provider 結合 の
-    禁止対象を避けるため、本クラスは ``cli_main.subprocess.run`` を patch
+    禁止対象を避けるため、本クラスは ``subprocess.run`` を patch
     せず、dispatch 先関数（``_github_pr_review`` / ``_forward_to_gh``）を
     直接 stub する。
     """

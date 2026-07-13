@@ -178,7 +178,7 @@ steps:
 
 @pytest.mark.medium
 class TestCmdRunWiring:
-    """再現テスト2-A: cli_main._cmd_run の差し替え漏れを検出する配線テスト。
+    """再現テスト2-A: commands.run.cmd_run の差し替え漏れを検出する配線テスト。
 
     ``main(["run", ...])`` を実際に駆動し、``WorkflowRunner.__init__`` に
     渡される ``artifacts_dir`` kwarg が ``main_wt / ".kaji-artifacts"`` で
@@ -287,7 +287,7 @@ class TestFallbackPaths:
 
 
 def _run_cli(argv: list[str]) -> tuple[int, str, str]:
-    """Invoke ``cli_main.main`` and capture stdout/stderr/exit code."""
+    """Invoke ``commands.main.main`` and capture stdout/stderr/exit code."""
     out = io.StringIO()
     err = io.StringIO()
     with redirect_stdout(out), redirect_stderr(err):

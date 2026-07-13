@@ -102,7 +102,7 @@ def test_pr_bare_provider_error_keywords() -> None:
 def test_pr_local_provider_blocks_all_subcommands(tmp_path: Path, args: list[str]) -> None:
     _setup_repo(tmp_path, provider="local")
     # gh / subprocess.run should NEVER be called under provider=local.
-    # gl:21: ``cli_main.subprocess.run`` を patch すると ``_worktree.subprocess.run``
+    # gl:21: ``subprocess.run`` を patch すると ``_worktree.subprocess.run``
     # にも波及して ``resolve_main_worktree()`` が壊れるため、provider 種別判定だけが
     # 関心のこのテストでは ``resolve_main_worktree`` 自体を局所 mock する
     # （設計書 § 方針 §§ 2 系統 B）。
@@ -115,7 +115,7 @@ def test_pr_local_provider_blocks_all_subcommands(tmp_path: Path, args: list[str
     assert "forge-only" in stderr
     assert "provider.type='local'" in stderr
     # ``_handle_pr`` の preflight は ``_load_config_for_dispatch()`` →
-    # ``get_provider()`` →（LocalProvider 判定）の順で、``cli_main.subprocess.run``
+    # ``get_provider()`` →（LocalProvider 判定）の順で、``subprocess.run``
     # を経由しない。``resolve_main_worktree`` は局所 mock 済みなので
     # ``_worktree.subprocess.run`` も走らない。将来 preflight が再構成されて
     # provider 構築前に subprocess を踏むようになった場合に regression を
