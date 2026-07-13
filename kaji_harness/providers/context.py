@@ -114,3 +114,23 @@ def format_issue_ref(issue_id: str) -> str:
     本関数を呼ぶ。
     """
     return f"#{issue_id}" if issue_id.isdigit() else issue_id
+
+
+def build_worktree_note_body(current_body: str, *, worktree: str, branch: str) -> str:
+    """Compose a deterministic worktree metadata note above an Issue body.
+
+    Args:
+        current_body: The current Issue body.
+        worktree: Worktree directory basename, such as ``kaji-fix-200``.
+        branch: Branch name, such as ``fix/200``.
+
+    Returns:
+        A NOTE block separated from the normalized body by exactly one blank
+        line. An empty body produces only the NOTE block with one trailing
+        newline.
+    """
+    note = f"> [!NOTE]\n> **Worktree**: `../{worktree}`\n> **Branch**: `{branch}`"
+    body = current_body.lstrip("\n")
+    if not body:
+        return note + "\n"
+    return f"{note}\n\n{body}"

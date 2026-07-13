@@ -10,7 +10,7 @@ from pathlib import Path
 
 from ..errors import ConfigLoadError, ConfigNotFoundError
 from ..providers import IssueProvider, ResolvedId, get_provider, normalize_id
-from ..providers.context import format_issue_ref
+from ..providers.context import build_worktree_note_body, format_issue_ref
 from ..providers.github import GitHubProviderError
 from ..providers.local import (
     IssueNotFoundError,
@@ -174,32 +174,6 @@ def _has_verdict_flags(args: list[str]) -> bool:
         or a.startswith("--verdict-status=")
         for a in args
     )
-
-
-def build_worktree_note_body(current_body: str, *, worktree: str, branch: str) -> str:
-    """``> [!NOTE]`` メタブロックを ``current_body`` 先頭へ決定的に合成する。
-
-    ``/issue-start`` Step 4 はかつて multi-line bash heredoc でメタブロックと既存
-    本文を結合していたため、エージェントの multi-line 忠実度に依存し、Haiku 等で
-    blockquote と本文 heading の境界 blank line が脱落していた（Issue #200 OB）。
-    本関数は blank line を Python 文字列リテラル ``\\n\\n`` に固定し、モデル非依存に
-    レイアウトを保証する。
-
-    Args:
-        current_body: 現在の Issue 本文。
-        worktree: NOTE に載せる worktree 相対パスの basename（例 ``kaji-fix-200``）。
-        branch: ブランチ名（例 ``fix/200``）。
-
-    Returns:
-        ``> [!NOTE]`` ブロック + 空行ちょうど 1 行 + 正規化済み本文。``current_body``
-        が空（改行のみを含む）の場合は NOTE ブロックのみ（末尾改行 1 つ）。
-    """
-    note = f"> [!NOTE]\n> **Worktree**: `../{worktree}`\n> **Branch**: `{branch}`"
-    # 本文先頭の余分な空行を剥がし、必ず空行 1 行だけを分離子として付与する。
-    body = current_body.lstrip("\n")
-    if not body:
-        return note + "\n"
-    return f"{note}\n\n{body}"
 
 
 def _handle_issue_prepend_note(provider: IssueProvider, rest: list[str]) -> int:
