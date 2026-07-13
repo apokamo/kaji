@@ -116,7 +116,7 @@ with patch("subprocess.run") as mock_run:
 | tests | from-import を持つ 26 ファイル（§ベースライン計測 (5) で機械列挙） | import 行の書換えのみ（決定 D1） |
 | tests | `tests/test_artifacts_dir.py` | module object import 1 件と `cli_main.main(` 呼び出し表記の書換え（D1） |
 | tests | `tests/test_cli_main.py` / `tests/test_dispatcher.py` / `tests/test_pr_bare_provider.py` / `tests/test_skill_migration.py` / `tests/test_issue_context_cli.py` / `tests/test_issue_prepend_note_cli.py` | patch target 文字列 68 件の書換え（D2） |
-| tests | `tests/test_private_imports.py` | 時限許容 allowlist 撤去 + 機構 unit test 3 本の合成定数化（D5） |
+| tests | `tests/test_private_imports.py` | 時限許容 allowlist 撤去 + 機構 unit test 3 本の合成定数化（D5。Issue 本文に限定例外として明文化済み） |
 | tests | prose のみ（`tests/conftest.py:76` 等、事実と乖離した docstring / コメント） | パス表記の最小修正 |
 | production | `kaji_harness/cli_main.py` | re-export・stdlib 束縛削除、entrypoint 専用へ縮小（D3）。**production 変更はこの 1 ファイルのみ** |
 | docs | `docs/ARCHITECTURE.md` / `docs/adr/009-module-boundary-private-import.md` / `docs/dev/testing-convention.md` | §影響ドキュメント参照 |
@@ -130,8 +130,12 @@ test logic / assertion / fixture の変更、CLI コマンド体系・出力・e
 - #286（blocked-by）は merge 済み（main `2cb61e4`）。移行先の正本は #286 完了時の
   設計書・実装（= 現 `cli_main.py` の import 節そのもの）。
 - tests の変更は import 行・module 参照・patch target 文字列・（それに伴い事実と
-  乖離する）prose 記述の機械的書換えに限定する。test body の制御フロー・assertion・
-  fixture behavior は変更しない。
+  乖離する）prose 記述の機械的書換えに限定する。**限定例外**として
+  `tests/test_private_imports.py` の時限許容 allowlist 撤去と、それに伴う allowlist
+  機構 unit test 3 本の参照データの合成定数化のみを許す（Issue #284 本文の完了条件・
+  対象スコープに 2026-07-14 追記済み。#285 設計 §時限許容が予告した終結処理）。
+  test body の制御フロー・assertion・fixture behavior は変更しない（限定例外の
+  3 本も参照定数の差し替えのみで assertion・制御フローは不変）。
 - production 側の変更は `cli_main.py` の re-export 削除と entrypoint 維持に限定する。
 - feat / bug 修正を混在させない。
 - gl:21 の `subprocess.run` patch スコープ規則（`docs/dev/testing-convention.md`
@@ -163,27 +167,61 @@ module object 参照 1 件（`tests/test_artifacts_dir.py` の `cli_main.main(..
 `from kaji_harness.commands.main import main` + 呼び出し箇所の `cli_main.main(` →
 `main(` に書換える。
 
-### 決定 D2: 属性 patch 68 件は stdlib 直 patch へ書換える
+### 決定 D2: 属性 patch 68 件は target 文字列のみ stdlib 直 patch へ書換える（site の検証機構は不変）
 
-`patch("kaji_harness.cli_main.subprocess.run")` → `patch("subprocess.run")`、
-`patch("kaji_harness.cli_main.shutil.which")` → `patch("shutil.which")` の一様書換え
-（monkeypatch の文字列 target も同様）。対象 6 ファイル:
+書換え規則: `"kaji_harness.cli_main.subprocess.run"` → `"subprocess.run"`、
+`"kaji_harness.cli_main.shutil.which"` → `"shutil.which"` の **target 文字列置換のみ**。
+各 site の `side_effect` / `return_value` / 併用 patch（`resolve_main_worktree` 局所 mock
+等）/ assertion には一切触れない。対象 6 ファイル:
 `test_cli_main.py`(35) / `test_dispatcher.py`(24) / `test_pr_bare_provider.py`(5) /
 `test_skill_migration.py`(2) / `test_issue_context_cli.py`(1) / `test_issue_prepend_note_cli.py`(1)。
 
-根拠:
+#### 68 site の機構分類（設計時点の全件棚卸し）
+
+「68 件一律」ではなく、各 site が gl:21（`docs/dev/testing-convention.md`
+§`subprocess.run` patch スコープ）の禁止事由 = **worktree 解決の git 経路まで盲目 stub
+して暗黙の分岐依存を作ること** をどの機構で回避しているかを分類した:
+
+| 機構 | 内容と規約適合の根拠 | site | 件数 |
+|------|---------------------|------|-----:|
+| (i) gh 転送境界の spy/stub | gh CLI への転送 argv / returncode の検証が試験目的そのもの。到達経路は `_load_config_for_dispatch()` → `get_provider()` → passthrough で `resolve_main_worktree()` を経由しない（経路順序は `tests/test_pr_bare_provider.py:118-123` のコメントが明文化）。`call_count` / `argv[0] == "gh"` の assertion が「gh 以外の subprocess 消費者に届いていない」ことを検証しており、暗黙の分岐依存は構造的に排除済み | `test_cli_main.py` 全 35 件（`TestGithubPrReviewHandler` / pr builtin 系。`:1065` / `:1701` のコメントが禁止対象回避を明文化）、`test_dispatcher.py` の github passthrough 群 18 件、`test_pr_bare_provider.py:134-153` の 4 件、`test_skill_migration.py:155,157` | 59 |
+| (ii) 不呼出し検証 | fail-fast / provider ガードで `assert_not_called()`。subprocess は一度も実行されず、mock は「gh が呼ばれない」ことの検証装置。worktree 解決が絡む site は 系統 B（`resolve_main_worktree` 局所 mock、`test_pr_bare_provider.py:110`）または provider method の局所 mock（`test_issue_context_cli.py:295-299` / `test_issue_prepend_note_cli.py:195-203`）を併用済み | `test_dispatcher.py:179,704,723,847`、`test_pr_bare_provider.py:111`、`test_issue_context_cli.py:299`、`test_issue_prepend_note_cli.py:203` | 7 |
+| (iii) 系統 A 維持の passthrough spy | `side_effect=real_run` で実 subprocess を素通しして git 経路（系統 A）を保全し、gh 不呼出しのみ spy 検証。gl:21 対応がコメントで明文化済み（`test_dispatcher.py:246-249`） | `test_dispatcher.py:253` | 1 |
+| (iv) 選択的 side_effect | `shutil.which` の jq 可用性のみ固定（`name == "jq"` で分岐する side_effect）。subprocess.run には触れない | `test_dispatcher.py:572` | 1 |
+
+つまり **既存 68 件はすべて gl:21 の系統 A/B・不呼出し検証・転送境界検証のいずれかの
+公認形態を既に実装済み** であり（gl:21 以後に書かれた site は in-file コメントで系統
+A/B を明示引用している）、「禁止対象を系統 A/B へ移す」べき site は存在しない。
+target 文字列の置換は sys.modules singleton の同一属性への変異という semantics を
+1 bit も変えないため（unittest.mock「Where to patch」）、各 site の機構・到達経路・
+波及先も書換え前後で不変である。
+
+**contingency**: 実装フェーズの行単位検証（下記対応表）で万一「worktree 解決経路に
+届く盲目 stub」という真の規約違反 site が発見された場合も、target 文字列置換自体は
+挙動保存のため実施し、fixture 再設計（系統 A/B への移設）は Issue 完了条件 4
+（fixture behavior 不変）と衝突するため **別 Issue に分離して起票する**
+（`_shared/report-unrelated-issues.md` の手順）。
+
+#### 実装フェーズ成果物: 行単位対応表（レビュー Should Fix 採用）
+
+commit A で、68 site 全件の「旧 target → 新 target / 所属 test / 機構分類 (i)〜(iv) /
+到達経路」の行単位対応表を生成して Issue コメントへ記録する（#283 §patch 対応表の
+照合を拡張。「0 件判定」だけでなく規約適合と fixture 不変を行単位でレビュー可能にする）。
+
+#### stdlib 直 patch を書換え先に選ぶ根拠
 
 1. **意味的完全同値**: この 68 件は sys.modules singleton（`subprocess` / `shutil`
    module object）の属性変異であり、prefix module は「その属性チェーンを辿れる」以上の
-   意味を持たない（unittest.mock「Where to patch」）。`patch("subprocess.run")` は同一
-   object の同一属性を変異させる。
+   意味を持たない。`patch("subprocess.run")` は同一 object の同一属性を変異させる。
 2. **既例**: R0 characterization test（`tests/test_cli_main_characterization.py`
    docstring「分割耐性（R1-robust）方針」）が stdlib 側 patch を既に採用しており、
    「object identity 経由で解決されるため、対象関数が別 module へ移っても届く」ことを
    明文化済み。
 3. **再発防止**: `kaji_harness.commands.pr.subprocess.run` 等、別 module の偶発的
    束縛に再結合すると「その module が束縛をやめた時点で壊れる」今回と同じ構造を
-   再生産する。stdlib 直 patch は束縛位置に依存しない。
+   再生産する。stdlib 直 patch は束縛位置に依存しない。また表記から偽の「局所化」の
+   示唆が消え、global 波及という実態が可視化される（gl:21 の判断はもともと表記では
+   なく到達経路で行う。§影響ドキュメントの testing-convention 更新で明文化）。
 
 ### 決定 D3: 縮小後の `cli_main.py`
 
@@ -197,7 +235,7 @@ from __future__ import annotations
 
 import sys
 
-from .commands.main import main
+from kaji_harness.commands.main import main
 
 __all__ = ["main"]
 
@@ -205,9 +243,12 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-- `from .commands.main import main` は public シンボルの下方向 import
+- `from kaji_harness.commands.main import main` は public シンボルの下方向 import
   （shim 層 rank 4 → command 層 rank 3）であり、ADR 009 の層規則・private import
-  規則のいずれにも抵触しない。
+  規則のいずれにも抵触しない。absolute import は
+  `docs/reference/python/python-style.md` §インポート順序「自プロジェクトの
+  インポート（相対パス禁止）」に従う（現 shim の相対 import は #283 由来だが、
+  縮小後の新規記述は規約準拠の absolute にする）。
 - `import shutil` / `import subprocess` の互換束縛は削除する（D2 で参照ゼロ化済み）。
 
 ### 決定 D4: entrypoint として許可する tests 参照の一覧（完了条件 7）
@@ -250,10 +291,14 @@ kaji_harness.cli_main`）のみ** とし、in-process の実装シンボル impo
   （現 7 entry 相当の synthetic allowlist）を参照する形へ書換え、機構カバレッジを維持する。
   assertion の意味（filter / 新規検出 / stale 検出）は不変。
 
-これは「機械的 import 書換え」を超える tests 変更だが、#285 設計書 §時限許容と
+これは「機械的 import 書換え」を超える tests 変更であるため、Issue #284 本文の
+完了条件・対象スコープに **限定例外として明文化した**（2026-07-14 追記済み。
+完了条件「機械的書換えに限定（限定例外: …）」と対象スコープ
+`tests/test_private_imports.py` の行）。根拠: #285 設計書 §時限許容と
 `tests/test_private_imports.py:214-215` が「#284 時点で撤去が強制される」と事前に
-設計した終結処理であり、完了条件 9（private import 検証の再実行 PASS）の前提条件で
-ある。scope 逸脱ではなく本 Issue の設計済み責務として扱う。
+設計した終結処理であり、完了条件（private import 検証の再実行 PASS）の前提条件で
+ある。機構 unit test 3 本の変更は参照定数の差し替えのみで、assertion・制御フローは
+不変（Issue 完了条件 4 の但し書きと整合）。
 
 ### 決定 D6: 層 mapping の `cli_main` entry は存続
 
@@ -269,6 +314,8 @@ kaji_harness.cli_main`）のみ** とし、in-process の実装シンボル impo
    ともに Issue コメントへ記録（完了条件 1・2）。
 2. **commit A（tests のみ）**: D1 の from-import / module 参照書換え + D2 の
    patch target 書換え。shim は存置したままなので新旧どちらの参照でも green。
+   D2 の行単位対応表（旧 target → 新 target / 機構分類 / 到達経路の 68 行）を
+   生成して Issue コメントへ記録する。
 3. **commit B（production + fitness）**: D3 の `cli_main.py` 縮小と、D5 の allowlist
    撤去・機構 test の合成定数化を **同一コミット** で行う（allowlist は shim の
    statement と厳密一致検査のため分離すると中間状態で fail する）。事実と乖離する
@@ -290,7 +337,9 @@ kaji_harness.cli_main`）のみ** とし、in-process の実装シンボル impo
   #283/#286 で評価・補強済みで、本 Issue ではロジックを一切動かさない。
 - 追加の safety net 構築は不要。**全既存テストが書換え前後で同一 assertion のまま
   PASS すること**自体が振る舞い保存の証跡（テスト側は参照先の書換えのみで、検証内容
-  が不変であることは diff が import 行・patch 文字列・prose に限定されることで示す）。
+  が不変であることは diff が import 行・patch 文字列・prose、および限定例外の
+  `tests/test_private_imports.py`（D5: allowlist 撤去 + 機構 test の参照定数差し替え）
+  に限定されることで示す）。
 
 ### Small テスト
 
@@ -349,7 +398,7 @@ python -m kaji_harness.cli_main --version
 |-------------|-----------|------|
 | docs/adr/ | あり（ADR 009 更新） | `36` / `81-99` 行の「cli_main.py は #284 で削除」を完了形（shim 撤去・entrypoint 存続）へ更新し、時限許容 allowlist の終結を追記。決定内容は不変 |
 | docs/ARCHITECTURE.md | あり | `109-110` の cli_main 説明（「互換 shim。最終削除は #284」）と `133` の層図を縮小後の実態へ更新 |
-| docs/dev/testing-convention.md | あり | `134` 行の patch スコープ記述が `kaji_harness.cli_main.subprocess.run` を名指ししている。D2 の stdlib 直 patch 表記へ更新（禁止/許可の区分は不変） |
+| docs/dev/testing-convention.md | あり | `134` 行の patch スコープ記述が `kaji_harness.cli_main.subprocess.run` を名指ししている。D2 の stdlib 直 patch 表記へ更新し、「属性 patch は表記（prefix module）に依らず sys.modules singleton へ global に波及する。禁止/許可の判定は表記ではなく到達経路（worktree 解決の git 経路に届くか）で行う」旨を明文化する（禁止/許可の区分・判断基準そのものは不変） |
 | docs/dev/（その他） | なし | ワークフロー・開発手順に変更なし |
 | docs/reference/ | なし | 規約変更なし（ADR 009 参照経由のみ） |
 | docs/cli-guides/ | なし | CLI 仕様不変 |
@@ -368,4 +417,6 @@ python -m kaji_harness.cli_main --version
 | #285 設計書 §時限許容 | `draft/design/issue-285-refactor-private-import-r3.md` | transitional allowlist の statement 単位登録と「#284 時点で stale 化し撤去が強制される」設計。D5 の根拠 |
 | stale 強制の実装 | `tests/test_private_imports.py:202-216` | 「allowlist entry に対応する statement が無い → fail（stale）」の厳密一致検査。D5 が撤去を伴う必然性の一次情報 |
 | R1-robust patch 方針の既例 | `tests/test_cli_main_characterization.py:1-16`（docstring） | 「stdlib 側（`subprocess.run` / `shutil.which`）を patch する。object identity 経由で解決されるため、対象関数が別 module へ移っても届く」— D2 の repo 内既例 |
+| gl:21 patch スコープ規則 | `docs/dev/testing-convention.md:132-145` + gl:21 設計書 `draft/design/issue-21-refactor-drop-test-compat-fallback-in-re.md` §制約・前提条件 | dispatch/provider 結合での盲目 stub 禁止と代替（系統 A: 実 git fixture / 系統 B: `resolve_main_worktree` 局所 mock）。D2 の site 機構分類 (i)〜(iv) の判定基準。既存 site の gl:21 対応は in-file コメント（`tests/test_dispatcher.py:246-249` / `tests/test_pr_bare_provider.py:104-108,118-123` / `tests/test_cli_main.py:1065,1701`）が明文化 |
+| コーディング規約（import） | `docs/reference/python/python-style.md:62-64` | 「自プロジェクトのインポート（相対パス禁止）」— D3 の absolute import の根拠 |
 | ADR 009 | `docs/adr/009-module-boundary-private-import.md` | 層規則（foundation→…→shim）と時限許容 allowlist 運用の正本。D3/D5/D6 の規約的根拠 |
