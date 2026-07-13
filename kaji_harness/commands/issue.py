@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import subprocess
 import sys
 from pathlib import Path
 
 from ..errors import ConfigLoadError, ConfigNotFoundError
 from ..providers import IssueProvider, ResolvedId, get_provider, normalize_id
-from ..providers.context import build_worktree_note_body, format_issue_ref
+from ..providers.context import build_worktree_note_body
 from ..providers.github import GitHubProviderError
 from ..providers.local import (
     IssueNotFoundError,
@@ -234,13 +233,7 @@ def _handle_issue_prepend_note(provider: IssueProvider, rest: list[str]) -> int:
 
     # local provider の --commit のみ issue.md を atomic commit。github は silent 無視。
     if ns.commit and isinstance(provider, LocalProvider) and local_rid is not None:
-        issue_dir = provider._resolve_issue_dir(issue_id_value)
-        _commit_local_issue_change(
-            provider=provider,
-            rid=local_rid,
-            action="edit",
-            paths=[issue_dir / "issue.md"],
-        )
+        provider.commit_issue_change(local_rid, "edit", [Path("issue.md")])
     return EXIT_OK
 
 
@@ -424,56 +417,6 @@ def _local_issue_create(provider: LocalProvider, rest: list[str]) -> int:
     return EXIT_OK
 
 
-def _commit_local_issue_change(
-    *,
-    provider: LocalProvider,
-    rid: ResolvedId,
-    action: str,
-    paths: list[Path],
-) -> None:
-    """Commit only the given ``paths`` atomically, leaving other staged changes untouched.
-
-    Two-step flow:
-      1. ``git add <paths>`` — register untracked targets (new comment markdown)
-         and update the index entry for tracked targets (modified ``issue.md``).
-         This only touches the listed paths; other entries already staged in the
-         user's index are not modified.
-      2. ``git commit --only -- <paths>`` — build a temporary index from HEAD
-         plus the listed paths and commit it. Pre-existing staged changes for
-         paths *not* listed are excluded from HEAD and remain staged in the
-         user's index after the commit (per ``man git-commit`` § ``--only``).
-
-    Together these guarantee the atomicity requirement: the resulting commit
-    contains only ``paths`` even when the user had unrelated files staged.
-    """
-    rel_paths = [str(p.relative_to(provider.repo_root)) for p in paths]
-    issue_ref = format_issue_ref(rid.value)
-    msg = f"chore(local): {action} for {issue_ref}"
-    subprocess.run(
-        ["git", "add", "--", *rel_paths],
-        cwd=provider.repo_root,
-        check=True,
-    )
-    # `LocalProvider.edit_issue` は同一 body 再送でも `issue.md` を再書込するため、
-    # `kaji issue edit --commit` が no-op edit で呼ばれた場合は staged diff が空に
-    # なる。`git commit --only` をそのまま呼ぶと `nothing to commit` で exit 1 に
-    # 落ちるため、対象 path の staged diff を確認して空なら commit を skip する。
-    # `git diff --cached --quiet` の exit code: 0=差分なし / 1=差分あり / >1=エラー。
-    diff_check = subprocess.run(
-        ["git", "diff", "--cached", "--quiet", "--", *rel_paths],
-        cwd=provider.repo_root,
-    )
-    if diff_check.returncode == 0:
-        return
-    if diff_check.returncode != 1:
-        diff_check.check_returncode()
-    subprocess.run(
-        ["git", "commit", "--only", "-m", msg, "--", *rel_paths],
-        cwd=provider.repo_root,
-        check=True,
-    )
-
-
 def _local_issue_edit(provider: LocalProvider, rest: list[str]) -> int:
     p = argparse.ArgumentParser(prog="kaji issue edit", add_help=True)
     p.add_argument("issue_id", type=str)
@@ -497,7 +440,7 @@ def _local_issue_edit(provider: LocalProvider, rest: list[str]) -> int:
         return rid_or_rc
     rid = rid_or_rc
     body = _read_body_arg(ns.body, ns.body_file)
-    issue = provider.edit_issue(
+    provider.edit_issue(
         rid.value,
         title=ns.title,
         body=body,
@@ -505,13 +448,7 @@ def _local_issue_edit(provider: LocalProvider, rest: list[str]) -> int:
         remove_labels=ns.remove_label,
     )
     if ns.commit:
-        issue_dir = provider._resolve_issue_dir(issue.id)
-        _commit_local_issue_change(
-            provider=provider,
-            rid=rid,
-            action="edit",
-            paths=[issue_dir / "issue.md"],
-        )
+        provider.commit_issue_change(rid, "edit", [Path("issue.md")])
     return EXIT_OK
 
 
@@ -547,13 +484,10 @@ def _local_issue_comment(provider: LocalProvider, rest: list[str]) -> int:
     comment = provider.comment_issue(rid.value, body)
     sys.stdout.write(f"{comment.seq}-{comment.machine_id}\n")
     if ns.commit:
-        issue_dir = provider._resolve_issue_dir(rid.value)
-        comment_path = issue_dir / "comments" / f"{comment.seq}-{comment.machine_id}.md"
-        _commit_local_issue_change(
-            provider=provider,
-            rid=rid,
-            action="comment",
-            paths=[comment_path],
+        provider.commit_issue_change(
+            rid,
+            "comment",
+            [Path("comments") / f"{comment.seq}-{comment.machine_id}.md"],
         )
     return EXIT_OK
 

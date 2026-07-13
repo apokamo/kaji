@@ -27,7 +27,6 @@ from .commands.exit_codes import (
 )
 from .commands.issue import (
     _LOCAL_ISSUE_SUBS,
-    _commit_local_issue_change,
     _github_issue_comment_with_verdict,
     _handle_issue,
     _handle_issue_context,
@@ -179,7 +178,6 @@ __all__ = [
     "_handle_issue_local",
     "_local_issue_view",
     "_local_issue_create",
-    "_commit_local_issue_change",
     "_local_issue_edit",
     "_local_issue_comment",
     "_local_issue_close",

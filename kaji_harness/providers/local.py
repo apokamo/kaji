@@ -11,13 +11,14 @@ import errno
 import json
 import os
 import re
+import subprocess
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import IO
+from typing import IO, TYPE_CHECKING
 
 import yaml
 
@@ -34,6 +35,9 @@ from .context import (
     validate_slug,
 )
 from .models import Comment, Issue, IssueContext, Label, PRContext
+
+if TYPE_CHECKING:
+    from . import ResolvedId
 
 _MACHINE_ID_RE = re.compile(r"^[a-z0-9]{1,16}$")
 _LOCAL_ID_RE = re.compile(r"^local-([a-z0-9]{1,16})-([1-9]\d*)$")
@@ -475,6 +479,42 @@ class LocalProvider:
         return result
 
     # -------- CRUD --------
+
+    def commit_issue_change(
+        self,
+        rid: ResolvedId,
+        action: str,
+        paths: list[Path],
+    ) -> None:
+        """Commit only selected Issue-relative paths and preserve the user's index.
+
+        Args:
+            rid: Canonical local Issue identifier.
+            action: Action included in the deterministic commit message.
+            paths: Paths relative to the Issue directory.
+        """
+        issue_dir = self._resolve_issue_dir(rid.value)
+        repo_paths = [issue_dir / path for path in paths]
+        relative_paths = [str(path.relative_to(self.repo_root)) for path in repo_paths]
+        message = f"chore(local): {action} for {format_issue_ref(rid.value)}"
+        subprocess.run(
+            ["git", "add", "--", *relative_paths],
+            cwd=self.repo_root,
+            check=True,
+        )
+        diff_check = subprocess.run(
+            ["git", "diff", "--cached", "--quiet", "--", *relative_paths],
+            cwd=self.repo_root,
+        )
+        if diff_check.returncode == 0:
+            return
+        if diff_check.returncode != 1:
+            diff_check.check_returncode()
+        subprocess.run(
+            ["git", "commit", "--only", "-m", message, "--", *relative_paths],
+            cwd=self.repo_root,
+            check=True,
+        )
 
     def create_issue(
         self,

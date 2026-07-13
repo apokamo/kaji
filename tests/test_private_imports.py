@@ -228,7 +228,6 @@ TRANSITIONAL_ALLOWLIST: frozenset[Signature] = frozenset(
             "kaji_harness.commands.issue",
             (
                 "_LOCAL_ISSUE_SUBS",
-                "_commit_local_issue_change",
                 "_github_issue_comment_with_verdict",
                 "_handle_issue",
                 "_handle_issue_context",
