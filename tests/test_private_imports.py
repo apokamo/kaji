@@ -211,7 +211,7 @@ def collect_private_imports(package_root: pathlib.Path) -> list[PrivateImport]:
 #   - 禁止 signature が allowlist に無い  → fail（新規の境界違反）
 #   - allowlist entry に対応する statement が無い → fail（stale = 期限切れ / 変化）
 # 両者を合わせると {禁止 signature} == TRANSITIONAL_ALLOWLIST の厳密一致になり、
-# #284 が cli_main.py を削除した時点で 8 entry すべてが stale になって本 allowlist の
+# #284 が cli_main.py を削除した時点で 7 entry すべてが stale になって本 allowlist の
 # 撤去が強制される。
 TRANSITIONAL_ALLOWLIST: frozenset[Signature] = frozenset(
     {
@@ -295,14 +295,6 @@ TRANSITIONAL_ALLOWLIST: frozenset[Signature] = frozenset(
                 "_is_ascii_decimal",
                 "_run_pr_review_poll",
                 "_user_specified_repo",
-            ),
-        ),
-        (
-            "kaji_harness.cli_main",
-            "kaji_harness.commands.recover",
-            (
-                "_resolve_recover_issue_context",
-                "_resolve_target_run_dir",
             ),
         ),
         (
@@ -537,8 +529,8 @@ def test_signature_is_line_and_order_independent() -> None:
 def test_allowlist_filters_registered_forbidden_signature() -> None:
     """allowlist に登録済みの禁止 signature は残差から除かれる。"""
     source = (
-        "from .commands.recover import _resolve_recover_issue_context, "
-        "_resolve_target_run_dir, cmd_recover\n"
+        "from .commands.run import _apply_execution_overrides, _run_failure_triage, "
+        "_validate_workflow_provider_match, cmd_run\n"
     )
     found = classify_source(source, "kaji_harness.cli_main", PACKAGES)
     forbidden = {r.signature for r in found if r.classification == "forbidden"}
@@ -554,8 +546,8 @@ def test_unregistered_violation_in_shim_is_detected() -> None:
     新しい境界違反が追加されれば既存 8 件が残っていても検出される。
     """
     source = (
-        "from .commands.recover import _resolve_recover_issue_context, "
-        "_resolve_target_run_dir, cmd_recover\n"
+        "from .commands.run import _apply_execution_overrides, _run_failure_triage, "
+        "_validate_workflow_provider_match, cmd_run\n"
         "from .commands.output import _brand_new_violation\n"
     )
     found = classify_source(source, "kaji_harness.cli_main", PACKAGES)
@@ -569,15 +561,15 @@ def test_unregistered_violation_in_shim_is_detected() -> None:
 @pytest.mark.small
 def test_stale_allowlist_entry_is_detected() -> None:
     """allowlist entry に対応する statement が消えたら stale として検出される。"""
-    # shim が 1 statement しか持たない状態を合成する（= 残り 7 entry が stale）
+    # shim が 1 statement しか持たない状態を合成する（= 残り 6 entry が stale）
     source = (
-        "from .commands.recover import _resolve_recover_issue_context, "
-        "_resolve_target_run_dir, cmd_recover\n"
+        "from .commands.run import _apply_execution_overrides, _run_failure_triage, "
+        "_validate_workflow_provider_match, cmd_run\n"
     )
     found = classify_source(source, "kaji_harness.cli_main", PACKAGES)
     forbidden = {r.signature for r in found if r.classification == "forbidden"}
     stale = TRANSITIONAL_ALLOWLIST - forbidden
-    assert len(stale) == 7
+    assert len(stale) == 6
     assert all(m == "kaji_harness.cli_main" for m, _, _ in stale)
 
 

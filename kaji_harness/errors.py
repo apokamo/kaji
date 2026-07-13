@@ -165,6 +165,10 @@ class IssueContextResolutionError(HarnessError):
         )
 
 
+class RecoveryTargetError(HarnessError):
+    """A requested recovery run is absent or not eligible for failure triage."""
+
+
 class MissingResumeSessionError(HarnessError):
     """resume 指定ステップで継続元のセッション ID が見つからない。"""
 

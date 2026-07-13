@@ -85,11 +85,7 @@ from .commands.pr import (
     _run_pr_review_poll,
     _user_specified_repo,
 )
-from .commands.recover import (
-    _resolve_recover_issue_context,
-    _resolve_target_run_dir,
-    cmd_recover,
-)
+from .commands.recover import cmd_recover
 from .commands.run import (
     _apply_execution_overrides,
     _run_failure_triage,
@@ -137,10 +133,8 @@ __all__ = [
     "cmd_run",
     "_run_failure_triage",
     "_validate_workflow_provider_match",
-    # recover（3 関数）
+    # recover（1 関数）
     "cmd_recover",
-    "_resolve_recover_issue_context",
-    "_resolve_target_run_dir",
     # pr（16 関数 + 4 定数）
     "_FORGE_METHOD_FLAGS",
     "_user_specified_repo",
