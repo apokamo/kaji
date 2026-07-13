@@ -115,8 +115,8 @@ steps:
 
   - id: implement
     skill: issue-implement
-    agent: claude
-    model: opus
+    agent: codex
+    model: gpt-5.6-sol
     effort: high
     timeout: 6000
     on:
@@ -127,8 +127,8 @@ steps:
 
   - id: review-code
     skill: issue-review-code
-    agent: codex
-    model: gpt-5.6-sol
+    agent: claude
+    model: fable
     effort: high
     on:
       PASS: final-check
