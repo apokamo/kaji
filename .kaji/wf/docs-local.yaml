@@ -1,6 +1,6 @@
 name: docs-local
 description: |
-  provider=local 用の docs-only 開発 workflow。
+  series 自動選択対象外。provider=local 用の docs-only 開発 workflow。
   type:docs Issue を local provider 配下で完走させる。
   issue-create / issue-start は事前に手動実行済みであることが前提。
   PR concept を持たないため、最終 step は issue-close

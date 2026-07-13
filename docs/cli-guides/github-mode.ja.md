@@ -96,6 +96,26 @@ kaji は GitHub project 直下の `.github/labels.yml` を label の正本とし
   - **marker comment の観測経路の非対称性**: self-PR fallback で投稿された marker comment は Issue Comments API (`/repos/<repo>/issues/<N>/comments`) に書き込まれるため、`kaji pr view <pr> --comments` 経由では取得可能だが、`kaji pr reviews <pr>` (`/pulls/<N>/reviews`) には現れない。後続の `pr-fix` skill は `kaji pr view --comments` を主要 read path としているため、観測経路上は問題なし
 - `kaji issue comment <id> --verdict-step <step> --verdict-status <STATUS>` は判定コメントに verdict マーカーを付与する（下記 § 2.1）
 
+### 2.2 複数 Issue の sequential series
+
+複数 Issue を明示順で実行するときは tracked な `.kaji/series/<id>.yaml` を使う。本実行前に
+validation と副作用のない dry-run を行う。
+
+```bash
+kaji validate-series .kaji/series/<id>.yaml
+kaji run-series .kaji/series/<id>.yaml --dry-run
+kaji run-series .kaji/series/<id>.yaml
+```
+
+各 member は既存の `kaji run` で実行され、child の exit 0 と Issue の
+`closed/completed` が揃った場合だけ次へ進む。停止・中断後は `--resume` を使う。定義 fingerprint
+の変更や生存中の遺留 child は安全側に拒否する。実行 state と lock は
+`<artifacts_dir>/_series/<id>/` に保存される。
+
+`/series-create <issues...> --id <id>` は YAML 生成、validation、dry-run まで行って停止する。
+標準外 variant は `--workflow <issue>=<path>` で member 単位に明示する。skill は Issue metadata
+を read-only で参照し、Issue 更新や本実行は行わない。
+
 ### 2.1 `kaji issue comment` の verdict マーカー付与
 
 `kaji issue comment` に `--verdict-step <step> --verdict-status <STATUS>` を渡すと、CLI が comment body の **1 行目**に決定的な HTML コメントマーカー `<!-- kaji-verdict: step=<step> status=<STATUS> -->` を付与してから投稿する（GitHub UI 上では HTML コメントとして不可視）。cross-skill 契約（`issue-design` の BACK 再入検出）を SKILL.md 散文ではなく CLI 層に置くための機構（ADR 008 決定 3）。

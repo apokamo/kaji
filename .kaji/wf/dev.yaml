@@ -1,6 +1,7 @@
 name: dev
 description: |
-  開発作業の標準 workflow。GitHub Issue から PR review / close まで進める。
+  type:feature / type:bug / type:refactor 等の開発作業に対する series 自動選択の標準 workflow。
+  GitHub Issue から PR review / close まで進める。品質優先 variant は明示 override で選ぶ。
   issue-create は事前に完了していることが前提。
   review-ready が RETRY の場合は fix-ready で Issue 本文を修正してから再試行する。
 execution_policy: auto

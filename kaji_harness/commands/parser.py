@@ -26,6 +26,7 @@ def create_parser() -> argparse.ArgumentParser:
     _register_run(subparsers)
     _register_recover(subparsers)
     _register_validate(subparsers)
+    _register_series(subparsers)
     _register_issue(subparsers)
     _register_pr(subparsers)
     _register_config(subparsers)
@@ -296,3 +297,31 @@ def _register_validate(
         default=None,
         help="Project root for skill lookup (default: auto-detect from config or pyproject.toml)",
     )
+
+
+def _register_series(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    """Register sequential series validation and execution commands."""
+    validate = subparsers.add_parser(
+        "validate-series", help="Validate sequential series YAML files"
+    )
+    validate.add_argument("series", nargs="+", type=Path, help="Path(s) to series YAML file(s)")
+    validate.add_argument(
+        "--workdir",
+        type=Path,
+        default=Path.cwd(),
+        help="Starting directory for config discovery (default: current directory)",
+    )
+
+    run = subparsers.add_parser("run-series", help="Run a sequential issue series")
+    run.add_argument("series", type=Path, help="Path to series YAML file")
+    run.add_argument("--dry-run", action="store_true", help="Print the validated plan only")
+    run.add_argument("--resume", action="store_true", help="Resume from persisted series state")
+    run.add_argument(
+        "--workdir",
+        type=Path,
+        default=Path.cwd(),
+        help="Starting directory for config discovery (default: current directory)",
+    )
+    run.add_argument("--quiet", action="store_true", help="Pass --quiet to member workflows")

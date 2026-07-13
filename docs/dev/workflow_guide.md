@@ -34,6 +34,39 @@
 
 判断に迷うケースは [workflow_overview.md](workflow_overview.md) の判断テーブルを参照。
 
+## 複数 Issue の sequential series
+
+順序が確定した複数 Issue を前段完了後に一件ずつ進める場合は、単一 Issue workflow を
+変更せず上位の series runner を使う。定義は `.kaji/series/<id>.yaml` に置く。
+
+```yaml
+id: maintenance-2026-07
+strategy: sequential
+members:
+  - issue: 310
+    workflow: .kaji/wf/dev.yaml
+  - issue: 311
+    workflow: .kaji/wf/docs.yaml
+on_failure: stop
+```
+
+```bash
+kaji validate-series .kaji/series/maintenance-2026-07.yaml
+kaji run-series .kaji/series/maintenance-2026-07.yaml --dry-run
+kaji run-series .kaji/series/maintenance-2026-07.yaml
+kaji run-series .kaji/series/maintenance-2026-07.yaml --resume
+```
+
+`parent_issue` は任意のトレーサビリティ情報で、実行意味論を変えない。member は YAML の
+順序どおりに起動され、child `kaji run` の exit 0 と GitHub Issue の
+`closed/completed` が揃った場合だけ次へ進む。失敗・close reason 不一致・外部状態の巻き戻りは
+後続を起動せず停止する。`--dry-run` は provider、state、lock、member workflow に触れない。
+
+定義作成には `/series-create` を使う。skill は Issue の単一 `type:` label と各 workflow の
+`description` から標準 `dev.yaml` / `docs.yaml` を一意選択し、thorough / fable 等の variant
+は member 単位 `--workflow` override がある場合だけ採用する。生成後は validation と dry-run
+まで行い、本実行は開始しない。
+
 ## provider × workflow の対応表
 
 各 builtin workflow が要求する provider type。`kaji run` 起動時に

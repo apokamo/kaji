@@ -57,6 +57,8 @@ class Issue:
         comments: 投稿順コメント一覧。
         slug: ディレクトリ末尾 / branch / worktree / design path 合成用の
             kebab-case 名。GitHub では title から sanitize 導出する。
+        state_reason: Issue state の理由。GitHub の値を小文字に正規化し、
+            provider が理由を持たない場合は空文字列。
     """
 
     id: str
@@ -66,6 +68,7 @@ class Issue:
     labels: list[Label] = field(default_factory=list)
     comments: list[Comment] = field(default_factory=list)
     slug: str = ""
+    state_reason: str = ""
 
 
 @dataclass(frozen=True)

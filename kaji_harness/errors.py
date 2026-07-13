@@ -65,6 +65,31 @@ class WorkflowValidationError(HarnessError):
         super().__init__(msg)
 
 
+class SeriesValidationError(HarnessError):
+    """series YAML / state の検証エラー。"""
+
+    def __init__(self, errors: list[str] | str):
+        if isinstance(errors, list):
+            self.errors = errors
+        else:
+            self.errors = [errors]
+        super().__init__(
+            f"{len(self.errors)} series validation error(s): " + "; ".join(self.errors)
+        )
+
+
+class SeriesInputError(HarnessError):
+    """series の起動条件・resume 条件が満たされない。"""
+
+
+class SeriesAbortedError(HarnessError):
+    """member failure または外部状態不整合により series を停止した。"""
+
+
+class SeriesRuntimeError(HarnessError):
+    """series の child 起動・状態保存等で実行時エラーが発生した。"""
+
+
 # --- スキル解決エラー ---
 class SkillNotFound(HarnessError):
     """スキルファイルが見つからない。"""

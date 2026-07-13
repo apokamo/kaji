@@ -131,6 +131,26 @@ compatibility contract.
 - `kaji issue comment <id> --verdict-step <step> --verdict-status <STATUS>` adds
   a verdict marker to judgment comments (see section 2.1).
 
+### 2.2 Sequential Issue series
+
+Use a tracked `.kaji/series/<id>.yaml` when several Issues must run in an explicit order. Validate
+and preview before starting:
+
+```bash
+kaji validate-series .kaji/series/<id>.yaml
+kaji run-series .kaji/series/<id>.yaml --dry-run
+kaji run-series .kaji/series/<id>.yaml
+```
+
+Each member runs through the existing `kaji run` command. The next member starts only when the child
+exits zero and `gh issue view` reports `closed` with state reason `completed`. Resume an interrupted
+or stopped series with `--resume`; a changed definition fingerprint or a live orphan child is
+rejected. Runtime state and the advisory lock live under `<artifacts_dir>/_series/<id>/`.
+
+`/series-create <issues...> --id <id>` generates the YAML, runs validation and dry-run, and stops.
+Use `--workflow <issue>=<path>` for a non-standard workflow variant. The skill reads Issue metadata
+but does not edit Issues or start the series.
+
 ### 2.1 Verdict markers on `kaji issue comment`
 
 When `kaji issue comment` receives `--verdict-step <step> --verdict-status <STATUS>`,

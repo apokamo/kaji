@@ -246,6 +246,19 @@ kaji run .kaji/wf/dev.yaml <issue-id> --from fix-code
 kaji run .kaji/wf/dev.yaml <issue-id> --step review-code
 ```
 
+明示した順序で複数の GitHub Issue を実行:
+
+```bash
+kaji validate-series .kaji/series/my-series.yaml
+kaji run-series .kaji/series/my-series.yaml --dry-run
+kaji run-series .kaji/series/my-series.yaml
+# 停止・中断後
+kaji run-series .kaji/series/my-series.yaml --resume
+```
+
+`/series-create <issue>... --id <series-id>` は、本実行を開始せず検証済み定義を生成する。
+runner は前段 workflow の正常終了と Issue の `closed/completed` を確認した場合だけ次へ進む。
+
 ### kaji自体を開発する
 
 別リポジトリでkajiを使うのではなく、kaji自体を開発する場合だけ、この手順を使います。

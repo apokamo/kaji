@@ -1,6 +1,7 @@
 name: docs
 description: |
-  docs-only 作業用 workflow。GitHub Issue から docs 更新、PR review、close まで進める。
+  type:docs 作業に対する series 自動選択の標準 workflow。
+  GitHub Issue から docs 更新、PR review、close まで進める。variant は明示 override で選ぶ。
   issue-create は事前に完了していることが前提。
   PR 作成後、review-poll / pr-fix / pr-verify / issue-close まで実行する。
 execution_policy: auto

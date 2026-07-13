@@ -263,6 +263,20 @@ Run only one step:
 kaji run .kaji/wf/dev.yaml <issue-id> --step review-code
 ```
 
+Run an explicitly ordered series of GitHub Issues:
+
+```bash
+kaji validate-series .kaji/series/my-series.yaml
+kaji run-series .kaji/series/my-series.yaml --dry-run
+kaji run-series .kaji/series/my-series.yaml
+# after a stopped or interrupted run
+kaji run-series .kaji/series/my-series.yaml --resume
+```
+
+Use `/series-create <issue>... --id <series-id>` to generate a validated definition without
+starting execution. The runner advances only after the preceding workflow exits successfully and
+the Issue is closed with reason `completed`.
+
 ### Develop kaji itself
 
 Use this path only when you want to work on kaji, not just run it in another

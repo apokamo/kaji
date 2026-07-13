@@ -96,6 +96,11 @@ A relative `artifacts_dir` is resolved against the main worktree (the worktree t
 `provider.<type>.default_branch` checked out) — Issue #177, see
 [Workflow authoring](../dev/workflow-authoring.md) § prerequisites.
 
+`kaji run-series` uses the same resolution and stores orchestration state under
+`<artifacts_dir>/_series/<series-id>/state.json`; the sibling `lock` file provides process-level
+exclusion. These runtime files are separate from the tracked `.kaji/series/<series-id>.yaml`
+definition. `validate-series` and `run-series --dry-run` do not create the directory.
+
 ### `[execution]`
 
 | key | Required/Optional | Type | Default | Validation | Source |
