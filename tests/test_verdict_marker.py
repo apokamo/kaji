@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from kaji_harness.providers.markers import build_kaji_verdict_marker
+from kaji_harness.providers.markers import build_kaji_verdict_marker, resolve_verdict_marker
 
 pytestmark = pytest.mark.small
 
@@ -26,6 +26,24 @@ class TestBuildKajiVerdictMarker:
         marker = build_kaji_verdict_marker("final-check", "BACK_DESIGN")
         assert "step=final-check" in marker
         assert "status=BACK_DESIGN" in marker
+
+
+class TestResolveVerdictMarker:
+    def test_both_none_returns_none(self) -> None:
+        assert resolve_verdict_marker(None, None) is None
+
+    def test_both_given_returns_marker(self) -> None:
+        assert resolve_verdict_marker("implement", "PASS") == build_kaji_verdict_marker(
+            "implement", "PASS"
+        )
+
+    @pytest.mark.parametrize(
+        ("step", "status"),
+        [("implement", None), (None, "PASS")],
+    )
+    def test_partial_flags_raise(self, step: str | None, status: str | None) -> None:
+        with pytest.raises(ValueError, match="must be specified together"):
+            resolve_verdict_marker(step, status)
 
 
 class TestStatusVocabulary:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
 from ..artifacts import resolve_artifacts_dir
 from ..config import KajiConfig
@@ -12,13 +11,14 @@ from ..errors import (
     ConfigLoadError,
     ConfigNotFoundError,
     HarnessError,
+    RecoveryTargetError,
     WorkflowValidationError,
 )
-from ..providers import IssueContext, IssueProvider, get_provider, normalize_id
+from ..providers import get_provider
 from ..providers.github import GitHubProviderError
 from ..providers.local import LocalProviderError
 from ..recovery.handler import RecoveryHandler
-from ..recovery.snapshot import read_run_log_events
+from ..recovery.target import resolve_recover_issue_context, select_target_run_dir
 from ..workflow import load_workflow
 from .exit_codes import (
     EXIT_CONFIG_NOT_FOUND,
@@ -71,15 +71,17 @@ def cmd_recover(args: argparse.Namespace) -> int:
         return rc
 
     try:
-        issue_context = _resolve_recover_issue_context(config, provider, args.issue)
+        issue_context = resolve_recover_issue_context(config, provider, args.issue)
     except (ValueError, HarnessError, GitHubProviderError, LocalProviderError) as e:
         print(f"Error: cannot resolve issue {args.issue!r}: {e}", file=sys.stderr)
         return EXIT_INVALID_INPUT
 
     artifacts_dir = resolve_artifacts_dir(config)
     runs_dir = artifacts_dir / issue_context.issue_id / "runs"
-    run_dir = _resolve_target_run_dir(runs_dir, args.run_id)
-    if run_dir is None:
+    try:
+        run_dir = select_target_run_dir(runs_dir, args.run_id)
+    except RecoveryTargetError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         return EXIT_INVALID_INPUT
 
     handler = RecoveryHandler(
@@ -99,61 +101,3 @@ def cmd_recover(args: argparse.Namespace) -> int:
         print(f"Error: failure triage failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return EXIT_RUNTIME_ERROR
     return EXIT_OK
-
-
-def _resolve_recover_issue_context(
-    config: KajiConfig, provider: IssueProvider, issue_input: str
-) -> IssueContext:
-    """``kaji recover`` 用に canonical Issue ID / ref を解決する。"""
-    assert config.provider is not None  # get_provider 成功後
-    provider_type = config.provider.type
-    machine_id = config.provider.local.machine_id if provider_type == "local" else None
-    rid = normalize_id(issue_input, provider_name=provider_type, machine_id=machine_id)
-    return provider.resolve_issue_context(rid.value)
-
-
-def _resolve_target_run_dir(runs_dir: Path, run_id: str | None) -> Path | None:
-    """triage 対象の run dir を解決する。不正な場合は stderr に理由を出して ``None``。
-
-    実行中 run（``workflow_end`` event が無い）への誤介入は拒否する。
-    """
-    if not runs_dir.is_dir():
-        print(f"Error: no runs found under {runs_dir}", file=sys.stderr)
-        return None
-    if run_id is not None:
-        run_dir = runs_dir / run_id
-        if not run_dir.is_dir():
-            print(f"Error: run dir not found: {run_dir}", file=sys.stderr)
-            return None
-    else:
-        candidates = sorted(p for p in runs_dir.iterdir() if p.is_dir())
-        if not candidates:
-            print(f"Error: no runs found under {runs_dir}", file=sys.stderr)
-            return None
-        run_dir = candidates[-1]
-
-    run_log = run_dir / "run.log"
-    if not run_log.is_file():
-        print(f"Error: run.log not found: {run_log}", file=sys.stderr)
-        return None
-    try:
-        events = read_run_log_events(run_log)
-    except OSError as exc:
-        print(f"Error: cannot read {run_log}: {exc}", file=sys.stderr)
-        return None
-    end = [e for e in events if e.get("event") == "workflow_end"]
-    if not end:
-        print(
-            f"Error: run {run_dir.name} is still in progress (no workflow_end event); "
-            "refusing to run failure triage against it",
-            file=sys.stderr,
-        )
-        return None
-    if end[-1].get("status") not in ("ERROR", "ABORT"):
-        print(
-            f"Error: run {run_dir.name} ended with status {end[-1].get('status')!r}; "
-            "failure triage only applies to ERROR / ABORT runs",
-            file=sys.stderr,
-        )
-        return None
-    return run_dir

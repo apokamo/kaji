@@ -27,7 +27,6 @@ from .commands.exit_codes import (
 )
 from .commands.issue import (
     _LOCAL_ISSUE_SUBS,
-    _commit_local_issue_change,
     _github_issue_comment_with_verdict,
     _handle_issue,
     _handle_issue_context,
@@ -41,8 +40,6 @@ from .commands.issue import (
     _local_issue_list,
     _local_issue_view,
     _resolve_local_id,
-    _resolve_verdict_marker,
-    build_worktree_note_body,
 )
 from .commands.main import main
 from .commands.output import (
@@ -87,11 +84,7 @@ from .commands.pr import (
     _run_pr_review_poll,
     _user_specified_repo,
 )
-from .commands.recover import (
-    _resolve_recover_issue_context,
-    _resolve_target_run_dir,
-    cmd_recover,
-)
+from .commands.recover import cmd_recover
 from .commands.run import (
     _apply_execution_overrides,
     _run_failure_triage,
@@ -105,6 +98,7 @@ from .commands.validate import (
     _resolve_project_root_for_validate,
     cmd_validate,
 )
+from .providers.context import build_worktree_note_body
 
 __all__ = [
     # stdlib module 束縛（属性 patch 68 件の target 解決に必須）
@@ -139,10 +133,8 @@ __all__ = [
     "cmd_run",
     "_run_failure_triage",
     "_validate_workflow_provider_match",
-    # recover（3 関数）
+    # recover（1 関数）
     "cmd_recover",
-    "_resolve_recover_issue_context",
-    "_resolve_target_run_dir",
     # pr（16 関数 + 4 定数）
     "_FORGE_METHOD_FLAGS",
     "_user_specified_repo",
@@ -176,20 +168,18 @@ __all__ = [
     "_format_jq_results",
     "_issue_to_json_dict",
     "_emit_json",
-    # issue（16 関数 + 1 定数）
+    # issue（13 関数 + 1 定数）
     "_handle_issue",
     "_github_issue_comment_with_verdict",
     "_resolve_local_id",
-    "_resolve_verdict_marker",
-    "_has_verdict_flags",
     "build_worktree_note_body",
+    "_has_verdict_flags",
     "_handle_issue_prepend_note",
     "_handle_issue_context",
     "_LOCAL_ISSUE_SUBS",
     "_handle_issue_local",
     "_local_issue_view",
     "_local_issue_create",
-    "_commit_local_issue_change",
     "_local_issue_edit",
     "_local_issue_comment",
     "_local_issue_close",

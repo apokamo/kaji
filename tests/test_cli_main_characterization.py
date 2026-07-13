@@ -16,15 +16,13 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from kaji_harness.cli_main import (
-    EXIT_OK,
     EXIT_RUNTIME_ERROR,
     _compose_json_and_jq,
     _detect_repo,
@@ -35,11 +33,7 @@ from kaji_harness.cli_main import (
     _has_verdict_flags,
     _is_ascii_decimal,
     _resolve_project_root_for_validate,
-    _resolve_recover_issue_context,
-    _resolve_target_run_dir,
-    _resolve_verdict_marker,
 )
-from kaji_harness.providers.markers import build_kaji_verdict_marker
 
 
 def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> SimpleNamespace:
@@ -70,32 +64,6 @@ class TestIsAsciiDecimal:
         assert _is_ascii_decimal("12a") is False
         assert _is_ascii_decimal("-1") is False
         assert _is_ascii_decimal(" 1") is False
-
-
-# ---------------------------------------------------------------------------
-# _resolve_verdict_marker — verdict フラグ解決（両必須 / 片方は ValueError）
-# ---------------------------------------------------------------------------
-class TestResolveVerdictMarker:
-    @pytest.mark.small
-    def test_both_none_returns_none(self) -> None:
-        assert _resolve_verdict_marker(None, None) is None
-
-    @pytest.mark.small
-    def test_both_given_returns_marker(self) -> None:
-        # 現挙動: build_kaji_verdict_marker の戻り値をそのまま返す。
-        assert _resolve_verdict_marker("implement", "PASS") == build_kaji_verdict_marker(
-            "implement", "PASS"
-        )
-
-    @pytest.mark.small
-    def test_step_only_raises(self) -> None:
-        with pytest.raises(ValueError, match="must be specified together"):
-            _resolve_verdict_marker("implement", None)
-
-    @pytest.mark.small
-    def test_status_only_raises(self) -> None:
-        with pytest.raises(ValueError, match="must be specified together"):
-            _resolve_verdict_marker(None, "PASS")
 
 
 # ---------------------------------------------------------------------------
@@ -228,33 +196,6 @@ class TestGhCaptureValue:
 
 
 # ---------------------------------------------------------------------------
-# _resolve_recover_issue_context — normalize_id → provider.resolve_issue_context
-# ---------------------------------------------------------------------------
-class TestResolveRecoverIssueContext:
-    @pytest.mark.small
-    def test_github_numeric_resolves_via_provider(self) -> None:
-        config = SimpleNamespace(provider=SimpleNamespace(type="github"))
-        sentinel = object()
-        provider = MagicMock()
-        provider.resolve_issue_context.return_value = sentinel
-
-        result = _resolve_recover_issue_context(config, provider, "282")
-
-        assert result is sentinel
-        # github numeric は normalize_id で value="282" に正規化されて provider へ渡る。
-        provider.resolve_issue_context.assert_called_once_with("282")
-
-    @pytest.mark.small
-    def test_github_rejects_local_form_id(self) -> None:
-        config = SimpleNamespace(provider=SimpleNamespace(type="github"))
-        provider = MagicMock()
-        # provider.type='github' で local-form id は normalize_id が ValueError を送出する。
-        with pytest.raises(ValueError):
-            _resolve_recover_issue_context(config, provider, "local-pc1-3")
-        provider.resolve_issue_context.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
 # _resolve_project_root_for_validate — 明示 root / pyproject 探索 / fallback
 # ---------------------------------------------------------------------------
 class TestResolveProjectRootForValidate:
@@ -282,82 +223,6 @@ class TestResolveProjectRootForValidate:
         yaml_path = yaml_dir / "wf.yaml"
         yaml_path.write_text("name: x\n", encoding="utf-8")
         assert _resolve_project_root_for_validate(None, yaml_path) == yaml_dir.resolve()
-
-
-# ---------------------------------------------------------------------------
-# _resolve_target_run_dir — recover 対象 run の解決（fs I/O。既存直接 test 無し）
-# ---------------------------------------------------------------------------
-def _write_run(run_dir: Path, events: list[dict[str, object]] | None) -> None:
-    """run_dir を作り、events を run.log(JSONL) に書く。events=None なら run.log 無し。"""
-    run_dir.mkdir(parents=True, exist_ok=True)
-    if events is not None:
-        lines = "\n".join(json.dumps(e) for e in events)
-        (run_dir / "run.log").write_text(lines + "\n", encoding="utf-8")
-
-
-class TestResolveTargetRunDir:
-    @pytest.mark.medium
-    def test_runs_dir_missing_returns_none(self, tmp_path: Path) -> None:
-        assert _resolve_target_run_dir(tmp_path / "nope", None) is None
-
-    @pytest.mark.medium
-    def test_explicit_run_id_missing_returns_none(self, tmp_path: Path) -> None:
-        runs = tmp_path / "runs"
-        runs.mkdir()
-        assert _resolve_target_run_dir(runs, "missing") is None
-
-    @pytest.mark.medium
-    def test_no_candidates_returns_none(self, tmp_path: Path) -> None:
-        runs = tmp_path / "runs"
-        runs.mkdir()
-        assert _resolve_target_run_dir(runs, None) is None
-
-    @pytest.mark.medium
-    def test_run_log_missing_returns_none(self, tmp_path: Path) -> None:
-        runs = tmp_path / "runs"
-        _write_run(runs / "r1", events=None)  # run dir だが run.log 無し
-        assert _resolve_target_run_dir(runs, "r1") is None
-
-    @pytest.mark.medium
-    def test_in_progress_run_refused(self, tmp_path: Path) -> None:
-        runs = tmp_path / "runs"
-        # workflow_end event が無い = 進行中とみなし拒否。
-        _write_run(runs / "r1", events=[{"event": "workflow_start"}])
-        assert _resolve_target_run_dir(runs, "r1") is None
-
-    @pytest.mark.medium
-    def test_non_error_status_refused(self, tmp_path: Path) -> None:
-        runs = tmp_path / "runs"
-        _write_run(runs / "r1", events=[{"event": "workflow_end", "status": "SUCCESS"}])
-        assert _resolve_target_run_dir(runs, "r1") is None
-
-    @pytest.mark.medium
-    def test_error_run_resolved(self, tmp_path: Path) -> None:
-        runs = tmp_path / "runs"
-        target = runs / "r1"
-        _write_run(target, events=[{"event": "workflow_end", "status": "ERROR"}])
-        assert _resolve_target_run_dir(runs, "r1") == target
-
-    @pytest.mark.medium
-    def test_abort_run_resolved(self, tmp_path: Path) -> None:
-        runs = tmp_path / "runs"
-        target = runs / "r1"
-        _write_run(target, events=[{"event": "workflow_end", "status": "ABORT"}])
-        assert _resolve_target_run_dir(runs, "r1") == target
-
-    @pytest.mark.medium
-    def test_latest_candidate_picked_when_run_id_none(self, tmp_path: Path) -> None:
-        runs = tmp_path / "runs"
-        _write_run(runs / "20260101", events=[{"event": "workflow_end", "status": "ERROR"}])
-        latest = runs / "20260202"
-        _write_run(latest, events=[{"event": "workflow_end", "status": "ERROR"}])
-        # sorted の末尾（辞書順最大）が選ばれる。
-        assert _resolve_target_run_dir(runs, None) == latest
-
-    @pytest.mark.medium
-    def test_returns_ok_exit_constant_symbol_sanity(self) -> None:
-        # EXIT_OK が 0 である現挙動を固定（recover 経路の成功コード契約）。
-        assert EXIT_OK == 0
 
 
 # ---------------------------------------------------------------------------

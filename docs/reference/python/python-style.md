@@ -93,8 +93,11 @@ MAX_RETRY_COUNT = 3
 
 規則の全文・分類ルール・時限許容の allowlist 運用は
 [ADR 009: モジュール境界と private import 規約](../../adr/009-module-boundary-private-import.md) が正本。
-`__all__` に強制力はないため、境界は `tests/test_private_imports.py` の fitness test が
-`make check` で機械的に検証する。
+`__all__` に強制力はないため、package を跨ぐ private import は
+`tests/test_private_imports.py`、runtime 層方向・module 分類の完全性は
+`tests/test_layer_imports.py` の fitness test が `make check` で機械的に検証する。
+`TYPE_CHECKING` guard 内の import は runtime edge から除外するが、関数内 deferred import は
+実行時依存として検査対象に含める。
 
 ## コメント・文字列
 

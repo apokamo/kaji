@@ -55,3 +55,23 @@ def build_kaji_verdict_marker(step: str, status: str) -> str:
             "(grammar BACK_[A-Z0-9_]+)"
         )
     return f"{_KAJI_VERDICT_MARKER_PREFIX}step={step} status={status}{_KAJI_VERDICT_MARKER_SUFFIX}"
+
+
+def resolve_verdict_marker(step: str | None, status: str | None) -> str | None:
+    """Resolve optional CLI verdict flags to a marker line.
+
+    Args:
+        step: The producing workflow step, or ``None`` when flags are omitted.
+        status: The verdict status, or ``None`` when flags are omitted.
+
+    Returns:
+        A marker string, or ``None`` when both flags are omitted.
+
+    Raises:
+        ValueError: Exactly one flag is supplied or either value is invalid.
+    """
+    if step is None and status is None:
+        return None
+    if step is None or status is None:
+        raise ValueError("--verdict-step and --verdict-status must be specified together")
+    return build_kaji_verdict_marker(step, status)

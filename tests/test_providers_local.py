@@ -6,11 +6,13 @@ phase3-design.md § Medium / LocalProvider CRUD 全経路 / atomic / cache reade
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from kaji_harness.fsio import atomic_write
+from kaji_harness.providers import ResolvedId
 from kaji_harness.providers.local import (
     IssueNotFoundError,
     LocalProvider,
@@ -29,6 +31,31 @@ def provider(tmp_path: Path) -> LocalProvider:
     repo.mkdir()
     (repo / ".kaji").mkdir()
     return LocalProvider(repo_root=repo, machine_id="pc1")
+
+
+def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.fixture
+def git_provider(tmp_path: Path) -> LocalProvider:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "--initial-branch=main")
+    _git(repo, "config", "user.name", "Test User")
+    _git(repo, "config", "user.email", "test@example.com")
+    (repo / ".kaji").mkdir()
+    local = LocalProvider(repo_root=repo, machine_id="pc1")
+    local.create_issue(title="title", body="original", slug="issue")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "initial")
+    return local
 
 
 class TestMachineIdValidation:
@@ -90,6 +117,54 @@ class TestAtomicWrite:
         atomic_write(target, "hello")
         assert target.read_text() == "hello"
         assert not target.with_suffix(".md.tmp").exists()
+
+
+class TestCommitIssueChange:
+    def test_commit_only_excludes_unrelated_staged_file(
+        self,
+        git_provider: LocalProvider,
+    ) -> None:
+        repo = git_provider.repo_root
+        unrelated = repo / "unrelated.txt"
+        unrelated.write_text("staged", encoding="utf-8")
+        _git(repo, "add", "unrelated.txt")
+        git_provider.edit_issue("local-pc1-1", body="changed")
+
+        git_provider.commit_issue_change(
+            ResolvedId(kind="local", value="local-pc1-1", raw="1"),
+            "edit",
+            [Path("issue.md")],
+        )
+
+        committed = _git(repo, "show", "--pretty=format:", "--name-only", "HEAD").stdout.split()
+        assert committed == [".kaji/issues/local-pc1-1-issue/issue.md"]
+        assert _git(repo, "status", "--short").stdout.startswith("A  unrelated.txt")
+
+    def test_empty_diff_skips_commit(self, git_provider: LocalProvider) -> None:
+        repo = git_provider.repo_root
+        before = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+        git_provider.commit_issue_change(
+            ResolvedId(kind="local", value="local-pc1-1", raw="1"),
+            "edit",
+            [Path("issue.md")],
+        )
+
+        assert _git(repo, "rev-parse", "HEAD").stdout.strip() == before
+
+    def test_commit_message_uses_issue_ref(self, git_provider: LocalProvider) -> None:
+        repo = git_provider.repo_root
+        git_provider.edit_issue("local-pc1-1", body="changed")
+
+        git_provider.commit_issue_change(
+            ResolvedId(kind="local", value="local-pc1-1", raw="1"),
+            "edit",
+            [Path("issue.md")],
+        )
+
+        assert _git(repo, "log", "-1", "--pretty=%s").stdout.strip() == (
+            "chore(local): edit for local-pc1-1"
+        )
 
 
 class TestCRUD:

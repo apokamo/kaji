@@ -6,9 +6,9 @@
 ``> **Branch**: `fix/199`## 概要`` のように本文 heading が blockquote 行へ吸着した
 （Issue #199 実観測 OB）。
 
-本ファイルは合成を kaji 内部の決定的経路（純粋関数 ``build_worktree_note_body`` +
-``kaji issue prepend-note`` dispatch）へ移し、モデル非依存に blank line を保証する
-ことの Red → Green 回帰証跡。
+本ファイルは ``kaji issue prepend-note`` dispatch の bridging test を担う。
+純粋関数 ``build_worktree_note_body`` の command 非依存テストは
+``tests/test_providers_context.py`` が担う。
 
 設計書: ``draft/design/issue-200-fix-issue-start-skill-issue-blank-line.md``
 """
@@ -21,86 +21,16 @@ from unittest.mock import patch
 
 import pytest
 
-from kaji_harness.cli_main import _handle_issue, build_worktree_note_body
+from kaji_harness.cli_main import _handle_issue
+from kaji_harness.cli_main import build_worktree_note_body as shim_note_body
 from kaji_harness.providers import LocalProvider
+from kaji_harness.providers.context import build_worktree_note_body
 from kaji_harness.providers.models import Issue
-
-# ============================================================
-# Small: build_worktree_note_body（核となる回帰テスト）
-# ============================================================
 
 
 @pytest.mark.small
-class TestBuildWorktreeNoteBody:
-    """純粋関数の不変条件（blank line 保証）を検証する。"""
-
-    def test_blank_line_guaranteed_between_note_and_heading(self) -> None:
-        """OB の直接 assert: blockquote 行と本文 heading の間が空行ちょうど 1 行。
-
-        Issue #199 OB の ``> **Branch**: `fix/199`## 概要`` 連結（改行 1 + 空行 1
-        の計 2 つが消えた状態）が起こらないことを保証する。
-        """
-        result = build_worktree_note_body(
-            "## 概要\n\n本文",
-            worktree="kaji-fix-200",
-            branch="fix/200",
-        )
-        # blockquote と heading の間は空行ちょうど 1 行
-        assert "> **Branch**: `fix/200`\n\n## 概要" in result
-        # OB の吸着（backtick 直後に heading が連結）が起きていない
-        assert "`fix/200`## 概要" not in result
-
-    def test_full_note_block_layout(self) -> None:
-        """NOTE ブロックのレイアウト全体が EB（#190 相当）と一致する。"""
-        result = build_worktree_note_body(
-            "## 概要",
-            worktree="kaji-fix-200",
-            branch="fix/200",
-        )
-        assert result == (
-            "> [!NOTE]\n> **Worktree**: `../kaji-fix-200`\n> **Branch**: `fix/200`\n\n## 概要"
-        )
-
-    def test_leading_blank_lines_normalized_to_one(self) -> None:
-        """本文先頭の余分な空行は 1 行へ収束する（冪等性）。"""
-        result = build_worktree_note_body(
-            "\n\n\n## 概要",
-            worktree="kaji-fix-200",
-            branch="fix/200",
-        )
-        assert "> **Branch**: `fix/200`\n\n## 概要" in result
-        # 空行が 2 行以上残らない
-        assert "`fix/200`\n\n\n" not in result
-
-    def test_empty_body_produces_note_only(self) -> None:
-        """空 body → NOTE ブロックのみ。末尾に余分な blank line を付けない。"""
-        result = build_worktree_note_body(
-            "",
-            worktree="kaji-fix-200",
-            branch="fix/200",
-        )
-        assert result == ("> [!NOTE]\n> **Worktree**: `../kaji-fix-200`\n> **Branch**: `fix/200`\n")
-
-    def test_whitespace_only_body_produces_note_only(self) -> None:
-        """改行のみの body も空扱いで NOTE ブロックのみになる。"""
-        result = build_worktree_note_body(
-            "\n\n",
-            worktree="kaji-fix-200",
-            branch="fix/200",
-        )
-        assert result == ("> [!NOTE]\n> **Worktree**: `../kaji-fix-200`\n> **Branch**: `fix/200`\n")
-
-    def test_special_chars_in_body_preserved(self) -> None:
-        """backtick / ``$`` / 複数行を含む body をそのまま保持する（shell 評価なし）。"""
-        body = "## 概要\n\n`code` と $VAR を含む `inline`\n- 行 2"
-        result = build_worktree_note_body(
-            body,
-            worktree="kaji-fix-200",
-            branch="fix/200",
-        )
-        assert result.endswith(body)
-        assert "$VAR" in result
-        assert "`code`" in result
+def test_legacy_shim_reexports_worktree_note_builder() -> None:
+    assert shim_note_body is build_worktree_note_body
 
 
 # ============================================================
