@@ -103,7 +103,7 @@ on_failure: stop             # 必須: 初期実装は "stop" のみ受理
 | code | 条件 |
 |------|------|
 | `EXIT_OK(0)` | 全 member 完了（dry-run 成功もここ） |
-| `EXIT_ABORT(1)` | member 失敗による停止: `kaji run` 非 0 / 成功ゲート不一致（`not_planned` close・open のまま等）/ 未開始 member が既に closed という外部不整合 / resume 再検証での完了済み member 巻き戻り検出 |
+| `EXIT_ABORT(1)` | member 失敗による停止: `kaji run` 非 0 / 成功ゲート不一致（`not_planned` close・open のまま等）/ 起動対象 member（fresh / resume 共通）が起動前に既に closed という外部不整合 / resume 再検証での完了済み member 巻き戻り検出 |
 | `EXIT_INVALID_INPUT(2)` | series YAML validation error / config 不在 / provider が `github` でない / fingerprint 不一致 / lock 取得失敗（`EACCES`・`EAGAIN` = 二重起動）/ state 既存なのに `--resume` なし / `--resume` なのに state 不在 / resume 時に中断遺留 member の child が生存（二重起動防止の保守的拒否） |
 | `EXIT_RUNTIME_ERROR(3)` | 予期しない harness error（state 書き込み失敗、lock の `EACCES`・`EAGAIN` 以外の `OSError` 等） |
 
@@ -193,7 +193,7 @@ member を「完了」と判定する条件は **両方** の成立:
 | `--resume` + fingerprint 不一致 | 変更後の順序・workflow を暗黙適用せず `EXIT_INVALID_INPUT` で拒否（新 id での作り直し、または state 削除の明示操作を案内） |
 | `--resume` + 完了済み member が closed/completed でなくなっている | 巻き戻り不整合として `EXIT_ABORT` で停止（暗黙再実行しない） |
 | `--resume` なし + state 既存 | `EXIT_INVALID_INPUT` で拒否し `--resume` を案内（誤った初回起動による状態破壊を防ぐ） |
-| fresh run で未開始 member の Issue が既に closed | 外部不整合として `EXIT_ABORT` で停止（series 設定の誤りの可能性。member 除去または resume 運用を案内） |
+| 起動対象 member の Issue が起動前に既に closed（fresh run の未開始 member / resume の再実行対象 member とも） | 外部不整合として `EXIT_ABORT` で停止（series 設定の誤り、または外部 close の可能性。member 除去または close 理由の解消を案内）。resume では reconciliation で `completed` 昇格・skip 済みの member を除いた「これから起動する member」に対して判定するため、closed Issue に対する `kaji run` の空振り起動（worktree / PR の重複生成）を防ぐ |
 
 #### 中断遺留 `running` member の reconciliation（crash-safe resume）
 
@@ -397,7 +397,7 @@ config discover → provider=github 確認
      → running member の reconciliation: child_pid 生存 → 拒否 /
        死亡 + closed/completed → completed 昇格 / 死亡 + 未完了 → interrupted）
 → for member in 未完了 members（記載順）:
-     fresh run なら pre-check: Issue が既に closed → 不整合停止
+     pre-check（fresh / resume 共通）: Issue が既に closed → 不整合停止
      Popen: kaji run <workflow> <issue> [--quiet]（cwd=repo_root）
      → status=running + child_pid を wait 前に永続化（atomic write）
      → wait → exit_code / run_id（runs/ 探索 best-effort）記録
@@ -456,7 +456,8 @@ config discover → provider=github 確認
 - lock: 同一 lock ファイルへの二重 flock が非ブロックで失敗すること
 - `SeriesRunner`（fake launcher + fake provider 注入）:
   - 記載順で 1 件ずつ起動し、前段ゲート成立まで次を起動しない
-  - member 非 0 / gate mismatch / fresh run 時の既 closed member で停止し
+  - member 非 0 / gate mismatch / 起動前に既 closed の member（fresh run の未開始
+    member、resume の再実行対象 member の双方）で停止し
     後続 launcher が呼ばれない
   - `--dry-run` で launcher 不呼出し・state ディレクトリ非作成・lock 非取得
   - resume: 完了済み skip / fingerprint 不一致拒否 / 完了済み巻き戻り停止 /

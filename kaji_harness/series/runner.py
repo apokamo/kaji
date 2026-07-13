@@ -102,13 +102,13 @@ class SeriesRunner:
             for index, member in enumerate(state.members):
                 if member.status == "completed":
                     continue
-                if not resume:
-                    issue = self.provider.view_issue(str(member.issue))
-                    if issue.state == "closed":
-                        self._abort(
-                            state,
-                            f"member {member.issue} is already closed before its fresh run",
-                        )
+                issue = self.provider.view_issue(str(member.issue))
+                if issue.state == "closed":
+                    phase = "resumed" if resume else "fresh"
+                    self._abort(
+                        state,
+                        f"member {member.issue} is already closed before its {phase} run",
+                    )
                 self._execute_member(state, index)
             state.status = "completed"
             state.stop_reason = None

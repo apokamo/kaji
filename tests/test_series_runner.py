@@ -243,6 +243,35 @@ def test_fresh_run_rejects_member_already_closed(tmp_path: Path) -> None:
     assert calls == []
 
 
+def test_resume_rejects_pending_member_closed_externally(tmp_path: Path) -> None:
+    provider = FakeProvider({10: _issue(10), 11: _issue(11, "closed", "duplicate")})
+    calls: list[list[str]] = []
+    runner = _runner(tmp_path, provider, calls)
+    state = SeriesState.create(_config())
+    state.members[0].status = "completed"
+    state.members[0].gate = "closed_completed"
+    provider.issues[10] = _issue(10, "closed", "completed")
+    state.save(runner.state_path)
+    with pytest.raises(SeriesAbortedError, match="member 11 is already closed"):
+        runner.run(resume=True)
+    assert calls == []
+    stopped = SeriesState.load(runner.state_path)
+    assert stopped.status == "stopped"
+
+
+def test_resume_rejects_retried_member_closed_externally(tmp_path: Path) -> None:
+    provider = FakeProvider({10: _issue(10, "closed", "not_planned"), 11: _issue(11)})
+    calls: list[list[str]] = []
+    runner = _runner(tmp_path, provider, calls)
+    state = SeriesState.create(_config())
+    state.members[0].status = "failed"
+    state.members[0].gate = "exit:1"
+    state.save(runner.state_path)
+    with pytest.raises(SeriesAbortedError, match="member 10 is already closed"):
+        runner.run(resume=True)
+    assert calls == []
+
+
 def test_resume_skips_completed_member(tmp_path: Path) -> None:
     provider = FakeProvider({10: _issue(10, "closed", "completed"), 11: _issue(11)})
     calls: list[list[str]] = []
@@ -384,8 +413,10 @@ def test_epic_and_standalone_fixtures_stop_and_resume_from_failure(
     def fail_midway(argv: list[str], _cwd: Path) -> FakeProcess:
         first_calls.append(argv)
         issue = int(argv[3])
-        provider.issues[issue] = _issue(issue, "closed", "completed")
-        return FakeProcess(pid=1000 + issue, returncode=next(return_codes))
+        returncode = next(return_codes)
+        if returncode == 0:
+            provider.issues[issue] = _issue(issue, "closed", "completed")
+        return FakeProcess(pid=1000 + issue, returncode=returncode)
 
     runner = SeriesRunner(
         config=config,
