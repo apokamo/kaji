@@ -6,6 +6,73 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-07-14
+
+This release adds a sequential series runner that drives an ordered list of
+Issues through their workflows, and completes the decomposition of the
+monolithic `cli_main.py` into a layered `commands/` package with enforced module
+boundaries. The `cli_main` compatibility shim is removed in the process.
+
+### BREAKING CHANGE
+
+- **Broken contract**: the `kaji_harness/cli_main.py` re-export compatibility shim
+  is removed (#284). Code that imports or monkeypatches command handlers, helpers,
+  or `subprocess` through `kaji_harness.cli_main` now fails with `ImportError` or
+  `AttributeError`. The console entry point (`kaji = kaji_harness.cli_main:main`)
+  is unchanged, so running the `kaji` CLI as a command is unaffected.
+  - **How to check whether you are affected**: run
+    `grep -rn 'kaji_harness\.cli_main\.\|from kaji_harness\.cli_main import' .`
+    in your repository. Zero hits means you are not affected.
+  - **How to migrate**: point each hit at the concrete module under
+    `kaji_harness/commands/` (`commands.run`, `commands.issue`, `commands.pr`,
+    `commands.config`, and so on). Test patch targets move the same way:
+    `kaji_harness.cli_main.subprocess.run` becomes
+    `kaji_harness.commands.<module>.subprocess.run`. kaji ships no backward
+    compatibility layer (ADR 008); see #283 / #284, `docs/ARCHITECTURE.md`, and
+    `docs/dev/testing-convention.md` for the full boundary description.
+
+### Added
+
+- A sequential series runner that drives an explicitly ordered list of Issues
+  through their workflows: `kaji validate-series` and `kaji run-series` (with
+  `--dry-run` and `--resume`), plus a `/series-create` skill that generates a
+  validated series definition without starting execution. The runner advances to
+  the next member only after the preceding workflow exits successfully and its
+  Issue is closed with reason `completed` (#313).
+
+### Fixed
+
+- Exclude interactive-runner launch failures that occur outside a tmux session
+  from automatic incident recording; these are missing preconditions rather than
+  failures worth filing repeatedly (#322).
+- Preserve degenerate cache entries in `list_issues` so that cache rebuilds no
+  longer drop entries (#323).
+- Apply the closed-issue preflight to resumed series members as well, so already
+  closed Issues are not re-run (#313).
+
+### Docs
+
+- Added a README section comparing kaji with other agent orchestration tools
+  (#314).
+- Aligned `/i-pr` and the shared skill rules with the finalized closing-keyword
+  policy, and distinguished the linked-PR path from the commit-message path in
+  the github-mode and commit-flow guides (#318).
+
+### Internal
+
+- Mechanically split `cli_main.py` into the `kaji_harness/commands/` package
+  (#283).
+- Removed cross-module imports of private symbols and made private imports through
+  sub-package facades a forbidden pattern (#285, ADR 009).
+- Moved domain logic out of the CLI layer (local issue commits, recovery target
+  selection, worktree note composition, verdict marker resolution) into the
+  provider and service layers, and enforced runtime layer import direction with a
+  fitness test (#286).
+- Split runner and local provider responsibilities (#323).
+- Migrated test imports to the concrete modules under `commands/`, removing the
+  last dependencies on the `cli_main` shim (#284).
+- Updated workflow agent and model assignments (dev-thorough-fable, docs-fable).
+
 ## [0.14.0] - 2026-07-13
 
 This release adds two-layer incident management, automated workflow failure

@@ -1,6 +1,6 @@
 [project]
 name = "kaji"
-version = "0.14.0"
+version = "0.15.0"
 description = "AI-driven software development workflow orchestrator"
 readme = "README.md"
 requires-python = ">=3.11"
