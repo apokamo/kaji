@@ -238,7 +238,22 @@ fi
 > ---END_VERDICT---
 > ```
 
-> **重要**: PR body に `Closes [issue_ref]` を必ず含めること。これにより GitHub の Development sidebar に正式リンクが作成される。
+> **重要**: PR body に `Closes [issue_ref]` を必ず含めること。これにより GitHub の Development sidebar に正式リンクが作成される。既存 PR を Issue に手動リンクする public API は存在せず、closing keyword が紐付けを自動化できる唯一の手段である。
+>
+> **前提条件（repo 設定への依存）**: この live closing keyword は、リポジトリ設定
+> **Auto-close issues with merged linked pull requests**（Settings → General →
+> Features → Issues）が **無効化されている** ことを前提とする。本リポジトリ
+> （apokamo/kaji）では無効化済みのため、PR を merge しても Issue は自動 close されず、
+> close は `/issue-close` の明示操作で行われる。この設定値は REST / GraphQL から
+> 参照できず **API では検証不能** なため、設定を有効化しないこと。skill を他リポジトリ
+> で流用する場合も同設定の無効化が前提となる。
+> 規約の正本: [`docs/dev/shared_skill_rules.md`](../../../docs/dev/shared_skill_rules.md) § auto close keyword 回避
+>
+> なお当該設定が抑止するのは **linked PR 経由の auto-close のみ**。commit message
+> 経由（commit が default branch に到達した時点で close される別経路）はカバー対象
+> と保証されないため、**commit body / merge commit message 側の closing keyword
+> 回避規約は維持** される。`Closes` + `#` + 番号を書いてよいのは PR description の
+> この 1 行のみ。
 
 > **マージ規約**: kaji の merge 規約は `--no-ff` only（squash merge 禁止）。マージ自体は `/issue-close` の責務だが、PR タイトルとコミットは Conventional Commits に従うこと（`docs/guides/git-commit-flow.md` 参照）。
 
