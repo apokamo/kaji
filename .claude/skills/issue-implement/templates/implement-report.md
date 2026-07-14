@@ -22,7 +22,7 @@ kaji issue comment [issue_id] --commit \
 ### テスト結果
 
 ```
-(pytest の標準出力をそのまま貼り付け)
+(Step 7 で保持した pytest の出力をそのまま貼り付け。`make check` 経路ではその出力の pytest 部分)
 ```
 
 | 項目 | 結果 |
@@ -39,7 +39,7 @@ kaji issue comment [issue_id] --commit \
 ### 品質チェック結果
 
 ```
-(ruff check / ruff format --check / mypy の出力をそのまま貼り付け)
+(Step 7 で保持した ruff check / ruff format --check / mypy の出力をそのまま貼り付け。`make check` 経路ではその出力の該当部分)
 ```
 
 ### 変更ファイル
