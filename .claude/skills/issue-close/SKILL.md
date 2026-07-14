@@ -107,10 +107,30 @@ follow-up のタイトルは次の完全一致形式に固定する。
 ```
 
 - マーカーが 1 件ある場合: 値を `FOLLOW_UP_ID` に設定して `kaji issue view` で確認し、
-  title が完全一致形式、本文に `<!-- kaji-follow-up-parent: [issue_ref] -->` が 1 件あることを
-  検証して再利用する
+  次の 3 点をすべて満たすときだけ再利用する
+  1. `state` が `open` である
+  2. title が完全一致形式である
+  3. 本文に `<!-- kaji-follow-up-parent: [issue_ref] -->` が 1 件ある
 - マーカーが複数、値が空、参照先が存在しない場合: `ABORT`
+- マーカーの参照先が close 済みの場合: `ABORT`。未チェック項目が親に残っているのに
+  追跡先が閉じている状態であり、close 済み follow-up を再利用すると追跡が失われる。
+  同名タイトルの open Issue 検索へフォールバックしてもマーカーとの不整合が残るため、
+  自動復旧はしない。人間が (a) 完了済みの項目を親本文で `[x]` に更新する、
+  (b) follow-up Issue を reopen する、(c) 親のマーカー行を削除して再作成させる、
+  のいずれかを選んだうえで再実行する
 - マーカーがない場合: open Issue を完全一致タイトルで検索する
+
+```bash
+FOLLOW_UP_STATE=$(kaji issue view "$FOLLOW_UP_ID" --json state -q '.state')
+# GitHub は OPEN/CLOSED、local は open/closed を返すため小文字化して比較する
+case "$(printf '%s' "$FOLLOW_UP_STATE" | tr '[:upper:]' '[:lower:]')" in
+  open) : ;;
+  *)
+    echo "ABORT: marked follow-up Issue $FOLLOW_UP_ID is not open (state=$FOLLOW_UP_STATE)"
+    exit 1
+    ;;
+esac
+```
 
 ```bash
 PARENT_TITLE=$(kaji issue view [issue_id] --json title -q '.title')
@@ -530,4 +550,4 @@ suggestion: |
 | status | 条件 |
 |--------|------|
 | PASS | クローズ完了 |
-| ABORT | follow-up 作成・再利用・親マーカー追記の失敗、またはクローズ失敗（`kaji issue close` 失敗を含む / local merge 衝突） |
+| ABORT | follow-up 作成・再利用・親マーカー追記の失敗（マーカー参照先が close 済みの場合を含む）、またはクローズ失敗（`kaji issue close` 失敗を含む / local merge 衝突） |

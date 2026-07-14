@@ -253,9 +253,13 @@ gh issue edit [number] --body-file /tmp/issue-body.md
 - follow-up 本文には親 Issue、未完了項目、参照 docs、証跡記録先、人間による手動 close 方針を含める
 - 既存 open Issue の完全一致タイトルを検索して再利用し、親本文の
   `<!-- kaji-follow-up-issue: <issue-id> -->` マーカーで再実行時の重複を防ぐ
+- マーカーの参照先を再利用できるのは、その Issue が **open** かつタイトル・親マーカーが
+  一致する場合だけとする。close 済みの Issue は再利用しない
 - follow-up 作成後に親マーカー追記が失敗した場合、再実行時は既存 open Issue を再利用する
-- 同一タイトルが複数ある、follow-up 作成に失敗する、または親マーカー追記に失敗する場合は
-  `ABORT` とし、親 Issue を close しない
+- 同一タイトルが複数ある、follow-up 作成に失敗する、親マーカー追記に失敗する、または
+  マーカーの参照先が close 済みの場合は `ABORT` とし、親 Issue を close しない
+  （close 済み参照先は、親に未完了項目が残るのに追跡先が閉じている不整合であり、
+  人間が親本文の更新・follow-up の reopen・マーカー行の削除のいずれかで解消する）
 
 移管は確認の完了を意味しない。follow-up Issue の各項目は、実施者が具体的証跡をコメントへ
 記録して `[x]` に更新し、全項目完了後に人間が手動で close する。
