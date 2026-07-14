@@ -12,18 +12,21 @@ Language: [English](github-mode.md) | 日本語
 - 緊急時 fallback の local-mode（[Local Mode CLI Guide](local-mode.md)）から GitHub 通常運用へ復帰する場合
 - `kaji sync from-github` で GitHub Issue を local cache に取り込みたい場合
 
-> ⚠️ **auto-close keyword 注意**: GitHub は PR description / commit message 内の
-> `Closes #<N>` / `Fixes #<N>` / `Resolves #<N>` 等を auto-close keyword として
-> 解釈し、**既定設定では** default branch への merge で当該 issue を自動 close する
+> ⚠️ **auto-close keyword 注意**: GitHub は `Closes #<N>` / `Fixes #<N>` /
+> `Resolves #<N>` 等を auto-close keyword として解釈する。経路は **2 つある**:
+> **PR description** に書くと PR↔Issue が linked PR として紐付き merge 時に close
+> され、**commit message** に書くとその commit が default branch に到達した時点で
+> close される
 > （公式: [Closing issues using keywords](https://docs.github.com/en/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue#linking-a-pull-request-to-an-issue-using-a-keyword)）。
 >
 > 本リポジトリ（apokamo/kaji）はリポジトリ設定
 > **Auto-close issues with merged linked pull requests**（Settings → General →
-> Features → Issues）を無効化しているため、この既定挙動は発生しない。その前提で
+> Features → Issues）を無効化している。この設定が抑止するのは **linked PR 経由の
+> 経路のみ** であり、commit message 経由の経路をカバーする保証はない。その前提で
 > `/i-pr` は PR description に live closing keyword を **1 行だけ**生成する
-> （PR↔Issue の紐付けを自動化できる唯一の手段のため）。commit body と、PR
-> description のそれ以外の箇所では引き続き closing keyword を書かない。issue の
-> close は `/issue-close` で明示的に行う。
+> （PR↔Issue の紐付けを自動化できる唯一の手段のため）。commit body（merge commit
+> message を含む）と、PR description のそれ以外の箇所では引き続き closing keyword
+> を書かない。issue の close は `/issue-close` で明示的に行う。
 >
 > 当該設定を無効化していないリポジトリで kaji を運用する場合は、PR description に
 > ついても従来どおり回避規約を適用すること。規約の正本は
@@ -215,7 +218,7 @@ kaji sync status            # forge=github / repo=<owner>/<name> / cached=<N>
 
 ### 4.5 commit / PR description の `Fix #<N>` が無関係 GitHub issue を auto close
 
-GitHub の closing keyword（`Closes` / `Fix(es|ed)` / `Resolves` 等 + `#<N>`）は、リポジトリ設定 **Auto-close issues with merged linked pull requests** が有効な場合、default branch への merge で当該 issue を自動 close する（[公式](https://docs.github.com/en/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue#linking-a-pull-request-to-an-issue-using-a-keyword)）。apokamo/kaji では同設定を無効化しており、kaji が生成する live closing keyword は `/i-pr` の `Closes <issue_ref>` 行 1 件のみ。それ以外の match（commit body / PR description の他の箇所）は hazard として placeholder 化する。grep 手順と placeholder 規約は [docs/dev/shared_skill_rules.md § auto close keyword 回避](../dev/shared_skill_rules.md#auto-close-keyword-回避) を参照。
+GitHub の closing keyword（`Closes` / `Fix(es|ed)` / `Resolves` 等 + `#<N>`）は当該 issue を自動 close する。経路は 2 つあり、**PR description 経由**（merge 時に close。リポジトリ設定 **Auto-close issues with merged linked pull requests** を無効化すると抑止される）と、**commit message 経由**（commit が default branch に到達した時点で close。同設定がカバーする保証はない）である（[公式](https://docs.github.com/en/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue#linking-a-pull-request-to-an-issue-using-a-keyword)）。apokamo/kaji では同設定を無効化しており、kaji が生成する live closing keyword は `/i-pr` の `Closes <issue_ref>` 行 1 件のみ。それ以外の match（commit body / PR description の他の箇所）は hazard として placeholder 化する。grep 手順と placeholder 規約は [docs/dev/shared_skill_rules.md § auto close keyword 回避](../dev/shared_skill_rules.md#auto-close-keyword-回避) を参照。
 
 意図せず close された場合は `gh issue reopen <N> --repo <owner>/<repo>` で reopen し、当該リポジトリ設定が無効のままかを確認する。
 

@@ -249,8 +249,11 @@ fi
 > で流用する場合も同設定の無効化が前提となる。
 > 規約の正本: [`docs/dev/shared_skill_rules.md`](../../../docs/dev/shared_skill_rules.md) § auto close keyword 回避
 >
-> なお **commit body 側の closing keyword 回避規約は維持** される。`Closes` +
-> `#` + 番号を書いてよいのは PR description のこの 1 行のみ。
+> なお当該設定が抑止するのは **linked PR 経由の auto-close のみ**。commit message
+> 経由（commit が default branch に到達した時点で close される別経路）はカバー対象
+> と保証されないため、**commit body / merge commit message 側の closing keyword
+> 回避規約は維持** される。`Closes` + `#` + 番号を書いてよいのは PR description の
+> この 1 行のみ。
 
 > **マージ規約**: kaji の merge 規約は `--no-ff` only（squash merge 禁止）。マージ自体は `/issue-close` の責務だが、PR タイトルとコミットは Conventional Commits に従うこと（`docs/guides/git-commit-flow.md` 参照）。
 

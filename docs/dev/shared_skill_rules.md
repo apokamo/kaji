@@ -140,9 +140,11 @@ keyword 表記の工夫では達成できず、後述のリポジトリ設定で
 - 上記 1 行を **例外**とし、PR description のそれ以外の箇所（Summary / Changes /
   Test Plan 本文など）では、後述の共通規約どおり close keyword + `#N` 表記を
   書かない。
-- **commit body 側の回避規約は維持する**（次節）。当該リポジトリ設定が commit
-  message 経由の auto-close（default branch への push / merge 時）までカバー
-  するかは仕様上明確でないため、保守的防御として残す。
+- **commit body 側（merge commit message を含む）の回避規約は維持する**（次節）。
+  GitHub の auto-close には linked PR 経由と commit message 経由の 2 経路があり、
+  当該リポジトリ設定が抑止するのは前者のみ。commit message 経由（commit が default
+  branch に到達した時点で close される経路）をカバーする保証はないため、回避規約を
+  残す。
 
 ### 共通規約（仕様準拠 / 必須）
 
