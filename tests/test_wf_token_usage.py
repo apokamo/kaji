@@ -607,6 +607,33 @@ def test_cli_rejects_traversal_before_config_or_artifact_scan(
 
 
 @pytest.mark.medium
+def test_cli_reports_missing_config_as_exit_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = wf.main(["325"])
+
+    assert exit_code == 2
+    assert "configuration failed" in capsys.readouterr().err
+
+
+@pytest.mark.medium
+def test_cli_reports_malformed_config_as_exit_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = tmp_path / ".kaji/config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text("[paths\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = wf.main(["325"])
+
+    assert exit_code == 2
+    assert "configuration failed" in capsys.readouterr().err
+
+
+@pytest.mark.medium
 def test_run_and_step_filters_and_missing_paths(
     artifact_fixture: tuple[Path, Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:

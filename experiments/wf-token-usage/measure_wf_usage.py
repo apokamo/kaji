@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from kaji_harness.artifacts import resolve_artifacts_dir
 from kaji_harness.config import KajiConfig
+from kaji_harness.errors import HarnessError
 
 IssueId = Annotated[str, Field(pattern=r"^(?:[0-9]+|local-[a-z0-9][a-z0-9-]*)$")]
 RunId = Annotated[str, Field(pattern=r"^[0-9]+$")]
@@ -792,6 +793,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         config = KajiConfig.discover()
         artifacts_dir = resolve_artifacts_dir(config)
+    except (HarnessError, OSError) as error:
+        print(f"configuration failed: {error}", file=sys.stderr)
+        return 2
+    try:
         payload = measure(query, artifacts_dir)
     except (MeasurementError, OSError) as error:
         print(f"measurement failed: {error}", file=sys.stderr)
