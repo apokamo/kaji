@@ -65,8 +65,8 @@ steps:
 
   - id: doc-update
     skill: i-doc-update
-    agent: claude
-    model: fable
+    agent: codex
+    model: gpt-5.6-sol
     effort: high
     on:
       PASS: doc-review
@@ -74,8 +74,8 @@ steps:
 
   - id: doc-review
     skill: i-doc-review
-    agent: codex
-    model: gpt-5.6-sol
+    agent: claude
+    model: fable
     effort: high
     on:
       PASS: final-check
@@ -84,8 +84,8 @@ steps:
 
   - id: doc-fix
     skill: i-doc-fix
-    agent: claude
-    model: fable
+    agent: codex
+    model: gpt-5.6-sol
     effort: high
     resume: doc-update
     on:
@@ -94,9 +94,9 @@ steps:
 
   - id: doc-verify
     skill: i-doc-verify
-    agent: codex
-    model: gpt-5.6-sol
-    effort: medium
+    agent: claude
+    model: fable
+    effort: high
     resume: doc-review
     on:
       PASS: final-check
@@ -107,7 +107,7 @@ steps:
     skill: i-doc-final-check
     agent: codex
     model: gpt-5.6-sol
-    effort: high
+    effort: medium
     on:
       PASS: pr
       RETRY: final-check
