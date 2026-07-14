@@ -82,8 +82,11 @@ flowchart TB
 
 - リンク、参照パス、コマンド例の整合確認（`make verify-docs`。検査対象には root `AGENTS.md` も含まれる）
 - 現行実装・CLI・運用方針との整合確認
-- docs-only の完了条件確認
+- 事後確認を除く docs-only の workflow 内完了条件確認
 - Issue 本文・コメントの状態更新
+
+未完了の `### ワークフロー完了後の確認項目` は final-check の PASS 判定と本文更新から
+除外し、`issue-close` が follow-up Issue へ移管する。
 
 `make check`（`ruff` / `mypy` / `pytest`）は docs-only final-check の必須条件ではない。docs だけが対象であれば `make verify-docs` の通過で十分。ただし `.claude/skills/` 配下に Python テストが連動するケースなど、影響範囲が docs を超える兆候があれば dev workflow への切り替えを検討する。
 
