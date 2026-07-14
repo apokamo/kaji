@@ -50,3 +50,14 @@ docs 更新要否を各フェーズで判断するための基準。
 ## 設計書「影響ドキュメント」テーブルとの関係
 
 設計書に記載された「影響ドキュメント」テーブルは設計時点の予測。`/i-dev-final-check` では実装後の実際の変更内容に基づいて最終確定する。
+
+## Quickref と正本の同期
+
+quickref は、毎回必要な最小規律と「状況 → 正本セクション」のポインタに限定し、詳細規則・例外・閾値の正本にしない。
+
+- 正本 docs の見出し、パス、規範、コマンドが変わる変更では、参照する quickref の pointer と最小規律も同じ変更で監査する
+- quickref の規範的記述を変更する場合は、対応する正本 docs を先に更新し、quickref を追従させる
+- 同じ規則本文を quickref と正本へ複製しない。短い不変条件と読込タイミングだけを quickref に置く
+- link check に加え、pointer が意図した正本セクションを指すことをレビューで確認する
+
+現行の実装用 quickref は [implement-quickref.md](./implement-quickref.md)。同期責務は `/issue-implement`、`/issue-review-code`、`/i-dev-final-check` に関わる docs または skill を変更する担当者が負う。
