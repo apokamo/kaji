@@ -84,8 +84,8 @@ $ARGUMENTS = <issue_id>
 - one-way door の真の未決、または source of truth 間の未解決な矛盾は `ABORT`
 - 人間決定は存在するが、本文への参照・記述が不足しているだけなら `RETRY`
 
-公開 CLI/API、永続化 schema、migration、運用、非互換変更、ユーザー価値、
-source of truth 指定は one-way door になりやすい代表軸であり、網羅リストではない。
+one-way door になりやすい代表軸は、同正本の「one-way door になりやすい判断軸」を
+参照する。個別項目を本 skill に複製せず、可逆性で判定する。
 
 ### type 別追加観点
 
@@ -173,7 +173,7 @@ kaji issue view [issue_id] --json labels --jq '[.labels[].name] | map(select(sta
 
 ```bash
 kaji issue view [issue_id] --json title,body,labels,comments \
-  --jq '{title: .title, body: .body, labels: [.labels[].name], comments: [.comments[] | {author: .author.login, body: .body}]}'
+  --jq '{title: .title, body: .body, labels: [.labels[].name], comments: [.comments[] | {author: (.author.login? // .author), body: .body}]}'
 ```
 
 取得した本文と人間のコメントを以降のステップで分析する。コメントが AI / bot の出力か

@@ -235,8 +235,8 @@ kaji issue view [issue_id] --json labels --jq '[.labels[].name] | map(select(sta
 2. 設計が人間決定の範囲内を詳細化しており、判断自体を上書き・弱化していないか
 3. source of truth を人間の確認なしに参考資料へ格下げしていないか
 4. AI の仮定が明示され、two-way door であり、根拠と後段の検査先を持つか
-5. 公開 CLI/API、永続化 schema、migration、運用、非互換変更、ユーザー価値などの
-   one-way door を AI が自己解釈で埋めていないか
+5. 同正本の「one-way door になりやすい判断軸」を参照し、代表軸の未決を AI が
+   自己解釈で埋めていないか
 
 判定は次のとおり。
 
