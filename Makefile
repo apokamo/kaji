@@ -1,7 +1,7 @@
 .PHONY: check lint format fmt typecheck test test-small test-medium test-large \
         test-large-local verify-docs verify-packaging setup help
 
-SOURCES := kaji_harness/ tests/
+SOURCES := kaji_harness/ tests/ experiments/
 
 check: lint format typecheck test
 
