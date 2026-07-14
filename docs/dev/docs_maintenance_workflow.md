@@ -67,6 +67,9 @@ flowchart TB
 - コード、設定、テストは変更しない
 - 事実確認のための read / search / コマンド実行は許可
 - docs だけでは安全に吸収できない問題は ABORT し、dev workflow への切り替えを提案
+- 共通の `issue-review-ready` では、人間が指定した source of truth と重要方針を保持し、
+  one-way door の未決を着手前に `ABORT` する。判定の正本は
+  [critical-decision-checklist.md](../../.claude/skills/_shared/critical-decision-checklist.md)
 
 ## 整合性監査の観点
 

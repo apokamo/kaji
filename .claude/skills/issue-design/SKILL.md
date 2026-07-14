@@ -49,8 +49,9 @@ $ARGUMENTS = <issue_id>
 ### 共通（常に読み込む）
 
 1. **開発ワークフロー**: `docs/dev/development_workflow.md`
-2. **テスト規約**: `docs/dev/testing-convention.md`
-3. **コーディング規約**: `docs/reference/python/python-style.md`
+2. **重要判断チェックリスト**: `.claude/skills/_shared/critical-decision-checklist.md`
+3. **テスト規約**: `docs/dev/testing-convention.md`
+4. **コーディング規約**: `docs/reference/python/python-style.md`
    - 必要に応じて `docs/reference/python/naming-conventions.md` /
      `type-hints.md` / `docstring-style.md` / `error-handling.md` /
      `logging.md` を追加読込
@@ -69,6 +70,12 @@ $ARGUMENTS = <issue_id>
 | **Primary Sources** | 一次情報（公式ドキュメント等）のURL/パスを必ず記載 |
 | **API仕様** | 公式リンク参照（コピペ禁止） |
 | **Test Strategy** | ID羅列ではなく検証観点を言語化 |
+| **Decision Provenance** | 人間決定の出典、AI の仮定、設計で行った詳細化を分離 |
+
+本フェーズは重要方針を新たに決める場ではなく、**決定済み方針を実装可能な粒度へ
+詳細化する場**である。詳細化と未決事項の境界は
+[_shared/critical-decision-checklist.md](../_shared/critical-decision-checklist.md)
+の可逆性基準で判定する。
 
 ### 一次情報のアクセス可能性ルール
 
@@ -85,6 +92,7 @@ $ARGUMENTS = <issue_id>
 ## 共通ルール
 
 - [_shared/report-unrelated-issues.md](../_shared/report-unrelated-issues.md) — 作業中に発見した無関係な問題の報告ルール
+- [_shared/critical-decision-checklist.md](../_shared/critical-decision-checklist.md) — 人間の重要判断、AI の仮定、one-way door の分類と停止条件の正本
 
 ## 実行手順
 
@@ -121,6 +129,29 @@ kaji issue view [issue_id] --json labels --jq '[.labels[].name] | map(select(sta
 | canonical 外 | `.claude/skills/_shared/design-by-type/feat.md`（フォールバック） |
 
 読み込んだ type 別ガイドは、Step 2 の設計書セクション構成・必須項目・テスト戦略の判断基準として使う。
+
+### Step 1.55: 重要判断の分類と停止判定
+
+Issue 本文・人間の Issue コメント・指定された source of truth を読み、
+`_shared/critical-decision-checklist.md` に従って判断を次の 3 種類に分類する。
+
+1. 決定済み方針の詳細化
+2. two-way door の未決
+3. one-way door の未決
+
+既存設計書がある場合は、その「重要判断 provenance」も入力に含める。人間が source of
+truth と指定した資料を、設計上の都合で上書き・弱化・参考資料へ格下げしない。一次情報
+同士が矛盾し、優先順位が人間未決なら AI が選択しない。
+
+- 分類 1: 出典と決定範囲を特定し、Step 2 で範囲内の詳細化を記録する
+- 分類 2: AI の仮定、根拠、後段の検査先を特定し、Step 2 で記録して進む
+- 分類 3: Step 2 以降へ進まず `ABORT`。`suggestion` に決めるべき項目、競合する
+  選択肢・情報源、再開条件を列挙する
+
+公開 CLI/API、永続化 schema、migration、運用、非互換変更、ユーザー価値、source of
+truth 指定は分類 3 になりやすい代表軸だが、項目名ではなく「誤ったときに後段で安く
+直せるか」で判定する。人間決定は存在し、参照や書式が不足しているだけなら、設計書で
+provenance を補完して進めてよい。
 
 ### Step 1.6: BACK 経由再起動の検出と分岐
 
@@ -410,6 +441,15 @@ Issue: [issue_ref]
 
 (実装の大まかな方針。疑似コードOK)
 
+## 重要判断 provenance
+
+| 判断 | 方針 | 出典または仮定 | 設計で行った詳細化 |
+|------|------|----------------|--------------------|
+| (後段で独立に検査できる判断) | (採用方針) | (Issue 本文/人間コメント/既存契約、または「AI の仮定」+ 根拠 + 後段の検査先) | (決定範囲内で具体化した内容) |
+
+> 重要判断がない場合も省略せず、「該当なし」と確認根拠を記載する。
+> source of truth の格下げ、出典のない one-way door、AI 仮定の人間決定への偽装は禁止。
+
 ## テスト戦略
 
 > **CRITICAL**: 変更タイプに応じて妥当な検証方針を定義すること。
@@ -477,6 +517,7 @@ Issue: [issue_ref]
    - [ ] インターフェース（入力・出力）
    - [ ] 制約・前提条件
    - [ ] 方針
+   - [ ] 重要判断 provenance
    - [ ] テスト戦略（変更タイプに応じたセクション）
    - [ ] 影響ドキュメント
    - [ ] 参照情報（Primary Sources）
@@ -484,6 +525,8 @@ Issue: [issue_ref]
 2. **内容の妥当性確認**:
    - テスト戦略が変更タイプに対して妥当か
    - Primary Sources に根拠が記載されているか
+   - 重要判断 provenance で人間決定の出典、AI の仮定、設計で行った詳細化が分離されているか
+   - source of truth の格下げや one-way door の自己解釈がないか
    - 影響ドキュメントが網羅的か
 
 3. **Issue 完了条件の段階確認**:
@@ -525,10 +568,15 @@ Issue: [issue_ref]
    - 3. 信頼性とエッジケース（Source of Truth / Error Handling / 一次情報との乖離）
    - 4. 検証可能性（テストサイズ別検証観点 / `docs/dev/testing-convention.md` の 4 条件マッピング / 不正当な省略理由の排除）
    - 5. 影響ドキュメント
+4. **重要判断と provenance**
+   - `_shared/critical-decision-checklist.md` の 3 分類と可逆性基準に従っているか
+   - 人間決定の出典と AI の仮定が区別され、仮定に後段の検査先があるか
+   - source of truth を上書き・弱化・格下げしていないか
+   - one-way door の未決が見つかった場合は handoff せず `ABORT` する
 
 #### Self-Check の実施手順
 
-1. 上記 3 節を順に Read する
+1. 上記 4 節を順に Read する
 2. 設計書を読み直し、各節の checklist 項目に対する充足度を内部で評価する
 3. 不足が見つかったら **Step 3 に進む前に設計書を補完** する（補完後、本 Step 2.6 を再実行）
 4. 結果（節ごとの判定と不足の有無）を Step 4 の Issue コメント `## Self-Check 結果` セクションに転記する
@@ -540,15 +588,19 @@ Issue: [issue_ref]
 
 - **経路**: main-session self-check
 - **対象 commit**: <git-sha>
-- **参照 rubric**: `/issue-review-design` SKILL.md Step 1.5 / Step 2 § type 重み付け / Step 2 § レビュー基準 1〜5
+- **参照 rubric**: `/issue-review-design` SKILL.md Step 1.5 / Step 2 § type 重み付け / Step 2 § 重要判断 audit / Step 2 § レビュー基準 1〜5
 
-### Step 1.5: Gate Check（一次情報）
+### Step 1.5: Gate Check（一次情報・provenance）
 - 判定: ✅ / ⚠️ / ❌
 - 根拠: 設計書「参照情報（Primary Sources）」セクションの状態
 
 ### Step 2 § type 重み付け（type: <採用 type>）
 - 判定: ✅ / ⚠️ / ❌
 - 根拠: 重点観点との整合
+
+### Step 2 § 重要判断 audit
+- 判定: ✅ / ⚠️ / ❌
+- 根拠: provenance、人間決定、AI 仮定、source of truth の確認結果
 
 ### Step 2 § レビュー基準 1〜5
 - 1. 抽象化と責務の分離: ✅ / ⚠️ / ❌
@@ -597,6 +649,10 @@ kaji issue comment [issue_id] --commit \
 1. **What**: (何を実現するか)
 2. **Why**: (なぜこの設計か)
 3. **Constraints**: (主な制約)
+
+### 重要判断 provenance
+
+- (人間決定の出典、AI の仮定と検査先、設計で行った詳細化の要点)
 
 ### テスト戦略
 
@@ -660,6 +716,9 @@ suggestion: |
 | status | 条件 |
 |--------|------|
 | PASS | 設計書作成・コミット完了、または BACK 経由再起動時の設計再確認完了（Step 1.6 / 1.7）|
-| ABORT | 以下のいずれか: (a) Issue 要件が論理的に破綻しており、設計レベルで実現不能 / (b) BACK 経由再起動だが、指摘内容が設計レビュー観点で根本的に修正不能（例: 一次情報そのものが消失、要件の前提が崩壊）|
+| ABORT | 以下のいずれか: (a) one-way door が人間未決、または source of truth 間の優先順位が未決 / (b) Issue 要件が論理的に破綻しており、設計レベルで実現不能 / (c) BACK 経由再起動だが、指摘内容が設計レビュー観点で根本的に修正不能（例: 一次情報そのものが消失、要件の前提が崩壊）|
+
+one-way door の `ABORT` では、`suggestion` に人間が決める項目、競合する選択肢・
+情報源、再開条件を具体的に列挙する。設計 agent が妥当そうな方針を選んで続行しない。
 
 > **重要**: 「既に implementation commit がある」「BACK 経由で再起動された」ことそれ自体は `ABORT` 条件に **含めない**。BACK 経由再起動は workflow YAML 仕様上の正当な遷移であり、Step 1.6 / 1.7 で `PASS` 復帰させる（`docs/dev/workflow-authoring.md:130` の `BACK = 差し戻し。前段ステップを再実行` 定義との整合）。
