@@ -92,8 +92,24 @@ gh pr merge --merge --delete-branch
 
 `--merge` オプションにより merge commit が作成され、`--no-ff` と同等のブランチ構造が維持される。
 
-PR description（または merge 後の commit message）に `Closes #N` 等を記載すると、
-GitHub の auto-close により merge 時に対応 Issue が自動 close される。
+PR description（または merge 後の commit message）に `Closes #<N>` 等の closing
+keyword を記載すると、GitHub の **既定設定では** merge 時に対応 Issue が自動 close
+される。
+
+本リポジトリ（apokamo/kaji）はリポジトリ設定
+**Auto-close issues with merged linked pull requests**（Settings → General →
+Features → Issues）を無効化しているため、この既定挙動は発生しない。この前提のもとで:
+
+- **PR description**: `/i-pr` が生成する `Closes <issue_ref>` 行 **1 行のみ**を
+  許可（かつ必須）とする。PR と Issue の紐付け（linked PR 表示）を自動化できる
+  唯一の手段であるため。Issue の close は `/issue-close` で明示的に行う
+- **commit body**: closing keyword + `#` + 番号の表記は **引き続き禁止**
+  （repo 設定が commit message 経由の auto-close をカバーするか不明確なため、
+  保守的防御として維持する）
+
+規約の正本と grep 手順は
+[docs/dev/shared_skill_rules.md § auto close keyword 回避](../dev/shared_skill_rules.md#auto-close-keyword-回避)
+を参照。
 
 #### PR レビュー指摘対応（pr-fix の流れ）
 
