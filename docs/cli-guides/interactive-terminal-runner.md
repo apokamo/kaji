@@ -43,7 +43,10 @@ workflows and CI behavior do not change.
 - **Run `kaji run` inside a tmux session**. The runner checks `$TMUX` and fails
   fast as a step failure when it is unset. There is no automatic fallback or
   search for another terminal. Use `--agent-runner headless` if you want to run
-  outside tmux.
+  outside tmux. This failure is treated as a known user precondition error and
+  never opens an incident Issue (the triage comment and run artifacts are kept;
+  Issue #322 / [failure-recovery.md](./failure-recovery.md) § Incident recording
+  exemption).
 - `$TMUX_PANE` must be set (it is used as the `split -t` target and is set
   automatically inside a tmux pane).
 - `tmux` (**>= 3.1**) must be on PATH. Kaji identifies managed panes through

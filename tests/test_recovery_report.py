@@ -12,6 +12,7 @@ import pytest
 
 from kaji_harness.recovery.models import FailureClassification, RecoveryDecision
 from kaji_harness.recovery.report import (
+    _CAUSE_DESCRIPTIONS,
     EVIDENCE_LIMIT,
     mask_secrets,
     render_stderr_summary,
@@ -146,6 +147,27 @@ def test_triage_comment_cycle_exhausted_offers_reset_cycle() -> None:
     body = render_triage_comment(decision=decision, issue_ref="#288")
     assert "--reset-cycle" in body
     assert "| resume_command | `n/a` |" in body
+
+
+def test_triage_comment_renders_user_precondition_error_cause() -> None:
+    # Issue #322: 新 cause の説明文が欠けると render_triage_comment が KeyError で落ちる。
+    decision = _decision(
+        decision="not_resumable",
+        recoverable=False,
+        resume_command=None,
+        resume_scheduled_at=None,
+        classification=FailureClassification(
+            cause="user_precondition_error",
+            synthetic=True,
+            source="config",
+            recoverability_hint="no",
+        ),
+    )
+    body = render_triage_comment(decision=decision, issue_ref="#288")
+    assert "| classification | `user_precondition_error` |" in body
+    # 固定説明文（incident 起票の対象外である旨）がそのまま載る。
+    assert _CAUSE_DESCRIPTIONS["user_precondition_error"] in body
+    assert "incident 起票の対象外" in _CAUSE_DESCRIPTIONS["user_precondition_error"]
 
 
 def test_triage_comment_masks_credentials_in_evidence() -> None:

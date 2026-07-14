@@ -134,15 +134,34 @@ The existing map (`0 = OK`, `1 = ABORT`, `2 = definition error`, `3 = runtime er
 
 | Path | Content |
 |------|---------|
-| `runs/<run_id>/recovery.json` | `RecoveryDecision` (`schema_version: 1`), overwritten on every decision update |
+| `runs/<run_id>/recovery.json` | `RecoveryDecision` (`schema_version: 1`), overwritten on every decision update. Carries `incident_suppressed` / `incident_suppression_reason` when incident recording was skipped (Issue #322) |
 | `runs/<run_id>/recovery-chain.json` | `{root_run_id, parent_run_id}`, written by a recovery child run at startup |
-| `runs/<run_id>/run.log` | `failure_event`, `recovery_decision`, `recovery_scheduled`, `recovery_attempt_start`, `recovery_attempt_end` |
+| `runs/<run_id>/run.log` | `failure_event`, `recovery_decision`, `recovery_scheduled`, `recovery_attempt_start`, `recovery_attempt_end`, `incident_recorded`, `incident_recording_failed`, `incident_suppressed` |
+| `incidents/occurrences.jsonl` | Local occurrence log of the incident layer (directly under `<artifacts_dir>`, append-only). One line per failure for every provider, **except for the exempted causes below** |
 | Issue comment | Machine-generated triage report (posted before the child launch) plus a follow-up result comment when an auto recovery ran. No kaji-verdict marker (it is not a step verdict) |
 | stderr | A short `--- failure triage ---` summary printed after the existing terminal message |
 
 The `comment:` line of the stderr summary shows `Comment.ref`: the created comment URL for the
 GitHub provider, the repo-root-relative comment file path for the local provider, and `n/a` when the
 reference could not be captured.
+
+### Incident recording exemption (Issue #322)
+
+Failures classified as `user_precondition_error` never enter the incident layer: no incident Issue
+is opened, no occurrence comment is posted, and nothing is appended to `incidents/occurrences.jsonl`.
+These are known user precondition mistakes that need no investigation, and promoting them to
+incidents would drown out the real failure signal.
+
+Today exactly one case qualifies: `TmuxSessionRequiredError`, raised when the interactive terminal
+runner is started outside a tmux session. The decision keys off the exception type name recorded in
+`failure_event.exception_type`, never off the raw error message. A missing tmux binary, an
+insufficient tmux version, a missing `TMUX_PANE`, and every other `CLINotFoundError` keep their
+existing incident recording behavior.
+
+Even when incident recording is suppressed, the console error, the run artifacts, and the triage
+comment on the originating Issue are all preserved. The suppression itself is auditable from the
+`incident_suppressed` event in `run.log` (`cause` / `exception_type` / `failed_step` / `reason`) and
+from the two `recovery.json` fields above.
 
 ## Related documents
 

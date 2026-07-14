@@ -65,6 +65,11 @@ _CAUSE_DESCRIPTIONS: dict[str, str] = {
         "外部 CLI / provider 由来と判別できるが、既知 pattern に一致しない opaque な"
         "エラーで終了した。解釈せずエラー文字列をそのまま引用する。"
     ),
+    "user_precondition_error": (
+        "実行前提を満たさない状態で run を起動した（既知のユーザー操作ミス）。"
+        "原因と対処はエラー文に含まれており、障害調査を要さないため incident 起票の"
+        "対象外とする。前提を満たして再実行すれば解消する。"
+    ),
     "external_upstream_anomaly": "外部 upstream の異常（予約分類）。",
 }
 

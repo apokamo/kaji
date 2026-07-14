@@ -30,6 +30,10 @@ _DEFINITION_EXCEPTIONS = frozenset(
     }
 )
 
+#: 調査を要さない既知のユーザー前提エラー（Issue #322）。incident 記録の対象外になる。
+#: live class ではなく ``run.log`` に記録された型名文字列で判定する（既存 2 集合と同じ設計）。
+_USER_PRECONDITION_EXCEPTIONS = frozenset({"TmuxSessionRequiredError"})
+
 #: verdict 解決失敗のうち、新セッションでの再実行に意味がある例外。
 _RECOVERABLE_VERDICT_EXCEPTIONS = frozenset({"VerdictNotFound", "VerdictParseError"})
 
@@ -72,6 +76,15 @@ def _detect_contradiction(snapshot: FailureSnapshot) -> bool:
 def _classify_dispatch(
     snapshot: FailureSnapshot, exception_type: str | None
 ) -> FailureClassification:
+    if exception_type in _USER_PRECONDITION_EXCEPTIONS:
+        # ``CLINotFoundError`` のサブクラスだが、原因と対処が確定している操作ミスであり、
+        # dispatch が壊れたわけではない。判定は型名のみで、message には依存しない。
+        return FailureClassification(
+            cause="user_precondition_error",
+            synthetic=True,
+            source="config",
+            recoverability_hint="no",
+        )
     if exception_type not in _DISPATCH_EXCEPTIONS:
         # runner の except 節が捕捉しない型が記録された = 解釈不能な外部エラー。
         return FailureClassification(

@@ -20,7 +20,12 @@ from unittest.mock import patch
 import pytest
 
 from kaji_harness.cli import _TRANSIENT_PATTERNS, is_transient_error_text
-from kaji_harness.errors import CLIExecutionError, CLINotFoundError, StepTimeoutError
+from kaji_harness.errors import (
+    CLIExecutionError,
+    CLINotFoundError,
+    StepTimeoutError,
+    TmuxSessionRequiredError,
+)
 from kaji_harness.interactive_terminal import (
     KajiAgentPane,
     _build_tmux_split_argv,
@@ -194,7 +199,7 @@ class TestRunnerEntryValidation:
         prompt = tmp_path / "prompt.txt"
         prompt.write_text("prompt", encoding="utf-8")
         with patch("kaji_harness.interactive_terminal.shutil.which", return_value=None):
-            with pytest.raises(CLINotFoundError, match="tmux"):
+            with pytest.raises(CLINotFoundError, match="tmux") as excinfo:
                 execute_interactive_terminal(
                     step=_step("claude"),
                     prompt_path=prompt,
@@ -202,6 +207,8 @@ class TestRunnerEntryValidation:
                     workdir=tmp_path,
                     timeout=5,
                 )
+        # Issue #322: tmux 未インストールは incident 記録の対象を維持する（新型ではない）。
+        assert not isinstance(excinfo.value, TmuxSessionRequiredError)
 
     def test_requires_running_inside_tmux(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -211,7 +218,7 @@ class TestRunnerEntryValidation:
         monkeypatch.delenv("TMUX", raising=False)
         monkeypatch.delenv("TMUX_PANE", raising=False)
         with patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"):
-            with pytest.raises(CLINotFoundError, match="inside tmux"):
+            with pytest.raises(TmuxSessionRequiredError) as excinfo:
                 execute_interactive_terminal(
                     step=_step("claude"),
                     prompt_path=prompt,
@@ -219,6 +226,12 @@ class TestRunnerEntryValidation:
                     workdir=tmp_path,
                     timeout=5,
                 )
+        # runner の dispatch except は CLINotFoundError を捕捉する。捕捉契約を壊さないこと。
+        assert isinstance(excinfo.value, CLINotFoundError)
+        assert str(excinfo.value) == (
+            "interactive terminal runner requires tmux. Run `kaji run` inside tmux "
+            "or use agent_runner='headless'."
+        )
 
     def test_requires_tmux_pane(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         prompt = tmp_path / "prompt.txt"
@@ -226,7 +239,7 @@ class TestRunnerEntryValidation:
         monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
         monkeypatch.delenv("TMUX_PANE", raising=False)
         with patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"):
-            with pytest.raises(CLINotFoundError, match="TMUX_PANE"):
+            with pytest.raises(CLINotFoundError, match="TMUX_PANE") as excinfo:
                 execute_interactive_terminal(
                     step=_step("claude"),
                     prompt_path=prompt,
@@ -234,6 +247,8 @@ class TestRunnerEntryValidation:
                     workdir=tmp_path,
                     timeout=5,
                 )
+        # Issue #322: TMUX_PANE 欠落は tmux session 内の異常であり、除外対象外。
+        assert not isinstance(excinfo.value, TmuxSessionRequiredError)
 
     @pytest.mark.parametrize("version", ["tmux 2.9\n", "tmux 3.0\n"])
     def test_tmux_version_below_minimum_fails_loud(
@@ -253,7 +268,7 @@ class TestRunnerEntryValidation:
             patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
             patch.object(subprocess, "run", side_effect=fake_run),
         ):
-            with pytest.raises(CLINotFoundError, match="tmux >= 3.1"):
+            with pytest.raises(CLINotFoundError, match="tmux >= 3.1") as excinfo:
                 execute_interactive_terminal(
                     step=_step("claude"),
                     prompt_path=prompt,
@@ -261,6 +276,8 @@ class TestRunnerEntryValidation:
                     workdir=tmp_path,
                     timeout=5,
                 )
+        # Issue #322: tmux バージョン不足は incident 記録の対象を維持する（新型ではない）。
+        assert not isinstance(excinfo.value, TmuxSessionRequiredError)
 
     def test_tmux_3_1_passes_version_check(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -48,6 +48,8 @@ from .incident import (
     read_occurrences,
 )
 from .models import (
+    INCIDENT_EXEMPT_CAUSES,
+    INCIDENT_SUPPRESSION_REASONS,
     NON_RESUMABLE_STEPS,
     RECOVERY_BUDGET,
     RECOVERY_FILE,
@@ -463,9 +465,26 @@ class RecoveryHandler:
 
         いかなる例外も外へ漏らさない。失敗時は ``incident_recording_failed`` を run.log に
         記録し、stderr WARNING を出して triage / recovery 判断をそのまま続行する。ローカル
-        occurrence 記録は全 provider・全失敗で必ず append する（GitHub 起票の成否と無関係）。
+        occurrence 記録は ``INCIDENT_EXEMPT_CAUSES`` を除く全 provider・全失敗で必ず append
+        する（GitHub 起票の成否と無関係）。
         """
         try:
+            # Issue #322: 調査を要さない既知のユーザー前提エラーは incident 記録の対象外。
+            # ``append_occurrence`` より前に抜ける（occurrences.jsonl は backfill の入力でも
+            # あるため、1 行でも残すと後から incident を再生成しうる）。
+            if classification.cause in INCIDENT_EXEMPT_CAUSES:
+                reason = INCIDENT_SUPPRESSION_REASONS[classification.cause]
+                event = snapshot.failure_event
+                self._run_logger.log_incident_suppressed(
+                    cause=classification.cause,
+                    exception_type=event.exception_type if event is not None else None,
+                    failed_step=snapshot.failed_step,
+                    reason=reason,
+                )
+                return replace(
+                    decision, incident_suppressed=True, incident_suppression_reason=reason
+                )
+
             # 再入ガード: 過去の handler 実行で既に incident を記録済みならスキップする
             # （remote への二重投稿を避ける。``triage_comment_ref`` と同型のローカルガード）。
             # 新規 plan の decision は incident 系フィールドが None のため、そのまま返すと直後の

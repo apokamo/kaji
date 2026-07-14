@@ -260,6 +260,27 @@ class RunLogger:
             also_matched=list(also_matched),
         )
 
+    def log_incident_suppressed(
+        self,
+        *,
+        cause: str,
+        exception_type: str | None,
+        failed_step: str | None,
+        reason: str,
+    ) -> None:
+        """Issue #322: incident 記録を対象外として抑止したことを記録する。
+
+        ``cause`` は ``INCIDENT_EXEMPT_CAUSES`` の要素。``reason`` は cause ごとの固定文で、
+        抑止した事実と理由を run artifact だけで監査できるようにする。
+        """
+        self._write(
+            "incident_suppressed",
+            cause=cause,
+            exception_type=exception_type,
+            failed_step=failed_step,
+            reason=reason,
+        )
+
     def log_incident_recording_failed(self, exc: BaseException) -> None:
         """Issue #304: incident 記録が失敗した（fail-open で triage は続行）ことを記録する。"""
         self._write(

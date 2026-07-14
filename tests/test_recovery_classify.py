@@ -229,6 +229,28 @@ def test_dispatch_script_error_is_not_candidate() -> None:
     assert c.recoverability_hint == "no"
 
 
+def test_dispatch_tmux_session_required_is_user_precondition_error() -> None:
+    # Issue #322: tmux 外での interactive runner 起動は既知のユーザー前提エラー。
+    c = classify_failure(
+        _snapshot(
+            failure_event=FailureEvent(
+                kind="dispatch_exception",
+                step_id="review-ready",
+                exception_type="TmuxSessionRequiredError",
+            ),
+            failed_step="review-ready",
+            attempt_error=(
+                "interactive terminal runner requires tmux. Run `kaji run` inside tmux "
+                "or use agent_runner='headless'."
+            ),
+        )
+    )
+    assert c.cause == "user_precondition_error"
+    assert c.synthetic is True
+    assert c.source == "config"
+    assert c.recoverability_hint == "no"
+
+
 def test_dispatch_exception_with_unknown_type_is_opaque_external() -> None:
     c = classify_failure(
         _snapshot(
