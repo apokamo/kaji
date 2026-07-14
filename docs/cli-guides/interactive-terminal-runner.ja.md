@@ -32,7 +32,9 @@ agent を同一画面で並列に見られる。pane 配置は **初回のみ or
 
 - **tmux session 内で `kaji run` していること**。runner は `$TMUX` を検査し、未設定なら step
   failure として **fail-fast** する（自動 fallback / 他 terminal 探索はしない）。tmux 外で使いたい
-  場合は `--agent-runner headless` に戻す。
+  場合は `--agent-runner headless` に戻す。この失敗は既知のユーザー前提エラーとして扱われ、
+  インシデントイシューには起票されない（triage コメントと run artifact は従来どおり残る。
+  Issue #322 / [failure-recovery.ja.md](./failure-recovery.ja.md) § incident 記録の対象外）。
 - `$TMUX_PANE`（split の `-t` ターゲット）が設定されていること（tmux pane 内なら自動で入る）。
 - `tmux`（**>= 3.1**）が PATH にあること。kaji 管理 pane を識別する pane user option
   （`set-option -p @kaji_interactive_terminal`）が tmux 3.1 で追加されたため（Issue #238 で 3.0 から

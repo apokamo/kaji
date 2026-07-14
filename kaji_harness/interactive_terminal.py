@@ -41,7 +41,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .cli import find_high_confidence_sensitive_pattern, find_transient_pattern
-from .errors import CLIExecutionError, CLINotFoundError, StepTimeoutError
+from .errors import (
+    CLIExecutionError,
+    CLINotFoundError,
+    StepTimeoutError,
+    TmuxSessionRequiredError,
+)
 from .models import CLIResult, Step
 
 # Issue #235: 起動コンソール向け progress logger（kaji.* 名前空間）。
@@ -480,8 +485,15 @@ def _resolve_tmux() -> str:
 
 
 def _resolve_target_pane() -> str:
+    """現在の tmux pane を解決する。
+
+    Raises:
+        TmuxSessionRequiredError: tmux セッション外から起動された（``$TMUX`` 未設定）。
+            既知のユーザー前提エラーとして incident 記録の対象外になる（Issue #322）。
+        CLINotFoundError: tmux セッション内だが ``$TMUX_PANE`` が無い（tmux 側の異常）。
+    """
     if not os.environ.get("TMUX"):
-        raise CLINotFoundError(
+        raise TmuxSessionRequiredError(
             "interactive terminal runner requires tmux. Run `kaji run` inside tmux "
             "or use agent_runner='headless'."
         )

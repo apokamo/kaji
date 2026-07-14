@@ -192,6 +192,13 @@ triage コメント投稿の**直後**に、同じ失敗を「識別署名」で
 - **無効化**: 第1層は failure triage の内部ステップであり、`--no-failure-triage`
   （`[execution] failure_triage = false`）で triage ごと無効になる。「全失敗を例外なく記録」は
   triage が有効な失敗に対する契約。
+- **記録の対象外**（Issue #322）: 分類が `user_precondition_error` の失敗は、調査を要さない
+  既知のユーザー前提エラーとして incident 記録を行わない（新規起票・occurrence コメント・
+  `incidents/occurrences.jsonl` 追記のいずれもしない）。triage コメント・run artifact・console の
+  エラー表示は従来どおり維持し、抑止した事実と理由は `run.log` の `incident_suppressed` event で
+  監査できる。現時点で該当するのは「interactive terminal runner を tmux セッション外から起動した」
+  1 ケースのみ（`TmuxSessionRequiredError`）。tmux 未インストール・tmux バージョン不足・
+  `TMUX_PANE` 欠落・その他の `CLINotFoundError` は従来どおり incident 記録の対象。
 - ラベル 2 軸の意味と遷移意図は [incident-labels.md](./incident-labels.md) を参照。
 
 ### 第2層: 調査・提案（Issue #305）

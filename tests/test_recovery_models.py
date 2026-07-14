@@ -12,6 +12,8 @@ import pytest
 
 from kaji_harness.recovery.models import (
     FAILURE_CAUSES,
+    INCIDENT_EXEMPT_CAUSES,
+    INCIDENT_SUPPRESSION_REASONS,
     NON_RESUMABLE_STEPS,
     RECOVERY_BUDGET,
     RECOVERY_DECISIONS,
@@ -86,9 +88,51 @@ def test_failure_cause_domain() -> None:
             "kaji_bug_suspected",
             "runtime_error",
             "unknown_external_error",
+            "user_precondition_error",
             "external_upstream_anomaly",
         }
     )
+
+
+def test_incident_exempt_causes_is_limited_to_user_precondition_error() -> None:
+    # Issue #322: 除外集合は 1 要素に固定する（一般化は別 Issue で判断する）。
+    assert INCIDENT_EXEMPT_CAUSES == frozenset({"user_precondition_error"})
+    assert INCIDENT_EXEMPT_CAUSES <= FAILURE_CAUSES
+    assert set(INCIDENT_SUPPRESSION_REASONS) == set(INCIDENT_EXEMPT_CAUSES)
+    assert INCIDENT_SUPPRESSION_REASONS["user_precondition_error"]
+
+
+def test_user_precondition_classification_is_constructible() -> None:
+    c = FailureClassification(
+        cause="user_precondition_error",
+        synthetic=True,
+        source="config",
+        recoverability_hint="no",
+    )
+    assert FailureClassification.from_dict(c.to_dict()) == c
+
+
+def test_incident_suppression_fields_round_trip() -> None:
+    reason = INCIDENT_SUPPRESSION_REASONS["user_precondition_error"]
+    decision = _decision(
+        decision="not_resumable",
+        incident_suppressed=True,
+        incident_suppression_reason=reason,
+    )
+    data = decision.to_dict()
+    assert data["incident_suppressed"] is True
+    assert data["incident_suppression_reason"] == reason
+    assert RecoveryDecision.from_dict(data) == decision
+
+
+def test_incident_suppression_fields_default_when_absent_in_legacy_json() -> None:
+    # 既存 recovery.json（両 field 欠落）は既定値で読み戻せる（additive・optional）。
+    data = _decision().to_dict()
+    del data["incident_suppressed"]
+    del data["incident_suppression_reason"]
+    restored = RecoveryDecision.from_dict(data)
+    assert restored.incident_suppressed is False
+    assert restored.incident_suppression_reason is None
 
 
 def test_recovery_decision_domain() -> None:

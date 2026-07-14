@@ -39,6 +39,9 @@ FailureCause = Literal[
     "kaji_bug_suspected",
     "runtime_error",
     "unknown_external_error",
+    # Issue #322: 調査を要さない既知のユーザー前提エラー（tmux 外での interactive
+    # runner 起動）。incident 記録の対象外にする唯一の cause。
+    "user_precondition_error",
     # 予約値。セッション異常の機械判定は pure code では不可能なため初期 classifier は
     # emit しない（将来の深掘り調査 agent 導入時に使用）。
     "external_upstream_anomaly",
@@ -68,9 +71,23 @@ FAILURE_CAUSES: frozenset[str] = frozenset(
         "kaji_bug_suspected",
         "runtime_error",
         "unknown_external_error",
+        "user_precondition_error",
         "external_upstream_anomaly",
     }
 )
+
+#: incident 記録（新規起票 / 再発追記 / ローカル occurrence 追記）の対象外にする cause。
+#: triage コメント・run artifact・console 表示は維持する（Issue #322）。
+#: 他のユーザー操作ミス・設定ミスの一般化は scope 外であり、要素追加は別 Issue で判断する。
+INCIDENT_EXEMPT_CAUSES: frozenset[str] = frozenset({"user_precondition_error"})
+
+#: 抑止理由の固定文（``run.log`` の ``incident_suppressed`` event と ``recovery.json``）。
+INCIDENT_SUPPRESSION_REASONS: dict[str, str] = {
+    "user_precondition_error": (
+        "known user precondition error (interactive terminal runner requires a tmux "
+        "session); excluded from incident recording"
+    ),
+}
 
 FAILURE_SOURCES: frozenset[str] = frozenset({"runner", "agent", "external", "config"})
 RECOVERABILITY_HINTS: frozenset[str] = frozenset({"candidate", "no", "unknown"})
@@ -162,6 +179,9 @@ class RecoveryDecision:
     incident_ref: str | None = None
     incident_action: str | None = None
     incident_transient_closed: bool = False
+    # Issue #322: incident 記録を抑止した事実と理由（additive・optional）。
+    incident_suppressed: bool = False
+    incident_suppression_reason: str | None = None
     schema_version: int = RECOVERY_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -196,6 +216,8 @@ class RecoveryDecision:
             "incident_ref": self.incident_ref,
             "incident_action": self.incident_action,
             "incident_transient_closed": self.incident_transient_closed,
+            "incident_suppressed": self.incident_suppressed,
+            "incident_suppression_reason": self.incident_suppression_reason,
         }
 
     @classmethod
@@ -226,6 +248,8 @@ class RecoveryDecision:
             incident_ref=data.get("incident_ref"),
             incident_action=data.get("incident_action"),
             incident_transient_closed=bool(data.get("incident_transient_closed", False)),
+            incident_suppressed=bool(data.get("incident_suppressed", False)),
+            incident_suppression_reason=data.get("incident_suppression_reason"),
             schema_version=int(data.get("schema_version", RECOVERY_SCHEMA_VERSION)),
         )
 

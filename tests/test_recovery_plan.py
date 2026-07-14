@@ -273,6 +273,23 @@ def test_non_candidate_decision_mapping(
     assert d.recoverable is False
 
 
+def test_user_precondition_error_is_not_resumable() -> None:
+    # Issue #322: 新 cause は auto-resume 候補にしない（従来の挙動と同一の not_resumable）。
+    d = _plan(
+        _snapshot(
+            failure_event=FailureEvent(
+                kind="dispatch_exception",
+                step_id="review-code",
+                exception_type="TmuxSessionRequiredError",
+            ),
+            attempt_error="interactive terminal runner requires tmux.",
+        )
+    )
+    assert d.classification.cause == "user_precondition_error"
+    assert d.decision == "not_resumable"
+    assert d.recoverable is False
+
+
 def test_runtime_error_is_comment_only() -> None:
     d = _plan(
         _snapshot(

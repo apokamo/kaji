@@ -125,6 +125,8 @@ class _IncidentProvider:
         self.comments_posted: list[tuple[str, str]] = []
         self.edits: list[tuple[str, list[str], list[str]]] = []
         self.closed: list[tuple[str, str | None]] = []
+        self.searches: list[list[str]] = []
+        self.comment_lists: list[str] = []
         self._search_error = search_error
         self._next_id = 900
 
@@ -154,11 +156,13 @@ class _IncidentProvider:
         )
 
     def search_issues_all(self, *, labels: list[str], state: str = "all") -> list[Issue]:
+        self.searches.append(list(labels))
         if self._search_error is not None:
             raise self._search_error
         return list(self._issues)
 
     def list_issue_comments_all(self, issue_id: str) -> list[Comment]:
+        self.comment_lists.append(issue_id)
         return list(self._comments.get(issue_id, []))
 
     def edit_issue(
@@ -582,6 +586,117 @@ def test_recurred_incident_is_not_transient_closed(tmp_path: Path) -> None:
 
 
 # --- 非 GitHub provider ---
+
+
+# --- incident 除外経路（Issue #322: tmux セッション外の interactive runner 起動） ---
+
+_TMUX_ERROR = (
+    "interactive terminal runner requires tmux. Run `kaji run` inside tmux "
+    "or use agent_runner='headless'."
+)
+
+
+def _build_dispatch_run(
+    tmp_path: Path,
+    *,
+    exception_type: str,
+    run_id: str = "260714000453",
+    error: str = _TMUX_ERROR,
+) -> Path:
+    """#316 と同型の run artifact（dispatch_exception で ERROR 終端）を組む。"""
+    run_dir = tmp_path / ".kaji-artifacts" / _ISSUE / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    events = [
+        {"event": "workflow_start", "issue": _ISSUE, "workflow": "dev", "schema_version": 1},
+        {"event": "step_start", "step_id": "implement", "agent": "claude", "attempt": 1},
+        {
+            "event": "failure_event",
+            "kind": "dispatch_exception",
+            "step_id": "implement",
+            "exception_type": exception_type,
+            "cycle_name": None,
+            "synthetic": True,
+        },
+        {"event": "workflow_end", "status": "ERROR", "error": f"{exception_type}: {error}"},
+    ]
+    (run_dir / "run.log").write_text(
+        "".join(json.dumps(e) + "\n" for e in events), encoding="utf-8"
+    )
+    attempt = run_dir / "steps" / "implement" / "attempt-001"
+    attempt.mkdir(parents=True)
+    (attempt / "result.json").write_text(
+        json.dumps(
+            {
+                "step_id": "implement",
+                "attempt": 1,
+                "status": "ABORT",
+                "error": error,
+                "synthetic": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return run_dir
+
+
+def test_tmux_session_required_keeps_triage_but_suppresses_incident(tmp_path: Path) -> None:
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_dispatch_run(tmp_path, exception_type="TmuxSessionRequiredError")
+    provider = _IncidentProvider()
+
+    result = _handler(tmp_path, run_dir, provider=provider).run()
+
+    # triage コメントは維持（1 件）。occurrence コメントは投稿しない。
+    assert len(provider.comments_posted) == 1
+    assert _occurrence_comments(provider) == []
+    # incident 起票経路の provider 呼び出しに一切到達しない。
+    assert provider.searches == []
+    assert provider.created == []
+    assert provider.comment_lists == []
+    # ローカル occurrence 記録も作らない。
+    assert not occurrences_path(tmp_path / ".kaji-artifacts").exists()
+    # run.log に抑止の構造化 event が 1 件。
+    events = [json.loads(x) for x in (run_dir / "run.log").read_text().splitlines()]
+    suppressed = [e for e in events if e["event"] == "incident_suppressed"]
+    assert len(suppressed) == 1
+    assert suppressed[0]["cause"] == "user_precondition_error"
+    assert suppressed[0]["exception_type"] == "TmuxSessionRequiredError"
+    assert suppressed[0]["failed_step"] == "implement"
+    assert suppressed[0]["reason"]
+    assert not any(e["event"] == "incident_recorded" for e in events)
+    # recovery.json に抑止の痕跡が残り、incident 参照は付かない。
+    persisted = read_recovery_json(run_dir / RECOVERY_FILE)
+    assert persisted.incident_suppressed is True
+    assert persisted.incident_suppression_reason == suppressed[0]["reason"]
+    assert persisted.incident_ref is None
+    assert persisted.incident_action is None
+    assert persisted.decision == "not_resumable"
+    assert result.decision.decision == "not_resumable"
+
+
+def test_cli_not_found_dispatch_still_records_incident(tmp_path: Path) -> None:
+    # 除外境界の回帰: 同じ fixture の例外型だけを差し替えると incident 記録が従来どおり動く。
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_dispatch_run(
+        tmp_path, exception_type="CLINotFoundError", error="CLI 'claude' not found."
+    )
+    provider = _IncidentProvider()
+
+    _handler(tmp_path, run_dir, provider=provider).run()
+
+    assert len(provider.created) == 1
+    assert len(provider.searches) == 1
+    records = read_occurrences(tmp_path / ".kaji-artifacts")
+    assert len(records) == 1
+    assert records[0].signature.exception_type == "CLINotFoundError"
+    events = [json.loads(x) for x in (run_dir / "run.log").read_text().splitlines()]
+    assert any(e["event"] == "incident_recorded" for e in events)
+    assert not any(e["event"] == "incident_suppressed" for e in events)
+    persisted = read_recovery_json(run_dir / RECOVERY_FILE)
+    assert persisted.incident_suppressed is False
+    assert persisted.incident_action == "created"
 
 
 class _PlainProvider:
