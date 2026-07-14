@@ -5,8 +5,7 @@ name: issue-implement
 
 # Issue Implement
 
-承認された設計書を元に、テストコードの作成から実装を開始します。
-**Test-Driven Development (TDD)** の原則に従い、「テスト作成 (Red) → 実装 (Green) → リファクタリング」のサイクルを回します。
+承認された設計書を契約として、Red → Green → Refactor で実装する。
 
 ## いつ使うか
 
@@ -20,8 +19,6 @@ name: issue-implement
 ## 入力
 
 ### ハーネス経由（コンテキスト変数）
-
-**常に注入される変数:**
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
@@ -37,508 +34,182 @@ $ARGUMENTS = <issue_id>
 
 ### 解決ルール
 
-コンテキスト変数 `issue_id` が存在すればそちらを使用。
-なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
+コンテキスト変数 `issue_id` が存在すればそちらを使用し、なければ `$ARGUMENTS` の第1引数を使う。
+手動実行時の `issue_ref` は、数値なら `#<issue_id>`、`local-*` なら bare ID とする。
 
-`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
+## 読み込み方針（段階的開示）
 
-## 前提知識の読み込み
+開始時に [implement-quickref.md](../../../docs/dev/implement-quickref.md) **だけ**を Read する。
+正本 docs・reference・template は quickref の対応表と各 Step の指示に従い、必要になった時点で読む。
 
-以下のドキュメントを Read ツールで読み込んでから作業を開始すること。
-
-1. **開発ワークフロー**: `docs/dev/development_workflow.md`
-2. **完了条件対応**: `docs/dev/workflow_completion_criteria.md`
-3. **docs 更新判断**: `docs/dev/documentation_update_criteria.md`
-4. **テスト規約**: `docs/dev/testing-convention.md`
-5. **Python スタイル**: `docs/reference/python/python-style.md`（必要に応じて他の `docs/reference/python/*.md` も追加読込）
+- 既読ファイルの全文再 Read はしない。必要箇所を `rg -n '^##? '` 等で特定し、対象セクションだけを読む。
+- 全文再 Read を許すのは、(a) 現セッションに本文がない、(b) 前回 Read 後にファイルが変更された、(c) 対象範囲だけでは判断不能、のいずれかに限る。理由を作業メモに残す。
+- 同じ内容を shell の `cat` と Read ツールの両方で取得しない。
+- 規則本文は正本 docs を優先する。quickref と本 skill は規則の要約・読込タイミング・手順だけを持つ。
 
 ## 前提条件
 
-- `/issue-start` が実行済みであること
-- `/issue-design` で設計書が作成済みであること
-- 設計レビューが完了・承認されていること
+- `/issue-start` 実行済み
+- `/issue-design` で設計書作成済み
+- 設計レビュー承認済み
 
 ## 共通ルール
 
-- [_shared/report-unrelated-issues.md](../_shared/report-unrelated-issues.md) — 作業中に発見した無関係な問題の報告ルール
+- [_shared/report-unrelated-issues.md](../_shared/report-unrelated-issues.md) — 無関係な問題の報告ルール
 
 ## 実行手順
 
 ### Step 1: Worktree 情報の取得
 
-[_shared/worktree-resolve.md](../_shared/worktree-resolve.md) の手順に従い、
-Worktree の絶対パスを取得すること。以降のステップではこのパスを使用する。
+[_shared/worktree-resolve.md](../_shared/worktree-resolve.md) に従って絶対パスを解決し、以降はそのパスを使う。
 
-### Step 2: 設計書の読み込み
+### Step 2: 設計書を解決して1回だけ読む
 
-```bash
-cat [worktree_dir]/draft/design/issue-[issue_id]-*.md
-```
+1. コンテキストに `design_path` があれば `[worktree_dir]/[design_path]` を採用する。
+2. なければ `draft/design/issue-[issue_id]-*.md` をファイル名だけ列挙し、候補を解決する。本文を `cat` しない。
+3. 候補が0件または複数で一意に決められなければ、実装を開始せず設計フェーズへ戻す。
+4. 解決した設計書を Read で **1回だけ**読み、「インターフェース」「テスト戦略」「影響ドキュメント」を作業契約とする。
 
-**特に注目するセクション**:
-- 「インターフェース」: 実装すべき API
-- 「テスト戦略」: テストケースの元になる
-- 「影響ドキュメント」: 実装後に更新が必要なドキュメント
+BACK 等で再入し、設計書が前回 Read 後に変わっている場合は、まず diff と変更セクションだけを読む。全文再 Read は変更範囲から判断できない場合だけ行う。
 
 ### Step 2.5: Baseline Check
 
-実装開始前にテスト環境の状態を確認し、変更前から存在する失敗（baseline failure）を記録する。
+この時点で初めて [references/baseline-check.md](references/baseline-check.md) を Read し、記載手順を省略せず実行する。
+変更前 pytest の FAILED / ERROR を記録し、停止基準・最新コメント選択・regression 比較キーを同 reference の契約どおり扱う。
 
-1. **pytest を実行する**:
-   ```bash
-   cd [worktree_dir] && source .venv/bin/activate && pytest
-   ```
-
-2. **全パスの場合**: baseline は clean。コメント不要。Step 2.6 へ進む。
-
-3. **FAILED / ERROR がある場合**:
-   a. 各失敗テストの `(nodeid, kind, error_type)` を記録する
-   b. Issue コメントに以下のフォーマットで投稿する（commit hash を含める）:
-
-   ````bash
-   kaji issue comment [issue_id] --commit --body "$(cat <<'BASELINE_EOF'
-   ## Baseline Check 結果
-
-   ### 実行環境
-
-   - **Commit**: [commit-hash]
-   - **コマンド**: `pytest`
-
-   ### Baseline Failure 一覧
-
-   | nodeid | kind | error_type | 概要 |
-   |--------|------|------------|------|
-   | tests/test_foo.py::test_bar | FAILED | AssertionError | expected 1, got 2 |
-   | tests/test_baz.py::test_qux | ERROR | ImportError | No module named 'xxx' |
-
-   ### Regression 判定キー
-
-   上記テーブルの `(nodeid, kind, error_type)` の3タプルを比較キーとする。
-   以降の pytest 実行で:
-   - 比較キーが一致する失敗 → baseline failure（既知）として除外
-   - 比較キーが一致しない新規 FAILED/ERROR → regression
-
-   ### 判定
-
-   - **継続**: 上記は変更前から存在する失敗であり、本 Issue の対象外
-   - **停止**: (該当する場合のみ記載)
-   BASELINE_EOF
-   )"
-   ````
-
-   c. **停止基準**に該当するか判断する:
-      - baseline failure が本 Issue の実装対象と同一モジュール/機能に影響する場合
-      - 失敗数が多く、regression の切り分けが困難な場合（目安: 10 件超）
-   d. 継続する場合: 以降の regression 判定は baseline failure を除外して行う
-
-> **Baseline コメントの選択規則**: Issue に `## Baseline Check 結果` コメントが複数存在する場合（再実行時など）、**最新のコメントを正とする**。各コメントに commit hash を含めることで、どの時点のスナップショットかを識別できる。
-
-### Step 2.6: type の判定と type 別手順ガイドの読み込み
-
-Issue ラベルから type を取得する（複数 type ラベルを許容しないため、配列として取得して cardinality をチェックする）:
+### Step 2.6: type 判定と type 別ガイド
 
 ```bash
 kaji issue view [issue_id] --json labels --jq '[.labels[].name] | map(select(startswith("type:")))'
 ```
 
-**判定の優先順**:
+| 判定 | 処理 |
+|------|------|
+| type ラベルが0件または複数 | 実装せず `/issue-review-ready` へ差し戻して `ABORT` |
+| `type:docs` | `/i-doc-update` へ誘導して `ABORT` |
+| `type:feature` | `_shared/implement-by-type/feat.md` をこの時点で Read |
+| `type:bug` | `_shared/implement-by-type/bug.md` をこの時点で Read |
+| `type:refactor` | `_shared/implement-by-type/refactor.md` をこの時点で Read |
+| その他の `type:*` | feat のガイドをフォールバックとして Read |
 
-1. **配列要素数 ≥ 2** → 複数 type ラベル付与。実装フェーズに入らず処理を停止し、`/issue-review-ready` への差し戻しを案内する（ABORT）。type ラベルは Issue ごとに 1 つに限定する責務。
-2. **配列が空** → type ラベル未付与。実装フェーズに入らず処理を停止し、`/issue-review-ready` への差し戻しを案内する（ABORT）。前段レディネスで type ラベル付与を確保する責務。
-3. **配列要素数 1**: その要素を採用し、以下の判定を行う:
-   - **`type:docs`** → **本スキル対象外**。`/i-doc-update` を使用すること。処理を停止し、ユーザーに誘導する（ABORT）
-   - **canonical（`type:feature` / `type:bug` / `type:refactor`）** → 対応するファイルを Read
-   - **canonical 外（`type:test` / `type:chore` / `type:perf` / `type:security` など）** → `feat.md` を Read（フォールバック規則）
+type 別ガイドが Step 3〜5 の具体化を担い、本 skill の記述は共通の枠組みとする。
 
-| type | 読み込むファイル | 手順の特徴 |
-|------|------------------|-----------|
-| `type:feature` | `.claude/skills/_shared/implement-by-type/feat.md` | 標準 TDD（Red → Green → Refactor）。IF 定義とユースケースを契約として実装 |
-| `type:bug` | `.claude/skills/_shared/implement-by-type/bug.md` | 再現テスト先行。Red = 再現テストが OB を再現 / Green = EB に合致 |
-| `type:refactor` | `.claude/skills/_shared/implement-by-type/refactor.md` | ベースライン計測 → safety net → 改修 → 再計測。振る舞い非変更が絶対要件 |
-| canonical 外 | `.claude/skills/_shared/implement-by-type/feat.md`（フォールバック） | 標準 TDD を適用 |
+### Step 2.7: 実装直前に必要な正本を読む
 
-**type 別手順と Step 3〜5 の関係**:
-- 読み込んだガイドは Step 3（Red）〜 Step 5（Refactor）の**具体的な進め方**を定義する
-- 下記 Step 3〜5 の汎用的な記述は、type 別ガイドで上書きされる箇所がある（例: bug の Step B1 は下記 Step 3 の「Red Phase」を「再現テスト先行」に具体化する）
-- ガイドの手順に従って作業し、下記 Step 3〜5 は**枠組み**として参照する
+quickref の「状況 → 正本」表に従い、まず必要なセクションを特定して部分 Read する。
 
-### Step 3: テスト実装 (Red Phase)
+- テスト実装前: `docs/dev/testing-convention.md` の「テストサイズ定義」「テスト戦略の原則」と設計で該当する節
+- **Python コードを書く前**: AGENTS.md の契約に従い、`docs/reference/python/*.md` をすべてロードする。既に同一内容を読んだファイルは再 Read しない
+- docs 更新判断時: `docs/dev/documentation_update_criteria.md` の該当節
+- 完了条件確認時: `docs/dev/workflow_completion_criteria.md` の該当節
+- workflow 全体や戻り先が不明な場合だけ: `docs/dev/development_workflow.md` の該当節
 
-> **CRITICAL — 変更タイプに応じて妥当な検証を選ぶこと**
->
-> 実行時コード変更では、都合よく S/M/L を減らさないこと。
-> 一方で docs-only / metadata-only / packaging-only 変更に対し、
-> 価値の低い恒久テストを機械的に追加してはならない。
->
-> **禁止事項**:
-> - ❌ 設計書で「作成する」と定義されたテストを省略する
-> - ❌ 設計書で「不要」と判断されたテストを独自判断で追加する
-> - ❌ 実行時コード変更なのに「実行時間が長い」を理由に M/L を省略する
-> - ❌ 実行時コード変更なのに「Small で十分」と決め打ちする
-> - ❌ docs-only / metadata-only / packaging-only 変更に無理やり S/M/L テストを新設する
-> - ❌ `uv pip install -e .` など副作用のある検証を shared 環境へ常設する
-> - ❌ 「API キーがない」「DB が起動していない」などの環境不備を理由にテストをスキップする（環境不備はスキップ理由ではなく修正対象）
+### Step 3: テスト実装（Red）
 
-設計書の「テスト戦略」セクションに基づき、変更タイプに応じた検証を実施する。テストサイズ判定は
-`docs/dev/testing-convention.md` のリソース制約（外部 API / DB / ファイル I/O の有無）に従う。
+設計書「テスト戦略」と type 別ガイドに従う。
 
-1. **テストファイルの特定/作成**:
-   - 実行時コード変更: `tests/` 配下の適切な場所にテストファイルを作成または特定
-   - docs-only / metadata-only / packaging-only: 変更固有検証のみで十分なら、新規テストは作成しない
-   - 各テストには `@pytest.mark.small` / `@pytest.mark.medium` / `@pytest.mark.large` のマーカーを付与
-
-2. **テストコード記述**:
-   - 実行時コード変更: 設計書の「テスト戦略」をカバーするテストケースを書く（不要と判断されたサイズは設計書側のエビデンスを維持）
-   - docs-only / metadata-only / packaging-only: 設計書に記載した変更固有検証を実施する
-
-3. **失敗 / 回帰の確認**:
-   - 実行時コード変更: Red Phase として失敗を確認する
-   - docs-only / metadata-only / packaging-only: 新規テストを追加しない場合、既存テストに回帰がないかを確認するステップとして扱う
-   ```bash
-   cd [worktree_dir] && source .venv/bin/activate && pytest
-   ```
-
-### Step 4: 機能実装 (Green Phase)
-
-1. **実装ファイルの編集**:
-   - 設計書の「インターフェース定義」に従い、`kaji_harness/` 配下のコードを実装
-
-2. **テスト通過確認**:
-   ```bash
-   cd [worktree_dir] && source .venv/bin/activate && pytest
-   ```
-
-   pytest の合否判定基準:
-   - **Baseline Check コメントがない場合**: 全テスト PASSED を期待（従来どおり）
-   - **Baseline Check コメントがある場合**:
-     1. FAILED/ERROR のテストを baseline failure 一覧と照合する
-     2. 比較キー `(nodeid, kind, error_type)` が baseline と一致 → 既知（除外）
-     3. 比較キーが不一致の新規 FAILED/ERROR → regression（修正が必要）
-     4. baseline にあったが消えた（PASSED に変わった）→ 問題なし
-
-### Step 5: リファクタリング
-
-- コードの可読性を高める修正を行う
-- テストが引き続きパスすることを確認
-
-### Step 6: ドキュメント更新
-
-設計書の「影響ドキュメント」セクションで「あり」のドキュメントを更新する。
-
-### Step 7: 品質チェック（コミット前必須）
-
-以下の 2 段階で実行すること。**すべての基準をクリアするまでコミットしてはならない**。
-
-> AGENTS.md の pre-commit 契約（`make check`）と等価。`make check` を
-> 一括で叩く方法もあるが、kaji では baseline failure 判定のため `pytest` を `&&` チェーンから
-> 切り離す必要がある。下記 7a / 7b の分離はそのための運用。
-
-#### 7a. Lint / Format / 型チェック（exit 0 必須）
-
-```bash
-cd [worktree_dir] && source .venv/bin/activate && ruff check kaji_harness/ tests/ && ruff format --check kaji_harness/ tests/ && mypy kaji_harness/
-```
-
-ruff / mypy は全パス必須。baseline failure の概念を適用しない。
-
-> `ruff format --check` は非破壊 gate（`make check` と等価）。整形差分で FAIL
-> した場合は `make fmt`（または `ruff format kaji_harness/ tests/`）で整形し、
-> 生じた差分をコミット対象に含めてから再チェックすること。gate 実行自体では
-> worktree を書き換えない。
-
-#### 7b. テスト実行
+- 実行時コード変更は、設計されたテストを先に書き、期待どおり失敗することを確認する。
+- docs-only / metadata-only / packaging-only は、設計された変更固有検証で十分なら恒久テストを機械的に追加しない。
+- テストサイズはリソース制約で決め、`small` / `medium` / `large` marker を付ける。
+- 設計で必要としたテストの省略、設計で不要としたテストの独自追加、環境不備を理由とする skip は禁止する。
 
 ```bash
 cd [worktree_dir] && source .venv/bin/activate && pytest
 ```
 
-**`pytest` は `&&` チェーンに含めず、必ず個別に実行する。** baseline failure が残っていると exit 非 0 になるが、以下の基準で合否を判定する:
+### Step 4: 機能実装（Green）
 
-- **Baseline Check コメントがない場合**: 全テスト PASSED 必須（exit 0 でなければ NG）
-- **Baseline Check コメントがある場合**: Step 4 と同じ regression 判定基準を適用する
-  - FAILED/ERROR を baseline 一覧と照合し、比較キー `(nodeid, kind, error_type)` が全一致 → OK（コミット可）
-  - 比較キーが不一致の新規 FAILED/ERROR が 1 件でもある → NG（修正が必要）
+設計書のインターフェースに従い、最小実装でテストを通す。
 
-失敗した場合は原因を修正して再実行すること。
+```bash
+cd [worktree_dir] && source .venv/bin/activate && pytest
+```
+
+Baseline Check コメントがある場合は `(nodeid, kind, error_type)` を照合し、新規 FAILED / ERROR を regression として修正する。
+
+### Step 5: Refactor
+
+可読性と構造を改善し、テストが引き続き通ることを確認する。type 別ガイドの追加測定・safety net 契約を維持する。
+
+### Step 6: docs 更新
+
+設計書「影響ドキュメント」で「あり」の文書を更新する。判断境界が必要な時だけ `documentation_update_criteria.md` の該当節を読む。
+
+### Step 7: 品質チェック（コミット前必須）
+
+AGENTS.md の pre-commit 契約を通し、出力を Step 8.5（Pre-Handoff Review の入力）と Step 9（証跡）の両方で使えるよう保持する。
+
+Baseline Check が clean なら `source .venv/bin/activate && make check` を実行し、exit 0 と全出力を記録する。以下の 7a / 7b はその内訳であり、同じコマンドを重複実行しない。Step 8.5 / Step 9 が要求する pytest 出力と ruff / format / mypy 出力は、この `make check` の出力から該当部分を切り出して使う（証跡取得のための再実行はしない）。
+
+Baseline failure を記録して継続している場合だけ、pytest の既知失敗を分類できるよう 7a / 7b に分離して実行する。この例外でも `make check` の全対象（`kaji_harness/ tests/ experiments/` の ruff / format、`kaji_harness/` の mypy、全 pytest）を省略しない。
+
+#### 7a. Lint / Format / 型チェック（exit 0 必須）
+
+```bash
+cd [worktree_dir] && source .venv/bin/activate && ruff check kaji_harness/ tests/ experiments/ && ruff format --check kaji_harness/ tests/ experiments/ && mypy kaji_harness/
+```
+
+全項目必須。`ruff format --check` は非破壊 gate とし、修正には `make fmt` を使って再実行する。
+
+#### 7b. pytest（個別実行）
+
+```bash
+cd [worktree_dir] && source .venv/bin/activate && pytest
+```
+
+`pytest` は baseline failure 判定のため `&&` チェーンへ含めない。
+
+- Baseline Check コメントなし: 全テスト PASSED / exit 0 必須
+- コメントあり: FAILED / ERROR が記録済み3タプルと全一致し、新規 regression が0件であること
+
+上記 7a / 7b は baseline failure がある場合に限り、`make check` の ruff / format / mypy / pytest 契約を同じ対象へ分離実行したもの。いずれかが基準を満たさなければコミットしない。
 
 ### Step 7.5: 完了条件の段階確認
 
-Issue 本文に `## 完了条件` セクションがある場合、実装段階で確認可能な条件を確認する。
-
-確認対象の例:
-- 実装が完了条件で求められている機能を網羅しているか
-- テストが完了条件で求められているカバレッジを満たしているか
-- docs 更新が完了条件で求められている範囲に対応しているか
-
-確認結果は Step 9 の Issue コメントに含めて後段への証跡とする。
+Issue 本文 `## 完了条件` のうち、実装・テスト・docs で確認できる条件を照合する。判断に必要な場合だけ `workflow_completion_criteria.md` の「各ステップの証跡責務」周辺を部分 Read し、結果を Step 9 に含める。
 
 ### Step 8: コミット
 
 ```bash
-cd [worktree_dir] && git add . && git commit -m "feat: implement [feature] for [issue_ref]"
+cd [worktree_dir] && git add <issue-scope-files> && git commit -m "<type-prefix>: implement <feature> for [issue_ref]"
 ```
 
-> 実装の commit prefix は Issue type に対応させる（`type:bug` なら `fix:`、`type:feature` なら `feat:` 等）。
+prefix は Issue type に合わせ、無関係な変更を stage しない。
 
 ### Step 8.5: Pre-Handoff Review（MANDATORY）
 
-handoff 直前（`/issue-review-code` への進行前）に「設計書整合・テスト証跡・Scope 混在・auto-close 規約」を第三者視点で検査する。Step 8（コミット）の後に配置されるため、入力に必要な `git diff main...HEAD` と対象 commit hash がいずれも取得可能である。**重複チェックリストは作成しない**。`/issue-review-code` SKILL.md を rubric の単一情報源として参照しつつ、capability に応じて subagent / self-check に分岐する。
+コミット後、この時点で初めて [references/pre-handoff-review.md](references/pre-handoff-review.md) を Read し、capability 分岐、入力、rubric、verdict loop、Issue コメント投稿、回数制限を記載どおり実行する。
 
-#### Step 8.5.1: capability 判定と分岐（1 方式に固定）
+この自己評価は `Yes` / `No` / `With fixes` だけを返し、workflow の正式 verdict は発行しない。責務の削除・省略、Issue コメント証跡の省略は禁止する。
 
-main session は以下のフローを実行する。**Agent tool 利用可否の試行を唯一の分岐条件**とする（環境変数や agent context には依存しない）。
+### Step 9: 実装完了報告
 
-1. main session は `kaji-code-reviewer` subagent を **Agent tool で起動** するよう試行する
-   - **起動成功**（subagent からの応答テキストが取得できる）→ 経路: `subagent`
-   - **Agent tool が利用不可**（Codex / Gemini 等で tool が未定義 / 起動失敗 / `.claude/agents/kaji-code-reviewer.md` が未ロード）→ 経路: `self-check (subagent unavailable, fallback)`
+Pre-Handoff Review が完了した後、この時点で初めて [templates/implement-report.md](templates/implement-report.md) を Read する。保持した pytest / ruff / format / mypy の出力、変更ファイル、Pre-Handoff Review、完了条件を埋めて投稿する。
 
-#### Step 8.5.2: 経路別の実行
-
-##### 経路 A: subagent（Claude Code セッション）
-
-1. main session が以下を **事前取得** する（subagent は Bash を持たないため、テキストとして prompt 注入する）:
-   - `git diff main...HEAD` の全文
-   - 直近 `pytest` の出力（Step 7b で取得済み）
-   - 直近 `ruff check` / `ruff format --check` / `mypy` の出力（Step 7a で取得済み）
-   - 最新の `## Baseline Check 結果` コメント（あれば）
-   - 対象 commit hash
-
-2. Agent tool で `subagent_type: "kaji-code-reviewer"` を指定して起動する。prompt は以下のテンプレートに沿って組み立てる。
-
-   > **入力契約の SoT**: 各セクション（`## Diff` / `## Test Output` / `## Quality Check` / `## Baseline Failures` / 対象 commit / 設計書パス）の意味と必須/省略可規約は `.claude/agents/kaji-code-reviewer.md` § 入力（prompt 経由で受領）が単一情報源。下記テンプレートはそのミラー — 契約を変更する際は agent markdown 側を先に更新し、本テンプレートを後追いで合わせること。
-
-   ````markdown
-   # Pre-Handoff Code Review (kaji workflow)
-
-   - 対象 commit: <git-sha>
-   - 設計書: <worktree_dir>/draft/design/issue-<id>-*.md
-   - Issue: [issue_ref]
-
-   ## Diff
-
-   ```
-   (git diff main...HEAD の全文)
-   ```
-
-   ## Test Output
-
-   ```
-   (pytest の出力)
-   ```
-
-   ## Quality Check
-
-   ```
-   (ruff check / ruff format --check / mypy の出力)
-   ```
-
-   ## Baseline Failures
-
-   (Baseline Check コメント本文を貼り付け。無ければ「無し」と明記)
-   ````
-
-3. subagent が返した Markdown 出力を Step 8.5.5 で専用の Issue コメントとして投稿する（main session が投稿経路を担う）。
-
-##### 経路 B: self-check（Codex / Gemini 等の非対応 agent）
-
-1. main session 自身が `.claude/agents/kaji-code-reviewer.md` を `Read` ツールで読み込み、同 markdown 内の rubric を **main session 内で適用** する。
-2. 上記 § 経路 A の入力情報（diff / test output / quality check / baseline）を自セッションで参照しながら、`kaji-code-reviewer.md` § 出力形式に沿った Markdown を生成する。
-3. 経路情報を `self-check (subagent unavailable, fallback)` と明記して Step 8.5.5 で専用の Issue コメントとして投稿する。
-
-> **判定不能の場合の扱い**: capability 試行が成功も失敗も判別できない（response がタイムアウト等で取得できない）場合は、安全側に倒して経路 B（self-check）を実行する。経路情報には `self-check (subagent ambiguous, fallback)` と明記する。
-
-#### Step 8.5.3: verdict ループと階層分離
-
-subagent / self-check が返す verdict は **pre-handoff の自己評価** であり、kaji workflow の正式 verdict ではない。
-
-| verdict | 取り扱い |
-|---------|---------|
-| `Yes` | handoff 可。Step 9（実装完了報告）へ進む（実装コミットは Step 8 で確定済み）|
-| `With fixes` | main session が指摘事項を反映 → Step 7a / 7b を再実行 → `git add` で修正をステージ → `git commit --amend --no-edit` で実装コミットを更新 → 本 Step 8.5 を再実行（ループ）|
-| `No` | 大幅な修正が必要。main session が修正 → Step 7a / 7b を再実行 → `git add` で修正をステージ → `git commit --amend --no-edit` で実装コミットを更新 → 本 Step 8.5 を再実行 |
-| verdict 行が出力されない / parse 不能 | subagent が `maxTurns` 打ち切り等で `Pre-Handoff Review Verdict` セクション、または `Yes` / `No` / `With fixes` のいずれも返さなかった場合。**一度だけ** 経路 B（self-check）に fallback して再実行する。経路情報は `self-check (subagent unparseable, fallback)` と明記。fallback でも parse 不能なら main session 出力の全文を Issue コメントに転記し verdict 欄を `No`（修正必須）扱いとして次のループに進める。**無限再起動を避けるため、subagent 経路への再 fallback はしない** |
-
-> **`--amend` を採る理由**: 実装を単一の実装コミット（Issue type に対応する prefix）に保ち、ループのたびに `git diff main...HEAD` と対象 commit hash が「修正反映後の現在状態」を表すようにする。worktree は未 push の feature branch なので amend は安全。**`--amend` 前の `git add` 必須**: amend はデフォルトで index の内容を使うため、修正を `git add` でステージしないと amend 後のコミットに反映されず、`git diff main...HEAD` と対象 commit hash が修正前を指したまま同じ指摘が再発する。
-
-**ループ制限**: `With fixes` / `No` を 3 回連続で返した場合は abort せず、main session が修正方針を Issue コメントに整理して `/issue-review-code` 側で BACK 相当の判定に委ねる（pre-handoff の自己評価ループでは正式 verdict を出さない）。
-
-**ループ回数の機械的カウント（必須）**: main session が自セッション内のカウンタで自己申告するのではなく、**Issue コメントの `## Pre-Handoff Review` セクション数を実際に数える**。Step 8.5.5 が本 Step 8.5 の実行（＝各ループ試行）ごとに専用の `## Pre-Handoff Review` コメントを投稿するため、Issue コメントが永続的なカウンタとなる。
-
-```bash
-PHR_COUNT=$(kaji issue view [issue_id] --comments 2>/dev/null | grep -c '^## Pre-Handoff Review$')
-```
-
-- Step 8.5.5 で証跡コメントを投稿した**直後**に `PHR_COUNT` を再取得する。**投稿済み実数 `PHR_COUNT` が 3 以上** かつ 今回の自己評価 verdict が `Yes` 以外 → ループ制限到達。本 Step 8.5 をさらに繰り返さず、以下の申し送りコメントを `kaji issue comment` で投稿してから Step 9 へ進む:
-
-  > **Pre-Handoff Review ループ制限到達**: `With fixes` / `No` が 3 回連続で返されました（Issue コメント上の `## Pre-Handoff Review` 件数 = N）。main session 側の自己評価ループでは収束しないため、`/issue-review-code` 側で BACK 相当の判定を求めます。未解消の指摘事項は最新の `## Pre-Handoff Review` コメント § 指摘事項 を参照してください。
-
-- `PHR_COUNT` が 3 未満かつ verdict が `Yes` 以外 → 通常通り Step 7a / 7b に戻ってループを継続
-
-> **趣旨**: ループに陥った当のセッション自身がカウンタを持つと「楽観バイアス」と同型の脆弱性を残す（過去 Issue: history）。Issue コメント側を権威ある回数情報源とすることで、main session の自己申告を経由しないカウントに置き換える。
-
-| 階層 | verdict | 発行者 |
-|------|---------|--------|
-| 自己評価（本 Step） | `Yes` / `No` / `With fixes` | `kaji-code-reviewer` subagent または main-session self-check |
-| 正式 verdict | `PASS` / `RETRY` / `BACK` / `ABORT` | `/issue-review-code`（次セッション推奨） |
-
-#### Step 8.5.4: 出力フォーマット（Step 8.5.5 への引き継ぎ）
-
-subagent / self-check 共通の出力は `.claude/agents/kaji-code-reviewer.md` § 出力形式に従う。経路情報を必ず先頭に明記:
-
-```markdown
-## Pre-Handoff Review
-
-- **経路**: subagent / self-check (subagent unavailable, fallback)
-- **起動 agent**: kaji-code-reviewer / main-session (capability=<agent_name>)
-- **対象 commit**: <git-sha>
-
-### 1. 設計書整合
-- 判定: ✅ / ⚠️ / ❌
-- 根拠: ...
-
-### 2. テスト証跡
-- 判定: ✅ / ⚠️ / ❌
-- 根拠: ...
-
-### 3. Scope 混在
-- 判定: ✅ / ⚠️ / ❌
-- 根拠: ...
-
-### 4. auto-close 規約
-- 判定: ✅ / ⚠️ / ❌
-- 根拠: ...
-
-### 指摘事項
-- 指摘 1: ...
-- 指摘 2: ...
-
-### Pre-Handoff Review Verdict
-- **Yes** / **No** / **With fixes**
-```
-
-> **規約遵守**: 本コメント本文に auto-close hazard pattern（`Clos(e[sd]?|ing)` / `Fix(e[sd]|ing)?` / `Resolv(e[sd]?|ing)` / `Implement(s|ing|ed)?` の直後 `#[0-9]`）を書かない。指摘参照は `指摘 N` / `Must Fix item N` / `point N` 形式に統一する（参照: [`docs/dev/shared_skill_rules.md`](../../../docs/dev/shared_skill_rules.md) § auto close keyword 回避規約）。
-
-#### Step 8.5.5: Pre-Handoff Review 証跡投稿（MANDATORY）
-
-本 Step 8.5 を実行するたび（＝各 verdict ループ試行ごと）に、その試行で生成した `## Pre-Handoff Review` ブロックを **専用の Issue コメントとして即座に投稿する**。これが PHR 出力の一次投稿経路であり、Step 9（実装完了報告）はこれを再投稿しない。
-
-````bash
-kaji issue comment [issue_id] --commit --body "$(cat <<'PHR_EOF'
-(Step 8.5.4 のフォーマットで生成した「## Pre-Handoff Review」ブロックを全文貼り付け)
-PHR_EOF
-)"
-````
-
-投稿後、Step 8.5.3 の `PHR_COUNT` 再取得とループ制限判定を行う。1 試行 1 コメントで永続記録されるため、`PHR_COUNT` は within-run のループ試行回数の正しいカウンタとなる。`/issue-review-code` Step 1.4 の hard gate は `## Pre-Handoff Review` セクションの存在を確認するが、本ステップが投稿する専用コメントがこれを満たす。
-
-### Step 9: Issueにコメント
-
-実装完了をIssueにコメントします。pytest および品質チェックの出力をそのまま含めること。
-
-**verdict マーカーの無条件付与（必須）**: 実装完了報告コメントには **常に** `--verdict-step implement --verdict-status <STATUS>` を付与する。`<STATUS>` は本 skill が「Verdict 出力」で返す status（`PASS` / `RETRY` / `BACK` / `ABORT`）に置換する。CLI が body 1 行目に `<!-- kaji-verdict: step=implement status=<STATUS> -->` を決定的に付与し、`issue-design` Step 1.6 の BACK 再入検出はこのマーカーのみを参照する（`dev.yaml` の `implement` の `BACK: design` 遷移。契約の正本は CLI コード。ADR 008 決定 3）。「BACK のときだけ付ける」条件付き出力は禁止（決定 3。`PASS` でも常に付ける）。
-
-> Baseline Check コメント（Step 2.5）と Pre-Handoff Review 証跡コメント（Step 8.5.5）は本 skill の verdict を表す判定コメントではないため、verdict マーカーを付与しない（付けると BACK 再入検出の対象母集団を汚す）。マーカーを付与するのは本 Step 9 の実装完了報告コメントのみ。
-
-````bash
-kaji issue comment [issue_id] --commit \
-  --verdict-step implement --verdict-status <STATUS> \
-  --body "$(cat <<'COMMENT_EOF'
-## 実装完了報告 (TDD)
-
-設計に基づき、TDDにて実装を行いました。
-
-### 実施内容
-
-- **テスト / 検証**: `tests/test_xxx.py` に XX 件のケースを追加、または変更固有検証を実施
-- **実装**: `kaji_harness/xxx.py` に機能を実装
-
-### テスト結果
-
-```
-(pytest の標準出力をそのまま貼り付け)
-```
-
-| 項目 | 結果 |
-|------|------|
-| テスト総数 | XX |
-| passed | XX |
-| failed | XX (うち baseline: YY, regression: 0) |
-| errors | XX (うち baseline: YY, regression: 0) |
-| skipped | XX |
-| Small テスト | XX passed |
-| Medium テスト | XX passed |
-| Large テスト | XX passed |
-
-### 品質チェック結果
-
-```
-(ruff check + ruff format --check + mypy の出力をそのまま貼り付け)
-```
-
-### 変更ファイル
-
-- `kaji_harness/xxx.py`: (変更内容)
-- `tests/test_xxx.py`: (変更内容)
-
-### Pre-Handoff Review 結果
-
-Pre-Handoff Review の出力は Step 8.5.5 が専用の `## Pre-Handoff Review` コメントとして投稿済み。本セクションでは最新コメントを参照し、投稿数と最終 verdict を要約する:
-
-- Pre-Handoff Review コメント数 (`PHR_COUNT`): XX
-- 最終 verdict: Yes / With fixes / No
-- 最新の `## Pre-Handoff Review` コメント: (リンクまたは投稿日時)
-
-### 完了条件の段階確認
-
-この段階で確認可能な完了条件:
-
-- [ ] (確認した条件1): ✅ 実装で対応済み
-- [ ] (確認した条件2): ✅ テスト通過で確認
-- (未確認の条件があれば): final-check で確認予定
-
-### 次のステップ
-
-`/issue-review-code [issue_id]` によるコードレビューをお願いします。
-COMMENT_EOF
-)"
-````
+実装完了報告には `--verdict-step implement --verdict-status <STATUS>` を **常に**付ける。Baseline / Pre-Handoff の証跡コメントには付けない。
 
 ### Step 10: 完了報告
 
-```
-## 実装完了
-
-| 項目 | 値 |
-|------|-----|
-| Issue | [issue_ref] |
-| テスト | XX 件追加 |
-| 品質チェック | すべてパス |
-
-### 次のステップ
-
-`/issue-review-code [issue_id]` でコードレビューを実施してください。
-```
+Issue、テスト件数、品質チェック結果、次の `/issue-review-code [issue_id]` を簡潔に報告する。
 
 ## Verdict 出力
 
-実行完了後、以下の形式で verdict を出力すること:
+作業報告 Issue コメント末尾、stdout、最後に `verdict_path` の pure YAML へ同じ内容を残す。
 
+```text
 ---VERDICT---
 status: PASS
 reason: |
   実装・テスト・品質チェック全パス
 evidence: |
-  pytest 全テストパス、ruff/mypy エラーなし
+  pytest 全テストパス、ruff/format/mypy エラーなし、Pre-Handoff Review 完了
 suggestion: |
 ---END_VERDICT---
-
-**重要**: verdict は **stdout にそのまま出力** すること。Issue コメントや Issue 本文更新とは別に、最終的な verdict ブロックは stdout に残す。
-
-### status の選択基準
+```
 
 | status | 条件 |
 |--------|------|
 | PASS | 実装・テスト・品質チェック全パス |
 | RETRY | テスト失敗等 |
 | BACK | 設計に問題 |
-| ABORT | 重大な問題（type ラベル未付与・複数付与・`type:docs` 等） |
+| ABORT | type ラベル不正、`type:docs` 等の重大な前提違反 |

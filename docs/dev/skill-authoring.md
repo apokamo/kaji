@@ -30,6 +30,26 @@ skill_dir = ".claude/skills"   # 必須。カノニカルディレクトリ
 
 各スキルはディレクトリで、`SKILL.md` を含む。
 
+## 段階的開示と遅延読込
+
+`SKILL.md` は、その step の責務、必須不変条件、実行順、どの資料をいつ読むかに絞る。常時不要な長い手順・出力雛形は skill 配下へ分離し、利用直前に明示的に Read する。
+
+```text
+.claude/skills/issue-implement/
+  SKILL.md
+  references/             # 状況依存の詳細手順・rubric mirror
+  templates/              # 終盤だけ使う報告雛形
+```
+
+- `references/`: 責務を維持したまま遅延読込する詳細手順。`SKILL.md` に読込 Step を明記する
+- `templates/`: コメントや報告を生成する直前に読む雛形。開始時の前提知識へ含めない
+- repo 横断で参照される正本規約は `docs/` に置く。skill 配下へ規則本文を複製しない
+- quickref を設ける場合は最小規律と正本 pointer だけを置き、同期責務を `documentation_update_criteria.md` に定義する
+- 既読ファイルは対象セクションを部分 Read する。全文再 Read の例外条件を skill に明記する
+- 外部化によって gate、証跡、verdict、停止基準などの責務を削除してはならない
+
+参照ファイルの存在だけでは agent が読む保証にならないため、`SKILL.md` の該当 Step に「この時点で初めて Read し、記載手順を実行する」と明記する。
+
 ## SKILL.md フォーマット
 
 ```markdown

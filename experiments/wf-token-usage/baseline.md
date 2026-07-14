@@ -39,6 +39,39 @@ wc -c -m \
 Documents loaded only when needed, including other files under `docs/reference/python/`,
 are variable input and are intentionally excluded from this fixed count.
 
+### Issue 326 progressive-disclosure comparison
+
+Measured on 2026-07-15 from the `docs/326` worktree. For a like-for-like
+`type:chore` startup comparison, the new fixed input is the compact skill, its
+quick reference, the unchanged feature fallback guide, and the shared
+unrelated-issue rule. Phase-specific references and the completion-report
+template are excluded because the skill now loads them only at their named
+steps rather than before reading the design.
+
+| Input | Characters | Bytes |
+|---|---:|---:|
+| `.claude/skills/issue-implement/SKILL.md` | 6,522 | 10,762 |
+| `docs/dev/implement-quickref.md` | 1,913 | 3,041 |
+| `.claude/skills/_shared/implement-by-type/feat.md` | 2,032 | 3,650 |
+| `.claude/skills/_shared/report-unrelated-issues.md` | 630 | 1,430 |
+| **Total after Issue 326** | **11,097** | **18,883** |
+| **Reduction from baseline** | **77.8%** | **77.3%** |
+
+Reproduce the post-change count:
+
+```bash
+wc -c -m \
+  .claude/skills/issue-implement/SKILL.md \
+  docs/dev/implement-quickref.md \
+  .claude/skills/_shared/implement-by-type/feat.md \
+  .claude/skills/_shared/report-unrelated-issues.md
+```
+
+The Issue 326 workflow attempt runs the `doc-update` step, so it does not have
+the same complete series key as the Issue 323 `implement` baseline. Calls,
+cache-read tokens, wall time, and review quality are therefore not compared;
+doing so would violate the series-isolation rule below.
+
 ## Recent run baseline
 
 Measured on 2026-07-14 from Issue #323 run `260714213832`. The artifacts were resolved

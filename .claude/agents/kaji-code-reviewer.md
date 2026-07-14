@@ -34,15 +34,15 @@ paraphrase / 再構成。逐語コピーではない。
 
 ## 入力（prompt 経由で受領） — 単一情報源 (SoT)
 
-> 本セクションは **prompt 入力契約の単一情報源**。`.claude/skills/issue-implement/SKILL.md` Step 8.5.2 経路 A の prompt template は本契約のミラーです。契約変更時はまず本ファイルを更新し、SKILL.md template を追従させてください。逆順は禁止。
+> 本セクションは **prompt 入力契約の単一情報源**。`.claude/skills/issue-implement/references/pre-handoff-review.md` Step 8.5.2 経路 A の prompt template は本契約のミラーです。契約変更時はまず本ファイルを更新し、reference の template を追従させてください。逆順は禁止。
 
 main session が以下を prompt 内のセクションとして渡します:
 
 - **設計書のパス**: `<worktree_dir>/draft/design/issue-<id>-*.md`
   - `Read` ツールで参照してください
 - **`## Diff`**: `git diff main...HEAD` の全文（main session が事前取得して貼付）
-- **`## Test Output`**: 直近 `pytest` の標準出力（Step 7b の出力をそのまま貼付）
-- **`## Quality Check`**: 直近 `ruff check` / `ruff format` / `mypy` の出力（Step 7a の出力をそのまま貼付）
+- **`## Test Output`**: 直近 `pytest` の出力。Step 7 を `make check` で実行した場合はその出力の pytest 部分、baseline failure により 7a / 7b へ分離実行した場合は Step 7b の出力をそのまま貼付
+- **`## Quality Check`**: 直近 `ruff check` / `ruff format --check` / `mypy` の出力。Step 7 を `make check` で実行した場合はその出力の該当部分、7a / 7b へ分離実行した場合は Step 7a の出力をそのまま貼付
 - **`## Baseline Failures`**: Baseline Check 一覧（存在する場合のみ。なければセクション省略）
 - **対象 commit hash**: prompt 冒頭または header で指定
 
