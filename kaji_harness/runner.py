@@ -10,6 +10,7 @@ import logging
 import os
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from itertools import count
@@ -33,7 +34,7 @@ from .errors import (
 )
 from .interactive_terminal import execute_interactive_terminal
 from .logger import RunLogger
-from .models import CostInfo, CycleDefinition, Verdict, Workflow
+from .models import CLIResult, CostInfo, CycleDefinition, Step, Verdict, Workflow
 from .prompt import build_prompt
 from .providers import IssueContext, IssueProvider, PRContext, get_provider, normalize_id
 from .providers.github import GitHubProviderError
@@ -211,6 +212,394 @@ class RunIssueContext:
     canonical_id: str
     issue_ref: str
     issue_context: IssueContext
+
+
+@dataclass(frozen=True)
+class _StepOutcome:
+    """Result of one step iteration, including synthetic non-dispatch outcomes."""
+
+    verdict: Verdict
+    cost: CostInfo | None
+    dispatched: bool
+    duration_ms: int
+    dispatch: str
+
+
+@dataclass(frozen=True)
+class _ExecutionSettings:
+    """Resolved dispatch settings for one workflow step."""
+
+    kind: str
+    is_script_like: bool
+    default_timeout: int
+    timeout: int
+    workdir: Path
+
+
+def _dispatch_kind(step: Step, metadata: SkillMetadata | None) -> str:
+    """Select the exec, exec_script, or agent dispatch path."""
+    if step.exec is not None:
+        return "exec"
+    if metadata is not None and metadata.exec_script is not None:
+        return "exec_script"
+    return "agent"
+
+
+@dataclass
+class _StepExecutor:
+    """Execute and record one dispatched workflow step attempt."""
+
+    workflow: Workflow
+    config: KajiConfig
+    provider: IssueProvider
+    run_ctx: RunIssueContext
+    run_dir: Path
+    logger: RunLogger
+    state: SessionState
+    project_root: Path
+    verbose: bool
+    resolve_pr_context: Callable[[IssueProvider, str], PRContext | None]
+
+    def execute(
+        self,
+        step: Step,
+        metadata: SkillMetadata | None,
+        issue_context: IssueContext,
+        started_monotonic: float,
+    ) -> _StepOutcome:
+        """Dispatch one attempt and persist its verdict and result artifacts."""
+        settings = self._resolve_settings(step, metadata)
+        pr_context = self.resolve_pr_context(self.provider, issue_context.branch_name)
+        session_id = self.state.get_session_id(step.resume) if step.resume else None
+        if step.resume and session_id is None:
+            raise MissingResumeSessionError(step.id, step.resume)
+
+        attempt_dir = allocate_attempt_dir(self.run_dir, step.id)
+        attempt_no = _attempt_number(attempt_dir)
+        verdict_path = attempt_dir / "verdict.yaml"
+        self._log_step_start(step, settings, session_id, attempt_dir, attempt_no)
+        if not settings.workdir.is_dir():
+            raise WorkdirNotFoundError(step.id, settings.workdir)
+
+        attempt_started_at_ref: list[datetime] = []
+        exit_code: int | None = None
+        signal_name: str | None = None
+        result_session_id: str | None = None
+        try:
+            result = self._dispatch(
+                step,
+                metadata,
+                issue_context,
+                pr_context,
+                session_id,
+                attempt_dir,
+                verdict_path,
+                settings,
+                attempt_started_at_ref,
+            )
+            attempt_started_at = attempt_started_at_ref[0]
+            if result.session_id:
+                self.state.save_session_id(step.id, result.session_id)
+            result_session_id = result.session_id
+            exit_code = result.exit_code
+            signal_name = result.signal
+            verdict = self._resolve_step_verdict(
+                step,
+                settings,
+                result,
+                attempt_dir,
+                verdict_path,
+                attempt_started_at,
+            )
+        except (
+            StepTimeoutError,
+            CLIExecutionError,
+            CLINotFoundError,
+            ScriptExecutionError,
+            VerdictNotFound,
+            VerdictParseError,
+            InvalidVerdictValue,
+        ) as exc:
+            self._record_dispatch_failure(
+                exc=exc,
+                step=step,
+                attempt_dir=attempt_dir,
+                attempt_no=attempt_no,
+                attempt_started_at=(attempt_started_at_ref[0] if attempt_started_at_ref else None),
+                started_monotonic=started_monotonic,
+                session_id=result_session_id or session_id,
+                dispatch=settings.kind,
+                exit_code=exit_code,
+                signal_name=signal_name,
+            )
+            raise
+
+        duration_ms = int((time.monotonic() - started_monotonic) * 1000)
+        _record_attempt_end(
+            attempt_dir=attempt_dir,
+            step_id=step.id,
+            attempt=attempt_no,
+            verdict=verdict,
+            exit_code=exit_code,
+            signal=signal_name,
+            started_at=attempt_started_at,
+            ended_at=datetime.now(UTC),
+            step_duration_ms=duration_ms,
+            session_id=result_session_id,
+            dispatch=settings.kind,
+            error=None,
+            cost=result.cost,
+            logger=self.logger,
+            state=self.state,
+            synthetic=False,
+        )
+        if verdict.status == "ABORT":
+            self.logger.log_failure_event(kind="agent_abort", step_id=step.id, synthetic=False)
+        return _StepOutcome(verdict, result.cost, True, duration_ms, settings.kind)
+
+    def _resolve_settings(self, step: Step, metadata: SkillMetadata | None) -> _ExecutionSettings:
+        """Resolve dispatch kind, timeout, and workdir for a step."""
+        kind = _dispatch_kind(step, metadata)
+        default_timeout = (
+            self.workflow.default_timeout
+            if self.workflow.default_timeout is not None
+            else self.config.execution.default_timeout
+        )
+        timeout = step.timeout if step.timeout is not None else default_timeout
+        raw_workdir = step.workdir or self.workflow.workdir
+        workdir = Path(raw_workdir) if raw_workdir else self.project_root
+        return _ExecutionSettings(
+            kind, kind in ("exec", "exec_script"), default_timeout, timeout, workdir
+        )
+
+    def _log_step_start(
+        self,
+        step: Step,
+        settings: _ExecutionSettings,
+        session_id: str | None,
+        attempt_dir: Path,
+        attempt_no: int,
+    ) -> None:
+        """Emit structured and human-readable step-start events."""
+        self.logger.log_step_start(
+            step.id,
+            None if settings.is_script_like else step.agent,
+            None if settings.is_script_like else step.model,
+            None if settings.is_script_like else step.effort,
+            session_id,
+            attempt=attempt_no,
+            dispatch=settings.kind,
+        )
+        agent_suffix = ""
+        if not settings.is_script_like:
+            parts = [f"agent={step.agent}"]
+            if step.model:
+                parts.append(f"model={step.model}")
+            if step.effort:
+                parts.append(f"effort={step.effort}")
+            agent_suffix = " " + " ".join(parts)
+        _console.info(
+            "step start: %s %s dispatch=%s%s",
+            step.id,
+            attempt_dir.name,
+            settings.kind,
+            agent_suffix,
+        )
+
+    def _dispatch(
+        self,
+        step: Step,
+        metadata: SkillMetadata | None,
+        issue_context: IssueContext,
+        pr_context: PRContext | None,
+        session_id: str | None,
+        attempt_dir: Path,
+        verdict_path: Path,
+        settings: _ExecutionSettings,
+        attempt_started_at_ref: list[datetime],
+    ) -> CLIResult:
+        """Run the selected backend while retaining runner-module patch lookup."""
+        if settings.is_script_like:
+            context_env = self._build_context_env(step, issue_context, pr_context, verdict_path)
+            attempt_started_at_ref.append(datetime.now(UTC))
+            if settings.kind == "exec":
+                assert step.exec is not None
+                result = execute_exec(
+                    step=step,
+                    argv=step.exec,
+                    env=context_env,
+                    workdir=settings.workdir,
+                    log_dir=attempt_dir,
+                    timeout=settings.timeout,
+                    verbose=self.verbose,
+                )
+            else:
+                assert metadata is not None
+                assert metadata.exec_script is not None
+                result = execute_script(
+                    step=step,
+                    module=metadata.exec_script,
+                    env=context_env,
+                    workdir=settings.workdir,
+                    log_dir=attempt_dir,
+                    timeout=settings.timeout,
+                    verbose=self.verbose,
+                )
+            return result
+
+        prompt = build_prompt(
+            step,
+            self.run_ctx.canonical_id,
+            self.state,
+            self.workflow,
+            issue_context=issue_context,
+            pr_context=pr_context,
+            verdict_path=str(verdict_path),
+        )
+        (attempt_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
+        attempt_started_at_ref.append(datetime.now(UTC))
+        if self.config.execution.agent_runner == "interactive_terminal":
+            result = execute_interactive_terminal(
+                step=step,
+                prompt_path=attempt_dir / "prompt.txt",
+                verdict_path=verdict_path,
+                workdir=settings.workdir,
+                timeout=settings.timeout,
+                session_id=session_id,
+                close_on_verdict=self.config.execution.interactive_terminal_close_on_verdict,
+            )
+        else:
+            result = execute_cli(
+                step=step,
+                prompt=prompt,
+                workdir=settings.workdir,
+                session_id=session_id,
+                log_dir=attempt_dir,
+                execution_policy=self.workflow.execution_policy,
+                verbose=self.verbose,
+                default_timeout=settings.default_timeout,
+            )
+        return result
+
+    def _build_context_env(
+        self,
+        step: Step,
+        issue_context: IssueContext,
+        pr_context: PRContext | None,
+        verdict_path: Path,
+    ) -> dict[str, str]:
+        """Build the canonical ``KAJI_*`` environment for script-like steps."""
+        context_env = {
+            "KAJI_ISSUE_ID": self.run_ctx.canonical_id,
+            "KAJI_ISSUE_REF": self.run_ctx.issue_ref,
+            "KAJI_STEP_ID": step.id,
+            "KAJI_WORKTREE_DIR": issue_context.worktree_dir,
+            "KAJI_BRANCH_NAME": issue_context.branch_name,
+            "KAJI_PROVIDER_TYPE": issue_context.provider_type,
+            "KAJI_DEFAULT_BRANCH": issue_context.default_branch,
+            "KAJI_VERDICT_PATH": str(verdict_path),
+            "KAJI_GIT_REMOTE": issue_context.git_remote,
+        }
+        if pr_context is not None:
+            context_env["KAJI_PR_ID"] = str(pr_context.pr_id)
+            context_env["KAJI_PR_REF"] = pr_context.pr_ref
+        return context_env
+
+    def _resolve_step_verdict(
+        self,
+        step: Step,
+        settings: _ExecutionSettings,
+        result: CLIResult,
+        attempt_dir: Path,
+        verdict_path: Path,
+        attempt_started_at: datetime,
+    ) -> Verdict:
+        """Resolve, log, sanitize, and normalize one attempt verdict."""
+        valid_statuses = set(step.on.keys())
+        if settings.is_script_like:
+            formatter = None
+        else:
+            assert step.agent is not None
+            formatter = create_verdict_formatter(
+                agent=step.agent,
+                valid_statuses=valid_statuses,
+                model=step.model,
+                workdir=settings.workdir,
+            )
+        verdict, source, findings = resolve_verdict(
+            attempt_dir=attempt_dir,
+            full_output=result.full_output,
+            valid_statuses=valid_statuses,
+            attempt_started_at=attempt_started_at,
+            comment_loader=lambda: self.provider.view_issue(self.run_ctx.canonical_id).comments,
+            ai_formatter=formatter,
+        )
+        self.logger.log_verdict_source(step.id, source, attempt_dir.name)
+        if findings:
+            self.logger.log_verdict_sanitization(step.id, attempt_dir.name, findings)
+        _console.info("verdict detected: %s source=%s status=%s", step.id, source, verdict.status)
+        if source != "artifact" or findings:
+            write_verdict_yaml(verdict_path, verdict)
+        return verdict
+
+    def _record_dispatch_failure(
+        self,
+        *,
+        exc: Exception,
+        step: Step,
+        attempt_dir: Path,
+        attempt_no: int,
+        attempt_started_at: datetime | None,
+        started_monotonic: float,
+        session_id: str | None,
+        dispatch: str,
+        exit_code: int | None,
+        signal_name: str | None,
+    ) -> None:
+        """Record a synthetic ABORT attempt before the original exception escapes."""
+        ended_at = datetime.now(UTC)
+        exc_returncode = getattr(exc, "returncode", None)
+        if exc_returncode is not None:
+            exit_code = exc_returncode
+            signal_name = derive_signal(exit_code)
+        started_at = attempt_started_at if attempt_started_at is not None else ended_at
+        verdict_exception = isinstance(
+            exc,
+            VerdictNotFound | VerdictParseError | InvalidVerdictValue,
+        )
+        self.logger.log_failure_event(
+            kind="verdict_exception" if verdict_exception else "dispatch_exception",
+            step_id=step.id,
+            exception_type=type(exc).__name__,
+            synthetic=True,
+        )
+        abort_verdict = Verdict(
+            status="ABORT",
+            reason="step aborted without a usable verdict",
+            evidence=str(exc)[:500],
+            suggestion=(
+                f"Inspect {attempt_dir.name}/result.json and console.log; "
+                "re-run after addressing the abort cause."
+            ),
+        )
+        _record_attempt_end(
+            attempt_dir=attempt_dir,
+            step_id=step.id,
+            attempt=attempt_no,
+            verdict=abort_verdict,
+            exit_code=exit_code,
+            signal=signal_name,
+            started_at=started_at,
+            ended_at=ended_at,
+            step_duration_ms=int((time.monotonic() - started_monotonic) * 1000),
+            session_id=session_id,
+            dispatch=dispatch,
+            error=f"{type(exc).__name__}: {exc}",
+            cost=None,
+            logger=self.logger,
+            state=self.state,
+            synthetic=True,
+        )
 
 
 @dataclass
@@ -408,6 +797,128 @@ class WorkflowRunner:
         logger.log_cycle_reset(cycle.name, previous)
         _console.info("cycle reset: %s (was %d)", cycle.name, previous)
 
+    def _collect_skill_metadata(self) -> dict[str, SkillMetadata | None]:
+        """Validate skill availability and return per-step execution metadata."""
+        skill_metadata: dict[str, SkillMetadata | None] = {}
+        for step in self.workflow.steps:
+            if step.exec is not None:
+                skill_metadata[step.id] = None
+                continue
+            assert step.skill is not None
+            validate_skill_exists(step.skill, self.project_root, self.config.paths.skill_dir)
+            metadata = load_skill_metadata(
+                step.skill,
+                self.project_root,
+                self.config.paths.skill_dir,
+            )
+            skill_metadata[step.id] = metadata
+            if step.agent is None and metadata.exec_script is None:
+                raise WorkflowValidationError(
+                    f"Step '{step.id}' omits 'agent' but skill '{step.skill}' does "
+                    "not declare 'exec_script' in its frontmatter; either set "
+                    "'agent' on the step or add 'exec_script' to the skill"
+                )
+            if metadata.exec_script is not None and (
+                step.agent is not None or step.model is not None or step.effort is not None
+            ):
+                sys.stderr.write(
+                    f"WARNING: Step '{step.id}' uses exec_script skill "
+                    f"'{step.skill}'; 'agent' / 'model' / 'effort' are ignored.\n"
+                )
+        return skill_metadata
+
+    def _validate_before_step(self) -> None:
+        """Validate a pre-dispatch barrier without touching run artifacts."""
+        if self.before_step and self.before_step != "end":
+            if not self.workflow.find_step(self.before_step):
+                raise WorkflowValidationError(f"Step '{self.before_step}' not found (--before)")
+
+    def _load_session_state(
+        self, run_ctx: RunIssueContext
+    ) -> tuple[SessionState, IssueContext, Verdict | None]:
+        """Load state, backfill a worktree, and return any ambiguous-worktree ABORT."""
+        issue_context = run_ctx.issue_context
+        state = SessionState.load_or_create(run_ctx.canonical_id, self.artifacts_dir)
+        ambiguous_abort: Verdict | None = None
+        if state.worktree_dir is None:
+            try:
+                discovered = discover_existing_worktree(
+                    self.project_root,
+                    run_ctx.canonical_id,
+                    self.config.paths.worktree_prefix,
+                )
+            except AmbiguousWorktreeError as exc:
+                candidates = "\n  ".join(f"{path} ({branch})" for path, branch in exc.candidates)
+                sys.stderr.write(
+                    f"ERROR: multiple worktrees match issue {run_ctx.canonical_id!r}:\n"
+                    f"  {candidates}\n"
+                    "  Resolve with `git worktree remove <path>` and re-run.\n"
+                )
+                ambiguous_abort = Verdict(
+                    status="ABORT",
+                    reason=f"multiple worktrees match issue {run_ctx.canonical_id}",
+                    evidence="candidates:\n  " + candidates,
+                    suggestion=(
+                        "Resolve the conflict with `git worktree remove <path>` and re-run."
+                    ),
+                )
+                discovered = None
+            if discovered is not None:
+                state.capture_worktree(discovered[0], discovered[1])
+        if state.worktree_dir and state.branch_name:
+            issue_context = replace(
+                issue_context,
+                worktree_dir=state.worktree_dir,
+                branch_name=state.branch_name,
+                branch_prefix=state.branch_name.split("/", 1)[0],
+            )
+        return state, issue_context, ambiguous_abort
+
+    def _resolve_start_step(self) -> Step:
+        """Resolve and validate the first step before allocating run artifacts."""
+        if self.single_step:
+            current_step = self.workflow.find_step(self.single_step)
+            if current_step is None:
+                raise WorkflowValidationError(f"Step '{self.single_step}' not found")
+            return current_step
+        if self.from_step:
+            current_step = self.workflow.find_step(self.from_step)
+            if current_step is None:
+                raise WorkflowValidationError(f"Step '{self.from_step}' not found")
+            return current_step
+        return self.workflow.find_start_step()
+
+    def _emit_ambiguous_worktree_abort(
+        self,
+        verdict: Verdict,
+        state: SessionState,
+        logger: RunLogger,
+        workflow_start: float,
+    ) -> SessionState:
+        """Persist and emit the pre-loop synthetic ambiguous-worktree ABORT."""
+        sys.stdout.write(
+            "---VERDICT---\n"
+            "status: ABORT\n"
+            f"reason: |\n  {verdict.reason}\n"
+            f"evidence: |\n  {verdict.evidence}\n"
+            f"suggestion: |\n  {verdict.suggestion}\n"
+            "---END_VERDICT---\n"
+        )
+        logger.log_failure_event(kind="ambiguous_worktree", synthetic=True)
+        _console.error("workflow abort: %s", verdict.reason)
+        state.last_transition_verdict = verdict
+        state._persist()
+        duration_ms = int((time.monotonic() - workflow_start) * 1000)
+        logger.log_workflow_end(
+            "ABORT",
+            state.cycle_counts,
+            total_duration_ms=duration_ms,
+            total_cost=None,
+            error=None,
+        )
+        _console.info("workflow end: status=ABORT duration=%dms", duration_ms)
+        return state
+
     def run(self) -> SessionState:
         """ワークフローを実行し、最終状態を返す。
 
@@ -419,47 +930,9 @@ class WorkflowRunner:
             MissingResumeSessionError: resume 先のセッション ID が見つからない
             InvalidTransition: verdict に対応する遷移先がない
         """
-        execution_policy = self.workflow.execution_policy
-
-        # 0. 全ステップのスキル存在を事前検証 + skill metadata 整合チェック (L2)
-        # exec-step（Issue #205）は skill レイヤを介さないため、skill 解決を skip し
-        # metadata に None を入れる（runner Step 0 preflight の skip。cmd_validate と対称）。
-        skill_metadata: dict[str, SkillMetadata | None] = {}
-        for step in self.workflow.steps:
-            if step.exec is not None:
-                skill_metadata[step.id] = None
-                continue
-            assert step.skill is not None  # exactly-one of skill/exec が保証
-            validate_skill_exists(step.skill, self.project_root, self.config.paths.skill_dir)
-            metadata = load_skill_metadata(
-                step.skill, self.project_root, self.config.paths.skill_dir
-            )
-            skill_metadata[step.id] = metadata
-            # L2 preflight: agent 省略の妥当性は metadata 依存
-            if step.agent is None and metadata.exec_script is None:
-                raise WorkflowValidationError(
-                    f"Step '{step.id}' omits 'agent' but skill '{step.skill}' does "
-                    "not declare 'exec_script' in its frontmatter; either set "
-                    "'agent' on the step or add 'exec_script' to the skill"
-                )
-            # exec_script 経路では agent / model / effort は無視される（warning）
-            if metadata.exec_script is not None and (
-                step.agent is not None or step.model is not None or step.effort is not None
-            ):
-                sys.stderr.write(
-                    f"WARNING: Step '{step.id}' uses exec_script skill "
-                    f"'{step.skill}'; 'agent' / 'model' / 'effort' are ignored.\n"
-                )
-
-        # 1. ワークフロー定義のバリデーション
+        skill_metadata = self._collect_skill_metadata()
         validate_workflow(self.workflow)
-
-        # 1.5. --before 指定 step の存在検証（"end" は許容）
-        if self.before_step and self.before_step != "end":
-            if not self.workflow.find_step(self.before_step):
-                raise WorkflowValidationError(f"Step '{self.before_step}' not found (--before)")
-
-        # 1.6. --reset-cycle の検証（workflow 定義のみ参照。state 未到達）
+        self._validate_before_step()
         cycle_reset_target = self._validate_cycle_reset()
 
         # 2. canonical issue id を確定し、以降の state / run log / prompt /
@@ -474,63 +947,8 @@ class WorkflowRunner:
         # 必須化済みのため、ここで `get_provider` が再度失敗することは想定外。
         provider = get_provider(self.config)
 
-        # 3. issue-scoped な状態をロード（canonical id ベース）
-        state = SessionState.load_or_create(run_ctx.canonical_id, self.artifacts_dir)
-
-        # Issue #218: backfill → override 経路。
-        # 旧 kaji 版で作られた state file には worktree_dir / branch_name が無いため、
-        # ``git worktree list --porcelain`` から既存 worktree を発見して state に
-        # 焼き込み、以降は state を正本として label 由来 path を override する。
-        ambiguous_abort: Verdict | None = None
-        if state.worktree_dir is None:
-            try:
-                discovered = discover_existing_worktree(
-                    self.project_root,
-                    run_ctx.canonical_id,
-                    self.config.paths.worktree_prefix,
-                )
-            except AmbiguousWorktreeError as exc:
-                cand_str = "\n  ".join(f"{p} ({b})" for p, b in exc.candidates)
-                sys.stderr.write(
-                    f"ERROR: multiple worktrees match issue {run_ctx.canonical_id!r}:\n"
-                    f"  {cand_str}\n"
-                    f"  Resolve with `git worktree remove <path>` and re-run.\n"
-                )
-                ambiguous_abort = Verdict(
-                    status="ABORT",
-                    reason=f"multiple worktrees match issue {run_ctx.canonical_id}",
-                    evidence="candidates:\n  " + cand_str,
-                    suggestion="Resolve the conflict with `git worktree remove <path>` and re-run.",
-                )
-                discovered = None
-            if discovered is not None:
-                state.capture_worktree(discovered[0], discovered[1])
-
-        if state.worktree_dir and state.branch_name:
-            prefix = state.branch_name.split("/", 1)[0]
-            issue_context = replace(
-                issue_context,
-                worktree_dir=state.worktree_dir,
-                branch_name=state.branch_name,
-                branch_prefix=prefix,
-            )
-
-        # 4. 開始ステップの決定
-        # Issue #288: run_dir 作成より前に検証する。run_dir を作ってから WorkflowValidationError
-        # で抜けると workflow_end の無い run.log が残り、failure triage がそれを artifact 破損
-        # （= kaji_bug_suspected）と誤読して無関係な bug issue を起票しうる。
-        # 開始 step の解決は workflow 定義だけに依存する純粋な処理なので、artifact を
-        # 作る前に済ませられる。
-        if self.single_step:
-            current_step = self.workflow.find_step(self.single_step)
-            if not current_step:
-                raise WorkflowValidationError(f"Step '{self.single_step}' not found")
-        elif self.from_step:
-            current_step = self.workflow.find_step(self.from_step)
-            if not current_step:
-                raise WorkflowValidationError(f"Step '{self.from_step}' not found")
-        else:
-            current_step = self.workflow.find_start_step()
+        state, issue_context, ambiguous_abort = self._load_session_state(run_ctx)
+        current_step: Step | None = self._resolve_start_step()
 
         # 5. run ログディレクトリを作成（canonical id ベース）
         run_dir = allocate_run_dir(self.artifacts_dir / run_ctx.canonical_id / "runs")
@@ -556,38 +974,29 @@ class WorkflowRunner:
         barrier_hit = False
         step_dispatched = False
 
-        # Issue #218: backfill 段階で多重候補 ABORT を検出していたら、
-        # main loop に入らず ABORT verdict を emit して run 全体を停止する。
         if ambiguous_abort is not None:
-            sys.stdout.write(
-                "---VERDICT---\n"
-                "status: ABORT\n"
-                f"reason: |\n  {ambiguous_abort.reason}\n"
-                f"evidence: |\n  {ambiguous_abort.evidence}\n"
-                f"suggestion: |\n  {ambiguous_abort.suggestion}\n"
-                "---END_VERDICT---\n"
+            return self._emit_ambiguous_worktree_abort(
+                ambiguous_abort,
+                state,
+                logger,
+                workflow_start,
             )
-            last_verdict = ambiguous_abort
-            end_status = "ABORT"
-            logger.log_failure_event(kind="ambiguous_worktree", synthetic=True)
-            _console.error("workflow abort: %s", ambiguous_abort.reason)
-            # cli_main は state.last_transition_verdict.status == "ABORT" を見て
-            # EXIT_ABORT を返すため、main loop 未到達でもここで反映する。
-            state.last_transition_verdict = ambiguous_abort
-            state._persist()
-            total_duration_ms = int((time.monotonic() - workflow_start) * 1000)
-            logger.log_workflow_end(
-                end_status,
-                state.cycle_counts,
-                total_duration_ms=total_duration_ms,
-                total_cost=total_cost if total_cost > 0 else None,
-                error=None,
-            )
-            _console.info("workflow end: status=%s duration=%dms", end_status, total_duration_ms)
-            return state
 
         # 6. --reset-cycle の適用（state / logger が確定済み、メインループ前）
         self._apply_cycle_reset(cycle_reset_target, state, logger)
+
+        executor = _StepExecutor(
+            workflow=self.workflow,
+            config=self.config,
+            provider=provider,
+            run_ctx=run_ctx,
+            run_dir=run_dir,
+            logger=logger,
+            state=state,
+            project_root=self.project_root,
+            verbose=self.verbose,
+            resolve_pr_context=self._resolve_pr_context_safe,
+        )
 
         # 7. メインループ
         try:
@@ -611,31 +1020,10 @@ class WorkflowRunner:
                         branch_prefix=prefix,
                     )
 
-                start_time = time.monotonic()
+                iteration_started = time.monotonic()
                 cycle = self.workflow.find_cycle_for_step(current_step.id)
                 step_metadata = skill_metadata[current_step.id]
-                # dispatch 種別を 3 値で確定する（Issue #205）。exec-step は
-                # step.exec を持ち skill metadata は None。exec_script は skill
-                # frontmatter 由来。それ以外は agent（LLM 経路）。
-                if current_step.exec is not None:
-                    dispatch_kind = "exec"
-                elif step_metadata is not None and step_metadata.exec_script is not None:
-                    dispatch_kind = "exec_script"
-                else:
-                    dispatch_kind = "agent"
-                # exec / exec_script は決定論 step として副作用を共有する
-                # （null agent fields / formatter=None / cost None）。
-                is_script_like = dispatch_kind in ("exec", "exec_script")
-                dispatch_label = dispatch_kind
-
-                # Issue #222: attempt 終了情報。dispatch を伴う step でのみ設定し、
-                # cycle 上限 exhaust の合成 verdict（dispatch 無し）では None のまま。
-                attempt_dir: Path | None = None
-                attempt_no: int | None = None
-                attempt_started_at: datetime | None = None
-                exit_code: int | None = None
-                signal_name: str | None = None
-                result_session_id: str | None = None
+                dispatch_kind = _dispatch_kind(current_step, step_metadata)
 
                 # サイクル上限チェック
                 if cycle and state.cycle_iterations(cycle.name) >= cycle.max_iterations:
@@ -652,338 +1040,37 @@ class WorkflowRunner:
                         synthetic=True,
                     )
                     _console.info("cycle exhausted: %s", cycle.name)
-                    cost: CostInfo | None = None
-                else:
-                    # PR context は step ごとに最新状態を見る（`i-pr` step 実行後など、
-                    # workflow 中に MR が新規作成されるケースを反映するため）。
-                    pr_context = self._resolve_pr_context_safe(provider, issue_context.branch_name)
-
-                    # セッション ID の取得（exec_script では使わない）
-                    session_id = (
-                        state.get_session_id(current_step.resume) if current_step.resume else None
-                    )
-                    if current_step.resume and session_id is None:
-                        raise MissingResumeSessionError(current_step.id, current_step.resume)
-
-                    # Issue #220: attempt 単位の log/verdict ディレクトリを採番。
-                    # cycle / retry / resume で同一 step が複数回 dispatch されても
-                    # prompt / logs / verdict を attempt-NNN で分離する。
-                    attempt_dir = allocate_attempt_dir(run_dir, current_step.id)
-                    attempt_no = _attempt_number(attempt_dir)
-                    verdict_yaml_path = attempt_dir / "verdict.yaml"
-
-                    # 決定論 step（exec / exec_script）では agent / model / effort を
-                    # null として記録する（設計書 § 副作用: ignored fields を null 化して
-                    # 経路判別を明示。exec-step は LLM 非経路）。
-                    logger.log_step_start(
-                        current_step.id,
-                        None if is_script_like else current_step.agent,
-                        None if is_script_like else current_step.model,
-                        None if is_script_like else current_step.effort,
-                        session_id,
-                        attempt=attempt_no,
-                        dispatch=dispatch_label,
-                    )
-                    # Issue #235: agent step のみ agent/model/effort を付記する
-                    # （exec / exec_script は LLM 非経路なので付けない）。
-                    agent_suffix = ""
-                    if not is_script_like:
-                        agent_parts = [f"agent={current_step.agent}"]
-                        if current_step.model:
-                            agent_parts.append(f"model={current_step.model}")
-                        if current_step.effort:
-                            agent_parts.append(f"effort={current_step.effort}")
-                        agent_suffix = " " + " ".join(agent_parts)
-                    _console.info(
-                        "step start: %s %s dispatch=%s%s",
-                        current_step.id,
-                        attempt_dir.name,
-                        dispatch_label,
-                        agent_suffix,
-                    )
-
-                    # タイムアウト解決: workflow.default_timeout → config.execution.default_timeout
-                    default_timeout = (
-                        self.workflow.default_timeout
-                        if self.workflow.default_timeout is not None
-                        else self.config.execution.default_timeout
-                    )
-                    resolved_timeout = (
-                        current_step.timeout
-                        if current_step.timeout is not None
-                        else default_timeout
-                    )
-
-                    # workdir 解決: step.workdir → workflow.workdir → project_root
-                    raw_workdir = current_step.workdir or self.workflow.workdir
-                    effective_workdir = Path(raw_workdir) if raw_workdir else self.project_root
-                    if not effective_workdir.is_dir():
-                        raise WorkdirNotFoundError(current_step.id, effective_workdir)
-
-                    # Issue #222: dispatch〜verdict 解決を try/except で囲み、
-                    # timeout / CLI / script の異常終了でも best-effort で attempt
-                    # 終了情報（result.json / step_end / progress.md）を残してから
-                    # 元例外を優先 re-raise する（crash semantics = EXIT_RUNTIME_ERROR
-                    # を維持し、失敗を silent に retry 化しない）。
-                    try:
-                        if is_script_like:
-                            # context env 注入（exec / exec_script 共通）。
-                            # canonical_id / step_id / worktree 関連を script に渡す。
-                            context_env: dict[str, str] = {
-                                "KAJI_ISSUE_ID": run_ctx.canonical_id,
-                                "KAJI_ISSUE_REF": run_ctx.issue_ref,
-                                "KAJI_STEP_ID": current_step.id,
-                                "KAJI_WORKTREE_DIR": issue_context.worktree_dir,
-                                "KAJI_BRANCH_NAME": issue_context.branch_name,
-                                "KAJI_PROVIDER_TYPE": issue_context.provider_type,
-                                "KAJI_DEFAULT_BRANCH": issue_context.default_branch,
-                                # Issue #220: script は verdict.yaml をここへ保存する
-                                "KAJI_VERDICT_PATH": str(verdict_yaml_path),
-                            }
-                            context_env["KAJI_GIT_REMOTE"] = issue_context.git_remote
-                            if pr_context is not None:
-                                context_env["KAJI_PR_ID"] = str(pr_context.pr_id)
-                                context_env["KAJI_PR_REF"] = pr_context.pr_ref
-
-                            # comment fallback の lower bound（dispatch 直前に記録）
-                            attempt_started_at = datetime.now(UTC)
-                            if dispatch_kind == "exec":
-                                # exec-step: 任意 argv を直接 subprocess 実行する。
-                                assert current_step.exec is not None
-                                result = execute_exec(
-                                    step=current_step,
-                                    argv=current_step.exec,
-                                    env=context_env,
-                                    workdir=effective_workdir,
-                                    log_dir=attempt_dir,
-                                    timeout=resolved_timeout,
-                                    verbose=self.verbose,
-                                )
-                            else:
-                                # exec_script: skill frontmatter の python -m <module>。
-                                assert step_metadata is not None
-                                assert step_metadata.exec_script is not None
-                                result = execute_script(
-                                    step=current_step,
-                                    module=step_metadata.exec_script,
-                                    env=context_env,
-                                    workdir=effective_workdir,
-                                    log_dir=attempt_dir,
-                                    timeout=resolved_timeout,
-                                    verbose=self.verbose,
-                                )
-                        else:
-                            # プロンプト構築（canonical id + verdict_path を渡す）
-                            prompt = build_prompt(
-                                current_step,
-                                run_ctx.canonical_id,
-                                state,
-                                self.workflow,
-                                issue_context=issue_context,
-                                pr_context=pr_context,
-                                verdict_path=str(verdict_yaml_path),
-                            )
-                            # 生成済み prompt を attempt に保存（再現性・調査用）
-                            (attempt_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
-
-                            # comment fallback の lower bound（dispatch 直前に記録）
-                            attempt_started_at = datetime.now(UTC)
-                            # Issue #224 / #230: runner backend を config.execution.agent_runner
-                            # で分岐。``interactive_terminal`` は tmux pane 上で通常 CLI を
-                            # 起動し verdict.yaml を待つ（artifact-primary 経路で完了判定）。
-                            # ``headless``（既定）は従来の CLI 起動経路をそのまま使う。
-                            if self.config.execution.agent_runner == "interactive_terminal":
-                                result = execute_interactive_terminal(
-                                    step=current_step,
-                                    prompt_path=attempt_dir / "prompt.txt",
-                                    verdict_path=verdict_yaml_path,
-                                    workdir=effective_workdir,
-                                    timeout=resolved_timeout,
-                                    session_id=session_id,
-                                    close_on_verdict=(
-                                        self.config.execution.interactive_terminal_close_on_verdict
-                                    ),
-                                )
-                            else:
-                                result = execute_cli(
-                                    step=current_step,
-                                    prompt=prompt,
-                                    workdir=effective_workdir,
-                                    session_id=session_id,
-                                    log_dir=attempt_dir,
-                                    execution_policy=execution_policy,
-                                    verbose=self.verbose,
-                                    default_timeout=default_timeout,
-                                )
-
-                        # セッション ID を保存
-                        if result.session_id:
-                            state.save_session_id(current_step.id, result.session_id)
-                        cost = result.cost
-                        result_session_id = result.session_id
-                        exit_code = result.exit_code
-                        signal_name = result.signal
-
-                        # Issue #220: verdict 解決順 artifact → comment → stdout。
-                        valid = set(current_step.on.keys())
-                        if is_script_like:
-                            # 決定論 step（exec / exec_script）では AI formatter
-                            # fallback を呼ばない（fabrication 防止 + 決定論性維持）
-                            formatter = None
-                        else:
-                            assert current_step.agent is not None  # L2 で確定
-                            formatter = create_verdict_formatter(
-                                agent=current_step.agent,
-                                valid_statuses=valid,
-                                model=current_step.model,
-                                workdir=effective_workdir,
-                            )
-                        verdict, verdict_source, verdict_findings = resolve_verdict(
-                            attempt_dir=attempt_dir,
-                            full_output=result.full_output,
-                            valid_statuses=valid,
-                            attempt_started_at=attempt_started_at,
-                            # comment fallback は artifact 不在時のみ遅延呼び出し。
-                            comment_loader=lambda: (
-                                provider.view_issue(run_ctx.canonical_id).comments
-                            ),
-                            ai_formatter=formatter,
-                        )
-                        logger.log_verdict_source(current_step.id, verdict_source, attempt_dir.name)
-                        if verdict_findings:
-                            logger.log_verdict_sanitization(
-                                current_step.id, attempt_dir.name, verdict_findings
-                            )
-                        _console.info(
-                            "verdict detected: %s source=%s status=%s",
-                            current_step.id,
-                            verdict_source,
-                            verdict.status,
-                        )
-                        # 解決 source が artifact 以外なら正規化保存（legacy skill が
-                        # stdout しか出さなくても attempt-NNN/verdict.yaml を必ず残す）。
-                        # artifact source でも sanitize が発生した場合（verdict_findings
-                        # 非空）は、agent が書いた生の禁止制御文字入り verdict.yaml を
-                        # 正規化後の内容で上書きする。これで生禁止文字がどの artifact にも
-                        # 残らず（完了条件: 診断証跡の永続化）、generic YAML reader でも
-                        # 読める verdict.yaml が保証される（comment / stdout 経路と対称）。
-                        if verdict_source != "artifact" or verdict_findings:
-                            write_verdict_yaml(verdict_yaml_path, verdict)
-                    except (
-                        StepTimeoutError,
-                        CLIExecutionError,
-                        CLINotFoundError,
-                        ScriptExecutionError,
-                        VerdictNotFound,
-                        VerdictParseError,
-                        InvalidVerdictValue,
-                    ) as exc:
-                        # best-effort で異常終了情報を記録 → 元例外を re-raise。
-                        # 二系統の失敗を 1 箇所で扱う:
-                        #   1. dispatch 失敗（StepTimeoutError / CLIExecutionError /
-                        #      CLINotFoundError / ScriptExecutionError）: result 未取得。
-                        #      exc.returncode を終了コードとして運ぶ（取得不能なら None）。
-                        #   2. verdict 解決失敗（VerdictNotFound / VerdictParseError /
-                        #      InvalidVerdictValue）: dispatch は成功し CLI/script は
-                        #      正常 exit している。L651-652 で result から捕捉済みの
-                        #      exit_code / signal_name を保持する（verdict 例外は
-                        #      returncode を持たないため、ここで無条件に
-                        #      getattr(..., None) で上書きすると正常 exit の終了コードを
-                        #      None で潰してしまう）。
-                        ended_at = datetime.now(UTC)
-                        exc_returncode = getattr(exc, "returncode", None)
-                        if exc_returncode is not None:
-                            exit_code = exc_returncode
-                            signal_name = derive_signal(exit_code)
-                        started = attempt_started_at if attempt_started_at is not None else ended_at
-                        # Issue #288: 同一 except 節から二系統を出し分ける。dispatch 失敗
-                        # （プロセス側）と verdict 解決失敗（dispatch は成功）は recovery
-                        # classifier にとって別 cause であり、reason 文字列で後から
-                        # 判別させない。
-                        logger.log_failure_event(
-                            kind=(
-                                "verdict_exception"
-                                if isinstance(
-                                    exc, VerdictNotFound | VerdictParseError | InvalidVerdictValue
-                                )
-                                else "dispatch_exception"
-                            ),
-                            step_id=current_step.id,
-                            exception_type=type(exc).__name__,
-                            synthetic=True,
-                        )
-                        abort_verdict = Verdict(
-                            status="ABORT",
-                            reason="step aborted without a usable verdict",
-                            evidence=str(exc)[:500],
-                            suggestion=(
-                                f"Inspect {attempt_dir.name}/result.json and console.log; "
-                                "re-run after addressing the abort cause."
-                            ),
-                        )
-                        _record_attempt_end(
-                            attempt_dir=attempt_dir,
-                            step_id=current_step.id,
-                            attempt=attempt_no,
-                            verdict=abort_verdict,
-                            exit_code=exit_code,
-                            signal=signal_name,
-                            started_at=started,
-                            ended_at=ended_at,
-                            step_duration_ms=int((time.monotonic() - start_time) * 1000),
-                            session_id=result_session_id or session_id,
-                            dispatch=dispatch_label,
-                            error=f"{type(exc).__name__}: {exc}",
-                            cost=None,
-                            logger=logger,
-                            state=state,
-                            synthetic=True,
-                        )
-                        raise
-
-                # ログ記録 + 状態更新
-                duration_ms = int((time.monotonic() - start_time) * 1000)
-                if (
-                    attempt_dir is not None
-                    and attempt_no is not None
-                    and attempt_started_at is not None
-                ):
-                    # dispatch を伴う step: result.json + step_end + record_step（attempt 付き）
-                    _record_attempt_end(
-                        attempt_dir=attempt_dir,
-                        step_id=current_step.id,
-                        attempt=attempt_no,
+                    outcome = _StepOutcome(
                         verdict=verdict,
-                        exit_code=exit_code,
-                        signal=signal_name,
-                        started_at=attempt_started_at,
-                        ended_at=datetime.now(UTC),
-                        step_duration_ms=duration_ms,
-                        session_id=result_session_id,
-                        dispatch=dispatch_label,
-                        error=None,
-                        cost=cost,
-                        logger=logger,
-                        state=state,
-                        synthetic=False,
+                        cost=None,
+                        dispatched=False,
+                        duration_ms=int((time.monotonic() - iteration_started) * 1000),
+                        dispatch=dispatch_kind,
                     )
-                    # Issue #288: agent が返した正規の ABORT verdict。runner 生成の
-                    # 合成 ABORT と区別するため synthetic=False で記録する。
-                    if verdict.status == "ABORT":
-                        logger.log_failure_event(
-                            kind="agent_abort", step_id=current_step.id, synthetic=False
-                        )
                 else:
-                    # cycle 上限 exhaust の合成 verdict: dispatch 無し → result.json 無し。
+                    outcome = executor.execute(
+                        current_step,
+                        step_metadata,
+                        issue_context,
+                        iteration_started,
+                    )
+
+                verdict = outcome.verdict
+                duration_ms = outcome.duration_ms
+                if not outcome.dispatched:
                     logger.log_step_end(
-                        current_step.id, verdict, duration_ms, cost, dispatch=dispatch_label
+                        current_step.id,
+                        verdict,
+                        duration_ms,
+                        outcome.cost,
+                        dispatch=outcome.dispatch,
                     )
                     state.record_step(current_step.id, verdict)
                 last_verdict = verdict
                 step_dispatched = True
 
-                if cost and cost.usd:
-                    total_cost += cost.usd
+                if outcome.cost and outcome.cost.usd:
+                    total_cost += outcome.cost.usd
 
                 # サイクルカウント
                 if cycle and current_step.id == cycle.loop[-1] and verdict.status == "RETRY":
