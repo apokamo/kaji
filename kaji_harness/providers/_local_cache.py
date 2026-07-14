@@ -70,11 +70,16 @@ class GitHubCacheReader:
         return issues
 
 
-def _normalized_payload(payload: dict[str, object]) -> tuple[dict[object, object], str]:
-    """Return the nested Issue payload and normalized display state."""
+def _normalized_payload(payload: dict[str, object]) -> tuple[dict[object, object], str] | None:
+    """Return the nested Issue payload and normalized display state.
+
+    ``None`` marks a structurally invalid entry (``issue`` present but not an object).
+    A missing / empty / null ``issue`` is not invalid: it normalizes to ``({}, "closed")``
+    so callers keep the pre-refactor degenerate-entry behavior.
+    """
     issue_payload = payload.get("issue") or {}
     if not isinstance(issue_payload, dict):
-        return {}, "closed"
+        return None
     local_meta = payload.get("kaji_local") or {}
     is_stale = bool(local_meta.get("is_stale", False)) if isinstance(local_meta, dict) else False
     github_state = str(issue_payload.get("state", "") or "").lower()
@@ -96,10 +101,14 @@ def _payload_labels(issue_payload: dict[object, object]) -> list[Label]:
 
 
 def _listed_issue_from_payload(payload: dict[str, object]) -> Issue | None:
-    """Build the list representation, whose identifier carries the ``gh:`` prefix."""
-    issue_payload, state = _normalized_payload(payload)
-    if not issue_payload:
+    """Build the list representation, whose identifier carries the ``gh:`` prefix.
+
+    ``None`` skips the entry, and only a non-object ``issue`` value is skipped.
+    """
+    normalized = _normalized_payload(payload)
+    if normalized is None:
         return None
+    issue_payload, state = normalized
     number = issue_payload.get("number")
     return Issue(
         id=f"gh:{number}" if number is not None else "",
@@ -113,9 +122,10 @@ def _listed_issue_from_payload(payload: dict[str, object]) -> Issue | None:
 
 def cached_github_issue_from_payload(payload: dict[str, object]) -> Issue:
     """Build the direct-view representation of a cached GitHub Issue."""
-    issue_payload, state = _normalized_payload(payload)
-    if not issue_payload:
+    normalized = _normalized_payload(payload)
+    if normalized is None:
         return Issue(id="", title="", body="", state="closed", labels=[], comments=[])
+    issue_payload, state = normalized
     number = issue_payload.get("number")
     return Issue(
         id=str(number) if number is not None else "",

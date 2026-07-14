@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+# ``os`` / ``datetime`` / ``atomic_write_new`` はこの facade の namespace 束縛が
+# 既存テストの patch target（例: tests/test_preflight.py の
+# ``patch.object(local.os, "write", ...)``）なので、facade 内で直接使わなくても再export する。
 import os as os
 import subprocess
 import sys

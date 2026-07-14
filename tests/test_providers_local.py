@@ -441,6 +441,43 @@ class TestRemoteCacheReader:
         issue = provider.view_cached_issue("200")
         assert issue.state == "closed"
 
+    def test_list_keeps_degenerate_cache_entries(self, provider: LocalProvider) -> None:
+        """空 / null の ``issue`` payload は list に残す（refactor #323 前からの挙動）。
+
+        characterization test: ``{"issue": {}}`` / ``{"issue": null}`` は
+        ``Issue(id="", state="closed")`` として列挙される。
+        """
+        cache_dir = provider.repo_root / ".kaji" / "cache"
+        cache_dir.mkdir(parents=True)
+        (cache_dir / "gh-99.json").write_text(json.dumps({"issue": {}}))
+        (cache_dir / "gh-100.json").write_text(json.dumps({"issue": None}))
+
+        listed = provider.list_issues(state="all")
+        assert [(i.id, i.state) for i in listed] == [("", "closed"), ("", "closed")]
+        assert provider.list_issues(state="closed") == listed
+        assert provider.list_issues(state="open") == []
+
+    def test_list_skips_non_object_cache_issue_payload(self, provider: LocalProvider) -> None:
+        """``issue`` が object でない entry のみ list から除外する。"""
+        cache_dir = provider.repo_root / ".kaji" / "cache"
+        cache_dir.mkdir(parents=True)
+        (cache_dir / "gh-101.json").write_text(json.dumps({"issue": ["not", "an", "object"]}))
+
+        assert provider.list_issues(state="all") == []
+
+    def test_view_cached_issue_degenerate_payload(self, provider: LocalProvider) -> None:
+        """view 側は空 payload でも空 Issue を返す（list と同じく旧挙動を維持）。"""
+        cache_dir = provider.repo_root / ".kaji" / "cache"
+        cache_dir.mkdir(parents=True)
+        (cache_dir / "gh-99.json").write_text(json.dumps({"issue": {}}))
+        (cache_dir / "gh-101.json").write_text(json.dumps({"issue": ["x"]}))
+
+        for number in ("99", "101"):
+            issue = provider.view_cached_issue(number)
+            assert issue.id == ""
+            assert issue.state == "closed"
+            assert issue.labels == []
+
     def test_is_readonly_id_only_for_remote_cache(self, provider: LocalProvider) -> None:
         assert provider.is_readonly_id("remote_cache") is True
         assert provider.is_readonly_id("local") is False
