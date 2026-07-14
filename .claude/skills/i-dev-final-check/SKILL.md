@@ -58,12 +58,12 @@ $ARGUMENTS = <issue_id>
 ## 実施内容
 
 1. worktree と branch を解決する
-2. 前段の証跡を集約し、Issue 完了条件との照合を行う
+2. 前段の証跡を集約し、事後確認を除く Issue 完了条件との照合を行う
 3. 設計書の「影響ドキュメント」と実差分を確認する
 4. 品質ゲートを実行する（後述 Step 4 詳細）
 5. docs 更新の最終確認を行い、必要なら修正する
 6. 設計書昇格判定 → 必要なら昇格、または既存 docs 更新の有無を確認する
-7. Issue 本文の完了条件を照合し、充足状態を更新する
+7. Issue 本文の完了条件を照合し、`### ワークフロー完了後の確認項目` を除く充足状態を更新する
 7.5. 設計書を Issue 本文の NOTE ブロック直下に添付する
 8. Issue に最終チェック結果をコメントする
 
@@ -93,7 +93,9 @@ kaji issue view [issue_id] --comments
 
 ### 2-2. 完了条件との照合
 
-Issue 本文の `## 完了条件` セクション（チェックボックス形式）を取得し、各条件について:
+Issue 本文の `## 完了条件` セクション（チェックボックス形式）を取得し、
+末尾サブセクション `### ワークフロー完了後の確認項目` を判定対象から除外する。
+残った各条件について:
 
 1. **どの前段で確認されたか** を特定する
 2. **確認の根拠** を前段コメントから抽出する（最新のコメントを優先）
@@ -150,13 +152,14 @@ cd [worktree_dir] && source .venv/bin/activate && make check
 
 ### PASS の場合
 
-Issue 本文のチェックボックスを `[x]` に更新する。
+Issue 本文の workflow 内完了条件のチェックボックスを `[x]` に更新する。
+`### ワークフロー完了後の確認項目` 内のチェックボックスは更新せず、`[ ]` のまま維持する。
 
 ```bash
 # 本文を取得
 kaji issue view [issue_id] --json body -q '.body' > /tmp/issue-body.md
 
-# チェックボックスを更新（確認済み条件を [x] に変更）
+# チェックボックスを更新（事後確認より前にある確認済み条件だけを [x] に変更）
 # 例: sed -i 's/- \[ \] 条件A/- [x] 条件A/' /tmp/issue-body.md
 
 # 更新を反映
@@ -264,7 +267,7 @@ kaji issue comment [issue_id] --commit \
 | issue-review-code | ✅ | Approve |
 | (fix-code → verify-code) | (経由した場合) | (Approve) |
 
-### 完了条件の充足状態
+### workflow 内完了条件の充足状態
 
 | 条件 | 充足 | 確認元 |
 |------|------|--------|
@@ -304,7 +307,7 @@ status: PASS
 reason: |
   dev workflow の最終チェックを完了し、PR に進める状態を確認した
 evidence: |
-  前段証跡を集約し、全完了条件の充足を確認した。Issue 本文のチェックボックスを更新済み
+  前段証跡を集約し、事後確認を除く workflow 内完了条件の充足を確認した。Issue 本文の対象チェックボックスを更新済み
 suggestion: |
 ---END_VERDICT---
 ```
@@ -313,7 +316,7 @@ suggestion: |
 
 | status | 条件 |
 |--------|------|
-| PASS | 全完了条件が充足し、Issue 本文更新済み |
+| PASS | 事後確認を除く workflow 内完了条件がすべて充足し、Issue 本文更新済み |
 | RETRY | final-check 文脈で閉じる軽微修正が必要 |
 | BACK_DESIGN | 設計起因の不足（影響ドキュメント評価漏れ / テスト戦略未定義 / 要件解釈の食い違い 等）。`design` に戻す。**`final-check.on` に `BACK_DESIGN` が定義されている YAML でのみ使用** |
 | BACK_IMPLEMENT | 実装起因の不足（前段コメント欠落 / 品質ゲート未通過 / docs 更新漏れ 等）。`implement` に戻す。**`final-check.on` に `BACK_IMPLEMENT` が定義されている YAML でのみ使用** |
