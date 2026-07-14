@@ -18,6 +18,8 @@ from kaji_harness.config import KajiConfig
 from kaji_harness.models import Step, Workflow
 from kaji_harness.prompt import build_prompt
 from kaji_harness.providers import IssueContext, LocalProvider
+from kaji_harness.runner import _dispatch_kind
+from kaji_harness.skill import SkillMetadata
 from kaji_harness.state import SessionState
 
 # ============================================================
@@ -53,6 +55,32 @@ def _make_state() -> SessionState:
             last_completed_step=None,
             last_transition_verdict=None,
         )
+
+
+@pytest.mark.small
+@pytest.mark.parametrize(
+    ("step", "metadata", "expected"),
+    [
+        (Step(id="exec", exec=["true"]), None, "exec"),
+        (
+            Step(id="script", skill="s"),
+            SkillMetadata(name="s", description="", exec_script="some.module"),
+            "exec_script",
+        ),
+        (
+            Step(id="agent", skill="s", agent="codex"),
+            SkillMetadata(name="s", description="", exec_script=None),
+            "agent",
+        ),
+    ],
+)
+def test_dispatch_kind(
+    step: Step,
+    metadata: SkillMetadata | None,
+    expected: str,
+) -> None:
+    """The extracted selector preserves all three dispatch routes."""
+    assert _dispatch_kind(step, metadata) == expected
 
 
 # ============================================================

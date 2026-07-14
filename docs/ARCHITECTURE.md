@@ -101,7 +101,11 @@ kaji_harness/
     base.py       # IssueProvider Protocol
     models.py     # Issue / Comment / Label / IssueContext / PRContext
     github.py     # GitHubProvider (gh CLI 委譲)
-    local.py      # LocalProvider (Issue CRUD + local issue change の atomic commit)
+    local.py      # LocalProvider facade (Issue CRUD + local issue change の atomic commit)
+    _local_common.py    # local frontmatter / validation / error vocabulary
+    _local_store.py     # local Issue storage / ID allocation
+    _local_comments.py  # local comment read / atomic append
+    _local_cache.py     # read-only GitHub cache reader
     context.py    # branch / worktree / design path / issue ref / NOTE 本文の決定的合成
     cache_guard.py  # legacy forge cache の fail-fast 検出 (sync と LocalProvider が共有する契約)
     markers.py    # kaji-verdict marker の生成 / optional flag 解決
