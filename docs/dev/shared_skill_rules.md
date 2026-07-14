@@ -104,9 +104,50 @@ issue reference の form は `#N` / `owner/repo#N` / issue URL。GitHub の clos
 pattern には `Implements` 系は **含まれない** が、kaji workflow では起点で抑止
 する追加ルールとして本規約に含める（保守的防御）。
 
+さらに GitHub 仕様上、**PR と issue の「リンク」と merge 時 auto-close は不可分**
+である。リンクされた PR が default branch に merge されると linked issue は自動
+close される。これはリンクの作成方法（closing keyword / sidebar の手動リンク /
+`createLinkedBranch`）に依存しない、リンクそのものの性質である（仕様:
+[Linking a pull request to an issue](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue)）。
+したがって「Issue 側に linked PR を表示しつつ auto-close は避ける」は、
+keyword 表記の工夫では達成できず、後述のリポジトリ設定でのみ達成できる。
+
+### 前提条件: リポジトリ設定で auto-close を無効化していること
+
+本規約は、以下のリポジトリ設定が **無効化されている** ことを前提とする。
+
+| 項目 | 内容 |
+|------|------|
+| 設定名 | **Auto-close issues with merged linked pull requests** |
+| 場所 | Settings → General → Features → Issues |
+| 本リポジトリ（apokamo/kaji）の状態 | **無効化済み**（linked PR を merge しても issue は自動 close されない） |
+| API からの検証 | **不可**。REST（`gh api repos/<owner>/<repo>`）にも GraphQL にも当該フィールドは公開されておらず、機械的に検証できない |
+
+- この設定を再び有効化すると、`/i-pr` が生成する PR の merge 時に issue が
+  意図せず close される。kaji は `/issue-close` による明示 close を前提とする
+  運用のため、**設定を変更しないこと**。
+- skill 群を **他リポジトリで流用する場合**、同設定の無効化が前提となる。
+  無効化できない環境では PR description の live closing keyword を使わない運用
+  （linked PR アイコンを諦める）に切り替える必要がある。
+
+### PR description の closing keyword（`/i-pr` のみ許可 / 必須）
+
+- **`/i-pr` が生成する PR description には live closing keyword（`Closes` +
+  `#` + issue 番号）を 1 行含める**（テンプレート上の表記は `Closes [issue_ref]`）。
+  これは PR↔Issue の紐付け（Issue 側 sidebar / 一覧での linked PR 表示）を
+  自動化できる唯一の手段であるため（既存 PR を issue に手動リンクする public API
+  は存在しない）。
+- 上記 1 行を **例外**とし、PR description のそれ以外の箇所（Summary / Changes /
+  Test Plan 本文など）では、後述の共通規約どおり close keyword + `#N` 表記を
+  書かない。
+- **commit body 側の回避規約は維持する**（次節）。当該リポジトリ設定が commit
+  message 経由の auto-close（default branch への push / merge 時）までカバー
+  するかは仕様上明確でないため、保守的防御として残す。
+
 ### 共通規約（仕様準拠 / 必須）
 
-skill が生成する **commit body** および **PR description** に対して必須:
+skill が生成する **commit body**、および **PR description**（`/i-pr` の
+`Closes [issue_ref]` 行を除く）に対して必須:
 
 - close keyword（`Clos(e[sd]?|ing)` / `Fix(e[sd]|ing)?` / `Resolv(e[sd]?|ing)` /
   `Implement(s|ing|ed)?`）の直後に `#` + 数字が連続するテキストを書かない。例文
@@ -166,8 +207,9 @@ pre-handoff review で起動する subagent（`.claude/agents/kaji-code-reviewer
     grep -iE '\b(clos(e[sd]?|ing)|fix(e[sd]|ing)?|resolv(e[sd]?|ing)|implement(s|ing|ed)?)\s*:?\s*#[0-9]'
   ```
   1 件でも match したら commit を amend して placeholder 化してから push する。
-  PR description も `kaji pr create` / `gh pr edit` で渡す本文を同様に grep
-  する。
+  PR description も `kaji pr create` / `gh pr edit` で渡す本文を同様に grep し、
+  match が **`/i-pr` テンプレートの `Closes <issue_ref>` 行 1 件のみ**であること
+  を確認する（それ以外の match は placeholder 化する）。
 - **push 後**: 意図しない close が発生していないか確認する:
   ```bash
   # 開いている issue を一覧（push 前との差分で消えた N を特定）
