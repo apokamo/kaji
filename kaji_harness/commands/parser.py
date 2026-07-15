@@ -31,10 +31,23 @@ def create_parser() -> argparse.ArgumentParser:
     _register_pr(subparsers)
     _register_config(subparsers)
     _register_sync(subparsers)
+    _register_starter(subparsers)
     from ..local_init import register_subcommand as _register_local
 
     _register_local(subparsers)
     return parser
+
+
+def _register_starter(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    """Register deterministic managed-starter helper commands."""
+    starter = subparsers.add_parser("starter", help="Managed starter maintenance helpers")
+    starter_subs = starter.add_subparsers(dest="starter_command", required=True)
+    starter_subs.add_parser(
+        "release-plan",
+        help="Read release observations as JSON from stdin and emit a deterministic plan",
+    )
 
 
 def _register_sync(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:

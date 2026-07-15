@@ -10,6 +10,7 @@ from .pr import _handle_pr
 from .recover import cmd_recover
 from .run import cmd_run
 from .series import cmd_run_series, cmd_validate_series
+from .starter import cmd_starter_release_plan
 from .sync import cmd_sync_from_github, cmd_sync_status
 from .validate import cmd_validate
 
@@ -51,6 +52,11 @@ def main(argv: list[str] | None = None) -> int:
         from ..local_init import cmd_local
 
         return cmd_local(args)
+    if args.command == "starter":
+        if args.starter_command == "release-plan":
+            return cmd_starter_release_plan()
+        parser.print_help()
+        return EXIT_ABORT
 
     parser.print_help()
     return EXIT_ABORT

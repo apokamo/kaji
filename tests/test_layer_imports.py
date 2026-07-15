@@ -39,6 +39,7 @@ MODULE_LAYERS: dict[str, str] = {
     "kaji_harness.scripts": "application",
     "kaji_harness.skill": "application",
     "kaji_harness.state": "application",
+    "kaji_harness.starter_release": "application",
     "kaji_harness.sync": "application",
     "kaji_harness.verdict": "application",
     "kaji_harness.workflow": "application",

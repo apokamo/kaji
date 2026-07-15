@@ -27,6 +27,10 @@ GitHub environment `pypi` approval
     ↓
 Trusted Publisher + uv publish で PyPI に公開
     ↓
+GitHub Release の managed starter 各行を PENDING で追跡
+    ↓
+tracking Issue → update → 別 session review → starter snapshot release / N/A
+    ↓
 consumer (kamo2 等) が `uv lock --upgrade-package kaji` で新版取得
 ```
 
@@ -58,8 +62,12 @@ skill 側で以下を guide する:
 7. `gh release create vX.Y.Z --notes "<CHANGELOG 抜粋>"`
 8. GitHub Actions `publish-pypi.yml` の起動と `pypi` environment approval を確認
 9. PyPI 公開後、`uv tool install kaji && kaji --help` をクリーン環境で確認
+10. managed starter ごとの tracking Issue を作成し、Release 状態表へリンクして
+    `/update-starter <tracking_issue_id>` へ handoff
 
 詳細は [`.claude/skills/release/SKILL.md`](../../../.claude/skills/release/SKILL.md) を参照。
+starter 追随・独立 review・snapshot 公開の正本は
+[Managed Starter Sync Runbook](starter-sync-runbook.md) を参照。
 
 ## バージョン管理対象
 
@@ -198,3 +206,4 @@ token を `.pypirc`、shell history、Issue コメント、docs、repo 内ファ
 ## 関連
 
 - skill 本体: [`.claude/skills/release/SKILL.md`](../../../.claude/skills/release/SKILL.md)
+- starter 追随運用: [Managed Starter Sync Runbook](starter-sync-runbook.md)

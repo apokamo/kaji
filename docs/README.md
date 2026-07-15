@@ -65,6 +65,7 @@ kaji のドキュメント一覧。[Diataxis フレームワーク](https://diat
 | ドキュメント | 概要 |
 |-------------|------|
 | [Release Runbook](operations/release/runbook.md) | `/release` skill ベースのリリース運用（CI 非依存 / maintainer 手元実行）と緊急時 fallback |
+| [Managed Starter Sync Runbook](operations/release/starter-sync-runbook.md) | kaji Release 後の starter 追随・独立 review・検証済み snapshot 公開運用 |
 | [Release-Please Admin 設定（historical）](operations/release/admin-setup.md) | 旧 GitHub release-please 運用の admin 初期設定。現在は非運用。GitHub 運用を再開する場合の参考資料 |
 | [Local Mode 緊急時 Fallback Runbook](operations/local-mode-runbook.md) | GitHub 障害・不通時に local-mode へ一時退避するための手順、複数 PC 運用、GitHub 復帰判断（英語正本、[日本語](operations/local-mode-runbook.ja.md)） |
 

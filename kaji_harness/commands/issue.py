@@ -5,10 +5,17 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
-from ..errors import ConfigLoadError, ConfigNotFoundError
-from ..providers import IssueProvider, ResolvedId, get_provider, normalize_id
+from ..errors import (
+    ConfigLoadError,
+    ConfigNotFoundError,
+    VerdictMarkerMalformedError,
+    VerdictMarkerMetaMissingError,
+    VerdictMarkerNotFoundError,
+)
+from ..providers import Comment, IssueProvider, ResolvedId, get_provider, normalize_id
 from ..providers.context import build_worktree_note_body
 from ..providers.github import GitHubProviderError
 from ..providers.local import (
@@ -17,11 +24,91 @@ from ..providers.local import (
     LocalProvider,
     LocalProviderError,
 )
-from ..providers.markers import resolve_verdict_marker
+from ..providers.markers import (
+    KajiVerdictMarker,
+    build_kaji_verdict_marker,
+    parse_kaji_verdict_marker,
+    resolve_verdict_marker,
+)
 from .config import _load_config_for_dispatch
 from .exit_codes import EXIT_INVALID_INPUT, EXIT_OK, EXIT_RUNTIME_ERROR
 from .output import _emit_json, _issue_to_json_dict, _read_body_arg
 from .pr import _forward_to_gh
+
+EXIT_VERDICT_NOT_FOUND = 4
+EXIT_VERDICT_MALFORMED = 5
+EXIT_VERDICT_META_MISSING = 6
+
+
+@dataclass(frozen=True)
+class ResolvedVerdictMarker:
+    """Latest valid verdict marker plus its provider timestamp.
+
+    Attributes:
+        step: Producing workflow step.
+        status: Verdict status.
+        meta: Validated marker metadata.
+        created_at: Provider-neutral ISO 8601 comment timestamp.
+    """
+
+    step: str
+    status: str
+    meta: dict[str, str]
+    created_at: str
+
+
+def resolve_latest_verdict(
+    comments: list[Comment],
+    *,
+    step: str,
+    required_meta: tuple[str, ...] = (),
+) -> ResolvedVerdictMarker:
+    """Resolve the latest marker for one step and validate required metadata.
+
+    ``Comment`` lists are provider-normalized in posting order, so reverse scan
+    deterministically makes every later verdict supersede earlier verdicts.
+
+    Args:
+        comments: Provider-neutral Issue comments in posting order.
+        step: Producing step to select.
+        required_meta: Metadata keys that must exist on the latest marker.
+
+    Returns:
+        The latest parsed marker and its comment timestamp.
+
+    Raises:
+        VerdictMarkerNotFoundError: No marker exists for the requested step.
+        VerdictMarkerMalformedError: The latest matching marker is malformed.
+        VerdictMarkerMetaMissingError: A required metadata key is absent.
+    """
+    build_kaji_verdict_marker(step, "PASS")  # fail-loud step grammar validation
+    marker_prefix = f"<!-- kaji-verdict: step={step} "
+    for comment in reversed(comments):
+        first_line = comment.body.splitlines()[0] if comment.body.splitlines() else ""
+        if not first_line.startswith(marker_prefix):
+            continue
+        marker = parse_kaji_verdict_marker(first_line)
+        if marker is None or marker.step != step:
+            raise VerdictMarkerMalformedError(
+                f"latest verdict marker for step {step!r} is malformed"
+            )
+        missing = [key for key in required_meta if key not in marker.meta]
+        if missing:
+            raise VerdictMarkerMetaMissingError(
+                f"latest verdict marker for step {step!r} is missing metadata: {', '.join(missing)}"
+            )
+        return _resolved_marker(marker, comment.created_at)
+    raise VerdictMarkerNotFoundError(f"no verdict marker found for step {step!r}")
+
+
+def _resolved_marker(marker: KajiVerdictMarker, created_at: str) -> ResolvedVerdictMarker:
+    """Combine a parsed marker with its comment timestamp."""
+    return ResolvedVerdictMarker(
+        step=marker.step,
+        status=marker.status,
+        meta=marker.meta,
+        created_at=created_at,
+    )
 
 
 def _handle_issue(raw_args: list[str]) -> int:
@@ -63,6 +150,8 @@ def _handle_issue(raw_args: list[str]) -> int:
     # GitHub passthrough 前に捕捉する（Issue #200）。
     if args and args[0] == "prepend-note":
         return _handle_issue_prepend_note(provider, args[1:])
+    if args and args[0] == "resolve-verdict":
+        return _handle_issue_resolve_verdict(provider, args[1:])
 
     if isinstance(provider, LocalProvider):
         return _handle_issue_local(provider, raw_args)
@@ -104,6 +193,7 @@ def _github_issue_comment_with_verdict(provider: object, rest: list[str]) -> int
     p.add_argument("--commit", action="store_true")
     p.add_argument("--verdict-step", dest="verdict_step", default=None, type=str)
     p.add_argument("--verdict-status", dest="verdict_status", default=None, type=str)
+    p.add_argument("--verdict-meta", dest="verdict_meta", action="append", default=[])
     ns = p.parse_args(rest)
     try:
         body = _read_body_arg(ns.body, ns.body_file)
@@ -117,7 +207,7 @@ def _github_issue_comment_with_verdict(provider: object, rest: list[str]) -> int
         sys.stderr.write("Error: 'kaji issue comment' requires --body or --body-file\n")
         return EXIT_INVALID_INPUT
     try:
-        marker = resolve_verdict_marker(ns.verdict_step, ns.verdict_status)
+        marker = resolve_verdict_marker(ns.verdict_step, ns.verdict_status, ns.verdict_meta)
     except ValueError as exc:
         sys.stderr.write(f"Error: {exc}\n")
         return EXIT_INVALID_INPUT
@@ -168,11 +258,70 @@ def _has_verdict_flags(args: list[str]) -> bool:
     形式も検出する。
     """
     return any(
-        a in ("--verdict-step", "--verdict-status")
+        a in ("--verdict-step", "--verdict-status", "--verdict-meta")
         or a.startswith("--verdict-step=")
         or a.startswith("--verdict-status=")
+        or a.startswith("--verdict-meta=")
         for a in args
     )
+
+
+def _handle_issue_resolve_verdict(provider: IssueProvider, rest: list[str]) -> int:
+    """Resolve the latest structured verdict marker for one Issue step.
+
+    Args:
+        provider: Active provider implementation.
+        rest: Arguments after ``kaji issue resolve-verdict``.
+
+    Returns:
+        Zero on success; distinct non-zero codes for not found, malformed, and
+        required-metadata-missing outcomes.
+    """
+    parser = argparse.ArgumentParser(prog="kaji issue resolve-verdict", add_help=True)
+    parser.add_argument("issue_id", type=str)
+    parser.add_argument("--step", required=True, type=str)
+    parser.add_argument("--require-meta", action="append", default=[])
+    namespace = parser.parse_args(rest)
+
+    if isinstance(provider, LocalProvider):
+        resolved_id = _resolve_local_id(provider, namespace.issue_id, write=False)
+        if isinstance(resolved_id, int):
+            return resolved_id
+        issue_id = resolved_id.value
+    else:
+        try:
+            issue_id = normalize_id(
+                namespace.issue_id,
+                provider_name="github",
+                machine_id=None,
+            ).value
+        except ValueError as exc:
+            sys.stderr.write(f"Error: {exc}\n")
+            return EXIT_INVALID_INPUT
+
+    try:
+        comments = provider.list_issue_comments_all(issue_id)
+        resolved = resolve_latest_verdict(
+            comments,
+            step=namespace.step,
+            required_meta=tuple(namespace.require_meta),
+        )
+    except VerdictMarkerNotFoundError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_VERDICT_NOT_FOUND
+    except VerdictMarkerMalformedError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_VERDICT_MALFORMED
+    except VerdictMarkerMetaMissingError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_VERDICT_META_MISSING
+    except ValueError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+    except (GitHubProviderError, IssueNotFoundError) as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+    return _emit_json(dataclasses.asdict(resolved), jq_expr=None)
 
 
 def _handle_issue_prepend_note(provider: IssueProvider, rest: list[str]) -> int:
@@ -468,6 +617,7 @@ def _local_issue_comment(provider: LocalProvider, rest: list[str]) -> int:
     )
     p.add_argument("--verdict-step", dest="verdict_step", default=None, type=str)
     p.add_argument("--verdict-status", dest="verdict_status", default=None, type=str)
+    p.add_argument("--verdict-meta", dest="verdict_meta", action="append", default=[])
     ns = p.parse_args(rest)
     rid_or_rc = _resolve_local_id(provider, ns.issue_id, write=True)
     if isinstance(rid_or_rc, int):
@@ -478,7 +628,7 @@ def _local_issue_comment(provider: LocalProvider, rest: list[str]) -> int:
         raise ValueError("'kaji issue comment' requires --body or --body-file")
     # verdict marker（ADR 008 決定 3: cross-skill 契約を CLI 層に置く）。
     # 片方のみ / 不正語彙は ValueError → _handle_issue_local が exit 2 にマップ。
-    marker = resolve_verdict_marker(ns.verdict_step, ns.verdict_status)
+    marker = resolve_verdict_marker(ns.verdict_step, ns.verdict_status, ns.verdict_meta)
     if marker is not None:
         body = f"{marker}\n{body}"
     comment = provider.comment_issue(rid.value, body)

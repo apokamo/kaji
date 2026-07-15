@@ -71,6 +71,10 @@ class IssueProvider(Protocol):
         """Issue 一覧を取得する。"""
         ...
 
+    def list_issue_comments_all(self, issue_id: str) -> list[Comment]:
+        """対象 Issue の全コメントを投稿順で取得する。"""
+        ...
+
     # --- Labels ---
     def list_labels(self) -> list[Label]:
         """ラベル一覧。"""
