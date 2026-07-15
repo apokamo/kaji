@@ -120,9 +120,9 @@ production / staging 固有環境、外部サービスの非同期応答、admin
 
 | ステップ | Issue 完了条件のうち確認する範囲 | 確認の根拠 | 証跡の残し方 |
 |----------|-------------------------------|-----------|-------------|
-| `issue-review-ready` | Issue 本文の記述品質（構造・具体性・根拠・検証可能性・整合性・スコープ推定・workflow 内判定可能性） | 共通観点 1〜7・14 と type 別追加観点の充足 | Issue コメント（レディネスレビュー結果 + PASS/RETRY/ABORT 判定） |
-| `issue-design` | 設計書で対応可能な条件（テスト方針、docs 影響評価、技術制約） | 設計書の各セクションが条件に対応 | 設計書コミット + Issue コメント（設計完了報告 + Step 2.6 Self-Check 結果） |
-| `issue-review-design` | 設計書が完了条件を充足できる構造か | 設計書の S/M/L 網羅性、一次情報整合、影響評価 | Issue コメント（レビュー結果 + Approve/CR 判定） |
+| `issue-review-ready` | Issue 本文の記述品質（構造・具体性・根拠・検証可能性・整合性・スコープ推定・workflow 内判定可能性・重要判断の着手可能性） | 共通観点 1〜7・14・15 と type 別追加観点の充足 | Issue コメント（レディネスレビュー結果 + PASS/RETRY/ABORT 判定） |
+| `issue-design` | 設計書で対応可能な条件（テスト方針、docs 影響評価、技術制約、重要判断 provenance） | 設計書の各セクションが条件に対応し、人間決定と AI 仮定が分離されている | 設計書コミット + Issue コメント（設計完了報告 + Step 2.6 Self-Check 結果） |
+| `issue-review-design` | 設計書が完了条件を充足できる構造か | 設計書の S/M/L 網羅性、一次情報・重要判断 provenance の整合、source of truth の保持、影響評価 | Issue コメント（レビュー結果 + Approve/CR/ABORT 判定） |
 | `issue-implement` | 実装・テストで対応可能な条件（実装完了、テスト通過、品質ゲート、docs 更新） | pytest 出力、`make check` 出力 | Issue コメント（実装完了報告 + テスト結果 + 品質チェック結果 + Step 8.5 Pre-Handoff Review 結果） |
 | `issue-review-code` | 実装が設計と整合し、テスト・docs が揃っているか | 独立テスト実行、差分レビュー | Issue コメント（レビュー結果 + Approve/CR 判定） |
 | `i-dev-final-check` | **workflow 内の全条件**（事後確認を除く前段証跡の集約 + 未確認条件の最終確認） | 前段コメントの走査 + 最終品質ゲート実行 | Issue コメント（最終チェック結果）+ **Issue 本文更新** |

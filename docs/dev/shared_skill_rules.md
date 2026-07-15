@@ -34,6 +34,15 @@ workflow 固有の最終判定は `i-dev-final-check` または `i-doc-final-che
 | worktree パス解決 | `.claude/skills/_shared/worktree-resolve.md` | Issue 本文 NOTE ブロックから worktree パスを取得 |
 | 無関係な問題の報告 | `.claude/skills/_shared/report-unrelated-issues.md` | 作業中に発見した無関係な問題の報告手順 |
 | 設計書の昇格 | `.claude/skills/_shared/promote-design.md` | draft 設計書から恒久ドキュメントへの昇格手順 |
+| 重要判断と provenance | `.claude/skills/_shared/critical-decision-checklist.md` | 人間決定・AI 仮定・one-way door の分類と停止条件 |
+
+## 重要判断の伝播（共通）
+
+`issue-review-ready` / `issue-design` / `issue-review-design` は
+[`critical-decision-checklist.md`](../../.claude/skills/_shared/critical-decision-checklist.md)
+を単一情報源として使う。人間が指定した source of truth と重要方針を後段へ伝播し、
+AI の仮定は provenance で区別する。記述を補えば直る不備は `RETRY`、人間の決定が
+存在しない one-way door は `ABORT` とし、AI の fix step へ判断を委ねない。
 
 ## verdict 永続化（共通）
 
