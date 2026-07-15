@@ -158,6 +158,10 @@ class LocalProvider:
         """Return one mutable local Issue."""
         return self._store.read_issue(self._store.resolve_issue_dir(issue_id))
 
+    def list_issue_comments_all(self, issue_id: str) -> list[Comment]:
+        """Return every local comment in provider-normalized posting order."""
+        return self.view_issue(issue_id).comments
+
     def edit_issue(
         self,
         issue_id: str,

@@ -228,6 +228,22 @@ class VerdictParseError(HarnessError):
     """必須フィールド欠損。回復不能。"""
 
 
+class VerdictMarkerResolutionError(HarnessError):
+    """Issue comment verdict marker cannot be resolved safely."""
+
+
+class VerdictMarkerNotFoundError(VerdictMarkerResolutionError):
+    """No verdict marker exists for the requested step."""
+
+
+class VerdictMarkerMalformedError(VerdictMarkerResolutionError):
+    """The latest marker for the requested step is malformed."""
+
+
+class VerdictMarkerMetaMissingError(VerdictMarkerResolutionError):
+    """The latest marker lacks required metadata."""
+
+
 class InvalidVerdictValue(HarnessError):
     """on に未定義の status 値。プロンプト違反。回復不能・リトライしない。"""
 

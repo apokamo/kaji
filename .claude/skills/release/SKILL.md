@@ -208,6 +208,18 @@ push 失敗時:
 
 ### Step 7: GitHub Release ページ作成
 
+公開 notes には [starter sync runbook](../../../docs/operations/release/starter-sync-runbook.md) の
+managed starters 表から repository 別状態表を作り、全行を `PENDING` で初期化する。各行は
+独立に `PASS` または `N/A` へ遷移し、単一の集約 status は置かない。
+
+```markdown
+## Starter repositories
+
+| repository | status | tracking Issue | starter Release / N/A 理由 |
+|---|---|---|---|
+| apokamo/kaji-starter-python | PENDING | - | - |
+```
+
 ```bash
 # CHANGELOG の該当 section を抜粋し、--notes に渡す
 gh release create vX.Y.Z \
@@ -247,6 +259,12 @@ user に以下を提示して終了:
 - PyPI publish workflow の状態または URL
 - PyPI 公開後の install 確認: `uv tool install kaji && kaji --help`
 - consumer 側に `uv lock --upgrade-package kaji` を案内する一文（kamo2 等の dependency consumer 向け）
+- managed starter ごとに kaji 側へ tracking Issue を作成し、Issue URL を GitHub Release の
+  repository 別状態表へ反映する post-release handoff
+- tracking Issue 作成後の `/update-starter <tracking_issue_id>` 案内
+
+starter の追随・review・公開は kaji 本体 release とは独立したトランザクションとする。
+starter が `PENDING` または失敗しても、公開済み kaji tag / GitHub Release / PyPI を rollback しない。
 
 ## Dry-run 経路（`--dry-run`）
 
@@ -332,6 +350,12 @@ main commit / tag / GitHub Release は作成済みなので、release commit を
 
 PyPI API token による local `uv publish` は emergency fallback のみ。使用する場合も token を
 `.pypirc`、shell history、Issue コメント、docs、repo 内ファイルに残さない。
+
+### Starter post-release handoff が失敗
+
+kaji 本体 tag / GitHub Release / PyPI は公開済みのため rollback しない。GitHub Release の対象行を
+`PENDING` のまま維持し、tracking Issue 作成または状態表リンク更新だけを再試行する。starter の
+具体的な復旧は [starter sync runbook](../../../docs/operations/release/starter-sync-runbook.md) に従う。
 
 ### 既に push 済みの release を撤回したい（緊急）
 
