@@ -4,8 +4,9 @@ workflow 系 skill が共有する、人間の重要判断と AI の仮定を分
 `issue-review-ready` / `issue-design` / `issue-review-design` は本書を参照し、
 判定基準を個別の skill に複製しない。
 
-将来、起票前に要件を聞き取る skill（`grill-me` 等）を追加する場合も、本書の判断軸と
-provenance 形式を再利用する。
+workflow 起動前に要件を聞き取る `grill-me` も、本書の判断軸と provenance 形式を
+再利用する。本書を質問文の固定リストとして複製せず、Issue と調査結果から未決 branch を
+組み立てる。
 
 ## 原則
 
@@ -96,6 +97,7 @@ provenance 欄が空、出典を検証できない、または AI が one-way do
 
 | step | 責務 |
 |------|------|
+| `grill-me`（workflow 外・明示起動） | 有人区間で未決 branch を 1 問ずつ確認し、人間決定を Issue 本文 `## 決定事項`、根拠を provenance コメントへ固定する。readiness 判定は行わない |
 | `issue-review-ready` | Issue 本文と人間コメントから one-way door の未決・source of truth の矛盾を着手前に検出する |
 | `issue-design` | 決定済み方針を詳細化し、判断 provenance と AI の仮定を設計書へ記録する。設計中に one-way door が顕在化したら停止する |
 | `issue-review-design` | provenance の出典を独立に確認し、人間決定の上書き、仮定の偽装、未決の one-way door がないか検査する |

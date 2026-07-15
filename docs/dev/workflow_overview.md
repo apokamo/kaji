@@ -2,6 +2,23 @@
 
 Issue の種類に応じて使う workflow を選ぶための入口ドキュメント。
 
+## workflow 開始前の有人 interview
+
+`/issue-create` 後、one-way door を含みうる重要な Issue では、人間が
+[`/grill-me <issue_id>`](../../.claude/skills/grill-me/SKILL.md) を明示起動できる。
+`grill-me` は未決の decision tree を 1 問ずつ
+推奨案付きで確認し、結果を Issue 本文の `## 決定事項` と provenance コメントへ固定する。
+typo やリンク修正など、one-way door がない軽微な Issue はスキップしてよい。
+
+```text
+/issue-create → (/grill-me: 任意・明示起動・有人) → /issue-review-ready → /issue-start → …
+```
+
+`grill-me` は workflow YAML の step ではなく、headless / auto 実行へ同期対話を持ち込まない。
+また、`/issue-review-ready` の独立した readiness 判定を代替しない。質問の判断軸と停止条件は
+[critical-decision-checklist.md](../../.claude/skills/_shared/critical-decision-checklist.md)
+を正本とする。
+
 ## どの workflow を使うか
 
 | 条件 | 使用する workflow | 主なスキル |

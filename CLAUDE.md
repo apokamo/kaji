@@ -13,6 +13,7 @@ PR 作成後のレビュー収束サイクルを管理する。
 | フェーズ | スキル |
 |---------|--------|
 | 起票 | `/issue-create` |
+| workflow 開始前の有人 interview（任意・明示起動） | `/grill-me` |
 | 着手前ゲート | `/issue-review-ready` → (`/issue-fix-ready`) |
 | 着手 | `/issue-start` |
 | 設計 | `/issue-design` → `/issue-review-design` → (`/issue-fix-design` → `/issue-verify-design`) |
