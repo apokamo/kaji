@@ -17,15 +17,19 @@ description: "独立 review 済み starter candidate を承認 gate 後に atomi
    meta 欠落、不一致は fail-closed で ABORT。
 3. local main clean、target kaji Release published、dependency / lockfile version 整合、quality gate を確認する。
 4. `meta.base == meta.candidate` の N/A を release-plan より先に分岐し、N/A では
-   release-plan を呼ばない。変更 candidate の場合だけ、この時点で初めて
+   release-plan を呼ばない。ただし N/A でも close 前に remote main == meta.base
+   (== meta.candidate) を必須とし、review PASS 後に remote main が前進していれば
+   stale review evidence として ABORT する。変更 candidate の場合だけ、この時点で初めて
    [pre-flight and recovery](references/preflight-and-recovery.md) を読み、観測 JSON を release-plan へ
    渡す。未公開 path は remote main == meta.base、公開済み残処理 path は remote main ==
    meta.candidate を必須にする。
 
 ## Publish
 
-- N/A (`meta.base == meta.candidate`): 上記の先行分岐で、独立 review PASS 後だけ kaji Release の repository 別状態表を
-  `N/A` と理由付きで更新し tracking Issue を close する。starter tag / Release は作らない。
+- N/A (`meta.base == meta.candidate`): 上記の先行分岐で、独立 review PASS かつ remote main ==
+  meta.base (== meta.candidate) を確認した後だけ kaji Release の repository 別状態表を
+  `N/A` と理由付きで更新し tracking Issue を close する。remote main が前進していれば
+  stale review evidence として ABORT する。starter tag / Release は作らない。
 - ref push path: candidate SHA と `kaji-vX.Y.Z` または `kaji-vX.Y.Z-rN` を提示し、workflow 外で
   **人間の明示承認**を得てから annotated tag と main を `git push --atomic` する。
 - push 後は [Release notes template](templates/release-notes.md) から `gh release create`、kaji Release

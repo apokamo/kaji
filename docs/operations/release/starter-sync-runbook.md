@@ -43,7 +43,8 @@ kaji GitHub Release 本文の repository 別状態表を状態正本とする。
 
 初回 tag は `kaji-vX.Y.Z`。同じ kaji version の公開済み snapshot から candidate が変わる修正版だけ
 `kaji-vX.Y.Z-rN`（最大 N + 1）を使う。force push / tag 上書きは禁止。Release 作成の再試行では同じ
-tag を使う。N/A は独立 review PASS 後だけ状態表更新と Issue close を行い、starter Release は作らない。
+tag を使う。N/A は独立 review PASS かつ remote main == 検証済み base/candidate を確認した後だけ状態表更新と
+Issue close を行い、remote main が前進していれば stale review evidence として ABORT する。starter Release は作らない。
 
 古い `PENDING` があっても新しい kaji Release 自体は止めず tracking Issue を作る。ただし同じ starter の
 sync は release 順で処理し、新しい update は ABORT する。starter failure から kaji tag / Release / PyPI
