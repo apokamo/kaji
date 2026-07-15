@@ -1,0 +1,6 @@
+interface:
+  display_name: "Grill Me"
+  short_description: "Front-load critical Issue decisions interactively"
+  default_prompt: "Use $grill-me to interview me one decision at a time before starting the workflow."
+policy:
+  allow_implicit_invocation: false

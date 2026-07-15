@@ -16,7 +16,7 @@ GitHub Issue を作成し、適切なラベルを付与する。
 | 新機能・バグ修正・リファクタの着手前 | ✅ 必須 |
 | 既存Issueがある場合 | ❌ 不要 |
 
-**ワークフロー内の位置**: **create** → review-ready → start → ...
+**ワークフロー内の位置**: **create** → (grill-me: 任意・明示起動) → review-ready → start → ...
 
 ## 引数
 
@@ -114,6 +114,11 @@ kaji issue create --title "[title]" --body "[body]" --label "[label]"
 
 ### Step 5: 完了報告
 
+Issue 作成後に `.claude/skills/grill-me/SKILL.md` の「要否門番」と同じ基準で、
+workflow 開始前の interview が必要かを判定する。one-way door を含みうる重要な Issue なら
+`/grill-me [issue_id]` を推奨し、軽微で不要なら `/issue-review-ready [issue_id]` を案内する。
+`grill-me` を自動起動せず、`issue-create` 内で interview を代行しない。
+
 以下の形式で報告すること。
 
 ```
@@ -129,7 +134,8 @@ kaji issue create --title "[title]" --body "[body]" --label "[label]"
 
 ### 次のステップ
 
-作業を開始するには `/issue-review-ready [issue_id]` でレディネスレビューを実行してください。
+- grill-me 推奨: `/grill-me [issue_id]` を明示起動し、完了後に `/issue-review-ready [issue_id]`
+- grill-me 不要: `/issue-review-ready [issue_id]`
 ```
 
 ## Verdict 出力

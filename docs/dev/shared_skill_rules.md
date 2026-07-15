@@ -38,11 +38,15 @@ workflow 固有の最終判定は `i-dev-final-check` または `i-doc-final-che
 
 ## 重要判断の伝播（共通）
 
-`issue-review-ready` / `issue-design` / `issue-review-design` は
+`grill-me` / `issue-review-ready` / `issue-design` / `issue-review-design` は
 [`critical-decision-checklist.md`](../../.claude/skills/_shared/critical-decision-checklist.md)
 を単一情報源として使う。人間が指定した source of truth と重要方針を後段へ伝播し、
 AI の仮定は provenance で区別する。記述を補えば直る不備は `RETRY`、人間の決定が
 存在しない one-way door は `ABORT` とし、AI の fix step へ判断を委ねない。
+
+`grill-me` だけは workflow 外の有人 front-load であり、未決を質問して Issue 本文へ
+固定する。後続 3 skill は無人 workflow 内でその決定を検査・伝播し、新たな人間判断を
+代行しない。
 
 ## verdict 永続化（共通）
 
