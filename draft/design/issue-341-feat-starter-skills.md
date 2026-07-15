@@ -241,6 +241,16 @@ skill 間で機械的に消費する契約は、以下のとおり CLI / harness
 
 - `markers.py` meta 拡張: meta 付き marker の build（key / value の文法違反は `ValueError` で fail-loud）、parse（正常 / meta なし後方互換 / 不正形式の fail-closed）、既存 marker 形式との相互非干渉
 - verdict 選択ロジック（in-memory のコメント列に対する純粋関数）: 同一 step へ PASS → RETRY の順で投稿された場合に **最新の RETRY** が選ばれる（stale PASS 排除）/ 対象 step の marker 0 件 / 最新 marker の不正形式 / `--require-meta` 指定 key の欠落、の各 fail-closed 挙動
+- 公開可否の等値照合テーブル（pre-flight 項目 1・7 の判定規則を純粋関数として検証。各不一致が **それぞれ単独で** 公開不可判定になることを 1 ケースずつ確認する）:
+
+  | ケース | 期待判定 |
+  |--------|----------|
+  | `meta.candidate != starter local main HEAD`（review PASS 後に candidate SHA が変わった） | 公開不可（PASS 失効） |
+  | `meta.target != target_kaji_release`（別 kaji version 向け review PASS の流用） | 公開不可 |
+  | 未公開経路（決定 1 / 3）で `starter remote main != meta.base`（review 以降に base が進んだ） | 公開不可 |
+  | 公開済み残処理経路（決定 2）で `starter remote main != meta.candidate`（push 整合の破れ） | 続行不可 |
+  | 最新 verdict の `status != PASS` | 公開不可 |
+  | 全項目一致（正常系） | 公開可 |
 - `release-plan` 決定表の全分岐: tag 0 件 → `kaji-vX.Y.Z` 採番 / latest SHA 一致 → 既存 tag 再利用 + 残処理 4 分岐（(a)(b)(c) の各欠落組合せと全完了 idempotent PASS）/ SHA 不一致 → `-r(maxN+1)` 採番（既存 `-rN` 複数時に最大 N + 1 となること）/ 旧 revision の SHA 一致 → ABORT / tag・Release・状態表の観測矛盾 → ABORT
 - N/A 判定（`meta.base == meta.candidate`）と、未公開 / 公開済み経路の鮮度検証規則（remote main と meta.base / meta.candidate の照合ロジック）
 
