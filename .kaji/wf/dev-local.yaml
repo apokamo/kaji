@@ -45,7 +45,7 @@ steps:
     model: gpt-5.6-luna
     effort: high
     on:
-      PASS: implement
+      PASS: baseline
       RETRY: fix-design
       ABORT: end
 
@@ -66,8 +66,15 @@ steps:
     effort: medium
     resume: review-design
     on:
-      PASS: implement
+      PASS: baseline
       RETRY: fix-design
+      ABORT: end
+
+  - id: baseline
+    skill: baseline-precheck
+    timeout: 1800
+    on:
+      PASS: implement
       ABORT: end
 
   - id: implement

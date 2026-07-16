@@ -114,7 +114,7 @@ production / staging 固有環境、外部サービスの非同期応答、admin
 |-----------|------|-----|
 | Issue コメント | ステップ完了時に投稿する構造化コメント | 設計レビュー結果、実装完了報告、コードレビュー結果 |
 | コミット内容 | Git に記録された成果物 | 設計書、テストコード、docs 更新 |
-| コマンド出力 | Issue コメントに含まれる実行結果 | pytest 出力、`make check` の結果 |
+| コマンド出力 / artifact | 実行結果と機械可読な正本 | pytest 出力、`make check`、`baseline.json` / `--compare` JSON |
 
 ### ステップ別の確認責務と証跡
 
@@ -123,9 +123,9 @@ production / staging 固有環境、外部サービスの非同期応答、admin
 | `issue-review-ready` | Issue 本文の記述品質（構造・具体性・根拠・検証可能性・整合性・スコープ推定・workflow 内判定可能性・重要判断の着手可能性） | 共通観点 1〜7・14・15 と type 別追加観点の充足 | Issue コメント（レディネスレビュー結果 + PASS/RETRY/ABORT 判定） |
 | `issue-design` | 設計書で対応可能な条件（テスト方針、docs 影響評価、技術制約、重要判断 provenance） | 設計書の各セクションが条件に対応し、人間決定と AI 仮定が分離されている | 設計書コミット + Issue コメント（設計完了報告 + Step 2.6 Self-Check 結果） |
 | `issue-review-design` | 設計書が完了条件を充足できる構造か | 設計書の S/M/L 網羅性、一次情報・重要判断 provenance の整合、source of truth の保持、影響評価 | Issue コメント（レビュー結果 + Approve/CR/ABORT 判定） |
-| `issue-implement` | 実装・テストで対応可能な条件（実装完了、テスト通過、品質ゲート、docs 更新） | pytest 出力、`make check` 出力 | Issue コメント（実装完了報告 + テスト結果 + 品質チェック結果 + Step 8.5 Pre-Handoff Review 結果） |
+| `issue-implement` | 実装・テストで対応可能な条件（実装完了、テスト通過、品質ゲート、docs 更新） | baseline artifact、pytest / `--compare` 出力、`make check` または等価分離 gate | Issue コメント（実装完了報告 + テスト結果 + 品質チェック結果 + Step 8.5 Pre-Handoff Review 結果） |
 | `issue-review-code` | 実装が設計と整合し、テスト・docs が揃っているか | 独立テスト実行、差分レビュー | Issue コメント（レビュー結果 + Approve/CR 判定） |
-| `i-dev-final-check` | **workflow 内の全条件**（事後確認を除く前段証跡の集約 + 未確認条件の最終確認） | 前段コメントの走査 + 最終品質ゲート実行 | Issue コメント（最終チェック結果）+ **Issue 本文更新** |
+| `i-dev-final-check` | **workflow 内の全条件**（事後確認を除く前段証跡の集約 + 未確認条件の最終確認） | 前段コメント、baseline artifact + `--compare`、最終品質ゲート | Issue コメント（最終チェック結果）+ **Issue 本文更新** |
 | `i-doc-final-check` | **docs-only workflow 内の全条件**（事後確認を除く docs 整合 + Issue 状態） | docs 差分 + リンクチェック | Issue コメント + **Issue 本文更新** |
 
 ### type 別に追加で確認する項目

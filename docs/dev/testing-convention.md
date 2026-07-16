@@ -224,4 +224,5 @@ dispatch / provider 結合テストで worktree 解決の git 経路まで盲目
 
 - **実行時コード変更**: `pytest` は必ず全テスト実行（`-m` フィルタなし）。特定テストのみの実行は開発中の補助に留める
 - **docs-only 変更**: `make verify-docs` で十分。`pytest` は回帰確認として実行するが、新規テスト追加は不要
-- **baseline failure がある場合**: regression 判定基準に従い、新規の FAILED/ERROR のみを対象とする（詳細は `issue-implement` スキルの Step 2.5 参照）
+- **baseline failure がある場合**: [baseline-check.md](baseline-check.md) の構造化 artifact と
+  `--compare` を使い、新規 FAILED/ERROR のみを regression とする

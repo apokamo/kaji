@@ -117,13 +117,20 @@ workflow YAML の `final-check.on` で決まり、prompt 経由で valid status 
 
 ## Step 4 詳細: 品質ゲートの実行
 
-kaji は Python 単一スタックのため、以下の 1 本に統一する。
+kaji は Python 単一スタックである。baseline artifact が `clean` の場合は以下の 1 本を実行する。
 
 ```bash
 cd [worktree_dir] && source .venv/bin/activate && make check
 ```
 
 `make check` は ruff / format / mypy / pytest を一括で実行する（AGENTS.md の pre-commit 契約と同一）。
+
+artifact が `known_failures` の場合だけ、同じ対象を次の 2 コマンドへ分離する。
+
+```bash
+cd [worktree_dir] && source .venv/bin/activate && ruff check kaji_harness/ tests/ experiments/ && ruff format --check kaji_harness/ tests/ experiments/ && mypy kaji_harness/
+cd [worktree_dir] && source .venv/bin/activate && python -m kaji_harness.scripts.baseline_precheck --compare
+```
 
 特定マーカーや変更タイプ固有の検証が必要な場合は、設計書「テスト戦略」に従い追加実行する:
 
@@ -133,9 +140,10 @@ cd [worktree_dir] && source .venv/bin/activate && make check
 | metadata-only / packaging-only | `make verify-packaging` |
 | 通常 | 追加なし（`make check` で十分） |
 
-> **baseline failure の扱い**: `pytest` 部分は baseline failure を考慮し、
-> 比較キー `(nodeid, kind, error_type)` が baseline と一致する失敗は除外、
-> 不一致の新規 FAILED/ERROR が 1 件でもあれば NG として扱う。
+> **baseline failure の扱い**: `[worktree]/.kaji-artifacts/baseline/baseline.json` が
+> `known_failures` の場合、上記の分離 gate を使う。
+> `verdict: ok`、regression 0 件だけを許可する。詳細は
+> [docs/dev/baseline-check.md](../../../docs/dev/baseline-check.md) を正本とする。
 
 ## Step 6 詳細: 設計書昇格判定
 
