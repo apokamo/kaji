@@ -160,6 +160,7 @@ def _handler(
     run_dir: Path,
     *,
     provider: object,
+    workflow: Workflow | None = None,
     auto_recover: bool = True,
     wait_seconds: int = 0,
     sleep=None,
@@ -167,7 +168,7 @@ def _handler(
     stderr: io.StringIO | None = None,
 ) -> RecoveryHandler:
     return RecoveryHandler(
-        workflow=_workflow(),
+        workflow=workflow or _workflow(),
         workflow_path=Path("wf.yaml"),
         issue_id=_ISSUE,
         issue_ref=_ISSUE,
@@ -514,6 +515,93 @@ def test_branch_mismatch_blocks_resume(tmp_path: Path) -> None:
 
     assert result.decision.decision == "not_resumable"
     assert launched == []
+
+
+def test_non_resumable_skill_step_blocks_child_launch(tmp_path: Path) -> None:
+    # Issue #349: 副作用 skill (`i-pr`) を実行する step は、step ID が denylist の
+    # skill 名と一致しなくても auto_recover=True で child launcher を起動しない。
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_id = "260710120000"
+    run_dir = tmp_path / ".kaji-artifacts" / _ISSUE / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    events = [
+        {"event": "workflow_start", "issue": _ISSUE, "workflow": "dev", "schema_version": 1},
+        {
+            "event": "failure_event",
+            "kind": "dispatch_exception",
+            "step_id": "pr",
+            "exception_type": "StepTimeoutError",
+            "cycle_name": None,
+            "synthetic": True,
+        },
+        {"event": "workflow_end", "status": "ERROR", "error": "StepTimeoutError: timed out"},
+    ]
+    (run_dir / "run.log").write_text(
+        "".join(json.dumps(e) + "\n" for e in events), encoding="utf-8"
+    )
+    attempt = run_dir / "steps" / "pr" / "attempt-001"
+    attempt.mkdir(parents=True)
+    (attempt / "result.json").write_text(
+        json.dumps(
+            {
+                "step_id": "pr",
+                "attempt": 1,
+                "status": "ABORT",
+                "exit_code": None,
+                "signal": None,
+                "started_at": "t",
+                "ended_at": "t",
+                "duration_ms": 1,
+                "session_id": None,
+                "dispatch": "agent",
+                "error": "StepTimeoutError: timed out",
+                "synthetic": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    launched: list[list[str]] = []
+    # step ID (`pr`) は skill 名 (`i-pr`) と一致しない実 workflow 相当の構造。
+    workflow = Workflow(
+        name="dev",
+        description="",
+        execution_policy="auto",
+        steps=[
+            Step(id="implement", skill="issue-implement", agent="claude", on={"PASS": "pr"}),
+            Step(id="pr", skill="i-pr", agent="claude", on={"PASS": "end"}),
+        ],
+    )
+    handler = _handler(
+        tmp_path,
+        run_dir,
+        provider=_FakeProvider(),
+        workflow=workflow,
+        child_launcher=lambda argv, _cwd: (launched.append(argv), 0)[1],
+    )
+    result = handler.run()
+
+    assert result.decision.decision == "not_resumable"
+    assert result.decision.recoverable is False
+    assert result.decision.resume_command is None
+    assert result.decision.resume_scheduled_at is None
+    assert result.child_exit_code is None
+    assert launched == []
+
+    persisted = read_recovery_json(run_dir / RECOVERY_FILE)
+    assert persisted.decision == "not_resumable"
+    assert persisted.resume_command is None
+    assert persisted.resume_scheduled_at is None
+    assert persisted.auto_recovery_attempted is False
+    assert persisted.auto_recovery_attempt_no == 0
+
+    logged = [
+        json.loads(line) for line in (run_dir / "run.log").read_text(encoding="utf-8").splitlines()
+    ]
+    kinds = [e["event"] for e in logged]
+    assert "recovery_scheduled" not in kinds
+    assert "recovery_attempt_start" not in kinds
+    assert "recovery_attempt_end" not in kinds
 
 
 def test_comment_failure_suppresses_auto_recovery(tmp_path: Path) -> None:

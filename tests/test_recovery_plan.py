@@ -23,12 +23,16 @@ _WORKFLOW_PATH = Path(".kaji/wf/dev.yaml")
 
 
 def _workflow() -> Workflow:
+    # step ID は実 built-in workflow と同じく skill 名と一致させない（Issue #349:
+    # 旧 fixture は id == skill という架空の step を使っており、実 workflow 構造から
+    # 乖離していた。`tests/test_recovery_models.py:45` 相当の値は保ちつつ、id/skill の
+    # 対応は `.kaji/wf/dev.yaml` 等の tracked built-in workflow に合わせる）。
     return Workflow(
         name="dev",
         description="",
         execution_policy="auto",
         steps=[
-            Step(id="issue-start", skill="issue-start", agent="claude", on={"PASS": "implement"}),
+            Step(id="start", skill="issue-start", agent="claude", on={"PASS": "implement"}),
             Step(
                 id="implement", skill="issue-implement", agent="claude", on={"PASS": "review-code"}
             ),
@@ -43,9 +47,16 @@ def _workflow() -> Workflow:
                 skill="issue-verify-code",
                 agent="codex",
                 resume="review-code",
-                on={"PASS": "end"},
+                on={"PASS": "pr"},
             ),
-            Step(id="i-pr", skill="i-pr", agent="claude", on={"PASS": "end"}),
+            Step(id="pr", skill="i-pr", agent="claude", resume="implement", on={"PASS": "close"}),
+            Step(id="close", skill="issue-close", agent="claude", on={"PASS": "end"}),
+            # 標準と異なる step ID から再開禁止 skill を参照する alias（一般則の検証用）。
+            Step(id="publish", skill="i-pr", agent="claude", on={"PASS": "end"}),
+            # 安全な skill が再開禁止 skill 側へ resume する組み合わせ（`resume:` 判定対象の検証用）。
+            Step(id="fix-pr-meta", skill="issue-fix-code", resume="pr", agent="claude"),
+            # exec-step: skill=None が gate に誤ヒットしないことの境界確認用。
+            Step(id="baseline", exec=["true"], on={"PASS": "end"}),
         ],
     )
 
@@ -215,17 +226,180 @@ def test_rate_limit_token_quota_text_is_not_treated_as_credential_leak() -> None
     assert d.decision == "resume"
 
 
-def test_non_resumable_step_denylist_gate() -> None:
+# --- 副作用 skill gate（Issue #349: step ID ではなく Step.skill で判定する） ---
+
+
+@pytest.mark.parametrize(
+    ("failed_step_id", "skill"),
+    [
+        ("start", "issue-start"),
+        ("pr", "i-pr"),
+        ("close", "issue-close"),
+        ("publish", "i-pr"),  # 標準と異なる step ID からの alias（一般則の検証）
+    ],
+)
+def test_non_resumable_skill_gate_blocks_regardless_of_step_id(
+    failed_step_id: str, skill: str
+) -> None:
     snapshot = _snapshot(
         failure_event=FailureEvent(
-            kind="dispatch_exception", step_id="i-pr", exception_type="StepTimeoutError"
+            kind="dispatch_exception", step_id=failed_step_id, exception_type="StepTimeoutError"
         ),
-        failed_step="i-pr",
+        failed_step=failed_step_id,
         attempt_error="StepTimeoutError: timed out",
     )
     d = _plan(snapshot)
     assert d.decision == "not_resumable"
-    assert any("non_resumable_step" in e for e in d.evidence)
+    assert d.recoverable is False
+    assert d.resume_command is None
+    assert d.resume_scheduled_at is None
+    assert d.resume_from is None
+    assert failed_step_id in d.reason and skill in d.reason
+    assert any(failed_step_id in e and skill in e for e in d.evidence)
+
+
+@pytest.mark.parametrize("auto_recover", [True, False])
+def test_non_resumable_skill_gate_ignores_auto_recover(auto_recover: bool) -> None:
+    snapshot = _snapshot(
+        failure_event=FailureEvent(
+            kind="dispatch_exception", step_id="pr", exception_type="StepTimeoutError"
+        ),
+        failed_step="pr",
+        attempt_error="StepTimeoutError: timed out",
+    )
+    d = _plan(snapshot, auto_recover=auto_recover)
+    assert d.decision == "not_resumable"
+    assert d.recoverable is False
+    assert d.resume_command is None
+    assert d.resume_scheduled_at is None
+
+
+@pytest.mark.parametrize(
+    ("event", "workflow_end_status", "attempt_error"),
+    [
+        (
+            FailureEvent(
+                kind="dispatch_exception", step_id="pr", exception_type="StepTimeoutError"
+            ),
+            "ERROR",
+            "StepTimeoutError: timed out",
+        ),
+        (
+            FailureEvent(kind="verdict_exception", step_id="pr", exception_type="VerdictNotFound"),
+            "ERROR",
+            "VerdictNotFound: no verdict block",
+        ),
+        (FailureEvent(kind="agent_abort", step_id="pr", synthetic=False), "ABORT", ""),
+        (
+            FailureEvent(kind="cycle_exhausted", step_id="pr", cycle_name="pr-cycle"),
+            "ABORT",
+            "",
+        ),
+    ],
+)
+def test_non_resumable_skill_gate_is_cause_independent(
+    event: FailureEvent, workflow_end_status: str, attempt_error: str
+) -> None:
+    snapshot = _snapshot(
+        failure_event=event,
+        failed_step="pr",
+        workflow_end_status=workflow_end_status,
+        attempt_error=attempt_error,
+    )
+    d = _plan(snapshot)
+    assert d.decision == "not_resumable"
+    assert d.recoverable is False
+
+
+def test_non_resumable_skill_gate_precedes_kaji_bug_suspected() -> None:
+    # gate 0 は kaji_bug_suspected より優先する（Issue #349 § 方針 4）。bug issue は
+    # 起票されないが、classification.cause は診断情報として保持される。
+    snapshot = _snapshot(
+        failure_event=FailureEvent(
+            kind="dispatch_exception", step_id="pr", exception_type="StepTimeoutError"
+        ),
+        failed_step="pr",
+        attempt_error="StepTimeoutError: timed out",
+        state_loaded=False,
+    )
+    d = _plan(snapshot)
+    assert d.classification.cause == "kaji_bug_suspected"
+    assert d.decision == "not_resumable"
+    assert d.recoverable is False
+
+
+def test_non_resumable_skill_hits_deduplicate_when_failed_step_equals_resume_target() -> None:
+    # `publish` に `resume:` はないため実再開先は自分自身。二重計上されないこと。
+    snapshot = _snapshot(
+        failure_event=FailureEvent(
+            kind="dispatch_exception", step_id="publish", exception_type="StepTimeoutError"
+        ),
+        failed_step="publish",
+        attempt_error="StepTimeoutError: timed out",
+    )
+    d = _plan(snapshot)
+    hits = [e for e in d.evidence if "non_resumable_skill" in e]
+    assert len(hits) == 1
+
+
+# --- `resume:` の判定対象（failed step と実際の再開先の双方を検査する） ---
+
+
+def test_resume_target_check_blocks_when_only_resume_target_is_non_resumable() -> None:
+    # 失敗した step 自体は安全な skill だが、`resume:` の実再開先が再開禁止 skill。
+    snapshot = _snapshot(
+        failure_event=FailureEvent(
+            kind="verdict_exception", step_id="fix-pr-meta", exception_type="VerdictNotFound"
+        ),
+        failed_step="fix-pr-meta",
+    )
+    d = _plan(snapshot)
+    assert d.decision == "not_resumable"
+    assert any("resume_from=pr" in e and "skill=i-pr" in e for e in d.evidence)
+
+
+def test_resume_target_check_blocks_when_only_failed_step_is_non_resumable() -> None:
+    # 失敗した step が再開禁止 skill。`resume:` の実再開先自体は安全でも停止する。
+    snapshot = _snapshot(
+        failure_event=FailureEvent(
+            kind="dispatch_exception", step_id="pr", exception_type="StepTimeoutError"
+        ),
+        failed_step="pr",
+        attempt_error="StepTimeoutError: timed out",
+    )
+    d = _plan(snapshot)
+    assert d.decision == "not_resumable"
+    assert any("failed_step=pr" in e and "skill=i-pr" in e for e in d.evidence)
+
+
+def test_resume_target_check_continues_normally_when_both_sides_are_safe() -> None:
+    # failed step・実再開先ともに安全な skill なら、既存の判定（resume 到達）を維持する。
+    snapshot = _snapshot(
+        failure_event=FailureEvent(
+            kind="verdict_exception", step_id="verify-code", exception_type="VerdictParseError"
+        ),
+        failed_step="verify-code",
+        attempt_error="VerdictParseError: missing reason",
+    )
+    d = _plan(snapshot)
+    assert d.decision == "resume"
+    assert d.resume_from == "review-code"
+
+
+# --- 境界: 未知 step / skill=None の exec-step ---
+
+
+def test_exec_step_with_no_skill_does_not_match_non_resumable_gate() -> None:
+    snapshot = _snapshot(
+        failure_event=FailureEvent(
+            kind="dispatch_exception", step_id="baseline", exception_type="StepTimeoutError"
+        ),
+        failed_step="baseline",
+        attempt_error="StepTimeoutError: timed out",
+    )
+    d = _plan(snapshot)
+    assert d.decision == "resume"
+    assert not any("non_resumable_skill" in e for e in d.evidence)
 
 
 def test_newer_run_detected_gate() -> None:
@@ -244,6 +418,7 @@ def test_unknown_failed_step_is_not_resumable() -> None:
     d = _plan(snapshot)
     assert d.decision == "not_resumable"
     assert any("unknown_failed_step" in e for e in d.evidence)
+    assert not any("non_resumable_skill" in e for e in d.evidence)
 
 
 # --- 非 candidate cause の decision mapping ---

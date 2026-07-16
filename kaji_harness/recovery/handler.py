@@ -50,7 +50,7 @@ from .incident import (
 from .models import (
     INCIDENT_EXEMPT_CAUSES,
     INCIDENT_SUPPRESSION_REASONS,
-    NON_RESUMABLE_STEPS,
+    NON_RESUMABLE_SKILLS,
     RECOVERY_BUDGET,
     RECOVERY_FILE,
     RECOVERY_WAIT_SECONDS,
@@ -126,7 +126,11 @@ def _sensitive_failure_text(text: str) -> bool:
 
 
 def _safety_gates(snapshot: FailureSnapshot, resume_from: str | None) -> list[str]:
-    """自動再開を止める gate 名を列挙する（空なら通過）。"""
+    """自動再開を止める gate 名を列挙する（空なら通過）。
+
+    副作用 skill の判定は ``_non_resumable_skill_hits()`` が gate 0 として最優先で
+    行うため、ここには含めない（Issue #349）。
+    """
     gates: list[str] = []
     if not snapshot.state_worktree_dir or not snapshot.git.available:
         gates.append("worktree_unavailable")
@@ -142,11 +146,35 @@ def _safety_gates(snapshot: FailureSnapshot, resume_from: str | None) -> list[st
         gates.append("artifact_unreadable")
     if resume_from is None:
         gates.append("unknown_failed_step")
-    elif snapshot.failed_step in NON_RESUMABLE_STEPS or resume_from in NON_RESUMABLE_STEPS:
-        gates.append("non_resumable_step")
     if snapshot.newer_run_ids:
         gates.append(f"newer_run_detected ({', '.join(snapshot.newer_run_ids)})")
     return gates
+
+
+def _step_skill(workflow: Workflow, step_id: str | None) -> str | None:
+    """step ID から ``Step.skill`` を解決する（未知 step / exec-step は ``None``）。"""
+    if not step_id:
+        return None
+    step = workflow.find_step(step_id)
+    return step.skill if step is not None else None
+
+
+def _non_resumable_skill_hits(
+    workflow: Workflow, failed_step: str | None, resume_from: str | None
+) -> list[str]:
+    """failed step と実再開先のうち、再開禁止 skill を実行するものを列挙する。
+
+    両方が同一 step を指す場合は二重計上しない。
+    """
+    targets = [("failed_step", failed_step)]
+    if resume_from is not None and resume_from != failed_step:
+        targets.append(("resume_from", resume_from))
+    hits: list[str] = []
+    for label, step_id in targets:
+        skill = _step_skill(workflow, step_id)
+        if skill in NON_RESUMABLE_SKILLS:
+            hits.append(f"non_resumable_skill ({label}={step_id}, skill={skill})")
+    return hits
 
 
 def _build_resume_command(
@@ -172,15 +200,18 @@ def plan_recovery(
 
     判定は上から順に確定する:
 
+    0. 失敗 step または実際の再開先が副作用 skill（``NON_RESUMABLE_SKILLS``）→
+       原因分類・budget・``auto_recover`` によらず常に ``not_resumable``（Issue #349）
     1. ``kaji_bug_suspected`` かつ根拠 artifact を列挙できる → ``bug_issue_created``
     2. ``recoverability_hint != candidate`` → cause 別の ``comment_only`` / ``not_resumable``
     3. budget guard（自身が recovery child / 自 run が budget 消費済み）→ ``exhausted``
-    4. safety gate 抵触 → ``not_resumable``（抵触 gate を evidence に記録）
+    4. 残りの safety gate 抵触 → ``not_resumable``（抵触 gate を evidence に記録）
     5. ``auto_recover`` 無効 → ``comment_only``（``resume_command`` は提示する）
     6. すべて通過 → ``resume``（``resume_scheduled_at`` を確定）
     """
     root_run_id = snapshot.recovery_root_run_id or snapshot.run_id
     evidence = list(snapshot.evidence)
+    resume_from, discarded = _resume_point(workflow, snapshot.failed_step)
 
     def build(
         decision: RecoveryDecisionValue,
@@ -209,6 +240,18 @@ def plan_recovery(
             resume_scheduled_at=resume_scheduled_at,
             discarded_resume_session=discarded,
             workflow_path=str(workflow_path),
+        )
+
+    skill_hits = _non_resumable_skill_hits(workflow, snapshot.failed_step, resume_from)
+    if skill_hits:
+        return build(
+            "not_resumable",
+            recoverable=False,
+            reason=(
+                "non-resumable skill step; auto recovery and manual resume are blocked: "
+                f"{', '.join(skill_hits)}"
+            ),
+            extra_evidence=[f"safety gate: {hit}" for hit in skill_hits],
         )
 
     if classification.cause == "kaji_bug_suspected":
@@ -256,7 +299,6 @@ def plan_recovery(
             ),
         )
 
-    resume_from, discarded = _resume_point(workflow, snapshot.failed_step)
     gates = _safety_gates(snapshot, resume_from)
     if gates:
         return build(
