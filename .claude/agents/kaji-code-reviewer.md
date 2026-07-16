@@ -43,7 +43,9 @@ main session が以下を prompt 内のセクションとして渡します:
 - **`## Diff`**: `git diff main...HEAD` の全文（main session が事前取得して貼付）
 - **`## Test Output`**: 直近 `pytest` の出力。Step 7 を `make check` で実行した場合はその出力の pytest 部分、baseline failure により 7a / 7b へ分離実行した場合は Step 7b の出力をそのまま貼付
 - **`## Quality Check`**: 直近 `ruff check` / `ruff format --check` / `mypy` の出力。Step 7 を `make check` で実行した場合はその出力の該当部分、7a / 7b へ分離実行した場合は Step 7a の出力をそのまま貼付
-- **`## Baseline Failures`**: Baseline Check 一覧（存在する場合のみ。なければセクション省略）
+- **`## Baseline Failures`**: `baseline.json` は常に必須。`status: known_failures` の場合は
+  Step 7b の `--compare` JSON も必須。`status: clean` の場合は `--compare` を再実行せず、
+  `make check` の pytest 出力を最終結果として扱う
 - **対象 commit hash**: prompt 冒頭または header で指定
 
 ## 利用可能ツール
@@ -66,7 +68,7 @@ main session が以下を prompt 内のセクションとして渡します:
 
 - 設計書「テスト戦略」の Small / Medium / Large 区分が `tests/` 配下に存在し PASSED か
 - 設計書で「不要」と判断したテストサイズについて、独自判断で追加していないか（逆に省略していないか）
-- `## Test Output` の pytest 結果が PASSED か。FAILED/ERROR がある場合、`## Baseline Failures` と比較キー `(nodeid, kind, error_type)` で全一致するか（regression 0 件か）
+- `## Test Output` の pytest 結果が PASSED か。既知 failure がある場合、`--compare` が `verdict: ok` かつ regression 0 件か
 - docs-only / metadata-only / packaging-only 変更の場合、設計書に記載した変更固有検証が実施されているか
 
 ### 3. Scope 混在

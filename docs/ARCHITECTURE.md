@@ -36,7 +36,7 @@
 実例: `.kaji/wf/dev.yaml` の step 列は次のとおり（design / code 双方が review → fix → verify の cycle を持ち、PR 作成後も review-poll → pr-fix / pr-verify cycle で収束させる。各 cycle は `max_iterations` 超過で ABORT）。
 
 ```
-design → review-design → (fix-design → verify-design) → implement
+design → review-design → (fix-design → verify-design) → baseline → implement
        → review-code → (fix-code → verify-code) → final-check → pr
        → review-poll → (pr-fix → pr-verify) → close → end
 ```
@@ -81,6 +81,8 @@ kaji_harness/
   __init__.py
   errors.py       # エラー階層 (ConfigNotFoundError / SyncError 等) — foundation
   fsio.py         # atomic write helper (atomic_write / atomic_write_new) — foundation
+  baseline.py     # pytest baseline artifact schema・分類・3タプル比較・scope 評価
+  pytest_baseline_plugin.py  # lossless pytest report を生成する内部 plugin
   config.py       # .kaji/config.toml 探索・パース (KajiConfig, PathsConfig, ExecutionConfig)
   models.py       # データクラス: Workflow, Step, CycleDefinition, Verdict, CLIResult
   workflow.py     # YAML パーサ & バリデータ
@@ -95,6 +97,7 @@ kaji_harness/
   worktree_discovery.py  # worktree / branch 探索
   logger.py       # JSONL 構造化ログ
   runner.py       # WorkflowRunner (自動遷移・サイクル管理)
+  scripts/baseline_precheck.py  # agentless baseline measure / evaluate / compare entrypoint
   series/         # ordered Issue series の schema / state / lock / runner / generator
   providers/      # Issue provider 抽象 (GitHub / local) — foundation のみに依存
     __init__.py   # facade。__all__ が package の public API を宣言する

@@ -18,7 +18,7 @@
 | 状況 | 読む正本セクション | 読む時点 |
 |------|--------------------|----------|
 | worktree 解決 | `.claude/skills/_shared/worktree-resolve.md` | Step 1 |
-| 既存失敗の記録・停止基準・regression 比較 | `.claude/skills/issue-implement/references/baseline-check.md` | Step 2.5 |
+| baseline artifact・停止基準・regression 比較 | `docs/dev/baseline-check.md` | Step 2.5 |
 | type 別 TDD | `.claude/skills/_shared/implement-by-type/{feat,bug,refactor}.md` | type 確定後 |
 | S/M/L、恒久テスト、変更固有検証 | `docs/dev/testing-convention.md` § テストサイズ定義 / § テスト戦略の原則 | テスト着手前 |
 | Python の style・命名・型・docstring・例外・logging | `docs/reference/python/*.md` | Python コード着手前 |

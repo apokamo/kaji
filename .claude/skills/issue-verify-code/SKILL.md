@@ -87,10 +87,10 @@ $ARGUMENTS = <issue_id>
    ```
    「コードレビュー結果」と「レビュー指摘への対応報告」を確認。
 
-3. **Baseline Check コメントの確認**:
-   Issue コメントから最新の `## Baseline Check 結果` を検索する。複数存在する場合は **最新のコメントを正** とする
-   （commit hash で識別）。存在する場合、テスト実行時の regression 判定に使用する（判定ロジックは
-   `issue-review-code` Step 1.5 と同一。特に **`pytest` は `&&` チェーンに含めず個別実行** する点に注意）。
+3. **Baseline artifact の確認**:
+   [docs/dev/baseline-check.md](../../../docs/dev/baseline-check.md) に従い固定 path の artifact を確認する。
+   regression 判定は `python -m kaji_harness.scripts.baseline_precheck --compare` を使い、
+   `verdict: ok`、regression 0 件を必須とする。Issue コメントは正本として検索しない。
 
 4. **修正差分を確認**:
    ```bash

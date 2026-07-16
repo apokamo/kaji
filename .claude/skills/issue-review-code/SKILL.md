@@ -78,7 +78,7 @@ $ARGUMENTS = <issue_id>
    ```bash
    kaji issue view [issue_id] --comments
    ```
-   直近の「実装完了報告」を確認。Baseline Check コメントの有無もここで把握する。
+   直近の「実装完了報告」を確認する。baseline の正本は Issue コメントではなく artifact とする。
 
 4. **実装差分の取得**:
    ```bash
@@ -109,34 +109,30 @@ PHR_ROUTE_COUNT=$(kaji issue view [issue_id] --comments 2>/dev/null | grep -cE '
 レビュワー自身が独立した環境でテストを実行し、結果を確認する。
 実装者の報告だけに依存せず、テスト結果を独自に検証することが目的。
 
-1. **Baseline Check コメントの確認**:
-   Step 1.3 で取得した Issue コメント群から、最新の `## Baseline Check 結果` を検索する。
-   複数存在する場合は **最新のコメントを正** とする（commit hash で識別）。
+1. **Baseline artifact の確認**:
+   [docs/dev/baseline-check.md](../../../docs/dev/baseline-check.md) に従い、
+   `[worktree_dir]/.kaji-artifacts/baseline/baseline.json` を Pydantic 検証し、
+   `measured_commit` が HEAD の ancestor であることを確認する。コメントは参照しない。
 
 2. **Lint / Format / 型チェック（exit 0 必須）**:
    ```bash
    cd [worktree_dir] && source .venv/bin/activate && ruff check kaji_harness/ tests/ && ruff format --check kaji_harness/ tests/ && mypy kaji_harness/
    ```
 
-3. **テスト実行（個別）**:
+3. **テスト実行と regression 比較**:
    ```bash
-   cd [worktree_dir] && source .venv/bin/activate && pytest
+   cd [worktree_dir] && source .venv/bin/activate && python -m kaji_harness.scripts.baseline_precheck --compare
    ```
-   **`pytest` は `&&` チェーンに含めず、必ず個別に実行する。** baseline failure が残っていると exit 非 0 になるため、チェーンに含めると後続の判定に到達できない。
+   `--compare` が全 pytest を実行し、artifact と3タプル比較する。
 
 4. **合否判定**:
-   - **Baseline Check コメントがない場合**:
-     - 全コマンドが exit 0 でなければ **Changes Requested**（従来どおり）
-   - **Baseline Check コメントがある場合**:
-     - ruff check / ruff format / mypy: exit 0 必須（変更なし）
-     - pytest: FAILED/ERROR を baseline 一覧と照合する
-       - 比較キー `(nodeid, kind, error_type)` が baseline と完全一致 → 除外
-       - 不一致の新規 FAILED/ERROR → **Changes Requested**
-       - baseline failure のみ残っている → テスト合否は OK とする
+   - ruff check / ruff format / mypy: exit 0 必須
+   - `--compare`: `verdict: ok` かつ `regressions: []` 必須
+   - `regression` / `stale_baseline` / `missing_baseline`: **Changes Requested**
 
 5. テスト総数、passed/failed/errors/skipped を記録しておく（Step 3 のコメントに含める）。
 
-> 最終ゲートは `i-dev-final-check` で `make check` を再実行する。review-code はレビュワーが
+> 最終ゲートは `i-dev-final-check` で artifact status に応じた等価 gate を再実行する。review-code はレビュワーが
 > 独立に軽量ゲートを通し、実装者の提示した品質チェック証跡も突き合わせる位置づけ。
 
 ### Step 2: コードレビューの実施

@@ -105,13 +105,13 @@ $ARGUMENTS = <issue_id>
 2. **品質チェック（コミット前必須）**:
 
    以下を実行し、**すべての基準をクリアするまでコミットしてはならない**。失敗した場合は原因を修正して再実行すること。
-   AGENTS.md の pre-commit 契約（`make check`）と等価。kaji では baseline failure
-   判定のため `pytest` を `&&` チェーンから切り離す必要がある。
+   AGENTS.md の pre-commit 契約（`make check`）と等価。artifact が `known_failures` の場合は
+   pytest を deterministic `--compare` に置換して分離する。
 
    #### 3.1 Lint / Format / 型チェック（exit 0 必須）
 
    ```bash
-   cd [worktree_dir] && source .venv/bin/activate && ruff check kaji_harness/ tests/ && ruff format --check kaji_harness/ tests/ && mypy kaji_harness/
+   cd [worktree_dir] && source .venv/bin/activate && ruff check kaji_harness/ tests/ experiments/ && ruff format --check kaji_harness/ tests/ experiments/ && mypy kaji_harness/
    ```
 
    > `ruff format --check` は非破壊 gate（`make check` と等価）。整形差分で FAIL
@@ -121,11 +121,11 @@ $ARGUMENTS = <issue_id>
    #### 3.2 テスト実行
 
    ```bash
-   cd [worktree_dir] && source .venv/bin/activate && pytest
+   cd [worktree_dir] && source .venv/bin/activate && python -m kaji_harness.scripts.baseline_precheck --compare
    ```
 
-   **`pytest` は `&&` チェーンに含めず、必ず個別に実行する。** 合否判定は `issue-implement` Step 7b と
-   同一の基準（Baseline Check コメントの有無で分岐）を適用する。
+   合否判定は `issue-implement` Step 7b と同一とし、`verdict: ok`、regression 0 件を必須とする。
+   artifact / stale 判定の正本は [docs/dev/baseline-check.md](../../../docs/dev/baseline-check.md)。
 
 ### Step 4: コミット
 

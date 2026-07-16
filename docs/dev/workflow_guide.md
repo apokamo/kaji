@@ -304,9 +304,13 @@ kaji run .kaji/wf/dev.yaml 247 --agent-runner headless
 
 ## dev / dev-thorough
 
-コード変更を伴う Issue のワークフロー。設計 → 設計レビュー → 実装 → コードレビュー →
+コード変更を伴う Issue のワークフロー。設計 → 設計レビュー → deterministic baseline → 実装 → コードレビュー →
 最終チェック → PR → review-poll → close。`dev-thorough` は同じ骨格をモデル / effort を
 厚めにした丁寧版。
+
+`dev` / `dev-thorough` / `dev-thorough-fable` / `dev-local` は設計承認直後に共通の
+`baseline-precheck` script step を 1 回実行する。artifact と既知 failure ポリシーは
+[baseline-check.md](baseline-check.md) を参照する。
 
 各 hand-off 直前（`design → review-design` / `implement → review-code`）には **pre-handoff review** が挟まる（capability-based: Claude Code は `kaji-code-reviewer` subagent、Codex / Gemini は main-session self-check）。詳細は [development_workflow.md § Pre-Handoff Review](development_workflow.md#prehandoff-review) を参照。
 

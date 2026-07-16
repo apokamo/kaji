@@ -23,7 +23,9 @@ main session は以下のフローを実行する。**Agent tool 利用可否の
    - 直近 `ruff check` / `ruff format --check` / `mypy` の出力（Step 7 を `make check` で実行した場合はその出力の該当部分、7a / 7b へ分離実行した場合は 7a の出力）
 
    Step 7 の出力はいずれの経路でも保持済みであり、証跡取得のために同じコマンドを再実行しない。
-   - 最新の `## Baseline Check 結果` コメント（あれば）
+   - `[worktree_dir]/.kaji-artifacts/baseline/baseline.json` の全文。`status: known_failures` の
+     場合は Step 7b `--compare` 出力も取得する。`status: clean` の場合は `make check` の
+     pytest 出力を最終結果とし、証跡取得だけを目的に `--compare` を再実行しない
    - 対象 commit hash
 
 2. Agent tool で `subagent_type: "kaji-code-reviewer"` を指定して起動する。prompt は以下のテンプレートに沿って組み立てる。
@@ -57,7 +59,7 @@ main session は以下のフローを実行する。**Agent tool 利用可否の
 
    ## Baseline Failures
 
-   (Baseline Check コメント本文を貼り付け。無ければ「無し」と明記)
+   (baseline.json。known_failures 時は `--compare` JSON も添付。artifact 不在は handoff 不可)
    ````
 
 3. subagent が返した Markdown 出力を Step 8.5.5 で専用の Issue コメントとして投稿する（main session が投稿経路を担う）。
