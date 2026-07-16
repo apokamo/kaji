@@ -26,7 +26,13 @@ from kaji_harness.baseline import (
 )
 from kaji_harness.config import KajiConfig
 from kaji_harness.fsio import atomic_write
-from kaji_harness.providers import LocalProvider, get_provider, normalize_id
+from kaji_harness.providers import (
+    LocalProvider,
+    get_provider,
+    normalize_id,
+    resolve_main_worktree,
+)
+from kaji_harness.providers.local import LocalProviderError
 
 ARTIFACT_RELATIVE_PATH = Path(".kaji-artifacts/baseline/baseline.json")
 REPORT_DIRECTORY = Path(".kaji-artifacts/baseline")
@@ -165,9 +171,51 @@ def _format_comment(artifact: BaselineArtifact) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _post_comment(worktree: Path, issue_id: str, artifact: BaselineArtifact) -> None:
+def _resolve_run_config(worktree: Path, default_branch: str) -> KajiConfig:
+    """Discover the config that selected the active run's provider.
+
+    ``git worktree add`` does not copy the gitignored ``.kaji/config.local.toml``
+    overlay into a feature worktree, so discovering from ``worktree`` can resolve
+    ``provider.type`` from the tracked ``.kaji/config.toml`` even while the run
+    itself uses the overlay's provider. Discover from the main worktree, which
+    owns the overlay, and fall back to ``worktree`` only when the main worktree
+    is unresolvable (non-git fixture / git CLI absent).
+    """
+    try:
+        main_root = resolve_main_worktree(start_dir=worktree, default_branch=default_branch)
+    except LocalProviderError:
+        return KajiConfig.discover(worktree)
+    return KajiConfig.discover(main_root)
+
+
+def _assert_provider_matches_run(config: KajiConfig) -> None:
+    """Fail loud when the resolved provider differs from the runner's selection.
+
+    Posting baseline evidence to the wrong forge is silent and unrecoverable, so
+    a divergence must stop the step (design: comment failure emits no verdict and
+    exits non-zero) instead of reaching ``comment_issue``.
+    """
+    expected = os.environ.get("KAJI_PROVIDER_TYPE", "").strip()
+    if not expected:
+        return
+    resolved = config.provider.type if config.provider is not None else None
+    if resolved != expected:
+        raise ValueError(
+            f"provider mismatch: the runner selected provider.type={expected!r} but "
+            f"config discovery resolved {resolved!r} from {config.repo_root}. "
+            "Baseline evidence was not posted. Check .kaji/config.local.toml."
+        )
+
+
+def _post_comment(
+    worktree: Path,
+    issue_id: str,
+    artifact: BaselineArtifact,
+    default_branch: str,
+) -> None:
     """Post baseline evidence through the active provider and commit local comments."""
-    config = KajiConfig.discover(worktree)
+    config = _resolve_run_config(worktree, default_branch)
+    _assert_provider_matches_run(config)
     provider = get_provider(config)
     comment = provider.comment_issue(issue_id, _format_comment(artifact))
     if isinstance(provider, LocalProvider):
@@ -261,7 +309,7 @@ def _measure(
                 verdict_path,
             )
         if artifact.status != "clean":
-            _post_comment(worktree, issue_id, artifact)
+            _post_comment(worktree, issue_id, artifact, default_branch)
         _emit_verdict(_verdict_fields(artifact, reused=True), verdict_path)
         return 0
 
@@ -301,7 +349,7 @@ def _measure(
         )
     save_artifact(artifact_path, artifact)
     if artifact.status != "clean":
-        _post_comment(worktree, issue_id, artifact)
+        _post_comment(worktree, issue_id, artifact, default_branch)
     _emit_verdict(_verdict_fields(artifact), verdict_path)
     return 0
 

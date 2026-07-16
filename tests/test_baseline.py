@@ -318,7 +318,7 @@ def test_entrypoint_classifies_non_clean_baseline_and_posts_evidence(
     monkeypatch.setattr(
         baseline_precheck,
         "_post_comment",
-        lambda _worktree, _issue_id, artifact: posted.append(artifact),
+        lambda _worktree, _issue_id, artifact, _default_branch: posted.append(artifact),
     )
 
     assert baseline_precheck.main([]) == 0
@@ -379,12 +379,13 @@ def test_non_clean_github_comment_uses_provider_boundary_spy(
             stderr="",
         )
 
-    monkeypatch.setattr(baseline_precheck.KajiConfig, "discover", lambda _: object())
+    monkeypatch.setattr(baseline_precheck, "_resolve_run_config", lambda *_: object())
+    monkeypatch.setattr(baseline_precheck, "_assert_provider_matches_run", lambda _: None)
     monkeypatch.setattr(baseline_precheck, "get_provider", lambda _: provider)
     monkeypatch.setattr(provider, "_run_gh", gh_spy)
     artifact = _artifact(failures=[_failure()])
 
-    baseline_precheck._post_comment(tmp_path, "346", artifact)
+    baseline_precheck._post_comment(tmp_path, "346", artifact, "main")
 
     assert len(calls) == 1
     assert calls[0][:6] == ("issue", "comment", "346", "--repo", "owner/repo", "--body")
@@ -466,13 +467,15 @@ def test_non_clean_local_comment_is_committed_to_provider_main(
         "feat/local-comment",
         str(feature_worktree),
     )
-    monkeypatch.setattr(baseline_precheck.KajiConfig, "discover", lambda _: object())
+    monkeypatch.setattr(baseline_precheck, "_resolve_run_config", lambda *_: object())
+    monkeypatch.setattr(baseline_precheck, "_assert_provider_matches_run", lambda _: None)
     monkeypatch.setattr(baseline_precheck, "get_provider", lambda _: provider)
 
     baseline_precheck._post_comment(
         feature_worktree,
         issue.id,
         _artifact(failures=[_failure()]),
+        "main",
     )
 
     assert _git_run(main_repo, "status", "--porcelain") == ""
@@ -483,6 +486,94 @@ def test_non_clean_local_comment_is_committed_to_provider_main(
     comments = provider.list_issue_comments_all(issue.id)
     assert len(comments) == 1
     assert comments[0].body.startswith("## Baseline Check 結果")
+
+
+def _write_overlay_repo(tmp_path: Path) -> tuple[Path, Path]:
+    """Build a main worktree whose local-only overlay overrides tracked github config."""
+    main_repo = tmp_path / "main"
+    (main_repo / ".kaji").mkdir(parents=True)
+    _git_run(main_repo, "init", "-b", "main")
+    _git_run(main_repo, "config", "user.email", "baseline@example.invalid")
+    _git_run(main_repo, "config", "user.name", "Baseline Test")
+    (main_repo / ".kaji" / "config.toml").write_text(
+        '[paths]\nartifacts_dir = ".kaji-artifacts"\nskill_dir = ".claude/skills"\n\n'
+        "[execution]\ndefault_timeout = 1800\n\n"
+        '[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/repo"\n',
+        encoding="utf-8",
+    )
+    # gitignored overlay: `git worktree add` never copies it into a feature worktree.
+    (main_repo / ".kaji" / "config.local.toml").write_text(
+        '[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\n',
+        encoding="utf-8",
+    )
+    (main_repo / ".gitignore").write_text(".kaji/config.local.toml\n", encoding="utf-8")
+    _git_run(main_repo, "add", ".")
+    _git_run(main_repo, "commit", "-m", "chore: seed config")
+    feature_worktree = tmp_path / "feature"
+    _git_run(main_repo, "worktree", "add", "-b", "feat/overlay", str(feature_worktree))
+    return main_repo, feature_worktree
+
+
+@pytest.mark.medium
+def test_run_config_resolves_main_worktree_overlay_from_feature_worktree(
+    tmp_path: Path,
+) -> None:
+    main_repo, feature_worktree = _write_overlay_repo(tmp_path)
+    assert not (feature_worktree / ".kaji" / "config.local.toml").exists()
+
+    config = baseline_precheck._resolve_run_config(feature_worktree, "main")
+
+    assert config.repo_root == main_repo.resolve()
+    assert config.provider is not None
+    # Discovering from the feature worktree would silently resolve 'github' and post
+    # baseline evidence to the wrong provider.
+    assert config.provider.type == "local"
+
+
+@pytest.mark.medium
+def test_run_config_falls_back_to_worktree_when_main_is_unresolvable(
+    tmp_path: Path,
+) -> None:
+    standalone = tmp_path / "standalone"
+    (standalone / ".kaji").mkdir(parents=True)
+    (standalone / ".kaji" / "config.toml").write_text(
+        '[paths]\nartifacts_dir = ".kaji-artifacts"\nskill_dir = ".claude/skills"\n\n'
+        "[execution]\ndefault_timeout = 1800\n\n"
+        '[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/repo"\n',
+        encoding="utf-8",
+    )
+
+    config = baseline_precheck._resolve_run_config(standalone, "main")
+
+    assert config.repo_root == standalone.resolve()
+    assert config.provider is not None
+    assert config.provider.type == "github"
+
+
+@pytest.mark.medium
+def test_post_comment_fails_loud_when_provider_diverges_from_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    main_repo, feature_worktree = _write_overlay_repo(tmp_path)
+    (main_repo / ".kaji" / "config.local.toml").unlink()
+    monkeypatch.setenv("KAJI_PROVIDER_TYPE", "local")
+    posted: list[object] = []
+    monkeypatch.setattr(
+        baseline_precheck,
+        "get_provider",
+        lambda _: posted.append("provider built"),
+    )
+
+    with pytest.raises(ValueError, match="provider mismatch"):
+        baseline_precheck._post_comment(
+            feature_worktree,
+            "local-1",
+            _artifact(failures=[_failure()]),
+            "main",
+        )
+
+    assert posted == []
 
 
 @pytest.mark.large
