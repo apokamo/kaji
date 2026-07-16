@@ -26,8 +26,9 @@ RECOVERY_BUDGET = 1
 #: ``decision: resume`` の child run 起動前に置く固定ウェイト（秒）。決定 9。
 RECOVERY_WAIT_SECONDS = 600
 
-#: irreversible / 外部公開系の副作用を持つ step。自動再開の対象にしない。
-NON_RESUMABLE_STEPS = frozenset({"issue-start", "i-pr", "issue-close"})
+#: irreversible / 外部公開系の副作用を持つ skill。これを実行する step は step ID に
+#: 依存せず自動再開・手動 resume 提示の対象にしない（Issue #349）。
+NON_RESUMABLE_SKILLS = frozenset({"issue-start", "i-pr", "issue-close"})
 
 FailureCause = Literal[
     "dispatch_failure",

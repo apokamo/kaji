@@ -258,7 +258,9 @@ kaji run .kaji/wf/dev.yaml 288 --auto-recover  # 復旧可能なら 10 分後に
   無制限 retry の実質的迂回になるため、手動の次アクション候補として提示するに留める）
 - config / workflow 定義 / workdir / resume session の不備 → `not_resumable`
 - worktree 不在 / branch 不一致 / provider 解決失敗 / auth・secret・permission 形跡 /
-  副作用 step（`issue-start` / `i-pr` / `issue-close`）→ `not_resumable`
+  副作用 skill（`issue-start` / `i-pr` / `issue-close`。これらを実行する step は
+  step ID に依存せず対象になり、原因分類・`auto_recover` の設定より優先して常に
+  `not_resumable` になる）→ `not_resumable`
 - 既に自動再開済みの chain → `exhausted`
 - artifact と runner event の決定論的矛盾 → `bug_issue_created`（`type:bug` の Issue を起票）
 - triage コメントの投稿に失敗した場合も自動再開しない（handler が必要操作を完遂できていないため）

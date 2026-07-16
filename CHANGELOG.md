@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### BREAKING CHANGE
+
+- **Broken contract**: `kaji_harness.recovery.NON_RESUMABLE_STEPS` is removed and
+  renamed to `NON_RESUMABLE_SKILLS` (#349). Code that imports the old name now
+  fails with `ImportError`. `kaji` CLI execution/arguments/exit codes,
+  `recovery.json` schema, and workflow YAML schema are all unchanged.
+  - **How to check whether you are affected**: run
+    `grep -rn 'NON_RESUMABLE_STEPS' .` in your repository. Zero hits means you
+    are not affected.
+  - **How to migrate**: replace each hit with `NON_RESUMABLE_SKILLS`. The value
+    and meaning are unchanged (`frozenset({"issue-start", "i-pr", "issue-close"})`);
+    the rename reflects that recovery now resolves the denylist against
+    `Step.skill` instead of the workflow step ID. kaji ships no backward
+    compatibility layer (ADR 008); see #349 for the full contract change.
+
 ## [0.15.0] - 2026-07-14
 
 This release adds a sequential series runner that drives an ordered list of

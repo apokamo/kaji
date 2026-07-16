@@ -14,7 +14,7 @@ from kaji_harness.recovery.models import (
     FAILURE_CAUSES,
     INCIDENT_EXEMPT_CAUSES,
     INCIDENT_SUPPRESSION_REASONS,
-    NON_RESUMABLE_STEPS,
+    NON_RESUMABLE_SKILLS,
     RECOVERY_BUDGET,
     RECOVERY_DECISIONS,
     RECOVERY_SCHEMA_VERSION,
@@ -42,7 +42,7 @@ def test_module_constants_are_fixed() -> None:
     assert RECOVERY_SCHEMA_VERSION == 1
     assert RECOVERY_BUDGET == 1
     assert RECOVERY_WAIT_SECONDS == 600
-    assert NON_RESUMABLE_STEPS == frozenset({"issue-start", "i-pr", "issue-close"})
+    assert NON_RESUMABLE_SKILLS == frozenset({"issue-start", "i-pr", "issue-close"})
 
 
 def _decision(**overrides: object) -> RecoveryDecision:
