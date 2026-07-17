@@ -22,7 +22,7 @@ execution_policy: auto
 steps:
   - id: s1
     skill: noop
-    agent: echo
+    agent: claude
     on:
       PASS: end
 """
@@ -63,7 +63,7 @@ def test_requires_provider_rejects_non_string() -> None:
 @pytest.mark.small
 def test_validate_workflow_catches_enum_violation_from_direct_construction() -> None:
     """``Workflow`` を YAML 経由でなく直接生成した場合も validate で検知する。"""
-    step = Step(id="s1", skill="noop", agent="echo", on={"PASS": "end"})
+    step = Step(id="s1", skill="noop", agent="claude", on={"PASS": "end"})
     wf = Workflow(
         name="w",
         description="",
@@ -79,7 +79,7 @@ def test_validate_workflow_catches_enum_violation_from_direct_construction() -> 
 
 @pytest.mark.small
 def test_validate_workflow_passes_with_default() -> None:
-    step = Step(id="s1", skill="noop", agent="echo", on={"PASS": "end"})
+    step = Step(id="s1", skill="noop", agent="claude", on={"PASS": "end"})
     wf = Workflow(
         name="w",
         description="",
