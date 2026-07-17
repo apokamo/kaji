@@ -109,7 +109,7 @@ def _write_workflow(repo: Path, name: str, requires: str) -> Path:
         "steps:\n"
         "  - id: only\n"
         "    skill: noop\n"
-        "    agent: echo\n"
+        "    agent: claude\n"
         "    on:\n"
         "      PASS: end\n"
     )
@@ -189,7 +189,7 @@ def test_validate_rejects_unknown_requires_provider(github_repo: Path) -> None:
         'name: bad\ndescription: ""\nexecution_policy: auto\n'
         "requires_provider: nonexistent\n"
         "steps:\n"
-        "  - id: only\n    skill: noop\n    agent: echo\n    on:\n      PASS: end\n"
+        "  - id: only\n    skill: noop\n    agent: claude\n    on:\n      PASS: end\n"
     )
     result = _run_kaji(github_repo, "validate", str(wf))
     assert result.returncode != 0

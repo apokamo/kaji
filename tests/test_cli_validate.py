@@ -133,6 +133,22 @@ steps:
       PASS: missing
 """
 
+NEW_VALIDATION_ERRORS_YAML = """\
+name: new-validation-errors
+description: exercises agent, PASS, and reachability validation
+execution_policy: auto
+steps:
+  - id: root
+    skill: test-skill
+    agent: cladue
+    on:
+      ABORT: end
+  - id: orphan
+    exec: ["true"]
+    on:
+      PASS: end
+"""
+
 
 def _create_config(project_root: Path, skill_dir: str = ".claude/skills") -> None:
     """Create a minimal .kaji/config.toml for testing."""
@@ -517,6 +533,41 @@ class TestCmdValidateMedium:
         exit_code = main(["validate", str(f)])
         assert exit_code == 0
 
+    @pytest.mark.medium
+    def test_new_validation_errors_are_reported_together(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Agent, PASS, and dead-step errors are visible through the CLI."""
+        workflow = tmp_path / "new-errors.yaml"
+        workflow.write_text(NEW_VALIDATION_ERRORS_YAML)
+        _create_skill(tmp_path, "test-skill")
+        _create_config(tmp_path)
+
+        exit_code = _cmd_validate_with_args(str(workflow))
+
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "Step 'root' has unknown agent 'cladue'" in captured.err
+        assert "Step 'root' 'on' must define a 'PASS' transition" in captured.err
+        assert "Step 'orphan' is not reachable from the first step 'root'" in captured.err
+
+    @pytest.mark.medium
+    def test_repository_workflows_all_validate(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Every repository-managed workflow remains compatible with validation."""
+        project_root = Path(__file__).resolve().parents[1]
+        workflows = sorted((project_root / ".kaji" / "wf").glob("*.yaml"))
+
+        exit_code = _cmd_validate_with_args(
+            *(str(workflow) for workflow in workflows),
+            "--project-root",
+            str(project_root),
+        )
+
+        assert workflows
+        assert exit_code == 0, capsys.readouterr().err
+        captured = capsys.readouterr()
+        assert captured.out.count("✓") == len(workflows)
+
 
 # ============================================================
 # Large tests — real subprocess execution
@@ -620,6 +671,25 @@ class TestCLIValidateLarge:
         assert "✓" in result.stdout
         assert "✗" in result.stderr
         assert "Validation failed" in result.stderr
+
+    @pytest.mark.large
+    @pytest.mark.large_local
+    def test_kaji_validate_rejects_unknown_agent(self, tmp_path: Path) -> None:
+        """The installed CLI rejects an agent typo before execution."""
+        workflow = tmp_path / "new-errors.yaml"
+        workflow.write_text(NEW_VALIDATION_ERRORS_YAML)
+        _create_skill(tmp_path, "test-skill")
+        _create_config(tmp_path)
+
+        result = subprocess.run(
+            [sys.executable, "-m", "kaji_harness.cli_main", "validate", str(workflow)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert result.returncode == 1
+        assert "Step 'root' has unknown agent 'cladue'" in result.stderr
 
 
 # ============================================================

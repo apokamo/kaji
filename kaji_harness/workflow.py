@@ -60,6 +60,8 @@ _STEP_REQUIRED_KEYS = ("id",)
 # これらは無意味であり、同時指定は parse 時に fail-fast する（Issue #205）。
 _EXEC_FORBIDDEN_KEYS = ("agent", "model", "effort", "resume", "inject_verdict", "max_budget_usd")
 
+VALID_AGENTS: frozenset[str] = frozenset({"claude", "codex", "gemini"})
+
 # Agent ごとの effort 許容値。CLI 仕様の一次情報:
 #   claude: `claude --help` の `--effort` 列挙 (low/medium/high/xhigh/max)
 #   codex:  codex error message "expected one of `none`, `minimal`, `low`,
@@ -414,6 +416,12 @@ def validate_workflow(workflow: Workflow) -> None:
 
     # ステップレベルの検証
     for step in workflow.steps:
+        if step.agent is not None and step.agent not in VALID_AGENTS:
+            errors.append(
+                f"Step '{step.id}' has unknown agent '{step.agent}' "
+                f"(allowed: {sorted(VALID_AGENTS)})"
+            )
+
         # スキーマ: skill / exec の排他（_parse_workflow() を経由せず手組みした
         # Workflow でも担保する defense-in-depth ミラー。Issue #205）。
         if (step.skill is None) == (step.exec is None):
@@ -476,6 +484,9 @@ def validate_workflow(workflow: Workflow) -> None:
                     )
             continue
 
+        if "PASS" not in step.on:
+            errors.append(f"Step '{step.id}' 'on' must define a 'PASS' transition")
+
         # 1. resume 先が存在し、同一 agent であること
         if step.resume:
             target = workflow.find_step(step.resume)
@@ -498,6 +509,28 @@ def validate_workflow(workflow: Workflow) -> None:
         for verdict in step.on:
             if not _is_valid_verdict(verdict):
                 errors.append(f"Step '{step.id}' has invalid verdict '{verdict}'")
+
+    if workflow.steps:
+        root_id = workflow.steps[0].id
+        step_ids = {step.id for step in workflow.steps}
+        reachable_step_ids: set[str] = set()
+        pending_step_ids = [root_id]
+
+        while pending_step_ids:
+            step_id = pending_step_ids.pop()
+            if step_id in reachable_step_ids:
+                continue
+            reachable_step_ids.add(step_id)
+            current_step = workflow.find_step(step_id)
+            if current_step is None or current_step.id in invalid_on_step_ids:
+                continue
+            for next_id in current_step.on.values():
+                if next_id in step_ids and next_id not in reachable_step_ids:
+                    pending_step_ids.append(next_id)
+
+        for step in workflow.steps:
+            if step.id not in reachable_step_ids:
+                errors.append(f"Step '{step.id}' is not reachable from the first step '{root_id}'")
 
     # サイクルレベルの検証
     for cycle in workflow.cycles:

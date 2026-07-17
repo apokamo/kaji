@@ -65,6 +65,19 @@ def _simple_workflow() -> Workflow:
     )
 
 
+def _dead_step_workflow() -> Workflow:
+    """Create a workflow whose second step is outside the canonical graph."""
+    return Workflow(
+        name="dead-step-workflow",
+        description="Test canonical graph validation",
+        execution_policy="auto",
+        steps=[
+            Step(id="root", exec=["true"], on={"PASS": "end"}),
+            Step(id="orphan", exec=["true"], on={"PASS": "end"}),
+        ],
+    )
+
+
 def _cycle_workflow() -> Workflow:
     """Create a workflow with a review cycle (review → fix → verify → ...)."""
     return Workflow(
@@ -303,6 +316,28 @@ class TestWorkflowExecution:
             with pytest.raises(WorkflowValidationError):
                 runner = _make_runner(tmp_path, workflow, single_step="nonexistent")
                 runner.run()
+
+    @pytest.mark.parametrize(
+        "start_option",
+        [{"from_step": "orphan"}, {"single_step": "orphan"}],
+        ids=["from", "step"],
+    )
+    def test_dead_step_start_is_rejected_before_resolution_and_dispatch(
+        self, tmp_path: Path, start_option: dict[str, str]
+    ) -> None:
+        """A partial-run option cannot turn an unreachable step into another root."""
+        workflow = _dead_step_workflow()
+
+        with (
+            patch("kaji_harness.runner.execute_exec") as execute_exec_mock,
+            patch.object(WorkflowRunner, "_resolve_start_step") as resolve_start_step_mock,
+            pytest.raises(WorkflowValidationError, match="orphan.*not reachable"),
+        ):
+            runner = _make_runner(tmp_path, workflow, **start_option)
+            runner.run()
+
+        resolve_start_step_mock.assert_not_called()
+        execute_exec_mock.assert_not_called()
 
     def test_resume_without_session_id_raises_error(self, tmp_path: Path) -> None:
         """Resume step without prior session_id raises MissingResumeSessionError."""

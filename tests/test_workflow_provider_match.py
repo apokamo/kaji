@@ -38,7 +38,7 @@ requires_provider: {provider}
 steps:
   - id: only
     skill: noop
-    agent: echo
+    agent: claude
     on:
       PASS: end
 """

@@ -5,11 +5,14 @@ Covers validate_workflow and WorkflowValidationError collection.
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
+from kaji_harness.adapters import ADAPTERS
 from kaji_harness.errors import WorkflowValidationError
 from kaji_harness.models import CycleDefinition, Step, Workflow
-from kaji_harness.workflow import validate_workflow
+from kaji_harness.workflow import VALID_AGENTS, validate_workflow
 
 # ============================================================
 # Helpers for building test Workflow objects
@@ -19,7 +22,7 @@ from kaji_harness.workflow import validate_workflow
 def _step(
     id: str,
     skill: str = "default-skill",
-    agent: str = "claude",
+    agent: str | None = "claude",
     *,
     model: str | None = None,
     effort: str | None = None,
@@ -103,6 +106,172 @@ class TestValidWorkflows:
         )
 
         validate_workflow(wf)
+
+
+class TestAgentValidation:
+    """Validation of the agent enum."""
+
+    @pytest.mark.small
+    @pytest.mark.parametrize("agent", ["claude", "codex", "gemini"])
+    def test_registered_agent_passes(self, agent: str) -> None:
+        """Every registered runtime agent is accepted."""
+        validate_workflow(_workflow([_step("run", agent=agent, on={"PASS": "end"})]))
+
+    @pytest.mark.small
+    def test_omitted_agent_is_not_an_enum_error(self) -> None:
+        """An omitted agent remains available to exec_script preflight validation."""
+        validate_workflow(_workflow([_step("run", agent=None, on={"PASS": "end"})]))
+
+    @pytest.mark.small
+    def test_model_name_is_not_enum_validated(self) -> None:
+        """Rapidly changing model names remain passthrough values."""
+        workflow = _workflow(
+            [_step("run", agent="codex", model="future-model-name", on={"PASS": "end"})]
+        )
+
+        validate_workflow(workflow)
+
+    @pytest.mark.small
+    @pytest.mark.parametrize("agent", ["cladue", "Claude", "unknown"])
+    def test_unknown_agent_is_rejected(self, agent: str) -> None:
+        """Unknown and incorrectly cased agents are rejected with the enum contract."""
+        workflow = _workflow([_step("run", agent=agent, on={"PASS": "end"})])
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            validate_workflow(workflow)
+
+        assert exc_info.value.errors == [
+            f"Step 'run' has unknown agent '{agent}' (allowed: ['claude', 'codex', 'gemini'])"
+        ]
+
+    @pytest.mark.small
+    def test_agent_enum_matches_runtime_adapters(self) -> None:
+        """Static validation and runtime dispatch expose the same agent set."""
+        assert VALID_AGENTS == frozenset(ADAPTERS)
+
+
+class TestPassTransitionValidation:
+    """Validation of the mandatory PASS transition."""
+
+    @pytest.mark.small
+    @pytest.mark.parametrize("agent", ["claude", None], ids=["agent", "exec-script"])
+    def test_skill_step_without_pass_is_rejected(self, agent: str | None) -> None:
+        """Agent-backed and exec_script skill steps require a successful transition."""
+        workflow = _workflow([_step("run", agent=agent, on={"ABORT": "end"})])
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            validate_workflow(workflow)
+
+        assert "Step 'run' 'on' must define a 'PASS' transition" in exc_info.value.errors
+
+    @pytest.mark.small
+    def test_exec_step_without_pass_is_rejected(self) -> None:
+        """A direct exec step must define its successful transition."""
+        workflow = _workflow(
+            [Step(id="run", exec=["true"], on={"ABORT": "end"})],
+        )
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            validate_workflow(workflow)
+
+        assert "Step 'run' 'on' must define a 'PASS' transition" in exc_info.value.errors
+
+    @pytest.mark.small
+    @pytest.mark.parametrize("invalid_on", [{}, []], ids=["empty", "non-mapping"])
+    def test_invalid_on_does_not_duplicate_pass_error(self, invalid_on: object) -> None:
+        """An invalid on mapping reports only the existing mapping error."""
+        workflow = _workflow(
+            [
+                Step(
+                    id="run",
+                    skill="default-skill",
+                    agent="claude",
+                    on=cast(dict[str, str], invalid_on),
+                )
+            ]
+        )
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            validate_workflow(workflow)
+
+        assert exc_info.value.errors == ["Step 'run' 'on' must be a non-empty mapping"]
+
+
+class TestReachabilityValidation:
+    """Validation of reachability from the canonical first step."""
+
+    @pytest.mark.small
+    def test_branching_graph_and_single_step_are_valid(self) -> None:
+        """All declared steps may be reached through any verdict edge."""
+        branching = _workflow(
+            [
+                _step("root", on={"PASS": "left", "RETRY": "right"}),
+                _step("left", on={"PASS": "end"}),
+                _step("right", on={"PASS": "end"}),
+            ]
+        )
+
+        validate_workflow(branching)
+        validate_workflow(_workflow([_step("only", on={"PASS": "end"})]))
+
+    @pytest.mark.small
+    def test_unreachable_steps_are_reported_in_declaration_order(self) -> None:
+        """Disconnected steps are errors rooted at the first declared step."""
+        workflow = _workflow(
+            [
+                _step("root", on={"PASS": "end"}),
+                _step("orphan-a", on={"PASS": "orphan-b"}),
+                _step("orphan-b", on={"PASS": "end"}),
+            ]
+        )
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            validate_workflow(workflow)
+
+        assert exc_info.value.errors == [
+            "Step 'orphan-a' is not reachable from the first step 'root'",
+            "Step 'orphan-b' is not reachable from the first step 'root'",
+        ]
+
+    @pytest.mark.small
+    def test_cycle_and_resume_references_do_not_make_steps_reachable(self) -> None:
+        """Cycle metadata and resume references are not graph transition edges."""
+        workflow = _workflow(
+            [
+                _step("root", on={"PASS": "end"}),
+                _step("orphan", resume="root", on={"PASS": "end"}),
+            ],
+            cycles=[
+                CycleDefinition(
+                    name="orphan-cycle",
+                    entry="orphan",
+                    loop=["orphan"],
+                    max_iterations=1,
+                    on_exhaust="ABORT",
+                )
+            ],
+        )
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            validate_workflow(workflow)
+
+        assert "Step 'orphan' is not reachable from the first step 'root'" in exc_info.value.errors
+
+    @pytest.mark.small
+    def test_unknown_transition_and_dead_step_errors_are_aggregated(self) -> None:
+        """Unknown targets are ignored by traversal but retained as validation errors."""
+        workflow = _workflow(
+            [
+                _step("root", on={"PASS": "missing"}),
+                _step("orphan", on={"PASS": "end"}),
+            ]
+        )
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            validate_workflow(workflow)
+
+        assert "Step 'root' transitions to unknown step 'missing' on PASS" in exc_info.value.errors
+        assert "Step 'orphan' is not reachable from the first step 'root'" in exc_info.value.errors
 
 
 # ============================================================
@@ -450,3 +619,23 @@ class TestMultipleErrorCollection:
 
         # At least two errors: unknown resume target + unknown on target
         assert len(exc_info.value.errors) >= 2
+
+    @pytest.mark.small
+    def test_new_rule_errors_are_collected_in_one_exception(self) -> None:
+        """Agent, PASS, and reachability violations are reported together."""
+        workflow = _workflow(
+            [
+                _step("root", agent="cladue", on={"ABORT": "end"}),
+                _step("orphan", on={"PASS": "end"}),
+            ]
+        )
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            validate_workflow(workflow)
+
+        assert (
+            "Step 'root' has unknown agent 'cladue' "
+            "(allowed: ['claude', 'codex', 'gemini'])" in exc_info.value.errors
+        )
+        assert "Step 'root' 'on' must define a 'PASS' transition" in exc_info.value.errors
+        assert "Step 'orphan' is not reachable from the first step 'root'" in exc_info.value.errors
