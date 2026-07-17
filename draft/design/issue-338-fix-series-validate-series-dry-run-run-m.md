@@ -110,10 +110,11 @@ def preflight_workflow_path(
     """path から L1 → L2 → L3 を適用する（validate / series / recover 用）。"""
 ```
 
-- 例外を投げず、構造化 error list を返す（Issue 完了条件「共通 preflight は構造化 error list を返し、公開 CLI 境界では既存契約を維持する」）。各入口が既存の例外型 / exit code / rendering へ mapping する
+- **検証エラー（definition invalid）は例外を投げず、構造化 error list で返す**（Issue 完了条件「共通 preflight は構造化 error list を返し、公開 CLI 境界では既存契約を維持する」）。各入口が既存の例外型 / exit code / rendering へ mapping する
+- **I/O 例外（`OSError`）は検証結果ではなく環境エラーとして扱い、preflight では捕捉せず伝播させる**。発生源は 2 箇所: L1 の workflow YAML 読取（`workflow.py:29` の `read_text`。`load_workflow()` は `yaml.YAMLError` のみ捕捉）と L3 の SKILL.md 読取（`skill.py` `load_skill_metadata()` 内 `read_text`。docstring の Raises にも `OSError` は含まれず素通し）。入口別の処理は次節「I/O 例外の入口別 mapping」の表を契約とする。これにより「読めるが invalid」（errors で返る）と「読み込めない」（`OSError` が伝播する）が preflight の型レベルで区別され、`load_series()` の分類（`is invalid` / `could not be loaded`）と競合しない
 - L1 失敗（YAML parse・型エラー）時は L2 / L3 を実行せず L1 エラーのみ返す（`workflow=None`）
 - L2 と L3 は独立に評価し、両方のエラーを集約する（series の「全件集約」要件と整合）
-- L3 は step ごとに `SkillNotFound` / `SecurityError` / `SkillFrontmatterError` を捕捉して `errors` に文字列化し、次の step へ継続する（現行 `cmd_validate` は最初の例外で当該ファイルの検証を打ち切るため、集約性が向上する。exit code / ✗ rendering は不変）
+- L3 は step ごとに `SkillNotFound` / `SecurityError` / `SkillFrontmatterError` を捕捉して `errors` に文字列化し、次の step へ継続する（現行 `cmd_validate` は最初の例外で当該ファイルの検証を打ち切るため、集約性が向上する。exit code / ✗ rendering は不変）。`OSError` はこの per-step 捕捉に**含めない**（上記 I/O 例外方針のとおり伝播）
 
 ### 出力（各入口の適用後の挙動）
 
@@ -125,18 +126,35 @@ def preflight_workflow_path(
 | 通常の `run-series` | `load_series()` が `SeriesRunner` 生成**前**に走るため、invalid なら member subprocess / series state / lock を一切作成せず exit 2。過去の dry-run 有無・結果には依存しない（開始時再検証が安全性の正本） |
 | `kaji run`（runner） | `runner.run()` 冒頭の `_collect_skill_metadata()` + `validate_workflow()` を `preflight_workflow(self.workflow, ...)` に置換。`errors` 非空なら `WorkflowValidationError(errors)` を送出（`cmd_run` の既存 mapping で exit 2）。`warnings` は現行どおり stderr へ。`skill_metadata` は実行に引き続き使用 |
 | `kaji validate` | `cmd_validate` の L2/L3 手組みを `preflight_workflow_path()` に置換。config 解決（`_resolve_project_root_for_validate`）は現行維持。exit 1・✓/✗ rendering 不変 |
-| `kaji recover` | `load_workflow()` 後に `preflight_workflow()` を追加適用。エラー時は既存 `WorkflowValidationError` 分岐と同じ `EXIT_DEFINITION_ERROR` |
+| `kaji recover` | `load_workflow()` 後に `preflight_workflow()` を追加適用。`errors` 非空なら既存 `WorkflowValidationError` 分岐と同じ `EXIT_DEFINITION_ERROR` |
+
+### I/O 例外（`OSError`）の入口別 mapping
+
+preflight が伝播させる `OSError`（workflow YAML / SKILL.md の読取失敗）の入口別処理。すべて既存分岐の維持または既存分岐への合流であり、公開 CLI 契約は変えない:
+
+| 入口 | `OSError` の扱い |
+|---|---|
+| `kaji validate` | `cmd_validate` の既存 `except OSError`（`validate.py:101`）で捕捉 → `✗` rendering + exit 1（現行維持） |
+| `load_series()`（validate-series / dry-run / 通常実行の 3 入口） | member ループの `except OSError` で捕捉 → `members.{index}.workflow could not be loaded: ...` に分類し、**残り member の検証は継続**して全件集約（現行の捕捉位置を維持。`is invalid` とは接頭辞で区別） |
+| `kaji run` | 捕捉しない。`cmd_run` 最外殻の `except Exception` → `Unexpected error` + `EXIT_ABORT`（現行 `_collect_skill_metadata()` 内 `read_text` 失敗時と同一挙動。契約変更なし） |
+| `kaji recover` | preflight 適用部を `except OSError` で捕捉 → `Error: ...` stderr + `EXIT_DEFINITION_ERROR`（L3 追加で新規に生じる SKILL.md 読取失敗経路を traceback にせず、definition 系分岐へ合流させる。`load_workflow()` 段階の `OSError` 伝播は現行挙動のまま変更しない） |
 
 ### 使用例
 
 ```python
 # load_series() 内（疑似コード）
-result = preflight_workflow_path(resolved, project_root=repo_root, skill_dir=config.paths.skill_dir)
+try:
+    result = preflight_workflow_path(
+        resolved, project_root=repo_root, skill_dir=config.paths.skill_dir
+    )
+except OSError as exc:
+    errors.append(f"members.{index}.workflow could not be loaded ({member.workflow}): {exc}")
+    continue  # 読み込めない: 環境エラー。残り member の検証は継続
 if result.errors:
     errors.extend(
         f"members.{index}.workflow is invalid ({member.workflow}): {e}" for e in result.errors
     )
-    continue
+    continue  # 読めるが invalid: 検証エラー
 ```
 
 ## 制約・前提条件
@@ -161,7 +179,7 @@ if result.errors:
 2. **各入口の置換**（上記「出力」表のとおり）
    - `runner._collect_skill_metadata()` と `cmd_validate` の L3 手組みを削除し preflight 呼び出しへ一本化（重複解消）
    - `load_series()`: member ループ内を preflight 化し、`is invalid` / `could not be loaded` / `not found` を区別して全件集約
-   - `cmd_recover`: `load_workflow()` 直後に preflight を追加
+   - `cmd_recover`: `load_workflow()` 直後に preflight を追加（適用部は `except OSError` → `EXIT_DEFINITION_ERROR`。「I/O 例外の入口別 mapping」表のとおり）
 
 3. **品質ゲートへの組み込み**
    - Makefile に `validate-workflows` ターゲット（`kaji validate .kaji/wf/*.yaml`）を追加し、`check` の依存に加える。CI は `make check` 経由で自動包含
@@ -179,6 +197,7 @@ if result.errors:
 | preflight の配置 | 新モジュール `kaji_harness/preflight.py` | AI の仮定。根拠: `workflow.py` に置くと `skill.py` 依存が増え leaf 性が崩れる。`runner.py` / `commands/` に置くと相互依存になる。review-design / review-code で検査 | 依存方向（workflow / skill のみ）を制約として明文化 |
 | 返却形 | frozen dataclass `WorkflowPreflightResult`（workflow / skill_metadata / errors / warnings） | AI の仮定。根拠: runner が skill_metadata を実行に再利用するため、検証と metadata 取得を 1 パスに統合すると二重ロードを避けられる。review-code で検査 | フィールド構成と L1 失敗時の `workflow=None` 契約を定義 |
 | L2/L3 の集約方式 | L1 失敗時は L1 のみ。L2 と L3 は独立評価して両方集約 | AI の仮定。根拠: series の「全件 error 集約」完了条件との整合と、L3 が L2 結果に依存しない事実。review-code で検査 | 例外→errors 回収の変換規則を定義 |
+| I/O 例外（`OSError`）の扱い | preflight は捕捉せず伝播。各入口の既存分岐（validate: exit 1 / series: `could not be loaded` / run: 現行伝播 / recover: `EXIT_DEFINITION_ERROR`）で処理 | AI の仮定。根拠: `OSError` を errors に混ぜると Issue 完了条件の「読み込めない」/「読めるが invalid」区別が `load_series()` で不可能になる。Issue の CLI 契約維持決定とも整合。review-design / review-code で検査 | 「I/O 例外の入口別 mapping」表として入口ごとに一意化 |
 | Makefile ターゲット名 | `validate-workflows` を `check` 依存に追加 | AI の仮定。根拠: 完了条件「make check と CI で .kaji/wf/*.yaml を共通 preflight により検証」。名称・組み込み位置は two-way door。review-code で検査 | `kaji validate` CLI 経由とし、preflight 実装の直接 import を避ける |
 
 ## テスト戦略
@@ -196,6 +215,8 @@ if result.errors:
 - `preflight_workflow_path()`: L1 invalid（YAML parse error）→ L1 エラーのみ・`workflow=None` / L2 invalid（実障害と同一の resume agent 不一致）→ 当該エラー文言 / L3 invalid（skill 不在・agent 省略×exec_script なし）→ 当該エラー文言 / L2+L3 同時 invalid → 両方集約 / valid → errors 空・skill_metadata 充足
 - warnings: exec_script skill に agent/model/effort 指定 → warnings に回収され errors に混入しない
 - `load_series()` のエラー分類: ファイル不在 → `not found` / 読取失敗 → `could not be loaded` / preflight エラー → `is invalid`（member index / path 付き）— 既存 `test_series_io.py` に追加
+- **複数 invalid member の全件集約**: 同一 series に member 2 = L2 invalid / member 3 = L3 invalid / member 4 = ファイル不在を置き、`SeriesValidationError.errors` に 3 件すべてが `members.{index}` と workflow path 付きで含まれ、分類接頭辞（`is invalid` / `not found`）が member ごとに正しいこと（完了条件「全件の error を member index / workflow path 付きで集約」の直接検証）
+- preflight の I/O 例外契約: 読取不能な workflow path（例: ディレクトリを指定）で `preflight_workflow_path()` が `OSError` を伝播させ、errors に混入しないこと
 - 既存 `test_workflow_validator.py` / `test_cli_validate.py` が L2 / `kaji validate` の挙動不変を回帰保護
 
 ### Medium テスト（tmp repo fixture、既存 `test_series_cli.py` の流儀）
@@ -203,7 +224,8 @@ if result.errors:
 - **L2 invalid / L3 invalid の双方**について、`validate-series`（exit 1・stderr に member index + 理由）/ `run-series --dry-run`（exit 2・`Error:` stderr）/ 通常 `run-series`（exit 2）が**同じ理由で停止**する回帰テスト（完了条件対応）
 - invalid な 2 番目の member を含む series で、**1 番目を含め member subprocess が 1 件も起動せず**、series state ファイル / lock が作成されないテスト（完了条件対応）
 - **stale-plan 回帰**: valid plan で dry-run 成功 → 参照 workflow を L2 invalid に書き換え → 通常実行が開始時再検証で exit 2 停止（完了条件対応）
-- `kaji recover`: L2 invalid workflow で `EXIT_DEFINITION_ERROR`（exit 2）
+- `kaji recover`: **L2 invalid / L3 invalid（skill 不在）の双方**で `EXIT_DEFINITION_ERROR`（exit 2）— recover 経路の L3 回帰テスト
+- CLI 境界での複数 invalid member 集約: `validate-series` の stderr に全 invalid member の行が出力されること（`load_series()` 集約の end-to-end 確認）
 - `kaji run`: 既存 `test_workflow_execution.py` 等で L2/L3 検出の回帰を確認（置換後も挙動不変）
 - dry-run の副作用なし: dry-run 成功後に artifacts / state / lock が存在しないことの確認
 
@@ -237,6 +259,8 @@ if result.errors:
 | `kaji_harness/commands/series.py:38-97` | repo 内 | `validate-series` exit 1 / `run-series` の `SeriesValidationError` → exit 2 mapping と rendering（維持対象の契約） |
 | `kaji_harness/commands/recover.py:62-65` | repo 内 | recover 初期 load が `load_workflow()` のみである根拠 |
 | `kaji_harness/commands/exit_codes.py` | repo 内 | `EXIT_VALIDATION_ERROR = 1` / `EXIT_DEFINITION_ERROR = EXIT_INVALID_INPUT = 2` |
+| `kaji_harness/workflow.py:28-31` / `kaji_harness/skill.py` `load_skill_metadata()` | repo 内 | `read_text` の `OSError` はどちらも捕捉されず伝播する（`load_workflow` は `yaml.YAMLError` のみ捕捉、`load_skill_metadata` の docstring Raises に `OSError` なし）— I/O 例外方針の根拠 |
+| `kaji_harness/commands/validate.py:101-102` | repo 内 | `cmd_validate` の既存 `except OSError` 分岐 — validate 入口の I/O 例外 mapping（現行維持）の根拠 |
 | `git log --follow kaji_harness/series/loader.py` | repo 内 | 導入 commit `49c9a28`（#313）から L1 のみ — 「いつから壊れているか」の根拠 |
 | docs/dev/testing-convention.md | repo 内 | テストサイズ判定基準（subprocess 起動前停止は Medium で観測、外部疎通なしのため Large 不要） |
 | 後続 Issue #339 | GitHub Issue #339 | validation ルール厳密化の分離先（スコープ境界） |
