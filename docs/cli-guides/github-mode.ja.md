@@ -126,6 +126,12 @@ kaji run-series .kaji/series/<id>.yaml
 の変更や生存中の遺留 child は安全側に拒否する。実行 state と lock は
 `<artifacts_dir>/_series/<id>/` に保存される。
 
+`validate-series` と `--dry-run` は現在の plan の全 member workflow に対し、YAML schema、
+workflow 内参照、skill metadata の完全 preflight を行う。通常実行も開始時に同じ preflight を
+再実行し、過去の dry-run 結果には依存しない。invalid member が 1 件でもあれば member process、
+series state、lock は作成されない。dry-run は workflow を読み取り・検証するが、provider API、
+Issue、artifact、state、lock、member 実行には副作用を与えない。
+
 `/series-create <issues...> --id <id>` は YAML 生成、validation、dry-run まで行って停止する。
 標準外 variant は `--workflow <issue>=<path>` で member 単位に明示する。skill は Issue metadata
 を read-only で参照し、Issue 更新や本実行は行わない。

@@ -160,6 +160,12 @@ exits zero and `gh issue view` reports `closed` with state reason `completed`. R
 or stopped series with `--resume`; a changed definition fingerprint or a live orphan child is
 rejected. Runtime state and the advisory lock live under `<artifacts_dir>/_series/<id>/`.
 
+`validate-series` and `--dry-run` fully preflight every member workflow in the current plan: YAML
+schema, workflow references, and skill metadata. A normal run repeats the same preflight at startup
+instead of trusting an earlier dry-run. If any member is invalid, no member process, series state, or
+lock is created. Dry-run reads and validates workflows but does not access provider APIs or mutate
+Issues, artifacts, state, locks, or member executions.
+
 `/series-create <issues...> --id <id>` generates the YAML, runs validation and dry-run, and stops.
 Use `--workflow <issue>=<path>` for a non-standard workflow variant. The skill reads Issue metadata
 but does not edit Issues or start the series.

@@ -109,6 +109,30 @@ steps:
     on: {
 """
 
+INVALID_TRANSITION_YAML = """\
+name: bad-transition
+description: invalid L2 transition
+execution_policy: auto
+steps:
+  - id: done
+    skill: test-skill
+    agent: claude
+    on:
+      PASS: missing
+"""
+
+L2_AND_L3_INVALID_YAML = """\
+name: bad-both
+description: invalid L2 transition and missing L3 skill
+execution_policy: auto
+steps:
+  - id: done
+    skill: nonexistent-skill-xyz
+    agent: claude
+    on:
+      PASS: missing
+"""
+
 
 def _create_config(project_root: Path, skill_dir: str = ".claude/skills") -> None:
     """Create a minimal .kaji/config.toml for testing."""
@@ -183,6 +207,38 @@ class TestCmdValidateSmall:
         captured = capsys.readouterr()
         assert "✗" in captured.err
         assert str(invalid_schema_yaml) in captured.err
+        assert "steps" in captured.err
+        assert ".kaji/config.toml not found" not in captured.err
+
+    @pytest.mark.small
+    def test_invalid_transition_precedes_missing_config(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        workflow = tmp_path / "invalid_transition.yaml"
+        workflow.write_text(INVALID_TRANSITION_YAML)
+
+        exit_code = _cmd_validate_with_args(str(workflow))
+
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "Step 'done' transitions to unknown step 'missing' on PASS" in captured.err
+        assert ".kaji/config.toml not found" not in captured.err
+
+    @pytest.mark.small
+    def test_l2_and_l3_errors_reported_together(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Preflight aggregates L2 and L3 errors instead of stopping at L2."""
+        _create_config(tmp_path)
+        workflow = tmp_path / "bad_both.yaml"
+        workflow.write_text(L2_AND_L3_INVALID_YAML)
+
+        exit_code = _cmd_validate_with_args(str(workflow))
+
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "Step 'done' transitions to unknown step 'missing' on PASS" in captured.err
+        assert "nonexistent-skill-xyz" in captured.err
 
     @pytest.mark.small
     def test_invalid_syntax_exit_1(

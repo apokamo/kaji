@@ -1,9 +1,9 @@
-.PHONY: check lint format fmt typecheck test test-small test-medium test-large \
-        test-large-local verify-docs verify-packaging setup help
+.PHONY: check lint format fmt typecheck validate-workflows test test-small test-medium \
+        test-large test-large-local verify-docs verify-packaging setup help
 
 SOURCES := kaji_harness/ tests/ experiments/
 
-check: lint format typecheck test
+check: lint format typecheck validate-workflows test
 
 lint:
 	ruff check $(SOURCES)
@@ -16,6 +16,9 @@ fmt:
 
 typecheck:
 	mypy kaji_harness/
+
+validate-workflows:
+	kaji validate .kaji/wf/*.yaml
 
 test:
 	pytest
@@ -43,8 +46,9 @@ setup:
 
 help:
 	@echo "Common targets:"
-	@echo "  make check               - lint + format(--check) + typecheck + test (non-mutating gate)"
+	@echo "  make check               - lint + format(--check) + typecheck + workflow validation + test (non-mutating gate)"
 	@echo "  make fmt                 - apply ruff format (mutating)"
+	@echo "  make validate-workflows  - validate all tracked workflows with L1/L2/L3 preflight"
 	@echo "  make test                - pytest (all markers)"
 	@echo "  make test-small          - pytest -m small"
 	@echo "  make test-medium         - pytest -m medium"

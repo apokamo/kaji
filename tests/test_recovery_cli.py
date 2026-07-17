@@ -172,6 +172,9 @@ def _repo(tmp_path: Path, execution_extra: str = "") -> Path:
         "      PASS: end\n"
         "      ABORT: end\n"
     )
+    skill_dir = repo / ".claude" / "skills" / "issue-implement"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# issue-implement\n", encoding="utf-8")
     from kaji_harness.providers import LocalProvider
 
     counter = repo / ".kaji" / "counters" / "pc1.txt"
@@ -408,4 +411,34 @@ class TestCmdRecover:
 
         assert rc == EXIT_INVALID_INPUT
         assert "requires provider.type='github'" in capsys.readouterr().err
+        assert not (run_dir / RECOVERY_FILE).exists()
+
+    @pytest.mark.parametrize(
+        ("replacement", "expected"),
+        [
+            ("PASS: missing", "transitions to unknown step 'missing'"),
+            ("skill: missing-skill", "missing-skill/SKILL.md not found"),
+        ],
+    )
+    def test_recover_rejects_l2_and_l3_invalid_workflows(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        replacement: str,
+        expected: str,
+    ) -> None:
+        repo = _repo(tmp_path)
+        run_dir = self._failed_run(repo)
+        workflow = repo / "invalid.yaml"
+        source = (repo / "wf.yaml").read_text(encoding="utf-8")
+        if replacement.startswith("PASS"):
+            source = source.replace("PASS: end", replacement)
+        else:
+            source = source.replace("skill: issue-implement", replacement)
+        workflow.write_text(source, encoding="utf-8")
+
+        rc = main(["recover", str(workflow), "99", "--workdir", str(repo)])
+
+        assert rc == EXIT_DEFINITION_ERROR
+        assert expected in capsys.readouterr().err
         assert not (run_dir / RECOVERY_FILE).exists()

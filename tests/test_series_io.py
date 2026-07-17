@@ -101,8 +101,78 @@ def test_load_series_rejects_malformed_workflow(tmp_path: Path) -> None:
     workflow.write_text("name: broken\nsteps: not-a-list\n", encoding="utf-8")
     path = tmp_path / "series.yaml"
     path.write_text(_series_yaml(), encoding="utf-8")
-    with pytest.raises(SeriesValidationError, match="could not be loaded"):
+    with pytest.raises(SeriesValidationError, match="is invalid"):
         load_series(path, _kaji_config(tmp_path))
+
+
+def test_load_series_rejects_l2_invalid_workflow(tmp_path: Path) -> None:
+    workflow = _write_workflow(tmp_path)
+    workflow.write_text(
+        workflow.read_text(encoding="utf-8").replace("PASS: end", "PASS: missing"),
+        encoding="utf-8",
+    )
+    path = tmp_path / "series.yaml"
+    path.write_text(_series_yaml(), encoding="utf-8")
+
+    with pytest.raises(SeriesValidationError) as exc_info:
+        load_series(path, _kaji_config(tmp_path))
+
+    assert exc_info.value.errors == [
+        "members.0.workflow is invalid (.kaji/wf/dev.yaml): "
+        "Step 'done' transitions to unknown step 'missing' on PASS"
+    ]
+
+
+def test_load_series_distinguishes_workflow_io_error(tmp_path: Path) -> None:
+    _write_workflow(tmp_path)
+    path = tmp_path / "series.yaml"
+    path.write_text(_series_yaml(), encoding="utf-8")
+
+    with (
+        patch(
+            "kaji_harness.series.loader.preflight_workflow_path",
+            side_effect=OSError("disk error"),
+        ),
+        pytest.raises(SeriesValidationError, match="could not be loaded"),
+    ):
+        load_series(path, _kaji_config(tmp_path))
+
+
+def test_load_series_aggregates_all_invalid_members(tmp_path: Path) -> None:
+    l2_path = _write_workflow(tmp_path, "l2.yaml")
+    l2_path.write_text(
+        l2_path.read_text(encoding="utf-8").replace("PASS: end", "PASS: missing"),
+        encoding="utf-8",
+    )
+    l3_path = _write_workflow(tmp_path, "l3.yaml")
+    l3_path.write_text(
+        l3_path.read_text(encoding="utf-8")
+        .replace('exec: ["true"]', "skill: missing-skill")
+        .replace("    on:", "    agent: claude\n    on:"),
+        encoding="utf-8",
+    )
+    path = tmp_path / "series.yaml"
+    path.write_text(
+        "id: test-series\n"
+        "strategy: sequential\n"
+        "members:\n"
+        "  - issue: 10\n    workflow: .kaji/wf/l2.yaml\n"
+        "  - issue: 11\n    workflow: .kaji/wf/l3.yaml\n"
+        "  - issue: 12\n    workflow: .kaji/wf/missing.yaml\n"
+        "on_failure: stop\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SeriesValidationError) as exc_info:
+        load_series(path, _kaji_config(tmp_path))
+
+    errors = exc_info.value.errors
+    assert len(errors) == 3
+    assert "members.0.workflow is invalid (.kaji/wf/l2.yaml)" in errors[0]
+    assert "unknown step 'missing'" in errors[0]
+    assert "members.1.workflow is invalid (.kaji/wf/l3.yaml)" in errors[1]
+    assert "missing-skill/SKILL.md not found" in errors[1]
+    assert errors[2] == "members.2.workflow not found: .kaji/wf/missing.yaml"
 
 
 def test_state_round_trip_is_validated_and_atomic(tmp_path: Path) -> None:

@@ -60,7 +60,13 @@ kaji run-series .kaji/series/maintenance-2026-07.yaml --resume
 `parent_issue` は任意のトレーサビリティ情報で、実行意味論を変えない。member は YAML の
 順序どおりに起動され、child `kaji run` の exit 0 と GitHub Issue の
 `closed/completed` が揃った場合だけ次へ進む。失敗・close reason 不一致・外部状態の巻き戻りは
-後続を起動せず停止する。`--dry-run` は provider、state、lock、member workflow に触れない。
+後続を起動せず停止する。
+
+`validate-series` と `--dry-run` は、現在の plan が参照する全 member workflow を読み取り、
+L1（parse/schema）/ L2（step・cycle の参照整合）/ L3（skill metadata）を完全検証する。
+通常実行も開始時に同じ検証を再実行し、過去の dry-run 成功を信用しない。invalid member が
+1 件でもあれば、member subprocess、series state、lock を作成せず停止する。`--dry-run` は
+provider API、Issue、artifact、state、lock、member workflow 実行への副作用を持たない。
 
 定義作成には `/series-create` を使う。skill は Issue の単一 `type:` label と各 workflow の
 `description` から標準 `dev.yaml` / `docs.yaml` を一意選択し、thorough / fable 等の variant

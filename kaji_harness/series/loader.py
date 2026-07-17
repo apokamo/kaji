@@ -8,8 +8,8 @@ import yaml
 from pydantic import ValidationError
 
 from ..config import KajiConfig
-from ..errors import SeriesValidationError, WorkflowValidationError
-from ..workflow import load_workflow
+from ..errors import SeriesValidationError
+from ..preflight import preflight_workflow_path
 from .models import SeriesConfig
 
 
@@ -57,10 +57,24 @@ def load_series(path: Path, config: KajiConfig) -> SeriesConfig:
             errors.append(f"members.{index}.workflow not found: {member.workflow}")
             continue
         try:
-            workflow = load_workflow(resolved)
-        except (OSError, WorkflowValidationError) as exc:
-            errors.append(f"members.{index}.workflow could not be loaded: {exc}")
+            result = preflight_workflow_path(
+                resolved,
+                project_root=repo_root,
+                skill_dir=config.paths.skill_dir,
+            )
+        except OSError as exc:
+            errors.append(
+                f"members.{index}.workflow could not be loaded ({member.workflow}): {exc}"
+            )
             continue
+        if result.errors:
+            errors.extend(
+                f"members.{index}.workflow is invalid ({member.workflow}): {error}"
+                for error in result.errors
+            )
+            continue
+        assert result.workflow is not None
+        workflow = result.workflow
         if workflow.requires_provider not in {"github", "any"}:
             errors.append(
                 f"members.{index}.workflow requires provider "

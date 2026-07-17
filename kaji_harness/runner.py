@@ -35,6 +35,7 @@ from .errors import (
 from .interactive_terminal import execute_interactive_terminal
 from .logger import RunLogger
 from .models import CLIResult, CostInfo, CycleDefinition, Step, Verdict, Workflow
+from .preflight import preflight_workflow
 from .prompt import build_prompt
 from .providers import IssueContext, IssueProvider, PRContext, get_provider, normalize_id
 from .providers.github import GitHubProviderError
@@ -45,7 +46,6 @@ from .script_exec import execute_exec, execute_script
 from .skill import SkillMetadata, load_skill_metadata, validate_skill_exists
 from .state import SessionState
 from .verdict import create_verdict_formatter, resolve_verdict, write_verdict_yaml
-from .workflow import validate_workflow
 from .worktree_discovery import AmbiguousWorktreeError, discover_existing_worktree
 
 # module-level stdlib logger. ``run()`` 内のローカル ``logger`` (RunLogger) と
@@ -798,34 +798,19 @@ class WorkflowRunner:
         _console.info("cycle reset: %s (was %d)", cycle.name, previous)
 
     def _collect_skill_metadata(self) -> dict[str, SkillMetadata | None]:
-        """Validate skill availability and return per-step execution metadata."""
-        skill_metadata: dict[str, SkillMetadata | None] = {}
-        for step in self.workflow.steps:
-            if step.exec is not None:
-                skill_metadata[step.id] = None
-                continue
-            assert step.skill is not None
-            validate_skill_exists(step.skill, self.project_root, self.config.paths.skill_dir)
-            metadata = load_skill_metadata(
-                step.skill,
-                self.project_root,
-                self.config.paths.skill_dir,
-            )
-            skill_metadata[step.id] = metadata
-            if step.agent is None and metadata.exec_script is None:
-                raise WorkflowValidationError(
-                    f"Step '{step.id}' omits 'agent' but skill '{step.skill}' does "
-                    "not declare 'exec_script' in its frontmatter; either set "
-                    "'agent' on the step or add 'exec_script' to the skill"
-                )
-            if metadata.exec_script is not None and (
-                step.agent is not None or step.model is not None or step.effort is not None
-            ):
-                sys.stderr.write(
-                    f"WARNING: Step '{step.id}' uses exec_script skill "
-                    f"'{step.skill}'; 'agent' / 'model' / 'effort' are ignored.\n"
-                )
-        return skill_metadata
+        """Run the shared preflight and return execution metadata."""
+        result = preflight_workflow(
+            self.workflow,
+            project_root=self.project_root,
+            skill_dir=self.config.paths.skill_dir,
+            skill_exists_validator=validate_skill_exists,
+            skill_metadata_loader=load_skill_metadata,
+        )
+        for warning in result.warnings:
+            sys.stderr.write(f"{warning}\n")
+        if result.errors:
+            raise WorkflowValidationError(result.errors)
+        return result.skill_metadata
 
     def _validate_before_step(self) -> None:
         """Validate a pre-dispatch barrier without touching run artifacts."""
@@ -931,7 +916,6 @@ class WorkflowRunner:
             InvalidTransition: verdict に対応する遷移先がない
         """
         skill_metadata = self._collect_skill_metadata()
-        validate_workflow(self.workflow)
         self._validate_before_step()
         cycle_reset_target = self._validate_cycle_reset()
 
