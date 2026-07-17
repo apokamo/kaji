@@ -5,6 +5,7 @@ Covers validate_workflow and WorkflowValidationError collection.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -12,7 +13,7 @@ import pytest
 from kaji_harness.adapters import ADAPTERS
 from kaji_harness.errors import WorkflowValidationError
 from kaji_harness.models import CycleDefinition, Step, Workflow
-from kaji_harness.workflow import VALID_AGENTS, validate_workflow
+from kaji_harness.workflow import VALID_AGENTS, load_workflow, validate_workflow
 
 # ============================================================
 # Helpers for building test Workflow objects
@@ -655,3 +656,93 @@ class TestMultipleErrorCollection:
         )
         assert "Step 'root' 'on' must define a 'PASS' transition" in exc_info.value.errors
         assert "Step 'orphan' is not reachable from the first step 'root'" in exc_info.value.errors
+
+
+# ============================================================
+# Test class: Duplicate step id validation (Issue #355)
+# ============================================================
+
+
+class TestDuplicateStepIdValidation:
+    """Validation of step id uniqueness across a workflow."""
+
+    @pytest.mark.small
+    def test_duplicate_step_id_is_rejected(self) -> None:
+        """A step id repeated across the workflow raises a duplicate-id error."""
+        workflow = _workflow(
+            [
+                _step("alpha", on={"PASS": "beta"}),
+                _step("beta", on={"PASS": "end"}),
+                _step("alpha", agent="codex", on={"PASS": "end"}),
+            ]
+        )
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            validate_workflow(workflow)
+
+        assert "Duplicate step id 'alpha' (defined 2 times)" in exc_info.value.errors
+
+    @pytest.mark.small
+    def test_duplicate_step_id_count_reflects_occurrences(self) -> None:
+        """A step id repeated three times is reported once with the correct count."""
+        workflow = _workflow(
+            [
+                _step("alpha", on={"PASS": "end"}),
+                _step("alpha", on={"PASS": "end"}),
+                _step("alpha", on={"PASS": "end"}),
+            ]
+        )
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            validate_workflow(workflow)
+
+        duplicate_errors = [e for e in exc_info.value.errors if e.startswith("Duplicate step id")]
+        assert duplicate_errors == ["Duplicate step id 'alpha' (defined 3 times)"]
+
+    @pytest.mark.small
+    def test_duplicate_step_ids_reported_in_declaration_order(self) -> None:
+        """Multiple duplicated ids are reported in first-occurrence order."""
+        workflow = _workflow(
+            [
+                _step("beta", on={"PASS": "end"}),
+                _step("alpha", on={"PASS": "end"}),
+                _step("beta", on={"PASS": "end"}),
+                _step("alpha", on={"PASS": "end"}),
+            ]
+        )
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            validate_workflow(workflow)
+
+        duplicate_errors = [e for e in exc_info.value.errors if e.startswith("Duplicate step id")]
+        assert duplicate_errors == [
+            "Duplicate step id 'beta' (defined 2 times)",
+            "Duplicate step id 'alpha' (defined 2 times)",
+        ]
+
+    @pytest.mark.small
+    def test_duplicate_step_id_and_unknown_transition_are_aggregated(self) -> None:
+        """A duplicate id and an unrelated validation error surface in one exception."""
+        workflow = _workflow(
+            [
+                _step("alpha", on={"PASS": "missing"}),
+                _step("alpha", on={"PASS": "end"}),
+            ]
+        )
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            validate_workflow(workflow)
+
+        assert "Duplicate step id 'alpha' (defined 2 times)" in exc_info.value.errors
+        assert "Step 'alpha' transitions to unknown step 'missing' on PASS" in exc_info.value.errors
+
+    @pytest.mark.medium
+    def test_repository_workflows_have_unique_step_ids(self) -> None:
+        """Every repository-managed workflow validates via load_workflow() + validate_workflow()."""
+        project_root = Path(__file__).resolve().parents[1]
+        workflows = sorted((project_root / ".kaji" / "wf").glob("*.yaml"))
+
+        assert workflows
+        for workflow_path in workflows:
+            workflow = load_workflow(workflow_path)
+            validate_workflow(workflow)

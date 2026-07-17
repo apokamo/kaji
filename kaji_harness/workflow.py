@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import shlex
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -413,6 +414,13 @@ def validate_workflow(workflow: Workflow) -> None:
     # ワークフローレベルの検証
     if not workflow.steps:
         errors.append("Workflow must have at least one step")
+
+    # step ID の一意性（find_step() は先頭一致で解決するため、重複は後続 step を
+    # silently shadow する。Issue #355）
+    id_counts = Counter(step.id for step in workflow.steps)
+    for step_id, count in id_counts.items():
+        if count > 1:
+            errors.append(f"Duplicate step id '{step_id}' (defined {count} times)")
 
     # ステップレベルの検証
     for step in workflow.steps:

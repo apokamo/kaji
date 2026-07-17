@@ -149,6 +149,28 @@ steps:
       PASS: end
 """
 
+DUPLICATE_STEP_ID_YAML = """\
+name: dup-step-id
+description: workflow with a duplicated step id
+execution_policy: auto
+steps:
+  - id: alpha
+    skill: test-skill
+    agent: claude
+    on:
+      PASS: beta
+  - id: beta
+    skill: test-skill
+    agent: claude
+    on:
+      PASS: end
+  - id: alpha
+    skill: test-skill
+    agent: codex
+    on:
+      PASS: end
+"""
+
 
 def _create_config(project_root: Path, skill_dir: str = ".claude/skills") -> None:
     """Create a minimal .kaji/config.toml for testing."""
@@ -532,6 +554,20 @@ class TestCmdValidateMedium:
         _create_config(tmp_path)
         exit_code = main(["validate", str(f)])
         assert exit_code == 0
+
+    @pytest.mark.medium
+    def test_duplicate_step_id_via_cli(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A duplicated step id is rejected with exit 1 and a duplicate-id message (Issue #355)."""
+        workflow = tmp_path / "dup-repro.yaml"
+        workflow.write_text(DUPLICATE_STEP_ID_YAML)
+
+        exit_code = _cmd_validate_with_args(str(workflow))
+
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "Duplicate step id 'alpha' (defined 2 times)" in captured.err
 
     @pytest.mark.medium
     def test_new_validation_errors_are_reported_together(
