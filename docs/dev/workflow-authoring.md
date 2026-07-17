@@ -185,7 +185,7 @@ config 非依存のため）。
 
 | フィールド | 型 | 必須 | 説明 |
 |-----------|-----|------|------|
-| `id` | str | ✅ | ステップ ID。英数字とハイフン。workflow 内で一意でなければならない（重複は `WorkflowValidationError`） |
+| `id` | str | ✅ | ステップ ID。英数字とハイフン。workflow 内で一意でなければならない（重複は `WorkflowValidationError`）。**検証範囲**: parse 時に強制されるのは型（非空 str）のみ（Issue #357）。英数字とハイフンという書式は文書契約だが validation では未強制 |
 | `skill` | str | △ | スキル名（`<agent>.skills/<name>` のルックアップキー）。`exec` と相互排他（後述「skill-step と exec-step」） |
 | `exec` | str \| list[str] | △ | 直接実行する command/argv。`skill` と相互排他。後述「exec-step（script step）」 |
 | `agent` | str | △ | `claude` / `codex` / `gemini`。skill-step（非 exec_script）で必須。exec-step / exec_script skill では指定不可 / 省略可 |
