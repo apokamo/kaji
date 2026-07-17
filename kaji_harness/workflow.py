@@ -525,6 +525,10 @@ def validate_workflow(workflow: Workflow) -> None:
             if current_step is None or current_step.id in invalid_on_step_ids:
                 continue
             for next_id in current_step.on.values():
+                # 非 str の遷移先は unhashable な場合があり、set 参照前に弾く。
+                # 遷移先自体の不正は上の「遷移先が存在すること」検証が報告する
+                if not isinstance(next_id, str):
+                    continue
                 if next_id in step_ids and next_id not in reachable_step_ids:
                     pending_step_ids.append(next_id)
 

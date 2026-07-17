@@ -273,6 +273,22 @@ class TestReachabilityValidation:
         assert "Step 'root' transitions to unknown step 'missing' on PASS" in exc_info.value.errors
         assert "Step 'orphan' is not reachable from the first step 'root'" in exc_info.value.errors
 
+    @pytest.mark.small
+    def test_non_string_transition_target_is_reported_not_raised(self) -> None:
+        """Unhashable targets must not crash traversal before errors are aggregated."""
+        workflow = _workflow(
+            [
+                _step("root", on={"PASS": ["next"]}),
+                _step("next", on={"PASS": "end"}),
+            ]
+        )
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            validate_workflow(workflow)
+
+        assert "Step 'root' transitions to unknown step '['next']' on PASS" in exc_info.value.errors
+        assert "Step 'next' is not reachable from the first step 'root'" in exc_info.value.errors
+
 
 # ============================================================
 # Test class: Resume validation
