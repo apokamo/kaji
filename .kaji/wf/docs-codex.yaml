@@ -1,11 +1,9 @@
-name: dev-thorough-fable
+name: docs-codex
 description: |
-  series 自動選択対象外の明示 override 専用 variant。
-  開発作業の丁寧版 workflow。設計・実装・修正を厚めに行う高品質優先の構成。
-  dev.yaml と同じ遷移グラフで、design/fix-design=xhigh, implement/fix-code=high。
-  レビュー系は標準の dev.yaml と同じ high を維持する。
+  series 自動選択対象外の明示 override 専用 docs variant。
+  docs-only 作業で GitHub Issue から docs 更新、PR review、close まで進める。
   issue-create は事前に完了していることが前提。
-  review-ready が RETRY の場合は fix-ready で Issue 本文を修正してから再試行する。
+  PR 作成後、review-poll / pr-fix / pr-verify / issue-close まで実行する。
 execution_policy: auto
 requires_provider: github
 
@@ -15,19 +13,9 @@ cycles:
     loop: [fix-ready, review-ready]
     max_iterations: 3
     on_exhaust: ABORT
-  design-review:
-    entry: review-design
-    loop: [fix-design, verify-design]
-    max_iterations: 3
-    on_exhaust: ABORT
-  code-review:
-    entry: review-code
-    loop: [fix-code, verify-code]
-    max_iterations: 3
-    on_exhaust: ABORT
-  implementation:
-    entry: implement
-    loop: [implement]
+  doc-review:
+    entry: doc-review
+    loop: [doc-fix, doc-verify]
     max_iterations: 3
     on_exhaust: ABORT
   final-check:
@@ -68,119 +56,68 @@ steps:
 
   - id: start
     skill: issue-start
-    agent: codex
-    model: gpt-5.6-luna
+    agent: claude
+    model: sonnet
     effort: medium
     on:
-      PASS: design
+      PASS: doc-update
       ABORT: end
 
-  - id: design
-    skill: issue-design
-    agent: claude
-    model: fable
-    effort: high
-    on:
-      PASS: review-design
-      ABORT: end
-
-  - id: review-design
-    skill: issue-review-design
+  - id: doc-update
+    skill: i-doc-update
     agent: codex
     model: gpt-5.6-sol
     effort: high
     on:
-      PASS: baseline
-      RETRY: fix-design
+      PASS: doc-review
       ABORT: end
 
-  - id: fix-design
-    skill: issue-fix-design
-    agent: claude
-    model: fable
-    effort: high
-    resume: design
-    on:
-      PASS: verify-design
-      ABORT: end
-
-  - id: verify-design
-    skill: issue-verify-design
-    agent: codex
-    model: gpt-5.6-sol
-    effort: medium
-    on:
-      PASS: baseline
-      RETRY: fix-design
-      ABORT: end
-
-  - id: baseline
-    skill: baseline-precheck
-    timeout: 1800
-    on:
-      PASS: implement
-      ABORT: end
-
-  - id: implement
-    skill: issue-implement
-    agent: codex
-    model: gpt-5.6-sol
-    effort: high
-    timeout: 6000
-    on:
-      PASS: review-code
-      RETRY: implement
-      BACK: design
-      ABORT: end
-
-  - id: review-code
-    skill: issue-review-code
+  - id: doc-review
+    skill: i-doc-review
     agent: claude
     model: fable
     effort: high
     on:
       PASS: final-check
-      RETRY: fix-code
-      BACK: design
-      BACK_IMPLEMENT: implement
+      RETRY: doc-fix
       ABORT: end
 
-  - id: fix-code
-    skill: issue-fix-code
+  - id: doc-fix
+    skill: i-doc-fix
     agent: codex
     model: gpt-5.6-sol
     effort: high
-    timeout: 3600
+    resume: doc-update
     on:
-      PASS: verify-code
+      PASS: doc-verify
       ABORT: end
 
-  - id: verify-code
-    skill: issue-verify-code
+  - id: doc-verify
+    skill: i-doc-verify
     agent: claude
-    model: fable
+    model: opus
     effort: high
+    resume: doc-review
     on:
       PASS: final-check
-      RETRY: fix-code
+      RETRY: doc-fix
       ABORT: end
 
   - id: final-check
-    skill: i-dev-final-check
+    skill: i-doc-final-check
     agent: codex
     model: gpt-5.6-sol
     effort: medium
     on:
       PASS: pr
       RETRY: final-check
-      BACK_DESIGN: design
-      BACK_IMPLEMENT: implement
+      BACK: doc-update
       ABORT: end
 
   - id: pr
     skill: i-pr
-    agent: codex
-    model: gpt-5.6-luna
+    agent: claude
+    model: sonnet
     effort: medium
     on:
       PASS: review-poll
@@ -226,8 +163,8 @@ steps:
 
   - id: close
     skill: issue-close
-    agent: codex
-    model: gpt-5.6-luna
+    agent: claude
+    model: sonnet
     effort: medium
     on:
       PASS: end
