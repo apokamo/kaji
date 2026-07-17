@@ -634,6 +634,380 @@ class TestParsingErrors:
             load_workflow_from_str(yaml_str)
 
 
+class TestStepIdAndVerdictTypeGuards:
+    """Issue #357: non-string step id / verdict values must raise
+    WorkflowValidationError at parse time instead of a raw TypeError from
+    validate_workflow(), and hashable-but-invalid values must not be silently
+    accepted."""
+
+    @pytest.mark.small
+    def test_step_id_list_raises_validation_error(self) -> None:
+        """step.id as a list raises WorkflowValidationError instead of TypeError."""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: [a, b]
+                skill: s
+                agent: claude
+                on:
+                  PASS: end
+        """)
+
+        with pytest.raises(
+            WorkflowValidationError, match=r"Step at index 0 'id' must be a string, got list"
+        ):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_step_id_null_raises_validation_error(self) -> None:
+        """step.id: null is no longer silently accepted."""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: null
+                skill: s
+                agent: claude
+                on:
+                  PASS: end
+        """)
+
+        with pytest.raises(
+            WorkflowValidationError,
+            match=r"Step at index 0 'id' must be a string, got NoneType",
+        ):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_step_id_empty_string_raises_validation_error(self) -> None:
+        """step.id: "" is no longer silently accepted."""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: ""
+                skill: s
+                agent: claude
+                on:
+                  PASS: end
+        """)
+
+        with pytest.raises(
+            WorkflowValidationError, match=r"Step at index 0 'id' must not be empty"
+        ):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_step_id_int_raises_validation_error(self) -> None:
+        """step.id: 1 (int) is no longer silently accepted."""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: 1
+                skill: s
+                agent: claude
+                on:
+                  PASS: end
+        """)
+
+        with pytest.raises(
+            WorkflowValidationError, match=r"Step at index 0 'id' must be a string, got int"
+        ):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_step_id_bool_raises_validation_error(self) -> None:
+        """step.id: true (bool) is no longer silently accepted."""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: true
+                skill: s
+                agent: claude
+                on:
+                  PASS: end
+        """)
+
+        with pytest.raises(
+            WorkflowValidationError, match=r"Step at index 0 'id' must be a string, got bool"
+        ):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_step_resume_list_raises_validation_error(self) -> None:
+        """step.resume as a list raises a type error instead of the misleading
+        'resumes unknown step' message."""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: a
+                skill: s
+                agent: claude
+                resume: [x]
+                on:
+                  PASS: end
+        """)
+
+        with pytest.raises(
+            WorkflowValidationError, match=r"Step 'a' 'resume' must be a string, got list"
+        ):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_step_resume_empty_string_raises_validation_error(self) -> None:
+        """step.resume: "" is no longer silently accepted (step ID rule requires
+        non-empty str)."""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: a
+                skill: s
+                agent: claude
+                resume: ""
+                on:
+                  PASS: end
+        """)
+
+        with pytest.raises(WorkflowValidationError, match=r"Step 'a' 'resume' must not be empty"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_step_on_key_null_raises_validation_error(self) -> None:
+        """A non-string key in step.on (YAML null) raises WorkflowValidationError
+        instead of TypeError from re.match()."""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: a
+                skill: s
+                agent: claude
+                on:
+                  null: end
+        """)
+
+        with pytest.raises(
+            WorkflowValidationError, match=r"Step 'a' 'on' keys must be strings, got NoneType"
+        ):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_step_on_key_int_raises_validation_error(self) -> None:
+        """A non-string key in step.on (int) raises WorkflowValidationError instead
+        of TypeError from re.match()."""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: a
+                skill: s
+                agent: claude
+                on:
+                  1: end
+        """)
+
+        with pytest.raises(
+            WorkflowValidationError, match=r"Step 'a' 'on' keys must be strings, got int"
+        ):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_cycle_entry_list_raises_validation_error(self) -> None:
+        """cycle.entry as a list raises WorkflowValidationError instead of TypeError."""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: a
+                skill: s
+                agent: claude
+                on:
+                  PASS: end
+            cycles:
+              c:
+                entry: [a]
+                loop:
+                  - a
+                max_iterations: 2
+                on_exhaust: end
+        """)
+
+        with pytest.raises(
+            WorkflowValidationError, match=r"Cycle 'c' 'entry' must be a string, got list"
+        ):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_cycle_entry_empty_string_raises_validation_error(self) -> None:
+        """cycle.entry: "" is no longer left to the misleading 'entry step not
+        found' message."""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: a
+                skill: s
+                agent: claude
+                on:
+                  PASS: end
+            cycles:
+              c:
+                entry: ""
+                loop:
+                  - a
+                max_iterations: 2
+                on_exhaust: end
+        """)
+
+        with pytest.raises(WorkflowValidationError, match=r"Cycle 'c' 'entry' must not be empty"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_cycle_loop_element_list_raises_validation_error(self) -> None:
+        """cycle.loop containing a non-string element raises WorkflowValidationError
+        instead of TypeError from set(cycle.loop)."""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: a
+                skill: s
+                agent: claude
+                on:
+                  PASS: end
+            cycles:
+              c:
+                entry: a
+                loop:
+                  - [a]
+                max_iterations: 2
+                on_exhaust: end
+        """)
+
+        with pytest.raises(
+            WorkflowValidationError,
+            match=r"Cycle 'c' 'loop' elements must be non-empty strings, got \['a'\]",
+        ):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_cycle_loop_element_empty_string_raises_validation_error(self) -> None:
+        """cycle.loop containing "" is no longer left to a misleading 'loop step
+        not found' message."""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: a
+                skill: s
+                agent: claude
+                on:
+                  PASS: end
+            cycles:
+              c:
+                entry: a
+                loop:
+                  - ""
+                max_iterations: 2
+                on_exhaust: end
+        """)
+
+        with pytest.raises(
+            WorkflowValidationError,
+            match=r"Cycle 'c' 'loop' elements must be non-empty strings, got ''",
+        ):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_cycle_on_exhaust_list_raises_validation_error(self) -> None:
+        """cycle.on_exhaust as a list raises WorkflowValidationError instead of
+        TypeError from re.match()."""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: a
+                skill: s
+                agent: claude
+                on:
+                  PASS: end
+            cycles:
+              c:
+                entry: a
+                loop:
+                  - a
+                max_iterations: 2
+                on_exhaust: [end]
+        """)
+
+        with pytest.raises(
+            WorkflowValidationError, match=r"Cycle 'c' 'on_exhaust' must be a string, got list"
+        ):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_cycle_on_exhaust_empty_string_reports_invalid_verdict(self) -> None:
+        """cycle.on_exhaust: "" is a str, so L1 accepts it (verdict fields require
+        str only, not non-empty); L2's existing verdict validity check reports it."""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: a
+                skill: s
+                agent: claude
+                on:
+                  PASS: end
+            cycles:
+              c:
+                entry: a
+                loop:
+                  - a
+                max_iterations: 2
+                on_exhaust: ""
+        """)
+
+        wf = load_workflow_from_str(yaml_str)
+        with pytest.raises(WorkflowValidationError, match=r"Cycle 'c' on_exhaust '' is invalid"):
+            validate_workflow(wf)
+
+    @pytest.mark.small
+    def test_on_key_empty_string_reports_invalid_verdict(self) -> None:
+        """step.on key "" is a str, so L1 accepts it (verdict fields require str
+        only, not non-empty); L2's existing verdict validity check reports it."""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: a
+                skill: s
+                agent: claude
+                on:
+                  PASS: end
+                  "": end
+        """)
+
+        wf = load_workflow_from_str(yaml_str)
+        with pytest.raises(WorkflowValidationError, match=r"has invalid verdict ''"):
+            validate_workflow(wf)
+
+    @pytest.mark.small
+    def test_valid_string_step_id_and_verdicts_still_parse(self) -> None:
+        """Normal string id / resume / cycle references still parse unchanged."""
+        wf = load_workflow_from_str(FULL_WORKFLOW_YAML)
+
+        assert wf.steps[1].id == "implement"
+        assert wf.steps[1].resume == "design"
+        assert wf.cycles[0].entry == "implement"
+        assert wf.cycles[0].loop == ["implement", "review"]
+        assert wf.cycles[0].on_exhaust == "ABORT"
+
+
 class TestValidationErrors:
     """Tests for validate_workflow catching structural issues."""
 

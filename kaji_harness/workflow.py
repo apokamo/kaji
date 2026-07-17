@@ -112,6 +112,23 @@ def _normalize_exec(value: Any, step_id: str) -> list[str]:
     )
 
 
+def _require_str(value: Any, label: str, context: str) -> str:
+    """表層値が str であることを確定する（verdict 系: 値の妥当性は L2 が検査）。"""
+    if not isinstance(value, str):
+        raise WorkflowValidationError(
+            f"{context} '{label}' must be a string, got {type(value).__name__}"
+        )
+    return value
+
+
+def _require_non_empty_str(value: Any, label: str, context: str) -> str:
+    """表層値が非空 str であることを確定する（step ID 系）。"""
+    text = _require_str(value, label, context)
+    if not text:
+        raise WorkflowValidationError(f"{context} '{label}' must not be empty")
+    return text
+
+
 def _parse_workflow(data: dict[str, Any]) -> Workflow:
     """YAML data dict をワークフローオブジェクトに変換する。"""
     if not isinstance(data, dict):
@@ -135,7 +152,7 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                 f"Step at index {i} missing required key(s): {', '.join(missing)}"
             )
 
-        sid = step_data["id"]
+        sid = _require_non_empty_str(step_data["id"], "id", f"Step at index {i}")
         # exactly one of skill / exec（Issue #205）。step 種別は skill を持つか
         # exec を持つかで一意に決まる。両方 / 両方無しは error。
         raw_skill = step_data.get("skill")
@@ -168,6 +185,11 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
             )
         if not raw_on:
             raise WorkflowValidationError(f"Step '{step_data['id']}' 'on' must not be empty")
+        for verdict_key in raw_on:
+            if not isinstance(verdict_key, str):
+                raise WorkflowValidationError(
+                    f"Step '{sid}' 'on' keys must be strings, got {type(verdict_key).__name__}"
+                )
         raw_inject_verdict = step_data.get("inject_verdict", False)
         if not isinstance(raw_inject_verdict, bool):
             raise WorkflowValidationError(
@@ -234,6 +256,11 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                     f"Step '{step_data['id']}' 'timeout' must be a positive integer, "
                     f"got {raw_timeout}"
                 )
+
+        raw_resume = step_data.get("resume")
+        if raw_resume is not None:
+            raw_resume = _require_non_empty_str(raw_resume, "resume", f"Step '{sid}'")
+
         steps.append(
             Step(
                 id=step_data["id"],
@@ -245,7 +272,7 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                 max_budget_usd=step_data.get("max_budget_usd"),
                 timeout=raw_timeout,
                 workdir=raw_step_workdir,
-                resume=step_data.get("resume"),
+                resume=raw_resume,
                 inject_verdict=raw_inject_verdict,
                 on=raw_on,
             )
@@ -276,6 +303,11 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
             raise WorkflowValidationError(
                 f"Cycle '{cycle_name}' 'loop' must be a list, got {type(raw_loop).__name__}"
             )
+        for elem in raw_loop:
+            if not isinstance(elem, str) or not elem:
+                raise WorkflowValidationError(
+                    f"Cycle '{cycle_name}' 'loop' elements must be non-empty strings, got {elem!r}"
+                )
         raw_max_iter = cycle_data["max_iterations"]
         if not isinstance(raw_max_iter, int) or isinstance(raw_max_iter, bool):
             raise WorkflowValidationError(
@@ -286,13 +318,17 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
             raise WorkflowValidationError(
                 f"Cycle '{cycle_name}' 'max_iterations' must be >= 1, got {raw_max_iter}"
             )
+        raw_entry = _require_non_empty_str(cycle_data["entry"], "entry", f"Cycle '{cycle_name}'")
+        raw_on_exhaust = _require_str(
+            cycle_data["on_exhaust"], "on_exhaust", f"Cycle '{cycle_name}'"
+        )
         cycles.append(
             CycleDefinition(
                 name=cycle_name,
-                entry=cycle_data["entry"],
+                entry=raw_entry,
                 loop=raw_loop,
                 max_iterations=raw_max_iter,
-                on_exhaust=cycle_data["on_exhaust"],
+                on_exhaust=raw_on_exhaust,
             )
         )
 

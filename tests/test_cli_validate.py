@@ -171,6 +171,18 @@ steps:
       PASS: end
 """
 
+NON_STRING_STEP_ID_YAML = """\
+name: non-string-step-id
+description: workflow with a non-string step id
+execution_policy: auto
+steps:
+  - id: [alpha, beta]
+    skill: test-skill
+    agent: claude
+    on:
+      PASS: end
+"""
+
 
 def _create_config(project_root: Path, skill_dir: str = ".claude/skills") -> None:
     """Create a minimal .kaji/config.toml for testing."""
@@ -568,6 +580,21 @@ class TestCmdValidateMedium:
         assert exit_code == 1
         captured = capsys.readouterr()
         assert "Duplicate step id 'alpha' (defined 2 times)" in captured.err
+
+    @pytest.mark.medium
+    def test_non_string_step_id_via_cli(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A non-string step id is rejected with exit 1 and a type-error message,
+        never a raw TypeError (Issue #357)."""
+        workflow = tmp_path / "non-string-id-repro.yaml"
+        workflow.write_text(NON_STRING_STEP_ID_YAML)
+
+        exit_code = _cmd_validate_with_args(str(workflow))
+
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "Step at index 0 'id' must be a string, got list" in captured.err
 
     @pytest.mark.medium
     def test_new_validation_errors_are_reported_together(
