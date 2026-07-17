@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-07-18
+
+This release tightens workflow validation and execution preflight, adds a
+deterministic test baseline gate, and introduces the managed-starter release
+workflow. It also strengthens the human-decision and post-workflow handoff
+contracts used by the development lifecycle.
+
 ### BREAKING CHANGE
 
 - **Broken contract**: `kaji_harness.recovery.NON_RESUMABLE_STEPS` is removed and
@@ -20,6 +27,56 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the rename reflects that recovery now resolves the denylist against
     `Step.skill` instead of the workflow step ID. kaji ships no backward
     compatibility layer (ADR 008); see #349 for the full contract change.
+
+### Added
+
+- Add a deterministic baseline precheck before implementation in all four
+  development workflow variants. The check records structured pytest evidence,
+  distinguishes known failures from regressions, and prevents implementation
+  from starting when the baseline is invalid or blocked (#346).
+- Add `update-starter`, `review-starter-update`, and `release-starter` skills,
+  deterministic starter release-plan support, and the canonical runbook for
+  independently synchronizing and releasing managed starter repositories
+  (#341).
+- Tighten workflow validation by checking supported agent names, requiring an
+  `on.PASS` transition, and rejecting steps that are unreachable from the first
+  workflow step (#339).
+- Add the explicit `grill-me` interview skill for resolving important decisions
+  before Issue creation and recording their provenance in the Issue (#329).
+- Add a standalone workflow token-usage measurement tool and baseline, with
+  aggregation by workflow, step, agent, model, and effort (#325).
+
+### Fixed
+
+- Resolve the non-resumable recovery gate by `Step.skill` rather than workflow
+  step ID, so irreversible skills cannot be resumed automatically through an
+  aliased step (#349).
+- Apply the shared L1/L2/L3 workflow preflight to `validate`, `run`, `recover`,
+  and every member of a series before execution; aggregate validation failures
+  and reject stale or invalid series plans before launching work (#338).
+- Reject duplicate workflow step IDs before later definitions can be silently
+  shadowed during transition, resume, or cycle validation (#355).
+- Reject non-string step IDs, resume and cycle references, and verdict keys at
+  the parse boundary with `WorkflowValidationError` instead of leaking raw type
+  errors or accepting invalid values (#357).
+
+### Docs
+
+- Preserve human-approved critical decisions across review and design, stop on
+  unresolved one-way doors, and record decision provenance in the Issue (#328).
+- Separate checks that can only happen after merge, deployment, or an external
+  response from workflow completion criteria, and create idempotent follow-up
+  Issues for unfinished post-workflow checks (#327).
+- Reorganize `issue-implement` around progressive disclosure, a compact
+  implementation quick reference, and delayed loading of handoff material
+  (#326).
+
+### Internal
+
+- Update GitHub Actions dependencies to Node 24-native major versions and pin
+  the affected action references (#336).
+- Update workflow agent/model variants and add plans for sequential Issue
+  series.
 
 ## [0.15.0] - 2026-07-14
 
