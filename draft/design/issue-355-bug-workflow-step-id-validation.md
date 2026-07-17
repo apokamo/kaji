@@ -69,7 +69,7 @@ parsed id: ['a', 'b'] list
 validate raised TypeError : unhashable type: 'list'
 ```
 
-これは `_parse_workflow()` の `_STEP_REQUIRED_KEYS = ("id",)` が id の**存在**のみ検査し**型**を検査しないことに起因する別欠陥であり、重複 ID の検出可否とは独立している。本 Issue のスコープ（重複 step ID の検出）には含めず、follow-up Issue として `/issue-create` で起票することを推奨する（既存 Issue 検索では該当なし）。本設計の一意性検査は既存の `set` 畳み込み（515 行）と同じ hashable 前提を共有するため、この挙動を改善も悪化もさせない（後述「制約・前提条件」）。
+これは `_parse_workflow()` の `_STEP_REQUIRED_KEYS = ("id",)` が id の**存在**のみ検査し**型**を検査しないことに起因する別欠陥であり、重複 ID の検出可否とは独立している。本 Issue のスコープ（重複 step ID の検出）には含めず、follow-up Issue #357 で追跡する。本設計の一意性検査は既存の `set` 畳み込み（515 行）と同じ hashable 前提を共有するため、この挙動を改善も悪化もさせない（後述「制約・前提条件」）。
 
 ## インターフェース
 
@@ -98,6 +98,8 @@ Duplicate step id 'alpha' (defined 2 times)
 ### 使用例
 
 ```python
+from pathlib import Path
+
 from kaji_harness.errors import WorkflowValidationError
 from kaji_harness.workflow import load_workflow, validate_workflow
 
@@ -133,7 +135,7 @@ exit=1
 - **エラーを集約する**: `validate_workflow()` は `errors` を蓄積し末尾で 1 回だけ raise する（`kaji_harness/workflow.py:604-605`）。重複検査もこの集約に従い、検出時に即時 raise しない（Issue #355 の集約テスト条件を満たすため）。
 - **L1 / L2 の層分離を守る**: `docs/dev/workflow-authoring.md:85-87` の定義では L1（`_parse_workflow`）が「YAML parse、型、必須、排他、許容値」＝ **step 単体のスキーマ**、L2（`validate_workflow`）が「step/cycle の遷移先、resume、verdict、到達可能性など workflow 内の参照」＝ **step 横断の整合**を担う。ID の一意性は単一 step のスキーマでは判定できない step 横断の性質であるため L2 に置く。
 - **hashable 前提の据え置き**: 一意性検査は `step.id` が hashable であることを前提とする。これは既存の到達可能性検査（`kaji_harness/workflow.py:515`）が既に置いている前提と同一であり、非 str id の raw `TypeError`（前述「スコープ外の隣接 gap」）は本 Issue で改善も悪化もさせない。
-- **既存 workflow を壊さない**: `.kaji/wf/*.yaml` は現行で ID 一意である（`tests/test_cli_validate.py::test_repository_workflows_all_validate` が exit 0 を固定）。本変更後も同テストが pass し続けること。
+- **既存 workflow を壊さない**: `.kaji/wf/*.yaml` は設計レビュー時の直接 `Counter` 走査で ID 一意を確認済み。本変更後は `tests/test_workflow_validator.py::TestDuplicateStepIdValidation::test_repository_workflows_have_unique_step_ids` が L2 validation を直接固定し、既存 `tests/test_cli_validate.py::test_repository_workflows_all_validate` が CLI + preflight 回帰網となる。
 - Python >= 3.11（`pyproject.toml:6`）。`collections.Counter` は標準ライブラリで追加依存なし。
 
 ## 方針
@@ -167,7 +169,7 @@ for step_id, count in id_counts.items():
 | 検査の配置層（L1 parse か L2 validate か） | L2 = `validate_workflow()` にのみ置き、`_parse_workflow()` には追加しない | Issue #355 「完了条件」が `validate_workflow()` での検出と、他 validation error との単一例外への集約を要求（人間決定）。層定義の一次情報: `docs/dev/workflow-authoring.md:85-87` | L1 に fail-fast を足すと集約要件（`kaji validate` が重複と他エラーを同時報告）を壊すこと、および ID 一意性が step 横断の性質で L1 の「step 単体スキーマ」に該当しないことを根拠に L2 単独と確定 |
 | エラーメッセージ書式 | `Duplicate step id 'alpha' (defined 2 times)` | AI の仮定。根拠: Issue #355 EB の「`Duplicate step id 'alpha'` 相当」という文言と、既存メッセージが `Step '<id>' ...` / `Cycle '<name>' ...` と主語を引用符で示す慣習（`kaji_harness/workflow.py:420-598`）。後段の検査先: `/issue-review-design`（書式の妥当性）、`/issue-review-code`（テストが固定する文字列との整合） | 重複 ID 1 件につき 1 メッセージ、出現回数を括弧内に添える形へ具体化 |
 | 重複 ID の報告粒度と順序 | 1 ID = 1 エラー、step 定義順 | AI の仮定。根拠: 既存の到達可能性検査が定義順で 1 step = 1 エラーを報告する（`tests/test_workflow_validator.py::test_unreachable_steps_are_reported_in_declaration_order`）。後段の検査先: `/issue-review-code`（テストで順序を固定） | `Counter` の挿入順保持を用いて決定的順序を担保する構成へ具体化 |
-| 隣接 gap（非 str `id` の raw `TypeError`）の扱い | 本 Issue では修正せず follow-up Issue を推奨する | AI の仮定。根拠: Issue #355 の目的・完了条件はいずれも「重複 step ID の検出」に限定され、id の型検証を含まない。`_shared/report-unrelated-issues.md` の報告フローに従い既存 Issue を検索（該当なし）。後段の検査先: `/issue-review-design`（スコープ判断の妥当性）、`/i-dev-final-check`（未起票の追跡） | 観測結果・発生箇所・原因（L1 の id 型検証欠落）を本設計に記録し、本変更が当該挙動を改善も悪化もさせないことを制約として明示 |
+| 隣接 gap（非 str `id` の raw `TypeError`）の扱い | 本 Issue では修正せず follow-up Issue #357 で追跡する | AI の仮定。根拠: Issue #355 の目的・完了条件はいずれも「重複 step ID の検出」に限定され、id の型検証を含まない。`_shared/report-unrelated-issues.md` の報告フローに従い既存 Issue を検索し、該当なしを確認後に Issue #357 を起票した。 | 観測結果・発生箇所・原因（L1 の id 型検証欠落）を本設計に記録し、本変更が当該挙動を改善も悪化もさせないことを制約として明示 |
 | `find_step()` の先頭一致仕様 | 変更しない | AI の仮定。根拠: Issue #355「期待する状態」は「重複 ID が曖昧な解釈を生まない」ことを求めており、validation で重複を拒否すれば先頭一致は一意解決に帰着する。`find_step()` 自体の変更は IF 変更を伴い Issue の完了条件外。後段の検査先: `/issue-review-design`（修正箇所の妥当性） | 修正を一意性検査の追加 1 点に閉じ、`find_step()` 呼び出し側（8 箇所）を無改修とする方針へ具体化 |
 
 ## テスト戦略
@@ -194,7 +196,7 @@ for step_id, count in id_counts.items():
 
 ファイル I/O・CLI 経路の結合のため Medium。
 
-- **`kaji validate` 経由の重複検出**: `tests/test_cli_validate.py` に、重複 ID の YAML を tmp_path へ書き出し `cmd_validate` を駆動して exit code 1 と stderr の重複 ID メッセージを固定するテストを追加する（Issue 完了条件 2 項目目）。既存 `TestCLIValidate` 系の `_cmd_validate_with_args` / `_create_skill` / `_create_config` ヘルパと同じ構成に揃える。
+- **`kaji validate` 経由の重複検出**: `tests/test_cli_validate.py` に、重複 ID の YAML を tmp_path へ書き出し `_cmd_validate_with_args` で `cmd_validate` を駆動して exit code 1 と stderr の重複 ID メッセージを固定するテストを追加する（Issue 完了条件 2 項目目）。L2 validation error が L3 の config / skill 検査より先に確定する既存テスト経路を使うため、`_create_skill` / `_create_config` は呼び出さない。
 - **リポジトリ管理 workflow の正常系**: `.kaji/wf/*.yaml` を `load_workflow()` → `validate_workflow()` で直接駆動し、例外を送出しないことを固定するテストを `tests/test_workflow_validator.py` に追加する（Issue 完了条件 4 項目目。ファイル読み込みを伴うため Medium）。既存の `tests/test_cli_validate.py::test_repository_workflows_all_validate` は CLI + preflight（L3 込み）経路を固定しており、`validate_workflow()` 単体の契約（例外を送出せず `None`）は固定していないため、両者は重複しない。
 
 #### Large テスト
@@ -238,5 +240,5 @@ for step_id, count in id_counts.items():
 | テスト規約 | `docs/dev/testing-convention.md` | サイズ判定基準（外部 API → Large / ファイル I/O・内部結合 → Medium / 純粋関数 → Small）、および恒久テストを追加しない 4 条件。Large 省略理由の根拠 |
 | bug 設計ガイド | `.claude/skills/_shared/design-by-type/bug.md` | 「修正前に Red になる再現テスト（regression test）を必ず 1 本以上定義する。省略不可」— 再現テスト先行方針の根拠 |
 | 既存の報告順序慣習 | `tests/test_workflow_validator.py:217-235` | `test_unreachable_steps_are_reported_in_declaration_order` が `errors == [...]` を定義順で完全一致検証 — 重複エラーを定義順で報告する設計判断の根拠 |
-| リポジトリ workflow の現行妥当性 | `tests/test_cli_validate.py:554-569` | `test_repository_workflows_all_validate` が `.kaji/wf/*.yaml` 全件で exit 0 を固定 — 既存 workflow が ID 一意であり本変更で壊れないことの根拠 |
+| リポジトリ workflow の現行妥当性 | `tests/test_workflow_validator.py::TestDuplicateStepIdValidation::test_repository_workflows_have_unique_step_ids` / `tests/test_cli_validate.py::test_repository_workflows_all_validate` | 設計レビュー時に 9 workflow を直接 `Counter` 走査して ID 一意を確認。実装後は前者が全 `.kaji/wf/*.yaml` の L2 validation を直接固定し、後者が CLI + preflight 回帰網として exit 0 を固定する |
 | `collections.Counter` | https://docs.python.org/3/library/collections.html#collections.Counter | 「Elements are counted from an iterable」。`Counter` は `dict` のサブクラスであり、Python 3.7 以降の dict と同じく挿入順を保持する（https://docs.python.org/3/library/stdtypes.html#dict — "Dictionaries preserve insertion order"）。定義順の決定的報告に依拠できる根拠 |
