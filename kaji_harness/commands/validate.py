@@ -60,11 +60,16 @@ def cmd_validate(args: argparse.Namespace) -> int:
             continue
         try:
             workflow = load_workflow(path)
-            # Preserve definition diagnostics even when project config discovery fails.
-            # The shared preflight repeats L2 later so it can aggregate L2 and L3 errors.
-            validate_workflow(workflow)
-            project_root = _resolve_project_root_for_validate(args.project_root, path)
-            config = KajiConfig.discover(start_dir=project_root)
+            try:
+                project_root = _resolve_project_root_for_validate(args.project_root, path)
+                config = KajiConfig.discover(start_dir=project_root)
+            except (ConfigNotFoundError, ConfigLoadError) as e:
+                # L3 needs project config; without it still surface L2 diagnostics,
+                # which are more actionable than the config error itself.
+                validate_workflow(workflow)
+                _print_error(path, [str(e)])
+                failed += 1
+                continue
             result = preflight_workflow(
                 workflow,
                 project_root=project_root,
@@ -77,9 +82,6 @@ def cmd_validate(args: argparse.Namespace) -> int:
             _print_success(path)
         except WorkflowValidationError as e:
             _print_error(path, e.errors)
-            failed += 1
-        except (ConfigNotFoundError, ConfigLoadError) as e:
-            _print_error(path, [str(e)])
             failed += 1
         except OSError as e:
             _print_error(path, [str(e)])
