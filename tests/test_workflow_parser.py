@@ -296,6 +296,32 @@ class TestParsingErrors:
     """Tests for error handling in load_workflow_from_str."""
 
     @pytest.mark.small
+    @pytest.mark.parametrize(
+        ("field", "yaml_value"),
+        [
+            ("name", "[invalid]"),
+            ("description", "[invalid]"),
+            ("execution_policy", "[auto]"),
+            ("skill", "[invalid]"),
+            ("model", "[invalid]"),
+            ("max_budget_usd", "invalid"),
+        ],
+    )
+    def test_invalid_field_types_raise_validation_error(self, field: str, yaml_value: str) -> None:
+        """Workflow and skill-step fields reject values outside their documented types."""
+        workflow_field = field in {"name", "description", "execution_policy"}
+        workflow_value = f"{field}: {yaml_value}\n" if workflow_field else ""
+        step_value = f"    {field}: {yaml_value}\n" if not workflow_field else ""
+        yaml_str = (
+            f"name: test\ndescription: test\nexecution_policy: auto\n{workflow_value}"
+            f"steps:\n  - id: only\n    skill: test-skill\n{step_value}"
+            "    agent: claude\n    on:\n      PASS: end\n"
+        )
+
+        with pytest.raises(WorkflowValidationError, match=field):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
     def test_invalid_yaml_syntax_raises_validation_error(self) -> None:
         """Malformed YAML syntax raises WorkflowValidationError."""
         bad_yaml = "name: test\nsteps:\n  - id: [unclosed"

@@ -117,6 +117,15 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
     if not isinstance(data, dict):
         raise WorkflowValidationError("Workflow definition must be a YAML mapping")
 
+    raw_name = data.get("name", "")
+    if not isinstance(raw_name, str):
+        raise WorkflowValidationError(f"'name' must be a string, got {type(raw_name).__name__}")
+    raw_description = data.get("description", "")
+    if not isinstance(raw_description, str):
+        raise WorkflowValidationError(
+            f"'description' must be a string, got {type(raw_description).__name__}"
+        )
+
     raw_steps = data.get("steps", [])
     if raw_steps is None:
         raise WorkflowValidationError("'steps' must be a list, got null")
@@ -143,6 +152,10 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
         if (raw_skill is None) == (raw_exec is None):
             raise WorkflowValidationError(
                 f"Step '{sid}' must declare exactly one of 'skill' or 'exec'"
+            )
+        if raw_skill is not None and not isinstance(raw_skill, str):
+            raise WorkflowValidationError(
+                f"Step '{sid}' 'skill' must be a string, got {type(raw_skill).__name__}"
             )
         if raw_exec is not None:
             # exec-step: agent 専用フィールドの同時指定を拒否（exec は LLM 非経路）。
@@ -205,6 +218,24 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                 f"got {type(raw_agent).__name__}"
             )
 
+        raw_model = step_data.get("model")
+        if raw_model is not None and not isinstance(raw_model, str):
+            raise WorkflowValidationError(
+                f"Step '{step_data['id']}' 'model' must be a string or null, "
+                f"got {type(raw_model).__name__}"
+            )
+
+        raw_max_budget_usd = step_data.get("max_budget_usd")
+        if raw_max_budget_usd is not None:
+            if not isinstance(raw_max_budget_usd, (int, float)) or isinstance(
+                raw_max_budget_usd, bool
+            ):
+                raise WorkflowValidationError(
+                    f"Step '{step_data['id']}' 'max_budget_usd' must be a number or null, "
+                    f"got {type(raw_max_budget_usd).__name__}"
+                )
+            raw_max_budget_usd = float(raw_max_budget_usd)
+
         raw_effort = step_data.get("effort")
         if raw_effort is not None:
             if not isinstance(raw_effort, str):
@@ -240,9 +271,9 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                 skill=raw_skill,
                 exec=exec_argv,
                 agent=raw_agent,
-                model=step_data.get("model"),
+                model=raw_model,
                 effort=raw_effort,
-                max_budget_usd=step_data.get("max_budget_usd"),
+                max_budget_usd=raw_max_budget_usd,
                 timeout=raw_timeout,
                 workdir=raw_step_workdir,
                 resume=step_data.get("resume"),
@@ -299,6 +330,10 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
     execution_policy = data.get("execution_policy")
     if execution_policy is None:
         raise WorkflowValidationError("'execution_policy' is required")
+    if not isinstance(execution_policy, str):
+        raise WorkflowValidationError(
+            f"'execution_policy' must be a string, got {type(execution_policy).__name__}"
+        )
     if execution_policy not in VALID_EXECUTION_POLICIES:
         raise WorkflowValidationError(
             f"execution_policy must be one of {sorted(VALID_EXECUTION_POLICIES)}, "
@@ -346,8 +381,8 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
         )
 
     return Workflow(
-        name=data.get("name", ""),
-        description=data.get("description", ""),
+        name=raw_name,
+        description=raw_description,
         execution_policy=execution_policy,
         steps=steps,
         cycles=cycles,

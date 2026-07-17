@@ -102,6 +102,18 @@ name: bad
 steps: not_a_list
 """
 
+INVALID_FIELD_TYPE_YAML = """\
+name: [bad]
+description: test workflow
+execution_policy: auto
+steps:
+  - id: step1
+    skill: test-skill
+    agent: claude
+    on:
+      PASS: end
+"""
+
 INVALID_SYNTAX_YAML = """\
 name: bad
 steps:
@@ -247,6 +259,19 @@ class TestCmdValidateSmall:
         assert str(invalid_schema_yaml) in captured.err
         assert "steps" in captured.err
         assert ".kaji/config.toml not found" not in captured.err
+
+    @pytest.mark.small
+    def test_invalid_field_type_exit_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A field type error returns exit 1 with the offending field in diagnostics."""
+        workflow = tmp_path / "invalid_field_type.yaml"
+        workflow.write_text(INVALID_FIELD_TYPE_YAML)
+
+        exit_code = _cmd_validate_with_args(str(workflow))
+
+        assert exit_code == 1
+        assert "name" in capsys.readouterr().err
 
     @pytest.mark.small
     def test_invalid_transition_precedes_missing_config(
