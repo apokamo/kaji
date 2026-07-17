@@ -51,6 +51,73 @@ def _series() -> SeriesConfig:
     )
 
 
+def _write_series_repo(tmp_path: Path) -> tuple[Path, Path, Path]:
+    repo = tmp_path / "repo"
+    workflow_dir = repo / ".kaji" / "wf"
+    series_dir = repo / ".kaji" / "series"
+    workflow_dir.mkdir(parents=True)
+    series_dir.mkdir()
+    (repo / ".kaji" / "config.toml").write_text(
+        '[paths]\nartifacts_dir = "artifacts"\nskill_dir = ".claude/skills"\n\n'
+        "[execution]\ndefault_timeout = 60\n\n"
+        '[provider]\ntype = "github"\n\n'
+        '[provider.github]\nrepo = "owner/name"\n',
+        encoding="utf-8",
+    )
+    valid = workflow_dir / "valid.yaml"
+    valid.write_text(
+        "name: valid\n"
+        "description: valid\n"
+        "requires_provider: github\n"
+        "execution_policy: auto\n"
+        "steps:\n"
+        "  - id: done\n"
+        '    exec: ["true"]\n'
+        "    on:\n"
+        "      PASS: end\n",
+        encoding="utf-8",
+    )
+    candidate = workflow_dir / "candidate.yaml"
+    candidate.write_text(valid.read_text(encoding="utf-8"), encoding="utf-8")
+    skill_dir = repo / ".claude" / "skills" / "test-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# test-skill\n", encoding="utf-8")
+    series = series_dir / "test.yaml"
+    series.write_text(
+        "id: preflight-test\n"
+        "strategy: sequential\n"
+        "members:\n"
+        "  - issue: 10\n    workflow: .kaji/wf/valid.yaml\n"
+        "  - issue: 11\n    workflow: .kaji/wf/candidate.yaml\n"
+        "on_failure: stop\n",
+        encoding="utf-8",
+    )
+    return repo, series, candidate
+
+
+def _invalid_workflow(reason: str) -> str:
+    if reason == "l2":
+        return (
+            "name: invalid\ndescription: invalid\nrequires_provider: github\n"
+            "execution_policy: auto\nsteps:\n  - id: broken\n"
+            '    exec: ["true"]\n    on:\n      PASS: missing\n'
+        )
+    if reason == "l3":
+        return (
+            "name: invalid\ndescription: invalid\nrequires_provider: github\n"
+            "execution_policy: auto\nsteps:\n  - id: broken\n"
+            "    skill: missing-skill\n    agent: claude\n    on:\n      PASS: end\n"
+        )
+    return (
+        "name: invalid\ndescription: invalid\nrequires_provider: github\n"
+        "execution_policy: auto\nsteps:\n"
+        "  - id: first\n    skill: test-skill\n    agent: claude\n"
+        "    on:\n      PASS: second\n"
+        "  - id: second\n    skill: test-skill\n    agent: codex\n"
+        "    resume: first\n    on:\n      PASS: end\n"
+    )
+
+
 def test_parser_accepts_series_commands() -> None:
     parser = create_parser()
     validate = parser.parse_args(["validate-series", "series.yaml"])
@@ -146,3 +213,67 @@ def test_generator_cli_preserves_order_and_refuses_overwrite(tmp_path: Path) -> 
     assert text.index("issue: 10") < text.index("issue: 11")
     assert generate_main(argv) == 1
     assert generate_main([*argv, "--update"]) == 0
+
+
+@pytest.mark.parametrize(
+    ("invalid_kind", "expected"),
+    [
+        ("l2", "transitions to unknown step 'missing'"),
+        ("l3", "missing-skill/SKILL.md not found"),
+        ("resume", "resumes 'first' but agents differ (codex != claude)"),
+    ],
+)
+def test_series_entrypoints_share_full_member_preflight(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    invalid_kind: str,
+    expected: str,
+) -> None:
+    repo, series, candidate = _write_series_repo(tmp_path)
+    candidate.write_text(_invalid_workflow(invalid_kind), encoding="utf-8")
+
+    assert main(["validate-series", str(series), "--workdir", str(repo)]) == 1
+    assert expected in capsys.readouterr().err
+    assert main(["run-series", str(series), "--dry-run", "--workdir", str(repo)]) == 2
+    assert expected in capsys.readouterr().err
+    with patch("kaji_harness.commands.series.SeriesRunner") as runner:
+        assert main(["run-series", str(series), "--workdir", str(repo)]) == 2
+    runner.assert_not_called()
+    assert expected in capsys.readouterr().err
+    assert not (repo / "artifacts" / "_series").exists()
+
+
+def test_run_series_revalidates_current_plan_after_dry_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo, series, candidate = _write_series_repo(tmp_path)
+    assert main(["run-series", str(series), "--dry-run", "--workdir", str(repo)]) == 0
+    capsys.readouterr()
+    candidate.write_text(_invalid_workflow("l2"), encoding="utf-8")
+
+    with patch("kaji_harness.commands.series.SeriesRunner") as runner:
+        assert main(["run-series", str(series), "--workdir", str(repo)]) == 2
+
+    runner.assert_not_called()
+    assert "transitions to unknown step 'missing'" in capsys.readouterr().err
+    assert not (repo / "artifacts" / "_series").exists()
+
+
+def test_validate_series_renders_every_invalid_member(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo, series, candidate = _write_series_repo(tmp_path)
+    candidate.write_text(_invalid_workflow("l2"), encoding="utf-8")
+    series.write_text(
+        series.read_text(encoding="utf-8").replace(
+            "on_failure: stop",
+            "  - issue: 12\n    workflow: .kaji/wf/missing.yaml\non_failure: stop",
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["validate-series", str(series), "--workdir", str(repo)]) == 1
+
+    stderr = capsys.readouterr().err
+    assert "members.1.workflow is invalid (.kaji/wf/candidate.yaml)" in stderr
+    assert "members.2.workflow not found: .kaji/wf/missing.yaml" in stderr

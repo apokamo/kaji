@@ -10,13 +10,10 @@ from ..config import KajiConfig
 from ..errors import (
     ConfigLoadError,
     ConfigNotFoundError,
-    SecurityError,
-    SkillFrontmatterError,
-    SkillNotFound,
     WorkflowValidationError,
 )
-from ..skill import load_skill_metadata, validate_skill_exists
-from ..workflow import load_workflow, validate_workflow
+from ..preflight import preflight_workflow
+from ..workflow import load_workflow
 from .exit_codes import EXIT_OK, EXIT_VALIDATION_ERROR
 
 
@@ -62,38 +59,21 @@ def cmd_validate(args: argparse.Namespace) -> int:
             failed += 1
             continue
         try:
-            wf = load_workflow(path)
-            validate_workflow(wf)
+            workflow = load_workflow(path)
             project_root = _resolve_project_root_for_validate(args.project_root, path)
             config = KajiConfig.discover(start_dir=project_root)
-            skill_dir = config.paths.skill_dir
-            agent_omission_errors: list[str] = []
-            for step in wf.steps:
-                # exec-step（Issue #205）は skill レイヤを介さないため skill 解決・
-                # agent 省略検証は不要。排他・型・必須検証は load_workflow /
-                # validate_workflow で完結済み（runner Step 0 preflight skip と対称）。
-                if step.exec is not None:
-                    continue
-                assert step.skill is not None  # exactly-one of skill/exec が保証
-                validate_skill_exists(step.skill, project_root, skill_dir)
-                # L3 任意: skill_dir が解決できているのでメタデータも check
-                metadata = load_skill_metadata(step.skill, project_root, skill_dir)
-                if step.agent is None and metadata.exec_script is None:
-                    agent_omission_errors.append(
-                        f"Step '{step.id}' omits 'agent' but skill "
-                        f"'{step.skill}' has no 'exec_script' frontmatter"
-                    )
-            if agent_omission_errors:
-                raise WorkflowValidationError(agent_omission_errors)
+            result = preflight_workflow(
+                workflow,
+                project_root=project_root,
+                skill_dir=config.paths.skill_dir,
+            )
+            if result.errors:
+                _print_error(path, result.errors)
+                failed += 1
+                continue
             _print_success(path)
         except WorkflowValidationError as e:
             _print_error(path, e.errors)
-            failed += 1
-        except (SkillNotFound, SecurityError) as e:
-            _print_error(path, [str(e)])
-            failed += 1
-        except SkillFrontmatterError as e:
-            _print_error(path, [str(e)])
             failed += 1
         except (ConfigNotFoundError, ConfigLoadError) as e:
             _print_error(path, [str(e)])

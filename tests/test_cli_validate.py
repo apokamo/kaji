@@ -183,6 +183,8 @@ class TestCmdValidateSmall:
         captured = capsys.readouterr()
         assert "✗" in captured.err
         assert str(invalid_schema_yaml) in captured.err
+        assert "steps" in captured.err
+        assert ".kaji/config.toml not found" not in captured.err
 
     @pytest.mark.small
     def test_invalid_syntax_exit_1(

@@ -168,7 +168,7 @@ runner は失敗の構造化記録（`run.log` の `failure_event` / `result.jso
 ```
 WorkflowRunner.run()
   │
-  ├─ validate_workflow(workflow)         # 静的バリデーション
+  ├─ preflight_workflow(workflow)        # 共通 L2/L3 validation + skill metadata 解決
   │
   ├─ SessionState.load_or_create()      # issue-scoped な状態をロード
   │
@@ -446,6 +446,11 @@ run / step / attempt の成果物は attempt 単位で分離される（Issue #2
 member ごとの workflow / child PID / run ID / exit code / 成功ゲートを保持し、`lock` は
 `fcntl.flock` による同一 series ID の非ブロック排他に使う。series 定義そのものは
 `.kaji/series/<series-id>.yaml` に残り、state と混在しない。
+
+`load_series()` は state / lock の作成前に、現在の plan が参照する全 member workflow を
+`preflight_workflow_path()` で L1（parse/schema）/ L2（参照整合）/ L3（skill metadata）まで
+検証する。`validate-series`、dry-run、通常実行は同じ入口を使うため、invalid member が 1 件でも
+あれば member subprocess を起動せず、通常実行も過去の dry-run 結果には依存しない。
 
 ```text
 <artifacts_dir>/<issue>/

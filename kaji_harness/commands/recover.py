@@ -14,6 +14,7 @@ from ..errors import (
     RecoveryTargetError,
     WorkflowValidationError,
 )
+from ..preflight import preflight_workflow
 from ..providers import get_provider
 from ..providers.github import GitHubProviderError
 from ..providers.local import LocalProviderError
@@ -62,6 +63,18 @@ def cmd_recover(args: argparse.Namespace) -> int:
         workflow = load_workflow(workflow_path)
     except WorkflowValidationError as e:
         print(f"Error: {e}", file=sys.stderr)
+        return EXIT_DEFINITION_ERROR
+    try:
+        preflight = preflight_workflow(
+            workflow,
+            project_root=config.repo_root,
+            skill_dir=config.paths.skill_dir,
+        )
+    except OSError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return EXIT_DEFINITION_ERROR
+    if preflight.errors:
+        print(f"Error: {WorkflowValidationError(preflight.errors)}", file=sys.stderr)
         return EXIT_DEFINITION_ERROR
 
     # cmd_run と同じ workflow ↔ provider 整合検証。これが無いと triage / wait を経て
