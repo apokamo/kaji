@@ -46,7 +46,7 @@ setup:
 
 help:
 	@echo "Common targets:"
-	@echo "  make check               - lint + format + typecheck + workflow validation + test"
+	@echo "  make check               - lint + format(--check) + typecheck + workflow validation + test (non-mutating gate)"
 	@echo "  make fmt                 - apply ruff format (mutating)"
 	@echo "  make validate-workflows  - validate all tracked workflows with L1/L2/L3 preflight"
 	@echo "  make test                - pytest (all markers)"

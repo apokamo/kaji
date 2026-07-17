@@ -13,7 +13,7 @@ from ..errors import (
     WorkflowValidationError,
 )
 from ..preflight import preflight_workflow
-from ..workflow import load_workflow
+from ..workflow import load_workflow, validate_workflow
 from .exit_codes import EXIT_OK, EXIT_VALIDATION_ERROR
 
 
@@ -60,6 +60,9 @@ def cmd_validate(args: argparse.Namespace) -> int:
             continue
         try:
             workflow = load_workflow(path)
+            # Preserve definition diagnostics even when project config discovery fails.
+            # The shared preflight repeats L2 later so it can aggregate L2 and L3 errors.
+            validate_workflow(workflow)
             project_root = _resolve_project_root_for_validate(args.project_root, path)
             config = KajiConfig.discover(start_dir=project_root)
             result = preflight_workflow(

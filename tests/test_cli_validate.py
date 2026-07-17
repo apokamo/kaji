@@ -109,6 +109,18 @@ steps:
     on: {
 """
 
+INVALID_TRANSITION_YAML = """\
+name: bad-transition
+description: invalid L2 transition
+execution_policy: auto
+steps:
+  - id: done
+    skill: test-skill
+    agent: claude
+    on:
+      PASS: missing
+"""
+
 
 def _create_config(project_root: Path, skill_dir: str = ".claude/skills") -> None:
     """Create a minimal .kaji/config.toml for testing."""
@@ -184,6 +196,20 @@ class TestCmdValidateSmall:
         assert "✗" in captured.err
         assert str(invalid_schema_yaml) in captured.err
         assert "steps" in captured.err
+        assert ".kaji/config.toml not found" not in captured.err
+
+    @pytest.mark.small
+    def test_invalid_transition_precedes_missing_config(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        workflow = tmp_path / "invalid_transition.yaml"
+        workflow.write_text(INVALID_TRANSITION_YAML)
+
+        exit_code = _cmd_validate_with_args(str(workflow))
+
+        assert exit_code == 1
+        captured = capsys.readouterr()
+        assert "Step 'done' transitions to unknown step 'missing' on PASS" in captured.err
         assert ".kaji/config.toml not found" not in captured.err
 
     @pytest.mark.small

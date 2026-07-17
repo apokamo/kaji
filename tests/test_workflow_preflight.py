@@ -1,4 +1,4 @@
-"""Medium tests for the shared L1/L2/L3 workflow preflight."""
+"""Small and medium tests for the shared L1/L2/L3 workflow preflight."""
 
 from __future__ import annotations
 

@@ -31,6 +31,7 @@ MODULE_LAYERS: dict[str, str] = {
     "kaji_harness.local_init": "application",
     "kaji_harness.logger": "application",
     "kaji_harness.models": "application",
+    "kaji_harness.preflight": "application",
     "kaji_harness.prompt": "application",
     "kaji_harness.pytest_baseline_plugin": "application",
     "kaji_harness.recovery": "application",
