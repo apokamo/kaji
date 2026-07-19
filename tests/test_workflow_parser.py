@@ -322,6 +322,18 @@ class TestParsingErrors:
             load_workflow_from_str(yaml_str)
 
     @pytest.mark.small
+    def test_huge_max_budget_usd_raises_validation_error(self) -> None:
+        """A max_budget_usd too large for float raises WorkflowValidationError, not OverflowError."""
+        yaml_str = (
+            "name: t\ndescription: t\nexecution_policy: auto\nsteps:\n  - id: s\n"
+            "    skill: x\n    agent: claude\n    max_budget_usd: " + "9" * 1000 + "\n"
+            "    on: {PASS: end}\n"
+        )
+
+        with pytest.raises(WorkflowValidationError, match="max_budget_usd"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
     def test_invalid_yaml_syntax_raises_validation_error(self) -> None:
         """Malformed YAML syntax raises WorkflowValidationError."""
         bad_yaml = "name: test\nsteps:\n  - id: [unclosed"

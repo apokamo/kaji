@@ -234,7 +234,13 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                     f"Step '{step_data['id']}' 'max_budget_usd' must be a number or null, "
                     f"got {type(raw_max_budget_usd).__name__}"
                 )
-            raw_max_budget_usd = float(raw_max_budget_usd)
+            try:
+                raw_max_budget_usd = float(raw_max_budget_usd)
+            except OverflowError as exc:
+                raise WorkflowValidationError(
+                    f"Step '{step_data['id']}' 'max_budget_usd' is too large to "
+                    f"represent as a number"
+                ) from exc
 
         raw_effort = step_data.get("effort")
         if raw_effort is not None:
