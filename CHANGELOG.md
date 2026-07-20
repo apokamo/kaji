@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-07-20
+
+### Fixed
+
+- Validate the documented types for workflow `name`, `description`, and
+  `execution_policy`, plus step `skill`, `model`, and `max_budget_usd`, at the
+  YAML parse boundary. Malformed values now raise field-specific
+  `WorkflowValidationError` messages instead of leaking `TypeError` or being
+  silently accepted (#360).
+- Reject an unrepresentable `max_budget_usd` (for example a 1000-digit YAML
+  integer) with a field-specific `WorkflowValidationError` instead of letting a
+  raw `OverflowError` escape `kaji validate` as a traceback (#360).
+
 ## [0.16.0] - 2026-07-18
 
 This release tightens workflow validation and execution preflight, adds a
