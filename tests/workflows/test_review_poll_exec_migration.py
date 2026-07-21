@@ -1,10 +1,10 @@
 """review-poll step の exec dispatch 回帰テスト（Issue #234 / #247）.
 
-公開 workflow（`.kaji/wf/{dev,dev-thorough,docs}.yaml`）の `review-poll` step が
+official workflow（`.kaji/wf/official/{dev,docs}.yaml`）の `review-poll` step が
 `skill: review-poll`（exec_script 経路）ではなく `exec` step type
 （`kaji pr review-poll`）として dispatch されることを固定する。
 
-- **static regression**（Small）: 3 workflow をロードし、`review-poll` step の `exec` argv が
+- **static regression**（Medium）: official 2 workflow をロードし、`review-poll` step の `exec` argv が
   `["kaji", "pr", "review-poll"]` であること・`skill`/`agent`/`model`/`effort` が None で
   あることを検証する。
 - **runtime-ish verification**（Medium）: `WorkflowRunner` 経路で `review-poll` が
@@ -13,9 +13,9 @@
 
 Issue #247 で legacy 専用 workflow（review-cycle / review-close / full-cycle /
 full-cycle-xhigh）と、その `uv run ... review_poll_entry` exec 形は削除された。
-本ファイルは現行 5 本運用の public workflow（installed `kaji` CLI 経由）のみを対象とし、
+本ファイルは official workflow（installed `kaji` CLI 経由）のみを対象とし、
 旧来の「review-cycle 専用 workflow だけ PASS=end、他は PASS=close」という前提は持たない
-（公開 workflow の review-poll は一律 PASS=close で close へ遷移する）。
+（official workflow の review-poll は一律 PASS=close で close へ遷移する）。
 
 `kaji validate` は schema/skill 解決のみで dispatch 経路を検証しないため、dispatch 不変・
 WARNING 除去の必須検証として本ファイルを置く。
@@ -36,16 +36,15 @@ from kaji_harness.workflow import load_workflow
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
-PUBLIC_WORKFLOWS = [
+OFFICIAL_WORKFLOWS = [
     "dev.yaml",
-    "dev-thorough.yaml",
     "docs.yaml",
 ]
 
-PUBLIC_EXPECTED_EXEC = ["kaji", "pr", "review-poll"]
+OFFICIAL_EXPECTED_EXEC = ["kaji", "pr", "review-poll"]
 
-PUBLIC_PATHS = [REPO_ROOT / ".kaji" / "wf" / name for name in PUBLIC_WORKFLOWS]
-PUBLIC_IDS = PUBLIC_WORKFLOWS
+OFFICIAL_PATHS = [REPO_ROOT / ".kaji" / "wf" / "official" / name for name in OFFICIAL_WORKFLOWS]
+OFFICIAL_IDS = OFFICIAL_WORKFLOWS
 
 
 def _review_poll_step(path: Path) -> Step:
@@ -61,36 +60,36 @@ def _verdict(status: str) -> str:
 
 
 # ============================================================
-# static regression（Small）
+# static regression（Medium）
 # ============================================================
 
 
-@pytest.mark.small
-class TestPublicReviewPollExecStatic:
+@pytest.mark.medium
+class TestOfficialReviewPollExecStatic:
     def test_all_public_workflows_exist(self) -> None:
-        """READMEで案内する標準workflowが存在する（glob/typo で silently skip しない）。"""
-        missing = [p.name for p in PUBLIC_PATHS if not p.exists()]
+        """official workflow が存在する（path typo で silently skip しない）。"""
+        missing = [p.name for p in OFFICIAL_PATHS if not p.exists()]
         assert not missing, f"対象 workflow が見つからない: {missing}"
 
-    @pytest.mark.parametrize("path", PUBLIC_PATHS, ids=PUBLIC_IDS)
+    @pytest.mark.parametrize("path", OFFICIAL_PATHS, ids=OFFICIAL_IDS)
     def test_review_poll_uses_installed_kaji_cli(self, path: Path) -> None:
-        """公開workflowは対象repoのPython環境ではなくinstalled kaji CLI経由でpollする。"""
+        """official workflowは対象repoのPython環境ではなくinstalled kaji CLI経由でpollする。"""
         step = _review_poll_step(path)
-        assert step.exec == PUBLIC_EXPECTED_EXEC, (
+        assert step.exec == OFFICIAL_EXPECTED_EXEC, (
             f"{path.name}: review-poll.exec がportableなCLI経由ではない。"
-            f"got={step.exec!r} expected={PUBLIC_EXPECTED_EXEC!r}"
+            f"got={step.exec!r} expected={OFFICIAL_EXPECTED_EXEC!r}"
         )
 
-    @pytest.mark.parametrize("path", PUBLIC_PATHS, ids=PUBLIC_IDS)
+    @pytest.mark.parametrize("path", OFFICIAL_PATHS, ids=OFFICIAL_IDS)
     def test_review_poll_has_no_agent_fields(self, path: Path) -> None:
-        """公開workflowのreview-pollもexec stepとしてdispatchされる。"""
+        """official workflowのreview-pollもexec stepとしてdispatchされる。"""
         step = _review_poll_step(path)
         assert step.skill is None, f"{path.name}: review-poll.skill が残存している"
         assert step.agent is None, f"{path.name}: review-poll.agent が残存している"
         assert step.model is None, f"{path.name}: review-poll.model が残存している"
         assert step.effort is None, f"{path.name}: review-poll.effort が残存している"
 
-    @pytest.mark.parametrize("path", PUBLIC_PATHS, ids=PUBLIC_IDS)
+    @pytest.mark.parametrize("path", OFFICIAL_PATHS, ids=OFFICIAL_IDS)
     def test_review_poll_on_block_preserved(self, path: Path) -> None:
         """on: ブロックの遷移キーは exec dispatch でも維持され、PASS は一律 close。"""
         step = _review_poll_step(path)
@@ -125,7 +124,7 @@ def _make_config(tmp_path: Path) -> KajiConfig:
 
 @pytest.mark.medium
 class TestReviewPollExecDispatch:
-    @pytest.mark.parametrize("path", PUBLIC_PATHS, ids=PUBLIC_IDS)
+    @pytest.mark.parametrize("path", OFFICIAL_PATHS, ids=OFFICIAL_IDS)
     def test_review_poll_dispatches_to_execute_exec(self, path: Path, tmp_path: Path) -> None:
         """実 workflow の review-poll step が exec dispatch（execute_exec）に到達する。
 
@@ -144,7 +143,7 @@ class TestReviewPollExecDispatch:
         )
 
         def fake_execute_exec(**kwargs: object) -> CLIResult:
-            assert kwargs["argv"] == PUBLIC_EXPECTED_EXEC
+            assert kwargs["argv"] == OFFICIAL_EXPECTED_EXEC
             return CLIResult(full_output=_verdict("PASS"))
 
         with (

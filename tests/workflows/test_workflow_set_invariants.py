@@ -1,10 +1,14 @@
-"""Invariants for the canonical workflow set under ``.kaji/wf/``.
+"""Invariants for the official workflow set under ``.kaji/wf/official/``.
 
-The workflow set contains the everyday GitHub/local workflows plus tracked model
-variants. Each workflow's ``name:`` must match its filename stem. This test
-guards those invariants so a re-added legacy workflow, an accidental deletion, or
-a ``name:`` / filename drift is caught cheaply by the loader (which is already
-covered by other tests).
+The official set is what kaji ships, updates, and regression-tests. Each
+workflow's ``name:`` must match its filename stem. This test guards those
+invariants so a re-added legacy workflow, an accidental deletion, a ``local/``
+hierarchy drift, or a custom workflow leaking into ``official/`` is caught
+cheaply by the loader (which is already covered by other tests).
+
+Workflows under ``.kaji/wf/custom/`` are repository-owned and intentionally
+excluded: the glob is rooted at ``official/`` rather than filtered, so adding a
+custom category can never pull it into the official regression set.
 """
 
 from __future__ import annotations
@@ -15,34 +19,31 @@ import pytest
 
 from kaji_harness.workflow import load_workflow
 
-WF_DIR = Path(__file__).resolve().parent.parent.parent / ".kaji" / "wf"
+OFFICIAL_DIR = Path(__file__).resolve().parent.parent.parent / ".kaji" / "wf" / "official"
 
-EXPECTED_WORKFLOWS = {
-    "dev",
-    "dev-local",
-    "dev-thorough",
-    "dev-thorough-fable",
-    "docs",
-    "docs-codex",
-    "docs-fable",
-    "docs-local",
-    "docs-thorough-codex",
-    "incident",
+EXPECTED_OFFICIAL = {
+    "dev.yaml",
+    "docs.yaml",
+    "incident.yaml",
+    "local/dev-local.yaml",
+    "local/docs-local.yaml",
 }
 
 
-@pytest.mark.small
-class TestWorkflowSetInvariants:
-    def test_exactly_canonical_workflows(self) -> None:
-        """``.kaji/wf/`` holds exactly the canonical workflows."""
-        stems = {p.stem for p in WF_DIR.glob("*.yaml")}
-        assert stems == EXPECTED_WORKFLOWS, (
-            f"`.kaji/wf/` workflow set drifted: got {sorted(stems)}, "
-            f"expected {sorted(EXPECTED_WORKFLOWS)}"
+@pytest.mark.medium
+class TestOfficialWorkflowSetInvariants:
+    def test_exactly_official_workflows(self) -> None:
+        """``.kaji/wf/official/`` holds exactly the official workflows."""
+        found = {p.relative_to(OFFICIAL_DIR).as_posix() for p in OFFICIAL_DIR.rglob("*.yaml")}
+        assert found == EXPECTED_OFFICIAL, (
+            f"`.kaji/wf/official/` workflow set drifted: got {sorted(found)}, "
+            f"expected {sorted(EXPECTED_OFFICIAL)}"
         )
 
-    @pytest.mark.parametrize("name", sorted(EXPECTED_WORKFLOWS))
-    def test_name_matches_filename_stem(self, name: str) -> None:
+    @pytest.mark.parametrize("relative_path", sorted(EXPECTED_OFFICIAL))
+    def test_name_matches_filename_stem(self, relative_path: str) -> None:
         """Each workflow's ``name:`` equals its filename stem (no drift)."""
-        wf = load_workflow(WF_DIR / f"{name}.yaml")
-        assert wf.name == name, f"{name}.yaml: name field {wf.name!r} != filename stem {name!r}"
+        path = OFFICIAL_DIR / relative_path
+        stem = path.stem
+        wf = load_workflow(path)
+        assert wf.name == stem, f"{relative_path}: name field {wf.name!r} != filename stem {stem!r}"

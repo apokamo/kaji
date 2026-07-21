@@ -28,7 +28,7 @@ least one positive integer Issue number.
    kaji issue view <issue> --json labels,title,state
    ```
 
-3. Read every `.kaji/wf/*.yaml` `description` and `requires_provider` value. For each member without
+3. Read every `.kaji/wf/official/**/*.yaml` and `.kaji/wf/custom/**/*.yaml` `description` and `requires_provider` value. For each member without
    an override, select candidates whose description says they are the standard series auto-selection
    target for the Issue's single `type:` label and whose provider is `github` or `any`.
 4. Auto-select only when exactly one candidate remains. Display the Issue type and matching

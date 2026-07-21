@@ -143,9 +143,9 @@ provenance が不足しているだけなら `RETRY` で補完する。
 `workflow.requires_provider` と `config.provider.type` を突合する。
 不整合は **exit 2** + 切替手順を stderr に出して dispatcher 起動前に止まる。
 
-- builtin workflow（`.kaji/wf/*.yaml`）はすべて `requires_provider` を明示済
+- official workflow（`.kaji/wf/official/**/*.yaml`）はすべて `requires_provider` を明示済
   （[workflow_guide.md](workflow_guide.md) § provider × workflow の対応表）
-- 例: `provider.type='local'` 配下で `kaji run .kaji/wf/dev.yaml ...` を
+- 例: `provider.type='local'` 配下で `kaji run .kaji/wf/official/dev.yaml ...` を
   打つと、step `i-pr` まで進む前に exit 2 で停止する
 - `requires_provider: any` の workflow は両 provider で通る（`design-only.yaml`）
 

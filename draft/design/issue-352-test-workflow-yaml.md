@@ -267,6 +267,14 @@ custom variant では pytest で保証されなくなる。3-5 の `review-poll`
 | `tests/test_skill_harness_adaptation.py` | `tests/fixtures/test_workflow.yaml` を読む。`.kaji/wf/` 非依存。呼び出し箇所（`:142-192`）は既に `medium` |
 | `tests/test_cli_validate.py:201,444` | 母集団 D に該当するが、参照は `tmp_path / ".kaji"`（config dir）であり `.kaji/wf` ではない。実 workflow に依存しないため `small` のまま |
 
+> **実装時の訂正（#352 implement）**: `tests/test_cli_validate.py` は上記 `:201,444` に加え、
+> `:646`（`TestCmdValidateMedium::test_repository_workflows_all_validate`）が
+> `project_root / ".kaji" / "wf"` の segment 形で実 workflow を glob していた。本節の
+> 「変更しない」分類および 3-0 の母集団表はこの 1 件を取りこぼしている。marker は既に
+> `medium` で妥当なため、3-2 と同じ扱い（glob 起点を `official/` へ限定 + test 名を
+> `test_official_workflows_all_validate` へ改名）で是正した。
+> したがって実際の分類は 3-1（8）/ 3-2（**5**）/ 3-3（**3**）/ 3-4（11）= 27 となる。
+
 > 母集団 C の `tests/test_workflow_requires_provider.py` / `test_exec_step_parser.py` は
 > A ∪ B ∪ D に含まれない（`load_workflow_from_str()` のみ）。ファイル I/O を伴わないため
 > `small` を維持し、本 Issue では一切変更しない。

@@ -12,6 +12,9 @@ starter には以下が同梱されている。
 - kaji（dev dependency として導入済み。`uv run kaji` で実行）
 - `.kaji/wf/` の workflow YAML 5 本（GitHub provider 用 3 本 + local provider 用 2 本、
   既定は claude 単騎構成）
+  - starter は現時点で flat な `.kaji/wf/` レイアウトのまま。kaji リポジトリ本体は
+    `official/` / `custom/` 分離へ移行済み（#352）で、starter は Release 後の
+    starter-sync で追随する（[runbook](../operations/release/starter-sync-runbook.md)）。
 - `.claude/skills/` の汎用化 skills 23 本（Claude 以外の agent は
   `.agents/skills/` の symlink から同じ正本を参照）
 
@@ -196,7 +199,7 @@ uv run kaji validate .kaji/wf/*.yaml
 複数の agent CLI を契約している場合は、YAML を直接編集して step ごとに CLI を
 割り当てられる。主な動機はレビュー視点の多様性 — 実装した model とは別の
 model にレビューさせること。kaji リポジトリ自体がこの構成で動いている
-（[dev.yaml](../../.kaji/wf/dev.yaml) では claude が実装し codex がレビュー）。
+（[dev.yaml](../../.kaji/wf/official/dev.yaml) では claude が実装し codex がレビュー）。
 レビュー系 step（`review-code`、`verify-code`、`review`、`pr-verify` など）の
 `agent:` / `model:` / `effort:` を書き換えたら再 validate する。workflow YAML
 の記法は [workflow-authoring.md](../dev/workflow-authoring.md) を参照。
@@ -272,7 +275,7 @@ skills は同梱コピーであり kaji 本体とは同期されない: kaji を
 
    既存の `review` step は残す: bot が応答しないときは `BACK_FALLBACK` で
    そちらへ fallback し、bot なしでも workflow が収束する。kaji リポジトリ
-   自体の [dev.yaml](../../.kaji/wf/dev.yaml) が同じ構成の参照実装。
+   自体の [dev.yaml](../../.kaji/wf/official/dev.yaml) が同じ構成の参照実装。
 3. validate する: `uv run kaji validate .kaji/wf/dev.yaml`
 
 ## 6. 同梱ドキュメント

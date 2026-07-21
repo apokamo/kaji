@@ -25,16 +25,16 @@ name: kaji-run-verify
 $ARGUMENTS = <workflow-path> <issue_id> [kaji run options...]
 ```
 
-- `workflow-path` (必須): 例 `.kaji/wf/dev.yaml`
+- `workflow-path` (必須): 例 `.kaji/wf/official/dev.yaml`
 - `issue_id` (必須): GitHub Issue 番号
 - `kaji run options...` (任意): `--from` / `--step` / `--workdir` / `--quiet` などをそのまま後続に渡す
 
 ### 例
 
 ```bash
-/kaji-run-verify .kaji/wf/dev.yaml 73
-/kaji-run-verify .kaji/wf/dev.yaml 73 --from fix-code
-/kaji-run-verify .kaji/wf/dev.yaml 73 --workdir ../kaji-feat-73
+/kaji-run-verify .kaji/wf/official/dev.yaml 73
+/kaji-run-verify .kaji/wf/official/dev.yaml 73 --from fix-code
+/kaji-run-verify .kaji/wf/official/dev.yaml 73 --workdir ../kaji-feat-73
 ```
 
 ## 前提知識の読み込み

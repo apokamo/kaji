@@ -3,13 +3,13 @@ parent_issue: 291
 strategy: sequential
 members:
   - issue: 282
-    workflow: .kaji/wf/dev.yaml
+    workflow: .kaji/wf/official/dev.yaml
   - issue: 283
-    workflow: .kaji/wf/dev-thorough-fable.yaml
+    workflow: .kaji/wf/custom/dev/dev-thorough-fable.yaml
   - issue: 285
-    workflow: .kaji/wf/dev.yaml
+    workflow: .kaji/wf/official/dev.yaml
   - issue: 286
-    workflow: .kaji/wf/dev.yaml
+    workflow: .kaji/wf/official/dev.yaml
   - issue: 284
-    workflow: .kaji/wf/dev.yaml
+    workflow: .kaji/wf/official/dev.yaml
 on_failure: stop

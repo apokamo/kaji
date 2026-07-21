@@ -52,8 +52,8 @@ def _config() -> SeriesConfig:
             "id": "runner-series",
             "strategy": "sequential",
             "members": [
-                {"issue": 10, "workflow": ".kaji/wf/dev.yaml"},
-                {"issue": 11, "workflow": ".kaji/wf/dev.yaml"},
+                {"issue": 10, "workflow": ".kaji/wf/official/dev.yaml"},
+                {"issue": 11, "workflow": ".kaji/wf/official/dev.yaml"},
             ],
             "on_failure": "stop",
         }

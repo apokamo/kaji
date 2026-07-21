@@ -19,14 +19,14 @@ from kaji_harness.recovery.snapshot import FailureEvent, FailureSnapshot, GitSta
 pytestmark = pytest.mark.small
 
 _NOW = datetime(2026, 7, 10, 12, 0, 0, tzinfo=UTC)
-_WORKFLOW_PATH = Path(".kaji/wf/dev.yaml")
+_WORKFLOW_PATH = Path(".kaji/wf/official/dev.yaml")
 
 
 def _workflow() -> Workflow:
     # step ID は実 built-in workflow と同じく skill 名と一致させない（Issue #349:
     # 旧 fixture は id == skill という架空の step を使っており、実 workflow 構造から
     # 乖離していた。`tests/test_recovery_models.py:45` 相当の値は保ちつつ、id/skill の
-    # 対応は `.kaji/wf/dev.yaml` 等の tracked built-in workflow に合わせる）。
+    # 対応は `.kaji/wf/official/dev.yaml` 等の tracked built-in workflow に合わせる）。
     return Workflow(
         name="dev",
         description="",
@@ -109,7 +109,7 @@ def test_candidate_with_auto_recover_resumes_from_failed_step() -> None:
     assert d.recovery_root_run_id == "260710120000"
     assert d.recovery_parent_run_id is None
     assert d.resume_command == (
-        "kaji run .kaji/wf/dev.yaml 288 --from review-code "
+        "kaji run .kaji/wf/official/dev.yaml 288 --from review-code "
         "--recovery-root 260710120000 --recovery-parent 260710120000"
     )
 

@@ -169,7 +169,7 @@ uv tool install git+https://github.com/apokamo/kaji.git
 ### 対象リポジトリを設定する
 
 kajiを実行したいリポジトリに `.kaji/config.toml` を追加します。
-下の例で使う `.kaji/wf/dev.yaml` は、PR作成、PR review polling、Issue closeまで扱う
+下の例で使う `.kaji/wf/official/dev.yaml` は、PR作成、PR review polling、Issue closeまで扱う
 GitHub前提のworkflowです。
 
 ```toml
@@ -209,7 +209,7 @@ kaji local init
 
 `kaji local init` は現在のmachine用の `.kaji/config.local.toml` を作成します。
 trackedなbase configを置き換えるものではありません。local modeでは
-`.kaji/wf/dev-local.yaml` などのlocal専用workflowを使います。local providerの
+`.kaji/wf/official/local/dev-local.yaml` などのlocal専用workflowを使います。local providerの
 セットアップは [Local Mode CLI Guide](docs/cli-guides/local-mode.md) を参照してください。
 
 skillは `.claude/skills/` に配置します。他agent向けのskill directoryは、
@@ -217,9 +217,13 @@ skillは `.claude/skills/` に配置します。他agent向けのskill directory
 
 ### workflowを実行する
 
-workflow fileは各リポジトリの `.kaji/wf/` から実行します。このリポジトリでは現在、
-GitHub前提のworkflow setとして `.kaji/wf/dev.yaml`、`.kaji/wf/dev-thorough.yaml`、
-`.kaji/wf/docs.yaml` を置いています。これらのworkflowを設定済みの新規Python
+workflow fileは各リポジトリの `.kaji/wf/` から実行します。配置は所有権で分かれ、
+`.kaji/wf/official/**` はkajiが提供・更新・テストする公式workflow、`.kaji/wf/custom/**` は
+リポジトリ利用者が所有するworkflowです。`official/**` を直接編集せず、`custom/**` へ
+コピーして管理してください（正本:
+[workflow-authoring.md](docs/dev/workflow-authoring.md#ファイル配置)）。このリポジトリでは
+GitHub前提の公式workflowとして `.kaji/wf/official/dev.yaml`、`.kaji/wf/official/docs.yaml` を、
+リポジトリ固有のvariantとして `.kaji/wf/custom/dev/dev-thorough.yaml` などを置いています。これらのworkflowを設定済みの新規Python
 プロジェクトを始めるには、
 [kaji-starter-python](https://github.com/apokamo/kaji-starter-python)
 template repositoryからリポジトリを作成し、
@@ -231,19 +235,19 @@ template repositoryからリポジトリを作成し、
 workflowを実行:
 
 ```bash
-kaji run .kaji/wf/dev.yaml <issue-id>
+kaji run .kaji/wf/official/dev.yaml <issue-id>
 ```
 
 特定stepから再開:
 
 ```bash
-kaji run .kaji/wf/dev.yaml <issue-id> --from fix-code
+kaji run .kaji/wf/official/dev.yaml <issue-id> --from fix-code
 ```
 
 単一stepだけ実行:
 
 ```bash
-kaji run .kaji/wf/dev.yaml <issue-id> --step review-code
+kaji run .kaji/wf/official/dev.yaml <issue-id> --step review-code
 ```
 
 明示した順序で複数の GitHub Issue を実行:
@@ -286,7 +290,7 @@ tmux session内で実行します。
 
 ```bash
 tmux new-session
-kaji run .kaji/wf/dev.yaml <issue-id> --agent-runner interactive-terminal
+kaji run .kaji/wf/official/dev.yaml <issue-id> --agent-runner interactive-terminal
 ```
 
 runnerは管理対象paneを開き、terminal transcriptを記録し、`verdict.yaml` を待ってworkflowを進めます。

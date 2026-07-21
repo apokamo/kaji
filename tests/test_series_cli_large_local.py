@@ -14,7 +14,7 @@ pytestmark = [pytest.mark.large, pytest.mark.large_local]
 def series_repo(tmp_path: Path) -> tuple[Path, Path]:
     """Create a minimal GitHub-configured repo without external provider access."""
     kaji_dir = tmp_path / ".kaji"
-    workflow_dir = kaji_dir / "wf"
+    workflow_dir = kaji_dir / "wf" / "official"
     series_dir = kaji_dir / "series"
     workflow_dir.mkdir(parents=True)
     series_dir.mkdir()
@@ -49,7 +49,7 @@ def series_repo(tmp_path: Path) -> tuple[Path, Path]:
         "strategy: sequential\n"
         "members:\n"
         "  - issue: 282\n"
-        "    workflow: .kaji/wf/dev.yaml\n"
+        "    workflow: .kaji/wf/official/dev.yaml\n"
         "on_failure: stop\n",
         encoding="utf-8",
     )

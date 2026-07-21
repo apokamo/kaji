@@ -1,8 +1,8 @@
-"""Medium tests: 実 workflow YAML 全 variant の再開禁止 skill 検査 (Issue #349).
+"""Medium tests: official workflow YAML 全件の再開禁止 skill 検査 (Issue #349).
 
-`.kaji/wf/*.yaml` を glob + `load_workflow()` でロードするため file I/O を伴う（Medium。
+`.kaji/wf/official/**/*.yaml` を glob + `load_workflow()` でロードするため file I/O を伴う（Medium。
 `docs/dev/testing-convention.md` § 判定基準「DB / ファイル / 内部サービス結合あり → Medium」）。
-`plan_recovery()` が全 tracked built-in workflow・全 variant で `Step.skill` のみに基づいて
+`plan_recovery()` が official workflow 全件で `Step.skill` のみに基づいて
 denylist を判定することを機械的に検証する。step ID ≠ skill の任意 alias の一般則自体は
 `tests/test_recovery_plan.py`（Small・合成 workflow）が担い、本ファイルは実 YAML の
 網羅性のみを担当する。
@@ -24,13 +24,13 @@ from kaji_harness.workflow import load_workflow
 pytestmark = pytest.mark.medium
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-WORKFLOW_PATHS = sorted((REPO_ROOT / ".kaji" / "wf").glob("*.yaml"))
+WORKFLOW_PATHS = sorted((REPO_ROOT / ".kaji" / "wf" / "official").rglob("*.yaml"))
 
 _NOW = datetime(2026, 7, 10, 12, 0, 0, tzinfo=UTC)
 
 
 def _non_resumable_targets() -> list[tuple[Path, str, str]]:
-    """全 tracked workflow から `(workflow_path, step_id, skill)` を re-open 禁止 skill の分だけ返す。"""
+    """全 official workflow から `(workflow_path, step_id, skill)` を re-open 禁止 skill の分だけ返す。"""
     targets: list[tuple[Path, str, str]] = []
     for path in WORKFLOW_PATHS:
         wf = load_workflow(path)
@@ -65,14 +65,14 @@ def _snapshot(*, failed_step: str) -> FailureSnapshot:
     )
 
 
-def test_tracked_workflow_inventory_is_not_empty() -> None:
+def test_official_workflow_inventory_is_not_empty() -> None:
     # vacuous pass 防止: glob 誤りで対象が消えていないこと。
-    assert WORKFLOW_PATHS, "tracked .kaji/wf/*.yaml が 1 件も見つからない"
+    assert WORKFLOW_PATHS, "official .kaji/wf/official/**/*.yaml が 1 件も見つからない"
 
 
 def test_non_resumable_skill_targets_are_not_empty() -> None:
     # vacuous pass 防止: denylist skill を持つ step が全体で 1 件以上あること。
-    assert TARGETS, "denylist skill を使う step が tracked workflow に 1 件も見つからない"
+    assert TARGETS, "denylist skill を使う step が official workflow に 1 件も見つからない"
 
 
 @pytest.mark.parametrize("skill", sorted(NON_RESUMABLE_SKILLS))

@@ -45,7 +45,7 @@ def _series() -> SeriesConfig:
         {
             "id": "cli-series",
             "strategy": "sequential",
-            "members": [{"issue": 10, "workflow": ".kaji/wf/dev.yaml"}],
+            "members": [{"issue": 10, "workflow": ".kaji/wf/official/dev.yaml"}],
             "on_failure": "stop",
         }
     )
@@ -53,7 +53,7 @@ def _series() -> SeriesConfig:
 
 def _write_series_repo(tmp_path: Path) -> tuple[Path, Path, Path]:
     repo = tmp_path / "repo"
-    workflow_dir = repo / ".kaji" / "wf"
+    workflow_dir = repo / ".kaji" / "wf" / "official"
     series_dir = repo / ".kaji" / "series"
     workflow_dir.mkdir(parents=True)
     series_dir.mkdir()
@@ -87,8 +87,8 @@ def _write_series_repo(tmp_path: Path) -> tuple[Path, Path, Path]:
         "id: preflight-test\n"
         "strategy: sequential\n"
         "members:\n"
-        "  - issue: 10\n    workflow: .kaji/wf/valid.yaml\n"
-        "  - issue: 11\n    workflow: .kaji/wf/candidate.yaml\n"
+        "  - issue: 10\n    workflow: .kaji/wf/official/valid.yaml\n"
+        "  - issue: 11\n    workflow: .kaji/wf/official/candidate.yaml\n"
         "on_failure: stop\n",
         encoding="utf-8",
     )
@@ -202,9 +202,9 @@ def test_generator_cli_preserves_order_and_refuses_overwrite(tmp_path: Path) -> 
         "--parent",
         "291",
         "--member",
-        "10=.kaji/wf/dev.yaml",
+        "10=.kaji/wf/official/dev.yaml",
         "--member",
-        "11=.kaji/wf/docs.yaml",
+        "11=.kaji/wf/official/docs.yaml",
         "--output",
         str(output),
     ]
@@ -267,7 +267,7 @@ def test_validate_series_renders_every_invalid_member(
     series.write_text(
         series.read_text(encoding="utf-8").replace(
             "on_failure: stop",
-            "  - issue: 12\n    workflow: .kaji/wf/missing.yaml\non_failure: stop",
+            "  - issue: 12\n    workflow: .kaji/wf/official/missing.yaml\non_failure: stop",
         ),
         encoding="utf-8",
     )
@@ -275,5 +275,5 @@ def test_validate_series_renders_every_invalid_member(
     assert main(["validate-series", str(series), "--workdir", str(repo)]) == 1
 
     stderr = capsys.readouterr().err
-    assert "members.1.workflow is invalid (.kaji/wf/candidate.yaml)" in stderr
-    assert "members.2.workflow not found: .kaji/wf/missing.yaml" in stderr
+    assert "members.1.workflow is invalid (.kaji/wf/official/candidate.yaml)" in stderr
+    assert "members.2.workflow not found: .kaji/wf/official/missing.yaml" in stderr

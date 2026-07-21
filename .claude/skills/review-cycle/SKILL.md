@@ -5,7 +5,7 @@ name: review-cycle
 
 # Review Cycle
 
-`kaji run .kaji/wf/dev.yaml <issue_id> --from review-poll --before close` を Bash 経由で
+`kaji run .kaji/wf/official/dev.yaml <issue_id> --from review-poll --before close` を Bash 経由で
 起動し、終了後に `/issue-close` 実行案内を含む verdict を出力する slash command wrapper skill。
 
 `--before close` で close step の手前で停止するため、本 skill 経由で workflow を回した後は
@@ -17,7 +17,7 @@ PASS なら `/issue-close <issue_id>` を **手動で** 実行する運用とな
 | タイミング | このスキル |
 |-----------|-----------|
 | PR レビューループを 1 コマンドで自動化したい（close は手動で確認） | ✅ 必須 |
-| close まで全自動で進めたい | ❌ 代わりに `kaji run .kaji/wf/dev.yaml <id> --from review-poll`（`--before close` を付けない） |
+| close まで全自動で進めたい | ❌ 代わりに `kaji run .kaji/wf/official/dev.yaml <id> --from review-poll`（`--before close` を付けない） |
 | `provider.type='github'` で codex auto-review が走っている環境 | ✅ 前提（`review-poll` step が auto-review シグナルを監視） |
 | `provider.type='github'` 以外（`local` 等） | ❌ workflow が `requires_provider: github` で exit 2 |
 
@@ -75,7 +75,7 @@ fi
 STDERR_LOG=$(mktemp)
 trap 'rm -f "$STDERR_LOG"' EXIT
 
-kaji run .kaji/wf/dev.yaml "$ISSUE_ID" --from review-poll --before close \
+kaji run .kaji/wf/official/dev.yaml "$ISSUE_ID" --from review-poll --before close \
     2> >(tee "$STDERR_LOG" >&2)
 EXIT=$?
 
@@ -116,7 +116,7 @@ status: PASS
 reason: |
   review-cycle workflow completed successfully (exit 0).
 evidence: |
-  kaji run .kaji/wf/dev.yaml $ISSUE_ID --from review-poll --before close exited with code 0.
+  kaji run .kaji/wf/official/dev.yaml $ISSUE_ID --from review-poll --before close exited with code 0.
 suggestion: |
   Run /issue-close $ISSUE_ID to merge the PR and clean up.
 ---END_VERDICT---
@@ -135,7 +135,7 @@ else
             ;;
         2)
             REASON="definition error / config error (exit 2)"
-            SUGG="Run 'kaji validate .kaji/wf/dev.yaml' to surface the YAML or skill error; verify .kaji/config.toml has [provider]."
+            SUGG="Run 'kaji validate .kaji/wf/official/dev.yaml' to surface the YAML or skill error; verify .kaji/config.toml has [provider]."
             ;;
         3)
             REASON="runtime error in kaji run (exit 3)"
@@ -152,7 +152,7 @@ status: ABORT
 reason: |
   $REASON
 evidence: |
-  kaji run .kaji/wf/dev.yaml $ISSUE_ID --from review-poll --before close exited with code $EXIT.
+  kaji run .kaji/wf/official/dev.yaml $ISSUE_ID --from review-poll --before close exited with code $EXIT.
   Workflow aborted marker in stderr: $HAS_ABORT_MARKER (1 = present, 0 = absent).
 suggestion: |
   $SUGG
