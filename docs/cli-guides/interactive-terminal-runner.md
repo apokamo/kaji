@@ -127,13 +127,13 @@ agent_runner = "interactive_terminal"
 tmux new-session            # or use an existing tmux session
 
 # Use repository config where interactive_terminal is the default
-kaji run .kaji/wf/dev.yaml 224
+kaji run .kaji/wf/official/dev.yaml 224
 
 # Use interactive terminal for this run and keep panes open
-kaji run .kaji/wf/dev.yaml 224   --agent-runner interactive-terminal   --no-interactive-terminal-close-on-verdict
+kaji run .kaji/wf/official/dev.yaml 224   --agent-runner interactive-terminal   --no-interactive-terminal-close-on-verdict
 
 # Use headless for this run only (tmux not required)
-kaji run .kaji/wf/dev.yaml 224 --agent-runner headless
+kaji run .kaji/wf/official/dev.yaml 224 --agent-runner headless
 ```
 
 ## Launcher-console progress (Issue 235)
@@ -165,7 +165,7 @@ launcher console through stdlib `logging`.
 
 ```bash
 # Show only warnings/errors from harness progress
-kaji run .kaji/wf/dev.yaml 224 --log-level WARNING
+kaji run .kaji/wf/official/dev.yaml 224 --log-level WARNING
 ```
 
 ## Behavior

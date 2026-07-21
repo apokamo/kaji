@@ -71,14 +71,19 @@ kaji --help
 Run a workflow in a configured target repository:
 
 ```bash
-kaji run .kaji/wf/dev.yaml <issue-id>
-kaji run .kaji/wf/dev.yaml <issue-id> --from <step-id>
-kaji run .kaji/wf/dev.yaml <issue-id> --step <step-id>
+kaji run .kaji/wf/official/dev.yaml <issue-id>
+kaji run .kaji/wf/official/dev.yaml <issue-id> --from <step-id>
+kaji run .kaji/wf/official/dev.yaml <issue-id> --step <step-id>
 ```
 
-Workflow files are run from `.kaji/wf/` in each repository. This repository
-currently includes `.kaji/wf/dev.yaml`, `.kaji/wf/dev-thorough.yaml`, and
-`.kaji/wf/docs.yaml` as GitHub-backed workflow examples. Template distribution
+Workflow files are run from `.kaji/wf/` in each repository and are split by
+ownership: `.kaji/wf/official/**` is provided/updated/regression-tested by kaji,
+`.kaji/wf/custom/**` is owned by the repository (copy official into custom instead
+of editing it in place). Canonical contract: docs/dev/workflow-authoring.md
+section "ファイル配置". This repository currently includes
+`.kaji/wf/official/dev.yaml` and `.kaji/wf/official/docs.yaml` as official
+GitHub-backed workflows, plus custom variants such as
+`.kaji/wf/custom/dev/dev-thorough.yaml`. Template distribution
 and first-time setup details are tracked in:
 https://github.com/apokamo/kaji/issues/242
 
@@ -130,12 +135,13 @@ kaji local init
 ```
 
 Local mode uses local-specific workflows such as
-`.kaji/wf/dev-local.yaml`.
+`.kaji/wf/official/local/dev-local.yaml`.
 
 ## Important Paths
 
 - `kaji_harness/`: supported runtime package behind the `kaji` CLI.
-- `.kaji/wf/`: repository-local operational workflow YAML layout.
+- `.kaji/wf/official/`: kaji-provided workflow YAMLs (updated and tested by kaji).
+- `.kaji/wf/custom/`: repository-owned workflow YAMLs (outside kaji's pytest scope).
 - `docs/`: canonical documentation.
 - `docs/cli-guides/`: CLI and runner guides.
 - `docs/dev/`: workflow and skill authoring docs.

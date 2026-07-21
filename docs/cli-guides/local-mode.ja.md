@@ -138,7 +138,7 @@ kaji issue context local-pc1-1 --json branch_prefix,branch_name,worktree_dir
 kaji issue prepend-note local-pc1-1 --worktree kaji-feat-local-pc1-1 --branch feat/local-pc1-1 --commit
 
 # workflow 起動（local 専用。docs-only Issue は docs-local.yaml）
-kaji run .kaji/wf/dev-local.yaml local-pc1-1
+kaji run .kaji/wf/official/local/dev-local.yaml local-pc1-1
 ```
 
 `kaji issue prepend-note <id> --worktree <basename> --branch <branch> [--commit]`

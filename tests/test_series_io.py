@@ -42,7 +42,7 @@ def _kaji_config(repo_root: Path) -> KajiConfig:
 
 
 def _write_workflow(repo: Path, name: str = "dev.yaml", provider: str = "github") -> Path:
-    path = repo / ".kaji" / "wf" / name
+    path = repo / ".kaji" / "wf" / "official" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "name: test\n"
@@ -59,7 +59,7 @@ def _write_workflow(repo: Path, name: str = "dev.yaml", provider: str = "github"
     return path
 
 
-def _series_yaml(workflow: str = ".kaji/wf/dev.yaml") -> str:
+def _series_yaml(workflow: str = ".kaji/wf/official/dev.yaml") -> str:
     return (
         "id: test-series\n"
         "strategy: sequential\n"
@@ -75,14 +75,14 @@ def test_load_series_validates_workflow_and_provider(tmp_path: Path) -> None:
     path.write_text(_series_yaml(), encoding="utf-8")
     loaded = load_series(path, _kaji_config(tmp_path))
     assert loaded.id == "test-series"
-    assert loaded.members[0].workflow == ".kaji/wf/dev.yaml"
+    assert loaded.members[0].workflow == ".kaji/wf/official/dev.yaml"
 
 
 @pytest.mark.parametrize(
     ("workflow", "provider", "match"),
     [
-        (".kaji/wf/missing.yaml", "github", "not found"),
-        (".kaji/wf/dev.yaml", "local", "requires provider"),
+        (".kaji/wf/official/missing.yaml", "github", "not found"),
+        (".kaji/wf/official/dev.yaml", "local", "requires provider"),
         ("../escape.yaml", "github", "inside repo root"),
     ],
 )
@@ -118,7 +118,7 @@ def test_load_series_rejects_l2_invalid_workflow(tmp_path: Path) -> None:
         load_series(path, _kaji_config(tmp_path))
 
     assert exc_info.value.errors == [
-        "members.0.workflow is invalid (.kaji/wf/dev.yaml): "
+        "members.0.workflow is invalid (.kaji/wf/official/dev.yaml): "
         "Step 'done' transitions to unknown step 'missing' on PASS"
     ]
 
@@ -156,9 +156,9 @@ def test_load_series_aggregates_all_invalid_members(tmp_path: Path) -> None:
         "id: test-series\n"
         "strategy: sequential\n"
         "members:\n"
-        "  - issue: 10\n    workflow: .kaji/wf/l2.yaml\n"
-        "  - issue: 11\n    workflow: .kaji/wf/l3.yaml\n"
-        "  - issue: 12\n    workflow: .kaji/wf/missing.yaml\n"
+        "  - issue: 10\n    workflow: .kaji/wf/official/l2.yaml\n"
+        "  - issue: 11\n    workflow: .kaji/wf/official/l3.yaml\n"
+        "  - issue: 12\n    workflow: .kaji/wf/official/missing.yaml\n"
         "on_failure: stop\n",
         encoding="utf-8",
     )
@@ -168,11 +168,11 @@ def test_load_series_aggregates_all_invalid_members(tmp_path: Path) -> None:
 
     errors = exc_info.value.errors
     assert len(errors) == 3
-    assert "members.0.workflow is invalid (.kaji/wf/l2.yaml)" in errors[0]
+    assert "members.0.workflow is invalid (.kaji/wf/official/l2.yaml)" in errors[0]
     assert "unknown step 'missing'" in errors[0]
-    assert "members.1.workflow is invalid (.kaji/wf/l3.yaml)" in errors[1]
+    assert "members.1.workflow is invalid (.kaji/wf/official/l3.yaml)" in errors[1]
     assert "missing-skill/SKILL.md not found" in errors[1]
-    assert errors[2] == "members.2.workflow not found: .kaji/wf/missing.yaml"
+    assert errors[2] == "members.2.workflow not found: .kaji/wf/official/missing.yaml"
 
 
 def test_state_round_trip_is_validated_and_atomic(tmp_path: Path) -> None:
@@ -180,7 +180,7 @@ def test_state_round_trip_is_validated_and_atomic(tmp_path: Path) -> None:
         {
             "id": "test-series",
             "strategy": "sequential",
-            "members": [{"issue": 10, "workflow": ".kaji/wf/dev.yaml"}],
+            "members": [{"issue": 10, "workflow": ".kaji/wf/official/dev.yaml"}],
             "on_failure": "stop",
         }
     )
@@ -238,7 +238,7 @@ def test_generator_is_deterministic_and_bridges_to_loader(tmp_path: Path) -> Non
             "id": "test-series",
             "parent_issue": 291,
             "strategy": "sequential",
-            "members": [{"issue": 10, "workflow": ".kaji/wf/dev.yaml"}],
+            "members": [{"issue": 10, "workflow": ".kaji/wf/official/dev.yaml"}],
             "on_failure": "stop",
         }
     )

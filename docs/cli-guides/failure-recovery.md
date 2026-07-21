@@ -78,15 +78,15 @@ run never executes.
 
 ```bash
 # 1. Normal operation: triage on, auto recovery off (defaults)
-kaji run .kaji/wf/dev.yaml 288
+kaji run .kaji/wf/official/dev.yaml 288
 # → on ERROR: triage comment on the Issue, recovery.json saved, summary on stderr. exit 3
 
 # 2. Opt in to auto recovery
-kaji run .kaji/wf/dev.yaml 288 --auto-recover
+kaji run .kaji/wf/official/dev.yaml 288 --auto-recover
 # → decision: resume starts a child run after 10 minutes. The parent's exit code is the child's
 
 # 3. The command the handler itself runs (you normally do not type this)
-kaji run .kaji/wf/dev.yaml 288 --from review-code \
+kaji run .kaji/wf/official/dev.yaml 288 --from review-code \
   --recovery-root 260710120000 --recovery-parent 260710120000
 ```
 
@@ -114,8 +114,8 @@ kaji recover <workflow.yaml> <issue> [--run-id <run_id>] [--auto-recover] [--wor
   issue is filed.
 
 ```bash
-kaji recover .kaji/wf/dev.yaml 288
-kaji recover .kaji/wf/dev.yaml 288 --run-id 260710120000
+kaji recover .kaji/wf/official/dev.yaml 288
+kaji recover .kaji/wf/official/dev.yaml 288 --run-id 260710120000
 ```
 
 ## Exit codes

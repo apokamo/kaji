@@ -26,8 +26,8 @@ def _config(**overrides: object) -> SeriesConfig:
         "id": "release-series",
         "strategy": "sequential",
         "members": [
-            {"issue": 10, "workflow": ".kaji/wf/dev.yaml"},
-            {"issue": 11, "workflow": ".kaji/wf/docs.yaml"},
+            {"issue": 10, "workflow": ".kaji/wf/official/dev.yaml"},
+            {"issue": 11, "workflow": ".kaji/wf/official/docs.yaml"},
         ],
         "on_failure": "stop",
     }
@@ -90,7 +90,7 @@ def test_fingerprint_is_canonical_and_order_sensitive() -> None:
     changed_workflow = config.model_copy(
         update={
             "members": [
-                SeriesMember(issue=10, workflow=".kaji/wf/dev-thorough.yaml"),
+                SeriesMember(issue=10, workflow=".kaji/wf/custom/dev/dev-thorough.yaml"),
                 config.members[1],
             ]
         }

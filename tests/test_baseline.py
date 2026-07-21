@@ -27,11 +27,11 @@ from kaji_harness.scripts import baseline_precheck
 from kaji_harness.workflow import load_workflow, validate_workflow
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEV_WORKFLOWS = (
+# official のみを対象とする（custom variant の routing は kaji の pytest で保証しない。
+# 所有権境界の意図的トレードオフ: Issue #352）。
+OFFICIAL_DEV_WORKFLOWS = (
     "dev.yaml",
-    "dev-thorough.yaml",
-    "dev-thorough-fable.yaml",
-    "dev-local.yaml",
+    "local/dev-local.yaml",
 )
 
 
@@ -229,8 +229,8 @@ class TestBaselineArtifact:
 
 @pytest.mark.medium
 def test_dev_workflows_route_design_approval_through_agentless_baseline() -> None:
-    for filename in DEV_WORKFLOWS:
-        workflow = load_workflow(REPO_ROOT / ".kaji" / "wf" / filename)
+    for relative_path in OFFICIAL_DEV_WORKFLOWS:
+        workflow = load_workflow(REPO_ROOT / ".kaji" / "wf" / "official" / relative_path)
         validate_workflow(workflow)
         baseline = workflow.find_step("baseline")
         assert baseline is not None

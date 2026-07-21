@@ -5,32 +5,45 @@
 
 ## 通常運用 workflow（5 本）
 
-通常運用で使う workflow は GitHub provider 3 本 + local provider 緊急 fallback 2 本の
-計 5 本に固定する。failure triage 第2層の `incident.yaml`（手動起動・調査専用。§ 第2層: 調査・提案）は
-通常運用の 5 本には含めない別系統の workflow。
+workflow YAML は所有権で 2 系統に分かれる。契約の正本は
+[workflow-authoring.md](workflow-authoring.md) § ファイル配置。
+
+### official（kaji 公式提供・更新・テスト対象）
 
 | ファイル | provider | 用途 |
 |----------|----------|------|
-| `.kaji/wf/dev.yaml` | github | 標準 dev workflow（設計 → 実装 → レビュー → PR → review-poll → close） |
-| `.kaji/wf/dev-thorough.yaml` | github | 丁寧版 dev workflow（同じ骨格でモデル / effort を厚めに） |
-| `.kaji/wf/docs.yaml` | github | docs-only workflow |
-| `.kaji/wf/dev-local.yaml` | local | GitHub 障害時・緊急時の fallback dev workflow |
-| `.kaji/wf/docs-local.yaml` | local | GitHub 障害時・緊急時の fallback docs-only workflow |
+| `.kaji/wf/official/dev.yaml` | github | 標準 dev workflow（設計 → 実装 → レビュー → PR → review-poll → close） |
+| `.kaji/wf/official/docs.yaml` | github | docs-only workflow |
+| `.kaji/wf/official/local/dev-local.yaml` | local | GitHub 障害時・緊急時の fallback dev workflow |
+| `.kaji/wf/official/local/docs-local.yaml` | local | GitHub 障害時・緊急時の fallback docs-only workflow |
+| `.kaji/wf/official/incident.yaml` | github | failure triage 第2層（手動起動・調査専用。§ 第2層: 調査・提案）。通常運用には含めない |
+
+### custom（このリポジトリ固有・利用者管理）
+
+kaji の pytest 回帰対象外。`make validate-workflows` の L1/L2/L3 静的検証のみが掛かる。
+
+| ファイル | provider | 用途 |
+|----------|----------|------|
+| `.kaji/wf/custom/dev/dev-thorough.yaml` | github | 丁寧版 dev workflow（dev.yaml と同じ骨格でモデル / effort を厚めに） |
+| `.kaji/wf/custom/dev/dev-thorough-fable.yaml` | github | dev-thorough の fable モデル variant |
+| `.kaji/wf/custom/docs/docs-codex.yaml` | github | docs workflow の codex variant |
+| `.kaji/wf/custom/docs/docs-fable.yaml` | github | docs workflow の fable variant |
+| `.kaji/wf/custom/docs/docs-thorough-codex.yaml` | github | 丁寧版 docs workflow の codex variant |
 
 - 各 YAML の `name:` はファイル名から `.yaml` を除いた値と一致する。
-- local 2 本は GitHub 前提 step（`i-pr` / `review-poll` / PR review）を持たず、最終 step は
-  `issue-close`（local merge `--no-ff` + frontmatter 更新）。通常時は GitHub 3 本を使い、
-  GitHub 障害時・緊急時の fallback として local 2 本を使う。
+- `official/local/` の 2 本は GitHub 前提 step（`i-pr` / `review-poll` / PR review）を持たず、
+  最終 step は `issue-close`（local merge `--no-ff` + frontmatter 更新）。通常時は GitHub provider
+  の workflow を使い、GitHub 障害時・緊急時の fallback として local 2 本を使う。
 
 ## ワークフロー選択表
 
 | 作業種類 | 通常時（GitHub 正常） | 緊急時（GitHub 障害・不通） |
 |----------|------------------------|------------------------------|
-| 機能追加・バグ修正・リファクタ | `dev.yaml` | `dev-local.yaml` |
-| 丁寧に進めたいコード変更 | `dev-thorough.yaml` | `dev-local.yaml`（thorough の local 版は持たない） |
-| スキルファイルの改善 | `dev.yaml` | `dev-local.yaml` |
-| ドキュメント修正のみ | `docs.yaml` | `docs-local.yaml` |
-| 既存 PR の review 収束のみ | `dev.yaml --from review-poll [--before close]` | （PR concept なし。local では非対象） |
+| 機能追加・バグ修正・リファクタ | `official/dev.yaml` | `official/local/dev-local.yaml` |
+| 丁寧に進めたいコード変更 | `custom/dev/dev-thorough.yaml`（このリポジトリ固有の custom variant） | `official/local/dev-local.yaml`（thorough の local 版は持たない） |
+| スキルファイルの改善 | `official/dev.yaml` | `official/local/dev-local.yaml` |
+| ドキュメント修正のみ | `official/docs.yaml` | `official/local/docs-local.yaml` |
+| 既存 PR の review 収束のみ | `official/dev.yaml --from review-poll [--before close]` | （PR concept なし。local では非対象） |
 
 判断に迷うケースは [workflow_overview.md](workflow_overview.md) の判断テーブルを参照。
 
@@ -44,9 +57,9 @@ id: maintenance-2026-07
 strategy: sequential
 members:
   - issue: 310
-    workflow: .kaji/wf/dev.yaml
+    workflow: .kaji/wf/official/dev.yaml
   - issue: 311
-    workflow: .kaji/wf/docs.yaml
+    workflow: .kaji/wf/official/docs.yaml
 on_failure: stop
 ```
 
@@ -78,35 +91,35 @@ provider API、Issue、artifact、state、lock、member workflow 実行への副
 各 builtin workflow が要求する provider type。`kaji run` 起動時に
 `config.provider.type` と突合し、不整合を exit 2 で fail-fast する。
 
-| Workflow | `requires_provider` | 末尾 step | 備考 |
-|----------|---------------------|-----------|------|
-| `dev.yaml` | `github` | `issue-close` | forge 必須。review-poll → close まで内包 |
-| `dev-thorough.yaml` | `github` | `issue-close` | forge 必須。丁寧版 |
-| `docs.yaml` | `github` | `issue-close` | forge 必須。docs-only |
-| `dev-local.yaml` | `local` | `issue-close` | local merge (`--no-ff`) 前提。GitHub 前提 step を持たない |
-| `docs-local.yaml` | `local` | `issue-close` | docs-only / local。GitHub 前提 step を持たない |
-| `incident.yaml` | `github` | `report` | 通常運用ではない failure triage 第2層（手動起動）。調査 → 査読 → 修正 → 確認 → 最終提案。終端は「提案」で close step を持たない（§ 第2層: 調査・提案） |
+| Workflow | 所有区分 | `requires_provider` | 末尾 step | 備考 |
+|----------|----------|---------------------|-----------|------|
+| `official/dev.yaml` | official | `github` | `issue-close` | forge 必須。review-poll → close まで内包 |
+| `official/docs.yaml` | official | `github` | `issue-close` | forge 必須。docs-only |
+| `official/local/dev-local.yaml` | official | `local` | `issue-close` | local merge (`--no-ff`) 前提。GitHub 前提 step を持たない |
+| `official/local/docs-local.yaml` | official | `local` | `issue-close` | docs-only / local。GitHub 前提 step を持たない |
+| `official/incident.yaml` | official | `github` | `report` | 通常運用ではない failure triage 第2層（手動起動）。調査 → 査読 → 修正 → 確認 → 最終提案。終端は「提案」で close step を持たない（§ 第2層: 調査・提案） |
+| `custom/dev/dev-thorough.yaml` | custom | `github` | `issue-close` | forge 必須。丁寧版。kaji の pytest 回帰対象外 |
 
 custom workflow への `requires_provider` 追加は推奨（[workflow-authoring.md](workflow-authoring.md)
 § `requires_provider` 参照）。
 
 ## PR レビュー後フェーズ（途中起動）
 
-dev / dev-thorough / docs の 3 本は review 軸（`review-poll` step +
+official の `dev` / `docs` と custom の `dev-thorough` 系は review 軸（`review-poll` step +
 `pr-review` cycle: `entry: review-poll` / `loop: [pr-fix, pr-verify]` /
 `max_iterations: 3` / `on_exhaust: ABORT`）を内包している。PR review の収束だけを
-回したい場合は専用 workflow を増やさず、`dev.yaml` を `--from review-poll` で途中起動する。
-review 以降の step 列は dev / dev-thorough / docs で同一のため、canonical には `dev.yaml`
-を使えばよい。
+回したい場合は専用 workflow を増やさず、`official/dev.yaml` を `--from review-poll` で
+途中起動する。review 以降の step 列はこれらで同一のため、canonical には
+`official/dev.yaml` を使えばよい。
 
 | 用途 | コマンド | close 実行 |
 |------|---------|-----------|
-| review → 修正 → 確認ループのみ（close 手前で停止） | `kaji run .kaji/wf/dev.yaml <id> --from review-poll --before close` | ❌（手動 `/issue-close`） |
-| review から close まで全自動 | `kaji run .kaji/wf/dev.yaml <id> --from review-poll` | ✅（自動） |
-| PR 作成で停止（review に入らない） | `kaji run .kaji/wf/dev.yaml <id> --before review-poll` | ❌ |
+| review → 修正 → 確認ループのみ（close 手前で停止） | `kaji run .kaji/wf/official/dev.yaml <id> --from review-poll --before close` | ❌（手動 `/issue-close`） |
+| review から close まで全自動 | `kaji run .kaji/wf/official/dev.yaml <id> --from review-poll` | ✅（自動） |
+| PR 作成で停止（review に入らない） | `kaji run .kaji/wf/official/dev.yaml <id> --before review-poll` | ❌ |
 | `/review-cycle <id>` | review → 修正 → 確認ループを 1 コマンドで回す slash command wrapper（内部で `dev.yaml --from review-poll --before close` を起動）。終了後に `/issue-close` 案内を出力 | ❌（手動） |
 
-> **review-poll の前提**: dev / dev-thorough / docs は `chatgpt-codex-connector[bot]` (id `199175422`) の auto-review が走っている GitHub 環境を前提に設計されている。`requires_provider: github` 固定で、local 環境では workflow load 時に exit 2 する。auto-review がクレジット不足等で走らない場合は、`review-poll` が `NO_REACTION_TIMEOUT_SEC` (60s) 経過で `BACK_FALLBACK` を返し、既存 `review` skill (codex agent による能動レビュー) に fallback する。詳細は [`.claude/skills/review-poll/SKILL.md`](../../.claude/skills/review-poll/SKILL.md) を参照。
+> **review-poll の前提**: `official/dev.yaml` / `official/docs.yaml` と custom の dev-thorough 系は `chatgpt-codex-connector[bot]` (id `199175422`) の auto-review が走っている GitHub 環境を前提に設計されている。`requires_provider: github` 固定で、local 環境では workflow load 時に exit 2 する。auto-review がクレジット不足等で走らない場合は、`review-poll` が `NO_REACTION_TIMEOUT_SEC` (60s) 経過で `BACK_FALLBACK` を返し、既存 `review` skill (codex agent による能動レビュー) に fallback する。詳細は [`.claude/skills/review-poll/SKILL.md`](../../.claude/skills/review-poll/SKILL.md) を参照。
 
 ## 途中開始・途中終了・単発実行（`--from` / `--before` / `--step` / `--reset-cycle`）
 
@@ -114,19 +127,19 @@ review 以降の step 列は dev / dev-thorough / docs で同一のため、cano
 
 ```bash
 # 通常運用（GitHub）
-kaji run .kaji/wf/dev.yaml 247              # 標準 dev
-kaji run .kaji/wf/dev-thorough.yaml 247     # 丁寧版
-kaji run .kaji/wf/docs.yaml 247             # docs-only
+kaji run .kaji/wf/official/dev.yaml 247              # 標準 dev
+kaji run .kaji/wf/custom/dev/dev-thorough.yaml 247     # 丁寧版
+kaji run .kaji/wf/official/docs.yaml 247             # docs-only
 
 # 緊急時 fallback（GitHub 障害・不通時）
-kaji run .kaji/wf/dev-local.yaml 247
-kaji run .kaji/wf/docs-local.yaml 247
+kaji run .kaji/wf/official/local/dev-local.yaml 247
+kaji run .kaji/wf/official/local/docs-local.yaml 247
 
 # 途中開始・途中終了・単発実行
-kaji run .kaji/wf/dev.yaml 247 --from review-poll               # PR review から close まで（旧 review-close 相当）
-kaji run .kaji/wf/dev.yaml 247 --from review-poll --before close # PR review ループのみ・close 手前で停止（旧 review-cycle 相当）
-kaji run .kaji/wf/dev.yaml 247 --step review-code               # 単発実行
-kaji run .kaji/wf/dev.yaml 247 --before review-poll             # PR 作成で停止
+kaji run .kaji/wf/official/dev.yaml 247 --from review-poll               # PR review から close まで（旧 review-close 相当）
+kaji run .kaji/wf/official/dev.yaml 247 --from review-poll --before close # PR review ループのみ・close 手前で停止（旧 review-cycle 相当）
+kaji run .kaji/wf/official/dev.yaml 247 --step review-code               # 単発実行
+kaji run .kaji/wf/official/dev.yaml 247 --before review-poll             # PR 作成で停止
 ```
 
 `--from` / `--step` / `--before` の意味論は
@@ -144,7 +157,7 @@ Issue 本文や設計書を修正した上で、`--from <cycle 内 step>` に `-
 
 ```bash
 # ready-review cycle が exhaust した後、Issue 本文を修正してから再開する
-kaji run .kaji/wf/dev.yaml 184 --from review-ready --reset-cycle
+kaji run .kaji/wf/official/dev.yaml 184 --from review-ready --reset-cycle
 ```
 
 `--reset-cycle` は `--from` を必須の相棒とする（単独指定はエラー）。`--from` の
@@ -215,8 +228,8 @@ triage コメント投稿の**直後**に、同じ失敗を「識別署名」で
 しない（EPIC #303「自動化への移行条件」が未解消のため）。
 
 - **起動**: `/incident-cycle <incident_issue_id>`（slash wrapper）または
-  `kaji run .kaji/wf/incident.yaml <incident_issue_id>`。`requires_provider: github`。
-- **workflow**: `.kaji/wf/incident.yaml`。step 構成は investigate（調査・提案役 opus）→
+  `kaji run .kaji/wf/official/incident.yaml <incident_issue_id>`。`requires_provider: github`。
+- **workflow**: `.kaji/wf/official/incident.yaml`。step 構成は investigate（調査・提案役 opus）→
   review（実行型査読役 subagent。提案役と別モデル sonnet）→ cycle `incident-review`
   （`loop: [fix, verify]` / `max_iterations: 3` / `on_exhaust: ABORT`）→ report（最終提案）。
 - **調査結論とレビュー verdict は別軸**（#303 決定 D）: 調査結論は
@@ -229,7 +242,7 @@ triage コメント投稿の**直後**に、同じ失敗を「識別署名」で
 - **全終端は「提案」**: ラベル遷移・クローズ・バグイシュー化・統合の**実行は人間**。conclusion →
   推奨ラベル・後続アクションの処遇メニューは [incident-labels.md](./incident-labels.md) § 調査フローと処遇判断（第2層）を参照。
 - **cycle exhaust からの復旧**: 査読 cycle が `max_iterations`（3）到達で ABORT した場合は、人間が
-  artifact を確認してから `kaji run .kaji/wf/incident.yaml <id> --from review --reset-cycle` で再開する。
+  artifact を確認してから `kaji run .kaji/wf/official/incident.yaml <id> --from review --reset-cycle` で再開する。
 - skill 群: `incident-investigate` / `incident-review` / `incident-fix` / `incident-verify` /
   `incident-report` / `incident-cycle`、実行型査読役 agent `kaji-incident-reviewer`。
 
@@ -239,8 +252,8 @@ triage コメント投稿の**直後**に、同じ失敗を「識別署名」で
 `decision: resume` の場合のみ **固定 10 分ウェイト後に child run を 1 回だけ**起動する。
 
 ```bash
-kaji run .kaji/wf/dev.yaml 288                 # triage のみ（default）
-kaji run .kaji/wf/dev.yaml 288 --auto-recover  # 復旧可能なら 10 分後に 1 回だけ自動再開
+kaji run .kaji/wf/official/dev.yaml 288                 # triage のみ（default）
+kaji run .kaji/wf/official/dev.yaml 288 --auto-recover  # 復旧可能なら 10 分後に 1 回だけ自動再開
 ```
 
 - **budget は recovery chain 単位で 1**。自動再開で作られた child run が再び失敗しても、
@@ -277,8 +290,8 @@ kaji run .kaji/wf/dev.yaml 288 --auto-recover  # 復旧可能なら 10 分後に
 ### 失敗 artifact からの手動 triage（`kaji recover`）
 
 ```bash
-kaji recover .kaji/wf/dev.yaml 288                      # 最新 run を対象に triage を再実行
-kaji recover .kaji/wf/dev.yaml 288 --run-id 260710120000
+kaji recover .kaji/wf/official/dev.yaml 288                      # 最新 run を対象に triage を再実行
+kaji recover .kaji/wf/official/dev.yaml 288 --run-id 260710120000
 ```
 
 対象 run に `workflow_end`（status `ERROR` / `ABORT`）が無い場合は、実行中 run への誤介入を
@@ -304,19 +317,20 @@ workflow YAML は runner backend を固定しない。
 #   agent_runner = "interactive_terminal"   # アンダースコア
 
 # CLI override（この実行だけ一時上書き）
-kaji run .kaji/wf/dev.yaml 247 --agent-runner interactive-terminal   # ハイフン
-kaji run .kaji/wf/dev.yaml 247 --agent-runner headless
+kaji run .kaji/wf/official/dev.yaml 247 --agent-runner interactive-terminal   # ハイフン
+kaji run .kaji/wf/official/dev.yaml 247 --agent-runner headless
 ```
 
 詳細は [Interactive Terminal Runner ガイド](../cli-guides/interactive-terminal-runner.md) を参照。
 
-## dev / dev-thorough
+## dev（official）/ dev-thorough（custom）
 
 コード変更を伴う Issue のワークフロー。設計 → 設計レビュー → deterministic baseline → 実装 → コードレビュー →
-最終チェック → PR → review-poll → close。`dev-thorough` は同じ骨格をモデル / effort を
-厚めにした丁寧版。
+最終チェック → PR → review-poll → close。`custom/dev/dev-thorough.yaml` は同じ骨格を
+モデル / effort を厚めにした、このリポジトリ固有の custom variant（kaji の pytest 回帰対象外）。
 
-`dev` / `dev-thorough` / `dev-thorough-fable` / `dev-local` は設計承認直後に共通の
+`official/dev.yaml` / `official/local/dev-local.yaml` と custom の dev-thorough 系は
+設計承認直後に共通の
 `baseline-precheck` script step を 1 回実行する。artifact と既知 failure ポリシーは
 [baseline-check.md](baseline-check.md) を参照する。
 

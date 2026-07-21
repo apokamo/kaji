@@ -1,11 +1,11 @@
 ---
-description: 第2層のインシデント調査レビュー収束サイクルを 1 コマンドで手動起動する slash command wrapper。kaji run .kaji/wf/incident.yaml <incident_issue_id> を Bash 経由で起動し、exit code を verdict に縮約する。
+description: 第2層のインシデント調査レビュー収束サイクルを 1 コマンドで手動起動する slash command wrapper。kaji run .kaji/wf/official/incident.yaml <incident_issue_id> を Bash 経由で起動し、exit code を verdict に縮約する。
 name: incident-cycle
 ---
 
 # Incident Cycle（slash wrapper）
 
-`kaji run .kaji/wf/incident.yaml <incident_issue_id>` を Bash 経由で起動する slash command wrapper
+`kaji run .kaji/wf/official/incident.yaml <incident_issue_id>` を Bash 経由で起動する slash command wrapper
 skill（`/review-cycle` 同型）。第2層（インシデント原因調査・対応策提案）の**手動起動の入口**。
 
 - 起動は手動のみ（#303 決定 C）。自動起動・自動昇格は実装しない。
@@ -63,7 +63,7 @@ fi
 STDERR_LOG=$(mktemp)
 trap 'rm -f "$STDERR_LOG"' EXIT
 
-kaji run .kaji/wf/incident.yaml "$ISSUE_ID" \
+kaji run .kaji/wf/official/incident.yaml "$ISSUE_ID" \
     2> >(tee "$STDERR_LOG" >&2)
 EXIT=$?
 
@@ -82,7 +82,7 @@ status: PASS
 reason: |
   incident workflow completed successfully (exit 0).
 evidence: |
-  kaji run .kaji/wf/incident.yaml $ISSUE_ID exited with code 0.
+  kaji run .kaji/wf/official/incident.yaml $ISSUE_ID exited with code 0.
 suggestion: |
   Review the final proposal comment on the incident issue and decide label transition / close / bug-issue drafting / consolidation (human judgement).
 ---END_VERDICT---
@@ -101,7 +101,7 @@ else
             ;;
         2)
             REASON="definition error / config error (exit 2)"
-            SUGG="Run 'kaji validate .kaji/wf/incident.yaml'; verify .kaji/config.toml [provider] type is github."
+            SUGG="Run 'kaji validate .kaji/wf/official/incident.yaml'; verify .kaji/config.toml [provider] type is github."
             ;;
         3)
             REASON="runtime error in kaji run (exit 3)"
@@ -118,7 +118,7 @@ status: ABORT
 reason: |
   $REASON
 evidence: |
-  kaji run .kaji/wf/incident.yaml $ISSUE_ID exited with code $EXIT.
+  kaji run .kaji/wf/official/incident.yaml $ISSUE_ID exited with code $EXIT.
   Workflow aborted marker in stderr: $HAS_ABORT_MARKER (1 = present, 0 = absent).
 suggestion: |
   $SUGG

@@ -2,7 +2,7 @@ id: issues-338-339
 strategy: sequential
 members:
 - issue: 338
-  workflow: .kaji/wf/dev-thorough-fable.yaml
+  workflow: .kaji/wf/custom/dev/dev-thorough-fable.yaml
 - issue: 339
-  workflow: .kaji/wf/dev-thorough-fable.yaml
+  workflow: .kaji/wf/custom/dev/dev-thorough-fable.yaml
 on_failure: stop

@@ -640,10 +640,10 @@ class TestCmdValidateMedium:
         assert "Step 'orphan' is not reachable from the first step 'root'" in captured.err
 
     @pytest.mark.medium
-    def test_repository_workflows_all_validate(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """Every repository-managed workflow remains compatible with validation."""
+    def test_official_workflows_all_validate(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Every official workflow remains compatible with validation."""
         project_root = Path(__file__).resolve().parents[1]
-        workflows = sorted((project_root / ".kaji" / "wf").glob("*.yaml"))
+        workflows = sorted((project_root / ".kaji" / "wf" / "official").rglob("*.yaml"))
 
         exit_code = _cmd_validate_with_args(
             *(str(workflow) for workflow in workflows),

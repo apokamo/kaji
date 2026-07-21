@@ -76,7 +76,7 @@ steps:
 
         from kaji_harness.workflow import load_workflow
 
-        path = Path(__file__).resolve().parents[1] / ".kaji" / "wf" / "dev.yaml"
+        path = Path(__file__).resolve().parents[1] / ".kaji" / "wf" / "official" / "dev.yaml"
         wf = load_workflow(path)
         poll = next(s for s in wf.steps if s.id == "review-poll")
         assert poll.agent is None

@@ -2,7 +2,7 @@
 
 Language: English | [日本語](local-mode-runbook.ja.md)
 
-Normal operation uses the GitHub provider (`.kaji/wf/dev.yaml`,
+Normal operation uses the GitHub provider (`.kaji/wf/official/dev.yaml`,
 `dev-thorough.yaml`, and `docs.yaml`). This practical runbook explains how to
 switch to kaji local mode as an emergency fallback when GitHub is down or
 unreachable, covering multi-PC operation, code synchronization strategy, and the
@@ -11,7 +11,7 @@ criteria for returning to the forge.
 ## 1. Role of this document
 
 - **Normal operation**: GitHub provider is the SoT. Issues, PRs, and reviews run
-  on GitHub (`.kaji/wf/dev.yaml`, `dev-thorough.yaml`, and `docs.yaml`).
+  on GitHub (`.kaji/wf/official/dev.yaml`, `dev-thorough.yaml`, and `docs.yaml`).
 - **Scope of this runbook**: emergency fallback steps for temporarily moving to
   local mode when GitHub outages, connectivity failures, rate limits, or similar
   problems prevent GitHub operation.
@@ -90,9 +90,9 @@ Invocation example:
 /issue-start    # Create worktree (Skill)
 
 # Automatic continuous run (kaji run requires a file path; it does not search by basename)
-kaji run .kaji/wf/dev-local.yaml local-pc1-1
+kaji run .kaji/wf/official/local/dev-local.yaml local-pc1-1
 # or
-kaji run .kaji/wf/docs-local.yaml   local-pc1-2
+kaji run .kaji/wf/official/local/docs-local.yaml   local-pc1-2
 ```
 
 ### 3.1a Manual operation for docs-only issues (without `kaji run`)

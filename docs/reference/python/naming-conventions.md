@@ -152,8 +152,14 @@ tests/
 
 ```
 .kaji/wf/
-├── dev.yaml
-└── docs.yaml
+├── official/            # kaji 公式提供・更新・テスト対象
+│   ├── dev.yaml
+│   ├── docs.yaml
+│   └── local/           # local provider 用
+│       └── dev-local.yaml
+└── custom/              # リポジトリ固有・利用者管理
+    └── dev/
+        └── dev-thorough.yaml
 
 .claude/skills/
 ├── issue-start/

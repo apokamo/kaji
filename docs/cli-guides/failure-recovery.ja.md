@@ -59,15 +59,15 @@ precedence は `--agent-runner` と同じ（CLI flag > `.kaji/config.local.toml`
 
 ```bash
 # 1. 通常運用（triage 有効・自動再開 無効が default）
-kaji run .kaji/wf/dev.yaml 288
+kaji run .kaji/wf/official/dev.yaml 288
 # → ERROR 終了時: Issue に triage コメント、recovery.json 保存、stderr にサマリ。exit 3
 
 # 2. 自動再開を opt-in
-kaji run .kaji/wf/dev.yaml 288 --auto-recover
+kaji run .kaji/wf/official/dev.yaml 288 --auto-recover
 # → decision: resume なら 10 分後に child run を起動。親の exit code は child のもの
 
 # 3. handler が内部で起動する child run（運用者は通常直接叩かない）
-kaji run .kaji/wf/dev.yaml 288 --from review-code \
+kaji run .kaji/wf/official/dev.yaml 288 --from review-code \
   --recovery-root 260710120000 --recovery-parent 260710120000
 ```
 
@@ -91,8 +91,8 @@ kaji recover <workflow.yaml> <issue> [--run-id <run_id>] [--auto-recover] [--wor
   では、`failure_event` の不在を harness の矛盾と見なさない。bug issue は起票されない。
 
 ```bash
-kaji recover .kaji/wf/dev.yaml 288
-kaji recover .kaji/wf/dev.yaml 288 --run-id 260710120000
+kaji recover .kaji/wf/official/dev.yaml 288
+kaji recover .kaji/wf/official/dev.yaml 288 --run-id 260710120000
 ```
 
 ## exit code

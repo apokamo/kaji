@@ -169,12 +169,12 @@ def test_decision_round_trip_preserves_schema_version_and_fields() -> None:
         failed_step="review-code",
         resume_from="review-code",
         resume_mode="from",
-        resume_command="kaji run .kaji/wf/dev.yaml 288 --from review-code",
+        resume_command="kaji run .kaji/wf/official/dev.yaml 288 --from review-code",
         reason="VerdictNotFound after successful dispatch",
         evidence=["run.log workflow_end status=ERROR"],
         recovery_root_run_id="260710120000",
         resume_scheduled_at="2026-07-10T12:10:00+00:00",
-        workflow_path=".kaji/wf/dev.yaml",
+        workflow_path=".kaji/wf/official/dev.yaml",
     )
     data = decision.to_dict()
     assert data["schema_version"] == RECOVERY_SCHEMA_VERSION

@@ -737,10 +737,10 @@ class TestDuplicateStepIdValidation:
         assert "Step 'alpha' transitions to unknown step 'missing' on PASS" in exc_info.value.errors
 
     @pytest.mark.medium
-    def test_repository_workflows_have_unique_step_ids(self) -> None:
-        """Every repository-managed workflow validates via load_workflow() + validate_workflow()."""
+    def test_official_workflows_have_unique_step_ids(self) -> None:
+        """Every official workflow validates via load_workflow() + validate_workflow()."""
         project_root = Path(__file__).resolve().parents[1]
-        workflows = sorted((project_root / ".kaji" / "wf").glob("*.yaml"))
+        workflows = sorted((project_root / ".kaji" / "wf" / "official").rglob("*.yaml"))
 
         assert workflows
         for workflow_path in workflows:

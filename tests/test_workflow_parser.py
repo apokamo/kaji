@@ -273,9 +273,9 @@ class TestWorkflowHelpers:
 
 
 class TestFileBasedLoading:
-    """Tests for load_workflow (file path-based)."""
+    """Medium: tests for load_workflow (file path-based, real file I/O)."""
 
-    @pytest.mark.small
+    @pytest.mark.medium
     def test_load_workflow_from_file(self, tmp_path: Path) -> None:
         """load_workflow reads and parses a YAML file from disk."""
         wf_file = tmp_path / "workflow.yaml"

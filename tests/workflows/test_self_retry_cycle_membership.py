@@ -9,9 +9,10 @@ runner は cycle 経由でのみ RETRY 上限を enforce する
 
 #247 で新設した local 系 workflow (dev-local / docs-local) は dev.yaml が持つ
 ``implementation`` / ``final-check`` の 1-step cycle を移植し漏れており、この
-不変条件に違反していた。本テストは canonical workflow セット
-(``.kaji/wf/*.yaml``) 全体に対し「self-RETRY step は cycle.loop 末尾に所属する」
-ことを機械的に検証し、同種の移植漏れを再発防止する。
+不変条件に違反していた。本テストは official workflow セット
+(``.kaji/wf/official/**/*.yaml``) 全体に対し「self-RETRY step は cycle.loop 末尾に
+所属する」ことを機械的に検証し、同種の移植漏れを再発防止する。custom workflow は
+利用者所有のため対象外とする。
 """
 
 from __future__ import annotations
@@ -24,18 +25,21 @@ from kaji_harness.workflow import load_workflow
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
-WORKFLOW_PATHS = sorted((REPO_ROOT / ".kaji" / "wf").glob("*.yaml"))
+OFFICIAL_DIR = REPO_ROOT / ".kaji" / "wf" / "official"
+
+WORKFLOW_PATHS = sorted(OFFICIAL_DIR.rglob("*.yaml"))
 WORKFLOW_IDS = [str(p.relative_to(REPO_ROOT)) for p in WORKFLOW_PATHS]
 
 
-@pytest.mark.small
+@pytest.mark.medium
 class TestSelfRetryCycleMembership:
-    """Small: self-RETRY step の cycle 所属不変条件（YAML パース + assertion のみ）。"""
+    """Medium: self-RETRY step の cycle 所属不変条件（repo 上の official YAML を読む）。"""
 
     def test_workflow_set_not_empty(self) -> None:
         """検証対象が空でないこと（glob 誤りで silently skip するのを防ぐ）。"""
         assert WORKFLOW_PATHS, (
-            "`.kaji/wf/` に workflow が 1 つも見つからない。WORKFLOW_PATHS の glob を確認すること。"
+            "`.kaji/wf/official/` に workflow が 1 つも見つからない。"
+            "WORKFLOW_PATHS の glob を確認すること。"
         )
 
     @pytest.mark.parametrize("path", WORKFLOW_PATHS, ids=WORKFLOW_IDS)

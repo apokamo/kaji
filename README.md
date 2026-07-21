@@ -183,7 +183,7 @@ uv tool install git+https://github.com/apokamo/kaji.git
 ### Configure your repository
 
 In the repository where you want to run kaji, add `.kaji/config.toml`.
-The default workflow below, `.kaji/wf/dev.yaml`, is GitHub-backed because it
+The default workflow below, `.kaji/wf/official/dev.yaml`, is GitHub-backed because it
 opens PRs, polls review state, and closes issues.
 
 ```toml
@@ -224,7 +224,7 @@ kaji local init
 
 `kaji local init` creates `.kaji/config.local.toml` for the current machine; it
 does not replace the tracked base config. Local mode uses local-specific
-workflows such as `.kaji/wf/dev-local.yaml`. See
+workflows such as `.kaji/wf/official/local/dev-local.yaml`. See
 [Local Mode CLI Guide](docs/cli-guides/local-mode.md)
 ([Japanese](docs/cli-guides/local-mode.ja.md)) for the local provider setup.
 
@@ -233,9 +233,14 @@ point to the same canonical skill files with symlinks.
 
 ### Run a workflow
 
-Workflow files are run from `.kaji/wf/` in each repository. This repository
-ships `.kaji/wf/dev.yaml`, `.kaji/wf/dev-thorough.yaml`, and `.kaji/wf/docs.yaml`
-as the current GitHub-backed workflow set. To start a new Python project with
+Workflow files are run from `.kaji/wf/` in each repository, split by ownership:
+`.kaji/wf/official/**` is provided, updated, and regression-tested by kaji, while
+`.kaji/wf/custom/**` is owned by the repository — do not edit `official/**` in place,
+copy it into `custom/**` instead (see
+[workflow-authoring.md](docs/dev/workflow-authoring.md#ファイル配置)). This repository
+ships `.kaji/wf/official/dev.yaml` and `.kaji/wf/official/docs.yaml` as the official
+GitHub-backed workflow set, plus repository-specific variants such as
+`.kaji/wf/custom/dev/dev-thorough.yaml`. To start a new Python project with
 these workflows preconfigured, create it from the
 [kaji-starter-python](https://github.com/apokamo/kaji-starter-python) template
 repository and follow the
@@ -248,19 +253,19 @@ already been completed. The workflow runs `issue-start` itself.
 Run a workflow:
 
 ```bash
-kaji run .kaji/wf/dev.yaml <issue-id>
+kaji run .kaji/wf/official/dev.yaml <issue-id>
 ```
 
 Resume from a specific step:
 
 ```bash
-kaji run .kaji/wf/dev.yaml <issue-id> --from fix-code
+kaji run .kaji/wf/official/dev.yaml <issue-id> --from fix-code
 ```
 
 Run only one step:
 
 ```bash
-kaji run .kaji/wf/dev.yaml <issue-id> --step review-code
+kaji run .kaji/wf/official/dev.yaml <issue-id> --step review-code
 ```
 
 Run an explicitly ordered series of GitHub Issues:
@@ -306,7 +311,7 @@ Then run from inside a tmux session:
 
 ```bash
 tmux new-session
-kaji run .kaji/wf/dev.yaml <issue-id> --agent-runner interactive-terminal
+kaji run .kaji/wf/official/dev.yaml <issue-id> --agent-runner interactive-terminal
 ```
 
 The runner opens managed panes, records terminal transcripts, waits for

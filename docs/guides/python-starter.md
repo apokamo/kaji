@@ -13,6 +13,10 @@ The starter ships:
 - kaji preinstalled as a dev dependency (run it with `uv run kaji`)
 - Five workflow YAMLs under `.kaji/wf/` (3 for the GitHub provider, 2 for the
   local provider), all in a claude single-agent configuration by default
+  - The starter still uses the flat `.kaji/wf/` layout. The kaji repository
+    itself moved to the `official/` / `custom/` split (#352); the starter
+    follows in a post-release starter-sync
+    ([runbook](../operations/release/starter-sync-runbook.md)).
 - 23 generalized skills under `.claude/skills/` (non-Claude agents reference
   the same files via `.agents/skills/` symlinks)
 
@@ -203,7 +207,7 @@ If you have multiple agent CLI subscriptions, you can assign different CLIs
 per step by editing the YAMLs directly — the main motivation is review
 diversity: having a different model review what another implemented. The kaji
 repository itself runs this way (claude implements, codex reviews in its
-[dev.yaml](../../.kaji/wf/dev.yaml)). Edit the `agent:` / `model:` /
+[dev.yaml](../../.kaji/wf/official/dev.yaml)). Edit the `agent:` / `model:` /
 `effort:` fields of the review steps (`review-code`, `verify-code`, `review`,
 `pr-verify`, …), then re-validate. The workflow YAML syntax is documented in
 [workflow-authoring.md](../dev/workflow-authoring.md).
@@ -280,7 +284,7 @@ converts its outcome into a workflow verdict.
    Keep the existing `review` step: `BACK_FALLBACK` falls back to it when the
    bot does not respond, so the workflow still converges without the bot.
    The kaji repository's own
-   [dev.yaml](../../.kaji/wf/dev.yaml) uses this exact construction as a
+   [dev.yaml](../../.kaji/wf/official/dev.yaml) uses this exact construction as a
    reference.
 3. Validate: `uv run kaji validate .kaji/wf/dev.yaml`
 

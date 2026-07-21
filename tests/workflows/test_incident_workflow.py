@@ -1,4 +1,4 @@
-"""Structure and asset invariants for ``.kaji/wf/incident.yaml`` (第2層 / Issue #305).
+"""Structure and asset invariants for ``.kaji/wf/official/incident.yaml`` (第2層 / Issue #305).
 
 ``incident.yaml`` is a declarative definition driven by the existing workflow engine,
 so it is guarded as a runtime-behaviour surface (not metadata-only). These invariants
@@ -19,7 +19,7 @@ import yaml
 from kaji_harness.workflow import load_workflow, validate_workflow
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-WF_PATH = REPO_ROOT / ".kaji" / "wf" / "incident.yaml"
+WF_PATH = REPO_ROOT / ".kaji" / "wf" / "official" / "incident.yaml"
 SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
 AGENT_PATH = REPO_ROOT / ".claude" / "agents" / "kaji-incident-reviewer.md"
 TEMPLATE_PATH = SKILLS_DIR / "incident-investigate" / "artifact-template.md"
@@ -58,7 +58,7 @@ def _load_frontmatter_model(md_path: Path) -> str:
     return model
 
 
-@pytest.mark.small
+@pytest.mark.medium
 class TestIncidentWorkflowStructure:
     def test_loads_and_validates(self) -> None:
         wf = load_workflow(WF_PATH)
@@ -85,7 +85,7 @@ class TestIncidentWorkflowStructure:
         assert cycle.on_exhaust == "ABORT"
 
 
-@pytest.mark.small
+@pytest.mark.medium
 class TestIncidentWorkflowTransitions:
     def test_loop_tail_retry_targets_loop_head(self) -> None:
         wf = load_workflow(WF_PATH)
@@ -117,7 +117,7 @@ class TestIncidentWorkflowTransitions:
         assert fix.agent == investigate.agent
 
 
-@pytest.mark.small
+@pytest.mark.medium
 class TestIncidentModelSeparation:
     def test_investigate_and_reviewer_models_differ(self) -> None:
         """提案役（investigate）と査読役（agent frontmatter）のデフォルトモデルが異なること。"""
@@ -129,7 +129,7 @@ class TestIncidentModelSeparation:
         assert investigate.model != reviewer_model
 
 
-@pytest.mark.small
+@pytest.mark.medium
 class TestIncidentAssetsExist:
     @pytest.mark.parametrize(
         "skill_name",
@@ -164,7 +164,7 @@ class TestIncidentAssetsExist:
             assert value in text, f"template missing conclusion value: {value}"
 
 
-@pytest.mark.small
+@pytest.mark.medium
 class TestIncidentCycleSlashWrapper:
     """slash wrapper は workflow から参照されないため明示的に検証する。"""
 
@@ -173,7 +173,7 @@ class TestIncidentCycleSlashWrapper:
 
     def test_launches_incident_workflow(self) -> None:
         text = CYCLE_SKILL_PATH.read_text(encoding="utf-8")
-        assert ".kaji/wf/incident.yaml" in text
+        assert ".kaji/wf/official/incident.yaml" in text
 
     def test_missing_argument_abort_path(self) -> None:
         text = CYCLE_SKILL_PATH.read_text(encoding="utf-8")
@@ -188,7 +188,7 @@ class TestIncidentCycleSlashWrapper:
         assert re.search(r"exit\s*(code)?\s*0", text, re.IGNORECASE)
 
 
-@pytest.mark.small
+@pytest.mark.medium
 class TestIncidentForbiddenVocabulary:
     """`risk-accepted` は人間専用語彙。出力語彙として現れないこと（#303 決定 D）。"""
 

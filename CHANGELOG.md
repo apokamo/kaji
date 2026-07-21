@@ -6,6 +6,50 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### BREAKING CHANGE
+
+- **Broken contract**: workflow YAML no longer lives directly under `.kaji/wf/`.
+  Every path that names a workflow file — `kaji run` / `kaji validate` /
+  `kaji recover` arguments, `.kaji/series/*.yaml` `workflow:` entries, scripts,
+  and CI steps — now fails with "File not found" (#352). Workflow YAML is split
+  by ownership: `.kaji/wf/official/**` is provided, updated, and
+  regression-tested by kaji; `.kaji/wf/custom/**` is owned by the repository.
+  No alias, symlink, or fallback for the old paths is provided
+  (`docs/adr/008-no-backward-compat-layer.md`).
+  - **How to check whether you are affected**: run
+    `rg -n '\.kaji/wf/[a-z0-9-]+\.yaml' .` in your repository. Zero hits means
+    you are not affected.
+  - **How to migrate**: move each workflow to its new location and update every
+    hit.
+
+    | Old | New | Ownership |
+    |---|---|---|
+    | `.kaji/wf/dev.yaml` | `.kaji/wf/official/dev.yaml` | official |
+    | `.kaji/wf/docs.yaml` | `.kaji/wf/official/docs.yaml` | official |
+    | `.kaji/wf/incident.yaml` | `.kaji/wf/official/incident.yaml` | official |
+    | `.kaji/wf/dev-local.yaml` | `.kaji/wf/official/local/dev-local.yaml` | official |
+    | `.kaji/wf/docs-local.yaml` | `.kaji/wf/official/local/docs-local.yaml` | official |
+    | agent / model / effort variants | `.kaji/wf/custom/<category>/<name>.yaml` | custom |
+
+    If you never customized a shipped workflow, re-copying the new layout is
+    enough. Do not edit `official/**` in place — copy it into `custom/**`,
+    change `name:` to match the new filename stem, then run `kaji validate`.
+    The canonical contract is `docs/dev/workflow-authoring.md` § ファイル配置.
+  - **What kaji stops guaranteeing for `custom/**`**: kaji's pytest inventory,
+    contract, and structural/routing invariants now target `.kaji/wf/official/**`
+    only. Tracked custom YAML is still statically validated (L1 parse/schema,
+    L2 workflow reference integrity, L3 skill metadata) by
+    `make validate-workflows`, but the following *behavioral* regressions are no
+    longer detected by kaji's test suite for workflows you move to `custom/**`:
+    the `review-poll` exec argv (`["kaji", "pr", "review-poll"]`), the baseline
+    step's agentless configuration and `{"PASS": "implement", "ABORT": "end"}`
+    routing, the `description` series auto-selection contract, `review-code`
+    routing, self-RETRY cycle membership, and workflow set inventory. This is a
+    deliberate trade-off that prioritizes the ownership boundary.
+  - **Managed starter**: the starter repository is not changed by this release.
+    It follows via the post-release starter-sync process
+    (`docs/operations/release/starter-sync-runbook.md`).
+
 ## [0.16.1] - 2026-07-20
 
 ### Fixed
