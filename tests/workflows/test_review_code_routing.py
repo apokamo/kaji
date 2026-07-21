@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from kaji_harness.models import Step, Workflow
 from kaji_harness.workflow import load_workflow
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -23,50 +24,56 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 WORKFLOW_PATHS = sorted(
     (REPO_ROOT / ".kaji" / "wf" / "official").rglob("*.yaml"),
 )
+WORKFLOW_IDS = [str(p.relative_to(REPO_ROOT)) for p in WORKFLOW_PATHS]
 
 
-def _review_code_workflows() -> list[Path]:
-    """review-code skill を採用する workflow ファイルのみを返す。"""
-    paths: list[Path] = []
-    for path in WORKFLOW_PATHS:
-        wf = load_workflow(path)
-        if any(step.skill == "issue-review-code" for step in wf.steps):
-            paths.append(path)
-    return paths
+def _load_review_code(path: Path) -> tuple[Workflow, Step]:
+    """workflow と review-code step を返す。採用していない workflow なら skip する。
+
+    ``load_workflow()`` は module import 時ではなくテスト本体で呼ぶ。import 時に
+    読むと、medium marker で除外されるはずの ``pytest -m small`` 実行でも
+    collection 時に YAML を読んでしまい、YAML 側の不備で small suite が落ちる。
+    """
+    wf = load_workflow(path)
+    step = next((s for s in wf.steps if s.skill == "issue-review-code"), None)
+    if step is None:
+        pytest.skip(f"{path.name}: review-code step 無し（対象外）")
+    return wf, step
 
 
-REVIEW_CODE_WORKFLOW_PATHS = _review_code_workflows()
-REVIEW_CODE_WORKFLOW_IDS = [str(p.relative_to(REPO_ROOT)) for p in REVIEW_CODE_WORKFLOW_PATHS]
-
-
+@pytest.mark.medium
 class TestReviewCodeRouting:
     """Medium: review-code routing 不変条件（repo 上の official YAML を読む）。"""
 
-    @pytest.mark.medium
     def test_at_least_one_review_code_workflow_exists(self) -> None:
         """検証対象が空でないこと（glob 誤りで silently skip するのを防ぐ）。"""
-        assert REVIEW_CODE_WORKFLOW_PATHS, (
+        assert WORKFLOW_PATHS, (
+            "`.kaji/wf/official/` に workflow が 1 つも見つからない。"
+            "WORKFLOW_PATHS の glob を確認すること。"
+        )
+        adopters = [
+            path
+            for path in WORKFLOW_PATHS
+            if any(s.skill == "issue-review-code" for s in load_workflow(path).steps)
+        ]
+        assert adopters, (
             "review-code を採用する workflow が 1 つも見つからない。"
             "WORKFLOW_PATHS の glob を確認すること。"
         )
 
-    @pytest.mark.medium
-    @pytest.mark.parametrize("path", REVIEW_CODE_WORKFLOW_PATHS, ids=REVIEW_CODE_WORKFLOW_IDS)
+    @pytest.mark.parametrize("path", WORKFLOW_PATHS, ids=WORKFLOW_IDS)
     def test_review_code_has_back_implement(self, path: Path) -> None:
         """review-code.on は BACK_IMPLEMENT key を持つ（Step 1.4 差し戻し経路）。"""
-        wf = load_workflow(path)
-        review_code = next(s for s in wf.steps if s.skill == "issue-review-code")
+        _, review_code = _load_review_code(path)
         assert "BACK_IMPLEMENT" in review_code.on, (
             f"{path.name}: review-code.on に BACK_IMPLEMENT が無い。"
             "Step 1.4 hard gate の差し戻し先が定義されていない。"
         )
 
-    @pytest.mark.medium
-    @pytest.mark.parametrize("path", REVIEW_CODE_WORKFLOW_PATHS, ids=REVIEW_CODE_WORKFLOW_IDS)
+    @pytest.mark.parametrize("path", WORKFLOW_PATHS, ids=WORKFLOW_IDS)
     def test_back_implement_routes_to_implement_step(self, path: Path) -> None:
         """BACK_IMPLEMENT の routing 先が issue-implement step を指す。"""
-        wf = load_workflow(path)
-        review_code = next(s for s in wf.steps if s.skill == "issue-review-code")
+        wf, review_code = _load_review_code(path)
         target_id = review_code.on["BACK_IMPLEMENT"]
         target = wf.find_step(target_id)
         assert target is not None, (
@@ -77,12 +84,10 @@ class TestReviewCodeRouting:
             f"'{target_id}' は skill={target.skill!r} を指している。"
         )
 
-    @pytest.mark.medium
-    @pytest.mark.parametrize("path", REVIEW_CODE_WORKFLOW_PATHS, ids=REVIEW_CODE_WORKFLOW_IDS)
+    @pytest.mark.parametrize("path", WORKFLOW_PATHS, ids=WORKFLOW_IDS)
     def test_bare_back_routes_to_design_step(self, path: Path) -> None:
         """bare BACK key がある場合、その先は issue-design step を指す。"""
-        wf = load_workflow(path)
-        review_code = next(s for s in wf.steps if s.skill == "issue-review-code")
+        wf, review_code = _load_review_code(path)
         if "BACK" not in review_code.on:
             pytest.skip(f"{path.name}: review-code に bare BACK key 無し（design 用途未使用）")
         target_id = review_code.on["BACK"]
