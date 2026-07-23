@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-07-24
+
+This release separates kaji-provided workflow YAML from repository-owned
+custom workflows and records the single-layer workflow overlay design for
+future implementation.
+
 ### BREAKING CHANGE
 
 - **Broken contract**: workflow YAML no longer lives directly under `.kaji/wf/`.
@@ -49,6 +55,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **Managed starter**: the starter repository is not changed by this release.
     It follows via the post-release starter-sync process
     (`docs/operations/release/starter-sync-runbook.md`).
+
+### Docs
+
+- Record the decision to use a single-layer workflow overlay, including merge
+  semantics, validation constraints, provenance requirements, and the planned
+  implementation boundary (#331, ADR 011).
+- Replace the GitHub Release badge with PyPI version and download badges.
+
+### Internal
+
+- Scope workflow inventory and behavioral invariant tests to
+  `.kaji/wf/official/**`, while retaining static validation for tracked custom
+  workflows, and classify repository workflow file-I/O tests as Medium (#352).
 
 ## [0.16.1] - 2026-07-20
 
