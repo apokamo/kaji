@@ -2,7 +2,8 @@
 
 言語: [English](README.md) | 日本語
 
-[![Release](https://img.shields.io/github/v/release/apokamo/kaji?include_prereleases)](https://github.com/apokamo/kaji/releases)
+[![PyPI](https://img.shields.io/pypi/v/kaji)](https://pypi.org/project/kaji/)
+[![Downloads](https://img.shields.io/pypi/dm/kaji)](https://pypi.org/project/kaji/)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](pyproject.toml)
 [![License](https://img.shields.io/badge/License-Apache--2.0-blue)](LICENSE)
 
