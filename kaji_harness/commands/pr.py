@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import json
+import re
 import shutil
 import subprocess
 import sys
+from datetime import datetime
+from typing import Any
 
 from ..errors import ConfigLoadError, ConfigNotFoundError
 from ..providers import get_provider
-from ..providers.github import build_kaji_review_marker
+from ..providers.github import build_kaji_review_marker, parse_kaji_review_marker
 from ..providers.local import LocalProvider
 from .config import _load_config_for_dispatch
 from .exit_codes import EXIT_INVALID_INPUT, EXIT_OK, EXIT_RUNTIME_ERROR
@@ -376,6 +380,29 @@ def _gh_capture_value(args: list[str]) -> str | None:
     return result.stdout.strip()
 
 
+def _gh_capture_json(args: list[str]) -> Any | None:
+    """``gh <args>`` を叩き、stdout を JSON として parse して返す（fail-closed）。
+
+    ``_gh_capture_value`` に委譲し、rc≠0 は ``None``。stdout が JSON として
+    parse 不能な場合も stderr に診断を出して ``None`` を返す。silent
+    fallthrough を作らず、呼出側で DENY へ縮約する。
+
+    Args:
+        args: ``gh`` へ渡す引数列（先頭に ``gh`` は含めない）。
+
+    Returns:
+        parse 済み JSON 値。取得失敗 / parse 失敗時は ``None``。
+    """
+    raw = _gh_capture_value(args)
+    if raw is None:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        sys.stderr.write("Error: failed to parse JSON from gh output.\n")
+        return None
+
+
 def _gh_post_issue_comment_silent(*, repo: str, pr_id: str, body: str) -> int:
     """``gh api --method POST repos/<repo>/issues/<pr>/comments -f body=<body>``.
 
@@ -508,6 +535,258 @@ def _github_pr_review(rest: list[str], *, repo_override: str | None) -> int:
     return _forward_to_gh("pr", gh_args, repo=repo)
 
 
+# admin-merge-check が elevated merge を許す唯一の mergeStateStatus。CLEAN は
+# 通常 merge 可能で admin 不要、DIRTY / BEHIND / DRAFT / HAS_HOOKS / UNKNOWN は
+# conflict / 未知要因なので、いずれも DENY する（fail-closed。設計 § MF3）。
+_ELIGIBLE_MERGE_STATE = "BLOCKED"
+
+# statusCheckRollup を通過してよい check 状態（成功・中立のみ）。他 check の
+# 失敗 / 保留を admin bypass しないため、これ以外を 1 つでも含めば DENY する。
+_OK_CHECK_STATES = {"SUCCESS", "NEUTRAL", "SKIPPED"}
+
+# git object SHA の 40 桁 hex。曖昧な headRefOid を elevated merge に渡さない。
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+# freshness 判定で「レビュー判定」とみなす marker state。COMMENTED は承認判断
+# ではないため除外する。
+_REVIEW_DECISION_STATES = {"APPROVED", "CHANGES_REQUESTED"}
+
+
+def _admin_merge_deny(reason: str) -> int:
+    """admin-merge-check の DENY 出力を統一する（stdout 空・stderr に理由・非 0）。"""
+    sys.stderr.write(f"DENY: {reason}\n")
+    return EXIT_RUNTIME_ERROR
+
+
+def _parse_iso8601(value: Any) -> datetime | None:
+    """ISO 8601 UTC 文字列を aware ``datetime`` に変換する。不正なら ``None``。"""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _flatten_slurped_comments(payload: Any) -> list[dict[str, Any]] | None:
+    """``gh api --paginate --slurp`` の array-of-pages を comment list に平坦化する。
+
+    ``--slurp`` は各ページを 1 つの外側配列に包む（``[[...], [...]]``）。ページを
+    平坦化し、非 slurp の flat list（``[...]``）も許容する。要素が dict / list
+    以外なら形状不正として ``None`` を返す（fail-closed）。
+
+    Args:
+        payload: parse 済みの comments JSON。
+
+    Returns:
+        平坦化した comment dict の list。形状不正時は ``None``。
+    """
+    if not isinstance(payload, list):
+        return None
+    flat: list[dict[str, Any]] = []
+    for page in payload:
+        if isinstance(page, list):
+            for item in page:
+                if not isinstance(item, dict):
+                    return None
+                flat.append(item)
+        elif isinstance(page, dict):
+            flat.append(page)
+        else:
+            return None
+    return flat
+
+
+def _check_is_ok(check: Any) -> bool:
+    """1 件の status check が bypass 不要な成功 / 中立状態かを返す（fail-closed）。
+
+    CheckRun は ``conclusion``、StatusContext は ``state`` を持つ。conclusion が
+    空（未完了 CheckRun）は保留とみなし ``False`` を返す。
+    """
+    if not isinstance(check, dict):
+        return False
+    conclusion = check.get("conclusion")
+    if conclusion:
+        return conclusion in _OK_CHECK_STATES
+    state = check.get("state")
+    if state:
+        return state in _OK_CHECK_STATES
+    return False
+
+
+def _fresh_approved_marker(commits: list[Any], comments: list[dict[str, Any]]) -> bool:
+    """現在 HEAD に対応する最新の kaji-review marker が ``APPROVED`` かを返す。
+
+    最新 HEAD commit 時刻（``committedDate`` の max）より後に投稿された
+    review decision marker のうち最新のものが ``APPROVED`` の場合だけ ``True``。
+    最新 marker が ``CHANGES_REQUESTED`` / stale / 不在ならすべて ``False``。
+
+    Args:
+        commits: ``gh pr view --json commits`` の commit list。
+        comments: 平坦化済みの Issue comment list。
+
+    Returns:
+        fresh な ``APPROVED`` marker が存在すれば ``True``。
+    """
+    head_dts = [
+        dt
+        for c in commits
+        if isinstance(c, dict)
+        for dt in (_parse_iso8601(c.get("committedDate")),)
+        if dt is not None
+    ]
+    if not head_dts:
+        return False
+    head_dt = max(head_dts)
+
+    decisions: list[tuple[str, datetime]] = []
+    for comment in comments:
+        body = comment.get("body")
+        if not isinstance(body, str) or not body:
+            continue
+        lines = body.splitlines()
+        state = parse_kaji_review_marker(lines[0]) if lines else None
+        if state not in _REVIEW_DECISION_STATES:
+            continue
+        created = _parse_iso8601(comment.get("created_at"))
+        if created is None:
+            continue
+        decisions.append((state, created))
+    if not decisions:
+        return False
+    latest_state, latest_dt = max(decisions, key=lambda pair: pair[1])
+    return latest_state == "APPROVED" and latest_dt > head_dt
+
+
+def _pr_admin_merge_check(rest: list[str], *, repo_override: str | None) -> int:
+    """self-PR の条件付き admin merge 適格性を read-only で判定する（fail-closed）。
+
+    通常 merge が base branch policy で block された後の recovery 分岐で使う。
+    次の 4 条件をすべて満たす場合だけ ALLOW（exit 0）とし、判定した HEAD SHA を
+    stdout に 1 行だけ出力する。後続の ``kaji pr merge <branch> --admin
+    --match-head-commit <SHA>`` がこの SHA で HEAD を拘束する。
+
+    1. self-PR（PR author == authenticated user）
+    2. 現在 HEAD に対応する最新 kaji-review marker が ``APPROVED``（stale でない）
+    3. policy-block 適格（``mergeStateStatus==BLOCKED`` かつ ``mergeable==MERGEABLE``
+       かつ他 status check 非失敗）
+    4. authenticated user が repository admin（bypass 権限）を持つ
+
+    いずれかを満たさない、または判定に必要な情報の取得 / parse に失敗した場合は
+    DENY（exit 非 0、stdout 空、stderr に ``DENY: <理由>``）とする。GitHub への
+    write は一切行わない。
+
+    Args:
+        rest: サブコマンド引数（先頭に feature branch 名を要求する）。
+        repo_override: ``[provider.github] repo`` 由来の repo 明示指定。
+
+    Returns:
+        ``EXIT_OK`` (ALLOW) / ``EXIT_RUNTIME_ERROR`` (DENY) / ``EXIT_INVALID_INPUT``。
+    """
+    p = argparse.ArgumentParser(prog="kaji pr admin-merge-check", add_help=True)
+    p.add_argument("branch", type=str, help="Feature branch name (PR head)")
+    ns = p.parse_args(rest)
+    branch = ns.branch
+
+    if shutil.which("gh") is None:
+        sys.stderr.write(_GH_MISSING_GUIDANCE)
+        return EXIT_RUNTIME_ERROR
+    repo = _detect_repo(override=repo_override)
+    if repo is None:
+        sys.stderr.write(
+            "Error: failed to detect current repository.\n"
+            "Run 'gh repo view --json nameWithOwner' in a checked-out repo first.\n"
+        )
+        return EXIT_RUNTIME_ERROR
+
+    # 1. branch → open PR を一意解決（0 件 / 複数件 / 曖昧はすべて DENY）
+    pr_list = _gh_capture_json(
+        ["pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number"]
+    )
+    if not isinstance(pr_list, list):
+        return _admin_merge_deny("failed to list open PRs for branch")
+    if len(pr_list) != 1:
+        return _admin_merge_deny(
+            f"expected exactly 1 open PR for head {branch!r}, got {len(pr_list)}"
+        )
+    first = pr_list[0]
+    pr_number = first.get("number") if isinstance(first, dict) else None
+    if not isinstance(pr_number, int):
+        return _admin_merge_deny("resolved PR has no numeric number")
+    pr_id = str(pr_number)
+
+    # 2. PR 詳細（HEAD SHA / author / merge 適格性 / check / commit 時刻）
+    data = _gh_capture_json(
+        [
+            "pr",
+            "view",
+            pr_id,
+            "--repo",
+            repo,
+            "--json",
+            "author,mergeable,mergeStateStatus,headRefOid,commits,statusCheckRollup",
+        ]
+    )
+    if not isinstance(data, dict):
+        return _admin_merge_deny("failed to fetch PR details")
+
+    head_sha = data.get("headRefOid")
+    if not isinstance(head_sha, str) or _SHA_RE.fullmatch(head_sha) is None:
+        return _admin_merge_deny("headRefOid missing/invalid")
+
+    # 3. 全 comment を pagination 取得（marker 見落とし防止）
+    comments_payload = _gh_capture_json(
+        ["api", "--paginate", "--slurp", f"repos/{repo}/issues/{pr_id}/comments"]
+    )
+    if comments_payload is None:
+        return _admin_merge_deny("failed to fetch PR comments")
+    comments = _flatten_slurped_comments(comments_payload)
+    if comments is None:
+        return _admin_merge_deny("unexpected comments payload shape")
+
+    me = _gh_capture_value(["api", "user", "--jq", ".login"])
+    if me is None:
+        return _admin_merge_deny("failed to resolve authenticated user")
+    admin_raw = _gh_capture_value(["api", f"repos/{repo}", "--jq", ".permissions.admin"])
+    if admin_raw is None:
+        return _admin_merge_deny("failed to resolve repository admin permission")
+
+    # 条件 A: self-PR
+    author = data.get("author")
+    author_login = author.get("login") if isinstance(author, dict) else None
+    if author_login != me:
+        return _admin_merge_deny(f"not a self-PR (author={author_login!r}, me={me!r})")
+
+    # 条件 B: policy-block 適格性（MF3）
+    merge_state = data.get("mergeStateStatus")
+    if merge_state != _ELIGIBLE_MERGE_STATE:
+        return _admin_merge_deny(f"mergeStateStatus not {_ELIGIBLE_MERGE_STATE}: {merge_state!r}")
+    mergeable = data.get("mergeable")
+    if mergeable != "MERGEABLE":
+        return _admin_merge_deny(f"not MERGEABLE: {mergeable!r}")
+    rollup = data.get("statusCheckRollup")
+    if rollup is None:
+        rollup = []
+    if not isinstance(rollup, list):
+        return _admin_merge_deny("unexpected statusCheckRollup shape")
+    if any(not _check_is_ok(c) for c in rollup):
+        return _admin_merge_deny("failing/pending status checks present (not bypassed)")
+
+    # 条件 C: 現在 HEAD に対応する最新 marker が APPROVED
+    commits = data.get("commits")
+    if not isinstance(commits, list) or not commits:
+        return _admin_merge_deny("PR has no commits")
+    if not _fresh_approved_marker(commits, comments):
+        return _admin_merge_deny("no fresh APPROVED marker for current HEAD")
+
+    # 条件 D: repository admin（bypass 権限）。取得失敗も含め非 true は DENY
+    if admin_raw != "true":
+        return _admin_merge_deny("authenticated user lacks repo admin bypass")
+
+    sys.stdout.write(f"{head_sha}\n")
+    return EXIT_OK
+
+
 def _handle_pr(raw_args: list[str]) -> int:
     """Two-stage dispatch for ``kaji pr``.
 
@@ -568,6 +847,10 @@ def _handle_pr(raw_args: list[str]) -> int:
     # bare-provider ガードと repo 必須検証は上で通過済みなので挙動は不変。
     if args and args[0] == "review-poll":
         return _run_pr_review_poll(args[1:])
+    # admin-merge-check は read-only の条件付き admin merge 適格性判定。
+    # config 由来 repo_override を尊重する（issue-close の close recovery で使用）。
+    if args and args[0] == "admin-merge-check":
+        return _pr_admin_merge_check(args[1:], repo_override=repo_override)
     if args and args[0] in _PR_BUILTIN_SUBCOMMANDS:
         return _dispatch_pr_builtin(args[0], args[1:], repo_override=repo_override)
     return _forward_to_gh("pr", raw_args, repo=repo_override)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -2123,3 +2124,346 @@ def cmd_run_with_args(*args: str) -> int:
     parser = create_parser()
     parsed = parser.parse_args(["run", *args])
     return cmd_run(parsed)
+
+
+# ============================================================
+# Issue #368: conditional admin merge for blocked self-PRs
+# ============================================================
+
+# run 260723023106 (PR #366) の一次観測に一致する HEAD SHA / commit 時刻。
+_HEAD_SHA = "ccd8036" + "0" * 33  # 40-hex（実 SHA prefix + padding）
+_HEAD_COMMITTED = "2026-07-23T02:31:06Z"
+_MARKER_FRESH_AT = "2026-07-23T08:04:05Z"  # HEAD commit より後（fresh APPROVED）
+_MARKER_STALE_AT = "2026-07-23T01:00:00Z"  # HEAD commit より前（stale）
+
+
+def _approved_comment(created_at: str = _MARKER_FRESH_AT) -> dict:
+    return {
+        "body": "<!-- kaji-review: state=APPROVED -->\npr-verify PASS",
+        "created_at": created_at,
+    }
+
+
+def _pr_view_payload(
+    *,
+    author: str = "apokamo",
+    mergeable: str = "MERGEABLE",
+    merge_state: str = "BLOCKED",
+    head_sha: str = _HEAD_SHA,
+    committed: str = _HEAD_COMMITTED,
+    rollup: list[dict] | None = None,
+) -> dict:
+    return {
+        "author": {"login": author},
+        "mergeable": mergeable,
+        "mergeStateStatus": merge_state,
+        "headRefOid": head_sha,
+        "commits": [{"committedDate": committed}],
+        "statusCheckRollup": rollup if rollup is not None else [],
+    }
+
+
+@pytest.mark.small
+class TestForwardToGhAdminFlags:
+    """`kaji pr merge --admin` / `--match-head-commit` の契約 lock（Issue #368 + MF2）。"""
+
+    def _run(self, argv: list[str], *, returncode: int = 0) -> list[str]:
+        from kaji_harness.commands.pr import _forward_to_gh
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/gh"),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=returncode)
+            rc = _forward_to_gh("pr", argv)
+        self._last_rc = rc
+        return mock_run.call_args[0][0]
+
+    def test_admin_preserved_and_merge_forced(self) -> None:
+        cmd = self._run(["merge", "chore/331", "--admin"])
+        assert cmd[:3] == ["gh", "pr", "merge"]
+        assert "--admin" in cmd
+        assert cmd.count("--merge") == 1
+        assert cmd[-1] == "--merge"
+
+    def test_admin_with_squash_downgrades_to_merge(self) -> None:
+        cmd = self._run(["merge", "chore/331", "--admin", "--squash"])
+        assert "--admin" in cmd
+        assert "--squash" not in cmd
+        assert cmd.count("--merge") == 1
+
+    def test_admin_with_rebase_downgrades_to_merge(self) -> None:
+        cmd = self._run(["merge", "chore/331", "--admin", "--rebase"])
+        assert "--admin" in cmd
+        assert "--rebase" not in cmd
+        assert cmd.count("--merge") == 1
+
+    def test_match_head_commit_and_sha_preserved(self) -> None:
+        cmd = self._run(["merge", "chore/331", "--admin", "--match-head-commit", _HEAD_SHA])
+        assert "--admin" in cmd
+        assert "--match-head-commit" in cmd
+        assert cmd[cmd.index("--match-head-commit") + 1] == _HEAD_SHA
+        assert cmd.count("--merge") == 1
+        assert cmd[-1] == "--merge"
+
+    def test_match_head_commit_mismatch_propagates_nonzero(self) -> None:
+        """HEAD が動いた場合の gh 非 0 を _forward_to_gh がそのまま返す（MF2）。"""
+        self._run(
+            ["merge", "chore/331", "--admin", "--match-head-commit", "stale" + "0" * 35],
+            returncode=1,
+        )
+        assert self._last_rc == 1
+
+
+@pytest.mark.small
+class TestFreshApprovedMarker:
+    """`_fresh_approved_marker` 純関数の freshness / 1 行目厳密照合の境界検証。"""
+
+    def _commits(self, committed: str = _HEAD_COMMITTED) -> list[dict]:
+        return [{"committedDate": committed}]
+
+    def test_fresh_approved_after_head_is_true(self) -> None:
+        from kaji_harness.commands.pr import _fresh_approved_marker
+
+        assert _fresh_approved_marker(self._commits(), [_approved_comment()]) is True
+
+    def test_stale_approved_before_head_is_false(self) -> None:
+        from kaji_harness.commands.pr import _fresh_approved_marker
+
+        assert (
+            _fresh_approved_marker(self._commits(), [_approved_comment(_MARKER_STALE_AT)]) is False
+        )
+
+    def test_latest_changes_requested_is_false(self) -> None:
+        from kaji_harness.commands.pr import _fresh_approved_marker
+
+        comments = [
+            _approved_comment("2026-07-23T08:00:00Z"),
+            {
+                "body": "<!-- kaji-review: state=CHANGES_REQUESTED -->\nnit",
+                "created_at": "2026-07-23T09:00:00Z",
+            },
+        ]
+        assert _fresh_approved_marker(self._commits(), comments) is False
+
+    def test_no_marker_is_false(self) -> None:
+        from kaji_harness.commands.pr import _fresh_approved_marker
+
+        comments = [{"body": "just a normal comment", "created_at": _MARKER_FRESH_AT}]
+        assert _fresh_approved_marker(self._commits(), comments) is False
+
+    def test_quoted_marker_in_body_not_detected(self) -> None:
+        """本文中に marker を引用しただけの comment は decision として拾わない。"""
+        from kaji_harness.commands.pr import _fresh_approved_marker
+
+        comments = [
+            {
+                "body": "discussion about `<!-- kaji-review: state=APPROVED -->` marker",
+                "created_at": _MARKER_FRESH_AT,
+            }
+        ]
+        assert _fresh_approved_marker(self._commits(), comments) is False
+
+    def test_empty_comments_is_false(self) -> None:
+        from kaji_harness.commands.pr import _fresh_approved_marker
+
+        assert _fresh_approved_marker(self._commits(), []) is False
+
+
+@pytest.mark.small
+class TestPrAdminMergeCheck:
+    """`_pr_admin_merge_check` の ALLOW（OB 回帰）/ DENY（fail-closed 網羅）。"""
+
+    def _run(
+        self,
+        *,
+        pr_list: object = None,
+        data: object = None,
+        comments: object = None,
+        me: str = "apokamo",
+        admin: str = "true",
+        branch: str = "chore/331",
+    ) -> tuple[int, object]:
+        from kaji_harness.commands.pr import _pr_admin_merge_check
+
+        if pr_list is None:
+            pr_list = [{"number": 366}]
+        if data is None:
+            data = _pr_view_payload()
+        if comments is None:
+            comments = [[_approved_comment()]]
+        seq = [
+            MagicMock(returncode=0, stdout=json.dumps(pr_list), stderr=""),
+            MagicMock(returncode=0, stdout=json.dumps(data), stderr=""),
+            MagicMock(returncode=0, stdout=json.dumps(comments), stderr=""),
+            MagicMock(returncode=0, stdout=me + "\n", stderr=""),
+            MagicMock(returncode=0, stdout=admin + "\n", stderr=""),
+        ]
+        with (
+            patch("shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.commands.pr._detect_repo", return_value="owner/repo"),
+            patch("subprocess.run", side_effect=seq) as mock_run,
+        ):
+            rc = _pr_admin_merge_check([branch], repo_override="owner/repo")
+        return rc, mock_run
+
+    def test_allow_emits_head_sha_ob_regression(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """PR #366 状態（BLOCKED / MERGEABLE / fresh APPROVED / admin）で ALLOW。"""
+        from kaji_harness.commands.exit_codes import EXIT_OK
+
+        rc, _ = self._run()
+        out = capsys.readouterr().out
+        assert rc == EXIT_OK
+        assert out == f"{_HEAD_SHA}\n"
+
+    def test_deny_non_self_pr(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from kaji_harness.commands.exit_codes import EXIT_OK
+
+        rc, _ = self._run(data=_pr_view_payload(author="someone-else"))
+        assert rc != EXIT_OK
+        assert capsys.readouterr().out == ""
+
+    def test_deny_merge_state_clean(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from kaji_harness.commands.exit_codes import EXIT_OK
+
+        rc, _ = self._run(data=_pr_view_payload(merge_state="CLEAN"))
+        assert rc != EXIT_OK
+        assert capsys.readouterr().out == ""
+
+    def test_deny_conflicting(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from kaji_harness.commands.exit_codes import EXIT_OK
+
+        rc, _ = self._run(data=_pr_view_payload(mergeable="CONFLICTING"))
+        assert rc != EXIT_OK
+        assert capsys.readouterr().out == ""
+
+    def test_deny_failing_status_check(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from kaji_harness.commands.exit_codes import EXIT_OK
+
+        rollup = [{"conclusion": "FAILURE", "name": "ci"}]
+        rc, _ = self._run(data=_pr_view_payload(rollup=rollup))
+        assert rc != EXIT_OK
+        assert capsys.readouterr().out == ""
+
+    def test_deny_pending_status_check(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from kaji_harness.commands.exit_codes import EXIT_OK
+
+        rollup = [{"status": "IN_PROGRESS", "conclusion": None, "name": "ci"}]
+        rc, _ = self._run(data=_pr_view_payload(rollup=rollup))
+        assert rc != EXIT_OK
+        assert capsys.readouterr().out == ""
+
+    def test_allow_with_successful_status_check(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from kaji_harness.commands.exit_codes import EXIT_OK
+
+        rollup = [{"conclusion": "SUCCESS", "name": "ci"}]
+        rc, _ = self._run(data=_pr_view_payload(rollup=rollup))
+        assert rc == EXIT_OK
+        assert capsys.readouterr().out == f"{_HEAD_SHA}\n"
+
+    def test_deny_changes_requested_latest(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from kaji_harness.commands.exit_codes import EXIT_OK
+
+        comments = [
+            [
+                _approved_comment("2026-07-23T08:00:00Z"),
+                {
+                    "body": "<!-- kaji-review: state=CHANGES_REQUESTED -->\nnit",
+                    "created_at": "2026-07-23T09:00:00Z",
+                },
+            ]
+        ]
+        rc, _ = self._run(comments=comments)
+        assert rc != EXIT_OK
+        assert capsys.readouterr().out == ""
+
+    def test_deny_no_marker(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from kaji_harness.commands.exit_codes import EXIT_OK
+
+        rc, _ = self._run(comments=[[{"body": "hi", "created_at": _MARKER_FRESH_AT}]])
+        assert rc != EXIT_OK
+        assert capsys.readouterr().out == ""
+
+    def test_deny_stale_approved(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from kaji_harness.commands.exit_codes import EXIT_OK
+
+        rc, _ = self._run(comments=[[_approved_comment(_MARKER_STALE_AT)]])
+        assert rc != EXIT_OK
+        assert capsys.readouterr().out == ""
+
+    def test_deny_not_admin(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from kaji_harness.commands.exit_codes import EXIT_OK
+
+        rc, _ = self._run(admin="false")
+        assert rc != EXIT_OK
+        assert capsys.readouterr().out == ""
+
+    def test_deny_invalid_head_ref_oid(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from kaji_harness.commands.exit_codes import EXIT_OK
+
+        rc, _ = self._run(data=_pr_view_payload(head_sha="not-a-sha"))
+        assert rc != EXIT_OK
+        assert capsys.readouterr().out == ""
+
+    def test_deny_zero_open_prs(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from kaji_harness.commands.exit_codes import EXIT_OK
+
+        rc, _ = self._run(pr_list=[])
+        assert rc != EXIT_OK
+        assert capsys.readouterr().out == ""
+
+    def test_deny_multiple_open_prs(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from kaji_harness.commands.exit_codes import EXIT_OK
+
+        rc, _ = self._run(pr_list=[{"number": 1}, {"number": 2}])
+        assert rc != EXIT_OK
+        assert capsys.readouterr().out == ""
+
+    def test_deny_gh_call_failure(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """途中の gh 呼び出し rc≠0 は fail-closed で DENY。"""
+        from kaji_harness.commands.exit_codes import EXIT_OK
+        from kaji_harness.commands.pr import _pr_admin_merge_check
+
+        seq = [MagicMock(returncode=1, stdout="", stderr="boom\n")]
+        with (
+            patch("shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.commands.pr._detect_repo", return_value="owner/repo"),
+            patch("subprocess.run", side_effect=seq),
+        ):
+            rc = _pr_admin_merge_check(["chore/331"], repo_override="owner/repo")
+        assert rc != EXIT_OK
+        assert capsys.readouterr().out == ""
+
+    def test_argv_call_order(self) -> None:
+        """gh 呼び出し列の順序・引数（pr list → pr view → api comments → api user → api repos）。"""
+        _, mock_run = self._run()
+        cmds = [call[0][0] for call in mock_run.call_args_list]
+        assert cmds[0][:4] == ["gh", "pr", "list", "--repo"]
+        assert "--head" in cmds[0] and "chore/331" in cmds[0]
+        assert cmds[1][:3] == ["gh", "pr", "view"]
+        assert cmds[2][:2] == ["gh", "api"]
+        assert "--paginate" in cmds[2] and "--slurp" in cmds[2]
+        assert cmds[2][-1] == "repos/owner/repo/issues/366/comments"
+        assert cmds[3][:3] == ["gh", "api", "user"]
+        assert cmds[4][:2] == ["gh", "api"]
+        assert cmds[4][2] == "repos/owner/repo"
+
+
+@pytest.mark.small
+class TestPrAdminMergeCheckRouting:
+    """`_handle_pr` が `admin-merge-check` を専用ハンドラへ routing する。"""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "kaji_harness.commands.pr._load_config_for_dispatch",
+            _stub_github_config,
+        )
+
+    def test_routes_to_admin_merge_check(self) -> None:
+        from kaji_harness.commands.pr import _handle_pr
+
+        with patch("kaji_harness.commands.pr._pr_admin_merge_check", return_value=0) as mock_check:
+            rc = _handle_pr(["admin-merge-check", "chore/331"])
+        assert rc == 0
+        mock_check.assert_called_once_with(["chore/331"], repo_override="owner/repo")

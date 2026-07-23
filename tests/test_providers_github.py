@@ -239,3 +239,50 @@ class TestResolvePrContext:
         assert "--head" in cmd and "feat/153" in cmd
         assert "--state" in cmd and "open" in cmd
         assert "--json" in cmd and "number,headRefName" in cmd
+
+
+class TestParseKajiReviewMarker:
+    """`parse_kaji_review_marker` — build と対の public parser（Issue #368 MF4）。"""
+
+    def test_parses_approved_marker(self) -> None:
+        from kaji_harness.providers.github import parse_kaji_review_marker
+
+        assert parse_kaji_review_marker("<!-- kaji-review: state=APPROVED -->") == "APPROVED"
+
+    def test_parses_changes_requested_marker(self) -> None:
+        from kaji_harness.providers.github import parse_kaji_review_marker
+
+        assert (
+            parse_kaji_review_marker("<!-- kaji-review: state=CHANGES_REQUESTED -->")
+            == "CHANGES_REQUESTED"
+        )
+
+    def test_round_trip_with_build(self) -> None:
+        from kaji_harness.providers.github import (
+            build_kaji_review_marker,
+            parse_kaji_review_marker,
+        )
+
+        for state in ("APPROVED", "CHANGES_REQUESTED", "COMMENTED"):
+            assert parse_kaji_review_marker(build_kaji_review_marker(state)) == state
+
+    def test_non_marker_line_returns_none(self) -> None:
+        from kaji_harness.providers.github import parse_kaji_review_marker
+
+        assert parse_kaji_review_marker("just a normal comment") is None
+
+    def test_quoted_marker_in_prose_returns_none(self) -> None:
+        """本文中に marker を引用した行（前後に文字がある）は誤検出しない。"""
+        from kaji_harness.providers.github import parse_kaji_review_marker
+
+        assert parse_kaji_review_marker("see `<!-- kaji-review: state=APPROVED -->` above") is None
+
+    def test_unknown_state_returns_none(self) -> None:
+        from kaji_harness.providers.github import parse_kaji_review_marker
+
+        assert parse_kaji_review_marker("<!-- kaji-review: state=BOGUS -->") is None
+
+    def test_empty_line_returns_none(self) -> None:
+        from kaji_harness.providers.github import parse_kaji_review_marker
+
+        assert parse_kaji_review_marker("") is None

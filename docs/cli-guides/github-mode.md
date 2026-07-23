@@ -120,6 +120,33 @@ compatibility contract.
   the same invocation style on GitHub.
 - `kaji pr merge` silently strips `--squash` / `--rebase` on the kaji side and
   always invokes `gh pr merge --merge`, enforcing the `--no-ff`-only merge rule.
+  `--admin` (administrator bypass) and `--match-head-commit <SHA>` (HEAD pinning)
+  are **not** method flags, so they are preserved and forwarded to `gh pr merge`
+  alongside the forced `--merge`.
+- `kaji pr admin-merge-check <branch>` is a **read-only** self-PR admin-merge
+  eligibility gate used by `/issue-close` when a normal merge is blocked by a base
+  branch policy (e.g. unresolved review threads under
+  `required_review_thread_resolution=true`). It never writes to GitHub. It ALLOWs
+  (exit 0, printing the resolved 40-hex HEAD SHA on stdout) only when **all** of
+  the following hold, and otherwise DENYs (non-zero exit, empty stdout, `DENY:
+  <reason>` on stderr):
+  1. **self-PR** — PR author equals the authenticated user.
+  2. **fresh APPROVED marker** — the latest `kaji-review` decision marker
+     (`<!-- kaji-review: state=APPROVED -->`), read from **all** issue comments via
+     `gh api --paginate --slurp`, was posted after the current HEAD commit time
+     (`committedDate`). A newer `CHANGES_REQUESTED`, a stale APPROVED, or no marker
+     all DENY.
+  3. **policy-block eligibility** — `mergeStateStatus == BLOCKED` **and**
+     `mergeable == MERGEABLE` **and** no failing/pending `statusCheckRollup` entry.
+     This excludes transient/auth/conflict/non-policy failures from elevated merge.
+  4. **admin bypass** — `permissions.admin == true` for the authenticated user.
+
+  Any `gh` error, JSON parse failure, ambiguous PR resolution (0 or >1 open PRs for
+  the head), or invalid `headRefOid` fails closed to DENY. `/issue-close` branches
+  on the exit code and passes the printed SHA to
+  `kaji pr merge <branch> --admin --match-head-commit "$HEAD_SHA"`, which GitHub
+  rejects if HEAD moved since the check. It never falls back to `--auto` and never
+  resolves review threads.
 - `kaji pr review <pr> --approve` / `--request-changes` detects self-PRs
   (PR author == authenticated user). For self-PRs, it posts an issue comment
   marker (`<!-- kaji-review: state=APPROVED -->` /

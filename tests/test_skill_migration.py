@@ -165,3 +165,33 @@ class TestPrReviewCommentsCliRunnerIntegration:
         assert "--jq" in argv
         composed = argv[argv.index("--jq") + 1]
         assert composed == "[.[] | {id: .id, body: .body}] | .[]"
+
+
+@pytest.mark.medium
+class TestIssueCloseAdminMergeRecovery:
+    """issue-close の github merge 節が条件付き admin merge recovery を持つ（Issue #368）。"""
+
+    def _close_skill_text(self) -> str:
+        path = PROJECT_ROOT / ".claude" / "skills" / "issue-close" / "SKILL.md"
+        return path.read_text(encoding="utf-8")
+
+    def test_references_admin_merge_check(self) -> None:
+        assert "kaji pr admin-merge-check [branch_name]" in self._close_skill_text()
+
+    def test_conditional_admin_merge_pins_head(self) -> None:
+        text = self._close_skill_text()
+        assert 'kaji pr merge [branch_name] --admin --match-head-commit "$HEAD_SHA"' in text, (
+            "conditional admin merge must pin HEAD via --match-head-commit"
+        )
+
+    def test_no_auto_merge_invocation_in_recovery(self) -> None:
+        """merge recovery で `--auto` を実行しない（説明文での言及は許容、invocation は禁止）。"""
+        text = self._close_skill_text()
+        auto_invocations = re.findall(r"(?:kaji|gh) pr merge [^\n]*--auto\b", text)
+        assert auto_invocations == [], (
+            f"issue-close must not invoke pr merge --auto for merge recovery: {auto_invocations}"
+        )
+
+    def test_fail_closed_abort_present(self) -> None:
+        text = self._close_skill_text()
+        assert "admin merge preconditions not met" in text

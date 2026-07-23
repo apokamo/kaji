@@ -238,13 +238,48 @@ cd "$MAIN_REPO"
 
 ### Step 3: PRのマージ
 
+まず通常マージ（非 admin）を試す。base branch policy でブロックされない PR は
+ここで完了する。ブロックされた場合のみ、`kaji pr admin-merge-check` による
+read-only の安全条件判定（fail-closed）を経て、条件成立時だけ **判定した HEAD SHA に
+拘束した条件付き admin merge** を行う。`--auto` へは fallback せず、Codex review thread の
+Resolve も要求しない。
+
+`admin-merge-check` は次の 4 条件をすべて満たす場合だけ ALLOW（exit 0、stdout に
+判定 HEAD SHA を 1 行出力）とする。いずれか不成立、または判定情報の取得失敗は DENY
+（exit 非 0、stdout 空）。
+
+1. self-PR（PR author == authenticated user）
+2. 現在 HEAD に対応する最新 `kaji-review` marker が `APPROVED`（stale でない）
+3. policy-block 適格（`mergeStateStatus=BLOCKED` かつ `mergeable=MERGEABLE` かつ他 check 非失敗）
+4. authenticated user が repository admin（bypass 権限）を持つ
+
 ```bash
-kaji pr merge [branch_name]
+if kaji pr merge [branch_name]; then
+    : # 通常マージ成功。pr_merge_result = "マージ済み"
+else
+    # 通常マージ失敗 → 安全条件判定（read-only, fail-closed）。
+    # transient / auth / conflict / 非 policy 失敗はすべて DENY され elevated merge に進まない。
+    if HEAD_SHA=$(kaji pr admin-merge-check [branch_name]); then
+        # 全条件成立 → 判定した SHA に拘束した条件付き admin merge。--auto は使わない。
+        # check 後に HEAD が動いていれば --match-head-commit により GitHub 側で merge が拒否される。
+        if kaji pr merge [branch_name] --admin --match-head-commit "$HEAD_SHA"; then
+            : # pr_merge_result = "admin merge 済み（条件付き bypass, HEAD 拘束）"
+        else
+            echo "ABORT: admin merge rejected (HEAD moved since check, or bypass denied)"
+            exit 1
+        fi
+    else
+        # 条件不成立 or 判定失敗 → fail-closed ABORT。--auto へは fallback しない。
+        echo "ABORT: admin merge preconditions not met (see admin-merge-check stderr)"
+        exit 1
+    fi
+fi
 ```
 
 マージコミットを作成してブランチ履歴を保持する。ブランチ削除は worktree 削除後に Step 4.5 で行う。
 
-> **結果を記録**: `pr_merge_result` = 「マージ済み」。この値は Step 6 で使用する。
+> **結果を記録**: `pr_merge_result` = 「マージ済み」（通常マージ）/「admin merge 済み（条件付き
+> bypass, HEAD 拘束）」（条件付き admin merge）。この値は Step 6 で使用する。
 
 ### Step 4: worktree削除
 
