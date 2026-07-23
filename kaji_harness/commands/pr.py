@@ -520,21 +520,31 @@ def _github_pr_review(rest: list[str], *, repo_override: str | None) -> int:
         )
         return EXIT_RUNTIME_ERROR
 
-    pr_author = _gh_capture_value(
-        ["pr", "view", ns.pr_id, "--repo", repo, "--json", "author", "--jq", ".author.login"]
+    # author と headRefOid を 1 回の pr view で取得する。head SHA は self-PR marker
+    # に埋め込み、admin-merge-check が現在 HEAD と照合する（Issue #368 review P2）。
+    pr_view_raw = _gh_capture_json(
+        ["pr", "view", ns.pr_id, "--repo", repo, "--json", "author,headRefOid"]
     )
-    if pr_author is None:
+    if pr_view_raw is None:
         return EXIT_RUNTIME_ERROR
+    try:
+        pr_view = _PrReviewTarget.model_validate(pr_view_raw)
+    except ValidationError as exc:
+        sys.stderr.write(f"Error: unexpected PR payload: {exc.error_count()} error(s)\n")
+        return EXIT_INVALID_INPUT
     me = _gh_capture_value(["api", "user", "--jq", ".login"])
     if me is None:
         return EXIT_RUNTIME_ERROR
-    is_self = pr_author == me
-
-    state = "APPROVED" if ns.approve else "CHANGES_REQUESTED"
-    marker = build_kaji_review_marker(state)
-    marked_body = f"{marker}\n{body}"
+    is_self = pr_view.author.login == me
 
     if is_self:
+        head_sha = pr_view.headRefOid
+        if _SHA_RE.fullmatch(head_sha) is None:
+            sys.stderr.write("Error: could not resolve a valid head SHA for the review marker.\n")
+            return EXIT_RUNTIME_ERROR
+        state = "APPROVED" if ns.approve else "CHANGES_REQUESTED"
+        marker = build_kaji_review_marker(state, head_sha)
+        marked_body = f"{marker}\n{body}"
         return _gh_post_issue_comment_silent(repo=repo, pr_id=ns.pr_id, body=marked_body)
 
     flag = "--approve" if ns.approve else "--request-changes"
@@ -626,13 +636,29 @@ class _PrDetail(BaseModel):
     statusCheckRollup: list[_PrStatusCheck] | None = None  # noqa: N815
 
 
+class _PrReviewTarget(BaseModel):
+    """``gh pr view --json author,headRefOid``。self-PR marker の投稿に必要な最小 payload。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    author: _PrAuthor
+    headRefOid: str  # noqa: N815 (gh JSON のフィールド名に一致)
+
+
 class _PrIssueComment(BaseModel):
-    """``repos/<repo>/issues/<pr>/comments`` の 1 件。``created_at`` は aware 必須。"""
+    """``repos/<repo>/issues/<pr>/comments`` の 1 件。``created_at`` は aware 必須。
+
+    ``user`` は marker 投稿者の認証に用いる（Issue #368 review P1: 第三者が詐称
+    投稿した marker を承認扱いしないため）。GitHub REST は通常 ``user`` を返すが、
+    ghost user 等で欠落しうるため optional とし、欠落は untrusted 扱い（fail-closed）
+    とする。
+    """
 
     model_config = ConfigDict(extra="ignore")
 
     body: str = ""
     created_at: AwareDatetime
+    user: _PrAuthor | None = None
 
 
 class _GhUser(BaseModel):
@@ -703,42 +729,55 @@ def _check_is_ok(check: _PrStatusCheck) -> bool:
     return False
 
 
-def _fresh_approved_marker(commits: list[_PrCommit], comments: list[_PrIssueComment]) -> bool:
-    """現在 HEAD に対応する最新の kaji-review marker が ``APPROVED`` かを返す。
+def _fresh_approved_marker(
+    head_sha: str, comments: list[_PrIssueComment], trusted_login: str
+) -> bool:
+    """現在 HEAD SHA に束縛された最新の kaji-review marker が ``APPROVED`` かを返す。
 
-    最新 HEAD commit 時刻（``committedDate`` の max）より後に投稿された
-    review decision marker のうち最新のものが ``APPROVED`` の場合だけ ``True``。
-    最新 marker が ``CHANGES_REQUESTED`` / stale / 不在ならすべて ``False``。
-    ``createdAt == HEAD committedDate`` の等号境界は stale（``latest_dt > head_dt``
-    が厳密比較のため ``False``）とする。
+    次をすべて満たす decision marker だけを承認判断の候補とする（fail-closed）:
 
-    引数は Pydantic 検証済み model のため、``committedDate`` / ``created_at`` は
-    いずれも aware ``datetime`` で、naive/aware 混在の ``TypeError`` は起こらない。
+    - comment 投稿者が ``trusted_login``（認証ユーザー = self-PR author）である
+      （Issue #368 review P1: 第三者が詐称投稿した marker を承認扱いしない）
+    - marker に埋め込まれた sha が現在の ``head_sha`` に一致する
+      （Issue #368 review P2: backdated commit へ force-push した際に、旧 head 向けの
+      stale approval が branch policy を bypass するのを防ぐ。``committedDate`` は
+      改竄可能なため時刻ベースの freshness では防げない）
+
+    候補のうち最新（``created_at`` max）が ``APPROVED`` の場合だけ ``True``。
+    候補が無い、または最新が ``CHANGES_REQUESTED`` ならすべて ``False``。
+
+    引数は Pydantic 検証済み model のため、``created_at`` は aware ``datetime`` で、
+    naive/aware 混在の ``TypeError`` は起こらない。
 
     Args:
-        commits: 検証済み PR commit list。
+        head_sha: 現在の PR head SHA（``headRefOid``、40 桁 hex）。
         comments: 検証済み Issue comment list。
+        trusted_login: 承認 marker の投稿者として信頼する login（認証ユーザー）。
 
     Returns:
-        fresh な ``APPROVED`` marker が存在すれば ``True``。
+        current head に束縛された trusted かつ fresh な ``APPROVED`` marker が
+        存在すれば ``True``。
     """
-    if not commits:
-        return False
-    head_dt = max(c.committedDate for c in commits)
-
     decisions: list[tuple[str, datetime]] = []
     for comment in comments:
+        if comment.user is None or comment.user.login != trusted_login:
+            continue
         if not comment.body:
             continue
         lines = comment.body.splitlines()
-        state = parse_kaji_review_marker(lines[0]) if lines else None
+        parsed = parse_kaji_review_marker(lines[0]) if lines else None
+        if parsed is None:
+            continue
+        state, marker_sha = parsed
         if state not in _REVIEW_DECISION_STATES:
+            continue
+        if marker_sha != head_sha:
             continue
         decisions.append((state, comment.created_at))
     if not decisions:
         return False
-    latest_state, latest_dt = max(decisions, key=lambda pair: pair[1])
-    return latest_state == "APPROVED" and latest_dt > head_dt
+    latest_state, _latest_dt = max(decisions, key=lambda pair: pair[1])
+    return latest_state == "APPROVED"
 
 
 def _pr_admin_merge_check(rest: list[str], *, repo_override: str | None) -> int:
@@ -866,11 +905,11 @@ def _pr_admin_merge_check(rest: list[str], *, repo_override: str | None) -> int:
     if any(not _check_is_ok(c) for c in rollup):
         return _admin_merge_deny("failing/pending status checks present (not bypassed)")
 
-    # 条件 C: 現在 HEAD に対応する最新 marker が APPROVED
-    if not data.commits:
-        return _admin_merge_deny("PR has no commits")
-    if not _fresh_approved_marker(data.commits, comments):
-        return _admin_merge_deny("no fresh APPROVED marker for current HEAD")
+    # 条件 C: 現在 HEAD SHA に束縛された trusted な最新 marker が APPROVED
+    # （Issue #368 review P1: 投稿者を認証ユーザーに限定 / P2: marker.sha を現在
+    # HEAD と照合し stale approval bypass を防ぐ）
+    if not _fresh_approved_marker(head_sha, comments, me):
+        return _admin_merge_deny("no fresh APPROVED marker bound to current HEAD")
 
     # 条件 D: repository admin（bypass 権限）。取得失敗も含め admin でなければ DENY
     if not repo_model.permissions.admin:

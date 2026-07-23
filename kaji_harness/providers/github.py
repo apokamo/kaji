@@ -32,49 +32,68 @@ class GitHubProviderError(RuntimeError):
     """``gh`` CLI 起動失敗 / 戻り値非ゼロ等。"""
 
 
-# kaji marker: review state を comment body 先頭に埋め込む HTML コメント。
-# 1 行目に置き、2 行目以降が user body。GitHub UI 上では HTML コメントとして
-# 不可視のため、UI の review 体験を壊さない。self-PR では ``gh pr review --approve``
-# が GitHub API で 422 拒否されるため、本 marker 付き comment を Issue Comments API
-# に投稿することで approve シグナルを表現する（``cli_main._github_pr_review`` 参照）。
+# kaji marker: review state と review 対象の PR head SHA を comment body 先頭に
+# 埋め込む HTML コメント。1 行目に置き、2 行目以降が user body。GitHub UI 上では
+# HTML コメントとして不可視のため、UI の review 体験を壊さない。self-PR では
+# ``gh pr review --approve`` が GitHub API で 422 拒否されるため、本 marker 付き
+# comment を Issue Comments API に投稿することで approve シグナルを表現する
+# （``cli_main._github_pr_review`` 参照）。
+#
+# marker には review 時点の head SHA を必ず埋め込む。``admin-merge-check`` は
+# marker.sha == 現在の headRefOid の場合だけ APPROVED を承認扱いとし、backdated
+# commit へ force-push した際に旧 head 向けの stale approval が branch policy を
+# bypass する経路を塞ぐ（Issue #368 review P2。committedDate は改竄可能なため
+# 時刻ベースの freshness では防げない）。
 _KAJI_REVIEW_MARKER_PREFIX = "<!-- kaji-review: state="
 _KAJI_REVIEW_MARKER_SUFFIX = " -->"
 
 _REVIEW_STATES_VALID = {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}
 
+# marker に埋め込む head SHA は git object の 40 桁 hex に限定する。
+_KAJI_REVIEW_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
 # ``build_kaji_review_marker`` の完全逆写像。1 行目だけを厳密照合し、本文中の
 # marker 引用や部分一致を誤検出しない（``providers.markers.parse_kaji_verdict_marker``
 # と同じ「build と対の public parser」パターン）。private ``_KAJI_REVIEW_MARKER_PREFIX``
 # は github.py 内に留め、外部へは本 public parser だけを公開する（ADR 009）。
-_KAJI_REVIEW_MARKER_RE = re.compile(r"^<!-- kaji-review: state=(?P<state>[A-Z_]+) -->$")
+# sha を必須 group として要求するため、旧形式（sha 無し）の marker は非一致となり
+# 承認扱いされない（fail-closed）。
+_KAJI_REVIEW_MARKER_RE = re.compile(
+    r"^<!-- kaji-review: state=(?P<state>[A-Z_]+) sha=(?P<sha>[0-9a-f]{40}) -->$"
+)
 
 
-def build_kaji_review_marker(state: str) -> str:
-    """``state`` から marker 文字列（先頭行のみ、改行なし）を組み立てる。
+def build_kaji_review_marker(state: str, sha: str) -> str:
+    """``state`` と review 対象 head ``sha`` から marker 文字列を組み立てる（1 行、改行なし）。
 
     Args:
         state: ``APPROVED`` / ``CHANGES_REQUESTED`` / ``COMMENTED`` のいずれか。
+        sha: review 対象の PR head SHA（``headRefOid``、40 桁 hex）。
 
     Raises:
-        ValueError: 不明な state。
+        ValueError: 不明な state、または 40 桁 hex でない sha。
     """
     if state not in _REVIEW_STATES_VALID:
         raise ValueError(f"invalid review state {state!r}: expected one of {_REVIEW_STATES_VALID}")
-    return f"{_KAJI_REVIEW_MARKER_PREFIX}{state}{_KAJI_REVIEW_MARKER_SUFFIX}"
+    if _KAJI_REVIEW_SHA_RE.fullmatch(sha) is None:
+        raise ValueError(f"invalid head sha {sha!r}: expected 40-hex")
+    return f"{_KAJI_REVIEW_MARKER_PREFIX}{state} sha={sha}{_KAJI_REVIEW_MARKER_SUFFIX}"
 
 
-def parse_kaji_review_marker(line: str) -> str | None:
-    """review marker 1 行から state を返す。marker でなければ ``None``。
+def parse_kaji_review_marker(line: str) -> tuple[str, str] | None:
+    """review marker 1 行から ``(state, sha)`` を返す。marker でなければ ``None``。
 
     ``build_kaji_review_marker`` が生成する 1 行を完全一致で解析する
     ``build`` と対の public parser。comment body の 1 行目にだけ適用し、
-    本文中の marker 引用や部分一致は ``None`` に落とす（fail-closed）。
+    本文中の marker 引用や部分一致、sha 欠落の旧形式はすべて ``None`` に
+    落とす（fail-closed）。
 
     Args:
         line: Issue / PR comment body の 1 行目。
 
     Returns:
-        ``APPROVED`` / ``CHANGES_REQUESTED`` / ``COMMENTED`` のいずれか。
+        ``(state, sha)`` のタプル。``state`` は ``APPROVED`` /
+        ``CHANGES_REQUESTED`` / ``COMMENTED`` のいずれか、``sha`` は 40 桁 hex。
         marker 行でない、または未知 state の場合は ``None``。
     """
     match = _KAJI_REVIEW_MARKER_RE.fullmatch(line)
@@ -83,7 +102,7 @@ def parse_kaji_review_marker(line: str) -> str | None:
     state = match.group("state")
     if state not in _REVIEW_STATES_VALID:
         return None
-    return state
+    return state, match.group("sha")
 
 
 def _comment_url(stdout: str) -> str:

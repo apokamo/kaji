@@ -242,20 +242,23 @@ class TestResolvePrContext:
 
 
 class TestParseKajiReviewMarker:
-    """`parse_kaji_review_marker` — build と対の public parser（Issue #368 MF4）。"""
+    """`parse_kaji_review_marker` — build と対の public parser（Issue #368 MF4 / review P2）。"""
+
+    _SHA = "a" * 40
 
     def test_parses_approved_marker(self) -> None:
         from kaji_harness.providers.github import parse_kaji_review_marker
 
-        assert parse_kaji_review_marker("<!-- kaji-review: state=APPROVED -->") == "APPROVED"
+        assert parse_kaji_review_marker(
+            f"<!-- kaji-review: state=APPROVED sha={self._SHA} -->"
+        ) == ("APPROVED", self._SHA)
 
     def test_parses_changes_requested_marker(self) -> None:
         from kaji_harness.providers.github import parse_kaji_review_marker
 
-        assert (
-            parse_kaji_review_marker("<!-- kaji-review: state=CHANGES_REQUESTED -->")
-            == "CHANGES_REQUESTED"
-        )
+        assert parse_kaji_review_marker(
+            f"<!-- kaji-review: state=CHANGES_REQUESTED sha={self._SHA} -->"
+        ) == ("CHANGES_REQUESTED", self._SHA)
 
     def test_round_trip_with_build(self) -> None:
         from kaji_harness.providers.github import (
@@ -264,7 +267,22 @@ class TestParseKajiReviewMarker:
         )
 
         for state in ("APPROVED", "CHANGES_REQUESTED", "COMMENTED"):
-            assert parse_kaji_review_marker(build_kaji_review_marker(state)) == state
+            assert parse_kaji_review_marker(build_kaji_review_marker(state, self._SHA)) == (
+                state,
+                self._SHA,
+            )
+
+    def test_legacy_marker_without_sha_returns_none(self) -> None:
+        """sha を持たない旧形式 marker は非一致（fail-closed、#368 review P2）。"""
+        from kaji_harness.providers.github import parse_kaji_review_marker
+
+        assert parse_kaji_review_marker("<!-- kaji-review: state=APPROVED -->") is None
+
+    def test_non_hex_sha_returns_none(self) -> None:
+        """sha が 40 桁 hex でない marker は非一致。"""
+        from kaji_harness.providers.github import parse_kaji_review_marker
+
+        assert parse_kaji_review_marker("<!-- kaji-review: state=APPROVED sha=deadbeef -->") is None
 
     def test_non_marker_line_returns_none(self) -> None:
         from kaji_harness.providers.github import parse_kaji_review_marker
@@ -275,14 +293,30 @@ class TestParseKajiReviewMarker:
         """本文中に marker を引用した行（前後に文字がある）は誤検出しない。"""
         from kaji_harness.providers.github import parse_kaji_review_marker
 
-        assert parse_kaji_review_marker("see `<!-- kaji-review: state=APPROVED -->` above") is None
+        assert (
+            parse_kaji_review_marker(
+                f"see `<!-- kaji-review: state=APPROVED sha={self._SHA} -->` above"
+            )
+            is None
+        )
 
     def test_unknown_state_returns_none(self) -> None:
         from kaji_harness.providers.github import parse_kaji_review_marker
 
-        assert parse_kaji_review_marker("<!-- kaji-review: state=BOGUS -->") is None
+        assert (
+            parse_kaji_review_marker(f"<!-- kaji-review: state=BOGUS sha={self._SHA} -->") is None
+        )
 
     def test_empty_line_returns_none(self) -> None:
         from kaji_harness.providers.github import parse_kaji_review_marker
 
         assert parse_kaji_review_marker("") is None
+
+    def test_build_rejects_invalid_sha(self) -> None:
+        """build は 40 桁 hex でない sha を ValueError で弾く。"""
+        import pytest
+
+        from kaji_harness.providers.github import build_kaji_review_marker
+
+        with pytest.raises(ValueError, match="invalid head sha"):
+            build_kaji_review_marker("APPROVED", "not-a-sha")

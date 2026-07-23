@@ -132,10 +132,15 @@ compatibility contract.
   <reason>` on stderr):
   1. **self-PR** — PR author equals the authenticated user.
   2. **fresh APPROVED marker** — the latest `kaji-review` decision marker
-     (`<!-- kaji-review: state=APPROVED -->`), read from **all** issue comments via
-     `gh api --paginate --slurp`, was posted after the current HEAD commit time
-     (`committedDate`). A newer `CHANGES_REQUESTED`, a stale APPROVED, or no marker
-     all DENY.
+     (`<!-- kaji-review: state=APPROVED sha=<40-hex> -->`), read from **all** issue
+     comments via `gh api --paginate --slurp`, was **posted by the authenticated
+     user** and carries a `sha` equal to the current `headRefOid`. Markers authored
+     by anyone else, markers whose `sha` does not match the current HEAD (e.g. a
+     stale approval left behind after a force-push, including force-pushes to a
+     backdated commit), a newer `CHANGES_REQUESTED` for the current HEAD, or no
+     marker all DENY. Binding to the HEAD SHA (rather than the attacker-controllable
+     `committedDate`) and to the comment author closes the spoofing / stale-approval
+     bypass paths.
   3. **policy-block eligibility** — `mergeStateStatus == BLOCKED` **and**
      `mergeable == MERGEABLE` **and** no failing/pending `statusCheckRollup` entry.
      This excludes transient/auth/conflict/non-policy failures from elevated merge.
@@ -149,8 +154,9 @@ compatibility contract.
   resolves review threads.
 - `kaji pr review <pr> --approve` / `--request-changes` detects self-PRs
   (PR author == authenticated user). For self-PRs, it posts an issue comment
-  marker (`<!-- kaji-review: state=APPROVED -->` /
-  `<!-- kaji-review: state=CHANGES_REQUESTED -->`) through the Issue Comments
+  marker (`<!-- kaji-review: state=APPROVED sha=<head> -->` /
+  `<!-- kaji-review: state=CHANGES_REQUESTED sha=<head> -->`, where `<head>` is the
+  current `headRefOid`) through the Issue Comments
   API and returns rc=0, because GitHub rejects author APPROVE / REQUEST_CHANGES
   events with 422 (`Can not approve your own pull request` /
   `Can not request changes on your own pull request`). For non-self PRs, it

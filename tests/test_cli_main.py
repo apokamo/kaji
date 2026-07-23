@@ -1069,6 +1069,16 @@ class TestHasRequestChangesFlag:
         assert _has_request_changes_flag(["199", "-rx"]) is False
 
 
+# _github_pr_review の 1 回目 `gh pr view --json author,headRefOid` が返す head SHA。
+# self-PR marker に埋め込まれ、body assertion でも同じ値を参照する（Issue #368）。
+_REVIEW_HEAD_SHA = "a" * 40
+
+
+def _pr_view_stdout(login: str, sha: str = _REVIEW_HEAD_SHA) -> str:
+    """`gh pr view --json author,headRefOid` の JSON stdout を組む test helper。"""
+    return json.dumps({"author": {"login": login}, "headRefOid": sha})
+
+
 @pytest.mark.small
 class TestGithubPrReviewHandler:
     """`_github_pr_review` を `_handle_pr` 非経由で直接呼ぶ handler 単体テスト。
@@ -1091,7 +1101,7 @@ class TestGithubPrReviewHandler:
         which, detect, run = self._patches()
         with which, detect, run as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="apokamo\n", stderr=""),
+                MagicMock(returncode=0, stdout=_pr_view_stdout("apokamo"), stderr=""),
                 MagicMock(returncode=0, stdout="apokamo\n", stderr=""),
                 MagicMock(returncode=0, stdout="", stderr=""),
             ]
@@ -1104,7 +1114,7 @@ class TestGithubPrReviewHandler:
             assert third_cmd[:4] == ["gh", "api", "--method", "POST"]
             assert third_cmd[4] == "repos/owner/repo/issues/185/comments"
             body_arg = third_cmd[third_cmd.index("-f") + 1]
-            marker = build_kaji_review_marker("APPROVED")
+            marker = build_kaji_review_marker("APPROVED", _REVIEW_HEAD_SHA)
             assert body_arg.startswith(f"body={marker}\n")
             assert body_arg.endswith("LGTM")
             # gh pr review は呼ばれていない
@@ -1119,7 +1129,7 @@ class TestGithubPrReviewHandler:
         which, detect, run = self._patches()
         with which, detect, run as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="apokamo\n", stderr=""),
+                MagicMock(returncode=0, stdout=_pr_view_stdout("apokamo"), stderr=""),
                 MagicMock(returncode=0, stdout="apokamo\n", stderr=""),
                 MagicMock(returncode=0, stdout="", stderr=""),
             ]
@@ -1134,7 +1144,7 @@ class TestGithubPrReviewHandler:
         which, detect, run = self._patches()
         with which, detect, run as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="me\n", stderr=""),
+                MagicMock(returncode=0, stdout=_pr_view_stdout("me"), stderr=""),
                 MagicMock(returncode=0, stdout="me\n", stderr=""),
                 MagicMock(returncode=0, stdout="", stderr=""),
             ]
@@ -1142,7 +1152,7 @@ class TestGithubPrReviewHandler:
             assert rc == 0
             third_cmd = mock_run.call_args_list[2][0][0]
             body_arg = third_cmd[third_cmd.index("-f") + 1]
-            marker = build_kaji_review_marker("APPROVED")
+            marker = build_kaji_review_marker("APPROVED", _REVIEW_HEAD_SHA)
             assert body_arg == f"body={marker}\n"
 
     def test_non_self_pr_approve_forwards_to_gh(self) -> None:
@@ -1151,7 +1161,7 @@ class TestGithubPrReviewHandler:
         which, detect, run = self._patches()
         with which, detect, run as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="alice\n", stderr=""),
+                MagicMock(returncode=0, stdout=_pr_view_stdout("alice"), stderr=""),
                 MagicMock(returncode=0, stdout="bob\n", stderr=""),
                 MagicMock(returncode=0),
             ]
@@ -1237,7 +1247,7 @@ class TestGithubPrReviewHandler:
         which, detect, run = self._patches()
         with which, detect, run as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="alice\n", stderr=""),
+                MagicMock(returncode=0, stdout=_pr_view_stdout("alice"), stderr=""),
                 MagicMock(returncode=1, stdout="", stderr="auth error\n"),
             ]
             rc = _github_pr_review(["185", "--approve"], repo_override="owner/repo")
@@ -1251,7 +1261,7 @@ class TestGithubPrReviewHandler:
         which, detect, run = self._patches()
         with which, detect, run as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="me\n", stderr=""),
+                MagicMock(returncode=0, stdout=_pr_view_stdout("me"), stderr=""),
                 MagicMock(returncode=0, stdout="me\n", stderr=""),
                 MagicMock(returncode=1, stdout="", stderr="API error\n"),
             ]
@@ -1266,7 +1276,7 @@ class TestGithubPrReviewHandler:
         which, detect, run = self._patches()
         with which, detect, run as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="me\n", stderr=""),
+                MagicMock(returncode=0, stdout=_pr_view_stdout("me"), stderr=""),
                 MagicMock(returncode=0, stdout="me\n", stderr=""),
                 MagicMock(returncode=0, stdout="", stderr=""),
             ]
@@ -1274,7 +1284,7 @@ class TestGithubPrReviewHandler:
             assert rc == 0
             third_cmd = mock_run.call_args_list[2][0][0]
             body_arg = third_cmd[third_cmd.index("-f") + 1]
-            marker = build_kaji_review_marker("APPROVED")
+            marker = build_kaji_review_marker("APPROVED", _REVIEW_HEAD_SHA)
             assert body_arg == f"body={marker}\nLGTM"
 
     def test_self_pr_approve_short_a_alias(self) -> None:
@@ -1284,7 +1294,7 @@ class TestGithubPrReviewHandler:
         which, detect, run = self._patches()
         with which, detect, run as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="me\n", stderr=""),
+                MagicMock(returncode=0, stdout=_pr_view_stdout("me"), stderr=""),
                 MagicMock(returncode=0, stdout="me\n", stderr=""),
                 MagicMock(returncode=0, stdout="", stderr=""),
             ]
@@ -1302,7 +1312,7 @@ class TestGithubPrReviewHandler:
         which, detect, run = self._patches()
         with which, detect, run as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="me\n", stderr=""),
+                MagicMock(returncode=0, stdout=_pr_view_stdout("me"), stderr=""),
                 MagicMock(returncode=0, stdout="me\n", stderr=""),
                 MagicMock(returncode=0, stdout="", stderr=""),
             ]
@@ -1367,7 +1377,7 @@ class TestGithubPrReviewHandler:
 
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="alice\n", stderr=""),
+                MagicMock(returncode=0, stdout=_pr_view_stdout("alice"), stderr=""),
                 MagicMock(returncode=0, stdout="alice\n", stderr=""),
                 MagicMock(returncode=0, stdout="", stderr=""),
             ]
@@ -1390,7 +1400,7 @@ class TestGithubPrReviewHandler:
 
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="alice\n", stderr=""),
+                MagicMock(returncode=0, stdout=_pr_view_stdout("alice"), stderr=""),
                 MagicMock(returncode=0, stdout="alice\n", stderr=""),
                 MagicMock(returncode=0, stdout="", stderr=""),
             ]
@@ -1414,7 +1424,7 @@ class TestGithubPrReviewHandler:
         which, detect, run = self._patches()
         with which, detect, run as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="apokamo\n", stderr=""),
+                MagicMock(returncode=0, stdout=_pr_view_stdout("apokamo"), stderr=""),
                 MagicMock(returncode=0, stdout="apokamo\n", stderr=""),
                 MagicMock(returncode=0, stdout="", stderr=""),
             ]
@@ -1428,7 +1438,7 @@ class TestGithubPrReviewHandler:
             assert third_cmd[:4] == ["gh", "api", "--method", "POST"]
             assert third_cmd[4] == "repos/owner/repo/issues/199/comments"
             body_arg = third_cmd[third_cmd.index("-f") + 1]
-            marker = build_kaji_review_marker("CHANGES_REQUESTED")
+            marker = build_kaji_review_marker("CHANGES_REQUESTED", _REVIEW_HEAD_SHA)
             assert body_arg == f"body={marker}\nMust Fix items"
             # gh pr review は呼ばれていない
             for call in mock_run.call_args_list:
@@ -1443,7 +1453,7 @@ class TestGithubPrReviewHandler:
         which, detect, run = self._patches()
         with which, detect, run as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="apokamo\n", stderr=""),
+                MagicMock(returncode=0, stdout=_pr_view_stdout("apokamo"), stderr=""),
                 MagicMock(returncode=0, stdout="apokamo\n", stderr=""),
                 MagicMock(returncode=0, stdout="", stderr=""),
             ]
@@ -1456,7 +1466,9 @@ class TestGithubPrReviewHandler:
             third_cmd = mock_run.call_args_list[2][0][0]
             body_arg = third_cmd[third_cmd.index("-f") + 1]
             # marker prefix + user body の構造を assert
-            assert body_arg.startswith("body=<!-- kaji-review: state=CHANGES_REQUESTED -->\n")
+            assert body_arg.startswith(
+                f"body=<!-- kaji-review: state=CHANGES_REQUESTED sha={_REVIEW_HEAD_SHA} -->\n"
+            )
             assert body_arg.endswith(user_body)
 
     def test_self_pr_request_changes_stdout_suppressed_via_capture_output(self) -> None:
@@ -1465,7 +1477,7 @@ class TestGithubPrReviewHandler:
         which, detect, run = self._patches()
         with which, detect, run as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="apokamo\n", stderr=""),
+                MagicMock(returncode=0, stdout=_pr_view_stdout("apokamo"), stderr=""),
                 MagicMock(returncode=0, stdout="apokamo\n", stderr=""),
                 MagicMock(returncode=0, stdout="", stderr=""),
             ]
@@ -1483,7 +1495,7 @@ class TestGithubPrReviewHandler:
         which, detect, run = self._patches()
         with which, detect, run as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="alice\n", stderr=""),
+                MagicMock(returncode=0, stdout=_pr_view_stdout("alice"), stderr=""),
                 MagicMock(returncode=0, stdout="bob\n", stderr=""),
                 MagicMock(returncode=0),
             ]
@@ -1510,7 +1522,7 @@ class TestGithubPrReviewHandler:
         which, detect, run = self._patches()
         with which, detect, run as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="me\n", stderr=""),
+                MagicMock(returncode=0, stdout=_pr_view_stdout("me"), stderr=""),
                 MagicMock(returncode=0, stdout="me\n", stderr=""),
                 MagicMock(returncode=0, stdout="", stderr=""),
             ]
@@ -1581,7 +1593,7 @@ class TestGithubPrReviewHandler:
         ):
             # mock があっても呼ばれない（validation 段で停止）
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="alice\n", stderr=""),
+                MagicMock(returncode=0, stdout=_pr_view_stdout("alice"), stderr=""),
                 MagicMock(returncode=0, stdout="bob\n", stderr=""),
             ]
             rc = _github_pr_review(["199", "--request-changes"], repo_override="owner/repo")
@@ -1596,7 +1608,7 @@ class TestGithubPrReviewHandler:
         which, detect, run = self._patches()
         with which, detect, run as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="me\n", stderr=""),
+                MagicMock(returncode=0, stdout=_pr_view_stdout("me"), stderr=""),
                 MagicMock(returncode=0, stdout="me\n", stderr=""),
                 MagicMock(returncode=0, stdout="", stderr=""),
             ]
@@ -1604,7 +1616,7 @@ class TestGithubPrReviewHandler:
             assert rc == 0
             third_cmd = mock_run.call_args_list[2][0][0]
             body_arg = third_cmd[third_cmd.index("-f") + 1]
-            marker = build_kaji_review_marker("APPROVED")
+            marker = build_kaji_review_marker("APPROVED", _REVIEW_HEAD_SHA)
             assert body_arg == f"body={marker}\n"
 
     def test_approve_and_request_changes_mutually_exclusive(self) -> None:
@@ -1640,7 +1652,7 @@ class TestGithubPrReviewHandler:
         which, detect, run = self._patches()
         with which, detect, run as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="alice\n", stderr=""),
+                MagicMock(returncode=0, stdout=_pr_view_stdout("alice"), stderr=""),
                 MagicMock(returncode=1, stdout="", stderr="auth error\n"),
             ]
             rc = _github_pr_review(
@@ -1656,7 +1668,7 @@ class TestGithubPrReviewHandler:
         which, detect, run = self._patches()
         with which, detect, run as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="me\n", stderr=""),
+                MagicMock(returncode=0, stdout=_pr_view_stdout("me"), stderr=""),
                 MagicMock(returncode=0, stdout="me\n", stderr=""),
                 MagicMock(returncode=1, stdout="", stderr="API error\n"),
             ]
@@ -2133,14 +2145,26 @@ def cmd_run_with_args(*args: str) -> int:
 # run 260723023106 (PR #366) の一次観測に一致する HEAD SHA / commit 時刻。
 _HEAD_SHA = "ccd8036" + "0" * 33  # 40-hex（実 SHA prefix + padding）
 _HEAD_COMMITTED = "2026-07-23T02:31:06Z"
-_MARKER_FRESH_AT = "2026-07-23T08:04:05Z"  # HEAD commit より後（fresh APPROVED）
-_MARKER_STALE_AT = "2026-07-23T01:00:00Z"  # HEAD commit より前（stale）
+_MARKER_FRESH_AT = "2026-07-23T08:04:05Z"  # APPROVED marker の投稿時刻（decision の新旧比較用）
 
 
-def _approved_comment(created_at: str = _MARKER_FRESH_AT) -> dict:
+def _approved_comment(
+    created_at: str = _MARKER_FRESH_AT, *, login: str = "apokamo", sha: str = _HEAD_SHA
+) -> dict:
     return {
-        "body": "<!-- kaji-review: state=APPROVED -->\npr-verify PASS",
+        "body": f"<!-- kaji-review: state=APPROVED sha={sha} -->\npr-verify PASS",
         "created_at": created_at,
+        "user": {"login": login},
+    }
+
+
+def _changes_requested_comment(
+    created_at: str, *, login: str = "apokamo", sha: str = _HEAD_SHA
+) -> dict:
+    return {
+        "body": f"<!-- kaji-review: state=CHANGES_REQUESTED sha={sha} -->\nnit",
+        "created_at": created_at,
+        "user": {"login": login},
     }
 
 
@@ -2161,13 +2185,6 @@ def _pr_view_payload(
         "commits": [{"committedDate": committed}],
         "statusCheckRollup": rollup if rollup is not None else [],
     }
-
-
-def _commit_models(committed: str = _HEAD_COMMITTED) -> list:
-    """検証済み ``_PrCommit`` の list を組む（freshness 純関数テスト用）。"""
-    from kaji_harness.commands.pr import _PrCommit
-
-    return [_PrCommit(committedDate=committed)]
 
 
 def _comment_models(dicts: list[dict]) -> list:
@@ -2231,76 +2248,82 @@ class TestForwardToGhAdminFlags:
 
 @pytest.mark.small
 class TestFreshApprovedMarker:
-    """`_fresh_approved_marker` 純関数の freshness / 1 行目厳密照合の境界検証。"""
+    """`_fresh_approved_marker` 純関数の author 認証 / head-SHA 束縛 / 1 行目厳密照合の境界検証。"""
 
-    def test_fresh_approved_after_head_is_true(self) -> None:
+    _TRUSTED = "apokamo"
+
+    def _call(self, dicts: list[dict], *, head_sha: str = _HEAD_SHA) -> bool:
         from kaji_harness.commands.pr import _fresh_approved_marker
 
+        return _fresh_approved_marker(head_sha, _comment_models(dicts), self._TRUSTED)
+
+    def test_fresh_approved_matching_head_and_author_is_true(self) -> None:
+        assert self._call([_approved_comment()]) is True
+
+    def test_approved_for_other_head_sha_is_false(self) -> None:
+        """marker.sha が現在 HEAD と異なる（backdated/force-push 後の stale approval）は DENY（#368 P2）。"""
+        other = "b" * 40
+        assert self._call([_approved_comment(sha=other)]) is False
+
+    def test_approved_by_untrusted_author_is_false(self) -> None:
+        """認証ユーザー以外が投稿した APPROVED marker は詐称扱いで無視する（#368 P1）。"""
+        assert self._call([_approved_comment(login="attacker")]) is False
+
+    def test_approved_without_user_is_false(self) -> None:
+        """user 欠落（ghost 等）は untrusted 扱いで DENY（fail-closed）。"""
         assert (
-            _fresh_approved_marker(_commit_models(), _comment_models([_approved_comment()])) is True
-        )
-
-    def test_stale_approved_before_head_is_false(self) -> None:
-        from kaji_harness.commands.pr import _fresh_approved_marker
-
-        assert (
-            _fresh_approved_marker(
-                _commit_models(), _comment_models([_approved_comment(_MARKER_STALE_AT)])
-            )
-            is False
-        )
-
-    def test_stale_approved_equal_to_head_is_false(self) -> None:
-        """createdAt == HEAD committedDate の等号境界は stale（厳密 > のため DENY 側）。"""
-        from kaji_harness.commands.pr import _fresh_approved_marker
-
-        assert (
-            _fresh_approved_marker(
-                _commit_models(), _comment_models([_approved_comment(_HEAD_COMMITTED)])
+            self._call(
+                [
+                    {
+                        "body": f"<!-- kaji-review: state=APPROVED sha={_HEAD_SHA} -->\nok",
+                        "created_at": _MARKER_FRESH_AT,
+                    }
+                ]
             )
             is False
         )
 
     def test_latest_changes_requested_is_false(self) -> None:
-        from kaji_harness.commands.pr import _fresh_approved_marker
-
-        comments = _comment_models(
-            [
-                _approved_comment("2026-07-23T08:00:00Z"),
-                {
-                    "body": "<!-- kaji-review: state=CHANGES_REQUESTED -->\nnit",
-                    "created_at": "2026-07-23T09:00:00Z",
-                },
-            ]
-        )
-        assert _fresh_approved_marker(_commit_models(), comments) is False
+        comments = [
+            _approved_comment("2026-07-23T08:00:00Z"),
+            _changes_requested_comment("2026-07-23T09:00:00Z"),
+        ]
+        assert self._call(comments) is False
 
     def test_no_marker_is_false(self) -> None:
-        from kaji_harness.commands.pr import _fresh_approved_marker
-
-        comments = _comment_models(
-            [{"body": "just a normal comment", "created_at": _MARKER_FRESH_AT}]
-        )
-        assert _fresh_approved_marker(_commit_models(), comments) is False
+        comments = [
+            {
+                "body": "just a normal comment",
+                "created_at": _MARKER_FRESH_AT,
+                "user": {"login": self._TRUSTED},
+            }
+        ]
+        assert self._call(comments) is False
 
     def test_quoted_marker_in_body_not_detected(self) -> None:
         """本文中に marker を引用しただけの comment は decision として拾わない。"""
-        from kaji_harness.commands.pr import _fresh_approved_marker
+        comments = [
+            {
+                "body": f"discussion about `<!-- kaji-review: state=APPROVED sha={_HEAD_SHA} -->`",
+                "created_at": _MARKER_FRESH_AT,
+                "user": {"login": self._TRUSTED},
+            }
+        ]
+        assert self._call(comments) is False
 
-        comments = _comment_models(
-            [
-                {
-                    "body": "discussion about `<!-- kaji-review: state=APPROVED -->` marker",
-                    "created_at": _MARKER_FRESH_AT,
-                }
-            ]
-        )
-        assert _fresh_approved_marker(_commit_models(), comments) is False
+    def test_legacy_marker_without_sha_is_false(self) -> None:
+        """sha を持たない旧形式 marker は非承認扱い（fail-closed）。"""
+        comments = [
+            {
+                "body": "<!-- kaji-review: state=APPROVED -->\nok",
+                "created_at": _MARKER_FRESH_AT,
+                "user": {"login": self._TRUSTED},
+            }
+        ]
+        assert self._call(comments) is False
 
     def test_empty_comments_is_false(self) -> None:
-        from kaji_harness.commands.pr import _fresh_approved_marker
-
-        assert _fresh_approved_marker(_commit_models(), []) is False
+        assert self._call([]) is False
 
 
 @pytest.mark.small
@@ -2431,10 +2454,7 @@ class TestPrAdminMergeCheck:
         comments = [
             [
                 _approved_comment("2026-07-23T08:00:00Z"),
-                {
-                    "body": "<!-- kaji-review: state=CHANGES_REQUESTED -->\nnit",
-                    "created_at": "2026-07-23T09:00:00Z",
-                },
+                _changes_requested_comment("2026-07-23T09:00:00Z"),
             ]
         ]
         rc, _ = self._run(comments=comments)
@@ -2448,10 +2468,19 @@ class TestPrAdminMergeCheck:
         assert rc != EXIT_OK
         assert capsys.readouterr().out == ""
 
-    def test_deny_stale_approved(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_deny_approved_for_other_head_sha(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """marker.sha が現在 HEAD と不一致（force-push 後の stale approval）は CLI 経由でも DENY（#368 P2）。"""
         from kaji_harness.commands.exit_codes import EXIT_OK
 
-        rc, _ = self._run(comments=[[_approved_comment(_MARKER_STALE_AT)]])
+        rc, _ = self._run(comments=[[_approved_comment(sha="b" * 40)]])
+        assert rc != EXIT_OK
+        assert capsys.readouterr().out == ""
+
+    def test_deny_approved_by_untrusted_author(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """認証ユーザー以外が投稿した APPROVED marker は詐称扱いで DENY（#368 P1）。"""
+        from kaji_harness.commands.exit_codes import EXIT_OK
+
+        rc, _ = self._run(comments=[[_approved_comment(login="attacker")]])
         assert rc != EXIT_OK
         assert capsys.readouterr().out == ""
 
@@ -2462,20 +2491,18 @@ class TestPrAdminMergeCheck:
         assert rc != EXIT_OK
         assert capsys.readouterr().out == ""
 
-    def test_deny_stale_approved_equal_boundary(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """createdAt == HEAD committedDate（等号）は CLI 経由でも DENY。"""
-        from kaji_harness.commands.exit_codes import EXIT_OK
-
-        rc, _ = self._run(comments=[[_approved_comment(_HEAD_COMMITTED)]])
-        assert rc != EXIT_OK
-        assert capsys.readouterr().out == ""
-
     def test_deny_naive_created_at_is_controlled(self, capsys: pytest.CaptureFixture[str]) -> None:
         """timezone 欠落の created_at は traceback でなく制御された DENY（stdout 空・非 0）。"""
         from kaji_harness.commands.exit_codes import EXIT_OK
 
         comments = [
-            [{"body": "<!-- kaji-review: state=APPROVED -->\nx", "created_at": "2026-07-24"}]
+            [
+                {
+                    "body": f"<!-- kaji-review: state=APPROVED sha={_HEAD_SHA} -->\nx",
+                    "created_at": "2026-07-24",
+                    "user": {"login": "apokamo"},
+                }
+            ]
         ]
         rc, _ = self._run(comments=comments)
         assert rc != EXIT_OK
