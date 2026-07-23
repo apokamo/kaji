@@ -2163,6 +2163,20 @@ def _pr_view_payload(
     }
 
 
+def _commit_models(committed: str = _HEAD_COMMITTED) -> list:
+    """検証済み ``_PrCommit`` の list を組む（freshness 純関数テスト用）。"""
+    from kaji_harness.commands.pr import _PrCommit
+
+    return [_PrCommit(committedDate=committed)]
+
+
+def _comment_models(dicts: list[dict]) -> list:
+    """comment dict を Pydantic 検証して ``_PrIssueComment`` の list に変換する。"""
+    from kaji_harness.commands.pr import _PrIssueComment
+
+    return [_PrIssueComment.model_validate(d) for d in dicts]
+
+
 @pytest.mark.small
 class TestForwardToGhAdminFlags:
     """`kaji pr merge --admin` / `--match-head-commit` の契約 lock（Issue #368 + MF2）。"""
@@ -2219,55 +2233,103 @@ class TestForwardToGhAdminFlags:
 class TestFreshApprovedMarker:
     """`_fresh_approved_marker` 純関数の freshness / 1 行目厳密照合の境界検証。"""
 
-    def _commits(self, committed: str = _HEAD_COMMITTED) -> list[dict]:
-        return [{"committedDate": committed}]
-
     def test_fresh_approved_after_head_is_true(self) -> None:
         from kaji_harness.commands.pr import _fresh_approved_marker
 
-        assert _fresh_approved_marker(self._commits(), [_approved_comment()]) is True
+        assert (
+            _fresh_approved_marker(_commit_models(), _comment_models([_approved_comment()])) is True
+        )
 
     def test_stale_approved_before_head_is_false(self) -> None:
         from kaji_harness.commands.pr import _fresh_approved_marker
 
         assert (
-            _fresh_approved_marker(self._commits(), [_approved_comment(_MARKER_STALE_AT)]) is False
+            _fresh_approved_marker(
+                _commit_models(), _comment_models([_approved_comment(_MARKER_STALE_AT)])
+            )
+            is False
+        )
+
+    def test_stale_approved_equal_to_head_is_false(self) -> None:
+        """createdAt == HEAD committedDate の等号境界は stale（厳密 > のため DENY 側）。"""
+        from kaji_harness.commands.pr import _fresh_approved_marker
+
+        assert (
+            _fresh_approved_marker(
+                _commit_models(), _comment_models([_approved_comment(_HEAD_COMMITTED)])
+            )
+            is False
         )
 
     def test_latest_changes_requested_is_false(self) -> None:
         from kaji_harness.commands.pr import _fresh_approved_marker
 
-        comments = [
-            _approved_comment("2026-07-23T08:00:00Z"),
-            {
-                "body": "<!-- kaji-review: state=CHANGES_REQUESTED -->\nnit",
-                "created_at": "2026-07-23T09:00:00Z",
-            },
-        ]
-        assert _fresh_approved_marker(self._commits(), comments) is False
+        comments = _comment_models(
+            [
+                _approved_comment("2026-07-23T08:00:00Z"),
+                {
+                    "body": "<!-- kaji-review: state=CHANGES_REQUESTED -->\nnit",
+                    "created_at": "2026-07-23T09:00:00Z",
+                },
+            ]
+        )
+        assert _fresh_approved_marker(_commit_models(), comments) is False
 
     def test_no_marker_is_false(self) -> None:
         from kaji_harness.commands.pr import _fresh_approved_marker
 
-        comments = [{"body": "just a normal comment", "created_at": _MARKER_FRESH_AT}]
-        assert _fresh_approved_marker(self._commits(), comments) is False
+        comments = _comment_models(
+            [{"body": "just a normal comment", "created_at": _MARKER_FRESH_AT}]
+        )
+        assert _fresh_approved_marker(_commit_models(), comments) is False
 
     def test_quoted_marker_in_body_not_detected(self) -> None:
         """本文中に marker を引用しただけの comment は decision として拾わない。"""
         from kaji_harness.commands.pr import _fresh_approved_marker
 
-        comments = [
-            {
-                "body": "discussion about `<!-- kaji-review: state=APPROVED -->` marker",
-                "created_at": _MARKER_FRESH_AT,
-            }
-        ]
-        assert _fresh_approved_marker(self._commits(), comments) is False
+        comments = _comment_models(
+            [
+                {
+                    "body": "discussion about `<!-- kaji-review: state=APPROVED -->` marker",
+                    "created_at": _MARKER_FRESH_AT,
+                }
+            ]
+        )
+        assert _fresh_approved_marker(_commit_models(), comments) is False
 
     def test_empty_comments_is_false(self) -> None:
         from kaji_harness.commands.pr import _fresh_approved_marker
 
-        assert _fresh_approved_marker(self._commits(), []) is False
+        assert _fresh_approved_marker(_commit_models(), []) is False
+
+
+@pytest.mark.small
+class TestGithubPayloadValidation:
+    """外部 GitHub payload の Pydantic 検証（AGENTS.md「外部入力は Pydantic で検証する」/ #368 MF1）。"""
+
+    def test_naive_committed_date_rejected(self) -> None:
+        """timezone 欠落の committedDate（例 ``2026-07-24``）は ValidationError で弾く。"""
+        from pydantic import ValidationError
+
+        from kaji_harness.commands.pr import _PrCommit
+
+        with pytest.raises(ValidationError):
+            _PrCommit.model_validate({"committedDate": "2026-07-24"})
+
+    def test_naive_created_at_rejected(self) -> None:
+        """timezone 欠落の created_at は ValidationError で弾く（naive/aware 比較の TypeError 回避）。"""
+        from pydantic import ValidationError
+
+        from kaji_harness.commands.pr import _PrIssueComment
+
+        with pytest.raises(ValidationError):
+            _PrIssueComment.model_validate({"body": "x", "created_at": "2026-07-24"})
+
+    def test_repo_permissions_absent_defaults_to_non_admin(self) -> None:
+        """permissions 不在は fail-closed（admin=False）。"""
+        from kaji_harness.commands.pr import _GhRepo
+
+        assert _GhRepo.model_validate({}).permissions.admin is False
 
 
 @pytest.mark.small
@@ -2281,7 +2343,7 @@ class TestPrAdminMergeCheck:
         data: object = None,
         comments: object = None,
         me: str = "apokamo",
-        admin: str = "true",
+        admin: bool = True,
         branch: str = "chore/331",
     ) -> tuple[int, object]:
         from kaji_harness.commands.pr import _pr_admin_merge_check
@@ -2296,8 +2358,10 @@ class TestPrAdminMergeCheck:
             MagicMock(returncode=0, stdout=json.dumps(pr_list), stderr=""),
             MagicMock(returncode=0, stdout=json.dumps(data), stderr=""),
             MagicMock(returncode=0, stdout=json.dumps(comments), stderr=""),
-            MagicMock(returncode=0, stdout=me + "\n", stderr=""),
-            MagicMock(returncode=0, stdout=admin + "\n", stderr=""),
+            MagicMock(returncode=0, stdout=json.dumps({"login": me}), stderr=""),
+            MagicMock(
+                returncode=0, stdout=json.dumps({"permissions": {"admin": admin}}), stderr=""
+            ),
         ]
         with (
             patch("shutil.which", return_value="/usr/bin/gh"),
@@ -2394,7 +2458,46 @@ class TestPrAdminMergeCheck:
     def test_deny_not_admin(self, capsys: pytest.CaptureFixture[str]) -> None:
         from kaji_harness.commands.exit_codes import EXIT_OK
 
-        rc, _ = self._run(admin="false")
+        rc, _ = self._run(admin=False)
+        assert rc != EXIT_OK
+        assert capsys.readouterr().out == ""
+
+    def test_deny_stale_approved_equal_boundary(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """createdAt == HEAD committedDate（等号）は CLI 経由でも DENY。"""
+        from kaji_harness.commands.exit_codes import EXIT_OK
+
+        rc, _ = self._run(comments=[[_approved_comment(_HEAD_COMMITTED)]])
+        assert rc != EXIT_OK
+        assert capsys.readouterr().out == ""
+
+    def test_deny_naive_created_at_is_controlled(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """timezone 欠落の created_at は traceback でなく制御された DENY（stdout 空・非 0）。"""
+        from kaji_harness.commands.exit_codes import EXIT_OK
+
+        comments = [
+            [{"body": "<!-- kaji-review: state=APPROVED -->\nx", "created_at": "2026-07-24"}]
+        ]
+        rc, _ = self._run(comments=comments)
+        assert rc != EXIT_OK
+        assert capsys.readouterr().out == ""
+
+    def test_deny_naive_committed_date_is_controlled(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """timezone 欠落の committedDate も制御された DENY に縮約する。"""
+        from kaji_harness.commands.exit_codes import EXIT_OK
+
+        rc, _ = self._run(data=_pr_view_payload(committed="2026-07-24"))
+        assert rc != EXIT_OK
+        assert capsys.readouterr().out == ""
+
+    def test_deny_malformed_pr_detail_is_controlled(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """型不正の PR 詳細 payload は ValidationError を DENY へ縮約する。"""
+        from kaji_harness.commands.exit_codes import EXIT_OK
+
+        rc, _ = self._run(data={"author": "not-a-dict"})
         assert rc != EXIT_OK
         assert capsys.readouterr().out == ""
 

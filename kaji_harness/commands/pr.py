@@ -11,6 +11,15 @@ import sys
 from datetime import datetime
 from typing import Any
 
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+)
+
 from ..errors import ConfigLoadError, ConfigNotFoundError
 from ..providers import get_provider
 from ..providers.github import build_kaji_review_marker, parse_kaji_review_marker
@@ -558,38 +567,122 @@ def _admin_merge_deny(reason: str) -> int:
     return EXIT_RUNTIME_ERROR
 
 
-def _parse_iso8601(value: Any) -> datetime | None:
-    """ISO 8601 UTC 文字列を aware ``datetime`` に変換する。不正なら ``None``。"""
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
+# --------------------------------------------------------------------------
+# GitHub payload の Pydantic model（AGENTS.md「外部入力は Pydantic で検証する」）。
+#
+# admin-merge-check は elevated merge の可否という安全判定を外部 GitHub JSON に
+# 依存させるため、payload を手作業の dict 判定でなく Pydantic で検証する。日時は
+# ``AwareDatetime`` を必須化し、timezone 欠落の naive 値（例 ``"2026-07-24"``）を
+# ``ValidationError`` で弾く。これにより freshness 比較（aware vs aware）が
+# ``TypeError: can't compare offset-naive and offset-aware datetimes`` を起こさず、
+# 呼出側で ``_admin_merge_deny`` へ縮約される fail-closed 契約が保たれる（#368 MF1）。
+# ``extra="ignore"`` で gh の追加フィールドは無視する。
+# --------------------------------------------------------------------------
 
 
-def _flatten_slurped_comments(payload: Any) -> list[dict[str, Any]] | None:
-    """``gh api --paginate --slurp`` の array-of-pages を comment list に平坦化する。
+class _PrListItem(BaseModel):
+    """``gh pr list --json number`` の 1 要素。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    number: int
+
+
+class _PrAuthor(BaseModel):
+    """PR author（``.author``）。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    login: str
+
+
+class _PrCommit(BaseModel):
+    """PR commit の 1 件（``.commits[]``）。``committedDate`` は aware 必須。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    committedDate: AwareDatetime  # noqa: N815 (gh JSON のフィールド名に一致)
+
+
+class _PrStatusCheck(BaseModel):
+    """``.statusCheckRollup[]`` の 1 件。CheckRun は ``conclusion``、StatusContext は ``state``。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    conclusion: str | None = None
+    state: str | None = None
+
+
+class _PrDetail(BaseModel):
+    """``gh pr view --json author,mergeable,mergeStateStatus,headRefOid,commits,statusCheckRollup``。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    author: _PrAuthor
+    mergeable: str
+    mergeStateStatus: str  # noqa: N815
+    headRefOid: str  # noqa: N815
+    commits: list[_PrCommit] = Field(default_factory=list)
+    statusCheckRollup: list[_PrStatusCheck] | None = None  # noqa: N815
+
+
+class _PrIssueComment(BaseModel):
+    """``repos/<repo>/issues/<pr>/comments`` の 1 件。``created_at`` は aware 必須。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    body: str = ""
+    created_at: AwareDatetime
+
+
+class _GhUser(BaseModel):
+    """``gh api user``。認証ユーザーの ``login``。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    login: str
+
+
+class _GhRepoPermissions(BaseModel):
+    """``repos/<repo>`` の ``permissions``。``admin`` 不在は fail-closed で ``False``。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    admin: bool = False
+
+
+class _GhRepo(BaseModel):
+    """``gh api repos/<repo>``。認証ユーザーの当該 repo 権限を含む。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    permissions: _GhRepoPermissions = Field(default_factory=_GhRepoPermissions)
+
+
+_PR_LIST_ADAPTER = TypeAdapter(list[_PrListItem])
+_COMMENTS_ADAPTER = TypeAdapter(list[_PrIssueComment])
+
+
+def _flatten_slurped_comments(payload: Any) -> list[Any] | None:
+    """``gh api --paginate --slurp`` の array-of-pages を要素 list に平坦化する。
 
     ``--slurp`` は各ページを 1 つの外側配列に包む（``[[...], [...]]``）。ページを
-    平坦化し、非 slurp の flat list（``[...]``）も許容する。要素が dict / list
-    以外なら形状不正として ``None`` を返す（fail-closed）。
+    平坦化し、非 slurp の flat list（``[...]``）も許容する。ページが list / dict
+    以外なら形状不正として ``None`` を返す（fail-closed）。要素の内容検証は呼出側の
+    ``_COMMENTS_ADAPTER`` に委ね、ここでは構造の平坦化のみを行う。
 
     Args:
         payload: parse 済みの comments JSON。
 
     Returns:
-        平坦化した comment dict の list。形状不正時は ``None``。
+        平坦化した要素の list。形状不正時は ``None``。
     """
     if not isinstance(payload, list):
         return None
-    flat: list[dict[str, Any]] = []
+    flat: list[Any] = []
     for page in payload:
         if isinstance(page, list):
-            for item in page:
-                if not isinstance(item, dict):
-                    return None
-                flat.append(item)
+            flat.extend(page)
         elif isinstance(page, dict):
             flat.append(page)
         else:
@@ -597,61 +690,51 @@ def _flatten_slurped_comments(payload: Any) -> list[dict[str, Any]] | None:
     return flat
 
 
-def _check_is_ok(check: Any) -> bool:
+def _check_is_ok(check: _PrStatusCheck) -> bool:
     """1 件の status check が bypass 不要な成功 / 中立状態かを返す（fail-closed）。
 
     CheckRun は ``conclusion``、StatusContext は ``state`` を持つ。conclusion が
     空（未完了 CheckRun）は保留とみなし ``False`` を返す。
     """
-    if not isinstance(check, dict):
-        return False
-    conclusion = check.get("conclusion")
-    if conclusion:
-        return conclusion in _OK_CHECK_STATES
-    state = check.get("state")
-    if state:
-        return state in _OK_CHECK_STATES
+    if check.conclusion:
+        return check.conclusion in _OK_CHECK_STATES
+    if check.state:
+        return check.state in _OK_CHECK_STATES
     return False
 
 
-def _fresh_approved_marker(commits: list[Any], comments: list[dict[str, Any]]) -> bool:
+def _fresh_approved_marker(commits: list[_PrCommit], comments: list[_PrIssueComment]) -> bool:
     """現在 HEAD に対応する最新の kaji-review marker が ``APPROVED`` かを返す。
 
     最新 HEAD commit 時刻（``committedDate`` の max）より後に投稿された
     review decision marker のうち最新のものが ``APPROVED`` の場合だけ ``True``。
     最新 marker が ``CHANGES_REQUESTED`` / stale / 不在ならすべて ``False``。
+    ``createdAt == HEAD committedDate`` の等号境界は stale（``latest_dt > head_dt``
+    が厳密比較のため ``False``）とする。
+
+    引数は Pydantic 検証済み model のため、``committedDate`` / ``created_at`` は
+    いずれも aware ``datetime`` で、naive/aware 混在の ``TypeError`` は起こらない。
 
     Args:
-        commits: ``gh pr view --json commits`` の commit list。
-        comments: 平坦化済みの Issue comment list。
+        commits: 検証済み PR commit list。
+        comments: 検証済み Issue comment list。
 
     Returns:
         fresh な ``APPROVED`` marker が存在すれば ``True``。
     """
-    head_dts = [
-        dt
-        for c in commits
-        if isinstance(c, dict)
-        for dt in (_parse_iso8601(c.get("committedDate")),)
-        if dt is not None
-    ]
-    if not head_dts:
+    if not commits:
         return False
-    head_dt = max(head_dts)
+    head_dt = max(c.committedDate for c in commits)
 
     decisions: list[tuple[str, datetime]] = []
     for comment in comments:
-        body = comment.get("body")
-        if not isinstance(body, str) or not body:
+        if not comment.body:
             continue
-        lines = body.splitlines()
+        lines = comment.body.splitlines()
         state = parse_kaji_review_marker(lines[0]) if lines else None
         if state not in _REVIEW_DECISION_STATES:
             continue
-        created = _parse_iso8601(comment.get("created_at"))
-        if created is None:
-            continue
-        decisions.append((state, created))
+        decisions.append((state, comment.created_at))
     if not decisions:
         return False
     latest_state, latest_dt = max(decisions, key=lambda pair: pair[1])
@@ -700,23 +783,23 @@ def _pr_admin_merge_check(rest: list[str], *, repo_override: str | None) -> int:
         return EXIT_RUNTIME_ERROR
 
     # 1. branch → open PR を一意解決（0 件 / 複数件 / 曖昧はすべて DENY）
-    pr_list = _gh_capture_json(
+    pr_list_raw = _gh_capture_json(
         ["pr", "list", "--repo", repo, "--head", branch, "--state", "open", "--json", "number"]
     )
-    if not isinstance(pr_list, list):
+    if pr_list_raw is None:
         return _admin_merge_deny("failed to list open PRs for branch")
+    try:
+        pr_list = _PR_LIST_ADAPTER.validate_python(pr_list_raw)
+    except ValidationError as exc:
+        return _admin_merge_deny(f"unexpected open-PR list payload: {exc.error_count()} error(s)")
     if len(pr_list) != 1:
         return _admin_merge_deny(
             f"expected exactly 1 open PR for head {branch!r}, got {len(pr_list)}"
         )
-    first = pr_list[0]
-    pr_number = first.get("number") if isinstance(first, dict) else None
-    if not isinstance(pr_number, int):
-        return _admin_merge_deny("resolved PR has no numeric number")
-    pr_id = str(pr_number)
+    pr_id = str(pr_list[0].number)
 
     # 2. PR 詳細（HEAD SHA / author / merge 適格性 / check / commit 時刻）
-    data = _gh_capture_json(
+    data_raw = _gh_capture_json(
         [
             "pr",
             "view",
@@ -727,11 +810,15 @@ def _pr_admin_merge_check(rest: list[str], *, repo_override: str | None) -> int:
             "author,mergeable,mergeStateStatus,headRefOid,commits,statusCheckRollup",
         ]
     )
-    if not isinstance(data, dict):
+    if data_raw is None:
         return _admin_merge_deny("failed to fetch PR details")
+    try:
+        data = _PrDetail.model_validate(data_raw)
+    except ValidationError as exc:
+        return _admin_merge_deny(f"unexpected PR detail payload: {exc.error_count()} error(s)")
 
-    head_sha = data.get("headRefOid")
-    if not isinstance(head_sha, str) or _SHA_RE.fullmatch(head_sha) is None:
+    head_sha = data.headRefOid
+    if _SHA_RE.fullmatch(head_sha) is None:
         return _admin_merge_deny("headRefOid missing/invalid")
 
     # 3. 全 comment を pagination 取得（marker 見落とし防止）
@@ -740,47 +827,53 @@ def _pr_admin_merge_check(rest: list[str], *, repo_override: str | None) -> int:
     )
     if comments_payload is None:
         return _admin_merge_deny("failed to fetch PR comments")
-    comments = _flatten_slurped_comments(comments_payload)
-    if comments is None:
+    flat_comments = _flatten_slurped_comments(comments_payload)
+    if flat_comments is None:
         return _admin_merge_deny("unexpected comments payload shape")
+    try:
+        comments = _COMMENTS_ADAPTER.validate_python(flat_comments)
+    except ValidationError as exc:
+        return _admin_merge_deny(f"unexpected comment payload: {exc.error_count()} error(s)")
 
-    me = _gh_capture_value(["api", "user", "--jq", ".login"])
-    if me is None:
+    me_raw = _gh_capture_json(["api", "user"])
+    if me_raw is None:
         return _admin_merge_deny("failed to resolve authenticated user")
-    admin_raw = _gh_capture_value(["api", f"repos/{repo}", "--jq", ".permissions.admin"])
-    if admin_raw is None:
+    try:
+        me = _GhUser.model_validate(me_raw).login
+    except ValidationError as exc:
+        return _admin_merge_deny(f"unexpected user payload: {exc.error_count()} error(s)")
+    repo_raw = _gh_capture_json(["api", f"repos/{repo}"])
+    if repo_raw is None:
         return _admin_merge_deny("failed to resolve repository admin permission")
+    try:
+        repo_model = _GhRepo.model_validate(repo_raw)
+    except ValidationError as exc:
+        return _admin_merge_deny(f"unexpected repository payload: {exc.error_count()} error(s)")
 
     # 条件 A: self-PR
-    author = data.get("author")
-    author_login = author.get("login") if isinstance(author, dict) else None
+    author_login = data.author.login
     if author_login != me:
         return _admin_merge_deny(f"not a self-PR (author={author_login!r}, me={me!r})")
 
     # 条件 B: policy-block 適格性（MF3）
-    merge_state = data.get("mergeStateStatus")
-    if merge_state != _ELIGIBLE_MERGE_STATE:
-        return _admin_merge_deny(f"mergeStateStatus not {_ELIGIBLE_MERGE_STATE}: {merge_state!r}")
-    mergeable = data.get("mergeable")
-    if mergeable != "MERGEABLE":
-        return _admin_merge_deny(f"not MERGEABLE: {mergeable!r}")
-    rollup = data.get("statusCheckRollup")
-    if rollup is None:
-        rollup = []
-    if not isinstance(rollup, list):
-        return _admin_merge_deny("unexpected statusCheckRollup shape")
+    if data.mergeStateStatus != _ELIGIBLE_MERGE_STATE:
+        return _admin_merge_deny(
+            f"mergeStateStatus not {_ELIGIBLE_MERGE_STATE}: {data.mergeStateStatus!r}"
+        )
+    if data.mergeable != "MERGEABLE":
+        return _admin_merge_deny(f"not MERGEABLE: {data.mergeable!r}")
+    rollup = data.statusCheckRollup or []
     if any(not _check_is_ok(c) for c in rollup):
         return _admin_merge_deny("failing/pending status checks present (not bypassed)")
 
     # 条件 C: 現在 HEAD に対応する最新 marker が APPROVED
-    commits = data.get("commits")
-    if not isinstance(commits, list) or not commits:
+    if not data.commits:
         return _admin_merge_deny("PR has no commits")
-    if not _fresh_approved_marker(commits, comments):
+    if not _fresh_approved_marker(data.commits, comments):
         return _admin_merge_deny("no fresh APPROVED marker for current HEAD")
 
-    # 条件 D: repository admin（bypass 権限）。取得失敗も含め非 true は DENY
-    if admin_raw != "true":
+    # 条件 D: repository admin（bypass 権限）。取得失敗も含め admin でなければ DENY
+    if not repo_model.permissions.admin:
         return _admin_merge_deny("authenticated user lacks repo admin bypass")
 
     sys.stdout.write(f"{head_sha}\n")
