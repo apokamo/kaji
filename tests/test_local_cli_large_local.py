@@ -2,7 +2,7 @@
 
 `kaji local init` / `kaji issue create / list / close` を実 subprocess で起動し、
 filesystem 上の生成物 / exit code / stderr を検証する。実 agent CLI（claude /
-codex / gemini）は起動しない（API コスト発生のため、別途 large_forge で扱う）。
+codex / antigravity）は起動しない（API コスト発生のため、別途 large_forge で扱う）。
 
 phase3e-design.md § 4 を参照。
 """

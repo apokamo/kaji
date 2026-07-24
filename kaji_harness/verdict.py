@@ -496,11 +496,6 @@ def _build_formatter_cli_args(agent: str, model: str | None, prompt: str) -> lis
             if model:
                 args += ["-m", model]
             args.append(prompt)
-        case "gemini":
-            # Gemini: -p takes an argument (prompt string), unlike Claude's -p flag.
-            args = ["gemini", "-p", prompt]
-            if model:
-                args += ["-m", model]
         case "antigravity":
             args = ["agy", "-p", prompt]
             if model:
@@ -523,7 +518,7 @@ def create_verdict_formatter(
     raw output into a parseable verdict block.
 
     Args:
-        agent: CLI agent name ("claude" | "codex" | "gemini").
+        agent: CLI agent name ("claude" | "codex" | "antigravity").
         valid_statuses: Valid verdict status values for the prompt.
         model: Optional model override.
         workdir: Optional working directory for subprocess.

@@ -44,7 +44,7 @@ FULL_WORKFLOW_YAML = dedent("""\
       - id: design
         skill: design
         agent: claude
-        model: gemini-2.5-pro
+        model: future-model-name
         effort: high
         max_budget_usd: 5.0
         timeout: 600
@@ -116,7 +116,7 @@ class TestWorkflowParsing:
 
         design = wf.find_step("design")
         assert design is not None
-        assert design.model == "gemini-2.5-pro"
+        assert design.model == "future-model-name"
         assert design.effort == "high"
         assert design.max_budget_usd == 5.0
         assert design.timeout == 600
@@ -1366,12 +1366,6 @@ class TestEffortValidator:
                 step = wf.find_step("only")
                 assert step is not None
                 assert step.effort == value
-
-    @pytest.mark.small
-    def test_parse_skips_validation_for_unknown_agent(self) -> None:
-        """allowed values 辞書に未登録の agent (gemini 等) は passthrough."""
-        wf = load_workflow_from_str(_effort_workflow_yaml("gemini", "anything"))
-        assert wf.find_step("only").effort == "anything"  # type: ignore[union-attr]
 
     @pytest.mark.small
     def test_parse_rejects_non_string_effort(self) -> None:

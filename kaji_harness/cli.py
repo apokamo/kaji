@@ -145,8 +145,6 @@ def build_cli_args(
             return _build_claude_args(step, prompt, workdir, session_id, execution_policy)
         case "codex":
             return _build_codex_args(step, prompt, workdir, session_id, execution_policy)
-        case "gemini":
-            return _build_gemini_args(step, prompt, workdir, session_id, execution_policy)
         case "antigravity":
             return _build_antigravity_args(step, prompt, session_id, execution_policy)
         case _:
@@ -448,26 +446,6 @@ def _build_codex_args(
         case "sandbox":
             args += ["-s", "workspace-write"]
     args.append(prompt)
-    return args
-
-
-def _build_gemini_args(
-    step: Step,
-    prompt: str,
-    workdir: Path,
-    session_id: str | None,
-    execution_policy: str,
-) -> list[str]:
-    args = ["gemini", "-p", prompt, "-o", "stream-json"]
-    if step.model:
-        args += ["-m", step.model]
-    if session_id:
-        args += ["-r", session_id]
-    match execution_policy:
-        case "auto":
-            args += ["--approval-mode", "yolo"]
-        case "sandbox":
-            args.append("-s")
     return args
 
 

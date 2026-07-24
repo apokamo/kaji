@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
-from kaji_harness.adapters import AntigravityAdapter, ClaudeAdapter, CodexAdapter, GeminiAdapter
+from kaji_harness.adapters import AntigravityAdapter, ClaudeAdapter, CodexAdapter
 from kaji_harness.cli import execute_cli, stream_and_log
 from kaji_harness.errors import CLIExecutionError, CLINotFoundError, StepTimeoutError
 from kaji_harness.models import Step
@@ -179,35 +179,6 @@ class TestStreamAndLog:
         assert "Working on it" in result.full_output
         assert result.cost is not None
         assert result.cost.input_tokens == 100
-
-    def test_gemini_streaming(self, tmp_path: Path) -> None:
-        """Gemini JSONL stream extracts session_id, text, and cost from stats."""
-        jsonl_lines = [
-            json.dumps({"type": "init", "session_id": "gem-xyz", "model": "auto"}),
-            json.dumps({"type": "message", "role": "assistant", "content": "Gemini says hi"}),
-            json.dumps(
-                {
-                    "type": "result",
-                    "status": "success",
-                    "stats": {"input_tokens": 500, "output_tokens": 20},
-                }
-            ),
-        ]
-        script = _create_mock_cli_script(tmp_path, jsonl_lines)
-        log_dir = tmp_path / "logs"
-        log_dir.mkdir()
-
-        process = subprocess.Popen(
-            [str(script)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-        )
-        adapter = GeminiAdapter()
-        result = stream_and_log(process, adapter, "implement", log_dir, verbose=False)
-        process.wait()
-
-        assert result.session_id == "gem-xyz"
-        assert "Gemini says hi" in result.full_output
-        assert result.cost is not None
-        assert result.cost.input_tokens == 500
 
     def test_antigravity_plain_stdout_preserves_fidelity(self, tmp_path: Path) -> None:
         """AGY stdout は JSON 風行・空行・前後空白を欠落なく保持する。"""
@@ -833,38 +804,6 @@ class TestTerminalEventBreak:
                     default_timeout=15,
                 )
         assert exc_info.value.step_id == "cfail"
-
-    def test_gemini_failure_terminal_raises_cli_execution_error(self, tmp_path: Path) -> None:
-        """Gemini `result` の status:error は failure terminal として CLIExecutionError。"""
-        jsonl_lines = [
-            json.dumps({"type": "init", "session_id": "g-fail", "model": "auto"}),
-            json.dumps(
-                {
-                    "type": "result",
-                    "status": "error",
-                    "stats": {"input_tokens": 10, "output_tokens": 0},
-                }
-            ),
-        ]
-        script = tmp_path / "gemini_fail.sh"
-        echos = "\n".join(f"echo '{line}'" for line in jsonl_lines)
-        script.write_text(f"#!/bin/bash\n{echos}\nexec sleep 30\n")
-        script.chmod(script.stat().st_mode | stat.S_IEXEC)
-
-        step = Step(id="gfail", skill="t", agent="gemini", on={"PASS": "end"})
-        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
-            with pytest.raises(CLIExecutionError) as exc_info:
-                execute_cli(
-                    step=step,
-                    prompt="x",
-                    workdir=tmp_path,
-                    session_id=None,
-                    log_dir=tmp_path / "logs",
-                    execution_policy="auto",
-                    verbose=False,
-                    default_timeout=15,
-                )
-        assert exc_info.value.step_id == "gfail"
 
     def test_claude_success_terminal_with_self_exit_nonzero_returns_result(
         self, tmp_path: Path

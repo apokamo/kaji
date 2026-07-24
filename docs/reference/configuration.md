@@ -114,9 +114,8 @@ definition. `validate-series` and `run-series --dry-run` do not create the direc
 - `agent_runner` selects whether agent steps launch via a headless CLI or an interactive CLI inside a
   tmux pane. For `interactive_terminal` behavior, CLI options, and precedence, see the
   [Interactive Terminal Runner guide](../cli-guides/interactive-terminal-runner.md).
-  Headless supports Claude, Codex, Gemini, and Antigravity. Interactive terminal supports Claude,
-  Codex, and Antigravity; Gemini remains unsupported there. Antigravity is single-run only and
-  rejects workflow `resume:` in both backends.
+  Headless and interactive terminal modes support Claude, Codex, and Antigravity. Antigravity is
+  single-run only and rejects workflow `resume:` in both backends.
 - `interactive_terminal_close_on_verdict` takes effect only when
   `agent_runner = "interactive_terminal"` (whether to close the pane after a verdict is detected). It
   is inert under headless operation.

@@ -335,7 +335,7 @@ class TestRunnerEntryValidation:
         with patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"):
             with pytest.raises(ValueError, match="does not support agent"):
                 execute_interactive_terminal(
-                    step=Step(id="s", skill="x", agent="gemini"),
+                    step=Step(id="s", skill="x", agent="unsupported"),
                     prompt_path=prompt,
                     verdict_path=tmp_path / "verdict.yaml",
                     workdir=tmp_path,

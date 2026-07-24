@@ -584,7 +584,7 @@ class TestCLILarge:
         ensure_local_issue(workdir, "999")
 
         # Restrict PATH to only the Python executable's directory so that
-        # agent CLIs (claude, codex, gemini) are guaranteed not to be found.
+        # agent CLIs (claude, codex, antigravity) are guaranteed not to be found.
         python_dir = str(Path(sys.executable).parent)
         git_dir = str(Path(__import__("shutil").which("git") or "/usr/bin/git").parent)
         env = {**__import__("os").environ, "PATH": f"{python_dir}:{git_dir}"}

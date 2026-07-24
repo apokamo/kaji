@@ -3,7 +3,7 @@
 ## Project
 
 kaji — AI-driven software development workflow orchestrator。
-AI agent (Claude / Codex / Gemini) を協調させて開発タスクを回す。TDD-first / Docs-as-Code。
+AI agent (Claude / Codex / Antigravity) を協調させて開発タスクを回す。TDD-first / Docs-as-Code。
 
 本ファイルは repo 内で作業する agent 向けの最小指示。外部読者向けの説明は
 README.md / llms.txt が担い、本ファイルには書かない。

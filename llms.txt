@@ -1,6 +1,6 @@
 # kaji
 
-> Closed-loop agentic development workflows for Claude Code, Codex, Gemini CLI, and Antigravity CLI.
+> Closed-loop agentic development workflows for Claude Code, Codex, and Antigravity CLI.
 
 kaji is a Python CLI workflow orchestrator for AI-assisted software development.
 It turns an issue into a resumable design -> implement -> review -> fix -> verify
@@ -16,7 +16,7 @@ in the `kaji_harness` package.
 - Closed-loop workflow: explicit review -> fix -> verify cycles instead of
   one-shot prompting.
 - Multi-agent orchestration: workflow steps can route work to Claude Code,
-  Codex, Gemini CLI, or Antigravity CLI.
+  Codex, or Antigravity CLI.
 - Verdict-driven control flow: steps return `PASS`, `RETRY`, `BACK`, or `ABORT`.
 - Artifact-backed verdicts: `verdict.yaml` is the primary completion signal when
   available.
@@ -157,6 +157,6 @@ Local mode uses local-specific workflows such as
 - Use `docs/ARCHITECTURE.md` for implementation architecture.
 - Use `docs/dev/workflow-authoring.md` and `docs/dev/skill-authoring.md` for
   workflow or skill changes.
-- Do not infer support for agents beyond Claude Code, Codex, Gemini CLI, and Antigravity CLI
+- Do not infer support for agents beyond Claude Code, Codex, and Antigravity CLI
   unless a workflow or adapter explicitly exists.
 - Do not treat `legacy/` as the current runtime.

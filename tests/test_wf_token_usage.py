@@ -299,7 +299,7 @@ def test_attach_usage_distinguishes_missing_reasons(tmp_path: Path) -> None:
     )
     assert (
         wf.attach_usage(
-            replace(base, agent="gemini"),
+            replace(base, agent="antigravity"),
             claude_root=claude_root,
             codex_root=codex_root,
         ).missing_reason
@@ -578,7 +578,7 @@ default_timeout = 30
         run_dir / "run.log",
         [
             _workflow_start(),
-            _step_start("synthetic", 1, "gemini"),
+            _step_start("synthetic", 1, "antigravity"),
             _step_end("synthetic", 1, "PASS"),
         ],
     )
@@ -643,16 +643,16 @@ def test_run_and_step_filters_and_missing_paths(
         run_dir / "run.log",
         [
             _workflow_start(),
-            _step_start("design", 1, "gemini"),
+            _step_start("design", 1, "antigravity"),
             _step_end("design", 1, "PASS"),
-            _step_start("implement", 1, "gemini"),
+            _step_start("implement", 1, "antigravity"),
             _step_end("implement", 1, "PASS"),
         ],
     )
     for step in ("design", "implement"):
         _write_json(
             run_dir / f"steps/{step}/attempt-001/result.json",
-            _result(step, 1, "gemini-session", 10, 20),
+            _result(step, 1, "antigravity-session", 10, 20),
         )
 
     payload = wf.measure(

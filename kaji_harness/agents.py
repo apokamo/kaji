@@ -39,13 +39,6 @@ AGENT_CAPABILITIES: dict[str, AgentCapabilities] = {
         emits_jsonl=True,
         effort_allowed=frozenset({"none", "minimal", "low", "medium", "high", "xhigh"}),
     ),
-    "gemini": AgentCapabilities(
-        binary="gemini",
-        supports_resume=True,
-        supports_interactive_terminal=False,
-        emits_jsonl=True,
-        effort_allowed=None,
-    ),
     "antigravity": AgentCapabilities(
         binary="agy",
         supports_resume=False,
