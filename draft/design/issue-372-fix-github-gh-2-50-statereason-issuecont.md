@@ -89,7 +89,7 @@ CI に持ち込まず、`gh --version` の応答を差し替えて同じ分岐�
 |------|------|
 | なぜ間違っているか | `_run_gh()`（`github.py:99-117`）は `shutil.which("gh")` で **存在** のみ検査し、**version** を検査しない。`view_issue()` が要求する `stateReason` は gh v2.50.0 で `api/query_builder.go` の `IssueFields` に追加された field であり、それ未満の gh は allowlist 検査で exit 1 になる |
 | いつから壊れているか | `stateReason` を `view_issue()` に追加した #313 / commit `49c9a28`（sequential series runner）以降。gh >= 2.50.0 の開発環境では顕在化しなかった |
-| 同じ原因で他に壊れている箇所 | `stateReason` の要求は `github.py:280` の 1 箇所のみ。`list_issues()` は `stateReason` を要求せず、`_parse_issue_payload()` は `payload.get("stateReason", "")` で欠落を許容する（`github.py:240`）。kaji が使う他の gh 機能の下限は `gh api --paginate --slurp`（`github.py:139`）の v2.48.0 で、2.50.0 に包含される。provider 外の gh 起動箇所（`commands/pr.py` の passthrough / `gh pr list --json` / `gh api repos/...`、`sync.py:166` の `gh api -X GET`、`scripts/codex_review_poll.py:156` の `gh api --paginate`）はいずれも v2.50.0 を要する機能を使わない |
+| 同じ原因で他に壊れている箇所 | `stateReason` の要求は `github.py:280` の 1 箇所のみ。`list_issues()` は `stateReason` を要求せず、`_parse_issue_payload()` は `payload.get("stateReason", "")` で欠落を許容する（`github.py:240`）。kaji が使う他の gh 機能の下限は `gh api --paginate --slurp`（`github.py:139`）の v2.48.0 で、2.50.0 に包含される。provider 外の gh 起動箇所（`commands/pr.py` の passthrough / `gh pr list --json` / `gh api repos/...`、`kaji_harness/sync.py:166` の `gh api -X GET`、`kaji_harness/scripts/codex_review_poll.py:156` の `gh api --paginate`）はいずれも v2.50.0 を要する機能を使わない |
 | 既存テストが検出できなかった理由 | provider テストは `subprocess.run` を mock して成功 JSON を返すため、実 `gh` の `--json` field allowlist との互換性を検出できない |
 
 ## インターフェース
@@ -115,6 +115,16 @@ kaji requests the `stateReason` JSON field when reading issues, which gh added
 in v2.50.0; older gh exits with `Unknown JSON field: "stateReason"`.
 Upgrade GitHub CLI: https://github.com/cli/cli#installation
 ```
+
+4 要素はいずれも Issue #372 `## あるべき挙動（EB）` が要求する契約であり、恒久テストで
+検証する。要素と assert 対象 token の対応は次のとおり（テスト戦略 Small 観点 1 と 1 対 1）。
+
+| 要素 | assert 対象 token | 欠落したときに起きること |
+|------|-------------------|--------------------------|
+| 検出 version | `2.45.0` | 利用者が自環境の gh version を特定できない |
+| 必要 version | `2.50.0` | 更新先が不明で復旧できない |
+| その version を要求する理由 | `stateReason`（および旧版で当該 field が利用不能である旨） | OB の `Unknown JSON field: "stateReason"` と結び付かず、なぜ 2.50.0 なのかが不明のまま |
+| 公式インストール手順 | `https://github.com/cli/cli#installation` | 復旧手段が示されない |
 
 ### 追加する内部 IF（すべて private）
 
@@ -170,6 +180,7 @@ provider.create_issue(title="t", body="b")
 | `tests/test_gh_version_large_local.py` | 実 `gh --version` 出力に対する parse 検証（新規） |
 | `README.md` / `README.ja.md` | prerequisites に `gh >= 2.50.0` |
 | `docs/cli-guides/github-mode.md` / `.ja.md` | § 1.1 必須ツール表 + troubleshooting 4.6 |
+| `docs/guides/python-starter.md` / `.ja.md` | § 2.3 に github-mode guide § 1.1 への参照リンクを 1 行追加（version 番号は複記しない） |
 | `docs/dev/development_workflow.md` | 新 section「GitHub CLI の最低 version 管理」 |
 
 リファクタは混在させない。`view_issue()` の field 列・protocol・REST 経路は触らない。
@@ -270,8 +281,22 @@ def _stub_gh_version(request: pytest.FixtureRequest):
         yield
 ```
 
-この stub が preflight の回帰を隠さないよう、`TestGhVersionPreflight` は marker で opt-out し
-probe 経路を直接駆動する。加えて Large-local で実 binary の出力形式を検証する。
+この stub が preflight の回帰を隠さないよう、**probe 経路そのものを検証するテストは
+`gh_version_probe` marker による opt-out を必須とする**。対象は次の 2 つで、どちらも
+marker が無い状態では `_detect_gh_version` が固定値に置換され偽陽性になる。
+
+| 対象 | marker の宣言位置 | marker が無いと起きること |
+|------|-------------------|---------------------------|
+| `tests/test_providers_github.py::TestGhVersionPreflight` | class 単位（`pytestmark` またはデコレータ） | `gh --version` の stdout 差し替えが `_detect_gh_version` の置換に潰され、2.45.0 拒否・fail-open・memo 化のいずれも検証できない |
+| `tests/test_gh_version_large_local.py` | module 単位の `pytestmark` | 実 `gh` binary を 1 度も起動せず固定値で Green になり、parse 前提の乖離を検出できない |
+
+marker は `pyproject.toml` の `[tool.pytest.ini_options] markers` に既存 5 件と同じ形式で
+登録する。ただし現行の `addopts`（`-v --tb=short -n auto`）に `--strict-markers` は
+**含まれていない**ため、marker 名を typo しても pytest は warning を出すだけで opt-out が
+黙って無効化される。したがって marker 宣言だけを頼りにせず、Large-local 側に「独立取得した
+実 version との一致」assertion を置いて構造的に fail させる（後述「Large テスト」観点 1）。
+`--strict-markers` の追加は本 Issue のスコープ（GitHub provider の互換性・診断）外のため
+行わない。
 
 ### 4. docs 更新方針
 
@@ -279,6 +304,8 @@ probe 経路を直接駆動する。加えて Large-local で実 binary の出�
 - `docs/cli-guides/github-mode.md` / `.ja.md` § 1.1 必須ツール表の `gh` 行の備考に
   `Must be on PATH, version >= 2.50.0` を追記し、troubleshooting に `4.6` を追加
   （症状 = 上記エラーメッセージ、原因 = 古い gh、対処 = 公式手順で更新）
+- `docs/guides/python-starter.md` / `.ja.md` § 2.3 に「最低 version は github-mode guide § 1.1
+  を参照」の 1 行を追加する（version 番号は複記せず、正本を 1 箇所に保つ）
 - `docs/dev/development_workflow.md` に新 section を追加し、
   「新しい `--json` field / gh flag を採用する際は `_MIN_GH_VERSION` と README / github-mode
   guide (en/ja) を同時に更新する」ルールと、下限調査の手順（cli/cli の release / compare で
@@ -297,7 +324,8 @@ probe 経路を直接駆動する。加えて Large-local で実 binary の出�
 | probe の実行手段 | `_run_gh()` を経由せず `subprocess.run` を直接呼ぶ | AI の詳細化。根拠: `_ensure_gh_version()` を `_run_gh()` 内に置く人間決定の帰結として再帰が発生するため。review-code で検査 | `kaji_harness.providers.github.subprocess.run` 経由に固定し、既存 mock が覆う形にした |
 | probe の失敗（exit != 0 / OSError）の扱い | 解析不能と同じく fail-open | AI の仮定。根拠: 人間決定の fail-open 趣旨（独自ビルド利用者を無条件に弾かない）と、実際に問題があれば直後の業務 gh 実行でエラーになること。review-design / review-code で検査 | `_detect_gh_version()` が `None` を返す分岐に統合 |
 | 検査の適用範囲 | `GitHubProvider._run_gh()` 経由の経路のみ。`kaji pr` passthrough / `kaji sync from-github` / `codex_review_poll` は対象外 | AI の詳細化。根拠: Issue の対象が「GitHub provider」であること、および grep で確認した通り当該 3 経路は v2.50.0 を要する gh 機能を使わないこと。review-design で検査 | 「根本原因」表に経路ごとの下限根拠を記録し、範囲外の理由を検証可能にした |
-| 既存テストの回帰吸収 | `tests/conftest.py` の autouse fixture で probe を stub、preflight テストは marker で opt-out | AI の詳細化。根拠: 13 箇所の provider 構築を個別修正する案より churn が小さく、将来の provider テスト追加でも同じ配慮が不要。review-code で検査 | marker 名 `gh_version_probe` を定義し、Large-local で実 binary 検証を併置して stub による盲点を塞いだ |
+| 既存テストの回帰吸収 | `tests/conftest.py` の autouse fixture で probe を stub、probe 経路を検証するテストは `gh_version_probe` marker での opt-out を必須とする | AI の詳細化。根拠: 13 箇所の provider 構築を個別修正する案より churn が小さく、将来の provider テスト追加でも同じ配慮が不要。review-code で検査 | marker 名 `gh_version_probe` を定義し、opt-out 必須対象を `TestGhVersionPreflight`（class 単位）と Large-local file（module 単位 `pytestmark`）の 2 つに特定。`--strict-markers` が未設定で typo が silent に通る点を踏まえ、Large-local に「独立取得した実 version との一致」assertion を置いて marker 失効を構造的に検出する |
+| starter guide への最低 version 記載 | version 番号は複記せず、github-mode guide § 1.1 への参照リンクのみ追加 | AI の詳細化（review-design の Should Fix 指摘を受けた再評価）。根拠: `_MIN_GH_VERSION` / README / github-mode guide に加えて 4 つ目の情報源を作ると drift する一方、starter § 1 Prerequisites が `gh` を列挙している以上、要件への到達経路は必要。review-design / i-dev-final-check で検査 | § 2.3 に参照リンク 1 行を追加する範囲に限定 |
 | version 比較方式 | tuple 比較 | AI の詳細化。根拠: 文字列比較では `2.9.0 > 2.50.0` になる。review-code で検査 | `(major, minor, patch)` を int tuple に正規化 |
 | スコープ外 | `LocalProvider` の `close_reason` 読み戻し欠落は別 Issue | Issue #372 `### スコープ外`（人間決定） | 本設計では扱わない |
 
@@ -322,9 +350,12 @@ one-way door の未決は無い。公開 CLI 契約・データ契約・永続�
 検証観点:
 
 1. **再現テスト（OB → EB）**: `gh --version` が `gh version 2.45.0 (2024-04-04)` を返す状態で
-   `view_issue("372")` を呼ぶと `GitHubProviderError` が送出され、message に検出 version
-   `2.45.0` / 必要 version `2.50.0` / インストール URL が含まれる。**修正前は preflight が
-   存在しないため gh が呼ばれ Red**、修正後 Green。
+   `view_issue("372")` を呼ぶと `GitHubProviderError` が送出され、message に「出力」節の
+   4 要素すべて — 検出 version `2.45.0` / 必要 version `2.50.0` / **理由（`stateReason` と、
+   旧版で当該 field が利用できない旨）** / インストール URL `https://github.com/cli/cli#installation`
+   — が含まれる。理由要素を assert に含めるのは、これを落としても version 2 要素と URL だけで
+   Green になり、Issue の EB「その version を要求する理由」を満たさない実装が通過してしまう
+   ため。**修正前は preflight が存在しないため gh が呼ばれ Red**、修正後 Green。
 2. **mutation 前停止**: 同条件で `create_issue()` / `edit_issue()` / `close_issue()` が
    raise し、捕捉した argv 一覧に `["gh", "issue", "create"]` 等の業務コマンドが
    **1 件も含まれない**（`gh --version` のみ）。
@@ -347,15 +378,35 @@ subprocess の 1 点のみである。その境界は Small（mock による分�
 
 ### Large テスト
 
-`tests/test_gh_version_large_local.py`（`pytest.mark.large` + `pytest.mark.large_local`、
-`shutil.which("gh") is None` で skip）。ネットワーク疎通は不要。
+`tests/test_gh_version_large_local.py`（新規）。ネットワーク疎通は不要。
+module 冒頭で marker を **3 つとも** 宣言し、`shutil.which("gh") is None` で skip する。
+
+```python
+pytestmark = [
+    pytest.mark.large,
+    pytest.mark.large_local,
+    # 必須: conftest の autouse fixture (_stub_gh_version) を opt-out する。
+    # これが無いと _detect_gh_version が固定値に置換され、実 binary を 1 度も
+    # 起動しないまま Green になり、本 file の存在意義が消える。
+    pytest.mark.gh_version_probe,
+]
+```
+
+`gh_version_probe` marker を module 単位で宣言することで、本 file に後から test を
+追加しても opt-out が自動的に効く（test ごとの付け忘れが起きない）。
 
 検証観点:
 
-1. 実 `gh --version` の stdout に対し `_detect_gh_version()` が `None` ではなく
-   3 要素 int tuple を返す（parse 前提が実 binary の出力形式と乖離していないことの検証。
-   Small の mock だけでは誤った regex がそのまま通ってしまう）。
-2. 解析した version が `_MIN_GH_VERSION` 以上なら `_ensure_gh_version()` が raise しない。
+1. **stub 無効化の自己検証**: test 内で `subprocess.run(["gh", "--version"])` を独立に実行して
+   得た version 文字列と、`_detect_gh_version()` の戻り値が一致する。autouse stub が効いた
+   状態では戻り値が `_MIN_GH_VERSION` 固定になるため、`gh != 2.50.0` の環境ではこの assertion
+   が fail する。「実 binary を起動している」ことを assertion で担保し、marker の付け忘れが
+   silent に通らないようにする。
+2. **parse 前提の検証**: 実 `gh --version` の stdout に対し `_detect_gh_version()` が `None`
+   ではなく 3 要素 int tuple を返す（parse 前提が実 binary の出力形式と乖離していないことの
+   検証。Small の mock だけでは誤った regex がそのまま通ってしまう）。
+3. **preflight の疎通**: 解析した version が `_MIN_GH_VERSION` 以上なら
+   `_ensure_gh_version()` が raise しない。
 
 `large_forge`（実 GitHub API 疎通）は追加しない。本変更は gh binary の version 検査で
 完結し、GitHub API の応答に依存しない。
@@ -379,7 +430,7 @@ docs 変更を含むため `make verify-docs` も実行する。
 | `docs/ARCHITECTURE.md` | なし | レイヤ構成・モジュール責務は不変 |
 | `docs/reference/python/` | なし | Python 規約の変更なし |
 | `docs/dev/testing-convention.md` | なし | 既存の patch スコープ規約の範囲内。新規則は追加しない |
-| `docs/guides/python-starter.md` / `.ja.md` | なし | § 2.3 は認証前提のみを扱う。必須ツールの version 表の正本は README / github-mode guide であり、二重管理を避ける（AI 判断。review-design で検査） |
+| `docs/guides/python-starter.md` / `.ja.md` | あり（リンクのみ） | § 1 の Prerequisites 行（en `python-starter.md:29` / ja `python-starter.ja.md:26`）が `gh` を <https://cli.github.com/> リンク付きで列挙し、§ 2.3 が `gh auth status` を要求する。version 番号をここに複記すると `_MIN_GH_VERSION` / README / github-mode guide に続く 4 つ目の情報源になり drift するため、**version は書かず** § 2.3 から github-mode guide § 1.1（最低 version の正本）への参照リンクを 1 行追加し、starter 利用者が要件へ到達できるようにする |
 | `AGENTS.md` / `CLAUDE.md` | なし | 開発規約の変更なし |
 | `llms.txt` | なし | `gh` の前提条件を記載していない |
 
