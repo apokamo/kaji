@@ -28,6 +28,12 @@ Use `agent: antigravity` for a single workflow step:
 ```yaml
 name: antigravity-example
 execution_policy: auto
+cycles:
+  implementation:
+    entry: implement
+    loop: [implement]
+    max_iterations: 3
+    on_exhaust: ABORT
 steps:
   - id: implement
     skill: issue-implement
@@ -42,6 +48,12 @@ steps:
 
 `model` is passed through to `--model`. Supported `effort` values are `low`,
 `medium`, and `high`; kaji rejects other values while parsing the workflow.
+
+The `RETRY: implement` self-edge needs the matching one-step `cycles` entry.
+kaji counts iterations only for steps that belong to a `cycles.*.loop` tail, so
+a self-`RETRY` edge without a cycle would re-dispatch the step without any cap.
+With the cycle above, the fourth entry into `implement` yields the synthetic
+`on_exhaust` verdict (`ABORT`) instead of looping forever.
 
 ## Headless execution
 
