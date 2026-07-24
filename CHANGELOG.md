@@ -6,6 +6,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Deprecated
+
+- **`inject_verdict`** (workflow step field) is deprecated and will be removed
+  in the next minor release (apokamo/kaji#310, #381). `kaji validate` and
+  `kaji run` now print a deprecation warning to stderr for any workflow file
+  that declares `inject_verdict` on one or more steps (aggregated to a single
+  line per file regardless of how many steps declare it). The field's current
+  behavior — injecting `previous_verdict` into the step prompt — is unchanged
+  in this release.
+  - **Broken contract**: after removal, `inject_verdict` will no longer inject
+    `previous_verdict` into the step prompt; the field will become an explicit
+    migration error instead of being silently ignored.
+  - **How to check whether you are affected**: run
+    `rg -n 'inject_verdict' .kaji/wf/` in your repository. Zero hits means you
+    are not affected.
+  - **How to migrate**: replace `inject_verdict: true` with `resume:
+    <step-id>` for same-agent session continuation. For cross-agent steps
+    where `resume` cannot be used, call `kaji issue resolve-verdict
+    <issue-id> --step <step-id>` to read the prior verdict explicitly. Remove
+    any explicit `inject_verdict: false` (equivalent to omitting the field).
+    See `docs/dev/workflow-authoring.md` § `inject_verdict`（非推奨）for details.
+
+### Changed
+
+- `kaji validate` now prints preflight's non-fatal warnings (`⚠ {path}:
+  {warning}`) to stderr, including the `inject_verdict` deprecation warning
+  above and the existing exec_script skill warning (`agent` / `model` /
+  `effort` ignored). Exit code behavior is unchanged.
+
 ## [0.17.0] - 2026-07-24
 
 This release separates kaji-provided workflow YAML from repository-owned

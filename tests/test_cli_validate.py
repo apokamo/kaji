@@ -195,6 +195,57 @@ steps:
       PASS: end
 """
 
+INJECT_VERDICT_TWICE_YAML = """\
+name: test
+description: test workflow
+execution_policy: auto
+steps:
+  - id: step1
+    skill: test-skill
+    agent: claude
+    inject_verdict: true
+    on:
+      PASS: step2
+  - id: step2
+    skill: test-skill
+    agent: claude
+    inject_verdict: true
+    on:
+      PASS: end
+"""
+
+INJECT_VERDICT_FALSE_TWICE_YAML = """\
+name: test
+description: test workflow
+execution_policy: auto
+steps:
+  - id: step1
+    skill: test-skill
+    agent: claude
+    inject_verdict: false
+    on:
+      PASS: step2
+  - id: step2
+    skill: test-skill
+    agent: claude
+    inject_verdict: false
+    on:
+      PASS: end
+"""
+
+EXEC_SCRIPT_SKILL_YAML = """\
+name: test
+description: test workflow
+execution_policy: auto
+steps:
+  - id: poll
+    skill: poll-skill
+    agent: claude
+    model: sonnet
+    on:
+      PASS: end
+"""
+
 
 def _create_config(project_root: Path, skill_dir: str = ".claude/skills") -> None:
     """Create a minimal .kaji/config.toml for testing."""
@@ -215,6 +266,15 @@ def _create_skill(project_root: Path, skill_name: str, agent: str = "claude") ->
     skill_dir = project_root / agent_dirs[agent] / skill_name
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(f"# {skill_name}\nTest skill.\n")
+
+
+def _create_skill_with_exec_script(project_root: Path, skill_name: str) -> None:
+    """Create a SKILL.md declaring `exec_script` frontmatter for testing."""
+    skill_dir = project_root / ".claude" / "skills" / skill_name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {skill_name}\ndescription: d\nexec_script: package.poll\n---\n# {skill_name}\n"
+    )
 
 
 def _write_valid_yaml(project_root: Path, filename: str = "workflow.yaml") -> Path:
@@ -644,6 +704,69 @@ class TestCmdValidateMedium:
         assert "Step 'orphan' is not reachable from the first step 'root'" in captured.err
 
     @pytest.mark.medium
+    def test_inject_verdict_true_twice_emits_single_stderr_line(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """2 件の inject_verdict: true があっても stderr の warning 行は 1 行（完了条件 4・5）。"""
+        f = tmp_path / "inject.yaml"
+        f.write_text(INJECT_VERDICT_TWICE_YAML)
+        _create_skill(tmp_path, "test-skill")
+        _create_config(tmp_path)
+
+        exit_code = _cmd_validate_with_args(str(f))
+
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        stderr_lines = captured.err.splitlines()
+        assert len(stderr_lines) == 1
+        assert str(f) in stderr_lines[0]
+        assert "inject_verdict" in stderr_lines[0]
+        assert "✓" in captured.out
+
+    @pytest.mark.medium
+    def test_inject_verdict_false_twice_emits_single_stderr_line(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """明示 false のみの workflow でも対象範囲の是正が CLI 面まで通る。"""
+        f = tmp_path / "inject_false.yaml"
+        f.write_text(INJECT_VERDICT_FALSE_TWICE_YAML)
+        _create_skill(tmp_path, "test-skill")
+        _create_config(tmp_path)
+
+        exit_code = _cmd_validate_with_args(str(f))
+
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert len(captured.err.splitlines()) == 1
+
+    @pytest.mark.medium
+    def test_no_inject_verdict_no_stderr(
+        self, valid_yaml: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """inject_verdict を含まない workflow は stderr が空のまま（回帰防止）。"""
+        exit_code = _cmd_validate_with_args(str(valid_yaml))
+
+        assert exit_code == 0
+        assert capsys.readouterr().err == ""
+
+    @pytest.mark.medium
+    def test_exec_script_warning_is_visible_via_validate(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """既存 exec_script warning も validate の stderr で可視化される（Should Fix 対応）。"""
+        f = tmp_path / "poll.yaml"
+        f.write_text(EXEC_SCRIPT_SKILL_YAML)
+        _create_skill_with_exec_script(tmp_path, "poll-skill")
+        _create_config(tmp_path)
+
+        exit_code = _cmd_validate_with_args(str(f))
+
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert "⚠" in captured.err
+        assert "exec_script" in captured.err
+
+    @pytest.mark.medium
     def test_official_workflows_all_validate(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Every official workflow remains compatible with validation."""
         project_root = Path(__file__).resolve().parents[1]
@@ -782,6 +905,28 @@ class TestCLIValidateLarge:
 
         assert result.returncode == 1
         assert "Step 'root' has unknown agent 'cladue'" in result.stderr
+
+    @pytest.mark.large
+    @pytest.mark.large_local
+    def test_kaji_validate_inject_verdict_warning_is_single_stderr_line(
+        self, tmp_path: Path
+    ) -> None:
+        """実 CLI の entry point 経由でも stderr の warning が 1 行であること（#381）。"""
+        f = tmp_path / "inject.yaml"
+        f.write_text(INJECT_VERDICT_TWICE_YAML)
+        _create_skill(tmp_path, "test-skill")
+        _create_config(tmp_path)
+
+        result = subprocess.run(
+            [sys.executable, "-m", "kaji_harness.cli_main", "validate", str(f)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert result.returncode == 0
+        assert len(result.stderr.splitlines()) == 1
+        assert "inject_verdict" in result.stderr
 
 
 # ============================================================

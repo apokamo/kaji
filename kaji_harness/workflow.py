@@ -205,6 +205,7 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                 f"Step '{step_data['id']}' 'inject_verdict' must be a boolean, "
                 f"got {type(raw_inject_verdict).__name__}"
             )
+        inject_verdict_declared = "inject_verdict" in step_data
         raw_step_workdir = step_data.get("workdir")
         if raw_step_workdir is not None:
             if not isinstance(raw_step_workdir, str):
@@ -307,6 +308,7 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                 workdir=raw_step_workdir,
                 resume=raw_resume,
                 inject_verdict=raw_inject_verdict,
+                inject_verdict_declared=inject_verdict_declared,
                 on=raw_on,
             )
         )

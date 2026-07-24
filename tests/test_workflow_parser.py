@@ -207,6 +207,67 @@ class TestWorkflowParsing:
         assert step is not None
         assert not hasattr(step, "max_turns")
 
+    @pytest.mark.small
+    def test_inject_verdict_declared_false_when_key_absent(self) -> None:
+        """未指定の場合、observed フィールドと従来フィールドの両方が False（#381）。"""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+                on:
+                  PASS: end
+        """)
+        wf = load_workflow_from_str(yaml_str)
+
+        step = wf.find_step("step1")
+        assert step is not None
+        assert step.inject_verdict_declared is False
+        assert step.inject_verdict is False
+
+    @pytest.mark.small
+    def test_inject_verdict_declared_true_for_explicit_false(self) -> None:
+        """明示 false でもキーが存在するため inject_verdict_declared は True（#381）。"""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+                inject_verdict: false
+                on:
+                  PASS: end
+        """)
+        wf = load_workflow_from_str(yaml_str)
+
+        step = wf.find_step("step1")
+        assert step is not None
+        assert step.inject_verdict_declared is True
+        assert step.inject_verdict is False
+
+    @pytest.mark.small
+    def test_inject_verdict_declared_true_for_explicit_true(self) -> None:
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+                inject_verdict: true
+                on:
+                  PASS: end
+        """)
+        wf = load_workflow_from_str(yaml_str)
+
+        step = wf.find_step("step1")
+        assert step is not None
+        assert step.inject_verdict_declared is True
+        assert step.inject_verdict is True
+
 
 # ============================================================
 # Test class: Workflow helper methods

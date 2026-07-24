@@ -255,6 +255,7 @@ config 非依存のため）。
 | `timeout` | int | — | タイムアウト（秒）。フォールバック: step.timeout → workflow.default_timeout → config.execution.default_timeout |
 | `workdir` | str | — | 作業ディレクトリ（絶対パス）。フォールバック: step.workdir → workflow.workdir → project_root |
 | `resume` | str | — | resume するステップ ID（同一 agent のセッション継続）。exec-step では指定不可 |
+| `inject_verdict` | bool | — | ⚠️ **非推奨**（次回 minor release で削除予定。後述「`inject_verdict`（非推奨）」）。exec-step では指定不可 |
 
 > **`skill` / `exec` の `△`（どちらか 1 つ必須）**: step は `skill` を持つ **skill-step** か
 > `exec` を持つ **exec-step** の **ちょうど 1 つ** でなければならない。両方指定 / 両方欠落は
@@ -404,6 +405,44 @@ steps:
 ```
 
 `resume` 先ステップと `agent` が異なる場合はバリデーションエラー。
+
+### `inject_verdict`（非推奨）
+
+> ⚠️ **非推奨（Issue apokamo/kaji#310 / #381）**: `inject_verdict` は次回 minor release で
+> engine から削除される。挙動（`previous_verdict` の prompt 注入）は現時点では維持されるが、
+> `kaji validate` / `kaji run` の事前検証は該当 workflow file につき 1 行の deprecation
+> warning を stderr へ出力する（`inject_verdict` 指定件数によらず集約は 1 行）。
+
+**検出方法**: `rg -n 'inject_verdict' .kaji/wf/`（0 件なら影響なし）。
+
+**移行方法**:
+
+- 同一 agent 内でのセッション継続には、`resume: <step-id>` へ置き換える（推奨・第一手段）。
+- cross-agent 等で `resume` が使えない step は、`kaji issue resolve-verdict <issue-id> --step
+  <step-id>` で対象 step の直前 verdict を明示的に取得する。
+- `inject_verdict: false` の明示指定は単に削除する（未指定と同じ挙動）。
+
+```yaml
+# Before（非推奨）
+steps:
+  - id: fix-code
+    skill: issue-fix-code
+    agent: claude
+    inject_verdict: true
+    on:
+      PASS: end
+
+# After（同一 agent のセッション継続）
+steps:
+  - id: fix-code
+    skill: issue-fix-code
+    agent: claude
+    resume: review-code
+    on:
+      PASS: end
+```
+
+削除の完全実施（engine からの `inject_verdict` field 除去）は別 Issue（#383）で扱う。
 
 ## 完全サンプル
 
