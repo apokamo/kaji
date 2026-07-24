@@ -41,14 +41,17 @@ workflow YAML は所有権で 2 系統に分かれる。本節が official / cus
     ├── dev/
     │   ├── dev-thorough.yaml
     │   └── dev-thorough-fable.yaml
-    └── docs/
-        ├── docs-codex.yaml
-        ├── docs-fable.yaml
-        └── docs-thorough-codex.yaml
+    ├── docs/
+    │   ├── docs-codex.yaml
+    │   ├── docs-fable.yaml
+    │   └── docs-thorough-codex.yaml
+    └── operations/
+        └── starter-sync.yaml
 ```
 
-`custom/operations/` は障害対応・保守・移行 workflow 用の予約カテゴリ。Git は空 directory を
-追跡できないため、実ファイルが必要になるまで作成しない。
+`custom/operations/` は障害対応・保守・移行 workflow 用のカテゴリ。Git は空 directory を
+追跡できないため、実ファイルが必要になるまで作成しない運用としてきたが、managed starter 同期
+（`starter-sync.yaml`）が最初の実ファイルとして存在する。
 
 `official/` 直下は既定の GitHub provider 用、`official/local/` は local provider 用とする。
 provider 整合性は各 YAML の `requires_provider` でも fail-fast 検証される。GitHub 以外の

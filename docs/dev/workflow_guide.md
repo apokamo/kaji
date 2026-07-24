@@ -29,6 +29,7 @@ kaji の pytest 回帰対象外。`make validate-workflows` の L1/L2/L3 静的�
 | `.kaji/wf/custom/docs/docs-codex.yaml` | github | docs workflow の codex variant |
 | `.kaji/wf/custom/docs/docs-fable.yaml` | github | docs workflow の fable variant |
 | `.kaji/wf/custom/docs/docs-thorough-codex.yaml` | github | 丁寧版 docs workflow の codex variant |
+| `.kaji/wf/custom/operations/starter-sync.yaml` | github | managed starter 同期（`update-starter` → `review-starter-update` → `release-starter`）。通常運用には含めない（手動起動） |
 
 - 各 YAML の `name:` はファイル名から `.yaml` を除いた値と一致する。
 - `official/local/` の 2 本は GitHub 前提 step（`i-pr` / `review-poll` / PR review）を持たず、
@@ -99,6 +100,7 @@ provider API、Issue、artifact、state、lock、member workflow 実行への副
 | `official/local/docs-local.yaml` | official | `local` | `issue-close` | docs-only / local。GitHub 前提 step を持たない |
 | `official/incident.yaml` | official | `github` | `report` | 通常運用ではない failure triage 第2層（手動起動）。調査 → 査読 → 修正 → 確認 → 最終提案。終端は「提案」で close step を持たない（§ 第2層: 調査・提案） |
 | `custom/dev/dev-thorough.yaml` | custom | `github` | `issue-close` | forge 必須。丁寧版。kaji の pytest 回帰対象外 |
+| `custom/operations/starter-sync.yaml` | custom | `github` | `release-starter` | 通常運用ではない managed starter 同期（手動起動）。終端は publish で close step を持たない。kaji の pytest 回帰対象外 |
 
 custom workflow への `requires_provider` 追加は推奨（[workflow-authoring.md](workflow-authoring.md)
 § `requires_provider` 参照）。

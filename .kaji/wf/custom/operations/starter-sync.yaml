@@ -1,0 +1,53 @@
+name: starter-sync
+description: |
+  series 自動選択対象外。kaji repository 固有の managed starter 同期運用（手動起動）。
+  starter-sync tracking Issue を入力に、candidate 作成 → 別 session の独立 review →
+  承認後の atomic publish を回す。
+  publish は workflow 外の人間承認を前提とするため、通常は
+  `--before release-starter` で停止し、承認後に `--from release-starter` で再開する。
+  警告: `--before release-starter` を付けずに実行すると、review PASS 直後に
+  `release-starter` へ自動遷移する（execution_policy: auto）。publish 前の人間承認は
+  `release-starter` skill 内の instruction に依存し、workflow 側に機械可読な承認 gate は
+  存在しない。tracking Issue に対する `kaji run` は必ず `--before release-starter` を
+  付けて起動すること。
+execution_policy: auto
+requires_provider: github
+default_timeout: 3600
+
+cycles:
+  starter-review:
+    entry: review-starter-update
+    loop: [update-starter, review-starter-update]
+    max_iterations: 3
+    on_exhaust: ABORT
+
+steps:
+  - id: update-starter
+    skill: update-starter
+    agent: claude
+    model: opus
+    effort: high
+    on:
+      PASS: review-starter-update
+      ABORT: end
+
+  - id: review-starter-update      # update-starter と別 session（resume を持たない）
+    skill: review-starter-update
+    agent: codex
+    model: gpt-5.6-sol
+    effort: high
+    on:
+      PASS: release-starter
+      RETRY: update-starter
+      ABORT: end
+
+  - id: release-starter            # 通常は --before release-starter で手前停止する。
+                                    # 停止しない場合、publish 前承認は skill 内 instruction のみが
+                                    # 拠り所（workflow に機械可読 gate なし）。上記 description 参照
+    skill: release-starter
+    agent: claude
+    model: opus
+    effort: high
+    on:
+      PASS: end
+      ABORT: end
