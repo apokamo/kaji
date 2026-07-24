@@ -45,17 +45,21 @@ workflow へ組み込める。
 | `timeout` / `workdir` / `inject_verdict` | — | agent 非依存の既存契約のまま |
 | `max_budget_usd` | float | claude 専用 flag のため無視（codex / gemini と同じ既存挙動。本 Issue では変更しない） |
 
-**workflow `execution_policy` → AGY 引数 mapping（headless）**:
+**workflow `execution_policy` → AGY 引数 mapping（headless / interactive 共通表）**:
 
-| execution_policy | AGY 引数 | 意味 |
-|------------------|---------|------|
-| `auto` | `--dangerously-skip-permissions` | tool 実行を自動承認（claude の `--permission-mode bypassPermissions` 相当） |
-| `sandbox` | `--sandbox` | containment のみ。permission（approval）は AGY default のまま |
-| `interactive` | （flag なし） | AGY default。headless では対話承認できないため tool は soft-deny され得る（下記「制約」参照） |
+| execution_policy | headless argv flag | interactive argv flag | 意味 |
+|------------------|-------------------|----------------------|------|
+| `auto` | `--dangerously-skip-permissions` | `--dangerously-skip-permissions` | tool 実行を自動承認（claude の `--permission-mode bypassPermissions` 相当）。headless / interactive とも agent は承認待ちで停止しない |
+| `sandbox` | `--sandbox` | `--sandbox` | containment のみ。permission（approval）は AGY default のまま。headless では soft-deny され得る。interactive では TUI approval で人間が承認できる |
+| `interactive` | （flag なし） | （flag なし） | AGY default。headless では対話承認できないため tool は soft-deny され得る（下記「制約」参照）。interactive では TUI approval |
 
-sandbox と permission は AGY では別軸の概念であり（https://antigravity.google/docs/cli/permissions ）、
-`sandbox` policy に承認 bypass を混ぜない。これは codex の `sandbox` → `-s workspace-write`
-（bypass なし）と同じ構造。
+sandbox と permission は AGY では別軸の概念であり（https://antigravity.google/docs/cli/permissions
+の permission engine 定義と、`agy --help` の `--sandbox` / `--dangerously-skip-permissions` が独立
+flag であること）、`sandbox` policy に承認 bypass を混ぜない。これは codex の `sandbox` →
+`-s workspace-write`（bypass なし）と同じ構造。headless / interactive で **flag mapping を同一**に
+することで、policy の意味が runner backend によって変わらないことを契約とする。interactive で
+`sandbox` / `interactive` policy の approval が TUI に出た場合は人間が pane 上で承認する
+（#267 capability 表「tool 実行: TUI approval または自動承認 policy」のとおり）。
 
 **headless argv（`_build_antigravity_args` が構築）**:
 
@@ -70,9 +74,14 @@ agy -p <prompt> [--model <m>] [--effort <low|medium|high>] [<policy flag>]
 **interactive terminal（wrapper.sh の antigravity case）**:
 
 ```
-agy --dangerously-skip-permissions [--model <m>] [--effort <e>] -i <initial_prompt>
+agy [<policy flag>] [--model <m>] [--effort <e>] -i <initial_prompt>
 ```
 
+- `<policy flag>` は上記 mapping 表の interactive 列（`auto` → `--dangerously-skip-permissions`、
+  `sandbox` → `--sandbox`、`interactive` → なし）
+- `execution_policy` は runner → `execute_interactive_terminal` → wrapper 第 9 位置引数として
+  伝播する（下記「方針 4」）。wrapper で antigravity case のみが消費し、既存 claude / codex case の
+  argv は変更しない（両者の policy mapping 見直しは本 Issue の scope 外）
 - wrapper 第 5 引数 `resume_session_id` が非空なら `exit 2`（fail-loud。validation 上到達しない防御）
 - `launch_session_id` は claude 専用のまま（antigravity では常に空）
 
@@ -82,7 +91,7 @@ agy --dangerously-skip-permissions [--model <m>] [--effort <e>] -i <initial_prom
 
 | フィールド | antigravity での値 |
 |-----------|-------------------|
-| `full_output` | stdout の plain text 全行（JSON に見える行も含め、無加工で text として収集） |
+| `full_output` | stdout の plain text 全行。行の保持契約: 各行は**行終端（`\n` / `\r\n`）のみを除去**し、先頭・末尾の空白と空行を含め原文のまま保持して `"\n".join` する。JSON として parse 可能な行も加工せず text として収集する（既存の非 JSON 行経路が行う `strip()` + 空行 skip は plain-text mode では適用しない） |
 | `session_id` | 常に `None`（新規 conversation UUID は公開 stdout contract に存在しない） |
 | `cost` | 常に `None`（token / cost metadata は取得不能） |
 | `terminal_seen` / `terminal_failure` | 常に `False`（terminal event 契約なし） |
@@ -166,15 +175,17 @@ Step 'implement' uses agent 'antigravity' which does not support 'resume'
 | `kaji_harness/adapters.py` | `AntigravityAdapter` 追加、`ADAPTERS["antigravity"]`、protocol へ `parses_stdout_as_jsonl()` 追加 |
 | `kaji_harness/cli.py` | `_build_antigravity_args` 追加、`build_cli_args` dispatch、`stream_and_log` の plain-text 分岐 |
 | `kaji_harness/workflow.py` | `VALID_AGENTS` / effort 許容値を registry 参照へ、`validate_workflow` に resume capability 検査追加 |
-| `kaji_harness/interactive_terminal.py` | 対応 agent 判定を registry 参照へ（`antigravity` 追加、gemini は従来どおり非対応） |
-| `kaji_harness/assets/interactive-terminal/wrapper.sh` | `antigravity` case 追加（resume 引数は exit 2） |
+| `kaji_harness/interactive_terminal.py` | 対応 agent 判定を registry 参照へ（`antigravity` 追加、gemini は従来どおり非対応）。`execute_interactive_terminal` / `_launch_pane` に `execution_policy` パラメータを追加し wrapper 第 9 位置引数として伝播 |
+| `kaji_harness/assets/interactive-terminal/wrapper.sh` | 第 9 位置引数 `execution_policy`（省略時空文字）を追加。`antigravity` case 追加（policy 3 分岐の flag 付与、resume 引数は exit 2）。claude / codex case の argv は不変 |
 | `kaji_harness/verdict.py` | `_build_formatter_cli_args` に `antigravity` case、docstring の agent 列挙更新 |
-| `tests/` | 下記「テスト戦略」 |
+| `kaji_harness/runner.py` | `execute_interactive_terminal` 呼び出しに `execution_policy=self.workflow.execution_policy` を追加（headless 経路と同じ値の受け渡しのみ） |
+| `tests/test_layer_imports.py` | `MODULE_LAYERS` に `"kaji_harness.agents": "foundation"` を追加（未分類 module は `layer_of()` が `ValueError` で fail-loud し `make check` を通過できないため必須） |
+| `tests/`（その他） | 下記「テスト戦略」 |
 | docs 群 | 下記「影響ドキュメント」 |
 
-`kaji_harness/runner.py` は変更不要（session 保存・resume 解決・formatter 生成は既存ガードで
-antigravity に自然対応する）ことを実装時に確認する。差分が必要になった場合は設計逸脱として
-review-code で検査する。
+`kaji_harness/runner.py` の変更は上記の引数追加 1 点に限定する。session 保存・resume 解決・
+formatter 生成は既存ガードで antigravity に自然対応することを実装時に確認する。それ以外の差分が
+必要になった場合は設計逸脱として review-code で検査する。
 
 ## 方針
 
@@ -233,11 +244,24 @@ extract 系が全て `None` を返して **その行が `full_output` から欠�
 返す（plain-text mode では呼ばれない）。失敗判定は `terminal_seen=False` 経路の既存規約
 （exit code / stderr）に委ねる。
 
-### 4. interactive terminal
+### 4. interactive terminal（execution_policy の伝播）
 
-`wrapper.sh` に `antigravity` case を追加（既存 claude / codex case と同じ `printf %q` quoting
-規約）。`execute_interactive_terminal` 側は対応 agent 判定の registry 化のみで、
-`verdict.yaml` polling・pane lifecycle・timeout は共通実装のまま変更しない。
+現行の interactive 経路は `execution_policy` を受け取らず、wrapper が claude / codex に常時
+承認 bypass flag を付けている。antigravity では #267 の決定（interactive でも permission /
+sandbox を別軸で mapping する）に従い、policy を argv まで伝播する:
+
+```
+runner._dispatch (workflow.execution_policy)
+  → execute_interactive_terminal(..., execution_policy=...)   # 新パラメータ
+  → _launch_pane(..., execution_policy=...)
+  → wrapper.sh 第 9 位置引数（省略時空文字 = 既存呼び出しとの互換）
+  → antigravity case が mapping 表どおりに flag を付与（claude / codex case は不変）
+```
+
+`wrapper.sh` の `antigravity` case は既存 claude / codex case と同じ `printf %q` quoting 規約で
+argv を組み立てる。`verdict.yaml` polling・pane lifecycle・timeout は共通実装のまま変更しない。
+claude / codex の wrapper argv（常時 bypass）は現状維持とし、両 agent の policy mapping 見直しが
+必要なら別 Issue とする（本 Issue の scope 境界）。
 
 ### 5. データフロー（headless）
 
@@ -261,10 +285,9 @@ workflow YAML → load_workflow (parse: effort 検証)
 | completion contract | headless は plain stdout / exit、interactive は `verdict.yaml` | #267 調査結果 + maintainer 承認（人間決定。「詳細な内部構造は設計で決定」） | plain-text stream mode（`parses_stdout_as_jsonl()=False`）で JSON 風行の欠落を防止。soft-deny は special-case せず verdict 解決層で fail-loud |
 | session ID / JSONL / token・cost 非取得 | result・tests・docs で一貫して非対応 | #267 決定事項・#376 完了条件（人間決定） | `CLIResult` の `session_id=None` / `cost=None` / `terminal_seen=False` を契約化し tests で固定 |
 | docs 一体更新 | 実装・tests・利用者向け docs を同一 Issue/PR で整合 | #267 maintainer コメント「ドキュメントとプログラムは一体」（人間決定） | 影響ドキュメント表に列挙 |
-| effort 許容値 | `low` / `medium` / `high` | AI の仮定。根拠: #267 実機確認表「`--effort low\|medium\|high` あり」。検査先: implement 時に `agy --help` で再確認し、差異があれば registry と workflow-authoring.md の表を実測値に合わせる | `effort_allowed=frozenset({"low","medium","high"})` |
-| `sandbox` policy の mapping | `--sandbox` のみ付与（承認 bypass を混ぜない） | AI の仮定。根拠: AGY 公式 permissions docs が sandbox と approval を別軸と定義、codex の `sandbox` mapping（bypass なし）と構造一致。検査先: review-design / implement 時の実機 smoke（事後確認項目） | headless mapping 表に反映。soft-deny の可能性を docs 明記で補完 |
-| interactive での `--dangerously-skip-permissions` 付与 | 付与する | AI の仮定。根拠: 既存 wrapper は claude / codex とも無条件に承認 bypass を付ける（`--dangerously-skip-permissions` / `--dangerously-bypass-approvals-and-sandbox`）。agent が承認待ちで停止すると `verdict.yaml` 完了契約と両立しないため。検査先: review-design、および tmux smoke（事後確認項目） | wrapper antigravity case の argv に反映 |
-| capability registry の配置 | 新規 `kaji_harness/agents.py` | AI の仮定。根拠: workflow / cli / interactive_terminal / verdict の複数 module が参照するため foundation 層に置き循環を回避（ADR 009 の層規約）。検査先: review-design、`tests/test_layer_imports.py` | registry 構造とフィールドを定義 |
+| effort 許容値 | `low` / `medium` / `high` | ローカル実機 `agy --help`（v1.1.6、2026-07-24 取得。Primary Sources に出力を引用）の `--effort ... (low\|medium\|high)` と #267 実機確認表で確認済み | `effort_allowed=frozenset({"low","medium","high"})` |
+| permission / sandbox mapping | headless / interactive とも同一 flag mapping（`auto` → `--dangerously-skip-permissions` / `sandbox` → `--sandbox` / `interactive` → flag なし）。`sandbox` に承認 bypass を混ぜない | 人間決定: #267 capability 表「sandbox: 対応（permission と別途設計）」「tool 実行: TUI approval または自動承認 policy」（interactive を含む双方の mapping 設計・検証の要求）。詳細化は AI: 3 policy への具体割当。根拠: AGY 公式 permissions docs の別軸定義 + `agy --help` で両 flag が独立に存在 + codex の `sandbox` mapping（bypass なし）と構造一致。検査先: 実装時の wrapper / argv tests（Small・Medium）、および実機 smoke（事後確認項目） | headless / interactive 共通 mapping 表と runner → wrapper の `execution_policy` 伝播経路（方針 4）に反映。soft-deny の可能性（headless の非 auto policy）を docs 明記で補完 |
+| capability registry の配置 | 新規 `kaji_harness/agents.py`（foundation 層、stdlib のみに依存） | AI の仮定。根拠: workflow / cli / interactive_terminal / verdict の複数 module が参照するため foundation 層に置き循環を回避（ADR 009 の層規約）。検査先: `tests/test_layer_imports.py` の `MODULE_LAYERS` へ `"kaji_harness.agents": "foundation"` を追加（未分類は fail-loud）した上で、foundation の内部 import 禁止検査（`test_runtime_imports_follow_layer_direction`）が機械検証する | registry 構造とフィールドを定義。layer mapping 追加を変更スコープに明記 |
 | Antigravity guide は英語のみ新設 | `.ja.md` は作らない | AI の仮定。根拠: #376 完了条件が「英語正本として追加」のみを要求。既存 guide の ja 対訳は #264（docs 英語化 EPIC）系の慣行だが本 Issue の完了条件外。検査先: review-design（scope 判断として） | docs 索引には英語版のみ登録 |
 | `max_budget_usd` の扱い | antigravity では無視（既存 codex / gemini と同挙動） | AI の仮定。根拠: 本 Issue の fail-fast 要求は `resume:` のみが対象（#376 完了条件）。codex / gemini も現状 silent ignore であり、agent 別の budget capability 検証は本 Issue の scope 外。検査先: review-design | 変更なし（現状維持）を明記 |
 
@@ -293,23 +316,29 @@ workflow YAML → load_workflow (parse: effort 検証)
   （+ `--model`）を返すこと
 - **adapter**: `AntigravityAdapter` の extract 系が `None` / terminal 系が `False` /
   `parses_stdout_as_jsonl()` が `False` を返すこと（既存 3 adapter は `True` を返すこと）
+- **layer 分類**: `MODULE_LAYERS` に `kaji_harness.agents` が foundation として分類され、
+  既存の layer fitness test（未分類 fail-loud・foundation の内部 import 禁止・stale entry 検査）が
+  `make check` で通ること
 
 ### Medium テスト
 
 subprocess・ファイル I/O 結合（fake `agy` 実行ファイルを PATH に置く既存 fixture パターン）:
 
-- **plain stdout 取り込み**: fake agy が plain text（**JSON として parse 可能な行を含む**）を
-  出力 → `full_output` に全行が欠落なく収集され、`session_id=None` / `cost=None` /
-  `terminal_seen=False` であること
+- **plain stdout 取り込み**: fake agy が plain text（**JSON として parse 可能な行・空行・
+  先頭 / 末尾に空白を持つ行を含む**）を出力 → `full_output` に全行が「行終端のみ除去・原文保持」
+  契約どおり欠落なく収集され、`session_id=None` / `cost=None` / `terminal_seen=False` であること
 - **失敗判定**: fake agy が stderr + 非 0 exit → `CLIExecutionError`（detail に stderr）。
   transient pattern を含む stderr で backoff retry が動くこと
 - **soft-deny 契約**: fake agy が exit 0 + 空 stdout → CLI 層は例外なく `CLIResult` を返し、
   verdict 解決層で `VerdictNotFound` 系の fail-loud になること（黙って PASS しない）
 - **interactive terminal**: tmux mock / 既存 test seam で `agent: antigravity` の pane 起動 argv
-  （wrapper への引数列）と `verdict.yaml` 検知 → `session_id=None` の返却。gemini が引き続き
-  `ValueError` になること
-- **wrapper.sh**: bash 直接実行で antigravity case の exec コマンド文字列（quoting 含む）と、
-  `resume_session_id` 非空時の `exit 2` を検証（既存 wrapper テストの方式に従う）
+  （wrapper への引数列に `execution_policy` が第 9 位置引数として渡ること）と `verdict.yaml` 検知
+  → `session_id=None` の返却。gemini が引き続き `ValueError` になること。runner →
+  `execute_interactive_terminal` へ `workflow.execution_policy` が渡ることの dispatch 検証
+- **wrapper.sh**: bash 直接実行で antigravity case の exec コマンド文字列（quoting 含む）を
+  **execution_policy 3 分岐（auto / sandbox / interactive）すべて**について検証し、
+  `resume_session_id` 非空時の `exit 2`、および policy 引数省略時（空文字）に claude / codex case の
+  argv が従来と不変であることを検証（既存 wrapper テストの方式に従う）
 
 ### Large テスト
 
@@ -333,7 +362,7 @@ subprocess・ファイル I/O 結合（fake `agy` 実行ファイルを PATH に
 | `docs/README.md` | あり | CLI ガイド索引に Antigravity guide を追加 |
 | `docs/dev/workflow-authoring.md` | あり | effort 値表に `antigravity` 行追加、agent 関連記述の更新 |
 | `docs/reference/configuration.md` / `.ja.md` | あり | `agent_runner` / execution_policy 節に antigravity の対応範囲注記（該当節がある場合のみ） |
-| `docs/cli-guides/interactive-terminal-runner.md` / `.ja.md` | あり | 対応 agent（claude / codex / antigravity）と PATH 前提の更新 |
+| `docs/cli-guides/interactive-terminal-runner.md` / `.ja.md` | あり | 対応 agent（claude / codex / antigravity）と PATH 前提、antigravity の execution_policy → interactive argv mapping（wrapper 第 9 引数の伝播）の更新 |
 | `docs/adr/` | なし | 新規技術選定なし（capability registry は既存層規約 ADR 009 の範囲内の module 追加） |
 | `AGENTS.md` / `CLAUDE.md` | なし | プロジェクト規約に変更なし |
 
@@ -343,13 +372,36 @@ Gemini 記載の削除・legacy 表記変更は行わない（#377 の scope）�
 
 | 情報源 | URL/パス | 根拠（引用/要約） |
 |--------|----------|-------------------|
-| Antigravity CLI: Using | https://antigravity.google/docs/cli/using | 現行 v1.1.6。headless `-p` / interactive `-i` の利用形態 |
+| ローカル実機 `agy --help` / `agy --version` | v1.1.6、2026-07-24 取得（下記に出力抜粋を引用。レビュワーはローカルの `agy` で再実行検証可能） | `-p/--print`（"Run a single prompt non-interactively and print the response"）、`-i/--prompt-interactive`、`--conversation`（"Resume a previous conversation by ID"）、`-c/--continue`、`--model`、`--effort ... (low\|medium\|high)`、`--sandbox`（"Run in a sandbox with terminal restrictions enabled"）、`--dangerously-skip-permissions`（"Auto-approve all tool permission requests without prompting"）、`--log-file` を確認。JSON / stream 出力 flag は flag 一覧に存在しない → argv mapping・effort 許容値・plain-text stream mode の直接根拠 |
+| Antigravity CLI: Using | https://antigravity.google/docs/cli/using | 現行 version を v1.1.6 と表示。設定 override として `--sandbox` / `--dangerously-skip-permissions` に言及（`-p` / `-i` の説明はこのページにはない。flag の根拠は上記 `agy --help`） |
 | Antigravity CLI: Install & auth | https://antigravity.google/docs/cli/install | native binary `agy`（macOS/Linux/Windows）。認証は対話 setup が必要 |
-| Antigravity CLI: Conversations | https://antigravity.google/docs/cli/conversations | `--continue` / `--conversation <uuid>` による再開。新規 UUID の公開取得手段は記載なし → resume 非対応判断の根拠 |
-| Antigravity CLI: Permissions | https://antigravity.google/docs/cli/permissions | permission engine は `deny > ask > allow`。headless では対話確認できない → soft-deny 仕様と policy mapping の根拠 |
-| Antigravity CLI: Reference | https://antigravity.google/docs/cli/reference | JSON / stream 出力 flag が存在しない → plain-text stream mode の根拠 |
+| Antigravity CLI: Conversations | https://antigravity.google/docs/cli/conversations | conversation は workspace-scoped で `-c` / `--continue` により再開可能。新規 conversation ID の公開取得手段は記載なし → resume 非対応判断の根拠（`--conversation <uuid>` flag 自体の根拠は上記 `agy --help` と #267 実機確認） |
+| Antigravity CLI: Permissions | https://antigravity.google/docs/cli/permissions | permission engine は `deny > ask > allow` で、sandbox と permission（approval）は別概念 → policy mapping で両者を混ぜない根拠（headless soft-deny / exit 0 の挙動はこのページには記載がなく、#267 実機確認を根拠とする） |
+| Antigravity CLI: Reference | https://antigravity.google/docs/cli/reference | TUI slash commands / keybindings / settings の reference（process 起動 flag の網羅表ではないため、flag 存否の根拠には使用しない。interactive TUI の操作体系の参照用） |
 | Gemini CLI 移行告知 | https://github.com/google-gemini/gemini-cli/discussions/27274 | 2026-06-18 以降、個人 / free tier は Antigravity CLI へ移行 → 本機能の背景 |
-| 親 Issue #267 本文・コメント | https://github.com/apokamo/kaji/issues/267 | 実機確認表（`agy --version` 1.1.6、`-p` plain stdout、exit 契約、soft-deny で exit 0、`--model` / `--effort low\|medium\|high` / `--sandbox`）と maintainer 承認済み決定事項（source of truth） |
+| 親 Issue #267 本文・コメント | https://github.com/apokamo/kaji/issues/267 | 実機確認表（`agy --version` 1.1.6、`agy -p` の回答は plain text stdout、成功時 exit 0 / v1.1.3+ は server-side failure を stderr + non-zero で返す、headless soft-deny 時に回答なしでも exit 0 になり得る、新規 conversation UUID は stdout/stderr に出ない）と maintainer 承認済み決定事項（source of truth。interactive を含む permission / sandbox mapping の設計・検証要求を含む） |
 | 現行実装 | `kaji_harness/cli.py` / `adapters.py` / `workflow.py` / `interactive_terminal.py` / `verdict.py` / `runner.py` / `preflight.py` / `assets/interactive-terminal/wrapper.sh` | argv 構築・adapter protocol・validation 経路（`validate_workflow` が `commands/validate.py` と `preflight.py` 経由 `runner.py` の双方から呼ばれる）・wrapper 契約・formatter 生成の各拡張点 |
 | テスト規約 | `docs/dev/testing-convention.md` | S/M/L 分類・large_local マーカー・省略正当化 4 条件 |
 | ADR 009 | `docs/adr/009-module-boundary-private-import.md` | 新 module `agents.py` の層配置と import 方向の制約 |
+| layer fitness test | `tests/test_layer_imports.py` | `MODULE_LAYERS` は module を明示列挙し、未分類 module は `layer_of()` が `ValueError` で fail-loud する。foundation は内部 module import 禁止 → `agents.py` の分類追加が必須である根拠 |
+
+### 実機出力の引用: `agy --help`（v1.1.6、2026-07-24 取得）
+
+設計判断に用いた flag の該当行のみ抜粋（全文はローカルの `agy --help` で再取得可能）:
+
+```
+  --conversation                  Resume a previous conversation by ID
+  -c                              Short alias for --continue
+  --continue                      Continue the most recent conversation
+  --dangerously-skip-permissions  Auto-approve all tool permission requests without prompting
+  --effort                        Reasoning effort for the current CLI session (low|medium|high)
+  -i                              Short alias for --prompt-interactive
+  --log-file                      Override CLI log file path
+  --model                         Model for the current CLI session
+  -p                              Short alias for --print
+  --print                         Run a single prompt non-interactively and print the response
+  --prompt-interactive            Run an initial prompt interactively and continue the session
+  --sandbox                       Run in a sandbox with terminal restrictions enabled
+```
+
+flag 一覧（全文）に JSON / stream 出力を指定する flag は存在しない。
