@@ -39,13 +39,20 @@ Language: [English](github-mode.md) | 日本語
 
 | ツール | 役割 | 備考 |
 |--------|------|------|
-| `gh` | GitHub CLI（`kaji pr` / `kaji issue` / `kaji sync from-github` の背後で起動） | PATH 上に必須 |
+| `gh` | GitHub CLI（`kaji pr` / `kaji issue` / `kaji sync from-github` の背後で起動） | PATH 上に必須、version >= 2.50.0 |
 | `git` | 通常運用 | `git@github.com` への SSH push が前提 |
 
 `gh` 未導入の場合、`kaji sync from-github` および `provider.type='github'` 配下の
 `kaji issue` / `kaji pr` は `'gh' CLI not found in PATH. ...` で始まるエラーで exit する
 （後続の案内文は entry point ごとに異なる。例: passthrough 経路は
 `Install GitHub CLI to use 'kaji issue' / 'kaji pr'.`）。
+
+`GitHubProvider`（`provider.type='github'` 配下の `kaji issue` / `kaji run` が使用）は
+これに加え `gh >= 2.50.0` を要求する。`stateReason` JSON field を読み取るためで、
+`gh` はこれを v2.50.0 以降でのみサポートする。それ未満の `gh` では、業務 `gh`
+コマンドを 1 つも実行する前に停止し、検出 version・必要 version・インストール URL
+を含む actionable なエラーを返す（§ 4.6 参照）。`gh --version` の出力が解析できない
+場合は検査を素通り（fail-open）するため、独自ビルドの `gh` を無条件に弾くことはない。
 
 ### 1.2 認証
 
@@ -227,6 +234,19 @@ kaji sync status            # forge=github / repo=<owner>/<name> / cached=<N>
 GitHub の closing keyword（`Closes` / `Fix(es|ed)` / `Resolves` 等 + `#<N>`）は当該 issue を自動 close する。経路は 2 つあり、**PR description 経由**（merge 時に close。リポジトリ設定 **Auto-close issues with merged linked pull requests** を無効化すると抑止される）と、**commit message 経由**（commit が default branch に到達した時点で close。同設定がカバーする保証はない）である（[公式](https://docs.github.com/en/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue#linking-a-pull-request-to-an-issue-using-a-keyword)）。apokamo/kaji では同設定を無効化しており、kaji が生成する live closing keyword は `/i-pr` の `Closes <issue_ref>` 行 1 件のみ。それ以外の match（commit body / PR description の他の箇所）は hazard として placeholder 化する。grep 手順と placeholder 規約は [docs/dev/shared_skill_rules.md § auto close keyword 回避](../dev/shared_skill_rules.md#auto-close-keyword-回避) を参照。
 
 意図せず close された場合は `gh issue reopen <N> --repo <owner>/<repo>` で reopen し、当該リポジトリ設定が無効のままかを確認する。
+
+### 4.6 `gh <version> is too old for provider.type='github' ...`
+
+症状: `provider.type='github'` 配下の `kaji issue` / `kaji run` が、業務 `gh`
+コマンドを実行する前に `GitHubProviderError: gh <detected> is too old for
+provider.type='github' (kaji requires gh >= 2.50.0). ...` で exit する。
+
+原因: `GitHubProvider` は `stateReason` JSON field のために `gh >= 2.50.0`
+を要求する（§ 1.1）。PATH 上の `gh` がそれより古いと preflight 検査で拒否される。
+
+対処:
+[公式インストール手順](https://github.com/cli/cli#installation)に従って
+GitHub CLI を更新し、`gh --version` で `>= 2.50.0` を再確認する。
 
 ## 5. 参照
 

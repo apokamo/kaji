@@ -181,6 +181,223 @@ class TestIssueContext:
         assert ctx.branch_prefix_fallback is True
 
 
+class TestGhVersionPreflight:
+    """Issue #372: `gh < 2.50.0` を preflight で拒否する。
+
+    conftest の autouse fixture (`_stub_gh_version`) が `_detect_gh_version` を
+    既定で固定値に置換するため、probe 経路そのものを検証する本クラスは
+    `gh_version_probe` marker で opt-out する。
+    """
+
+    pytestmark = pytest.mark.gh_version_probe
+
+    @staticmethod
+    def _version_proc(first_line: str) -> subprocess.CompletedProcess[str]:
+        return _ok(stdout=f"{first_line}\n")
+
+    def test_old_version_rejects_with_actionable_message(self, provider: GitHubProvider) -> None:
+        with (
+            patch("kaji_harness.providers.github.shutil.which", return_value="/usr/bin/gh"),
+            patch(
+                "kaji_harness.providers.github.subprocess.run",
+                return_value=self._version_proc("gh version 2.45.0 (2024-04-04)"),
+            ),
+        ):
+            with pytest.raises(GitHubProviderError) as exc_info:
+                provider.view_issue("372")
+        message = str(exc_info.value)
+        assert "2.45.0" in message
+        assert "2.50.0" in message
+        assert "stateReason" in message
+        assert "https://github.com/cli/cli#installation" in message
+
+    def test_mutation_stops_before_business_gh_call(self, tmp_path: Path) -> None:
+        captured: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+            captured.append(cmd)
+            return self._version_proc("gh version 2.45.0 (2024-04-04)")
+
+        with (
+            patch("kaji_harness.providers.github.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.providers.github.subprocess.run", side_effect=fake_run),
+        ):
+            for op in (
+                lambda p: p.create_issue(title="t", body="b"),
+                lambda p: p.edit_issue("372", title="t"),
+                lambda p: p.close_issue("372"),
+            ):
+                captured.clear()
+                # 各 op ごとに未 probe な provider を使い、mutation 前停止を独立に検証する
+                fresh_provider = GitHubProvider(repo="owner/name", repo_root=tmp_path / "main")
+                with pytest.raises(GitHubProviderError):
+                    op(fresh_provider)
+                assert captured == [["gh", "--version"]]
+
+    def test_min_version_passes(self, provider: GitHubProvider) -> None:
+        payload = json.dumps(
+            {
+                "number": 372,
+                "title": "t",
+                "body": "",
+                "state": "open",
+                "labels": [],
+                "comments": [],
+            }
+        )
+        outputs = iter([self._version_proc("gh version 2.50.0 (2025-01-01)"), _ok(stdout=payload)])
+        with (
+            patch("kaji_harness.providers.github.shutil.which", return_value="/usr/bin/gh"),
+            patch(
+                "kaji_harness.providers.github.subprocess.run",
+                side_effect=lambda *a, **kw: next(outputs),
+            ),
+        ):
+            issue = provider.view_issue("372")
+        assert issue.id == "372"
+
+    def test_newer_version_passes(self, provider: GitHubProvider) -> None:
+        payload = json.dumps(
+            {
+                "number": 372,
+                "title": "t",
+                "body": "",
+                "state": "open",
+                "labels": [],
+                "comments": [],
+            }
+        )
+        outputs = iter([self._version_proc("gh version 2.96.0 (2026-07-02)"), _ok(stdout=payload)])
+        with (
+            patch("kaji_harness.providers.github.shutil.which", return_value="/usr/bin/gh"),
+            patch(
+                "kaji_harness.providers.github.subprocess.run",
+                side_effect=lambda *a, **kw: next(outputs),
+            ),
+        ):
+            issue = provider.view_issue("372")
+        assert issue.id == "372"
+
+    @pytest.mark.parametrize(
+        "version_proc",
+        [
+            _ok(stdout="gh version dev-custom\n"),
+            _ok(stdout=""),
+            _ok(stdout="unexpected format\n"),
+        ],
+    )
+    def test_fail_open_on_unparseable_version(
+        self, provider: GitHubProvider, version_proc: subprocess.CompletedProcess[str]
+    ) -> None:
+        payload = json.dumps(
+            {
+                "number": 372,
+                "title": "t",
+                "body": "",
+                "state": "open",
+                "labels": [],
+                "comments": [],
+            }
+        )
+        outputs = iter([version_proc, _ok(stdout=payload)])
+        with (
+            patch("kaji_harness.providers.github.shutil.which", return_value="/usr/bin/gh"),
+            patch(
+                "kaji_harness.providers.github.subprocess.run",
+                side_effect=lambda *a, **kw: next(outputs),
+            ),
+        ):
+            issue = provider.view_issue("372")
+        assert issue.id == "372"
+
+    def test_fail_open_on_probe_nonzero_exit(self, provider: GitHubProvider) -> None:
+        payload = json.dumps(
+            {
+                "number": 372,
+                "title": "t",
+                "body": "",
+                "state": "open",
+                "labels": [],
+                "comments": [],
+            }
+        )
+        outputs = iter([_fail(stdout="", stderr="unknown flag"), _ok(stdout=payload)])
+        with (
+            patch("kaji_harness.providers.github.shutil.which", return_value="/usr/bin/gh"),
+            patch(
+                "kaji_harness.providers.github.subprocess.run",
+                side_effect=lambda *a, **kw: next(outputs),
+            ),
+        ):
+            issue = provider.view_issue("372")
+        assert issue.id == "372"
+
+    def test_fail_open_on_probe_oserror(self, provider: GitHubProvider) -> None:
+        payload = json.dumps(
+            {
+                "number": 372,
+                "title": "t",
+                "body": "",
+                "state": "open",
+                "labels": [],
+                "comments": [],
+            }
+        )
+        outputs = iter([payload])
+
+        def fake_run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+            if cmd == ["gh", "--version"]:
+                raise OSError("exec format error")
+            return _ok(stdout=next(outputs))
+
+        with (
+            patch("kaji_harness.providers.github.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.providers.github.subprocess.run", side_effect=fake_run),
+        ):
+            issue = provider.view_issue("372")
+        assert issue.id == "372"
+
+    def test_probe_memoized_across_calls(self, provider: GitHubProvider) -> None:
+        captured: list[list[str]] = []
+        payload = json.dumps(
+            {
+                "number": 372,
+                "title": "t",
+                "body": "",
+                "state": "open",
+                "labels": [],
+                "comments": [],
+            }
+        )
+
+        def fake_run(cmd: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+            captured.append(cmd)
+            if cmd == ["gh", "--version"]:
+                return self._version_proc("gh version 2.96.0 (2026-07-02)")
+            return _ok(stdout=payload)
+
+        with (
+            patch("kaji_harness.providers.github.shutil.which", return_value="/usr/bin/gh"),
+            patch("kaji_harness.providers.github.subprocess.run", side_effect=fake_run),
+        ):
+            provider.view_issue("372")
+            provider.view_issue("372")
+        version_calls = [c for c in captured if c == ["gh", "--version"]]
+        assert len(version_calls) == 1
+
+    def test_old_minor_two_digit_rejected(self, provider: GitHubProvider) -> None:
+        """`2.9.0` は文字列比較なら `2.50.0` より大きく誤判定される桁のケース。"""
+        with (
+            patch("kaji_harness.providers.github.shutil.which", return_value="/usr/bin/gh"),
+            patch(
+                "kaji_harness.providers.github.subprocess.run",
+                return_value=self._version_proc("gh version 2.9.0 (2023-01-01)"),
+            ),
+        ):
+            with pytest.raises(GitHubProviderError, match="2.9.0"):
+                provider.view_issue("372")
+
+
 class TestResolvePrContext:
     """Issue gl:34: `gh pr list --head <branch> --state open --json number,headRefName`."""
 

@@ -14,11 +14,13 @@ import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
+from unittest.mock import patch
 
 import pytest
 
 from kaji_harness.console_log import ROOT_LOGGER_NAME
 from kaji_harness.providers import IssueContext, LocalProvider
+from kaji_harness.providers.github import _MIN_GH_VERSION, GitHubProvider
 
 
 class KajiRootLoggingState(NamedTuple):
@@ -287,3 +289,18 @@ def _autocreate_local_issue_for_runner(
         ensure_local_issue(repo_root, str(self.issue_number), machine_id=machine_id)
 
     monkeypatch.setattr(_runner.WorkflowRunner, "__post_init__", patched_post_init)
+
+
+@pytest.fixture(autouse=True)
+def _stub_gh_version(request: pytest.FixtureRequest) -> Iterator[None]:
+    """既定で `gh` version probe を supported 値に固定する（Issue #372）。
+
+    `@pytest.mark.gh_version_probe` を付けたテストのみ opt-out し、probe 経路
+    そのものを検証する。opt-out がなければ `GitHubProvider._detect_gh_version`
+    が固定値に置換され、preflight の分岐を検証できない。
+    """
+    if request.node.get_closest_marker("gh_version_probe"):
+        yield
+        return
+    with patch.object(GitHubProvider, "_detect_gh_version", return_value=_MIN_GH_VERSION):
+        yield

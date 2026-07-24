@@ -107,7 +107,8 @@ provider と workflow は一致させる — github provider で `dev-local.yaml
 ### 2.3 GitHub 認証とラベル
 
 - GitHub 系 workflow の実行前に `gh auth status` が通っていること
-  （kaji は Issue / PR 操作を `gh` CLI へ委譲する）
+  （kaji は Issue / PR 操作を `gh` CLI へ委譲する）。kaji が要求する `gh` の
+  最低 version は [GitHub mode guide § 1.1](../cli-guides/github-mode.ja.md#11-必須ツール) を参照
 - `scripts/setup_labels.sh` が `type:*` ラベル
   （`type:feature` / `type:bug` / `type:refactor` / `type:docs` / `type:test` /
   `type:chore` / `type:perf` / `type:security`）を作成する。冪等

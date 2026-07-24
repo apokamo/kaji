@@ -148,7 +148,7 @@ kajiは現在、Claude Code、Codex、Gemini CLIを中心に対応していま�
 - Python 3.11以上
 - `uv`
 - 使用したいagentのClaude Code、Codex、Gemini CLI
-- GitHub Issue / PR連携を使う場合は認証済みの `gh`
+- GitHub Issue / PR連携を使う場合は認証済みの `gh` 2.50.0以上
 - interactive terminal runnerを使う場合は `tmux` 3.1以上
 - 対象リポジトリに `.claude/skills/` 配下のkaji skillがあること
 

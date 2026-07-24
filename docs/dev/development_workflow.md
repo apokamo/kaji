@@ -152,6 +152,24 @@ provenance が不足しているだけなら `RETRY` で補完する。
 CLI 層（`kaji pr` の bare-provider error）／Skill 層（`pr-fix` / `pr-verify` /
 `i-pr` の Step 0 ガード）と組み合わせて、3 層で forge 機能の誤起動を止める。
 
+## GitHub CLI の最低 version 管理（Issue #372）
+
+`GitHubProvider`（`kaji_harness/providers/github.py`）は `_MIN_GH_VERSION` 定数で
+kaji が要求する `gh` の最低 version を単一情報源として保持する。`_run_gh()` が
+最初の業務 `gh` 実行より前に `gh --version` を検査し、未満なら検出 version・
+必要 version・理由・公式インストール手順 URL を含む `GitHubProviderError` で
+mutation 前に停止する（`gh --version` の出力が解析できない場合は fail-open）。
+
+新しい `gh --json` field や flag を採用する場合は、以下を同時に行う。
+
+1. cli/cli の release note / compare（`https://github.com/cli/cli/compare/vX...vY`）で、
+   その機能が追加された version を確認する
+2. 既存の下限より新しければ `_MIN_GH_VERSION` を更新する
+3. `README.md` / `README.ja.md` の prerequisites と
+   [github-mode.md](../cli-guides/github-mode.md#11-required-tools) /
+   [github-mode.ja.md](../cli-guides/github-mode.ja.md#11-必須ツール) の
+   必須ツール表を同時に更新する
+
 ## テストと品質ゲート
 
 kaji は Python 単一スタックであり、通常の品質ゲートは `make check` に統一されている。

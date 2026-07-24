@@ -82,4 +82,5 @@ markers = [
     "large: Large tests - real CLI, E2E",
     "large_local: Large tests with subprocess but no external network (Phase 3-e+)",
     "large_forge: Large tests requiring real GitHub API (post-recovery)",
+    "gh_version_probe: opt out of the autouse GitHubProvider._detect_gh_version stub (Issue #372)",
 ]
