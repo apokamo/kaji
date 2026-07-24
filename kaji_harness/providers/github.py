@@ -11,10 +11,12 @@ provider 化する。**Phase 3-ab の段階では `cli_main.py` の dispatcher �
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Final
 
 from ._mappings import labels_to_branch_prefix
 from .context import (
@@ -40,6 +42,13 @@ _KAJI_REVIEW_MARKER_PREFIX = "<!-- kaji-review: state="
 _KAJI_REVIEW_MARKER_SUFFIX = " -->"
 
 _REVIEW_STATES_VALID = {"APPROVED", "CHANGES_REQUESTED", "COMMENTED"}
+
+# Issue #372: kaji が要求する gh の最低 version。`view_issue()` の
+# `--json stateReason` は gh v2.50.0 で `IssueFields` に追加された field で
+# あり、それ未満は `Unknown JSON field: "stateReason"` で exit 1 になる。
+_MIN_GH_VERSION: Final[tuple[int, int, int]] = (2, 50, 0)
+_GH_VERSION_RE: Final = re.compile(r"^gh version (\d+)\.(\d+)\.(\d+)")
+_GH_INSTALL_URL: Final = "https://github.com/cli/cli#installation"
 
 
 def build_kaji_review_marker(state: str) -> str:
@@ -90,11 +99,66 @@ class GitHubProvider:
     git_remote: str = "origin"
     worktree_prefix: str = ""
 
+    # gh version probe の memo（Issue #372）。dataclass の等価性・repr からは除外する。
+    _gh_version: tuple[int, int, int] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _gh_version_probed: bool = field(default=False, init=False, repr=False, compare=False)
+
     @property
     def is_readonly(self) -> bool:
         return False
 
     # -------- 内部 ----------
+
+    def _detect_gh_version(self) -> tuple[int, int, int] | None:
+        """``gh --version`` を起動し ``(major, minor, patch)`` を返す。
+
+        解析できない場合（未知フォーマット・probe 失敗）は ``None``（fail-open）。
+        ``_run_gh()`` の内部で使われるため、無限再帰を避けて ``subprocess.run``
+        を直接呼ぶ。
+
+        Returns:
+            解析できた場合は int 3 要素の tuple。解析不能なら ``None``。
+        """
+        try:
+            proc = subprocess.run(["gh", "--version"], check=False, capture_output=True, text=True)
+        except OSError:
+            return None
+        if proc.returncode != 0:
+            return None
+        first_line = proc.stdout.strip().splitlines()[0] if proc.stdout.strip() else ""
+        match = _GH_VERSION_RE.match(first_line)
+        if match is None:
+            return None
+        major, minor, patch = (int(group) for group in match.groups())
+        return (major, minor, patch)
+
+    def _ensure_gh_version(self) -> None:
+        """``gh`` version が ``_MIN_GH_VERSION`` 未満なら actionable な例外を送出する。
+
+        probe 結果はインスタンス内で memo 化し、以降の呼び出しは ``gh --version``
+        を再実行しない。
+
+        Raises:
+            GitHubProviderError: 検出した version が ``_MIN_GH_VERSION`` 未満の場合。
+        """
+        if not self._gh_version_probed:
+            self._gh_version = self._detect_gh_version()
+            self._gh_version_probed = True
+        version = self._gh_version
+        if version is None:
+            return  # fail-open: 独自ビルド等を無条件に弾かない
+        if version < _MIN_GH_VERSION:
+            detected = ".".join(str(part) for part in version)
+            required = ".".join(str(part) for part in _MIN_GH_VERSION)
+            raise GitHubProviderError(
+                f"gh {detected} is too old for provider.type='github' "
+                f"(kaji requires gh >= {required}). kaji requests the `stateReason` "
+                f"JSON field when reading issues, which gh added in v{required}; "
+                'older gh exits with `Unknown JSON field: "stateReason"`. '
+                f"Upgrade GitHub CLI: {_GH_INSTALL_URL}"
+            )
 
     def _run_gh(self, *args: str, capture: bool = True) -> subprocess.CompletedProcess[str]:
         """``gh`` を subprocess で起動。
@@ -105,6 +169,7 @@ class GitHubProvider:
             raise GitHubProviderError(
                 "'gh' CLI not found in PATH. Install GitHub CLI to use provider.type='github'."
             )
+        self._ensure_gh_version()
         cmd = ["gh", *args]
         try:
             return subprocess.run(

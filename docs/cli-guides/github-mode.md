@@ -39,7 +39,7 @@ configuration, naming rules, and troubleshooting in one file.
 
 | Tool | Role | Notes |
 |------|------|-------|
-| `gh` | GitHub CLI (launched behind `kaji pr`, `kaji issue`, and `kaji sync from-github`) | Must be on PATH |
+| `gh` | GitHub CLI (launched behind `kaji pr`, `kaji issue`, and `kaji sync from-github`) | Must be on PATH, version >= 2.50.0 |
 | `git` | Normal operation | SSH push to `git@github.com` is assumed |
 
 When `gh` is not installed, `kaji sync from-github` and `kaji issue` /
@@ -47,6 +47,15 @@ When `gh` is not installed, `kaji sync from-github` and `kaji issue` /
 `'gh' CLI not found in PATH. ...` (the following guidance differs by entry
 point; for example, the passthrough path says
 `Install GitHub CLI to use 'kaji issue' / 'kaji pr'.`).
+
+`GitHubProvider` (used by `kaji issue` / `kaji run` under
+`provider.type='github'`) additionally requires `gh >= 2.50.0`: it reads the
+`stateReason` JSON field, which `gh` only supports from v2.50.0 onward. On an
+older `gh`, the provider stops before invoking any business `gh` command and
+raises an actionable error naming the detected version, the required version,
+and the install URL (see § 4.6). `gh` version whose output cannot be parsed
+is passed through unchecked (fail-open), so custom builds are not rejected
+outright.
 
 ### 1.2 Authentication
 
@@ -295,6 +304,19 @@ placeholder. See the grep procedure and placeholder convention in
 If an issue was closed unintentionally, reopen it with
 `gh issue reopen <N> --repo <owner>/<repo>` and check whether the repository
 setting is still disabled.
+
+### 4.6 `gh <version> is too old for provider.type='github' ...`
+
+Symptom: `kaji issue` / `kaji run` under `provider.type='github'` exits with
+`GitHubProviderError: gh <detected> is too old for provider.type='github'
+(kaji requires gh >= 2.50.0). ...` before any `gh` mutation runs.
+
+Cause: `GitHubProvider` requires `gh >= 2.50.0` for the `stateReason` JSON
+field (§ 1.1). An older `gh` on PATH fails this preflight check.
+
+Fix: upgrade GitHub CLI following the
+[official installation instructions](https://github.com/cli/cli#installation),
+then re-run `gh --version` to confirm `>= 2.50.0`.
 
 ## 5. References
 

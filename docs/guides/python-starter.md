@@ -112,7 +112,9 @@ under the github provider (or vice versa) is rejected fail-fast by kaji.
 ### 2.3 GitHub authentication and labels
 
 - `gh auth status` must pass before running GitHub workflows (kaji delegates
-  issue / PR operations to the `gh` CLI)
+  issue / PR operations to the `gh` CLI). See the
+  [GitHub mode guide § 1.1](../cli-guides/github-mode.md#11-required-tools)
+  for the minimum `gh` version kaji requires.
 - `scripts/setup_labels.sh` creates the `type:*` labels
   (`type:feature` / `type:bug` / `type:refactor` / `type:docs` / `type:test` /
   `type:chore` / `type:perf` / `type:security`). It is idempotent

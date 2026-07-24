@@ -162,7 +162,7 @@ tell us what workflow you want to run.
 - Python 3.11 or newer
 - `uv`
 - Claude Code, Codex, or Gemini CLI installed for the agents you want to run
-- `gh` authenticated if you use GitHub-backed issue and PR operations
+- `gh` 2.50.0 or newer, authenticated, if you use GitHub-backed issue and PR operations
 - `tmux` 3.1 or newer if you use the interactive terminal runner
 - A target repository with kaji skills under `.claude/skills/`
 
