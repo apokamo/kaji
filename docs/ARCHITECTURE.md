@@ -8,7 +8,7 @@
 
 ## 概要
 
-**kaji_harness** は、Claude Code / Codex / Gemini CLI / Antigravity CLI のスキルをワークフロー YAML に従って実行する軽量ハーネス。
+**kaji_harness** は、Claude Code / Codex / Antigravity CLI のスキルをワークフロー YAML に従って実行する軽量ハーネス。
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -18,7 +18,7 @@
 │  スキル (.claude/skills/, .agents/skills/)       │
 │  各ステップの実作業プロンプト。CLI がロード      │
 ├─────────────────────────────────────────────────┤
-│  CLI (Claude Code / Codex / Gemini / Antigravity)│
+│  CLI (Claude Code / Codex / Antigravity)         │
 │  スキルをロードし、PJ コンテキストで実行         │
 └─────────────────────────────────────────────────┘
 ```
@@ -88,7 +88,7 @@ kaji_harness/
   models.py       # データクラス: Workflow, Step, CycleDefinition, Verdict, CLIResult
   workflow.py     # YAML パーサ & バリデータ
   verdict.py      # Verdict パーサ (3段階フォールバック)
-  adapters.py     # CLI イベントアダプタ (Claude/Codex/Gemini/Antigravity)
+  adapters.py     # CLI イベントアダプタ (Claude/Codex/Antigravity)
   cli.py          # CLI 引数構築 & サブプロセス実行
   prompt.py       # プロンプトビルダー
   skill.py        # スキル存在確認 & パストラバーサル防御 (config.paths.skill_dir ベース)
@@ -234,7 +234,7 @@ agent 経路の起動 backend は repository config の `[execution] agent_runne
 `kaji run --agent-runner`）で選ぶ（Issue #224）。
 
 - **`headless`（既定）**: `execute_cli()` が `claude -p --output-format stream-json` /
-  `codex exec --json` / `gemini -p ... -o stream-json` / `agy -p` を起動する。
+  `codex exec --json` / `agy -p` を起動する。
   Antigravity の stdout は JSONL decode せず plain text 全行を保持する。
 - **`interactive_terminal`**: `execute_interactive_terminal()` が **tmux pane** 上で通常の
   対話 `claude` / `codex` / `agy -i` を起動し（初回は `split-window -h` で origin の右、2枚目以降は右列内を
@@ -523,15 +523,15 @@ chain をまたいだ retry storm が構造的に起きない。
 
 ## CLI 対応マトリクス
 
-| 機能 | Claude Code | Codex | Gemini | Antigravity |
-|------|-------------|-------|--------|-------------|
-| 非インタラクティブ実行 | `-p` | `exec --json` | `-p` | `agy -p` |
-| ストリーミング | `--output-format stream-json --verbose` | `--json` | `-o stream-json` | plain stdout |
-| セッション resume | `--resume <session_id>` | `resume <thread_id>` | `--resume <session_id>` | 非対応（validation で拒否） |
-| 承認バイパス (auto) | `--permission-mode bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox` | `--approval-mode yolo` | `--dangerously-skip-permissions` |
-| sandbox | agent default | `-s workspace-write` | `-s` | `--sandbox` |
-| モデル指定 | `--model` | `-m` | `--model` | `--model` |
-| token / cost | 対応 | token 対応 | token 対応 | 非対応 |
+| 機能 | Claude Code | Codex | Antigravity |
+|------|-------------|-------|-------------|
+| 非インタラクティブ実行 | `-p` | `exec --json` | `agy -p` |
+| ストリーミング | `--output-format stream-json --verbose` | `--json` | plain stdout |
+| セッション resume | `--resume <session_id>` | `resume <thread_id>` | 非対応（validation で拒否） |
+| 承認バイパス (auto) | `--permission-mode bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox` | `--dangerously-skip-permissions` |
+| sandbox | agent default | `-s workspace-write` | `--sandbox` |
+| モデル指定 | `--model` | `-m` | `--model` |
+| token / cost | 対応 | token 対応 | 非対応 |
 
 ---
 
@@ -587,5 +587,4 @@ HarnessError
 | [ワークフローガイド](dev/workflow_guide.md) | ワークフロー選択基準・概要 |
 | [Claude Code CLI ガイド](cli-guides/claude-code-cli-guide.md) | claude コマンド仕様 |
 | [Codex CLI Guide](cli-guides/codex-cli-session-guide.md) | codex コマンド仕様 |
-| [Gemini CLI ガイド](cli-guides/gemini-cli-session-guide.md) | gemini コマンド仕様 |
 | [Antigravity CLI ガイド](cli-guides/antigravity-cli-session-guide.md) | agy コマンド仕様と resume 非対応契約 |

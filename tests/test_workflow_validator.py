@@ -73,7 +73,7 @@ class TestValidWorkflows:
         """A simple valid workflow raises no error."""
         wf = _workflow(
             steps=[
-                _step("analyse", agent="gemini", on={"PASS": "implement", "ABORT": "end"}),
+                _step("analyse", agent="antigravity", on={"PASS": "implement", "ABORT": "end"}),
                 _step("implement", agent="claude", on={"PASS": "review", "ABORT": "end"}),
                 _step("review", agent="codex", on={"PASS": "end", "RETRY": "implement"}),
             ],
@@ -113,7 +113,7 @@ class TestAgentValidation:
     """Validation of the agent enum."""
 
     @pytest.mark.small
-    @pytest.mark.parametrize("agent", ["claude", "codex", "gemini", "antigravity"])
+    @pytest.mark.parametrize("agent", ["claude", "codex", "antigravity"])
     def test_registered_agent_passes(self, agent: str) -> None:
         """Every registered runtime agent is accepted."""
         validate_workflow(_workflow([_step("run", agent=agent, on={"PASS": "end"})]))
@@ -133,6 +133,18 @@ class TestAgentValidation:
         validate_workflow(workflow)
 
     @pytest.mark.small
+    def test_removed_gemini_agent_is_rejected(self) -> None:
+        """Gemini CLI is rejected after removal from the public agent contract."""
+        workflow = _workflow([_step("run", agent="gemini", on={"PASS": "end"})])
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            validate_workflow(workflow)
+
+        assert exc_info.value.errors == [
+            ("Step 'run' has unknown agent 'gemini' (allowed: ['antigravity', 'claude', 'codex'])")
+        ]
+
+    @pytest.mark.small
     @pytest.mark.parametrize("agent", ["cladue", "Claude", "unknown"])
     def test_unknown_agent_is_rejected(self, agent: str) -> None:
         """Unknown and incorrectly cased agents are rejected with the enum contract."""
@@ -144,7 +156,7 @@ class TestAgentValidation:
         assert exc_info.value.errors == [
             (
                 f"Step 'run' has unknown agent '{agent}' "
-                "(allowed: ['antigravity', 'claude', 'codex', 'gemini'])"
+                "(allowed: ['antigravity', 'claude', 'codex'])"
             )
         ]
 
@@ -322,7 +334,7 @@ class TestResumeValidation:
         """resume targeting a step with a different agent triggers an error."""
         wf = _workflow(
             steps=[
-                _step("step_a", agent="gemini"),
+                _step("step_a", agent="codex"),
                 _step("step_b", agent="claude", resume="step_a"),
             ],
         )
@@ -379,14 +391,14 @@ class TestResumeValidation:
         )
 
     @pytest.mark.small
-    def test_gemini_resume_remains_supported(self) -> None:
-        """既存 Gemini resume 契約を変更しない。"""
+    def test_codex_resume_remains_supported(self) -> None:
+        """Codex の resume 契約を維持する。"""
         workflow = _workflow(
             [
-                _step("investigate", agent="gemini", on={"PASS": "implement"}),
+                _step("investigate", agent="codex", on={"PASS": "implement"}),
                 _step(
                     "implement",
-                    agent="gemini",
+                    agent="codex",
                     resume="investigate",
                     on={"PASS": "end"},
                 ),
@@ -717,7 +729,7 @@ class TestMultipleErrorCollection:
 
         assert (
             "Step 'root' has unknown agent 'cladue' "
-            "(allowed: ['antigravity', 'claude', 'codex', 'gemini'])" in exc_info.value.errors
+            "(allowed: ['antigravity', 'claude', 'codex'])" in exc_info.value.errors
         )
         assert "Step 'root' 'on' must define a 'PASS' transition" in exc_info.value.errors
         assert "Step 'orphan' is not reachable from the first step 'root'" in exc_info.value.errors

@@ -13,7 +13,7 @@ https://github.com/user-attachments/assets/b1e3fb2e-6b92-4798-8f4c-0227b0727ce1
   <a href="docs/assets/demo.mp4">Watch the terminal demo (MP4)</a>
 </p>
 
-Closed-loop agentic development for Claude Code, Codex, Gemini CLI, and Antigravity CLI.
+Closed-loop agentic development for Claude Code, Codex, and Antigravity CLI.
 
 kaji turns an issue into a resumable design -> implement -> review -> fix
 -> verify -> PR loop, with human-in-the-loop gates and artifact-backed
@@ -32,7 +32,7 @@ review, when to fix, when to stop, and when a human should decide.
 kaji provides that layer.
 
 - Define the development process as workflow YAML.
-- Route each step to Claude Code, Codex, Gemini CLI, or Antigravity CLI.
+- Route each step to Claude Code, Codex, or Antigravity CLI.
 - Use bounded review/fix/verify loops instead of endless chat.
 - Capture decisions as structured verdict artifacts.
 - Resume from a specific step when work is interrupted.
@@ -52,7 +52,7 @@ checklist.
 | Comparison | kaji | [Ruflo](https://github.com/ruvnet/ruflo) (formerly claude-flow) | [OpenHands](https://docs.openhands.dev/openhands/usage/agent-canvas/overview) | [Claude Code subagents](https://code.claude.com/docs/en/sub-agents) alone |
 |---|---|---|---|---|
 | Primary abstraction | A repository-owned issue-to-PR development workflow | An agent meta-harness for Claude Code and Codex | A coding-agent runtime and SDK, with Agent Canvas as a control surface | A specialized delegated agent inside a Claude Code session |
-| Orchestration model | Explicit workflow YAML with named steps and transitions; each step can route to Claude Code, Codex, Gemini CLI, or Antigravity CLI | Routing, swarm topologies, plugins, loops, and shared memory | Agent conversations, automations, and programmable SDK workflows; Agent Canvas can also run ACP-compatible agents | The parent session delegates parallel or nested work to agents with separate contexts |
+| Orchestration model | Explicit workflow YAML with named steps and transitions; each step can route to Claude Code, Codex, or Antigravity CLI | Routing, swarm topologies, plugins, loops, and shared memory | Agent conversations, automations, and programmable SDK workflows; Agent Canvas can also run ACP-compatible agents | The parent session delegates parallel or nested work to agents with separate contexts |
 | Review convergence | Explicit review -> fix -> verify cycles with iteration ceilings and defined exhaustion behavior | Autonomous loops, consensus mechanisms, and reusable workflow plugins | An [experimental Critic](https://docs.openhands.dev/openhands/usage/agent-canvas/critic) can score work and run bounded iterative refinement; the SDK also supports custom loops | Reviews can be composed with prompts, hooks, and delegated agents, but the subagent primitive does not prescribe an issue-to-PR review lifecycle |
 | State and resume | Structured `PASS`, `RETRY`, `BACK`, and `ABORT` verdicts, per-attempt artifacts, and restart from a named workflow step | Persistent memory, agent state, telemetry, and cross-session restoration | Typed conversation events, persisted or resumed conversations, critic scores, and automation history | Results return to the parent; subagent context and transcripts can be resumed within the retained Claude Code session |
 | Control boundary | Named transitions and explicit stop or exhaustion states keep human gates around issue and PR decisions | Hooks, security controls, audit features, and circuit breakers govern autonomous coordination | Action confirmation, pause and resume controls, sandbox choices, and automation management | Per-agent tools, permissions, hooks, and parent-session supervision |
@@ -129,7 +129,7 @@ artifacts, and advances the workflow deterministically from each verdict.
 
 ## Core features
 
-- **Multi-agent workflow orchestration**: run Claude Code, Codex, Gemini CLI, and Antigravity CLI
+- **Multi-agent workflow orchestration**: run Claude Code, Codex, and Antigravity CLI
   from one workflow definition.
 - **Closed review loops**: model review feedback as explicit
   review -> fix -> verify cycles.
@@ -148,7 +148,7 @@ artifacts, and advances the workflow deterministically from each verdict.
 
 ## Extensibility
 
-kaji currently focuses on Claude Code, Codex, Gemini CLI, and Antigravity CLI. The runner and
+kaji currently focuses on Claude Code, Codex, and Antigravity CLI. The runner and
 workflow model are designed to support additional coding-agent CLIs when there
 is real demand.
 
@@ -161,7 +161,7 @@ tell us what workflow you want to run.
 
 - Python 3.11 or newer
 - `uv`
-- Claude Code, Codex, Gemini CLI, or Antigravity CLI (`agy`) installed for the agents you want to run
+- Claude Code, Codex, or Antigravity CLI (`agy`) installed for the agents you want to run
 - `gh` 2.50.0 or newer, authenticated, if you use GitHub-backed issue and PR operations
 - `tmux` 3.1 or newer if you use the interactive terminal runner
 - A target repository with kaji skills under `.claude/skills/`

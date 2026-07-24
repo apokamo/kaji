@@ -143,7 +143,7 @@ class CLIEventAdapter(Protocol):
     def treats_stream_error_as_failure(self) -> bool:
         """Stream-level `type:"error"` event を terminal-seen 分岐の失敗根拠とするか。
 
-        - True (Claude / Gemini): 既存契約。terminal が success でも
+        - True (Claude): terminal が success でも
           `error_messages` が non-empty なら `CLIExecutionError` を raise する
         - False (Codex): `error` event は recoverable 通知（Reconnecting 等）を
           含むため失敗根拠としない。`turn.failed` のみで失敗判定する
@@ -334,68 +334,6 @@ class CodexAdapter:
         return True
 
 
-class GeminiAdapter:
-    """Gemini CLI の JSONL イベントアダプタ。
-
-    stream-json イベント形式:
-    - init: {type: "init", session_id, model}
-    - message: {type: "message", role: "user"|"assistant", content: "<text>"}
-    - result: {type: "result", status, stats: {input_tokens, output_tokens, ...}}
-    """
-
-    def extract_session_id(self, event: dict[str, Any]) -> str | None:
-        if event.get("type") == "init":
-            return event.get("session_id")
-        return None
-
-    def extract_text(self, event: dict[str, Any]) -> str | None:
-        if event.get("type") == "message" and event.get("role") == "assistant":
-            content = event.get("content")
-            return content if isinstance(content, str) and content else None
-        return None
-
-    def extract_cost(self, event: dict[str, Any]) -> CostInfo | None:
-        if event.get("type") == "result":
-            stats = event.get("stats", {})
-            if stats:
-                return CostInfo(
-                    input_tokens=stats.get("input_tokens"),
-                    output_tokens=stats.get("output_tokens"),
-                )
-        return None
-
-    def extract_error_message(self, event: dict[str, Any]) -> str | None:
-        event_type = event.get("type")
-        if event_type not in ("error", "result"):
-            return None
-        if event_type == "result" and not self.is_terminal_failure(event):
-            return None
-
-        message = _non_empty_string(event.get("message"))
-        if message:
-            return message
-        error = event.get("error")
-        if isinstance(error, dict):
-            return _non_empty_string(error.get("message"))
-        return _non_empty_string(error)
-
-    def is_terminal_event(self, event: dict[str, Any]) -> bool:
-        return event.get("type") == "result"
-
-    def is_terminal_failure(self, event: dict[str, Any]) -> bool:
-        # Gemini `result` の failure シグナル: status が "success" 以外なら失敗扱い。
-        if event.get("type") != "result":
-            return False
-        status = event.get("status")
-        return status is not None and status != "success"
-
-    def treats_stream_error_as_failure(self) -> bool:
-        return True
-
-    def parses_stdout_as_jsonl(self) -> bool:
-        return True
-
-
 class AntigravityAdapter:
     """Antigravity CLI の plain-text stdout adapter。"""
 
@@ -428,5 +366,4 @@ ADAPTERS: dict[str, CLIEventAdapter] = {
     "antigravity": AntigravityAdapter(),
     "claude": ClaudeAdapter(),
     "codex": CodexAdapter(),
-    "gemini": GeminiAdapter(),
 }

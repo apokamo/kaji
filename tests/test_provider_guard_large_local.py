@@ -1,7 +1,7 @@
 """Phase 4 Large-local: subprocess E2E tests for the 3-layer guard.
 
 CLI 層 / Skill 層 / Workflow 層の bare-provider ガードを実 subprocess 経由で
-確認する。実 agent CLI（claude / codex / gemini）は起動しない（API コスト
+確認する。実 agent CLI（claude / codex / antigravity）は起動しない（API コスト
 発生のため、別途 large_forge で扱う）。
 
 phase4-design.md § 受け入れ条件 § 機械検証 / § テスト戦略 § Large-local 参照。

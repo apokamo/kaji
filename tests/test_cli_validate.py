@@ -207,7 +207,11 @@ def _create_config(project_root: Path, skill_dir: str = ".claude/skills") -> Non
 
 def _create_skill(project_root: Path, skill_name: str, agent: str = "claude") -> None:
     """Create a minimal SKILL.md for testing."""
-    agent_dirs = {"claude": ".claude/skills", "codex": ".agents/skills", "gemini": ".agents/skills"}
+    agent_dirs = {
+        "claude": ".claude/skills",
+        "codex": ".agents/skills",
+        "antigravity": ".agents/skills",
+    }
     skill_dir = project_root / agent_dirs[agent] / skill_name
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(f"# {skill_name}\nTest skill.\n")

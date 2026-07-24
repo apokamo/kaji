@@ -12,7 +12,7 @@ authors = [
 maintainers = [
     {name = "apokamo"}
 ]
-keywords = ["ai", "agent", "workflow", "orchestrator", "claude", "codex", "gemini"]
+keywords = ["ai", "agent", "workflow", "orchestrator", "claude", "codex"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",

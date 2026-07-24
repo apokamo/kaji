@@ -11,7 +11,7 @@ main session は以下のフローを実行する。**Agent tool 利用可否の
 
 1. main session は `kaji-code-reviewer` subagent を **Agent tool で起動** するよう試行する
    - **起動成功**（subagent からの応答テキストが取得できる）→ 経路: `subagent`
-   - **Agent tool が利用不可**（Codex / Gemini 等で tool が未定義 / 起動失敗 / `.claude/agents/kaji-code-reviewer.md` が未ロード）→ 経路: `self-check (subagent unavailable, fallback)`
+   - **Agent tool が利用不可**（Codex / Antigravity 等で tool が未定義 / 起動失敗 / `.claude/agents/kaji-code-reviewer.md` が未ロード）→ 経路: `self-check (subagent unavailable, fallback)`
 
 #### Step 8.5.2: 経路別の実行
 
@@ -64,7 +64,7 @@ main session は以下のフローを実行する。**Agent tool 利用可否の
 
 3. subagent が返した Markdown 出力を Step 8.5.5 で専用の Issue コメントとして投稿する（main session が投稿経路を担う）。
 
-##### 経路 B: self-check（Codex / Gemini 等の非対応 agent）
+##### 経路 B: self-check（Codex / Antigravity 等の非対応 agent）
 
 1. main session 自身が `.claude/agents/kaji-code-reviewer.md` を `Read` ツールで読み込み、同 markdown 内の rubric を **main session 内で適用** する。
 2. 上記 § 経路 A の入力情報（diff / test output / quality check / baseline）を自セッションで参照しながら、`kaji-code-reviewer.md` § 出力形式に沿った Markdown を生成する。

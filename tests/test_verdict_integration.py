@@ -62,13 +62,15 @@ class TestCreateVerdictFormatterFactory:
         )
         assert callable(formatter)
 
-    def test_gemini_formatter_cli_args(self) -> None:
-        """Gemini formatter builds correct CLI args."""
+    def test_unknown_formatter_agent_is_rejected(self) -> None:
+        """An unsupported formatter agent fails through the shared fallback."""
         formatter = create_verdict_formatter(
-            agent="gemini",
+            agent="unsupported",
             valid_statuses={"PASS", "BACK", "ABORT"},
         )
-        assert callable(formatter)
+
+        with pytest.raises(ValueError, match="Unknown agent for formatter: unsupported"):
+            formatter("raw input")
 
     def test_antigravity_formatter_cli_args(self) -> None:
         """Antigravity formatter uses plain `agy -p` output."""

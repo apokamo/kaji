@@ -110,7 +110,7 @@ cycles:                            # 省略可: ループサイクル定義
 steps:                             # 必須: ステップ一覧（上から順に実行）
   - id: <step-id>
     skill: <skill-name>
-    agent: claude                  # claude / codex / gemini / antigravity（exec_script skill のみ省略可）
+    agent: claude                  # claude / codex / antigravity（exec_script skill のみ省略可）
     on:
       PASS: <next-step-id>
       RETRY: <step-id>
@@ -247,7 +247,7 @@ config 非依存のため）。
 | `id` | str | ✅ | ステップ ID。英数字とハイフン。workflow 内で一意でなければならない（重複は `WorkflowValidationError`）。**検証範囲**: parse 時に強制されるのは型（非空 str）のみ（Issue #357）。英数字とハイフンという書式は文書契約だが validation では未強制 |
 | `skill` | str | △ | スキル名（`<agent>.skills/<name>` のルックアップキー）。`exec` と相互排他（後述「skill-step と exec-step」） |
 | `exec` | str \| list[str] | △ | 直接実行する command/argv。`skill` と相互排他。後述「exec-step（script step）」 |
-| `agent` | str | △ | `claude` / `codex` / `gemini` / `antigravity`。skill-step（非 exec_script）で必須。exec-step / exec_script skill では指定不可 / 省略可 |
+| `agent` | str | △ | `claude` / `codex` / `antigravity`。skill-step（非 exec_script）で必須。exec-step / exec_script skill では指定不可 / 省略可 |
 | `on` | mapping | ✅ | verdict → next step ID のマッピング。非空必須 |
 | `model` | str | — | モデル名（省略時は agent デフォルト）。exec-step では指定不可 |
 | `effort` | str | — | エージェント別の許容値で書く。後述「effort 値」参照。exec-step では指定不可 |
@@ -260,7 +260,7 @@ config 非依存のため）。
 > `exec` を持つ **exec-step** の **ちょうど 1 つ** でなければならない。両方指定 / 両方欠落は
 > `WorkflowValidationError`（parse / `validate_workflow` の双方で fail-fast）。
 
-`agent` を指定する場合は `claude` / `codex` / `gemini` / `antigravity` の
+`agent` を指定する場合は `claude` / `codex` / `antigravity` の
 いずれかでなければならない。
 model 名は agent ごとに変化するため enum 検証の対象外とする。
 
@@ -276,7 +276,6 @@ runtime validator が agent 別 allowed values で reject するため、本仕�
 | `claude` | `low`, `medium`, `high`, `xhigh`, `max` | `claude --help` の `--effort` 列挙 |
 | `codex` | `none`, `minimal`, `low`, `medium`, `high`, `xhigh` | codex error message: `expected one of \`none\`, \`minimal\`, \`low\`, \`medium\`, \`high\`, \`xhigh\` in \`model_reasoning_effort\`` |
 | `antigravity` | `low`, `medium`, `high` | AGY v1.1.6 `agy --help` の `--effort` 列挙 |
-| `gemini` | 検証スキップ（passthrough） | capability registry の `effort_allowed=None` |
 
 > **罠（UI 表示と YAML 値の差異）**: claude / codex どちらの対話 UI も effort
 > を **大文字**（`Low` / `Medium` / `High` / `Extra high`）で表示する。
@@ -370,11 +369,11 @@ cycle の `cycle_counts` だけを `0` に戻してから再開できる（詳�
 
 ### エージェント別 CLI フラグ
 
-| policy | Claude | Codex | Gemini | Antigravity |
-|--------|--------|-------|--------|-------------|
-| `auto` | `--permission-mode bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox` | `--approval-mode yolo` | `--dangerously-skip-permissions` |
-| `sandbox` | （フラグなし） | `-s workspace-write` | `-s` | `--sandbox` |
-| `interactive` | （フラグなし） | （フラグなし） | （フラグなし） | （フラグなし） |
+| policy | Claude | Codex | Antigravity |
+|--------|--------|-------|-------------|
+| `auto` | `--permission-mode bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox` | `--dangerously-skip-permissions` |
+| `sandbox` | （フラグなし） | `-s workspace-write` | `--sandbox` |
+| `interactive` | （フラグなし） | （フラグなし） | （フラグなし） |
 
 Antigravity では sandbox（containment）と permission（tool approval）は別軸である。
 `sandbox` policy に承認 bypass は付けない。この mapping は headless と interactive

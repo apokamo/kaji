@@ -12,7 +12,7 @@ import shutil
 
 import pytest
 
-from kaji_harness.adapters import ClaudeAdapter, CodexAdapter, GeminiAdapter
+from kaji_harness.adapters import ClaudeAdapter, CodexAdapter
 
 
 def _cli_available(name: str) -> bool:
@@ -81,37 +81,3 @@ class TestRealCodexCLI:
             "item": {"type": "agent_message", "text": "Codex output"},
         }
         assert adapter.extract_text(text_event) == "Codex output"
-
-
-@pytest.mark.large
-class TestRealGeminiCLI:
-    """E2E tests with real Gemini CLI."""
-
-    @pytest.mark.skipif(not _cli_available("gemini"), reason="Gemini CLI not installed")
-    def test_gemini_cli_version(self) -> None:
-        """Verify Gemini CLI is accessible."""
-        import subprocess
-
-        result = subprocess.run(["gemini", "--version"], capture_output=True, text=True, timeout=10)
-        assert result.returncode == 0
-
-    @pytest.mark.skipif(not _cli_available("gemini"), reason="Gemini CLI not installed")
-    def test_gemini_adapter_with_sample_jsonl(self) -> None:
-        """GeminiAdapter correctly parses known JSONL structures."""
-        adapter = GeminiAdapter()
-
-        init_event = {"type": "init", "session_id": "gem-real-789", "model": "auto"}
-        assert adapter.extract_session_id(init_event) == "gem-real-789"
-
-        text_event = {"type": "message", "role": "assistant", "content": "Gemini output"}
-        assert adapter.extract_text(text_event) == "Gemini output"
-
-        # Cost from result event stats
-        result_event = {
-            "type": "result",
-            "status": "success",
-            "stats": {"input_tokens": 1000, "output_tokens": 50},
-        }
-        cost = adapter.extract_cost(result_event)
-        assert cost is not None
-        assert cost.input_tokens == 1000

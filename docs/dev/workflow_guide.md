@@ -334,7 +334,7 @@ kaji run .kaji/wf/official/dev.yaml 247 --agent-runner headless
 `baseline-precheck` script step を 1 回実行する。artifact と既知 failure ポリシーは
 [baseline-check.md](baseline-check.md) を参照する。
 
-各 hand-off 直前（`design → review-design` / `implement → review-code`）には **pre-handoff review** が挟まる（capability-based: Claude Code は `kaji-code-reviewer` subagent、Codex / Gemini は main-session self-check）。詳細は [development_workflow.md § Pre-Handoff Review](development_workflow.md#prehandoff-review) を参照。
+各 hand-off 直前（`design → review-design` / `implement → review-code`）には **pre-handoff review** が挟まる（capability-based: Claude Code は `kaji-code-reviewer` subagent、Codex / Antigravity は main-session self-check）。詳細は [development_workflow.md § Pre-Handoff Review](development_workflow.md#prehandoff-review) を参照。
 
 詳細: [development_workflow.md](development_workflow.md)
 

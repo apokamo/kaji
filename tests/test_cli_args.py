@@ -1,7 +1,7 @@
 """Tests for CLI argument builder.
 
 Verifies that build_cli_args produces correct command-line arguments
-for each agent (Claude, Codex, Gemini) across various configurations.
+for each supported agent (Claude, Codex, Antigravity) across various configurations.
 """
 
 from pathlib import Path
@@ -198,81 +198,6 @@ class TestCodexArgs:
 
 
 # ==========================================
-# Gemini args
-# ==========================================
-
-
-class TestGeminiArgs:
-    """build_cli_args for agent=gemini."""
-
-    @pytest.mark.small
-    def test_basic_new_session(self, workdir: Path) -> None:
-        """Basic Gemini invocation: -p takes prompt as value, -o stream-json."""
-        step = _make_step("gemini")
-        args = build_cli_args(
-            step, "do stuff", workdir, session_id=None, execution_policy="interactive"
-        )
-        assert args == ["gemini", "-p", "do stuff", "-o", "stream-json"]
-
-    @pytest.mark.small
-    def test_with_model(self, workdir: Path) -> None:
-        """Model flag uses -m for Gemini."""
-        step = _make_step("gemini", model="model-name")
-        args = build_cli_args(
-            step, "do stuff", workdir, session_id=None, execution_policy="interactive"
-        )
-        assert "-m" in args
-        assert "model-name" in args
-
-    @pytest.mark.small
-    def test_effort_ignored(self, workdir: Path) -> None:
-        """Effort is not passed to Gemini."""
-        step = _make_step("gemini", effort="high")
-        args = build_cli_args(
-            step, "do stuff", workdir, session_id=None, execution_policy="sandbox"
-        )
-        assert "--effort" not in args
-        assert "high" not in args
-
-    @pytest.mark.small
-    def test_max_budget_usd_ignored(self, workdir: Path) -> None:
-        """max_budget_usd is not passed to Gemini."""
-        step = _make_step("gemini", max_budget_usd=5.0)
-        args = build_cli_args(
-            step, "do stuff", workdir, session_id=None, execution_policy="sandbox"
-        )
-        assert "--max-budget-usd" not in args
-        assert "5.0" not in args
-
-    @pytest.mark.small
-    def test_with_session_id_resume(self, workdir: Path) -> None:
-        """Resume flag uses -r for Gemini."""
-        step = _make_step("gemini")
-        args = build_cli_args(
-            step, "do stuff", workdir, session_id="session-id", execution_policy="sandbox"
-        )
-        assert "-r" in args
-        assert "session-id" in args
-
-    @pytest.mark.small
-    def test_execution_policy_auto(self, workdir: Path) -> None:
-        """Auto policy includes yolo approval mode."""
-        step = _make_step("gemini")
-        args = build_cli_args(step, "do stuff", workdir, session_id=None, execution_policy="auto")
-        assert "--approval-mode" in args
-        assert "yolo" in args
-
-    @pytest.mark.small
-    def test_execution_policy_sandbox(self, workdir: Path) -> None:
-        """Sandbox policy includes -s flag."""
-        step = _make_step("gemini")
-        args = build_cli_args(
-            step, "do stuff", workdir, session_id=None, execution_policy="sandbox"
-        )
-        assert "-s" in args
-
-
-# ==========================================
 # Antigravity args
 # ==========================================
 
@@ -344,5 +269,23 @@ class TestAntigravityArgs:
                 "do stuff",
                 workdir,
                 session_id="unsupported-session",
+                execution_policy="auto",
+            )
+
+
+class TestUnknownAgentArgs:
+    """Defensive build_cli_args behavior for unsupported agents."""
+
+    @pytest.mark.small
+    def test_removed_gemini_agent_is_rejected(self, workdir: Path) -> None:
+        """Validation を迂回した Gemini agent を fail-loud に拒否する。"""
+        step = _make_step("gemini")
+
+        with pytest.raises(ValueError, match=r"^Unknown agent: gemini$"):
+            build_cli_args(
+                step,
+                "do stuff",
+                workdir,
+                session_id=None,
                 execution_policy="auto",
             )

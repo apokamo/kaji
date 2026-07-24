@@ -88,7 +88,7 @@ $ARGUMENTS = <issue_id>
 
 ### Step 1.4: Pre-Handoff Review 証跡の存在チェック（hard gate）
 
-`/issue-implement` Step 8.5 で生成される `## Pre-Handoff Review` セクション（経路情報を含む）が Issue コメントに存在することを機械的に確認する。**実装側のゲートが Codex / Gemini 等で skill markdown を誤読・省略してサイレントにバイパスされていないか**を、レビュー側でハードチェックする責務。
+`/issue-implement` Step 8.5 で生成される `## Pre-Handoff Review` セクション（経路情報を含む）が Issue コメントに存在することを機械的に確認する。**実装側のゲートが Codex / Antigravity 等で skill markdown を誤読・省略してサイレントにバイパスされていないか**を、レビュー側でハードチェックする責務。
 
 ```bash
 PHR_COUNT=$(kaji issue view [issue_id] --comments 2>/dev/null | grep -c '^## Pre-Handoff Review$')

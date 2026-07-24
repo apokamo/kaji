@@ -111,7 +111,7 @@ dev workflow のフローそのものは type に依存しないが、各スキ�
 | フェーズ | スキル内ステップ | 経路（capability-based） |
 |---------|------------------|------------------------|
 | design hand-off | `/issue-design` Step 2.6 (Self-Check) | main-session self-check（rubric: review-design SKILL.md Step 1.5 / Step 2 § type 重み付け / § 重要判断 audit / § レビュー基準 1〜5）|
-| implement hand-off | `/issue-implement` Step 8.5 (Pre-Handoff Review) | Claude Code: `kaji-code-reviewer` subagent / Codex・Gemini 等: main-session self-check（同 rubric） |
+| implement hand-off | `/issue-implement` Step 8.5 (Pre-Handoff Review) | Claude Code: `kaji-code-reviewer` subagent / Codex・Antigravity 等: main-session self-check（同 rubric） |
 
 `/issue-implement` は開始時に [implement-quickref.md](./implement-quickref.md) を読み、正本規約を状況依存で部分 Read する。Baseline Check は [baseline-check.md](./baseline-check.md) と構造化 artifact、Pre-Handoff Review の詳細手順と実装完了報告 template は skill 配下を正本とする。
 

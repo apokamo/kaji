@@ -1,4 +1,4 @@
-"""Tests for CLI event adapters (Claude, Codex, Gemini, Antigravity).
+"""Tests for CLI event adapters (Claude, Codex, Antigravity).
 
 Each adapter extracts session_id, text, and cost from JSONL events.
 """
@@ -9,7 +9,6 @@ from kaji_harness.adapters import (
     AntigravityAdapter,
     ClaudeAdapter,
     CodexAdapter,
-    GeminiAdapter,
     decode_unicode_escapes,
 )
 from kaji_harness.models import CostInfo
@@ -657,83 +656,6 @@ class TestDecodeUnicodeEscapes:
 
 
 # ==========================================
-# Gemini Adapter
-# ==========================================
-
-
-class TestGeminiAdapter:
-    """GeminiAdapter: Gemini CLI JSONL event parsing."""
-
-    @pytest.fixture
-    def adapter(self) -> GeminiAdapter:
-        return GeminiAdapter()
-
-    @pytest.mark.small
-    def test_extract_session_id_from_init_event(self, adapter: GeminiAdapter) -> None:
-        """Init event returns session_id."""
-        event = {"type": "init", "session_id": "gem-789"}
-        assert adapter.extract_session_id(event) == "gem-789"
-
-    @pytest.mark.small
-    def test_extract_session_id_returns_none_for_non_matching(self, adapter: GeminiAdapter) -> None:
-        """Non-init event returns None."""
-        event = {"type": "other"}
-        assert adapter.extract_session_id(event) is None
-
-    @pytest.mark.small
-    def test_extract_text_from_assistant_message(self, adapter: GeminiAdapter) -> None:
-        """Assistant message event returns content text."""
-        event = {"type": "message", "role": "assistant", "content": "hello"}
-        assert adapter.extract_text(event) == "hello"
-
-    @pytest.mark.small
-    def test_extract_text_returns_none_for_user_message(self, adapter: GeminiAdapter) -> None:
-        """User message event returns None."""
-        event = {"type": "message", "role": "user", "content": "question"}
-        assert adapter.extract_text(event) is None
-
-    @pytest.mark.small
-    def test_extract_text_returns_none_for_non_matching(self, adapter: GeminiAdapter) -> None:
-        """Non-message event returns None."""
-        event = {"type": "other"}
-        assert adapter.extract_text(event) is None
-
-    @pytest.mark.small
-    def test_extract_text_from_tool_result_event_returns_none(self, adapter: GeminiAdapter) -> None:
-        """Issue #137: Gemini も tool result 類似イベントを表示経路に流さない。"""
-        event = {
-            "type": "tool_result",
-            "content": [{"type": "text", "text": "\\u306e"}],
-        }
-        assert adapter.extract_text(event) is None
-
-    @pytest.mark.small
-    def test_extract_cost_from_result_event(self, adapter: GeminiAdapter) -> None:
-        """Result event with stats returns CostInfo with token counts."""
-        event = {
-            "type": "result",
-            "status": "success",
-            "stats": {"input_tokens": 1000, "output_tokens": 50},
-        }
-        cost = adapter.extract_cost(event)
-        assert cost is not None
-        assert cost.input_tokens == 1000
-        assert cost.output_tokens == 50
-
-    @pytest.mark.small
-    def test_extract_cost_returns_none_for_non_matching(self, adapter: GeminiAdapter) -> None:
-        """Non-result event returns None for cost."""
-        event = {"type": "message", "role": "assistant", "content": "hi"}
-        assert adapter.extract_cost(event) is None
-
-    @pytest.mark.small
-    def test_extract_cost_returns_none_for_init(self, adapter: GeminiAdapter) -> None:
-        """Init event returns None for cost."""
-        event = {"type": "init", "session_id": "gem-789"}
-        assert adapter.extract_cost(event) is None
-
-
-# ==========================================
 # Antigravity Adapter
 # ==========================================
 
@@ -823,20 +745,6 @@ class TestIsTerminalEvent:
         ):
             assert not adapter.is_terminal_event(ev)
 
-    @pytest.mark.small
-    def test_gemini_result_is_terminal(self) -> None:
-        adapter = GeminiAdapter()
-        assert adapter.is_terminal_event({"type": "result", "status": "success", "stats": {}})
-        assert adapter.is_terminal_event({"type": "result", "status": "error", "stats": {}})
-
-    @pytest.mark.small
-    def test_gemini_init_and_message_are_not_terminal(self) -> None:
-        adapter = GeminiAdapter()
-        assert not adapter.is_terminal_event({"type": "init", "session_id": "g-1"})
-        assert not adapter.is_terminal_event(
-            {"type": "message", "role": "assistant", "content": "hi"}
-        )
-
 
 class TestIsTerminalFailure:
     """is_terminal_failure: terminal event 内の failure シグナル判定（local-p1-22 fix）。"""
@@ -882,22 +790,6 @@ class TestIsTerminalFailure:
         adapter = CodexAdapter()
         assert not adapter.is_terminal_failure({"type": "error", "message": "x"})
 
-    @pytest.mark.small
-    def test_gemini_status_error_is_failure(self) -> None:
-        adapter = GeminiAdapter()
-        assert adapter.is_terminal_failure({"type": "result", "status": "error", "stats": {}})
-
-    @pytest.mark.small
-    def test_gemini_status_success_is_not_failure(self) -> None:
-        adapter = GeminiAdapter()
-        assert not adapter.is_terminal_failure({"type": "result", "status": "success", "stats": {}})
-
-    @pytest.mark.small
-    def test_gemini_non_terminal_is_not_failure(self) -> None:
-        adapter = GeminiAdapter()
-        assert not adapter.is_terminal_failure({"type": "init"})
-        assert not adapter.is_terminal_failure({"type": "message"})
-
 
 class TestTreatsStreamErrorAsFailure:
     """Issue #196: adapter ごとの stream-level error event の致死性契約。"""
@@ -912,18 +804,12 @@ class TestTreatsStreamErrorAsFailure:
         # 失敗根拠としない (Issue #196)。fatal は `turn.failed` で表現される。
         assert CodexAdapter().treats_stream_error_as_failure() is False
 
-    @pytest.mark.small
-    def test_gemini_treats_stream_error_as_failure(self) -> None:
-        assert GeminiAdapter().treats_stream_error_as_failure() is True
-
 
 class TestParsesStdoutAsJsonl:
     """adapter ごとの stdout framing 契約。"""
 
     @pytest.mark.small
-    @pytest.mark.parametrize("adapter", [ClaudeAdapter(), CodexAdapter(), GeminiAdapter()])
-    def test_existing_adapters_parse_jsonl(
-        self, adapter: ClaudeAdapter | CodexAdapter | GeminiAdapter
-    ) -> None:
+    @pytest.mark.parametrize("adapter", [ClaudeAdapter(), CodexAdapter()])
+    def test_existing_adapters_parse_jsonl(self, adapter: ClaudeAdapter | CodexAdapter) -> None:
         """既存 agent の JSONL decoding を維持する。"""
         assert adapter.parses_stdout_as_jsonl() is True

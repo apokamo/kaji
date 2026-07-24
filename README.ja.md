@@ -13,7 +13,7 @@ https://github.com/user-attachments/assets/b1e3fb2e-6b92-4798-8f4c-0227b0727ce1
   <a href="docs/assets/demo.mp4">ターミナルデモを見る（MP4）</a>
 </p>
 
-Claude Code、Codex、Gemini CLI、Antigravity CLIのための closed-loop agentic development。
+Claude Code、Codex、Antigravity CLIのための closed-loop agentic development。
 
 kajiは、Issueを起点に、設計 -> 実装 -> レビュー -> 修正 -> 検証 -> PR までを
 再開可能なワークフローとして実行するAIエージェントオーケストレータです。
@@ -31,7 +31,7 @@ AI coding agentは強力ですが、一発プロンプトだけでは開発プ�
 kajiはその層を提供します。
 
 - 開発プロセスをworkflow YAMLとして定義する
-- 各stepをClaude Code、Codex、Gemini CLI、Antigravity CLIへ割り当てる
+- 各stepをClaude Code、Codex、Antigravity CLIへ割り当てる
 - 無限チャットではなく、上限付きの review -> fix -> verify ループにする
 - 判断結果を構造化されたverdict artifactとして残す
 - 中断した作業を特定stepから再開する
@@ -49,7 +49,7 @@ kajiは、汎用的なagent platformやswarm frameworkよりも、意図的に�
 | 比較軸 | kaji | [Ruflo](https://github.com/ruvnet/ruflo)（旧claude-flow） | [OpenHands](https://docs.openhands.dev/openhands/usage/agent-canvas/overview) | [Claude Code subagents](https://code.claude.com/docs/en/sub-agents)単体 |
 |---|---|---|---|---|
 | 中心となる抽象 | リポジトリが所有するIssue-to-PR開発workflow | Claude CodeとCodexのためのagent meta-harness | coding-agent runtimeとSDK、およびcontrol surfaceとしてのAgent Canvas | Claude Code session内で委譲される専門agent |
-| オーケストレーションモデル | 名前付きstepと遷移を持つ明示的なworkflow YAML。各stepをClaude Code、Codex、Gemini CLI、Antigravity CLIへ割り当て可能 | routing、swarm topology、plugin、loop、共有memory | agent conversation、automation、SDKでプログラム可能なworkflow。Agent CanvasはACP互換agentも実行可能 | 親sessionが、別contextを持つagentへ並列またはnestedな作業を委譲 |
+| オーケストレーションモデル | 名前付きstepと遷移を持つ明示的なworkflow YAML。各stepをClaude Code、Codex、Antigravity CLIへ割り当て可能 | routing、swarm topology、plugin、loop、共有memory | agent conversation、automation、SDKでプログラム可能なworkflow。Agent CanvasはACP互換agentも実行可能 | 親sessionが、別contextを持つagentへ並列またはnestedな作業を委譲 |
 | レビューの収束 | review -> fix -> verify cycleに反復上限と上限到達時の挙動を明示 | autonomous loop、consensus mechanism、再利用可能なworkflow plugin | [実験的なCritic](https://docs.openhands.dev/openhands/usage/agent-canvas/critic)が作業をscore化し、上限付きiterative refinementを実行可能。SDKで独自loopも構成可能 | prompt、hook、委譲agentでレビューを構成できるが、subagentという仕組み自体はIssue-to-PRのreview lifecycleを規定しない |
 | 状態と再開 | 構造化された`PASS`、`RETRY`、`BACK`、`ABORT` verdict、attemptごとのartifact、名前付きworkflow stepからの再開 | 永続memory、agent state、telemetry、cross-session restoration | 型付きconversation event、conversationの永続化と再開、critic score、automation history | 結果を親へ返し、保持中のClaude Code session内でsubagent contextとtranscriptを再開可能 |
 | 制御境界 | 名前付き遷移と明示的な停止・上限到達状態により、IssueやPRの判断にhuman gateを維持 | hook、security control、audit機能、circuit breakerによりautonomous coordinationを統制 | action confirmation、pause/resume、sandbox選択、automation管理 | agentごとのtool、permission、hook、親sessionによる監督 |
@@ -124,7 +124,7 @@ harnessは `verdict.yaml` などの構造化出力を読み、attempt artifact�
 
 ## 主な機能
 
-- **Multi-agent workflow orchestration**: 1つのworkflow定義からClaude Code、Codex、Gemini CLI、Antigravity CLIを呼び分ける
+- **Multi-agent workflow orchestration**: 1つのworkflow定義からClaude Code、Codex、Antigravity CLIを呼び分ける
 - **Closed review loops**: review -> fix -> verify の閉じたサイクルでレビュー指摘を収束させる
 - **Interactive tmux runner**: 通常のCLI agentをtmux paneで起動し、kajiがartifact-backed verdictを監視する
 - **Headless runner**: CI的な非対話実行に向いた既存のheadless経路も維持する
@@ -135,7 +135,7 @@ harnessは `verdict.yaml` などの構造化出力を読み、attempt artifact�
 
 ## 拡張性
 
-kajiは現在、Claude Code、Codex、Gemini CLI、Antigravity CLIを中心に対応しています。runnerとworkflow modelは、
+kajiは現在、Claude Code、Codex、Antigravity CLIを中心に対応しています。runnerとworkflow modelは、
 実際の需要があるcoding-agent CLIを追加できるように設計しています。
 
 このループに組み込みたい別のcoding agentがあれば、ぜひIssueで教えてください。
@@ -147,7 +147,7 @@ kajiは現在、Claude Code、Codex、Gemini CLI、Antigravity CLIを中心に�
 
 - Python 3.11以上
 - `uv`
-- 使用したいagentのClaude Code、Codex、Gemini CLI、Antigravity CLI（`agy`）
+- 使用したいagentのClaude Code、Codex、Antigravity CLI（`agy`）
 - GitHub Issue / PR連携を使う場合は認証済みの `gh` 2.50.0以上
 - interactive terminal runnerを使う場合は `tmux` 3.1以上
 - 対象リポジトリに `.claude/skills/` 配下のkaji skillがあること
