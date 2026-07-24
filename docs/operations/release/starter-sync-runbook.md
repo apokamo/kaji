@@ -71,6 +71,11 @@ kaji run .kaji/wf/custom/operations/starter-sync.yaml <tracking_issue_id> --from
 `--before release-starter` は `release-starter` を dispatch する直前の exclusive barrier で停止する。
 承認後は `--from release-starter` で同じ tracking Issue に対して再開し、`release-starter` から実行する。
 
+> **警告**: `--before release-starter` を省略して起動した場合、`execution_policy: auto` の下で
+> review PASS 直後に `release-starter` へ自動遷移する。publish 前の人間承認は `release-starter`
+> skill 内の instruction（Publish 節）にのみ依存しており、workflow 自体に機械可読な承認 gate は
+> ない。tracking Issue に対する起動は必ず 2 phase（`--before` → 人間承認 → `--from`）で行うこと。
+
 ## One-time bootstrap after Issue 341
 
 Issue 341 の merge / close 後、別の kaji tracking Issue と有人手順で現在の starter main を
