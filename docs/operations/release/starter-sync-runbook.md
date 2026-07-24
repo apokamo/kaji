@@ -50,6 +50,27 @@ Issue close を行い、remote main が前進していれば stale review eviden
 sync は release 順で処理し、新しい update は ABORT する。starter failure から kaji tag / Release / PyPI
 を rollback しない。
 
+### Workflow による起動
+
+上記 3 skill は `.kaji/wf/custom/operations/starter-sync.yaml` で接続されている。
+`update-starter` → `review-starter-update` の正常系遷移、RETRY による `update-starter` への
+差し戻し（`max_iterations: 3` で `on_exhaust: ABORT`）、`release-starter` までの遷移を宣言する。
+
+publish は workflow 外の人間承認を要求するため、通常は 2 回に分けて起動する。
+
+```bash
+# Phase 1: candidate 作成 → 独立 review（release-starter の手前で停止）
+kaji run .kaji/wf/custom/operations/starter-sync.yaml <tracking_issue_id> --before release-starter
+
+# --- workflow 外で人間が candidate SHA と tag を確認し、明示承認する ---
+
+# Phase 2: 承認後の publish
+kaji run .kaji/wf/custom/operations/starter-sync.yaml <tracking_issue_id> --from release-starter
+```
+
+`--before release-starter` は `release-starter` を dispatch する直前の exclusive barrier で停止する。
+承認後は `--from release-starter` で同じ tracking Issue に対して再開し、`release-starter` から実行する。
+
 ## One-time bootstrap after Issue 341
 
 Issue 341 の merge / close 後、別の kaji tracking Issue と有人手順で現在の starter main を
