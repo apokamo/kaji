@@ -21,6 +21,7 @@ from kaji_harness.providers.local import (
     _serialize_frontmatter,
     validate_machine_id,
 )
+from kaji_harness.series.models import GateResult, evaluate_member_gate
 
 pytestmark = pytest.mark.medium
 
@@ -326,6 +327,92 @@ class TestCRUD:
         # counter file は machine ごとに分離
         assert (repo / ".kaji" / "counters" / "pc1.txt").exists()
         assert (repo / ".kaji" / "counters" / "pc2.txt").exists()
+
+
+class TestStateReason:
+    """Issue #373: frontmatter ``close_reason`` を ``Issue.state_reason`` に反映する。"""
+
+    @staticmethod
+    def _rewrite_close_reason(provider: LocalProvider, issue_id: str, value: object) -> None:
+        """frontmatter の ``close_reason`` を手編集相当で書き換える。"""
+        issue_path = provider._resolve_issue_dir(issue_id) / "issue.md"
+        meta, body = _parse_frontmatter(issue_path.read_text(encoding="utf-8"))
+        meta["close_reason"] = value
+        issue_path.write_text(
+            f"---\n{_serialize_frontmatter(meta)}---\n{body}",
+            encoding="utf-8",
+        )
+
+    def test_close_issue_return_value_carries_reason(self, provider: LocalProvider) -> None:
+        """再現テスト: 理由を渡した直後の戻り値が空文字列にならない（OB の中核）。"""
+        provider.create_issue(title="t", body="b", slug="x")
+        closed = provider.close_issue("local-pc1-1", reason="completed")
+        assert closed.state == "closed"
+        assert closed.state_reason == "completed"
+
+    def test_view_and_list_carry_reason(self, provider: LocalProvider) -> None:
+        """読み戻し経路（view_issue / list_issues）でも同じ値が載る。"""
+        provider.create_issue(title="t", body="b", slug="x")
+        provider.close_issue("local-pc1-1", reason="completed")
+
+        assert provider.view_issue("local-pc1-1").state_reason == "completed"
+        listed = provider.list_issues(state="all")
+        assert [issue.state_reason for issue in listed] == ["completed"]
+
+    def test_reason_is_lowercased(self, provider: LocalProvider) -> None:
+        """GitHub provider と同じく読み出し境界で ``.lower()`` する。"""
+        provider.create_issue(title="t", body="b", slug="x")
+        provider.close_issue("local-pc1-1", reason="completed")
+        self._rewrite_close_reason(provider, "local-pc1-1", "COMPLETED")
+
+        assert provider.view_issue("local-pc1-1").state_reason == "completed"
+
+    def test_free_form_reason_passes_through(self, provider: LocalProvider) -> None:
+        """書き込み側の自由文字列契約に合わせ、GitHub 値域外もそのまま返す。"""
+        provider.create_issue(title="t", body="b", slug="x")
+        provider.close_issue("local-pc1-1", reason="merged into main")
+
+        assert provider.view_issue("local-pc1-1").state_reason == "merged into main"
+
+    def test_not_planned_variant_fails_gate_safely(self, provider: LocalProvider) -> None:
+        """表記ゆれ（``not-planned``）は allowlist により安全側へ倒れる。"""
+        provider.create_issue(title="t", body="b", slug="x")
+        provider.close_issue("local-pc1-1", reason="not-planned")
+
+        issue = provider.view_issue("local-pc1-1")
+        assert issue.state_reason == "not-planned"
+        assert evaluate_member_gate(0, issue.state, issue.state_reason) == GateResult(
+            success=False,
+            gate="mismatch:closed/not-planned",
+        )
+
+    def test_open_issue_has_empty_reason(self, provider: LocalProvider) -> None:
+        """``close_reason`` を持たない Issue は従来どおり空文字列（後方互換）。"""
+        provider.create_issue(title="t", body="b", slug="x")
+
+        assert provider.view_issue("local-pc1-1").state_reason == ""
+
+    @pytest.mark.parametrize("value", [None, ""])
+    def test_null_or_empty_reason_falls_back_to_empty(
+        self, provider: LocalProvider, value: object
+    ) -> None:
+        """手編集で ``close_reason:`` が null / 空文字でも空文字列へ倒す。"""
+        provider.create_issue(title="t", body="b", slug="x")
+        provider.close_issue("local-pc1-1", reason="completed")
+        self._rewrite_close_reason(provider, "local-pc1-1", value)
+
+        assert provider.view_issue("local-pc1-1").state_reason == ""
+
+    def test_gate_passes_for_closed_completed(self, provider: LocalProvider) -> None:
+        """OB の ``mismatch:closed/`` が解消し gate が成功側に倒れる。"""
+        provider.create_issue(title="t", body="b", slug="x")
+        provider.close_issue("local-pc1-1", reason="completed")
+
+        issue = provider.view_issue("local-pc1-1")
+        assert evaluate_member_gate(0, issue.state, issue.state_reason) == GateResult(
+            success=True,
+            gate="closed_completed",
+        )
 
 
 class TestResolveIssueDir:

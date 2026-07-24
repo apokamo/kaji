@@ -142,6 +142,7 @@ class LocalIssueStore:
             labels=labels_from_meta(meta.get("labels")),
             comments=self.comments.read_comments(issue_dir),
             slug=str(slug_value or ""),
+            state_reason=str(meta.get("close_reason", "") or "").lower(),
         )
 
     @staticmethod
