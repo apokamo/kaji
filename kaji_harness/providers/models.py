@@ -58,7 +58,10 @@ class Issue:
         slug: ディレクトリ末尾 / branch / worktree / design path 合成用の
             kebab-case 名。GitHub では title から sanitize 導出する。
         state_reason: Issue state の理由。GitHub の値を小文字に正規化し、
-            provider が理由を持たない場合は空文字列。
+            provider が理由を持たない場合は空文字列。local では frontmatter
+            ``close_reason`` を同じく小文字化して載せるため、GitHub の値域
+            (``completed`` / ``not_planned`` / ``duplicate`` / ``reopened``)
+            外の自由文字列（``"merged into main"`` 等）もありうる。
     """
 
     id: str
