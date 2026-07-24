@@ -136,6 +136,10 @@ class CLIEventAdapter(Protocol):
     def extract_error_message(self, event: dict[str, Any]) -> str | None: ...
     def is_terminal_event(self, event: dict[str, Any]) -> bool: ...
     def is_terminal_failure(self, event: dict[str, Any]) -> bool: ...
+    def parses_stdout_as_jsonl(self) -> bool:
+        """stdout を JSONL event として decode するか。"""
+        ...
+
     def treats_stream_error_as_failure(self) -> bool:
         """Stream-level `type:"error"` event を terminal-seen 分岐の失敗根拠とするか。
 
@@ -261,6 +265,9 @@ class ClaudeAdapter:
     def treats_stream_error_as_failure(self) -> bool:
         return True
 
+    def parses_stdout_as_jsonl(self) -> bool:
+        return True
+
 
 class CodexAdapter:
     """Codex CLI の JSONL イベントアダプタ。"""
@@ -323,6 +330,9 @@ class CodexAdapter:
         # event で表現される (adapters.py の is_terminal_failure 契約)。Issue #196。
         return False
 
+    def parses_stdout_as_jsonl(self) -> bool:
+        return True
+
 
 class GeminiAdapter:
     """Gemini CLI の JSONL イベントアダプタ。
@@ -382,8 +392,40 @@ class GeminiAdapter:
     def treats_stream_error_as_failure(self) -> bool:
         return True
 
+    def parses_stdout_as_jsonl(self) -> bool:
+        return True
+
+
+class AntigravityAdapter:
+    """Antigravity CLI の plain-text stdout adapter。"""
+
+    def extract_session_id(self, event: dict[str, Any]) -> str | None:
+        return None
+
+    def extract_text(self, event: dict[str, Any]) -> str | None:
+        return None
+
+    def extract_cost(self, event: dict[str, Any]) -> CostInfo | None:
+        return None
+
+    def extract_error_message(self, event: dict[str, Any]) -> str | None:
+        return None
+
+    def is_terminal_event(self, event: dict[str, Any]) -> bool:
+        return False
+
+    def is_terminal_failure(self, event: dict[str, Any]) -> bool:
+        return False
+
+    def treats_stream_error_as_failure(self) -> bool:
+        return False
+
+    def parses_stdout_as_jsonl(self) -> bool:
+        return False
+
 
 ADAPTERS: dict[str, CLIEventAdapter] = {
+    "antigravity": AntigravityAdapter(),
     "claude": ClaudeAdapter(),
     "codex": CodexAdapter(),
     "gemini": GeminiAdapter(),

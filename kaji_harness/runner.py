@@ -467,6 +467,7 @@ class _StepExecutor:
                 timeout=settings.timeout,
                 session_id=session_id,
                 close_on_verdict=self.config.execution.interactive_terminal_close_on_verdict,
+                execution_policy=self.workflow.execution_policy,
             )
         else:
             result = execute_cli(

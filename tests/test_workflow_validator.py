@@ -113,7 +113,7 @@ class TestAgentValidation:
     """Validation of the agent enum."""
 
     @pytest.mark.small
-    @pytest.mark.parametrize("agent", ["claude", "codex", "gemini"])
+    @pytest.mark.parametrize("agent", ["claude", "codex", "gemini", "antigravity"])
     def test_registered_agent_passes(self, agent: str) -> None:
         """Every registered runtime agent is accepted."""
         validate_workflow(_workflow([_step("run", agent=agent, on={"PASS": "end"})]))
@@ -142,7 +142,10 @@ class TestAgentValidation:
             validate_workflow(workflow)
 
         assert exc_info.value.errors == [
-            f"Step 'run' has unknown agent '{agent}' (allowed: ['claude', 'codex', 'gemini'])"
+            (
+                f"Step 'run' has unknown agent '{agent}' "
+                "(allowed: ['antigravity', 'claude', 'codex', 'gemini'])"
+            )
         ]
 
     @pytest.mark.small
@@ -329,6 +332,68 @@ class TestResumeValidation:
 
         errors_joined = " ".join(exc_info.value.errors)
         assert "agent" in errors_joined.lower() or "mismatch" in errors_joined.lower()
+
+    @pytest.mark.small
+    def test_antigravity_resume_is_rejected_with_capability_context(self) -> None:
+        """AGY resume を step・agent・capability が分かる error にする。"""
+        workflow = _workflow(
+            [
+                _step(
+                    "investigate",
+                    agent="antigravity",
+                    on={"PASS": "implement"},
+                ),
+                _step(
+                    "implement",
+                    agent="antigravity",
+                    resume="investigate",
+                    on={"PASS": "end"},
+                ),
+            ]
+        )
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            validate_workflow(workflow)
+
+        assert (
+            "Step 'implement' uses agent 'antigravity' which does not support capability 'resume'"
+            in exc_info.value.errors
+        )
+
+    @pytest.mark.small
+    def test_antigravity_resume_is_rejected_even_when_on_is_invalid(self) -> None:
+        """不正 on の early continue より前に resume capability を検査する。"""
+        workflow = _workflow(
+            [
+                _step("investigate", agent="antigravity", on={"PASS": "implement"}),
+                _step("implement", agent="antigravity", resume="investigate", on={}),
+            ]
+        )
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            validate_workflow(workflow)
+
+        assert (
+            "Step 'implement' uses agent 'antigravity' which does not support capability 'resume'"
+            in exc_info.value.errors
+        )
+
+    @pytest.mark.small
+    def test_gemini_resume_remains_supported(self) -> None:
+        """既存 Gemini resume 契約を変更しない。"""
+        workflow = _workflow(
+            [
+                _step("investigate", agent="gemini", on={"PASS": "implement"}),
+                _step(
+                    "implement",
+                    agent="gemini",
+                    resume="investigate",
+                    on={"PASS": "end"},
+                ),
+            ]
+        )
+
+        validate_workflow(workflow)
 
 
 # ============================================================
@@ -652,7 +717,7 @@ class TestMultipleErrorCollection:
 
         assert (
             "Step 'root' has unknown agent 'cladue' "
-            "(allowed: ['claude', 'codex', 'gemini'])" in exc_info.value.errors
+            "(allowed: ['antigravity', 'claude', 'codex', 'gemini'])" in exc_info.value.errors
         )
         assert "Step 'root' 'on' must define a 'PASS' transition" in exc_info.value.errors
         assert "Step 'orphan' is not reachable from the first step 'root'" in exc_info.value.errors

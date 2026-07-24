@@ -8,7 +8,7 @@
 
 ## 概要
 
-**kaji_harness** は、Claude Code / Codex / Gemini CLI のスキルをワークフロー YAML に従って実行する軽量ハーネス。
+**kaji_harness** は、Claude Code / Codex / Gemini CLI / Antigravity CLI のスキルをワークフロー YAML に従って実行する軽量ハーネス。
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -18,7 +18,7 @@
 │  スキル (.claude/skills/, .agents/skills/)       │
 │  各ステップの実作業プロンプト。CLI がロード      │
 ├─────────────────────────────────────────────────┤
-│  CLI (Claude Code / Codex / Gemini)              │
+│  CLI (Claude Code / Codex / Gemini / Antigravity)│
 │  スキルをロードし、PJ コンテキストで実行         │
 └─────────────────────────────────────────────────┘
 ```
@@ -81,13 +81,14 @@ kaji_harness/
   __init__.py
   errors.py       # エラー階層 (ConfigNotFoundError / SyncError 等) — foundation
   fsio.py         # atomic write helper (atomic_write / atomic_write_new) — foundation
+  agents.py       # agent capability registry — foundation
   baseline.py     # pytest baseline artifact schema・分類・3タプル比較・scope 評価
   pytest_baseline_plugin.py  # lossless pytest report を生成する内部 plugin
   config.py       # .kaji/config.toml 探索・パース (KajiConfig, PathsConfig, ExecutionConfig)
   models.py       # データクラス: Workflow, Step, CycleDefinition, Verdict, CLIResult
   workflow.py     # YAML パーサ & バリデータ
   verdict.py      # Verdict パーサ (3段階フォールバック)
-  adapters.py     # CLI イベントアダプタ (Claude/Codex/Gemini)
+  adapters.py     # CLI イベントアダプタ (Claude/Codex/Gemini/Antigravity)
   cli.py          # CLI 引数構築 & サブプロセス実行
   prompt.py       # プロンプトビルダー
   skill.py        # スキル存在確認 & パストラバーサル防御 (config.paths.skill_dir ベース)
@@ -232,10 +233,11 @@ kaji のログは責務の異なる 2 層に分かれる（Issue #235）。**機
 agent 経路の起動 backend は repository config の `[execution] agent_runner`（または
 `kaji run --agent-runner`）で選ぶ（Issue #224）。
 
-- **`headless`（既定）**: 従来どおり `execute_cli()` が `claude -p --output-format
-  stream-json` / `codex exec --json` を起動し、stdout を読む。
+- **`headless`（既定）**: `execute_cli()` が `claude -p --output-format stream-json` /
+  `codex exec --json` / `gemini -p ... -o stream-json` / `agy -p` を起動する。
+  Antigravity の stdout は JSONL decode せず plain text 全行を保持する。
 - **`interactive_terminal`**: `execute_interactive_terminal()` が **tmux pane** 上で通常の
-  対話 `claude` / `codex` を起動し（初回は `split-window -h` で origin の右、2枚目以降は右列内を
+  対話 `claude` / `codex` / `agy -i` を起動し（初回は `split-window -h` で origin の右、2枚目以降は右列内を
   `-v` で上下分割し、kaji 管理 agent pane を右列に最大2枚まで維持 / Issue #238）、
   stdout を読まずに attempt directory の `verdict.yaml` を polling する。完了判定は
   artifact-primary 経路（Issue #220）に完全に乗る。`tmux`（>= 3.1）/ `$TMUX` 不在は
@@ -339,6 +341,8 @@ delimiter-presence-only gate により、verdict 不在の agent セッション
 Verdict 判定機構は parser 単体ではなく、`full_output` を組み立てる収集層まで含めて成立する。
 
 - `stream_and_log()` は JSONL の decode に失敗した行も捨てず、plain text として `full_output` に保持する
+- `AntigravityAdapter` は stdout を JSONL として解釈せず、JSON 風行・空行・前後空白を
+  plain text のまま保持する。session ID / token / cost / terminal event は生成しない
 - `CodexAdapter` は `agent_message` / `reasoning` に加えて `mcp_tool_call` の `result.content[].text` からもテキストを抽出する
 - `parse_verdict()` は、この収集済み `full_output` を入力として初めて strict / relaxed / formatter retry を適用できる
 
@@ -519,13 +523,15 @@ chain をまたいだ retry storm が構造的に起きない。
 
 ## CLI 対応マトリクス
 
-| 機能 | Claude Code | Codex | Gemini |
-|------|-------------|-------|--------|
-| 非インタラクティブ実行 | `-p` | `exec --json` | `-p` |
-| ストリーミング | `--output-format stream-json --verbose` | `--json` | `-o stream-json` |
-| セッション resume | `--resume <session_id>` | `resume <thread_id>` | `--resume <session_id>` |
-| 承認バイパス (auto) | `--permission-mode bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox` | `--approval-mode yolo` |
-| モデル指定 | `--model` | `-m` | `--model` |
+| 機能 | Claude Code | Codex | Gemini | Antigravity |
+|------|-------------|-------|--------|-------------|
+| 非インタラクティブ実行 | `-p` | `exec --json` | `-p` | `agy -p` |
+| ストリーミング | `--output-format stream-json --verbose` | `--json` | `-o stream-json` | plain stdout |
+| セッション resume | `--resume <session_id>` | `resume <thread_id>` | `--resume <session_id>` | 非対応（validation で拒否） |
+| 承認バイパス (auto) | `--permission-mode bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox` | `--approval-mode yolo` | `--dangerously-skip-permissions` |
+| sandbox | agent default | `-s workspace-write` | `-s` | `--sandbox` |
+| モデル指定 | `--model` | `-m` | `--model` | `--model` |
+| token / cost | 対応 | token 対応 | token 対応 | 非対応 |
 
 ---
 
@@ -582,3 +588,4 @@ HarnessError
 | [Claude Code CLI ガイド](cli-guides/claude-code-cli-guide.md) | claude コマンド仕様 |
 | [Codex CLI Guide](cli-guides/codex-cli-session-guide.md) | codex コマンド仕様 |
 | [Gemini CLI ガイド](cli-guides/gemini-cli-session-guide.md) | gemini コマンド仕様 |
+| [Antigravity CLI ガイド](cli-guides/antigravity-cli-session-guide.md) | agy コマンド仕様と resume 非対応契約 |

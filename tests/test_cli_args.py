@@ -270,3 +270,79 @@ class TestGeminiArgs:
             step, "do stuff", workdir, session_id=None, execution_policy="sandbox"
         )
         assert "-s" in args
+
+
+# ==========================================
+# Antigravity args
+# ==========================================
+
+
+class TestAntigravityArgs:
+    """build_cli_args for agent=antigravity."""
+
+    @pytest.mark.small
+    @pytest.mark.parametrize(
+        ("execution_policy", "expected_flag"),
+        [
+            ("auto", "--dangerously-skip-permissions"),
+            ("sandbox", "--sandbox"),
+            ("interactive", None),
+        ],
+    )
+    def test_execution_policy_mapping(
+        self,
+        workdir: Path,
+        execution_policy: str,
+        expected_flag: str | None,
+    ) -> None:
+        """AGY headless argv に policy を permission と sandbox の別軸で反映する。"""
+        step = _make_step("antigravity")
+        args = build_cli_args(
+            step,
+            "do stuff",
+            workdir,
+            session_id=None,
+            execution_policy=execution_policy,
+        )
+
+        assert args[:3] == ["agy", "-p", "do stuff"]
+        for policy_flag in ("--dangerously-skip-permissions", "--sandbox"):
+            assert (policy_flag in args) is (policy_flag == expected_flag)
+
+    @pytest.mark.small
+    def test_model_and_effort_are_passed_after_prompt(self, workdir: Path) -> None:
+        """AGY の model と effort を公開 CLI flag へ渡す。"""
+        step = _make_step("antigravity", model="gemini-3-pro", effort="high")
+
+        args = build_cli_args(
+            step,
+            "do stuff",
+            workdir,
+            session_id=None,
+            execution_policy="auto",
+        )
+
+        assert args == [
+            "agy",
+            "-p",
+            "do stuff",
+            "--model",
+            "gemini-3-pro",
+            "--effort",
+            "high",
+            "--dangerously-skip-permissions",
+        ]
+
+    @pytest.mark.small
+    def test_resume_session_is_rejected_defensively(self, workdir: Path) -> None:
+        """validation を迂回した session_id を fail-loud に拒否する。"""
+        step = _make_step("antigravity")
+
+        with pytest.raises(AssertionError, match="does not support resume"):
+            build_cli_args(
+                step,
+                "do stuff",
+                workdir,
+                session_id="unsupported-session",
+                execution_policy="auto",
+            )

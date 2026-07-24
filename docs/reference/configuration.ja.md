@@ -110,6 +110,9 @@ worktree）基準で解決される（Issue #177、[ワークフロー作成](..
 - `agent_runner` は agent step を headless CLI で起動するか tmux pane 上の対話 CLI で起動するかを選ぶ。
   `interactive_terminal` の挙動・CLI option・優先順位は
   [Interactive Terminal Runner ガイド](../cli-guides/interactive-terminal-runner.md) を参照。
+  headless は Claude / Codex / Gemini / Antigravity、interactive terminal は
+  Claude / Codex / Antigravity に対応する（Gemini は従来どおり非対応）。
+  Antigravity は単発実行のみで、両 backend とも workflow の `resume:` を拒否する。
 - `interactive_terminal_close_on_verdict` は `agent_runner = "interactive_terminal"` のときのみ作用する
   （verdict 検知後に pane を閉じるか）。headless 運用では無効。
 

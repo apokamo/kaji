@@ -92,6 +92,7 @@ class TestRunnerBackendDispatch:
         assert state.last_completed_step == "design"
         # close_on_verdict flag is threaded from config into the runner call.
         assert captured["close_on_verdict"] is False
+        assert captured["execution_policy"] == "auto"
         assert captured["prompt_path"].name == "prompt.txt"
         assert captured["verdict_path"].name == "verdict.yaml"
 

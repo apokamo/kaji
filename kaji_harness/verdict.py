@@ -501,6 +501,10 @@ def _build_formatter_cli_args(agent: str, model: str | None, prompt: str) -> lis
             args = ["gemini", "-p", prompt]
             if model:
                 args += ["-m", model]
+        case "antigravity":
+            args = ["agy", "-p", prompt]
+            if model:
+                args += ["--model", model]
         case _:
             raise ValueError(f"Unknown agent for formatter: {agent}")
     return args

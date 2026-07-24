@@ -10,6 +10,7 @@ from typing import Any
 
 import yaml
 
+from .agents import AGENT_CAPABILITIES
 from .errors import WorkflowValidationError
 from .models import CycleDefinition, Step, Workflow
 
@@ -61,17 +62,12 @@ _STEP_REQUIRED_KEYS = ("id",)
 # これらは無意味であり、同時指定は parse 時に fail-fast する（Issue #205）。
 _EXEC_FORBIDDEN_KEYS = ("agent", "model", "effort", "resume", "inject_verdict", "max_budget_usd")
 
-VALID_AGENTS: frozenset[str] = frozenset({"claude", "codex", "gemini"})
+VALID_AGENTS: frozenset[str] = frozenset(AGENT_CAPABILITIES)
 
-# Agent ごとの effort 許容値。CLI 仕様の一次情報:
-#   claude: `claude --help` の `--effort` 列挙 (low/medium/high/xhigh/max)
-#   codex:  codex error message "expected one of `none`, `minimal`, `low`,
-#           `medium`, `high`, `xhigh` in `model_reasoning_effort`"
-# 辞書未登録の agent (gemini 等) は validation skip。新 agent 追加時に本辞書へ
-# 1 行加える。docs/dev/workflow-authoring.md に同じ表を保持する。
 _AGENT_EFFORT_ALLOWED: dict[str, frozenset[str]] = {
-    "claude": frozenset({"low", "medium", "high", "xhigh", "max"}),
-    "codex": frozenset({"none", "minimal", "low", "medium", "high", "xhigh"}),
+    agent: capabilities.effort_allowed
+    for agent, capabilities in AGENT_CAPABILITIES.items()
+    if capabilities.effort_allowed is not None
 }
 
 
@@ -505,6 +501,12 @@ def validate_workflow(workflow: Workflow) -> None:
             errors.append(
                 f"Step '{step.id}' has unknown agent '{step.agent}' "
                 f"(allowed: {sorted(VALID_AGENTS)})"
+            )
+        capabilities = AGENT_CAPABILITIES.get(step.agent) if step.agent is not None else None
+        if step.resume and capabilities is not None and not capabilities.supports_resume:
+            errors.append(
+                f"Step '{step.id}' uses agent '{step.agent}' "
+                "which does not support capability 'resume'"
             )
 
         # スキーマ: skill / exec の排他（_parse_workflow() を経由せず手組みした
