@@ -75,6 +75,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 project_root=project_root,
                 skill_dir=config.paths.skill_dir,
             )
+            _print_warnings(path, result.warnings)
             if result.errors:
                 _print_error(path, result.errors)
                 failed += 1
@@ -94,6 +95,17 @@ def cmd_validate(args: argparse.Namespace) -> int:
         )
 
     return EXIT_VALIDATION_ERROR if failed > 0 else EXIT_OK
+
+
+def _print_warnings(path: Path, warnings: list[str]) -> None:
+    """Print non-fatal warnings to stderr, one line each.
+
+    ``path`` comes from user-supplied CLI args and may contain line-breaking
+    characters (e.g. newline, U+2028); escape it via ``repr()`` so it can never
+    split a single warning across multiple stderr lines (Issue #381).
+    """
+    for warning in warnings:
+        print(f"⚠ {str(path)!r}: {warning}", file=sys.stderr)
 
 
 def _print_success(path: Path) -> None:

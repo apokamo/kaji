@@ -442,3 +442,26 @@ class TestCmdRecover:
         assert rc == EXIT_DEFINITION_ERROR
         assert expected in capsys.readouterr().err
         assert not (run_dir / RECOVERY_FILE).exists()
+
+    def test_recover_workflow_with_inject_verdict_emits_no_deprecation_warning(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``kaji recover`` は完了条件の対象外経路であり warning を出力しない（方針 3.5 #3）。"""
+        repo = _repo(tmp_path)
+        run_dir = self._failed_run(repo)
+        workflow = repo / "wf-inject.yaml"
+        workflow.write_text(
+            (repo / "wf.yaml")
+            .read_text()
+            .replace(
+                "    agent: claude\n    on:\n",
+                "    agent: claude\n    inject_verdict: true\n    on:\n",
+            ),
+            encoding="utf-8",
+        )
+
+        rc = main(["recover", str(workflow), "99", "--workdir", str(repo)])
+
+        assert rc == EXIT_OK
+        assert "inject_verdict" not in capsys.readouterr().err
+        assert (run_dir / RECOVERY_FILE).exists()

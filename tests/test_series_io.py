@@ -78,6 +78,38 @@ def test_load_series_validates_workflow_and_provider(tmp_path: Path) -> None:
     assert loaded.members[0].workflow == ".kaji/wf/official/dev.yaml"
 
 
+def test_load_series_member_with_inject_verdict_emits_no_deprecation_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """series member 検証は完了条件の対象外経路であり warning を出力しない（方針 3.5 #4）。"""
+    skill_dir = tmp_path / ".claude" / "skills" / "member-skill"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text("# member-skill\n", encoding="utf-8")
+    workflow_path = tmp_path / ".kaji" / "wf" / "official" / "dev.yaml"
+    workflow_path.parent.mkdir(parents=True, exist_ok=True)
+    workflow_path.write_text(
+        "name: test\n"
+        "description: test\n"
+        "requires_provider: github\n"
+        "execution_policy: auto\n"
+        "steps:\n"
+        "  - id: done\n"
+        "    skill: member-skill\n"
+        "    agent: claude\n"
+        "    inject_verdict: true\n"
+        "    on:\n"
+        "      PASS: end\n",
+        encoding="utf-8",
+    )
+    path = tmp_path / "series.yaml"
+    path.write_text(_series_yaml(), encoding="utf-8")
+
+    loaded = load_series(path, _kaji_config(tmp_path))
+
+    assert loaded.id == "test-series"
+    assert capsys.readouterr().err == ""
+
+
 @pytest.mark.parametrize(
     ("workflow", "provider", "match"),
     [
