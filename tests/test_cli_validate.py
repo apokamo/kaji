@@ -740,6 +740,26 @@ class TestCmdValidateMedium:
         assert len(captured.err.splitlines()) == 1
 
     @pytest.mark.medium
+    def test_inject_verdict_warning_path_with_newline_stays_single_line(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """改行を含む workflow path でも deprecation warning は 1 行のまま（review #381 Must Fix）。"""
+        f = tmp_path / ("workflow" + "\n" + "name.yaml")
+        f.write_text(INJECT_VERDICT_TWICE_YAML)
+        _create_skill(tmp_path, "test-skill")
+        _create_config(tmp_path)
+
+        exit_code = _cmd_validate_with_args(str(f))
+
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        stderr_lines = captured.err.splitlines()
+        assert len(stderr_lines) == 1
+        assert "workflow" in stderr_lines[0]
+        assert "name.yaml" in stderr_lines[0]
+        assert "inject_verdict" in stderr_lines[0]
+
+    @pytest.mark.medium
     def test_no_inject_verdict_no_stderr(
         self, valid_yaml: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -926,6 +946,30 @@ class TestCLIValidateLarge:
 
         assert result.returncode == 0
         assert len(result.stderr.splitlines()) == 1
+        assert "inject_verdict" in result.stderr
+
+    @pytest.mark.large
+    @pytest.mark.large_local
+    def test_kaji_validate_inject_verdict_warning_path_with_newline_stays_single_line(
+        self, tmp_path: Path
+    ) -> None:
+        """実 CLI の entry point 経由でも、改行を含む path で warning が 1 行のまま（review #381 Must Fix）。"""
+        f = tmp_path / ("workflow" + "\n" + "name.yaml")
+        f.write_text(INJECT_VERDICT_TWICE_YAML)
+        _create_skill(tmp_path, "test-skill")
+        _create_config(tmp_path)
+
+        result = subprocess.run(
+            [sys.executable, "-m", "kaji_harness.cli_main", "validate", str(f)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert result.returncode == 0
+        assert len(result.stderr.splitlines()) == 1
+        assert "workflow" in result.stderr
+        assert "name.yaml" in result.stderr
         assert "inject_verdict" in result.stderr
 
 

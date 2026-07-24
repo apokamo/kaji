@@ -98,9 +98,14 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 
 def _print_warnings(path: Path, warnings: list[str]) -> None:
-    """Print non-fatal warnings to stderr, one line each."""
+    """Print non-fatal warnings to stderr, one line each.
+
+    ``path`` comes from user-supplied CLI args and may contain line-breaking
+    characters (e.g. newline, U+2028); escape it via ``repr()`` so it can never
+    split a single warning across multiple stderr lines (Issue #381).
+    """
     for warning in warnings:
-        print(f"⚠ {path}: {warning}", file=sys.stderr)
+        print(f"⚠ {str(path)!r}: {warning}", file=sys.stderr)
 
 
 def _print_success(path: Path) -> None:
