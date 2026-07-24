@@ -1368,6 +1368,14 @@ class TestEffortValidator:
                 assert step.effort == value
 
     @pytest.mark.small
+    def test_parse_skips_effort_validation_for_unregistered_agent(self) -> None:
+        """effort 許容値が未登録の agent は parser で passthrough する。"""
+        wf = load_workflow_from_str(_effort_workflow_yaml("unregistered-agent", "anything"))
+        step = wf.find_step("only")
+        assert step is not None
+        assert step.effort == "anything"
+
+    @pytest.mark.small
     def test_parse_rejects_non_string_effort(self) -> None:
         """effort が string 以外 (int) の場合は型エラーで reject."""
         yaml_str = dedent("""\

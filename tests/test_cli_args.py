@@ -271,3 +271,21 @@ class TestAntigravityArgs:
                 session_id="unsupported-session",
                 execution_policy="auto",
             )
+
+
+class TestUnknownAgentArgs:
+    """Defensive build_cli_args behavior for unsupported agents."""
+
+    @pytest.mark.small
+    def test_removed_gemini_agent_is_rejected(self, workdir: Path) -> None:
+        """Validation を迂回した Gemini agent を fail-loud に拒否する。"""
+        step = _make_step("gemini")
+
+        with pytest.raises(ValueError, match=r"^Unknown agent: gemini$"):
+            build_cli_args(
+                step,
+                "do stuff",
+                workdir,
+                session_id=None,
+                execution_policy="auto",
+            )
