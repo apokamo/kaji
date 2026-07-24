@@ -18,6 +18,7 @@ LAYER_RANK = {
 
 MODULE_LAYERS: dict[str, str] = {
     "kaji_harness.__init__": "foundation",
+    "kaji_harness.agents": "foundation",
     "kaji_harness.errors": "foundation",
     "kaji_harness.fsio": "foundation",
     "kaji_harness.providers": "provider",

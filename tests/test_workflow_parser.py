@@ -1408,3 +1408,22 @@ class TestEffortValidator:
         """)
         wf = load_workflow_from_str(yaml_str)
         assert wf.find_step("only").effort is None  # type: ignore[union-attr]
+
+    @pytest.mark.small
+    @pytest.mark.parametrize("effort", ["low", "medium", "high"])
+    def test_parse_accepts_antigravity_effort(self, effort: str) -> None:
+        """AGY が公開する effort 列挙値を受理する。"""
+        workflow = load_workflow_from_str(_effort_workflow_yaml("antigravity", effort))
+
+        step = workflow.find_step("only")
+        assert step is not None
+        assert step.effort == effort
+
+    @pytest.mark.small
+    def test_parse_rejects_unsupported_antigravity_effort(self) -> None:
+        """AGY が公開しない xhigh を parse 時に拒否する。"""
+        with pytest.raises(
+            WorkflowValidationError,
+            match=r"effort 'xhigh' is not valid for agent 'antigravity'",
+        ):
+            load_workflow_from_str(_effort_workflow_yaml("antigravity", "xhigh"))

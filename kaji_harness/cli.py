@@ -147,6 +147,8 @@ def build_cli_args(
             return _build_codex_args(step, prompt, workdir, session_id, execution_policy)
         case "gemini":
             return _build_gemini_args(step, prompt, workdir, session_id, execution_policy)
+        case "antigravity":
+            return _build_antigravity_args(step, prompt, session_id, execution_policy)
         case _:
             raise ValueError(f"Unknown agent: {step.agent}")
 
@@ -324,6 +326,15 @@ def stream_and_log(
             f_raw.write(line)
             f_raw.flush()
 
+            if not adapter.parses_stdout_as_jsonl():
+                plain_text = line.removesuffix("\n").removesuffix("\r")
+                texts.append(plain_text)
+                f_con.write(plain_text + "\n")
+                f_con.flush()
+                if verbose:
+                    print(f"[{_now_stamp()}] [{step_id}] {plain_text}")
+                continue
+
             try:
                 event: dict[str, Any] = json.loads(line)
             except json.JSONDecodeError:
@@ -457,4 +468,25 @@ def _build_gemini_args(
             args += ["--approval-mode", "yolo"]
         case "sandbox":
             args.append("-s")
+    return args
+
+
+def _build_antigravity_args(
+    step: Step,
+    prompt: str,
+    session_id: str | None,
+    execution_policy: str,
+) -> list[str]:
+    """Antigravity CLI の headless argv を構築する。"""
+    assert session_id is None, "antigravity does not support resume"
+    args = ["agy", "-p", prompt]
+    if step.model:
+        args += ["--model", step.model]
+    if step.effort:
+        args += ["--effort", step.effort]
+    match execution_policy:
+        case "auto":
+            args.append("--dangerously-skip-permissions")
+        case "sandbox":
+            args.append("--sandbox")
     return args

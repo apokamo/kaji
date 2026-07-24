@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from kaji_harness.adapters import CodexAdapter
+from kaji_harness.adapters import AntigravityAdapter, CodexAdapter
 from kaji_harness.cli import stream_and_log
 from kaji_harness.errors import VerdictNotFound
 from kaji_harness.models import CLIResult, CostInfo
@@ -69,6 +69,22 @@ class TestCreateVerdictFormatterFactory:
             valid_statuses={"PASS", "BACK", "ABORT"},
         )
         assert callable(formatter)
+
+    def test_antigravity_formatter_cli_args(self) -> None:
+        """Antigravity formatter uses plain `agy -p` output."""
+        formatter = create_verdict_formatter(
+            agent="antigravity",
+            valid_statuses={"PASS", "RETRY"},
+            model="gemini-3-pro",
+        )
+
+        with patch("kaji_harness.verdict.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(stdout="formatted output", returncode=0)
+            formatter("raw input")
+
+        args = mock_run.call_args.args[0]
+        assert args[0:2] == ["agy", "-p"]
+        assert args[3:] == ["--model", "gemini-3-pro"]
 
     def test_formatter_subprocess_called_with_prompt(self) -> None:
         """Formatter invokes subprocess with correct prompt containing valid_statuses."""
@@ -285,6 +301,31 @@ class TestStreamAndLogNonJsonLines:
 
         assert "Hello" in result.full_output
         assert "plain text line" in result.full_output
+
+    def test_antigravity_soft_deny_empty_output_fails_loud(self, tmp_path: Path) -> None:
+        """AGY exit 0 + 空 stdout を verdict 成功へ誤変換しない。"""
+        script = _create_mock_cli_script(tmp_path, [])
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        process = subprocess.Popen(
+            [str(script)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        result = stream_and_log(
+            process,
+            AntigravityAdapter(),
+            "test",
+            log_dir,
+            verbose=False,
+        )
+        process.wait()
+
+        assert result.full_output == ""
+        with pytest.raises(VerdictNotFound):
+            parse_verdict(result.full_output, VALID_STATUSES)
 
 
 # ============================================================

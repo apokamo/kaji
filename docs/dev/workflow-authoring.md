@@ -110,7 +110,7 @@ cycles:                            # 省略可: ループサイクル定義
 steps:                             # 必須: ステップ一覧（上から順に実行）
   - id: <step-id>
     skill: <skill-name>
-    agent: claude                  # claude / codex / gemini（exec_script skill のみ省略可）
+    agent: claude                  # claude / codex / gemini / antigravity（exec_script skill のみ省略可）
     on:
       PASS: <next-step-id>
       RETRY: <step-id>
@@ -247,7 +247,7 @@ config 非依存のため）。
 | `id` | str | ✅ | ステップ ID。英数字とハイフン。workflow 内で一意でなければならない（重複は `WorkflowValidationError`）。**検証範囲**: parse 時に強制されるのは型（非空 str）のみ（Issue #357）。英数字とハイフンという書式は文書契約だが validation では未強制 |
 | `skill` | str | △ | スキル名（`<agent>.skills/<name>` のルックアップキー）。`exec` と相互排他（後述「skill-step と exec-step」） |
 | `exec` | str \| list[str] | △ | 直接実行する command/argv。`skill` と相互排他。後述「exec-step（script step）」 |
-| `agent` | str | △ | `claude` / `codex` / `gemini`。skill-step（非 exec_script）で必須。exec-step / exec_script skill では指定不可 / 省略可 |
+| `agent` | str | △ | `claude` / `codex` / `gemini` / `antigravity`。skill-step（非 exec_script）で必須。exec-step / exec_script skill では指定不可 / 省略可 |
 | `on` | mapping | ✅ | verdict → next step ID のマッピング。非空必須 |
 | `model` | str | — | モデル名（省略時は agent デフォルト）。exec-step では指定不可 |
 | `effort` | str | — | エージェント別の許容値で書く。後述「effort 値」参照。exec-step では指定不可 |
@@ -260,7 +260,8 @@ config 非依存のため）。
 > `exec` を持つ **exec-step** の **ちょうど 1 つ** でなければならない。両方指定 / 両方欠落は
 > `WorkflowValidationError`（parse / `validate_workflow` の双方で fail-fast）。
 
-`agent` を指定する場合は `claude` / `codex` / `gemini` のいずれかでなければならない。
+`agent` を指定する場合は `claude` / `codex` / `gemini` / `antigravity` の
+いずれかでなければならない。
 model 名は agent ごとに変化するため enum 検証の対象外とする。
 
 ### effort 値
@@ -274,7 +275,8 @@ runtime validator が agent 別 allowed values で reject するため、本仕�
 |-------|-----------------|----------|
 | `claude` | `low`, `medium`, `high`, `xhigh`, `max` | `claude --help` の `--effort` 列挙 |
 | `codex` | `none`, `minimal`, `low`, `medium`, `high`, `xhigh` | codex error message: `expected one of \`none\`, \`minimal\`, \`low\`, \`medium\`, \`high\`, \`xhigh\` in \`model_reasoning_effort\`` |
-| その他 (`gemini` 等) | 検証スキップ（passthrough） | allowed values 辞書未登録のため |
+| `antigravity` | `low`, `medium`, `high` | AGY v1.1.6 `agy --help` の `--effort` 列挙 |
+| `gemini` | 検証スキップ（passthrough） | capability registry の `effort_allowed=None` |
 
 > **罠（UI 表示と YAML 値の差異）**: claude / codex どちらの対話 UI も effort
 > を **大文字**（`Low` / `Medium` / `High` / `Extra high`）で表示する。
@@ -282,11 +284,11 @@ runtime validator が agent 別 allowed values で reject するため、本仕�
 > codex 側で `unknown variant 'High'` で workflow が ERROR 停止する（claude 側は
 > 暗黙の lowercase 化で通る場合があるが、許容値の方針として統一する）。
 
-採択方針 (Issue local-pc5090-16): **agent 別 allowed values 辞書** を `workflow.py`
-の module-level 定数として保持し、`step.agent` でルックアップして reject する。
+採択方針 (Issue local-pc5090-16 / #376): **agent capability registry** を
+`kaji_harness/agents.py` に保持し、`step.agent` でルックアップして reject する。
 共通 subset (`low/medium/high/xhigh`) のみで縛らない（claude `max` / codex
 `none/minimal` を将来も使えるようにするため）。新 agent 追加時は
-`_AGENT_EFFORT_ALLOWED` 辞書に 1 行加える。
+`AGENT_CAPABILITIES` に定義を加える。
 
 ### `on` マッピング
 
@@ -362,21 +364,29 @@ cycle の `cycle_counts` だけを `0` に戻してから再開できる（詳�
 
 | 値 | 動作 |
 |----|------|
-| `auto` | 全 agent で承認・sandbox をバイパス（完全自動） |
+| `auto` | agent ごとの自動承認 flag を使用する |
 | `sandbox` | sandbox 内で自動実行（ファイル書き込みを制限） |
 | `interactive` | 承認フロー有効（人手確認あり） |
 
 ### エージェント別 CLI フラグ
 
-| policy | Claude | Codex | Gemini |
-|--------|--------|-------|--------|
-| `auto` | `--permission-mode bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox` | `--approval-mode yolo` |
-| `sandbox` | （フラグなし） | `-s workspace-write` | `-s` |
-| `interactive` | （フラグなし） | （フラグなし） | （フラグなし） |
+| policy | Claude | Codex | Gemini | Antigravity |
+|--------|--------|-------|--------|-------------|
+| `auto` | `--permission-mode bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox` | `--approval-mode yolo` | `--dangerously-skip-permissions` |
+| `sandbox` | （フラグなし） | `-s workspace-write` | `-s` | `--sandbox` |
+| `interactive` | （フラグなし） | （フラグなし） | （フラグなし） | （フラグなし） |
+
+Antigravity では sandbox（containment）と permission（tool approval）は別軸である。
+`sandbox` policy に承認 bypass は付けない。この mapping は headless と interactive
+terminal の両 runner で共通。
 
 ## resume（セッション継続）
 
 同一 agent 内でコンテキストを引き継ぐ場合に指定する。
+
+`agent: antigravity` は公開 session ID を取得できないため resume 非対応。
+`resume:` を指定すると `kaji validate` と run 前 preflight が step 名・agent 名・
+`resume` capability を含む `WorkflowValidationError` を返す。
 
 ```yaml
 steps:

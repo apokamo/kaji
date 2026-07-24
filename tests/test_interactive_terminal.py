@@ -190,6 +190,26 @@ class TestBuildTmuxSplitArgv:
         with pytest.raises(ValueError, match="split_flag"):
             self._argv(tmp_path, split_target_pane="%7", split_flag="-x")
 
+    def test_execution_policy_is_ninth_wrapper_argument(self, tmp_path: Path) -> None:
+        """runner policy を wrapper の第 9 位置引数へ渡す。"""
+        argv = _build_tmux_split_argv(
+            "/usr/bin/tmux",
+            WRAPPER,
+            split_target_pane="%7",
+            split_flag="-h",
+            agent="antigravity",
+            prompt_path=tmp_path / "prompt.txt",
+            verdict_path=tmp_path / "verdict.yaml",
+            workdir=tmp_path,
+            resume_session_id="",
+            launch_session_id="",
+            model="gemini-3-pro",
+            effort="high",
+            execution_policy="sandbox",
+        )
+
+        assert argv[-1].endswith("gemini-3-pro high sandbox")
+
 
 @pytest.mark.small
 class TestRunnerEntryValidation:
@@ -413,6 +433,20 @@ class TestSessionIdLaunch:
         )
         assert result.session_id == "resume-session"
         assert "resume-session" in self._split_command(calls)
+
+    def test_antigravity_returns_no_session_and_receives_policy(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AGY interactive は policy を伝播し session ID を生成しない。"""
+        result, calls = self._run(
+            tmp_path,
+            monkeypatch,
+            _step("antigravity", model="gemini-3-pro", effort="high"),
+            execution_policy="sandbox",
+        )
+
+        assert result.session_id is None
+        assert self._split_command(calls).endswith("gemini-3-pro high sandbox")
 
     def test_codex_fresh_does_not_generate_launch_uuid(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -786,7 +820,7 @@ class TestCodexSessionIdExtraction:
 
 @pytest.mark.medium
 class TestInteractiveTerminalWrapper:
-    """Wrapper shell contract: cwd, arg order, and agent command lines (8 args)."""
+    """Wrapper shell contract: cwd, arg order, and agent command lines (9 positions)."""
 
     def test_wrapper_syntax_is_valid(self) -> None:
         result = subprocess.run(
@@ -842,7 +876,7 @@ class TestInteractiveTerminalWrapper:
         prompt.write_text("prompt", encoding="utf-8")
         workdir = tmp_path / "work"
         workdir.mkdir(exist_ok=True)
-        # 8-arg contract: agent prompt verdict workdir ...
+        # 9-position contract prefix: agent prompt verdict workdir ...
         return [agent, str(prompt), str(tmp_path / "verdict.yaml"), str(workdir)]
 
     def test_wrapper_cds_into_workdir_before_agent(self, tmp_path: Path) -> None:
@@ -963,6 +997,71 @@ class TestInteractiveTerminalWrapper:
             'model_reasoning_effort="low"',
             "33333333-3333-4333-8333-333333333333",
         ]
+
+    @pytest.mark.parametrize(
+        ("policy", "expected_flag"),
+        [
+            ("auto", "--dangerously-skip-permissions"),
+            ("sandbox", "--sandbox"),
+            ("interactive", None),
+        ],
+    )
+    def test_antigravity_policy_command_matches_contract(
+        self,
+        tmp_path: Path,
+        policy: str,
+        expected_flag: str | None,
+    ) -> None:
+        """AGY interactive argv に 3 policy を同じ意味で写像する。"""
+        args_path, _ = self._fake_agent_recording_argv(tmp_path, "agy")
+        fake_bin = tmp_path / "bin"
+        wrapper_args = self._base_args(tmp_path, "antigravity") + [
+            "",
+            "",
+            "gemini-3-pro",
+            "high",
+            policy,
+        ]
+
+        result = self._run_wrapper(
+            tmp_path,
+            "agy",
+            wrapper_args,
+            path_prefix=fake_bin,
+        )
+
+        assert result.returncode == 0, result.stderr
+        args = args_path.read_text(encoding="utf-8").splitlines()
+        prompt_index = args.index("-i")
+        assert args[prompt_index + 1].startswith("Read the full task prompt from:")
+        assert "--model" in args
+        assert "gemini-3-pro" in args
+        assert "--effort" in args
+        assert "high" in args
+        for policy_flag in ("--dangerously-skip-permissions", "--sandbox"):
+            assert (policy_flag in args) is (policy_flag == expected_flag)
+
+    def test_antigravity_resume_is_rejected_by_wrapper(self, tmp_path: Path) -> None:
+        """validation を迂回した AGY resume を wrapper でも拒否する。"""
+        fake_bin = tmp_path / "bin"
+        fake_bin.mkdir(exist_ok=True)
+        wrapper_args = self._base_args(tmp_path, "antigravity") + [
+            "unsupported-session",
+            "",
+            "",
+            "",
+            "auto",
+        ]
+
+        result = self._run_wrapper(
+            tmp_path,
+            "agy",
+            wrapper_args,
+            path_prefix=fake_bin,
+        )
+
+        assert result.returncode == 2
+        assert "does not support resume" in result.stderr
 
 
 @pytest.mark.small

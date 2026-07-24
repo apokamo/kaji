@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
-from kaji_harness.adapters import ClaudeAdapter, CodexAdapter, GeminiAdapter
+from kaji_harness.adapters import AntigravityAdapter, ClaudeAdapter, CodexAdapter, GeminiAdapter
 from kaji_harness.cli import execute_cli, stream_and_log
 from kaji_harness.errors import CLIExecutionError, CLINotFoundError, StepTimeoutError
 from kaji_harness.models import Step
@@ -208,6 +208,41 @@ class TestStreamAndLog:
         assert "Gemini says hi" in result.full_output
         assert result.cost is not None
         assert result.cost.input_tokens == 500
+
+    def test_antigravity_plain_stdout_preserves_fidelity(self, tmp_path: Path) -> None:
+        """AGY stdout は JSON 風行・空行・前後空白を欠落なく保持する。"""
+        script = tmp_path / "agy"
+        script.write_text(
+            "#!/usr/bin/env bash\n"
+            "printf '%s\\n' '  leading' '{\"status\":\"not-an-event\"}' '' 'trailing  '\n",
+            encoding="utf-8",
+        )
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        process = subprocess.Popen(
+            [str(script)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        result = stream_and_log(
+            process,
+            AntigravityAdapter(),
+            "implement",
+            log_dir,
+            verbose=False,
+        )
+        process.wait()
+
+        expected = '  leading\n{"status":"not-an-event"}\n\ntrailing  '
+        assert result.full_output == expected
+        assert (log_dir / "console.log").read_text(encoding="utf-8") == expected + "\n"
+        assert result.session_id is None
+        assert result.cost is None
+        assert result.terminal_seen is False
+        assert result.terminal_failure is False
 
     def test_console_log_written(self, tmp_path: Path) -> None:
         """Console log contains decoded text (not raw JSONL)."""
@@ -435,6 +470,81 @@ class TestExecuteCLI:
                 )
             assert exc_info.value.step_id == "test"
             assert exc_info.value.returncode == 1
+
+    def test_antigravity_nonzero_exit_includes_stderr(self, tmp_path: Path) -> None:
+        """AGY の stderr と exit code を CLIExecutionError に反映する。"""
+        script = tmp_path / "agy"
+        script.write_text(
+            "#!/usr/bin/env bash\nprintf 'permission backend failed\\n' >&2\nexit 7\n",
+            encoding="utf-8",
+        )
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        step = Step(
+            id="antigravity-step",
+            skill="test-skill",
+            agent="antigravity",
+            on={"PASS": "end"},
+        )
+
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            with pytest.raises(CLIExecutionError) as exc_info:
+                execute_cli(
+                    step=step,
+                    prompt="test prompt",
+                    workdir=tmp_path,
+                    session_id=None,
+                    log_dir=tmp_path / "logs",
+                    execution_policy="auto",
+                    verbose=False,
+                    default_timeout=10,
+                )
+
+        assert exc_info.value.step_id == "antigravity-step"
+        assert exc_info.value.returncode == 7
+        assert "permission backend failed" in str(exc_info.value)
+
+    def test_antigravity_transient_stderr_retries_and_succeeds(self, tmp_path: Path) -> None:
+        """AGY の transient stderr を検知し、backoff 後の再実行結果を返す。"""
+        script = tmp_path / "agy"
+        counter = tmp_path / "attempt-count"
+        script.write_text(
+            "#!/usr/bin/env bash\n"
+            'counter="$(dirname "$0")/attempt-count"\n'
+            "count=0\n"
+            '[[ -f "$counter" ]] && count="$(cat "$counter")"\n'
+            "count=$((count + 1))\n"
+            'printf "%s\\n" "$count" > "$counter"\n'
+            'if [[ "$count" -eq 1 ]]; then\n'
+            "  printf 'service is at capacity; try again\\n' >&2\n"
+            "  exit 1\n"
+            "fi\n"
+            "printf 'PASS after retry\\n'\n",
+            encoding="utf-8",
+        )
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        step = Step(
+            id="antigravity-step",
+            skill="test-skill",
+            agent="antigravity",
+            on={"PASS": "end"},
+        )
+
+        with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+            with patch("kaji_harness.cli.time.sleep") as sleep:
+                result = execute_cli(
+                    step=step,
+                    prompt="test prompt",
+                    workdir=tmp_path,
+                    session_id=None,
+                    log_dir=tmp_path / "logs",
+                    execution_policy="auto",
+                    verbose=False,
+                    default_timeout=10,
+                )
+
+        assert counter.read_text(encoding="utf-8") == "2\n"
+        sleep.assert_called_once_with(30.0)
+        assert result.full_output == "PASS after retry"
 
     def test_timeout_raises_step_timeout_error(self, tmp_path: Path) -> None:
         """CLI that exceeds timeout is killed and StepTimeoutError is raised."""

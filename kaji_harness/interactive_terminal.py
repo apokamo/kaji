@@ -1,6 +1,7 @@
 """Interactive terminal runner.
 
-This runner starts a real interactive agent CLI (``claude`` / ``codex``) inside
+This runner starts a real interactive agent CLI (``claude`` / ``codex`` /
+``antigravity``) inside
 a ``tmux`` pane and waits for the agent-written ``verdict.yaml`` artifact. It
 intentionally avoids parsing stdout: completion is decided by the
 artifact-primary verdict resolution introduced in Issue #220.
@@ -40,6 +41,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .agents import AGENT_CAPABILITIES
 from .cli import find_high_confidence_sensitive_pattern, find_transient_pattern
 from .errors import (
     CLIExecutionError,
@@ -230,13 +232,14 @@ def _build_wrapper_command(
     launch_session_id: str,
     model: str,
     effort: str,
+    execution_policy: str = "auto",
 ) -> str:
     """Build the single shell command tmux runs in the new pane.
 
     ``split-window`` takes one command argument, so the wrapper argv is
-    shell-quoted with ``shlex.join``. The 8 wrapper arguments follow the
+    shell-quoted with ``shlex.join``. The 9 wrapper arguments follow the
     Wrapper 契約 order exactly: ``agent prompt_path verdict_path workdir
-    resume_session_id launch_session_id model effort``.
+    resume_session_id launch_session_id model effort execution_policy``.
     """
     return shlex.join(
         [
@@ -249,6 +252,7 @@ def _build_wrapper_command(
             launch_session_id,
             model,
             effort,
+            execution_policy,
         ]
     )
 
@@ -267,6 +271,7 @@ def _build_tmux_split_argv(
     launch_session_id: str,
     model: str,
     effort: str,
+    execution_policy: str = "auto",
 ) -> list[str]:
     """Assemble the ``tmux split-window`` argv.
 
@@ -307,6 +312,7 @@ def _build_tmux_split_argv(
             launch_session_id=launch_session_id,
             model=model,
             effort=effort,
+            execution_policy=execution_policy,
         ),
     ]
 
@@ -320,11 +326,12 @@ def execute_interactive_terminal(
     timeout: int,
     session_id: str | None = None,
     close_on_verdict: bool = True,
+    execution_policy: str = "auto",
 ) -> CLIResult:
     """Start a real interactive CLI in a tmux pane and wait for ``verdict.yaml``.
 
     Args:
-        step: The workflow step (``agent`` must be ``claude`` or ``codex``).
+        step: The workflow step with an interactive-terminal capable agent.
         prompt_path: Absolute path to the attempt's ``prompt.txt``.
         verdict_path: Absolute path the agent must write ``verdict.yaml`` to.
         workdir: Trusted project worktree used as cwd / ``--cd``. Resolved by
@@ -335,6 +342,7 @@ def execute_interactive_terminal(
         close_on_verdict: ``kill-pane`` after the verdict artifact appears
             (best-effort cleanup). When ``False`` the pane is left with
             ``remain-on-exit on`` so it survives the agent's natural exit.
+        execution_policy: Workflow policy passed to the agent wrapper.
 
     Returns:
         ``CLIResult(full_output="", session_id=<resolved id or None>)``.
@@ -351,7 +359,8 @@ def execute_interactive_terminal(
     """
     if step.agent is None:
         raise ValueError(f"interactive terminal runner requires step.agent (step={step.id})")
-    if step.agent not in {"claude", "codex"}:
+    capabilities = AGENT_CAPABILITIES.get(step.agent)
+    if capabilities is None or not capabilities.supports_interactive_terminal:
         raise ValueError(f"interactive terminal runner does not support agent: {step.agent}")
     if not prompt_path.is_file():
         raise FileNotFoundError(f"prompt.txt not found: {prompt_path}")
@@ -382,6 +391,7 @@ def execute_interactive_terminal(
         launch_session_id=launch_session_id,
         model=step.model or "",
         effort=step.effort or "",
+        execution_policy=execution_policy,
     )
     pane_id = launch.pane_id
     # Issue #235: pane 起動成功直後に起動コンソールへ progress を出す。
@@ -530,6 +540,7 @@ def _launch_pane(
     launch_session_id: str,
     model: str,
     effort: str,
+    execution_policy: str,
 ) -> _PaneLaunch:
     """Place and launch one agent pane, returning its id and placement metadata.
 
@@ -567,6 +578,7 @@ def _launch_pane(
         launch_session_id=launch_session_id,
         model=model,
         effort=effort,
+        execution_policy=execution_policy,
     )
     proc = subprocess.run(argv, text=True, capture_output=True, check=False, cwd=workdir)
     if proc.returncode != 0:

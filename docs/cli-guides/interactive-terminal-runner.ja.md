@@ -2,7 +2,8 @@
 
 Language: [English](interactive-terminal-runner.md) | 日本語
 
-`kaji run` の agent step を、headless CLI ではなく **tmux pane 上**の通常 `claude` / `codex`
+`kaji run` の agent step を、headless CLI ではなく **tmux pane 上**の通常 `claude` / `codex` /
+Antigravity（`agy`）
 対話 CLI で実行する runner backend（Issue #224 / tmux 化は #230）。agent が attempt directory の
 `verdict.yaml` を書いたら、kaji は artifact-primary 経路（[ADR 005](../adr/005-artifact-primary-verdict.md)）
 で verdict を読み、次 step へ進む。
@@ -22,6 +23,8 @@ agent を同一画面で並列に見られる。pane 配置は **初回のみ or
 - 従量課金の headless 経路ではなく、通常コンソール利用に近い形で workflow を進めたいとき。
 - ディスプレイ無し環境（WSL2 / SSH / headless）でも `kaji run` 出力と agent を同一画面で並列に見たいとき。
 - step ごとに Claude / Codex の session を `--resume` / `codex resume` で引き継ぎたいとき。
+- `agy -i` で Antigravity の単発 step を実行しつつ、kaji の artifact 完了契約を使いたいとき
+  （Antigravity は `resume:` 非対応）。
 - agent の最終状態を verdict 後も pane に残して確認したいとき（`close_on_verdict = false`）。pane を
   残しても右列は最新2枚相当に保たれ、横幅が step ごとに狭くならない。
 
@@ -39,10 +42,10 @@ agent を同一画面で並列に見られる。pane 配置は **初回のみ or
 - `tmux`（**>= 3.1**）が PATH にあること。kaji 管理 pane を識別する pane user option
   （`set-option -p @kaji_interactive_terminal`）が tmux 3.1 で追加されたため（Issue #238 で 3.0 から
   引き上げ）。無ければ / 古ければ fail-fast。
-- `claude` / `codex` CLI が PATH にあること（runner が起動する agent）。
+- 選択した `claude` / `codex` / `agy` CLI が PATH にあること。
 - transcript（`terminal.log`）は `tmux pipe-pane` で **常時記録**される（OS 分岐なし）。
 - wrapper は agent 起動前に `NO_COLOR` を unset し、`COLORTERM=truecolor` を設定する。
-  親 shell に `NO_COLOR=1` があっても、interactive terminal runner 内の Claude / Codex は
+  親 shell に `NO_COLOR=1` があっても、interactive terminal runner 内の agent は
   truecolor 表示を使える。
 
 ## 設定
@@ -60,6 +63,18 @@ default_timeout = 2400
 agent_runner = "interactive_terminal"            # "headless"（既定） | "interactive_terminal"
 interactive_terminal_close_on_verdict = true     # 既定 true
 ```
+
+### Antigravity の execution policy
+
+runner は workflow の `execution_policy` を wrapper 第9引数へ渡し、Antigravity では次のように写像する。
+
+| policy | `agy -i` flag | permission の挙動 |
+|--------|---------------|-------------------|
+| `auto` | `--dangerously-skip-permissions` | tool request を自動承認 |
+| `sandbox` | `--sandbox` | containment を有効化し、TUI approval は維持 |
+| `interactive` | なし | AGY default と TUI approval |
+
+AGY では sandbox と permission は別軸であり、`sandbox` に permission bypass を加えない。
 
 `agent_runner` が許可値以外なら **config load 時点で `ConfigLoadError`**（fail-fast）。
 `[execution]` 各 key の網羅的な仕様（型 / 既定 / 検証）の正本は
@@ -167,7 +182,8 @@ kaji run .kaji/wf/official/dev.yaml 224 --log-level WARNING
 2. runner は `tmux pipe-pane -o -t %id 'cat >> terminal.log'` で pane 出力を attempt directory の
    `terminal.log` に記録する。
 3. wrapper は最初に `cd <workdir>`（trusted な project worktree。`/tmp` や attempt directory を
-   cwd にしない）してから通常 `claude` / `codex` を起動する（Codex には `--cd <workdir>` も渡す）。
+   cwd にしない）してから通常 `claude` / `codex` / `agy` を起動する
+   （Codex には `--cd <workdir>` も渡す）。
 4. wrapper は prompt 全文を埋め込まず、agent に「`prompt.txt` を読み、`verdict.yaml` を pure YAML
    で書く」ことだけを指示する。
 5. runner は `verdict.yaml` を polling し、出現したら artifact-primary 経路で verdict を解決して
@@ -198,6 +214,8 @@ kaji run .kaji/wf/official/dev.yaml 224 --log-level WARNING
   当該 attempt の `prompt.txt` / `verdict.yaml` path を含む rollout file の UUID を採用する。
   resume step では `codex resume <uuid>` で起動する。session id 未解決の Codex fresh では、verdict
   検知後に回収 grace（≤5s）を挟むことを許容する。
+- **Antigravity**: 公開 session ID を取得しない。result は常に `session_id=None` で、
+  workflow の `resume:` は起動前に拒否する。
 
 ### effort の注意（Codex）
 
@@ -205,10 +223,10 @@ Codex の `reasoning.effort = minimal` は現 tool 構成（`image_gen` / `web_s
 実用最小値は `low`。runner / wrapper は effort を pass-through し、最小値の選択は workflow step /
 手動検証側の責務とする。
 
-## 手動検証手順（real tmux + real Claude / Codex）
+## 手動検証手順（real tmux + real Claude / Codex / Antigravity）
 
 > 自動テストは fake bin + 実 tmux の Large（`large_local`）と fake tmux の Medium で振る舞いを
-> 担保する。real `claude` / `codex` のライブ疎通は **意図的に自動化しない**（実 API 課金・対話 CLI の
+> 担保する。real `claude` / `codex` / `agy` のライブ疎通は **意図的に自動化しない**（実 API 課金・対話 CLI の
 > 自動化困難）ため、以下を手動で確認する。
 
 検証は **project worktree 内**かつ **tmux session 内**で行う。`/tmp` や attempt directory を cwd に
@@ -218,6 +236,7 @@ Codex の `reasoning.effort = minimal` は現 tool 構成（`image_gen` / `web_s
 
 - Claude: `haiku` / `low`
 - Codex: `gpt-5.4-mini` / `low`
+- Antigravity: 利用可能な model / `low`
 
 手順:
 

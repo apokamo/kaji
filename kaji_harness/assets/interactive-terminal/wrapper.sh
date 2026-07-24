@@ -9,6 +9,7 @@ resume_session_id="${5:-}"
 launch_session_id="${6:-}"
 model="${7:-}"
 effort="${8:-}"
+execution_policy="${9:-}"
 
 cd "$workdir"
 
@@ -31,6 +32,9 @@ if [[ -n "$model" ]]; then
 fi
 if [[ -n "$effort" ]]; then
   echo "effort: $effort"
+fi
+if [[ -n "$execution_policy" ]]; then
+  echo "execution_policy: $execution_policy"
 fi
 echo
 echo "The agent must read prompt_path and write a pure YAML verdict to verdict_path."
@@ -82,6 +86,36 @@ case "$agent" in
       run_agent "$(printf 'exec codex resume --cd %q --dangerously-bypass-approvals-and-sandbox%s%s %q %q' "$workdir" "$codex_model_args" "$codex_effort_args" "$resume_session_id" "$initial_prompt")"
     fi
     run_agent "$(printf 'exec codex --cd %q --dangerously-bypass-approvals-and-sandbox%s%s %q' "$workdir" "$codex_model_args" "$codex_effort_args" "$initial_prompt")"
+    ;;
+  antigravity)
+    if [[ -n "$resume_session_id" ]]; then
+      echo "antigravity does not support resume" >&2
+      exit 2
+    fi
+    antigravity_policy_args=""
+    case "$execution_policy" in
+      auto)
+        antigravity_policy_args=" --dangerously-skip-permissions"
+        ;;
+      sandbox)
+        antigravity_policy_args=" --sandbox"
+        ;;
+      interactive|"")
+        ;;
+      *)
+        echo "unsupported antigravity execution policy: $execution_policy" >&2
+        exit 2
+        ;;
+    esac
+    antigravity_model_args=""
+    if [[ -n "$model" ]]; then
+      antigravity_model_args="$(printf ' --model %q' "$model")"
+    fi
+    antigravity_effort_args=""
+    if [[ -n "$effort" ]]; then
+      antigravity_effort_args="$(printf ' --effort %q' "$effort")"
+    fi
+    run_agent "$(printf 'exec agy%s%s%s -i %q' "$antigravity_policy_args" "$antigravity_model_args" "$antigravity_effort_args" "$initial_prompt")"
     ;;
   *)
     echo "unsupported agent: $agent" >&2

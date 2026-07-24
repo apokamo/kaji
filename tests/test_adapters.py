@@ -1,4 +1,4 @@
-"""Tests for CLI event adapters (Claude, Codex, Gemini).
+"""Tests for CLI event adapters (Claude, Codex, Gemini, Antigravity).
 
 Each adapter extracts session_id, text, and cost from JSONL events.
 """
@@ -6,6 +6,7 @@ Each adapter extracts session_id, text, and cost from JSONL events.
 import pytest
 
 from kaji_harness.adapters import (
+    AntigravityAdapter,
     ClaudeAdapter,
     CodexAdapter,
     GeminiAdapter,
@@ -732,6 +733,41 @@ class TestGeminiAdapter:
         assert adapter.extract_cost(event) is None
 
 
+# ==========================================
+# Antigravity Adapter
+# ==========================================
+
+
+class TestAntigravityAdapter:
+    """AntigravityAdapter: AGY plain-text output contract."""
+
+    @pytest.fixture
+    def adapter(self) -> AntigravityAdapter:
+        return AntigravityAdapter()
+
+    @pytest.mark.small
+    def test_extractors_return_no_structured_metadata(self, adapter: AntigravityAdapter) -> None:
+        """AGY は session・JSONL text・cost・error metadata を抽出しない。"""
+        event = {"type": "result", "session_id": "private", "cost": 1, "text": "ignored"}
+
+        assert adapter.extract_session_id(event) is None
+        assert adapter.extract_text(event) is None
+        assert adapter.extract_cost(event) is None
+        assert adapter.extract_error_message(event) is None
+
+    @pytest.mark.small
+    def test_terminal_contract_is_absent(self, adapter: AntigravityAdapter) -> None:
+        """AGY は terminal event を公開しないため process exit を真実とする。"""
+        assert adapter.is_terminal_event({"type": "result"}) is False
+        assert adapter.is_terminal_failure({"type": "error"}) is False
+        assert adapter.treats_stream_error_as_failure() is False
+
+    @pytest.mark.small
+    def test_declares_plain_text_stdout(self, adapter: AntigravityAdapter) -> None:
+        """stdout を JSONL parse しない adapter capability を返す。"""
+        assert adapter.parses_stdout_as_jsonl() is False
+
+
 class TestIsTerminalEvent:
     """is_terminal_event: session 終端マーカー判定（local-p1-22）。"""
 
@@ -879,3 +915,15 @@ class TestTreatsStreamErrorAsFailure:
     @pytest.mark.small
     def test_gemini_treats_stream_error_as_failure(self) -> None:
         assert GeminiAdapter().treats_stream_error_as_failure() is True
+
+
+class TestParsesStdoutAsJsonl:
+    """adapter ごとの stdout framing 契約。"""
+
+    @pytest.mark.small
+    @pytest.mark.parametrize("adapter", [ClaudeAdapter(), CodexAdapter(), GeminiAdapter()])
+    def test_existing_adapters_parse_jsonl(
+        self, adapter: ClaudeAdapter | CodexAdapter | GeminiAdapter
+    ) -> None:
+        """既存 agent の JSONL decoding を維持する。"""
+        assert adapter.parses_stdout_as_jsonl() is True

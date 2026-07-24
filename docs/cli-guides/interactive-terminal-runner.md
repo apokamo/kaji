@@ -2,8 +2,8 @@
 
 Language: English | [日本語](interactive-terminal-runner.ja.md)
 
-A runner backend that executes `kaji run` agent steps through normal `claude` /
-`codex` interactive CLIs inside **tmux panes**, instead of the headless CLI path
+A runner backend that executes `kaji run` agent steps through normal `claude`,
+`codex`, or Antigravity (`agy`) interactive CLIs inside **tmux panes**, instead of the headless CLI path
 (Issue 224; tmux integration in Issue 230). When an agent writes
 `verdict.yaml` in the attempt directory, kaji reads the verdict through the
 artifact-primary path ([ADR 005](../adr/005-artifact-primary-verdict.md)) and
@@ -31,6 +31,8 @@ Runner backend dispatch.
   displayless environment (WSL2 / SSH / headless).
 - You want each step to continue Claude / Codex sessions through `--resume` /
   `codex resume`.
+- You want to run a single Antigravity step through `agy -i` while keeping
+  kaji's artifact completion contract. Antigravity does not support `resume:`.
 - You want to keep the agent's final state visible in the pane after the verdict
   (`close_on_verdict = false`). Even when panes remain, the right column is kept
   to the latest two panes, so its width does not shrink on every step.
@@ -52,12 +54,12 @@ workflows and CI behavior do not change.
 - `tmux` (**>= 3.1**) must be on PATH. Kaji identifies managed panes through
   pane user options (`set-option -p @kaji_interactive_terminal`), added in tmux
   3.1 (raised from 3.0 in Issue 238). Missing or older tmux fails fast.
-- `claude` / `codex` CLI must be on PATH (the agent the runner launches).
+- The selected `claude`, `codex`, or `agy` CLI must be on PATH.
 - Transcripts (`terminal.log`) are **always recorded** with `tmux pipe-pane`
   (no OS branch).
 - Before launching the agent, the wrapper unsets `NO_COLOR` and sets
-  `COLORTERM=truecolor`. Even if the parent shell has `NO_COLOR=1`, Claude /
-  Codex inside the interactive terminal runner can use truecolor output.
+  `COLORTERM=truecolor`. Even if the parent shell has `NO_COLOR=1`, the agent
+  inside the interactive terminal runner can use truecolor output.
 
 ## Configuration
 
@@ -80,6 +82,20 @@ If `agent_runner` is not an allowed value, config loading fails fast with
 `ConfigLoadError`. The exhaustive specification for `[execution]` keys (type /
 default / validation) is the
 [Configuration Reference](../reference/configuration.md#execution).
+
+### Antigravity execution policy
+
+The runner passes workflow `execution_policy` to the wrapper as its ninth
+argument. The Antigravity case maps it as follows:
+
+| policy | `agy -i` flag | permission behavior |
+|--------|---------------|---------------------|
+| `auto` | `--dangerously-skip-permissions` | tool requests are auto-approved |
+| `sandbox` | `--sandbox` | containment is enabled; TUI approval remains active |
+| `interactive` | none | AGY defaults and TUI approval |
+
+Sandbox and permission are separate AGY controls. The `sandbox` mapping never
+adds the permission bypass flag.
 
 ### Overlay
 
@@ -196,8 +212,8 @@ kaji run .kaji/wf/official/dev.yaml 224 --log-level WARNING
 2. The runner records pane output to `terminal.log` in the attempt directory via
    `tmux pipe-pane -o -t %id 'cat >> terminal.log'`.
 3. The wrapper first runs `cd <workdir>` (trusted project worktree; not `/tmp` or
-   the attempt directory), then launches normal `claude` / `codex` (Codex also
-   receives `--cd <workdir>`).
+   the attempt directory), then launches normal `claude` / `codex` / `agy`
+   (Codex also receives `--cd <workdir>`).
 4. The wrapper does not embed the full prompt. It only tells the agent to read
    `prompt.txt` and write pure YAML to `verdict.yaml`.
 5. The runner polls `verdict.yaml`; once it appears, it resolves the verdict via
@@ -239,6 +255,8 @@ kaji run .kaji/wf/official/dev.yaml 224 --log-level WARNING
   Resume steps launch `codex resume <uuid>`. A Codex fresh run whose session id
   was not resolved may wait through a collection grace period (<=5s) after
   verdict detection.
+- **Antigravity**: no public session ID is collected. The result always carries
+  `session_id=None`, and workflow `resume:` is rejected before launch.
 
 ### Effort note (Codex)
 
@@ -247,11 +265,11 @@ Codex `reasoning.effort = minimal` conflicts with the current tool configuration
 wrapper pass effort through; choosing the minimum value is the responsibility of
 workflow steps and manual verification.
 
-## Manual verification procedure (real tmux + real Claude / Codex)
+## Manual verification procedure (real tmux + real Claude / Codex / Antigravity)
 
 > Automated tests cover behavior with fake binaries + real tmux at Large
 > (`large_local`) and fake tmux at Medium. Live connectivity with real `claude` /
-> `codex` is **intentionally not automated** because it may incur API charges and
+> `codex` / `agy` is **intentionally not automated** because it may incur API charges and
 > interactive CLIs are hard to automate. Verify it manually as follows.
 
 Run verification **inside a project worktree** and **inside a tmux session**. Do
@@ -261,6 +279,7 @@ Verification models / effort (low-cost choices):
 
 - Claude: `haiku` / `low`
 - Codex: `gpt-5.4-mini` / `low`
+- Antigravity: an available model / `low`
 
 Procedure:
 
