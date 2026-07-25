@@ -6,6 +6,42 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-07-25
+
+This release adds Antigravity CLI support and a managed starter synchronization
+workflow, removes the unreproducible Gemini CLI integration, and introduces an
+advance warning for the upcoming `inject_verdict` removal.
+
+### BREAKING CHANGE
+
+- **Gemini CLI is no longer a supported agent.**
+  - **Broken contract**: workflow steps that specify `agent: gemini` no longer
+    validate or run. The Gemini adapter, command construction, formatter,
+    interactive-terminal support, packaging metadata, and CLI guide have been
+    removed.
+  - **How to check whether you are affected**: run
+    `rg -n 'agent:[[:space:]]*gemini([[:space:]#]|$)' .kaji/wf/` in each
+    downstream repository. Zero hits means its workflow YAML is not affected.
+  - **How to migrate**: for an uncustomized managed workflow, refresh it from
+    the v0.18.0 upstream copy. For customized workflows, replace `gemini` with
+    `claude`, `codex`, or `antigravity` and review agent-specific `model`,
+    `effort`, execution-policy, output-format, and resume assumptions.
+    Antigravity is the closest newly supported CLI option but does not support
+    session resume. See upstream commit `d3dccc3` and issue #377 for the
+    contract removal.
+
+### Added
+
+- Added Antigravity CLI (`antigravity` / `agy`) as a supported agent for
+  headless and interactive-terminal execution. The integration includes
+  capability validation, plain-text streaming, model/effort and execution
+  policy arguments, wrapper support, and an explicit validation error for
+  unsupported resume sessions (#376).
+- Added `.kaji/wf/custom/operations/starter-sync.yaml` to connect
+  `update-starter`, `review-starter-update`, and `release-starter`, including a
+  bounded review retry cycle and an approval boundary before publication
+  (#374).
+
 ### Deprecated
 
 - **`inject_verdict`** (workflow step field) is deprecated and will be removed
@@ -34,6 +70,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   {warning}`) to stderr, including the `inject_verdict` deprecation warning
   above and the existing exec_script skill warning (`agent` / `model` /
   `effort` ignored). Exit code behavior is unchanged.
+- Updated the agent contract, architecture, configuration reference, workflow
+  authoring guidance, and interactive-terminal documentation for the
+  Antigravity addition and Gemini removal.
+
+### Fixed
+
+- `LocalProvider` now exposes persisted `close_reason` values through
+  `Issue.state_reason`, restoring the close/view/list contract used by series
+  gates (#373).
+- GitHub-backed operations now preflight the installed GitHub CLI version and
+  reject `gh` older than 2.50.0 with an actionable error before requesting the
+  unsupported `stateReason` field (#372).
 
 ## [0.17.0] - 2026-07-24
 
