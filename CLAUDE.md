@@ -5,6 +5,13 @@
 Claude Code の auto-memory 機能は、このリポジトリでは使用しない。
 `~/.claude/settings.json` の `autoMemoryEnabled: false` を維持し、memory file を再作成しない。
 
+## Code Intelligence
+
+Claude Code では Serena を使用しない（MCP に登録しない）。セッション途中の worktree 切替で
+active root が再バインドされず、誤った checkout を読み書きしうるため。
+コードナビゲーションが必要な場合は公式 Pyright LSP plugin を任意利用する
+（診断の正本は従来通り `make check`）。詳細: [docs/guides/git-worktree.md](docs/guides/git-worktree.md)
+
 ## Development Skills
 
 スキルは `.claude/skills/` に格納。`/issue-create` から `/issue-close` までのライフサイクルと、
