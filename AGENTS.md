@@ -19,6 +19,9 @@ README.md / llms.txt が担い、本ファイルには書かない。
 - secrets をハードコードしない。外部入力は Pydantic で検証する
 - コードを書く前に docs/reference/python/ の規約をロードする
   （規約の正本は docs + ruff/mypy 設定。`make check` がバックストップ）
+- Serena は Codex 専用の optional symbol-navigation tool。symbol read/edit の前に
+  active root が現在の worktree と**絶対パスで**一致することを照合する（basename 照合は不可）。
+  Claude 系 / Antigravity では使用しない。正本: docs/guides/git-worktree.md
 
 ## Routing（作業種別 → 入口）
 
