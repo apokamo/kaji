@@ -263,7 +263,57 @@ uv tool install -p 3.13 'serena-agent==1.6.1'
 ```
 
 version を更新する場合は、CHANGELOG と config schema の差分を確認したうえで、
-後述の移行手順（退避 → 再生成 → 再 index → root 照合）で再検証する。
+後述の移行手順（退避 → 再生成 → 再 index → root 照合）で再検証する。このとき
+custom context `codex-kaji`（後述）と新 version の built-in `codex` context の差分も確認し、
+excluded_tools の乖離があれば追従させる。
+
+### custom context `codex-kaji`（native-first 整合）
+
+**built-in の `codex` context はそのまま使用しない。** v1.6.1 の
+[`contexts/codex.yml`](https://github.com/oraios/serena/blob/v1.6.1/src/serena/resources/config/contexts/codex.yml)
+は「Serena tools を優先し、code file 全体の native read を避ける」ことを agent に指示しており、
+本節の native-first 方針（`rg` / native read-edit を既定、Serena は semantic 操作のみ）と矛盾する。
+`--add-mode no-memories` は memory / onboarding tools を除外するだけで、
+context の tool-selection prompt は上書きしない。
+
+そのため、tool-selection instruction を native-first に差し替えた custom context を
+`~/.serena/contexts/codex-kaji.yml` に作成し、名前で参照する
+（`--context` は built-in context 名または custom context YAML の path を受け付ける。
+`SERENA_HOME` を設定している場合は `$SERENA_HOME/contexts/`）。
+
+```bash
+# 雛形を built-in codex からコピーして作成し、prompt を下記内容へ差し替える
+serena context create -n codex-kaji --from-internal codex
+serena context edit codex-kaji
+```
+
+`~/.serena/contexts/codex-kaji.yml` の内容:
+
+```yaml
+description: kaji Codex context - native-first (derived from built-in codex)
+prompt: |
+  You are running in the Codex IDE assistant mode, where file operations, basic (line-based) edits and reads
+  as well as shell commands are handled by your own, internal tools.
+  Don't attempt to use any excluded tools; instead, rely on your own internal tools for basic file or shell operations.
+
+  Default to your own native tools (ripgrep-based search, file reads and edits) for exploration and editing.
+  Use Serena's tools only when the task requires semantic code operations, such as listing symbol
+  references, safe renames, symbol-level overviews of large files, or multi-file semantic refactorings.
+  Do not use Serena's tools for plain-text, config, or documentation searches.
+
+excluded_tools:
+  - create_text_file
+  - read_file
+  - execute_shell_command
+  - replace_content
+  - find_file
+  - list_dir
+
+tool_description_overrides: {}
+```
+
+`excluded_tools` は built-in `codex` と同一に維持する。これは Codex 内蔵の file / shell 操作と
+重複する Serena 側 tool の除外であり、native-first 方針と整合する（差し替えるのは prompt のみ）。
 
 Codex 設定例:
 
@@ -274,7 +324,7 @@ command = "serena"
 args = [
   "start-mcp-server",
   "--project-from-cwd",
-  "--context=codex",
+  "--context=codex-kaji",
   "--add-mode", "no-memories",
   "--open-web-dashboard", "false",
 ]
@@ -290,6 +340,25 @@ SERENA_USAGE_REPORTING = "false"
   Serena 利用を促す設計であり、kaji の用途限定方針（semantic task でのみ任意利用）と
   衝突する。将来有効化する場合は、その時点の Codex / Serena の組合せで hook contract と
   tool-selection への影響を再検証する
+
+#### 起動 instruction の再検証
+
+custom context 導入後、および version 更新後は、実際に注入される instruction を確認する:
+
+```bash
+serena print-system-prompt --context codex-kaji --only-instructions [worktree_root]
+```
+
+- `Context description:` 節が上記 native-first 文言になっており、built-in `codex` の
+  「prioritize them」「avoid reading entire source code files」指示が含まれないこと
+- MCP client 側の tool 一覧に file / shell 系（`read_file` / `execute_shell_command` 等）と
+  memory / onboarding 系 tool が現れないこと（`excluded_tools` + `no-memories` の効果）
+
+> **Note**: `print-system-prompt` は未登録 path を渡すと project 登録と
+> `.serena/project.yml` 生成の副作用がある。移行手順で `project.yml` を再生成した後の
+> worktree に対して実行する。また、instruction 冒頭の汎用部（"You have semantic coding
+> tools..."）は Serena tool を使う場面での効率指針であり、tool 選択の既定は
+> `Context description:` 節の native-first 文言が定める。
 
 ### root 確定手順
 
@@ -333,9 +402,18 @@ worktree B ── Codex session B ── stdio Serena B ── project B / cache
 
 1. 既存 `.serena/` をリポジトリ外へ退避する（復元用。repository へ push しない）
 2. 安定版を固定インストールする: `uv tool install -p 3.13 'serena-agent==1.6.1'`
-3. Codex 設定を `uvx --from git+...` から固定版 `serena` コマンド起動へ変更する（上記設定例）
-4. v1.6.1 で `project.yml` を再生成する（`languages: ["python"]` 形式になることを確認）
-5. 開発版が生成した cache は引き継がず、worktree ごとに再 index する
+3. Codex 設定を `uvx --from git+...` から固定版 `serena` コマンド起動へ変更する
+   （上記設定例。custom context `codex-kaji` の作成を含む）
+4. v1.6.1 で `project.yml` を再生成し、再 index する。worktree root で実行する:
+
+   ```bash
+   serena project index [worktree_root] --language python
+   ```
+
+   `project.yml` が存在しない場合は自動生成される。生成された `.serena/project.yml` が
+   `languages: ["python"]` 形式であることを確認する
+5. 開発版が生成した cache は引き継がない。各 worktree でも同じ `serena project index` を
+   実行して再 index する
 6. stale な既存 memory は復元しない（退避先に残すのみ）
 7. `no-memories` が有効であることを確認する
 8. `get_current_config` で active project root が現在の worktree の絶対パスと一致することを確認する
