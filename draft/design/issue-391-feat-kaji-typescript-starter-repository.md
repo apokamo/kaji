@@ -51,7 +51,7 @@ managed starter 登録、登録内容の回帰検証を追加する。
 | Node.js | `.node-version` の `24.18.1` | 必須 | Linux / macOS / WSL2。native Windows は対象外 |
 | npm | `packageManager` の `npm@11.16.0` | 必須 | package manager は npm だけを使い、`npm ci` で lockfile を再現する |
 | repository identity | README checklist に列挙した repository 名、package 名、`.kaji/config.toml` の `repo` | GitHub 利用時に変更 | pristine default 一式または整合した変更後一式は許可し、部分変更は検証 script で失敗させる |
-| agent | `scripts/set-agent.ts` の `claude` / `codex` / `gemini` | 任意 | 未指定時は単一 agent の既定構成。変換は全 workflow に対して冪等・atomic |
+| agent | `scripts/set-agent.ts` の `claude` / `codex` | 任意 | 未指定時は単一 agent の既定構成。変換は全 workflow に対して冪等・atomic。`gemini` / `antigravity` を含む非対応 target は全 file の書換え前に拒否する |
 | application config | `process.env` の `APP_MESSAGE` | 任意 | UTF-8 の非空文字列、上限 200 文字。未指定時は非 secret の既定 greeting を使う |
 | provider | tracked GitHub config または local overlay | 必須 | `.kaji/config.toml` は GitHub、`.kaji/config.local.toml` は local init が生成し gitignore する |
 
@@ -174,6 +174,8 @@ git diff --exit-code
 - tag audit は missing / duplicate / unknown を test case 単位で列挙し、1 件でもあれば非 0。
 - workflow validation、docs link、skill 語彙/symlink、template identity の検証は入力を
  書き換えず、違反 path と契約を示して非 0。
+- `scripts/set-agent.ts` は `gemini`、`antigravity`、未知 target を非対応として、いずれの
+  workflow file も書き換える前に診断して非 0。Gemini を Antigravity へ暗黙変換しない。
 - candidate path が既存の別 repository または dirty worktree なら上書きせず停止する。
 - external GitHub 操作、credential 不足、admin 設定未完了は workflow 内成果物の失敗に偽装せず、
  事後確認として Issue に未完了状態を残す。
@@ -272,6 +274,9 @@ git diff --exit-code
   決定的に検査する。
 8. `scripts/set-agent.ts` は全 workflow を memory 上で parse / validate / transform してから
   一括反映する。途中失敗時は 1 file も変更せず、同じ target への再実行は no-op にする。
+  変換 target は Claude / Codex の 2 種類に限定する。kaji v0.18.0 で廃止済みの Gemini と、
+  `supports_resume: false` のため現行 dev/docs workflow を一括変換できない Antigravity は
+  非対応とし、いずれも全 workflow の parse / target 検証段階で fail-loud に拒否する。
   既定 workflow に `review-poll` は入れず、外部 review bot を設定済みの利用者だけが選ぶ
   option として starter README/docs に設定条件と検証手順を記載する。
 9. local candidate の quality gate と fresh-state dogfood を完了し、candidate SHA と環境・
@@ -324,6 +329,7 @@ git diff --exit-code
 | toolchain | Node 24.18.1、npm 11.16.0、TypeScript 6.0.3、native type stripping、ESM/NodeNext、`tsc` build | Issue #391「Runtime」「TypeScript の実行・build 契約」および公式一次情報 | no-emit と emit の責務、dev/build/start の観測点を分離した |
 | quality stack | typed ESLint、Prettier、Vitest/V8、exactly-one S/M/L tag、80% coverage、Zod、`make check` | Issue #391「Lint」「Test」「品質 gate」 | effective tag audit、negative test、non-mutating gate の検証面を定義した |
 | kaji dependency isolation | `tools/kaji` uv project + `scripts/kaji` wrapper | Issue #391「kaji の分離と workflow」 | docs/skills/Makefile を wrapper へ統一し lock mode で実行する責務を定義した |
+| agent 変換対象 | 初期版は Claude / Codex の 2 種類。Gemini / Antigravity は暗黙変換せず mutation 前に拒否 | Issue #391「kaji の分離と workflow」「重要判断」の 2026-07-30 人間決定。根拠は v0.18.0 `kaji_harness/agents.py`、validator tests、現行 Python starter `scripts/set_agent.py` | 全 workflow の parse / validate 後に一括反映する atomic 境界、非対応 target の negative test、2 回目 no-op の検査を定義した |
 | skill baseline | Python starter の consumer skills を TypeScript 用に汎用化し、maintainer skills を除外 | Issue #391「Skills、agent instructions、docs」 | 一覧差分、Python 語彙、per-skill symlink の決定的検査を定義した |
 | managed maintenance | 既存の言語非依存 update/review/release 運用を再利用 | Issue #391「継続保守」、Issue #341、`starter-sync-runbook.md` | runbook 表、Release notes 例、回帰 test の同期点を定義した |
 | dogfood evidence | local と GitHub の fresh-state 結果を SHA/version/command/artifact/発見事項で記録 | Issue #391「Dogfooding と証跡」、2026-07-30 人間承認 | local は workflow 内、GitHub/admin は事後確認とし、secret/transcript を除外した |
@@ -366,8 +372,10 @@ corpus として持つ。agent / external state を要する lifecycle は Vites
 
 - temporary filesystem に test fixture 群を置き、tag audit が valid corpus を通し、
   missing / duplicate / unknown の各 negative fixture を非 0 にすること。
-- temporary copy の全 workflow に `scripts/set-agent.ts` を適用し、Claude/Codex/Gemini の
- 各変換が valid、2 回目 no-op、途中の不正 YAML では全 file unchanged になること。
+- temporary copy の全 workflow に `scripts/set-agent.ts` を適用し、Claude / Codex の
+  各変換が valid、2 回目 no-op、途中の不正 YAML では全 file unchanged になること。
+  `gemini` / `antigravity` / 未知 target は全 file unchanged のまま非 0 となり、Gemini から
+  Antigravity への暗黙変換が起きないこと。
 - `tsc` build が clean `dist/` を生成し、source の `.ts` relative import が emit 後 `.js` に
  変換され、`src/` 外を production artifact に含めないこと。
 - docs link、template identity、skill symlink/語彙、workflow static validation が
@@ -521,6 +529,7 @@ local dogfood までを実施し、workflow 後は実 GitHub evidence で補完�
 | uv projects | https://docs.astral.sh/uv/guides/projects/ | `pyproject.toml` と version-control 対象の exact `uv.lock` で再現し、`uv run --project` で隔離環境を実行できる |
 | managed starter sync runbook | `docs/operations/release/starter-sync-runbook.md` | kaji Release 後の update → independent review → human approval → atomic publish と repository 別状態管理の正本 |
 | workflow completion criteria | `docs/dev/workflow_completion_criteria.md` | external admin / credential state を workflow 後の確認へ分離し、workflow 内では静的検証を行う |
+| kaji v0.18.0 agent capability | https://github.com/apokamo/kaji/blob/v0.18.0/kaji_harness/agents.py / https://github.com/apokamo/kaji/blob/v0.18.0/tests/test_workflow_validator.py | 有効 agent は Claude / Codex / Antigravity。Gemini は拒否され、Antigravity は `supports_resume: false` のため `resume:` を持つ workflow に使用できない |
 | Python starter | `/home/aki/dev/kaji/kaji-starter-python` / https://github.com/apokamo/kaji-starter-python | consumer workflow/skills/docs、agent conversion、Make targets、managed starter の既存 baseline。Python 固有 tool/path はコピーしない |
 | kamo2 TypeScript sources | `/home/aki/dev/kamo2/apps/web/{package.json,tsconfig.json,eslint.config.mjs,vitest.config.ts}` | flat lint、Vitest tags、Zod 等の運用実績を参照する一方、Next.js/React/bundler 固有設定は starter へ持ち込まない |
 | kaji v0.18.0 Release | https://github.com/apokamo/kaji/releases/tag/v0.18.0 | project-local kaji pin と初期 starter snapshot tag の対象 release |
