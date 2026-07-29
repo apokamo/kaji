@@ -111,20 +111,24 @@ TypeScript starter に適用した AI の仮定である。実装開始時に既
 | Make target | npm / tool 側の責務 | mutation |
 |---|---|---|
 | `make setup` | `npm ci` と `uv sync --project tools/kaji --locked` | dependency environment のみ。lockfile は変更しない |
-| `make check` | format check → typed lint → no-emit typecheck → test-tag audit → Vitest coverage → clean build → kaji workflow validation → docs/template/skill/Actions static validation | tracked file は変更しない |
+| `make check` | format check → typed lint → no-emit typecheck → test-tag audit → S/M/L 全 Vitest corpus の coverage → clean build → kaji workflow validation → `make verify-static` | tracked file は変更しない。network / credential / agent CLI を要求しない |
 | `make lint` | ESLint flat config を対象 source/test/script/config に適用 | なし |
 | `make format` | `prettier --check` | なし |
 | `make fmt` | Prettier の明示的 write | 対象 tracked file を書換えうる |
 | `make typecheck` | `tsc -p tsconfig.json --noEmit` | なし |
-| `make test` | tag audit 後に全 Vitest corpus | test artifact は gitignore |
-| `make test-small` / `medium` / `large` | tag audit 後に対応 tag filter | test artifact は gitignore |
-| `make coverage` | V8 provider、4 指標 80%、`src/**/*.ts` | coverage artifact は gitignore |
+| `make test` | tag audit 後、filter なしで恒久 Vitest corpus の `small` / `medium` / `large` を全件実行 | test artifact は gitignore |
+| `make test-small` / `medium` / `large` | tag audit 後に対応 tag filter。`large` は network / credential / agent CLI 不要の恒久 test だけ | test artifact は gitignore |
+| `make coverage` | tag audit 後、filter なしの S/M/L 全 Vitest corpus で V8 coverage を計測し、`src/**/*.ts` の 4 指標 80% を判定 | coverage artifact は gitignore |
 | `make build` | stale `dist/` を除去して `tsc -p tsconfig.build.json` | `dist/` のみ。gitignore |
 | `make validate-workflows` | tracked 全 workflow を `./scripts/kaji validate` | なし |
 | `make verify-docs` | README / docs / agent instructions / skills の link と path | なし |
+| `make verify-static` | `make verify-docs` と npm scripts の template identity、skill set/symlink/語彙、GitHub Actions の actionlint 相当検証を集約 | なし |
+| `make dogfood-local` | fresh temporary clone/copy で setup/check と local-provider lifecycle を実行する maintainer acceptance runner | temporary repository と gitignored artifact のみ。network と認証済み agent CLI が必要なため `make check` 外 |
 
 `package.json` scripts は同じ個別責務を直接実行し、Makefile は順序付けと名前の安定した
-利用者向け facade に限定する。local と CI は同じ `make check` を呼び、別の合格基準を持たない。
+利用者向け facade に限定する。`verify:template`、`verify:skills`、`validate:actions` を
+`verify:static` が束ね、対応する `make verify-static` を `make check` が呼ぶ。local と CI は
+同じ `make check` を呼び、別の合格基準を持たない。
 
 ### 使用例
 
@@ -268,6 +272,8 @@ git diff --exit-code
   決定的に検査する。
 8. `scripts/set-agent.ts` は全 workflow を memory 上で parse / validate / transform してから
   一括反映する。途中失敗時は 1 file も変更せず、同じ target への再実行は no-op にする。
+  既定 workflow に `review-poll` は入れず、外部 review bot を設定済みの利用者だけが選ぶ
+  option として starter README/docs に設定条件と検証手順を記載する。
 9. local candidate の quality gate と fresh-state dogfood を完了し、candidate SHA と環境・
    command・artifact・再実行結果を Issue #391 に集約する。
 10. kaji 側は candidate の公開契約を英日 guide と managed starters 表へ登録し、Python /
@@ -275,9 +281,10 @@ git diff --exit-code
 
 ### candidate 作成・独立 review・公開準備
 
-1. `/home/aki/dev/kaji/kaji-starter-typescript` が存在しないことを確認して独立 Git repository を
-  初期化する。存在する場合は remote、branch、status、所有目的を read-only で確認し、
-  一致を証明できなければ変更しない。
+1. kaji main worktree の sibling `../kaji-starter-typescript` が存在しないことを確認して
+  独立 Git repository を初期化する。存在する場合は remote、branch、status、所有目的を
+  read-only で確認し、一致を証明できなければ変更しない。以降、candidate path は runbook の
+  default local path と同じこの相対表記を正本とする。
 2. candidate payload を TDD で構築し、`make setup` 後の offline `make check`、clean status、
   secret scan、placeholder state を確認して local commit を作る。
 3. fresh copy を candidate commit から作り、README だけを入口に setup/check/local provider
@@ -338,7 +345,9 @@ threshold、managed 運用、公開 gate は Issue #391 で人間決定済みで
   Dependabot、template identity。
 - **docs**: starter README/docs と kaji 本体の英日 guide、index、runbook。
 
-実行時コードを含むため、Small / Medium / Large をすべて恒久 test として持つ。
+実行時コードを含むため、Small / Medium と、offline で決定的な Large を恒久 Vitest
+corpus として持つ。agent / external state を要する lifecycle は Vitest corpus へ混在させず、
+下記の分類表どおりに `make check` との境界を固定する。
 
 ### Small テスト
 
@@ -370,16 +379,18 @@ threshold、managed 運用、公開 gate は Issue #391 で人間決定済みで
 
 ### Large テスト
 
-- 実 Node child process で TypeScript entry point を起動し、正常 config と不正 config の
-  stdout / stderr / exit code を確認すること。
-- clean build 後の `npm start` が `dist/index.js` から成功し、dev と build/start が同じ
- 利用者契約を満たすこと。watch mode の smoke は最初の output を待って bounded に終了する。
-- `make setup` 済み candidate で、network を遮断した `make check` が全 gate を通り、
- 実行前後の `git status --short` が一致すること。
-- fresh copy で README checklist、setup/check、local provider の Issue 作成から close までを
- 完走し、元 candidate へ artifact / secret / placeholder drift を残さないこと。
-- GitHub credential と admin state を要する fresh-template GitHub dogfood は恒久 CI test に
- せず、workflow 後の確認項目として command、URL、SHA、結果を Issue に記録すること。
+| 検証観点 | 分類 | 起動面・実行条件 | `make check` |
+|---|---|---|---|
+| 実 Node child process で TypeScript entry point を起動し、正常/不正 config の stdout / stderr / exit code を確認 | **(a) 恒久 Vitest corpus** (`large`) | `make test-large`。network / credential / agent CLI 不要、bounded timeout | 対象。`make coverage` の全 tag corpus に含む |
+| clean build 後の `npm start` が `dist/index.js` から成功し、dev と build/start が同じ利用者契約を満たす。watch smoke は最初の output 後に bounded に終了 | **(a) 恒久 Vitest corpus** (`large`) | `make test-large`。temporary `dist/`、network 不要 | 対象。`make coverage` の全 tag corpus に含む |
+| fresh copy で README checklist、setup/check、local provider の Issue 作成から close まで完走し、元 candidate に artifact / secret / placeholder drift を残さない | **(b) 恒久 acceptance runner、Vitest corpus 外** | `make dogfood-local` / `npm run dogfood:local`。認証済み agent CLI と agent API network がある maintainer 環境で candidate snapshot ごとに実行 | 対象外。offline / deterministic gate ではない |
+| setup 済み candidate で network を遮断した `make check` が通り、前後の `git status --short` が一致 | **(c) 変更固有の外側検証** | implementation/final-check が warmed dependency 環境で network deny を設定し、`make check` の外側から before/after status と exit 0 を記録 | 自己再帰を避けるため corpus には入れない |
+| public template から GitHub-provider workflow を完走し、Actions / URL / SHA を確認 | **(c) workflow 後の変更固有検証** | repository 作成・Settings・credential・人間承認後。Issue の事後確認に command / URL / SHA / 結果を記録 | 対象外 |
+
+分類 (b) は再実行可能な script として repository に残すが、agent の外部 API と非決定的な
+agent 応答を必要とするため daily/required gate から分離する。分類 (c) は対象 commit の
+環境契約または公開状態を一度確認する acceptance evidence であり、application の恒久
+回帰 corpus ではない。
 
 ### test corpus / coverage の横断検証
 
@@ -387,9 +398,14 @@ threshold、managed 運用、公開 gate は Issue #391 で人間決定済みで
  作らない。
 - 各 test case の effective tags は `small` / `medium` / `large` のちょうど 1 つ。
   type augmentation と audit script の両層で unknown / cardinality drift を防ぐ。
-- `make test` は全 test、個別 target は tag filter した同一 corpus を実行する。
-- V8 coverage は `src/**/*.ts` の statements / branches / functions / lines のすべて 80%。
-  entry point を対象に含める。
+- `make test` は filter なしで恒久 Vitest corpus の S/M/L を全件実行し、個別 target は
+  同じ corpus を tag filter する。`make test-large` に agent / GitHub dogfood を含めない。
+- `make check` は tag audit 後に `make coverage` を呼び、`make coverage` は tag filter なしで
+  S/M/L の全恒久 Vitest corpus を実行する。coverage threshold の測定 corpus はこの全件集合で
+  固定し、small+medium だけへの縮退を許可しない。
+- V8 coverage は上記全件実行で `src/**/*.ts` の statements / branches / functions / lines の
+  すべて 80%。entry point を対象に含める。child-process smoke の coverage だけに依存せず、
+  entry point が委譲する config/application logic を in-process test でも通して計測可能にする。
 - strict option の形骸化は、各 option に対応する invalid fixture または compiler config の
  決定的 inspection で検出する。少なくとも erasable syntax、unchecked index、optional
  property、unused、fallthrough、override、import extension の退行を gate で拒否する。
@@ -407,13 +423,36 @@ threshold、managed 運用、公開 gate は Issue #391 で人間決定済みで
 
 ### 恒久テストを追加しない範囲
 
+#### offline / clean `make check` の外側検証
+
+repository 内の恒久 test にせず、implementation/final-check の変更固有検証とする。
+
+1. **独自ロジック**: 新規 application logic を検証するものではなく、出荷対象の
+   `make check` 自身の合成契約（network 不要・tracked state 不変）を外側から観測する。
+2. **既存 gate**: 個別 failure は `make check` 内の恒久 S/M/L、build、static gate が検出し、
+   外側検証は network deny と before/after status だけを追加確認する。
+3. **追加情報**: `make check` から `make check` を再帰起動する恒久 test は実行不能で、
+   wrapper fixture を足しても実 gate の offline/clean 性以上の回帰情報を増やさない。
+4. **review 可能性**: candidate SHA、network deny 方法、実行 command、exit code、
+   before/after `git status --short` を Issue の実装報告へ記録する。
+
+#### GitHub/admin 公開状態の検証
+
 GitHub Repository Settings の template 有効化、public repository 上の Actions、
-GitHub-provider dogfood、annotated tag / Release は外部 admin state に依存するため、
-repository 内の恒久 test にはしない。ただし「独自ロジックを含まない」「静的 config /
-既存 gate で failure pattern を検出する」「同じ設定を fixture 化しても外部 state の
-回帰情報が増えない」「代替検証と事後手順を review 可能に記録する」の 4 条件を満たす。
-workflow 内では schema/static validation と local dogfood、workflow 後は実 URL / run evidence
-で補完する。
+GitHub-provider dogfood、annotated tag / Release は repository 内の恒久 test にしない。
+
+1. **独自ロジック**: repository admin state と外部 GitHub resource の存在確認であり、
+   candidate 内の新規 runtime logic ではない。
+2. **既存 gate**: workflow/config/permission/SHA pin は `make verify-static`、local lifecycle は
+   `make dogfood-local` で公開前に検出する。
+3. **追加情報**: mock GitHub state を恒久 fixture にしても実 Settings、Actions、template 生成、
+   public URL の成功を保証する回帰情報は増えない。
+4. **review 可能性**: workflow 後の確認項目に operator、command、URL、candidate SHA、
+   Actions run、結果を記録する。
+
+分類 (b) の local dogfood は `make dogfood-local` として恒久化するため、この「追加しない範囲」
+には含めない。workflow 内では static gate、全 S/M/L Vitest、offline/clean 外側検証、
+local dogfood までを実施し、workflow 後は実 GitHub evidence で補完する。
 
 ## 影響ドキュメント
 
@@ -421,12 +460,12 @@ workflow 内では schema/static validation と local dogfood、workflow 後は�
 |---|---|---|
 | `README.md` / `README.ja.md` | あり | Python だけでなく TypeScript starter も starting point として案内する |
 | `docs/README.md` | あり | TypeScript starter 英日 guide を Tutorials に追加する |
-| `docs/guides/typescript-starter.md` / `.ja.md` | 新規 | template 作成、setup、provider、agent、customization、troubleshooting の公開導線 |
+| `docs/guides/typescript-starter.md` / `.ja.md` | 新規 | template 作成、setup、provider、agent、customization、troubleshooting、TypeScript 7 非採用の tool compatibility、外部 bot 設定済み利用者向け `review-poll` option の公開導線 |
 | `docs/operations/release/starter-sync-runbook.md` | あり | managed starters 表に TypeScript repository と default local path を登録する |
 | `.claude/skills/release/SKILL.md` | あり | Release notes の repository 別 PENDING 例を runbook の全 managed starters と一致させる |
 | starter `README.md` / `README.ja.md` | 新規 | pristine で動く入口、変更 checklist、GitHub/local provider、quality commands |
 | starter `docs/dev/` | 新規 | change/gate、testing、Git/worktree、kaji workflow、completion criteria、baseline |
-| starter `docs/reference/` | 新規 | configuration と TypeScript standards |
+| starter `docs/reference/` | 新規 | configuration と TypeScript standards。TypeScript 6.0.3 baseline、TypeScript 7 の API / typescript-eslint 互換性による非採用理由を永続化 |
 | starter `AGENTS.md` / `CLAUDE.md` | 新規 | 最小不変条件と docs routing、Claude import |
 | `docs/adr/` | なし | kaji core architecture は変更せず、starter 固有の技術選定は人間決定済み Issue、starter TypeScript standards、公開 guide に永続化する |
 | `docs/ARCHITECTURE.md` | なし | kaji runtime / module dependency graph は変更しない |
