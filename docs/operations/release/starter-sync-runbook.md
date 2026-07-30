@@ -8,6 +8,7 @@ starter repository は kaji が所有する配布 repository とし、作業・�
 | repository | default local path | quality gate source |
 |---|---|---|
 | `apokamo/kaji-starter-python` | kaji main worktree の sibling `../kaji-starter-python` | starter repository の実体 |
+| `apokamo/kaji-starter-typescript` | kaji main worktree の sibling `../kaji-starter-typescript` | starter repository の実体 |
 
 新しい言語の starter はこの表へ追加する。skill は tracking Issue の `starter_repo` を入力とし、
 manifest / lockfile / quality gate を repository から解決する。

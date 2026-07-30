@@ -218,6 +218,7 @@ managed starters 表から repository 別状態表を作り、全行を `PENDING
 | repository | status | tracking Issue | starter Release / N/A 理由 |
 |---|---|---|---|
 | apokamo/kaji-starter-python | PENDING | - | - |
+| apokamo/kaji-starter-typescript | PENDING | - | - |
 ```
 
 ```bash
