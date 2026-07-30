@@ -98,11 +98,23 @@ def test_starter_sync_runbook_contract_and_links() -> None:
 def test_managed_starter_sets_match_release_notes_template() -> None:
     runbook = (ROOT / "docs/operations/release/starter-sync-runbook.md").read_text(encoding="utf-8")
     release_skill = (ROOT / ".claude/skills/release/SKILL.md").read_text(encoding="utf-8")
-    repositories = {
+    expected_repositories = {
         "apokamo/kaji-starter-python",
         "apokamo/kaji-starter-typescript",
     }
 
-    for repository in repositories:
-        assert f"| `{repository}` |" in runbook
-        assert f"| {repository} | PENDING |" in release_skill
+    runbook_repositories = {
+        row.split("`")[1]
+        for row in runbook.splitlines()
+        if row.startswith("| `apokamo/kaji-starter-")
+    }
+    release_repositories = {
+        cells[1]
+        for line in release_skill.splitlines()
+        if line.startswith("| apokamo/kaji-starter-")
+        and (cells := [cell.strip() for cell in line.split("|")])
+    }
+
+    assert runbook_repositories == expected_repositories
+    assert release_repositories == expected_repositories
+    assert runbook_repositories == release_repositories

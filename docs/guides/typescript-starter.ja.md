@@ -34,4 +34,8 @@ typescript-eslint 8.65.0 の対応範囲は TypeScript 6.1 未満です。この
 固定します。`@typescript/typescript6` の併用は compiler identity と更新経路を
 二重化するため初期版では採りません。
 
+upstream の任意 `review-poll` step は初期構成に含めません。外部 review bot を
+設定済みのチームだけが custom workflow へ追加し、追加後に
+`make validate-workflows` を再実行してください。
+
 問題は [kaji Issue tracker](https://github.com/apokamo/kaji/issues)へ報告してください。
