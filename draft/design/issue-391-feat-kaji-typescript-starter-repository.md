@@ -121,9 +121,9 @@ TypeScript starter に適用した AI の仮定である。実装開始時に既
 | `make test-small` / `medium` / `large` | tag audit 後に対応 tag filter。`large` は network / credential / agent CLI 不要の恒久 test だけ | test artifact は gitignore |
 | `make coverage` | tag audit 後、filter なしの S/M/L 全 Vitest corpus で V8 coverage を計測し、`src/**/*.ts` の 4 指標 80% を判定 | coverage artifact は gitignore |
 | `make build` | stale `dist/` を除去して `tsc -p tsconfig.build.json` | `dist/` のみ。gitignore |
-| `make validate-workflows` | tracked 全 workflow を `./scripts/kaji validate` | なし |
+| `make validate-workflows` | setup 済み `tools/kaji` を `UV_OFFLINE=1 ./scripts/kaji validate` で起動し、tracked 全 workflow を検証 | なし。index / Git source へ接続しない |
 | `make verify-docs` | README / docs / agent instructions / skills の link と path | なし |
-| `make verify-static` | `make verify-docs` と npm scripts の template identity、skill set/symlink/語彙、GitHub Actions の actionlint 相当検証を集約 | なし |
+| `make verify-static` | `make verify-docs`、template identity、skill set/symlink/語彙/workflow path、`.tools/actionlint` v1.7.12 binary の実行を集約。不在時は setup 手順を示して失敗 | なし。network なし |
 | `make dogfood-local` | fresh temporary clone/copy で setup/check と local-provider lifecycle を実行する maintainer acceptance runner | temporary repository と gitignored artifact のみ。network と認証済み agent CLI が必要なため `make check` 外 |
 
 `package.json` scripts は同じ個別責務を直接実行し、Makefile は順序付けと名前の安定した
@@ -282,11 +282,13 @@ git diff --exit-code
    Vitest JSON report を測定し、Zod validation 済み artifact と verdict を atomic に保存する。
 8. TypeScript 版 `issue-start` は feature worktree 内で `make setup` を完了してから PASS とし、
    baseline 以降を worktree-local dependency だけで offline 実行可能にする。
-9. Python starter の consumer skill set を一覧比較し、maintainer-only skills と Python
-   `baseline-precheck` skill を除いた上で
-   TypeScript command/path/test 語彙へ変換する。symlink と Python 固有語彙の残存を script で
-   決定的に検査する。tracked workflow の全 `skill:` が対応する `SKILL.md` へ解決することも
-   同じ gate で検証する。
+9. Python starter の consumer skill/docs/template を一覧比較し、maintainer-only skills と
+   Python `baseline-precheck` skill を除いた上で、TypeScript command/path/test 語彙と
+   workflow path（`.kaji/wf/official/**` → `.kaji/wf/custom/**`）を変換する。symlink、
+   Python 固有語彙、tracked docs/skills/template 内の official path 残存を決定的に検査する。
+   tracked workflow の全 `skill:` が対応する `SKILL.md` へ解決することも同じ gate で検証する。
+   upstream file の行番号は consumer 文書へ固定せず、step ID / status / marker など安定した
+   契約を参照する。
 10. `scripts/set-agent.ts` は全 workflow を memory 上で parse / validate / transform してから
   一括反映する。途中失敗時は 1 file も変更せず、同じ target への再実行は no-op にする。
   変換 target は Claude / Codex の 2 種類に限定する。kaji v0.18.0 で廃止済みの Gemini と、
@@ -304,7 +306,9 @@ git diff --exit-code
 #### Workflow 配置
 
 starter の実行可能 workflow は次の 5 本とし、いずれも consumer 所有の custom workflow
-として upstream v0.18.0 workflow の provenance と意図的差分を header/docs に持つ。
+とする。payload の直接 baseline は現行 Python starter の 5 workflow、kaji release 追随時の
+比較元は upstream v0.18.0 official workflow とし、双方の commit/tag と意図的差分を
+header/docs に持つ。
 
 - `.kaji/wf/custom/dev/dev.yaml`
 - `.kaji/wf/custom/dev/dev-thorough.yaml`
@@ -312,8 +316,10 @@ starter の実行可能 workflow は次の 5 本とし、いずれも consumer �
 - `.kaji/wf/custom/local/dev-local.yaml`
 - `.kaji/wf/custom/local/docs-local.yaml`
 
-dev 3 本は upstream の `review-design -> baseline -> implement` topology を維持し、
-`baseline` だけを次の direct exec 契約へ置き換える。
+dev 3 本は Python starter payload の topology を基準に
+`review-design -> baseline -> implement` を維持し、`baseline` を次の direct exec 契約へ
+置き換える。kaji official に存在する `review-poll` は初期 payload に同梱せず、外部 review
+bot を設定済みの利用者向け option とする点も意図的差分に列挙する。
 
 ```yaml
 - id: baseline
@@ -324,7 +330,9 @@ dev 3 本は upstream の `review-design -> baseline -> implement` topology を�
     ABORT: end
 ```
 
-この step に `agent`、`model`、`effort`、`resume`、`inject_verdict` は設定しない。
+この step は agent 専用 field を一切持たない。現行 validator が禁止する `agent`、
+`model`、`effort`、`resume`、`inject_verdict`、`max_budget_usd` を検査し、将来 field が
+追加された場合も exec step の validator 契約へ追随する。
 `.kaji/wf/official/**` は kaji 所有であり、TypeScript 固有 topology を直接変更した copy を
 official path に置かない。managed update では upstream official diff を調査し、
 custom workflow へ反映、package 更新で吸収、不要のいずれかを記録する。
@@ -333,19 +341,33 @@ custom workflow へ反映、package 更新で吸収、不要のいずれかを�
 
 `scripts/baseline-precheck.ts` の入力は runner が注入する `KAJI_ISSUE_ID`、
 `KAJI_BRANCH_NAME`、`KAJI_DEFAULT_BRANCH`、`KAJI_PROVIDER_TYPE`、
-`KAJI_WORKTREE_DIR`、`KAJI_VERDICT_PATH` であり、すべて Zod で検証する。測定前に current
-git root と worktree、tracked/untracked を含む clean status、default branch 後の
-non-design commit 不在、Node/npm pin、lock/setup state を fail-closed で確認する。
+`KAJI_WORKTREE_DIR`、`KAJI_VERDICT_PATH` であり、すべて Zod で検証する。
 
-測定は shell 文字列を介さない argv 配列で tag audit を先行し、続いて local dependency
-だけを使う `npm exec --offline -- vitest run --reporter=json --outputFile=<ignored-path>` を
-実行する。human stdout は parse せず、built-in JSON report を Zod schema で検証する。
+kaji v0.18.0 の exec process cwd は workflow の起動側 checkout（通常 main worktree）であり、
+`KAJI_WORKTREE_DIR` と一致することを要求しない。script entry
+`scripts/baseline-precheck.ts` とその `zod` import は起動側 checkout から解決されるため、
+main worktree も `make setup` 済みでなければならない。一方、測定対象の正本 root は
+`KAJI_WORKTREE_DIR` とし、次を fail-closed で検査する。
 
-正本 artifact は `.kaji-artifacts/baseline/baseline.json` に same-directory temp + rename で
-atomic write し、schema version 1、runner、issue/branch/measured commit/time、実行 argv と
-exit code、test file/test の total/passed/failed/skipped/todo、status/stop reason、
-project-relative failure identity と sanitized message head を持つ。raw Vitest JSON は ignored
-diagnostic file に限定する。
+1. `KAJI_WORKTREE_DIR` が実在する absolute path で、`git -C <worktree> rev-parse
+   --show-toplevel` の結果と絶対パスで一致する。
+2. `git -C <worktree> branch --show-current` が `KAJI_BRANCH_NAME` と一致する。
+3. 同 worktree が tracked/untracked を含め clean で、default branch 後に
+   `draft/design/**` 以外の implementation commit がない。
+4. 同 worktree の Node/npm pin、lockfile、`node_modules` setup state が契約どおりである。
+
+すべての git / npm subprocess は shell 文字列を介さない argv 配列と
+`cwd=KAJI_WORKTREE_DIR`（git は同値の `git -C` でも可）で実行する。tag audit を先行し、
+続いて feature worktree の local dependency だけを使う
+`npm exec --offline -- vitest run --reporter=json --outputFile=<raw-report-path>` を実行する。
+human stdout は parse せず、built-in JSON report を Zod schema で検証する。
+
+正本 artifact は `KAJI_WORKTREE_DIR/.kaji-artifacts/baseline/baseline.json`、raw report は
+同 worktree 配下の ignored diagnostic path とし、process cwd からの相対 path で解決しない。
+artifact は same-directory temp + rename で atomic write し、schema version 1、runner、
+issue/branch/measured commit/time、実行 argv と exit code、test file/test の
+total/passed/failed/skipped/todo、status/stop reason、project-relative failure identity と
+sanitized message head を持つ。
 
 - `clean`: tag audit と Vitest が成功し、report `success=true`、failure 0、total test > 0、
   summary 整合。唯一の `PASS`。
@@ -417,12 +439,12 @@ worktree 内で `make setup` を完了してから PASS とする。`node_module
 | toolchain | Node 24.18.1、npm 11.16.0、TypeScript 6.0.3、native type stripping、ESM/NodeNext、`tsc` build | Issue #391「Runtime」「TypeScript の実行・build 契約」および公式一次情報 | no-emit と emit の責務、dev/build/start の観測点を分離した |
 | quality stack | typed ESLint、Prettier、Vitest/V8、exactly-one S/M/L tag、80% coverage、Zod、`make check` | Issue #391「Lint」「Test」「品質 gate」 | effective tag audit、negative test、non-mutating gate の検証面を定義した |
 | kaji dependency isolation | `tools/kaji` uv project + `scripts/kaji` wrapper | Issue #391「kaji の分離と workflow」 | docs/skills/Makefile を wrapper へ統一し lock mode で実行する責務を定義した |
-| TypeScript baseline | pytest 固定 baseline を使わず、同じ step ID/topology の direct exec で clean-only Vitest baseline を測定する | Issue #391「TypeScript 専用 baseline 契約」「重要判断」および 2026-07-30 人間決定 | runner env、測定 guard、schema v1 artifact、clean/blocked/invalid、ancestor reuse、verdict-last の入出力を定義した |
-| workflow 所有権 | 実行可能な 5 workflow は starter-owned `.kaji/wf/custom/**` に置き、official workflow を標準入口にしない | Issue #391「Workflow の所有権と配置」、`docs/dev/workflow-authoring.md`、ADR 011 | upstream provenance と意図的差分、3 dev workflow の baseline direct exec を固定した |
+| TypeScript baseline | pytest 固定 baseline を使わず、同じ step ID/topology の direct exec で clean-only Vitest baseline を測定する | Issue #391「TypeScript 専用 baseline 契約」「重要判断」および 2026-07-30 人間決定 | exec cwd と測定 root を分離し、全 git/npm/report/artifact を `KAJI_WORKTREE_DIR` 基準にした。runner env、guard、schema v1、clean/blocked/invalid、ancestor reuse、verdict-last も定義した |
+| workflow 所有権 | 実行可能な 5 workflow は starter-owned `.kaji/wf/custom/**` に置き、official workflow を標準入口にしない | Issue #391「Workflow の所有権と配置」、`docs/dev/workflow-authoring.md`、ADR 011 | Python starter payload と kaji official の二つの provenance、baseline direct exec、review-poll 非同梱、official path 参照 0 件を固定した |
 | worktree dependency state | TypeScript 版 `issue-start` が feature worktree ごとに `make setup` を完了し、dependency state を symlink 共有しない | Issue #391「Worktree setup 契約」 | provider overlay と Node/kaji/tool environment の共有可否、bootstrap/offline 境界を定義した |
-| supply-chain gate | exact engine/install-script policy、checksum-pinned actionlint、full-SHA Actions を初期 gate に含める | Issue #391「Runtime」「CI と supply-chain」および npm/GitHub/actionlint 一次情報 | setup 時の network install と check 時の offline validation、positive/negative 検査を分離した |
+| supply-chain gate | exact engine/install-script policy、checksum-pinned actionlint、full-SHA Actions を初期 gate に含める | Issue #391「Runtime」「CI と supply-chain」および npm/GitHub/actionlint 一次情報 | setup 時の network install と check 時の offline validation を分離し、全契約の恒久 Medium positive/negative fixture を定義した |
 | agent 変換対象 | 初期版は Claude / Codex の 2 種類。Gemini / Antigravity は暗黙変換せず mutation 前に拒否 | Issue #391「kaji の分離と workflow」「重要判断」の 2026-07-30 人間決定。根拠は v0.18.0 `kaji_harness/agents.py`、validator tests、現行 Python starter `scripts/set_agent.py` | 全 workflow の parse / validate 後に一括反映する atomic 境界、非対応 target の negative test、2 回目 no-op の検査を定義した |
-| skill baseline | Python starter の consumer skills を TypeScript 用に汎用化し、maintainer skills と Python baseline skill を除外 | Issue #391「Skills、agent instructions、docs」 | 8 consumer skill の clean-only validator 適応、nested reference を含む Python 語彙、workflow skill 解決、frontmatter、per-skill symlink の決定的検査を定義した |
+| skill baseline | Python starter の consumer skills を TypeScript 用に汎用化し、maintainer skills と Python baseline skill を除外 | Issue #391「Skills、agent instructions、docs」 | 8 consumer skill の clean-only validator 適応、nested reference を含む Python 語彙と official workflow path、workflow skill 解決、frontmatter、per-skill symlink の決定的検査を定義した |
 | managed maintenance | 既存の言語非依存 update/review/release 運用を再利用 | Issue #391「継続保守」、Issue #341、`starter-sync-runbook.md` | runbook 表、Release notes 例、回帰 test の同期点を定義した |
 | dogfood evidence | local と GitHub の fresh-state 結果を SHA/version/command/artifact/発見事項で記録 | Issue #391「Dogfooding と証跡」、2026-07-30 人間承認 | local は workflow 内、GitHub/admin は事後確認とし、secret/transcript を除外した |
 | publication gate | candidate review までは workflow 内、repository creation/settings/push/tag/Release は人間承認後 | Issue #391「外部公開操作」、`workflow_completion_criteria.md`、Issue #341 | 公開前・atomic failure・公開後 defect の rollback 境界を定義した |
@@ -471,7 +493,17 @@ corpus として持つ。agent / external state を要する lifecycle は Vites
   fixture を非 0 にすること。
 - temporary Git repository と stub command/report を使い、baseline の clean / blocked /
   invalid、dirty worktree、non-design commit guard、stale/missing artifact、破損/矛盾 JSON、
-  measured commit ancestor reuse、verdict-last、child exit code 優先を検証すること。
+  measured commit ancestor reuse、verdict-last、child exit code 優先を検証すること。exec の
+  process cwd と `KAJI_WORKTREE_DIR` が異なる fixture を必須とし、全 git/npm subprocess、
+  raw report、artifact が feature worktree だけを参照することを spy と path assertion で守る。
+- supply-chain gate の positive fixture と次の negative fixture を repository に恒久化し、
+  `make check` の Medium corpus で実行すること。
+  - pin と一致する `devEngines` / strict engine・peer policy / version-pinned
+    `allowScripts` / actionlint checksum / full-SHA action reference は通る。
+  - Node/npm `devEngines` 不一致、`engine-strict` / `strict-peer-deps` の欠落・無効化、
+    未承認 install script、`allowScripts` の package version 不一致は fail-loud。
+  - actionlint binary の欠落・checksum 不一致・unsupported OS/arch と、GitHub Action の
+    mutable tag 参照は fail-loud。
 - temporary copy の全 workflow に `scripts/set-agent.ts` を適用し、Claude / Codex の
   各変換が valid、2 回目 no-op、途中の不正 YAML では全 file unchanged になること。
   `gemini` / `antigravity` / 未知 target は全 file unchanged のまま非 0 となり、Gemini から
@@ -482,6 +514,9 @@ corpus として持つ。agent / external state を要する lifecycle は Vites
   temporary filesystem の broken fixture を決定的に拒否すること。
 - tracked workflow の全 `skill:` が `.claude/skills/<name>/SKILL.md` へ解決し、
   frontmatter `name` と directory が一致すること。direct `exec:` は skill 解決対象外とする。
+- tracked README / docs / AGENTS / CLAUDE / skill / shared reference / template に
+  `.kaji/wf/official/` 参照が 0 件で、custom 5 本への参照が実在すること。Python starter
+  fixture にある official path と行番号付き workflow 引用を negative fixture として拒否する。
 - `scripts/kaji` が `tools/kaji` project と lock mode を使い、引数と exit code を
  透過的に委譲すること。実 GitHub API は呼ばない。
 - kaji 本体の `tests/test_starter_skills.py` で runbook と Release notes 例の managed starter
@@ -521,14 +556,16 @@ agent 応答を必要とするため daily/required gate から分離する。�
  property、unused、fallthrough、override、import extension の退行を gate で拒否する。
 - baseline corpus は clean status だけを PASS とし、known-failure tolerance や compare mode へ
   縮退しない。後続 skill は `--validate` で artifact/ancestor/issue/branch を再検査する。
+- supply-chain と workflow-path の positive/negative fixture は `make check` が継続実行する
+  恒久 Medium test であり、変更固有検証へ格下げしない。
 
 ### 変更固有検証
 
 - candidate と kaji worktree の双方で docs link check。
 - exact version specs、lockfileVersion 3、`npm ci` / `uv sync --locked` の再現性。
-- actionlint binary の platform allowlist、SHA-256、atomic install、不在時の offline fail-loud。
-- GitHub Actions の syntax、PR/main trigger、read-only permissions、full SHA、
-  `persist-credentials: false`、lockfile install、`make check` 呼出し。
+- GitHub Actions の実 file が恒久 fixture で守られた syntax、PR/main trigger、
+  read-only permissions、full SHA、`persist-credentials: false`、lockfile install、
+  `make check` 呼出しを満たすこと。
 - Dependabot の npm / github-actions weekly entry。
 - candidate commit の tracked file 一覧に `.env`、credential、coverage、dist、
   `.kaji/artifacts/`、local overlay が含まれないこと。
@@ -577,12 +614,12 @@ local dogfood までを実施し、workflow 後は実 GitHub evidence で補完�
 |---|---|---|
 | `README.md` / `README.ja.md` | あり | Python だけでなく TypeScript starter も starting point として案内する |
 | `docs/README.md` | あり | TypeScript starter 英日 guide を Tutorials に追加する |
-| `docs/guides/typescript-starter.md` / `.ja.md` | 新規 | template 作成、setup、provider、agent、customization、troubleshooting、TypeScript 7 非採用の tool compatibility、外部 bot 設定済み利用者向け `review-poll` option の公開導線 |
+| `docs/guides/typescript-starter.md` / `.ja.md` | 新規 | template 作成、setup、provider、agent、customization、troubleshooting、TypeScript 7 非採用の tool compatibility（`@typescript/typescript6` alias 併用を初期版で採らない理由を含む）、外部 bot 設定済み利用者向け `review-poll` option の公開導線 |
 | `docs/operations/release/starter-sync-runbook.md` | あり | managed starters 表に TypeScript repository と default local path を登録する |
 | `.claude/skills/release/SKILL.md` | あり | Release notes の repository 別 PENDING 例を runbook の全 managed starters と一致させる |
-| starter `README.md` / `README.ja.md` | 新規 | pristine で動く入口、変更 checklist、GitHub/local provider、quality commands |
-| starter `docs/dev/` | 新規 | change/gate、testing、Git/worktree、kaji workflow、completion criteria、baseline |
-| starter `docs/reference/` | 新規 | configuration と TypeScript standards。TypeScript 6.0.3 baseline、TypeScript 7 の API / typescript-eslint 互換性による非採用理由を永続化 |
+| starter `README.md` / `README.ja.md` | 新規 | pristine で動く入口、変更 checklist、GitHub/local provider、custom workflow path、quality commands |
+| starter `docs/dev/` | 新規 | change/gate、testing、Git/worktree、custom workflow、completion criteria、baseline。upstream file の行番号を固定参照しない |
+| starter `docs/reference/` | 新規 | configuration と TypeScript standards。TypeScript 6.0.3 baseline、TypeScript 7 の API / typescript-eslint 互換性と `@typescript/typescript6` alias 運用コストによる非採用理由を永続化 |
 | starter `AGENTS.md` / `CLAUDE.md` | 新規 | 最小不変条件と docs routing、Claude import |
 | `docs/adr/` | なし | kaji core architecture は変更せず、starter 固有の技術選定は人間決定済み Issue、starter TypeScript standards、公開 guide に永続化する |
 | `docs/ARCHITECTURE.md` | なし | kaji runtime / module dependency graph は変更しない |
@@ -601,7 +638,10 @@ local dogfood までを実施し、workflow 後は実 GitHub evidence で補完�
  test/coverage、commands、kaji isolation、custom workflow/TypeScript baseline、
  worktree setup、skills/docs、CI、dogfood の全契約を実装・検証責務へ対応付けた。
 - TypeScript baseline の入力、測定 guard、schema v1 artifact、clean/blocked/invalid、
-  ancestor reuse、verdict-last と、workflow/skill の検査境界を定義した。
+  `KAJI_WORKTREE_DIR` 基準の subprocess/path 解決、ancestor reuse、verdict-last と、
+  workflow/skill の検査境界を定義した。
+- supply-chain と official-to-custom path 移行を `make check` 内の恒久 Medium
+  positive/negative test として定義した。
 - workflow 内条件と `### ワークフロー完了後の確認項目` の分離は
   `docs/dev/workflow_completion_criteria.md` の再実行可能性基準と一致している。
 
@@ -638,7 +678,8 @@ local dogfood までを実施し、workflow 後は実 GitHub evidence で補完�
 | Vitest coverage | https://vitest.dev/guide/coverage | V8 coverage provider と include/reporting を構成できる。threshold 80% は Issue の品質決定 |
 | Zod | https://zod.dev/ | untrusted data を schema で parse し validated/type-safe な値を得る TypeScript-first validation。`strict` が要件 |
 | npm ci | https://docs.npmjs.com/cli/commands/npm-ci | lockfile に基づく clean install を CI/再現 setup に使い、dependency graph を install 時に更新しない |
-| npm package.json | https://docs.npmjs.com/cli/configuring-npm/package-json/ | `engines` / `devEngines` と install-script allowlist を tracked package policy として検査する根拠 |
+| npm package.json v11 | https://docs.npmjs.com/cli/v11/configuring-npm/package-json | `engines` / `devEngines` と `onFail` の tracked runtime policy を検査する根拠 |
+| npm 11.16.0 allowScripts 実装 | https://github.com/npm/cli/blob/v11.16.0/lib/utils/resolve-allow-scripts.js / https://github.com/npm/cli/blob/v11.16.0/lib/utils/strict-allow-scripts-preflight.js | `allow-scripts` / version pin と strict preflight の pin 対象実装。未承認または version 不一致 fixture の期待挙動を固定する |
 | actionlint | https://github.com/rhysd/actionlint | GitHub Actions workflow の project-local static validation。Issue が v1.7.12 と checksum install を固定 |
 | GitHub Actions secure use | https://docs.github.com/en/actions/reference/security/secure-use | full-length commit SHA が action の immutable release を参照する方法。token permission 最小化も要求する |
 | GitHub template repositories | https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template | read access のある利用者が同じ directory/file 構造から履歴非共有の repository を生成できる |
@@ -647,7 +688,7 @@ local dogfood までを実施し、workflow 後は実 GitHub evidence で補完�
 | workflow completion criteria | `docs/dev/workflow_completion_criteria.md` | external admin / credential state を workflow 後の確認へ分離し、workflow 内では静的検証を行う |
 | workflow ownership | `docs/dev/workflow-authoring.md` / `docs/adr/011-workflow-overlay-single-layer.md` | official は kaji 所有、custom は利用者所有。v0.18.0 に topology overlay はなく、`skill` から `exec` への差は custom workflow で保持する |
 | kaji v0.18.0 pytest baseline | `kaji_harness/scripts/baseline_precheck.py` / `kaji_harness/baseline.py` | root `.venv/bin/python -m pytest`、pytest 固有 failure schema と exit 分類に固定され、TypeScript-only root へ転用できない |
-| kaji v0.18.0 direct exec | `kaji_harness/script_exec.py` | subprocess は argv + `shell=False` で起動し、child nonzero exit を stdout verdict より優先して `ScriptExecutionError` とする |
+| kaji v0.18.0 direct exec | `kaji_harness/commands/run.py` / `kaji_harness/runner.py` / `kaji_harness/workflow.py` / `kaji_harness/script_exec.py` | exec cwd は config repo root が既定で、step workdir は absolute literal のみ。subprocess は argv + `shell=False` で起動し child nonzero exit を verdict より優先するため、測定処理は `KAJI_WORKTREE_DIR` を明示 cwd/root にする |
 | kaji v0.18.0 agent capability | https://github.com/apokamo/kaji/blob/v0.18.0/kaji_harness/agents.py / https://github.com/apokamo/kaji/blob/v0.18.0/tests/test_workflow_validator.py | 有効 agent は Claude / Codex / Antigravity。Gemini は拒否され、Antigravity は `supports_resume: false` のため `resume:` を持つ workflow に使用できない |
 | Python starter | `/home/aki/dev/kaji/kaji-starter-python` / https://github.com/apokamo/kaji-starter-python | consumer workflow/skills/docs、agent conversion、Make targets、managed starter の既存 baseline。Python 固有 tool/path はコピーしない |
 | kamo2 TypeScript sources | `/home/aki/dev/kamo2/apps/web/{package.json,tsconfig.json,eslint.config.mjs,vitest.config.ts}` | flat lint、Vitest tags、Zod 等の運用実績を参照する一方、Next.js/React/bundler 固有設定は starter へ持ち込まない |
