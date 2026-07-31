@@ -14,13 +14,15 @@ Prerequisites are Linux, macOS, or WSL2; Node 24.18.1; npm 11.16.0; uv; and
 at least one supported agent CLI.
 
 1. Select **Use this template**, clone the generated repository, and run
-   `make setup && make check`.
+   `make setup`.
 2. Change the `starter-app` package name and `.kaji/config.toml` repository
    identity together. The pristine defaults are valid, but a partial identity
    change fails the static gate.
-3. Keep the exact lockfiles and commit the initial setup before starting a
+3. Run `make check`, and re-run it after every later identity edit so the
+   static gate always inspects the state you are about to commit.
+4. Keep the exact lockfiles and commit the initial setup before starting a
    workflow.
-4. Use `./scripts/kaji` for every kaji command.
+5. Use `./scripts/kaji` for every kaji command.
 
 GitHub development starts with `.kaji/wf/custom/dev/dev.yaml`. For a local
 trial, run `./scripts/kaji local init`, create/start a local issue, and select

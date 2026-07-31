@@ -11,12 +11,14 @@ application starter です。
 
 Linux / macOS / WSL2、Node 24.18.1、npm 11.16.0、uv、対応 agent CLI が前提です。
 
-1. **Use this template** で repository を作成し、clone 後に
-   `make setup && make check` を実行します。
+1. **Use this template** で repository を作成し、clone 後に `make setup` を
+   実行します。
 2. `starter-app` package 名と `.kaji/config.toml` の repository identity を
    まとめて変更します。既定値一式は有効ですが、部分変更は static gate が拒否します。
-3. exact lockfile を維持し、workflow 前に初期設定を commit します。
-4. kaji は常に `./scripts/kaji` から起動します。
+3. `make check` を実行します。以降 identity を変更したときも、commit 前に必ず
+   `make check` を再実行し、static gate に最終状態を検査させます。
+4. exact lockfile を維持し、workflow 前に初期設定を commit します。
+5. kaji は常に `./scripts/kaji` から起動します。
 
 GitHub 開発は `.kaji/wf/custom/dev/dev.yaml`、local 試行は
 `./scripts/kaji local init` 後に `.kaji/wf/custom/local/dev-local.yaml` を使います。
