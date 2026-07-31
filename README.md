@@ -241,11 +241,12 @@ copy it into `custom/**` instead (see
 [workflow-authoring.md](docs/dev/workflow-authoring.md#ファイル配置)). This repository
 ships `.kaji/wf/official/dev.yaml` and `.kaji/wf/official/docs.yaml` as the official
 GitHub-backed workflow set, plus repository-specific variants such as
-`.kaji/wf/custom/dev/dev-thorough.yaml`. To start a new Python project with
-these workflows preconfigured, create it from the
-[kaji-starter-python](https://github.com/apokamo/kaji-starter-python) template
-repository and follow the
-[Python Starter Guide](docs/guides/python-starter.md).
+`.kaji/wf/custom/dev/dev-thorough.yaml`. To start a new project with these
+workflows preconfigured, use the
+[Python starter](https://github.com/apokamo/kaji-starter-python) or the
+[TypeScript starter](https://github.com/apokamo/kaji-starter-typescript).
+Setup details are in the [Python Starter Guide](docs/guides/python-starter.md)
+and [TypeScript Starter Guide](docs/guides/typescript-starter.md).
 
 The `dev.yaml` example assumes that a GitHub issue already exists, required
 skills are available, selected agent CLIs are installed, and `/issue-create` has

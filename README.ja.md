@@ -224,11 +224,12 @@ workflow fileは各リポジトリの `.kaji/wf/` から実行します。配置
 コピーして管理してください（正本:
 [workflow-authoring.md](docs/dev/workflow-authoring.md#ファイル配置)）。このリポジトリでは
 GitHub前提の公式workflowとして `.kaji/wf/official/dev.yaml`、`.kaji/wf/official/docs.yaml` を、
-リポジトリ固有のvariantとして `.kaji/wf/custom/dev/dev-thorough.yaml` などを置いています。これらのworkflowを設定済みの新規Python
-プロジェクトを始めるには、
-[kaji-starter-python](https://github.com/apokamo/kaji-starter-python)
-template repositoryからリポジトリを作成し、
-[Python Starterガイド](docs/guides/python-starter.ja.md)に従ってください。
+リポジトリ固有のvariantとして `.kaji/wf/custom/dev/dev-thorough.yaml` などを置いています。
+設定済みの新規プロジェクトには
+[kaji-starter-python](https://github.com/apokamo/kaji-starter-python) または
+[kaji-starter-typescript](https://github.com/apokamo/kaji-starter-typescript)
+を使い、[Python Starterガイド](docs/guides/python-starter.ja.md) または
+[TypeScript Starterガイド](docs/guides/typescript-starter.ja.md)に従ってください。
 
 `dev.yaml` の例は、GitHub Issueが存在し、必要なskillがあり、選択するagent CLIが使え、
 `/issue-create` が完了していることを前提にします。`issue-start` はworkflow内で実行します。
