@@ -195,7 +195,7 @@ steps:
       PASS: end
 """
 
-INJECT_VERDICT_TWICE_YAML = """\
+REMOVED_INJECT_VERDICT_YAML = """\
 name: test
 description: test workflow
 execution_policy: auto
@@ -205,32 +205,8 @@ steps:
     agent: claude
     inject_verdict: true
     on:
-      PASS: step2
-  - id: step2
-    skill: test-skill
-    agent: claude
-    inject_verdict: true
-    on:
       PASS: end
-"""
-
-INJECT_VERDICT_FALSE_TWICE_YAML = """\
-name: test
-description: test workflow
-execution_policy: auto
-steps:
-  - id: step1
-    skill: test-skill
-    agent: claude
-    inject_verdict: false
-    on:
-      PASS: step2
-  - id: step2
-    skill: test-skill
-    agent: claude
-    inject_verdict: false
-    on:
-      PASS: end
+      ABORT: end
 """
 
 EXEC_SCRIPT_SKILL_YAML = """\
@@ -423,10 +399,10 @@ class TestCmdValidateSmall:
         assert "Validation failed" in captured.err
 
     @pytest.mark.small
-    def test_invalid_inject_verdict_type_exit_1(
+    def test_removed_inject_verdict_key_with_non_bool_value_exit_1(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """inject_verdict with non-boolean value should fail validation."""
+        """非 bool 値でも旧 'must be a boolean' 型検証ではなく migration error になる（#383）。"""
         f = tmp_path / "bad_inject.yaml"
         f.write_text(INVALID_INJECT_VERDICT_YAML)
         exit_code = _cmd_validate_with_args(str(f))
@@ -434,6 +410,7 @@ class TestCmdValidateSmall:
         captured = capsys.readouterr()
         assert "✗" in captured.err
         assert "inject_verdict" in captured.err
+        assert "must be a boolean" not in captured.err
 
     @pytest.mark.small
     def test_missing_skill_exit_1(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -704,49 +681,32 @@ class TestCmdValidateMedium:
         assert "Step 'orphan' is not reachable from the first step 'root'" in captured.err
 
     @pytest.mark.medium
-    def test_inject_verdict_true_twice_emits_single_stderr_line(
+    def test_removed_inject_verdict_key_exit_1_with_migration_error(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """2 件の inject_verdict: true があっても stderr の warning 行は 1 行（完了条件 4・5）。"""
+        """stale 'inject_verdict' キーは L1 parse で migration error になり exit 1（#383）。"""
         f = tmp_path / "inject.yaml"
-        f.write_text(INJECT_VERDICT_TWICE_YAML)
+        f.write_text(REMOVED_INJECT_VERDICT_YAML)
         _create_skill(tmp_path, "test-skill")
         _create_config(tmp_path)
 
         exit_code = _cmd_validate_with_args(str(f))
 
-        assert exit_code == 0
+        assert exit_code == 1
         captured = capsys.readouterr()
-        stderr_lines = captured.err.splitlines()
-        assert len(stderr_lines) == 1
-        assert str(f) in stderr_lines[0]
-        assert "inject_verdict" in stderr_lines[0]
-        assert "✓" in captured.out
+        assert "✗" in captured.err
+        assert "inject_verdict" in captured.err
+        assert "was removed from the workflow step schema" in captured.err
 
     @pytest.mark.medium
-    def test_inject_verdict_false_twice_emits_single_stderr_line(
+    def test_exec_script_warning_path_with_newline_stays_single_line(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """明示 false のみの workflow でも対象範囲の是正が CLI 面まで通る。"""
-        f = tmp_path / "inject_false.yaml"
-        f.write_text(INJECT_VERDICT_FALSE_TWICE_YAML)
-        _create_skill(tmp_path, "test-skill")
-        _create_config(tmp_path)
-
-        exit_code = _cmd_validate_with_args(str(f))
-
-        assert exit_code == 0
-        captured = capsys.readouterr()
-        assert len(captured.err.splitlines()) == 1
-
-    @pytest.mark.medium
-    def test_inject_verdict_warning_path_with_newline_stays_single_line(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """改行を含む workflow path でも deprecation warning は 1 行のまま（review #381 Must Fix）。"""
+        """改行を含む workflow path でも warning は 1 行のまま（review #381 Must Fix）。
+        warning producer は inject_verdict 廃止に伴い exec_script warning へ retarget する（#383）。"""
         f = tmp_path / ("workflow" + "\n" + "name.yaml")
-        f.write_text(INJECT_VERDICT_TWICE_YAML)
-        _create_skill(tmp_path, "test-skill")
+        f.write_text(EXEC_SCRIPT_SKILL_YAML)
+        _create_skill_with_exec_script(tmp_path, "poll-skill")
         _create_config(tmp_path)
 
         exit_code = _cmd_validate_with_args(str(f))
@@ -757,7 +717,7 @@ class TestCmdValidateMedium:
         assert len(stderr_lines) == 1
         assert "workflow" in stderr_lines[0]
         assert "name.yaml" in stderr_lines[0]
-        assert "inject_verdict" in stderr_lines[0]
+        assert "exec_script" in stderr_lines[0]
 
     @pytest.mark.medium
     def test_no_inject_verdict_no_stderr(
@@ -928,12 +888,11 @@ class TestCLIValidateLarge:
 
     @pytest.mark.large
     @pytest.mark.large_local
-    def test_kaji_validate_inject_verdict_warning_is_single_stderr_line(
-        self, tmp_path: Path
-    ) -> None:
-        """実 CLI の entry point 経由でも stderr の warning が 1 行であること（#381）。"""
+    def test_kaji_validate_rejects_removed_inject_verdict_key(self, tmp_path: Path) -> None:
+        """実 CLI の entry point 経由でも、stale 'inject_verdict' キーは
+        returncode 1 + stderr の migration error で止まる（#383）。"""
         f = tmp_path / "inject.yaml"
-        f.write_text(INJECT_VERDICT_TWICE_YAML)
+        f.write_text(REMOVED_INJECT_VERDICT_YAML)
         _create_skill(tmp_path, "test-skill")
         _create_config(tmp_path)
 
@@ -944,19 +903,20 @@ class TestCLIValidateLarge:
             timeout=30,
         )
 
-        assert result.returncode == 0
-        assert len(result.stderr.splitlines()) == 1
+        assert result.returncode == 1
         assert "inject_verdict" in result.stderr
+        assert "was removed from the workflow step schema" in result.stderr
 
     @pytest.mark.large
     @pytest.mark.large_local
-    def test_kaji_validate_inject_verdict_warning_path_with_newline_stays_single_line(
+    def test_kaji_validate_exec_script_warning_path_with_newline_stays_single_line(
         self, tmp_path: Path
     ) -> None:
-        """実 CLI の entry point 経由でも、改行を含む path で warning が 1 行のまま（review #381 Must Fix）。"""
+        """実 CLI の entry point 経由でも、改行を含む path で warning が 1 行のまま
+        （review #381 Must Fix）。producer は exec_script warning へ retarget する（#383）。"""
         f = tmp_path / ("workflow" + "\n" + "name.yaml")
-        f.write_text(INJECT_VERDICT_TWICE_YAML)
-        _create_skill(tmp_path, "test-skill")
+        f.write_text(EXEC_SCRIPT_SKILL_YAML)
+        _create_skill_with_exec_script(tmp_path, "poll-skill")
         _create_config(tmp_path)
 
         result = subprocess.run(
@@ -970,7 +930,7 @@ class TestCLIValidateLarge:
         assert len(result.stderr.splitlines()) == 1
         assert "workflow" in result.stderr
         assert "name.yaml" in result.stderr
-        assert "inject_verdict" in result.stderr
+        assert "exec_script" in result.stderr
 
 
 # ============================================================

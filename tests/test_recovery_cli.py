@@ -443,10 +443,11 @@ class TestCmdRecover:
         assert expected in capsys.readouterr().err
         assert not (run_dir / RECOVERY_FILE).exists()
 
-    def test_recover_workflow_with_inject_verdict_emits_no_deprecation_warning(
+    def test_recover_rejects_removed_inject_verdict_key(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``kaji recover`` は完了条件の対象外経路であり warning を出力しない（方針 3.5 #3）。"""
+        """stale 'inject_verdict' キーは L1 parse で migration error になり、recover を
+        止める（#383）。CLI 経路は EXIT_DEFINITION_ERROR + RECOVERY_FILE 未生成が観測境界（G4-cli）。"""
         repo = _repo(tmp_path)
         run_dir = self._failed_run(repo)
         workflow = repo / "wf-inject.yaml"
@@ -462,6 +463,6 @@ class TestCmdRecover:
 
         rc = main(["recover", str(workflow), "99", "--workdir", str(repo)])
 
-        assert rc == EXIT_OK
-        assert "inject_verdict" not in capsys.readouterr().err
-        assert (run_dir / RECOVERY_FILE).exists()
+        assert rc == EXIT_DEFINITION_ERROR
+        assert "inject_verdict" in capsys.readouterr().err
+        assert not (run_dir / RECOVERY_FILE).exists()

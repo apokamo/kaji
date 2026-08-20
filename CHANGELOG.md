@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### BREAKING CHANGE
+
+- **`inject_verdict`** (workflow step field) has been removed from the engine
+  and the public workflow schema (apokamo/kaji#310, #383).
+  - **Broken contract**: workflow steps that declare `inject_verdict` (any
+    value, including `false`) no longer parse. `kaji validate`, `kaji run`,
+    `kaji recover`, and series member validation all stop with an explicit
+    migration error instead of silently ignoring the field or injecting
+    `previous_verdict` into the step prompt. `resume`-based `previous_verdict`
+    injection is unchanged.
+  - **How to check whether you are affected**: run
+    `rg -n 'inject_verdict' .kaji/wf/` in your repository. Zero hits means you
+    are not affected. You can also confirm with
+    `find .kaji/wf -name '*.yaml' -exec kaji validate {} +` (recurses into
+    every depth regardless of shell `globstar` settings, unlike
+    `.kaji/wf/**/*.yaml`); an affected file fails with the migration error.
+  - **How to migrate**: for an uncustomized managed workflow, refresh it from
+    the upstream copy. For a customized workflow, remove the `inject_verdict`
+    line from the affected step. If that step needs the prior step's verdict,
+    replace it with `resume: <step-id>` for same-agent session continuation,
+    or call `kaji issue resolve-verdict <issue-id> --step <step-id>` to read
+    the prior verdict explicitly. See `docs/dev/workflow-authoring.md` §
+    削除済みフィールド for details, and issue #383 and its PR for the
+    contract removal.
+
 ## [0.18.0] - 2026-07-25
 
 This release adds Antigravity CLI support and a managed starter synchronization

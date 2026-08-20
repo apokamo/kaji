@@ -31,7 +31,6 @@ steps:
   - id: fix
     skill: test-fix
     agent: claude
-    inject_verdict: true
     on:
       PASS: verify
       ABORT: end

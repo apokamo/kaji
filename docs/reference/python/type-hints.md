@@ -89,7 +89,6 @@ class Step:
     timeout: int | None = None
     workdir: str | None = None
     resume: str | None = None
-    inject_verdict: bool = False
     on: dict[str, str] = field(default_factory=dict)
 ```
 

@@ -75,7 +75,6 @@ class TestExecExclusivity:
             ("model", "sonnet"),
             ("effort", "high"),
             ("resume", "s"),
-            ("inject_verdict", "true"),
             ("max_budget_usd", "5.0"),
         ],
     )
@@ -146,11 +145,6 @@ class TestValidateWorkflowMirror:
     def test_exec_with_agent_errors(self) -> None:
         step = Step(id="s", exec=["python", "-m", "foo"], agent="claude", on={"PASS": "end"})
         with pytest.raises(WorkflowValidationError, match="must not set 'agent'"):
-            validate_workflow(self._wf(step))
-
-    def test_exec_with_inject_verdict_errors(self) -> None:
-        step = Step(id="s", exec=["python", "-m", "foo"], inject_verdict=True, on={"PASS": "end"})
-        with pytest.raises(WorkflowValidationError, match="must not set 'inject_verdict'"):
             validate_workflow(self._wf(step))
 
     def test_exec_empty_list_errors(self) -> None:
