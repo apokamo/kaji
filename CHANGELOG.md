@@ -19,8 +19,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **How to check whether you are affected**: run
     `rg -n 'inject_verdict' .kaji/wf/` in your repository. Zero hits means you
     are not affected. You can also confirm with
-    `kaji validate .kaji/wf/**/*.yaml`; an affected file fails with the
-    migration error.
+    `find .kaji/wf -name '*.yaml' -exec kaji validate {} +` (recurses into
+    every depth regardless of shell `globstar` settings, unlike
+    `.kaji/wf/**/*.yaml`); an affected file fails with the migration error.
   - **How to migrate**: for an uncustomized managed workflow, refresh it from
     the upstream copy. For a customized workflow, remove the `inject_verdict`
     line from the affected step. If that step needs the prior step's verdict,
