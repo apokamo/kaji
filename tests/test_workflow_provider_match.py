@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from kaji_harness.commands.exit_codes import EXIT_DEFINITION_ERROR
 from kaji_harness.commands.main import main as cli_main
 
 _BASE_CONFIG = """
@@ -120,3 +121,20 @@ def test_cmd_run_any_passes_under_github(tmp_path: Path) -> None:
     rc, _, stderr = _run(["run", str(wf), "1", "--workdir", str(tmp_path)])
     assert "requires provider.type" not in stderr
     assert rc != 0
+
+
+@pytest.mark.medium
+def test_cmd_run_rejects_removed_inject_verdict_key(tmp_path: Path) -> None:
+    """stale 'inject_verdict' キーは L1 parse（load_workflow）で migration error になり、
+    provider 整合チェックより前に EXIT_DEFINITION_ERROR で止まる（#383）。"""
+    wf = _setup(tmp_path, provider="github", requires="github")
+    wf.write_text(
+        wf.read_text().replace(
+            "    agent: claude\n    on:\n",
+            "    agent: claude\n    inject_verdict: true\n    on:\n",
+        )
+    )
+    rc, _, stderr = _run(["run", str(wf), "1", "--workdir", str(tmp_path)])
+    assert rc == EXIT_DEFINITION_ERROR
+    assert "inject_verdict" in stderr
+    assert "requires provider.type" not in stderr

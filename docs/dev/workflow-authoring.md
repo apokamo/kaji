@@ -177,7 +177,7 @@ ad-hoc な metrics 収集 / artifact dump / 外部 CLI 呼び出しのような�
 exec-step の規約:
 
 - **相互排他**: `skill` と同時指定不可。step は skill-step か exec-step のいずれか 1 つ。
-- **agent 専用フィールド禁止**: `agent` / `model` / `effort` / `resume` / `inject_verdict` /
+- **agent 専用フィールド禁止**: `agent` / `model` / `effort` / `resume` /
   `max_budget_usd` は指定できない（exec-step は LLM を呼ばないため無意味）。指定すると
   `WorkflowValidationError`。許容するのは `id` / `exec` / `timeout` / `workdir` / `on`。
 - **可読性の不変条件**: exec-step は `agent` を持てないため、**`agent` の有無 = LLM コスト発生の
@@ -258,7 +258,6 @@ config 非依存のため）。
 | `timeout` | int | — | タイムアウト（秒）。フォールバック: step.timeout → workflow.default_timeout → config.execution.default_timeout |
 | `workdir` | str | — | 作業ディレクトリ（絶対パス）。フォールバック: step.workdir → workflow.workdir → project_root |
 | `resume` | str | — | resume するステップ ID（同一 agent のセッション継続）。exec-step では指定不可 |
-| `inject_verdict` | bool | — | ⚠️ **非推奨**（次回 minor release で削除予定。後述「`inject_verdict`（非推奨）」）。exec-step では指定不可 |
 
 > **`skill` / `exec` の `△`（どちらか 1 つ必須）**: step は `skill` を持つ **skill-step** か
 > `exec` を持つ **exec-step** の **ちょうど 1 つ** でなければならない。両方指定 / 両方欠落は
@@ -409,12 +408,16 @@ steps:
 
 `resume` 先ステップと `agent` が異なる場合はバリデーションエラー。
 
-### `inject_verdict`（非推奨）
+### 削除済みフィールド
 
-> ⚠️ **非推奨（Issue apokamo/kaji#310 / #381）**: `inject_verdict` は次回 minor release で
-> engine から削除される。挙動（`previous_verdict` の prompt 注入）は現時点では維持されるが、
-> `kaji validate` / `kaji run` の事前検証は該当 workflow file につき 1 行の deprecation
-> warning を stderr へ出力する（`inject_verdict` 指定件数によらず集約は 1 行）。
+#### `inject_verdict`
+
+`inject_verdict` は Issue #383（Issue apokamo/kaji#310 の完全削除段階）で engine と公開
+workflow schema から削除された。当該キーを含む step は **L1 parse 時に
+`WorkflowValidationError`** となり、`kaji validate` / `kaji run` / `kaji recover` /
+series member 検証のいずれも silent ignore せず fail-fast する（値の真偽は問わない。
+キーの存在だけで判定する）。破壊的変更の詳細は `CHANGELOG.md` の該当 `[Unreleased]`
+BREAKING エントリを参照。
 
 **検出方法**: `rg -n 'inject_verdict' .kaji/wf/`（0 件なら影響なし）。
 
@@ -423,10 +426,9 @@ steps:
 - 同一 agent 内でのセッション継続には、`resume: <step-id>` へ置き換える（推奨・第一手段）。
 - cross-agent 等で `resume` が使えない step は、`kaji issue resolve-verdict <issue-id> --step
   <step-id>` で対象 step の直前 verdict を明示的に取得する。
-- `inject_verdict: false` の明示指定は単に削除する（未指定と同じ挙動）。
 
 ```yaml
-# Before（非推奨）
+# Before（削除済み・エラーになる）
 steps:
   - id: fix-code
     skill: issue-fix-code
@@ -444,8 +446,6 @@ steps:
     on:
       PASS: end
 ```
-
-削除の完全実施（engine からの `inject_verdict` field 除去）は別 Issue（#383）で扱う。
 
 ## 完全サンプル
 

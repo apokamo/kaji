@@ -78,10 +78,9 @@ def test_load_series_validates_workflow_and_provider(tmp_path: Path) -> None:
     assert loaded.members[0].workflow == ".kaji/wf/official/dev.yaml"
 
 
-def test_load_series_member_with_inject_verdict_emits_no_deprecation_warning(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """series member 検証は完了条件の対象外経路であり warning を出力しない（方針 3.5 #4）。"""
+def test_load_series_member_with_removed_inject_verdict_key_raises(tmp_path: Path) -> None:
+    """stale 'inject_verdict' キーを含む member workflow は L1 parse で migration error になり、
+    series load を止める（#383）。series 経路は例外送出が観測境界（G4-lib）。"""
     skill_dir = tmp_path / ".claude" / "skills" / "member-skill"
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text("# member-skill\n", encoding="utf-8")
@@ -104,10 +103,12 @@ def test_load_series_member_with_inject_verdict_emits_no_deprecation_warning(
     path = tmp_path / "series.yaml"
     path.write_text(_series_yaml(), encoding="utf-8")
 
-    loaded = load_series(path, _kaji_config(tmp_path))
+    with pytest.raises(SeriesValidationError) as exc_info:
+        load_series(path, _kaji_config(tmp_path))
 
-    assert loaded.id == "test-series"
-    assert capsys.readouterr().err == ""
+    message = str(exc_info.value)
+    assert "members.0.workflow is invalid" in message
+    assert "inject_verdict" in message
 
 
 @pytest.mark.parametrize(

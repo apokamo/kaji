@@ -3,7 +3,6 @@
 Validates that:
 - All skills have proper SKILL.md structure (verdict blocks, dual-mode input)
 - Workflow engine correctly parses and validates fixture YAML
-- inject_verdict field is correctly parsed from YAML
 
 Engine logic tests use fixture YAML (tests/fixtures/test_workflow.yaml),
 NOT the production workflow. Production YAML validation is handled by
@@ -165,23 +164,6 @@ class TestFixtureWorkflowValidation:
         assert "fix" in cycle.loop
         assert "verify" in cycle.loop
         assert cycle.max_iterations == 3
-
-
-@pytest.mark.medium
-class TestFixtureWorkflowInjectVerdict:
-    """inject_verdict field must be correctly parsed from fixture YAML."""
-
-    def test_fix_step_has_inject_verdict_true(self) -> None:
-        workflow = load_workflow(FIXTURE_WORKFLOW_PATH)
-        step = workflow.find_step("fix")
-        assert step is not None
-        assert step.inject_verdict is True, "fix step must have inject_verdict: true"
-
-    def test_design_step_has_inject_verdict_false_by_default(self) -> None:
-        workflow = load_workflow(FIXTURE_WORKFLOW_PATH)
-        step = workflow.find_step("design")
-        assert step is not None
-        assert step.inject_verdict is False, "design step should default inject_verdict to False"
 
 
 @pytest.mark.medium

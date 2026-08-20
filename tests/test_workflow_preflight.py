@@ -159,7 +159,7 @@ def test_preflight_workflow_uses_injected_skill_seams_without_io(tmp_path: Path)
 
 
 # ============================================================
-# inject_verdict deprecation warning (#381)
+# preflight warnings after inject_verdict removal (#383)
 # ============================================================
 
 
@@ -192,120 +192,13 @@ def _preflight_no_io(
     )
 
 
-class TestInjectVerdictDeprecationWarning:
-    """Small: workflow file 単位で 1 行に集約される deprecation warning（#381）。"""
+class TestNoDeprecationWarningAfterRemoval:
+    """Small: inject_verdict deprecation warning producer は #383 で削除済み。
+    workflow が 'inject_verdict' を持たない限り、preflight の warnings は空のまま
+    （既存の exec_script warning は存続する）。"""
 
     @pytest.mark.small
-    def test_two_true_declarations_aggregate_to_one_warning(self) -> None:
-        workflow = _workflow_from_yaml(
-            "  - id: a\n    skill: s\n    agent: claude\n    inject_verdict: true\n"
-            "    on:\n      PASS: b\n"
-            "  - id: b\n    skill: s\n    agent: claude\n    inject_verdict: true\n"
-            "    on:\n      PASS: end\n"
-        )
-
-        result = _preflight_no_io(workflow)
-
-        assert len(result.warnings) == 1
-
-    @pytest.mark.small
-    def test_explicit_false_alone_is_also_deprecated(self) -> None:
-        workflow = _workflow_from_yaml(
-            "  - id: a\n    skill: s\n    agent: claude\n    inject_verdict: false\n"
-            "    on:\n      PASS: end\n"
-        )
-
-        result = _preflight_no_io(workflow)
-
-        assert len(result.warnings) == 1
-        assert "'a'" in result.warnings[0]
-
-    @pytest.mark.small
-    def test_mixed_true_and_false_merge_into_one_warning_with_both_ids(self) -> None:
-        workflow = _workflow_from_yaml(
-            "  - id: a\n    skill: s\n    agent: claude\n    inject_verdict: true\n"
-            "    on:\n      PASS: b\n"
-            "  - id: b\n    skill: s\n    agent: claude\n    inject_verdict: false\n"
-            "    on:\n      PASS: end\n"
-        )
-
-        result = _preflight_no_io(workflow)
-
-        assert len(result.warnings) == 1
-        assert "'a'" in result.warnings[0]
-        assert "'b'" in result.warnings[0]
-
-    @pytest.mark.small
-    def test_message_contains_required_elements(self) -> None:
-        workflow = _workflow_from_yaml(
-            "  - id: a\n    skill: s\n    agent: claude\n    inject_verdict: true\n"
-            "    on:\n      PASS: end\n"
-        )
-
-        result = _preflight_no_io(workflow)
-
-        message = result.warnings[0]
-        for token in (
-            "inject_verdict",
-            "next minor release",
-            "apokamo/kaji#310",
-            "resume",
-            "kaji issue resolve-verdict",
-        ):
-            assert token in message
-
-    @pytest.mark.small
-    def test_message_is_a_single_line(self) -> None:
-        workflow = _workflow_from_yaml(
-            "  - id: a\n    skill: s\n    agent: claude\n    inject_verdict: true\n"
-            "    on:\n      PASS: end\n"
-        )
-
-        result = _preflight_no_io(workflow)
-
-        assert len(result.warnings[0].splitlines()) == 1
-
-    @pytest.mark.small
-    def test_message_stays_single_line_with_newline_step_id(self) -> None:
-        workflow = _workflow_from_yaml(
-            '  - id: "fix\\ncode"\n    skill: s\n    agent: claude\n    inject_verdict: true\n'
-            "    on:\n      PASS: end\n"
-        )
-
-        result = _preflight_no_io(workflow)
-
-        message = result.warnings[0]
-        assert len(message.splitlines()) == 1
-        assert "\\n" in message
-
-    @pytest.mark.small
-    def test_message_stays_single_line_with_line_separator_step_id(self) -> None:
-        workflow = _workflow_from_yaml(
-            '  - id: "fix\\u2028code"\n    skill: s\n    agent: claude\n    inject_verdict: true\n'
-            "    on:\n      PASS: end\n"
-        )
-
-        result = _preflight_no_io(workflow)
-
-        assert len(result.warnings[0].splitlines()) == 1
-
-    @pytest.mark.small
-    def test_only_declared_step_ids_are_listed(self) -> None:
-        workflow = _workflow_from_yaml(
-            "  - id: a\n    skill: s\n    agent: claude\n    inject_verdict: true\n"
-            "    on:\n      PASS: b\n"
-            "  - id: b\n    skill: s\n    agent: claude\n"
-            "    on:\n      PASS: end\n"
-        )
-
-        result = _preflight_no_io(workflow)
-
-        message = result.warnings[0]
-        assert "'a'" in message
-        assert "'b'" not in message
-
-    @pytest.mark.small
-    def test_no_warning_when_key_absent(self) -> None:
+    def test_warnings_empty_without_inject_verdict(self) -> None:
         workflow = _workflow_from_yaml(
             "  - id: a\n    skill: s\n    agent: claude\n    on:\n      PASS: end\n"
         )
@@ -315,16 +208,12 @@ class TestInjectVerdictDeprecationWarning:
         assert result.warnings == []
 
     @pytest.mark.small
-    def test_deprecation_warning_precedes_exec_script_warning(self) -> None:
+    def test_exec_script_warning_still_emitted(self) -> None:
         workflow = _workflow_from_yaml(
-            "  - id: a\n    skill: s\n    agent: claude\n    inject_verdict: true\n"
-            "    on:\n      PASS: b\n"
-            "  - id: b\n    skill: poll\n    agent: claude\n"
-            "    on:\n      PASS: end\n"
+            "  - id: a\n    skill: poll\n    agent: claude\n    on:\n      PASS: end\n"
         )
 
         result = _preflight_no_io(workflow, exec_script_skills=frozenset({"poll"}))
 
-        assert len(result.warnings) == 2
-        assert "inject_verdict" in result.warnings[0]
-        assert "exec_script" in result.warnings[1]
+        assert len(result.warnings) == 1
+        assert "exec_script" in result.warnings[0]

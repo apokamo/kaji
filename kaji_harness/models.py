@@ -65,10 +65,6 @@ class Step:
     timeout: int | None = None
     workdir: str | None = None
     resume: str | None = None
-    inject_verdict: bool = False
-    # YAML に 'inject_verdict' キーが書かれていたか（値は問わない）。
-    # 廃止予告 (#381) 用の parse 表層メタデータであり、#383 で inject_verdict と共に削除する。
-    inject_verdict_declared: bool = False
     on: dict[str, str] = field(default_factory=dict)
 
 

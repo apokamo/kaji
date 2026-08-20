@@ -60,7 +60,19 @@ _STEP_REQUIRED_KEYS = ("id",)
 
 # exec-step が拒否する agent 専用フィールド。exec-step は LLM を呼ばないため
 # これらは無意味であり、同時指定は parse 時に fail-fast する（Issue #205）。
-_EXEC_FORBIDDEN_KEYS = ("agent", "model", "effort", "resume", "inject_verdict", "max_budget_usd")
+_EXEC_FORBIDDEN_KEYS = ("agent", "model", "effort", "resume", "max_budget_usd")
+
+# 削除済み step キー → 移行手順。unknown-key 一般の拒否ではなく、過去に受理していた
+# キーだけを named error で止める（ADR 008: fail-fast、互換層なし）。sid 確定直後・
+# skill-exec 排他検証より前で参照する（Issue #310, #383）。
+_REMOVED_STEP_KEYS: dict[str, str] = {
+    "inject_verdict": (
+        "'inject_verdict' was removed from the workflow step schema "
+        "(apokamo/kaji#310, #383); remove the field and use 'resume: <step-id>' "
+        "for same-agent session continuation, or read the prior verdict with "
+        "'kaji issue resolve-verdict <issue-id> --step <step-id>'"
+    ),
+}
 
 VALID_AGENTS: frozenset[str] = frozenset(AGENT_CAPABILITIES)
 
@@ -158,6 +170,15 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
             )
 
         sid = _require_non_empty_str(step_data["id"], "id", f"Step at index {i}")
+
+        # 削除済みキーの named rejection（Issue #383）。exec-step 排他検証より前に
+        # 置くことで、exec-step + 削除済みキーの組み合わせでも汎用の
+        # "must not set" ではなく移行手順つきエラーになる。
+        for removed_key, guidance in _REMOVED_STEP_KEYS.items():
+            if removed_key in step_data:
+                # step ID は利用者入力。repr() で 1 行にエスケープする（#381 と同じ理由）。
+                raise WorkflowValidationError(f"Step {sid!r}: {guidance}")
+
         # exactly one of skill / exec（Issue #205）。step 種別は skill を持つか
         # exec を持つかで一意に決まる。両方 / 両方無しは error。
         raw_skill = step_data.get("skill")
@@ -199,13 +220,6 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                 raise WorkflowValidationError(
                     f"Step '{sid}' 'on' keys must be strings, got {type(verdict_key).__name__}"
                 )
-        raw_inject_verdict = step_data.get("inject_verdict", False)
-        if not isinstance(raw_inject_verdict, bool):
-            raise WorkflowValidationError(
-                f"Step '{step_data['id']}' 'inject_verdict' must be a boolean, "
-                f"got {type(raw_inject_verdict).__name__}"
-            )
-        inject_verdict_declared = "inject_verdict" in step_data
         raw_step_workdir = step_data.get("workdir")
         if raw_step_workdir is not None:
             if not isinstance(raw_step_workdir, str):
@@ -307,8 +321,6 @@ def _parse_workflow(data: dict[str, Any]) -> Workflow:
                 timeout=raw_timeout,
                 workdir=raw_step_workdir,
                 resume=raw_resume,
-                inject_verdict=raw_inject_verdict,
-                inject_verdict_declared=inject_verdict_declared,
                 on=raw_on,
             )
         )
@@ -525,8 +537,6 @@ def validate_workflow(workflow: Workflow) -> None:
                 errors.append(f"Step '{step.id}' with 'exec' must not set 'effort'")
             if step.resume is not None:
                 errors.append(f"Step '{step.id}' with 'exec' must not set 'resume'")
-            if step.inject_verdict:
-                errors.append(f"Step '{step.id}' with 'exec' must not set 'inject_verdict'")
             if step.max_budget_usd is not None:
                 errors.append(f"Step '{step.id}' with 'exec' must not set 'max_budget_usd'")
             # exec argv は非空 list[str]・全要素非空 str であること。
