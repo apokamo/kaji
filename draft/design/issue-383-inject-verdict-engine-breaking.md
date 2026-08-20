@@ -18,7 +18,7 @@ workflow step フィールド `inject_verdict` を engine（`models.py` / `workf
 
 | 領域 | 出現数 / ファイル | 内訳 |
 |------|------------------|------|
-| `kaji_harness/` | 20 occurrences / 4 files | `models.py`(3) / `workflow.py`(6) / `prompt.py`(2) / `preflight.py`(4)… |
+| `kaji_harness/` | 20 occurrences / 4 files | `models.py`(4) / `workflow.py`(10) / `prompt.py`(2) / `preflight.py`(4) |
 | `tests/` | 82 occurrences / 10 files | fixture 1 + 9 テストファイル |
 | `docs/` `.claude/` | 6 files | `workflow-authoring.md` / `type-hints.md` / `adr/011` / skill 3本 |
 | `.kaji/wf/**` | 0 | 自リポジトリの runtime workflow は移行済み |
@@ -42,14 +42,24 @@ workflow step フィールド `inject_verdict` を engine（`models.py` / `workf
 
 ### 改善指標（測定可能）
 
-| # | 指標 | 測定コマンド | 目標値 |
-|---|------|--------------|--------|
-| G1 | engine から実行 capability が消えている | `grep -rn "inject_verdict" kaji_harness/` | 0 |
-| G2 | 機能テストが削除後契約へ置換されている | `grep -rn "inject_verdict" tests/` | 削除後契約テスト（拒否テスト）由来の出現のみ。`step.inject_verdict` 属性参照は 0 |
+> **文字列 `inject_verdict` は engine から完全には消えない。** 削除後も
+> `_REMOVED_STEP_KEYS` の key と migration guidance がキー名を**意図的に保持する**
+> （保持しなければ stale YAML を named rejection できない）。したがって指標は
+> 「文字列の全消滅」ではなく **capability 参照の消滅（G1a）** と
+> **残存が named rejection 由来だけであること（G1b）** に分離する。
+
+| # | 指標 | 測定コマンド | ベースライン → 目標値 |
+|---|------|--------------|----------------------|
+| G1a | engine から実行 capability の参照が消えている | `grep -rnE 'step\.inject_verdict\|inject_verdict_declared\|raw_inject_verdict\|_INJECT_VERDICT_DEPRECATION\|_deprecated_field_warnings\|inject_verdict: bool\|inject_verdict=' kaji_harness/ \| wc -l` | 16 → **0** |
+| G1b | 残存文字列が named rejection 由来だけである | `grep -rln "inject_verdict" kaji_harness/` | 4 files → **`kaji_harness/workflow.py` のみ**。かつ `grep -n "inject_verdict" kaji_harness/workflow.py` の全ヒットが `_REMOVED_STEP_KEYS` 定義ブロック（dict key・guidance 文字列・直上コメント）に収まる |
+| G2 | 機能テストが削除後契約へ置換されている | (a) `grep -rnE 'step\.inject_verdict\|inject_verdict_declared\|inject_verdict=' tests/ \| wc -l` (b) `grep -rln "inject_verdict" tests/` | (a) 23 → **0**（属性・コンストラクタ引数の参照が消える） (b) 10 files → 削除後契約テスト（stale YAML 拒否）と fixture 以外に残らない |
 | G3 | 公開 schema / 運用 docs から消えている | `grep -rn "inject_verdict" docs/dev/ docs/reference/ .claude/skills/` | 「削除済み」を説明する記述のみ（フィールド仕様としての記載は 0） |
-| G4 | stale YAML が silent に通らない | `kaji validate` / `kaji run` / `kaji recover` / series load の 4 経路で stale YAML を投入 | いずれも非 0 exit + migration error 出力（silent 成功 0 件） |
+| G4-cli | stale YAML が CLI で silent に通らない | `kaji validate` / `kaji run` / `kaji recover` に stale YAML を投入 | 3 経路とも **非 0 exit**（validate=1、run/recover=`EXIT_DEFINITION_ERROR`）+ stderr に migration error |
+| G4-lib | stale YAML が library 経路で silent に通らない | series member 検証（`load_series`）に stale YAML を投入 | **`SeriesValidationError` 送出**（CLI exit code ではなく例外が観測境界）。`preflight_workflow_path()` は `errors` 非空 / `workflow=None` |
 | G5 | `resume` 注入が不変 | `pytest tests/test_prompt_builder.py` の resume 系テスト | 変更なしで green |
 | G6 | 品質ゲート | `source .venv/bin/activate && make check` | PASS |
+
+G1a の識別子リストは「削除対象の実体」（`models.py:68,71` の 2 属性 / `workflow.py:202-208,310-311,528` の parse・格納・L2 参照 / `prompt.py:76` の注入条件 / `preflight.py:23-38,85` の warning producer）を網羅する。実装後にこの grep が 1 件でも残れば削除漏れである。
 
 ### ベースライン計測
 
@@ -57,14 +67,31 @@ workflow step フィールド `inject_verdict` を engine（`models.py` / `workf
 
 ```bash
 cd /home/aki/dev/kaji/kaji-refactor-383
-# 出現数ベースライン
-grep -rn "inject_verdict" kaji_harness/ | wc -l   # 期待: 20 → 0
-grep -rn "inject_verdict" tests/ | wc -l          # 期待: 82 → 拒否テスト由来のみ
-grep -rln "inject_verdict" docs/ .claude/         # 期待: 6 files → 削除済み記述のみ
-grep -rn "inject_verdict" .kaji/wf/ | wc -l       # 期待: 0 → 0（不変）
+CAP='step\.inject_verdict|inject_verdict_declared|raw_inject_verdict|_INJECT_VERDICT_DEPRECATION|_deprecated_field_warnings|inject_verdict: bool|inject_verdict='
+
+# G1a: engine の capability 参照（0 になるべき本体）
+grep -rnE "$CAP" kaji_harness/ | wc -l            # 20260820 実測: 16 → 0
+
+# G1b: engine の残存文字列（named rejection のみが残る）
+grep -rln "inject_verdict" kaji_harness/          # 実測: 4 files → workflow.py のみ
+grep -n  "inject_verdict" kaji_harness/workflow.py  # 実測: 10 行 → _REMOVED_STEP_KEYS 定義ブロックのみ
+
+# G2: テストの capability 参照 / ファイル分布
+grep -rnE 'step\.inject_verdict|inject_verdict_declared|inject_verdict=' tests/ | wc -l  # 実測: 23 → 0
+grep -rln "inject_verdict" tests/                 # 実測: 10 files → 拒否テスト + fixture 以外は 0
+
+# G3 / 参考
+grep -rln "inject_verdict" docs/ .claude/         # 実測: 6 files → 削除済み記述のみ
+grep -rn  "inject_verdict" .kaji/wf/ | wc -l      # 実測: 0 → 0（不変）
+
 # pytest ベースライン（baseline-precheck step の構造化 artifact を正本とする）
 source .venv/bin/activate && make check
 ```
+
+`grep -rn "inject_verdict" kaji_harness/ | wc -l`（実測 20）は G1b の粗い上位集合であり、
+**0 を目標値にしない**。20 のうち 16 が capability 参照（G1a で 0 になる）、残りは
+コメント・エラーメッセージ・`_EXEC_FORBIDDEN_KEYS` のキー名であり、削除後は
+`_REMOVED_STEP_KEYS` 由来の数行に置き換わる。
 
 pytest の baseline failure 判定は workflow の `baseline-precheck` step が生成する構造化
 artifact（`docs/dev/baseline-check.md`）を正本とし、本設計では数値を固定しない。
@@ -315,7 +342,8 @@ bridging test の新規追加は不要。`resume` 注入は既存 Small テス�
 
 #### Medium テスト
 
-4 entry path すべてで stale YAML が非 0 / 例外で止まることを固定する（G4 の直接証跡）。
+4 entry path すべてで stale YAML が止まることを固定する。観測境界は経路種別で異なる:
+CLI 3 経路は **非 0 exit code + stderr**（G4-cli）、series は **例外送出**（G4-lib）。
 
 | 経路 | 配置先 | 期待 |
 |------|--------|------|
@@ -330,9 +358,13 @@ bridging test の新規追加は不要。`resume` 注入は既存 Small テス�
 
 #### Large テスト
 
-- `large_local`: インストール済み entry point（`python -m kaji_harness.cli_main validate`）で
-  stale YAML → returncode 1 + stderr に migration error。#381 が entry point 経由の観測を
-  large_local で固定していた層を、削除後契約で引き継ぐ
+- `large_local`: **別プロセスの module CLI invocation**（`subprocess.run([sys.executable, "-m",
+  "kaji_harness.cli_main", "validate", ...])`）で stale YAML → returncode 1 + stderr に
+  migration error。ここで保証する境界は「`sys.argv` 解析 → exit code → stderr の
+  プロセス境界越しの観測」であり、**配布済み `kaji` entry point（console_script）の疎通では
+  ない**。既存 `tests/test_cli_validate.py` の large_local テストと同じ起動形式に揃える。
+  配布 wheel からの `kaji` entry point 疎通は Issue #383「ワークフロー完了後の確認項目」
+  （公開済み wheel での smoke test）が担い、本 workflow の恒久テストでは扱わない
 - **既存 large_local の retarget（削除しない）**:
   `test_kaji_validate_inject_verdict_warning_path_with_newline_stays_single_line` が守っている
   「改行を含む path でも warning が 1 行」という `_print_warnings` の repr エスケープ契約
