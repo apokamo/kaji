@@ -153,45 +153,22 @@ defaultを `tmux` にし、既存直接呼び出しtestの互換を保つ。runn
 
 ### 1. backend境界
 
-現在のmoduleを全面framework化せず、orchestration共通部とbackend固有pane操作を分ける。
+現在のmoduleを全面framework化せず、public dispatchとbackend固有pane操作を分ける。実装時の
+patch namespace互換性を確認した結果、既存tmux helperは元moduleに維持し、Herdr helperだけを
+別moduleにする構成で確定した。共通Protocolは導入しない。
 
 ```text
 kaji_harness/interactive_terminal.py
   - public execute_interactive_terminal
-  - step capability / prompt / verdict polling
+  - backend dispatch
+  - 既存tmux preflight / layout / pipe / liveness / metadata / close
   - common terminal diagnostic
   - session ID fallback
-
-kaji_harness/interactive_terminal_tmux.py
-  - existing tmux preflight / layout / pipe / liveness / metadata / close
 
 kaji_harness/interactive_terminal_herdr.py
   - Herdr CLI JSON wrapper
   - caller context preflight
-  - token marker / layout / launch / agent detection / read / metadata / close
-```
-
-実装時の既存test patch namespace調査で大規模な互換リスクが見つかった場合は、tmux helperを当面
-元moduleに残し、Herdr helperだけ別moduleにする。分割自体を受入条件にはしない。
-
-backend内部IFは実際に必要な操作だけに限定する。
-
-```python
-@dataclass(frozen=True)
-class PaneLaunch:
-    pane_id: str
-    origin_pane_id: str
-    split_target_pane_id: str
-    split_direction: str
-    panes_before: list[str]
-    panes_pruned: list[str]
-
-class InteractivePaneBackend(Protocol):
-    def launch(...) -> PaneLaunch: ...
-    def capture_transcript(...) -> TranscriptCapture: ...
-    def exited_before_verdict(...) -> bool: ...
-    def write_metadata(...) -> None: ...
-    def close(...) -> None: ...
+  - token marker / layout / launch / process-info liveness / read / metadata / close
 ```
 
 backendをterminal一般、agent一般、plugin一般へ広げない。
@@ -272,9 +249,20 @@ pane split -> report-metadata -> pane run <existing wrapper command>
 - promptはpath参照の短いinitial promptで、`pane run`のbracketed pasteを利用できる
 
 起動後のlivenessは`pane process-info --pane <pane_id>`で確認する。existing wrapper経路ではHerdr
-integration未導入のagentも許容するため、Herdrのagent identity / statusを必須にしない。foregroundに
-pane shell以外のprocessがあれば実行中とし、shell-onlyを2秒間隔で3回連続観測し、かつverdictが無ければ
-早期終了とする。Herdr agent statusの`unknown`自体は失敗でも完了でもない。
+integration未導入のagentも許容するため、Herdrのagent identity / statusを必須にしない。
+`process_info`は次の3状態へ分類する。
+
+- **active**: integer `shell_pid`と非空の`foreground_processes`があり、integer `pid`が
+  `shell_pid`と異なるprocessを1件以上確認した
+- **confirmed_shell_only**: integer `shell_pid`と非空の`foreground_processes`があり、全要素が
+  integer `pid == shell_pid`として検証できた
+- **unknown**: `shell_pid` / `foreground_processes`の欠落・`null`・型不正・空list、またはprocess要素の
+  `pid`欠落・型不正。optional fieldの未観測をshell-onlyの証拠にしない
+
+`confirmed_shell_only`を2秒間隔で3回連続観測し、かつverdictが無い場合だけ早期終了とする。
+`active`と`unknown`は連続回数を0へresetする。`process_info` container自体の欠落・型不正、query non-zero、
+invalid JSONは`CLIExecutionError`としてfail-loudし、livenessを確認できないためpaneを自動closeしない。
+Herdr agent statusの`unknown`自体も失敗でも完了でもない。
 
 split時にcaller PATHをexplicit envとして渡すだけではinteractive shell startupがPATHを再構成するため、
 `pane run`へ渡すwrapper commandにもshell-quoted `env PATH=<caller-path>`を前置する。
@@ -363,6 +351,8 @@ plugin v1はruntime argv pane registrationを持たないため、core runnerの
 | marker設定 / exact readback失敗 | ownership未確認paneをcloseせずfail-loud |
 | verdict前にforegroundがshellへ復帰 | transcript snapshot + metadata後fail-loud |
 | verdict前agent消失 | transcript diagnostic付き`CLIExecutionError` |
+| process field欠落 / null / 型不正 / 空list | liveness `unknown`。shell-only連続回数をresetし、polling継続 |
+| process-info query失敗 / container欠落・型不正 | `CLIExecutionError`。liveness未確認のためpaneを自動closeしない |
 | read失敗 | metadataへ記録。verdictがあれば成功をmaskしない |
 | timeout | diagnostic capture + safe close後`StepTimeoutError` |
 
@@ -430,7 +420,7 @@ experiments/herdr-interactive-terminal/
 - token marker parse / foreign pane exclusion
 - layout rectによるmanaged pane順序とprune候補
 - pane read plain text + exact pane get revision / truncation unknown
-- foreground process / shell-onlyのliveness判定
+- foreground processのactive / confirmed shell-only / unknown判定（field欠落・null・型不正・空listを含む）
 - Claude/Codex/Antigravityのsession ID fallback
 - metadata backend fields
 - tmux既存test全回帰
@@ -441,6 +431,8 @@ experiments/herdr-interactive-terminal/
 - immediate verdict race
 - marker failure時はownership未確認paneをcloseせずfail-loud
 - early agent disappearance + provider error diagnostic
+- process-info unknownがshell-only確認へ加算されず、後続artifact verdictまでpollingを継続する
+- process-info query / container failureでowned paneを誤cleanupしない
 - timeout safe close
 - close_on_verdict=falseでcloseなし
 - runner dispatchがconfig backendを渡す
@@ -485,7 +477,7 @@ experiments/herdr-interactive-terminal/
 | `docs/ARCHITECTURE.md` | backend boundary / artifacts |
 | `docs/reference/configuration*.md` | config / precedence |
 | `docs/cli-guides/interactive-terminal-runner*.md` | setup / usage / failure recovery |
-| agent skill / guide（配置は実装前確定） | agent -> pane -> kaji |
+| `.claude/skills/herdr-kaji-launch/` / `.agents/skills/herdr-kaji-launch` | agent -> pane -> kaji |
 | optional Herdr plugin（後段） | human keybinding/action UX |
 
 ## 非目標
@@ -528,12 +520,14 @@ experiments/herdr-interactive-terminal/
 
 ## 一次情報
 
-- https://herdr.dev/docs/agent-skill/
-- https://herdr.dev/docs/agent-automation/
-- https://herdr.dev/docs/integrations/
-- https://herdr.dev/docs/socket-api/
-- https://herdr.dev/docs/cli-reference/
-- https://github.com/herdrdev/herdr/blob/v0.8.2/skills/herdr/SKILL.md
-- https://github.com/herdrdev/herdr/blob/master/docs/next/website/src/content/docs/plugins.mdx
-- `herdr api schema --json`（installed 0.8.2 / protocol 20）
-- `docs/adr/007-interactive-terminal-runner.md`
+| 情報源 | 設計に使用した根拠 |
+|---|---|
+| https://herdr.dev/docs/agent-skill/ | `HERDR_ENV=1` guardとrelease-matched `herdr --skill`をagent操作の安全境界にする |
+| https://herdr.dev/docs/agent-automation/ | pane / agentの責務分離、creation responseからのID取得、CLI readのrendered text契約 |
+| https://herdr.dev/docs/integrations/ | Claude / Codex等のsession identity integrationはoptionalで、state authorityとは別である |
+| https://herdr.dev/docs/socket-api/ | process-infoはplatformが公開可能なfieldだけを返すため、optional field欠落をunknownとして扱う |
+| https://herdr.dev/docs/cli-reference/ | pane split / run / read / process-info / metadata / closeのCLI surface |
+| https://github.com/herdrdev/herdr/blob/v0.8.2/skills/herdr/SKILL.md | 最低対応versionと同じreleaseのagent向けcommand / guardrail |
+| https://github.com/herdrdev/herdr/blob/master/docs/next/website/src/content/docs/plugins.mdx | plugin v1の責務とunsandboxed executionの制約 |
+| `herdr api schema --json`（installed 0.8.2 / protocol 20） | `PaneProcessInfo` requiredは`pane_id`だけで、`shell_pid` / `foreground_processes`はoptional |
+| `docs/adr/007-interactive-terminal-runner.md` | 既存tmux runner契約とHerdr追加後の恒久backend方針 |
