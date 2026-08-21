@@ -76,6 +76,11 @@ class FailureSnapshot:
     attempt_error: str | None = None
     attempt_result_present: bool = False
     attempt_synthetic: bool | None = None
+    #: Issue #403: 異常終了 attempt の ``result.json`` に残った診断用 session ID。
+    #: 人手 resume の判断材料であり、auto-resume の入力にはしない。
+    attempt_session_id: str | None = None
+    #: Issue #403: 割込みで kill せずに残した pane の ``pane_id``。
+    orphan_pane_id: str | None = None
     state_loaded: bool = True
     state_last_completed_step: str | None = None
     state_worktree_dir: str | None = None
@@ -256,14 +261,19 @@ def _parse_failure_event(entry: dict[str, Any] | None) -> FailureEvent | None:
     )
 
 
-def _latest_attempt_result(run_dir: Path, step_id: str | None) -> dict[str, Any] | None:
+def _latest_attempt_dir(run_dir: Path, step_id: str | None) -> Path | None:
     if not step_id:
         return None
     steps_dir = run_dir / "steps" / step_id
     attempts = sorted(p for p in steps_dir.glob("attempt-*") if p.is_dir())
-    if not attempts:
+    return attempts[-1] if attempts else None
+
+
+def _latest_attempt_result(run_dir: Path, step_id: str | None) -> dict[str, Any] | None:
+    attempt_dir = _latest_attempt_dir(run_dir, step_id)
+    if attempt_dir is None:
         return None
-    path = attempts[-1] / "result.json"
+    path = attempt_dir / "result.json"
     if not path.is_file():
         return None
     try:
@@ -271,6 +281,37 @@ def _latest_attempt_result(run_dir: Path, step_id: str | None) -> dict[str, Any]
     except (OSError, json.JSONDecodeError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def _orphan_pane_id(attempt_dir: Path | None) -> str | None:
+    """割込みで残した pane の ``pane_id`` を ``pane-metadata.json`` から読む（Issue #403）。
+
+    ``result.json`` を持つ attempt は完了済みで pane も cleanup 済みなので採用しない。
+    ``WorkflowRunner`` は ``_StepExecutor.execute()`` の *前* に ``in_flight_step_id`` を
+    設定するため、新 attempt directory 作成前に割り込まれると最新 attempt が同 step の
+    直前の完了済み attempt になり、殺し済み pane を孤児と誤報しうる。割込み時に
+    進行中 attempt の ``result.json`` を作らない契約（``runner.run()`` の
+    ``KeyboardInterrupt`` ハンドラ）により、``result.json`` の実在で両者を判別できる。
+
+    silent best-effort とし、不在 / 破損を ``artifact_read_errors`` に入れない
+    （入れると pane metadata を持たない headless run で ``kaji_bug_suspected`` に倒れ、
+    bug issue を誤起票する）。
+    """
+    if attempt_dir is None:
+        return None
+    if (attempt_dir / "result.json").is_file():
+        return None
+    path = attempt_dir / "pane-metadata.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    pane_id = data.get("pane_id")
+    return pane_id if isinstance(pane_id, str) and pane_id else None
 
 
 def _load_state(state_path: Path) -> dict[str, Any] | None:
@@ -333,9 +374,14 @@ def collect_snapshot(
     failure_event = _parse_failure_event(_last_event(events, "failure_event"))
     failed_step = failure_event.step_id if failure_event else None
 
+    attempt_dir = _latest_attempt_dir(run_dir, failed_step)
     result = _latest_attempt_result(run_dir, failed_step)
     attempt_error = result.get("error") if result else None
     attempt_synthetic = bool(result["synthetic"]) if result and "synthetic" in result else None
+    raw_session_id = result.get("session_id") if result else None
+    attempt_session_id = raw_session_id if isinstance(raw_session_id, str) else None
+    interrupted = failure_event is not None and failure_event.kind == "interrupted"
+    orphan_pane_id = _orphan_pane_id(attempt_dir) if interrupted else None
 
     state = _load_state(artifacts_dir / issue_id / STATE_FILE)
     state_loaded = state is not None
@@ -375,6 +421,18 @@ def collect_snapshot(
         )
     if result is not None and failed_step:
         evidence.append(sanitize_evidence(f"steps/{failed_step}/result.json error={attempt_error}"))
+    if attempt_session_id and failed_step:
+        # Issue #403: 人手 resume の判断材料。auto-resume の入力にはしない。
+        evidence.append(
+            sanitize_evidence(f"steps/{failed_step}/result.json session_id={attempt_session_id}")
+        )
+    if orphan_pane_id and failed_step and attempt_dir is not None:
+        evidence.append(
+            sanitize_evidence(
+                f"steps/{failed_step}/{attempt_dir.name}/pane-metadata.json: "
+                f"orphan pane pane_id={orphan_pane_id} (not killed)"
+            )
+        )
     if state is not None:
         evidence.append(
             sanitize_evidence(
@@ -407,6 +465,8 @@ def collect_snapshot(
         attempt_error=attempt_error,
         attempt_result_present=result is not None,
         attempt_synthetic=attempt_synthetic,
+        attempt_session_id=attempt_session_id,
+        orphan_pane_id=orphan_pane_id,
         state_loaded=state_loaded,
         state_last_completed_step=state.get("last_completed_step") if state else None,
         state_worktree_dir=worktree_dir,

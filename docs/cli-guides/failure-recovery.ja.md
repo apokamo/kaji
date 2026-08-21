@@ -122,16 +122,31 @@ kaji recover .kaji/wf/official/dev.yaml 288 --run-id 260710120000
 [incident-labels.md](../dev/incident-labels.md) を参照。`incidents/occurrences.jsonl` は triage が
 有効な失敗に対して必ず生成され、GitHub provider では加えてインシデントイシューへ集約される。
 
-### incident 記録の対象外（Issue #322）
+### incident 記録の対象外（Issue #322 / #403）
 
-分類が `user_precondition_error` の失敗だけは、第1層の記録経路に一切入らない。新規起票も
-occurrence コメントも `incidents/occurrences.jsonl` への追記も行わない。調査を要さない既知の
-ユーザー前提エラーであり、incident 一覧に載せると障害の信号が薄まるため。
+分類が `user_precondition_error` または `user_interrupted` の失敗だけは、第1層の記録経路に
+一切入らない。新規起票も occurrence コメントも `incidents/occurrences.jsonl` への追記も
+行わない。調査を要さない既知のユーザー起因の終了であり、incident 一覧に載せると障害の信号が
+薄まるため。
 
-現時点で該当するのは `TmuxSessionRequiredError`（interactive terminal runner を tmux セッション
-外から起動した）1 ケースのみ。判定は run.log の `failure_event.exception_type` の型名で行い、
-エラーメッセージの文字列一致には依存しない。tmux 未インストール・tmux バージョン不足・
-`TMUX_PANE` 欠落・その他の `CLINotFoundError` は従来どおり incident 記録の対象。
+| 分類 | 該当ケース | 判定入力 |
+|---|---|---|
+| `user_precondition_error` | interactive terminal runner を tmux セッション外から起動した（`TmuxSessionRequiredError`） | `failure_event.exception_type` の型名 |
+| `user_interrupted` | 利用者が `kaji run` を Ctrl-C で中断した | `failure_event.kind == "interrupted"` |
+
+いずれも判定は run.log の構造化 `failure_event` で行い、エラーメッセージの文字列一致には
+依存しない。tmux 未インストール・tmux バージョン不足・`TMUX_PANE` 欠落・その他の
+`CLINotFoundError` は従来どおり incident 記録の対象。
+
+中断した run は `workflow_end status=ERROR` として終端されるため、`kaji recover` の triage
+対象として選択できる（`user_interrupted` の decision は `comment_only` で、自動再開はしない）。
+中断時の証跡は run レベルのみで、進行中 attempt の `result.json` は作らない。interactive
+terminal runner では pane を kill せずに残し、その `pane_id` を triage コメントの根拠一覧に
+出す（[interactive terminal runner ガイド](./interactive-terminal-runner.ja.md) § session 継続）。
+孤児 pane として提示するのは `result.json` を持たない進行中 attempt の `pane-metadata.json`
+だけで、完了済み attempt の pane（cleanup 済み）は採用しない。新 attempt 作成前に割り込むと
+最新 attempt が直前の完了済み attempt になるため、この判別がないと殺し済み pane を
+孤児と誤報する。
 
 抑止した場合も、console のエラー表示・run artifact・発生元 Issue への triage コメントは
 維持される。抑止の事実と理由は `run.log` の `incident_suppressed` event（`cause` /

@@ -89,8 +89,18 @@ _SENSITIVE_FAILURE_PATTERNS: list[re.Pattern[str]] = [
 ]
 
 #: 非 candidate cause の decision mapping。列挙外は ``not_resumable``。
+#: Issue #403: ``user_interrupted`` は手動再開が正当なので ``comment_only`` に置く
+#: （``not_resumable`` は Issue #349 が「副作用 skill のため手動 resume も封じる」意味で
+#: 使う語であり、中断 run に付けると誤読される）。どちらでも ``recoverable=False`` で
+#: auto-resume 経路には入らない。
 _COMMENT_ONLY_CAUSES = frozenset(
-    {"agent_declared_abort", "runtime_error", "unknown_external_error", "external_upstream_anomaly"}
+    {
+        "agent_declared_abort",
+        "runtime_error",
+        "unknown_external_error",
+        "external_upstream_anomaly",
+        "user_interrupted",
+    }
 )
 
 ChildLauncher = Callable[[list[str], Path], int]

@@ -225,7 +225,10 @@ kaji run .kaji/wf/official/dev.yaml 224 --log-level WARNING
    followed by best-effort pane cleanup with `tmux kill-pane`. This is cleanup,
    not a latency contract such as "kill within <=N seconds after polling"; a
    kill after the next step starts is allowed. Timeout paths also best-effort
-   kill the pane and then fail loud.
+   kill the pane and then fail loud. An operator Ctrl-C (`KeyboardInterrupt`) is
+   the exception: the pane is **not** killed (Issue #403). The runner records the
+   orphan `pane_id` in `pane-metadata.json` and re-raises so the agent state stays
+   inspectable; clean it up manually with `tmux kill-pane -t <pane_id>`.
 7. If `interactive_terminal_close_on_verdict = false`, the runner sets
    `tmux set-option -p -t %id remain-on-exit on` before polling and does not kill
    the pane after the verdict. After the agent exits naturally, the pane remains
@@ -257,6 +260,34 @@ kaji run .kaji/wf/official/dev.yaml 224 --log-level WARNING
   verdict detection.
 - **Antigravity**: no public session ID is collected. The result always carries
   `session_id=None`, and workflow `resume:` is rejected before launch.
+
+#### Abnormal exit paths (timeout / pane-dead) (Issue #403)
+
+An attempt that ends without a verdict still records a session ID in
+`result.json` when one can be **verifiably** tied to that attempt (for diagnosis
+and manual resume decisions; nothing is auto-resumed). The rules differ from the
+verdict-detection path.
+
+| Agent | Resume input | Path | Resolution |
+|---|---|---|---|
+| codex | none / present | timeout / pane-dead | Adopted only when exactly one session-store rollout matches. Zero / multiple / unreadable resolves to `null` (never falls back to the parent id) |
+| claude | none | timeout | The runner-minted `--session-id` UUID |
+| claude | none | pane-dead | `null` (a dead pane includes launch failure, so the UUID may name a session that never existed) |
+| claude | present | timeout / pane-dead | The resume input id (`--resume` continues the same session) |
+| antigravity | — | all | `null` |
+
+- The codex scan is limited to `CODEX_HOME/sessions/**/*.jsonl` entries modified
+  **at or after the `prompt.txt` mtime**, counting those whose body contains the
+  attempt marker (the absolute `prompt.txt` / `verdict.yaml` paths). On a `resume:`
+  step the parent rollout also contains the marker but stopped being updated
+  before the attempt started, so it is excluded.
+- Abnormal exit paths never read `terminal.log` (on timeout the Codex resume line
+  has not been printed yet, and the transcript can be very large) and add no grace
+  wait.
+- The **verdict-detection path keeps its existing rule** (first match in
+  descending mtime). Codex `resume` creates a new rollout that inherits history,
+  so the same marker can legitimately match more than once; forcing uniqueness
+  there would regress existing `resume:` steps with `MissingResumeSessionError`.
 
 ### Effort note (Codex)
 

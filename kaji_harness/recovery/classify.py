@@ -38,6 +38,8 @@ _USER_PRECONDITION_EXCEPTIONS = frozenset({"TmuxSessionRequiredError"})
 _RECOVERABLE_VERDICT_EXCEPTIONS = frozenset({"VerdictNotFound", "VerdictParseError"})
 
 #: ``failure_event.kind`` のうち、対応する attempt の ``result.json`` を伴うはずのもの。
+#: Issue #403 の ``interrupted`` は **含めない**: 中断では進行中 attempt の ``result.json``
+#: を意図的に作らないため、含めると ``kaji_bug_suspected`` として bug issue を誤起票する。
 _ATTEMPT_BACKED_KINDS = frozenset({"dispatch_exception", "verdict_exception", "agent_abort"})
 
 
@@ -169,6 +171,16 @@ def classify_failure(snapshot: FailureSnapshot) -> FailureClassification:
                     cause="agent_declared_abort",
                     synthetic=False,
                     source="agent",
+                    recoverability_hint="no",
+                )
+            case "interrupted":
+                # Issue #403: Ctrl-C は kaji のプロセス境界の外から届く signal であり、
+                # harness のバグでも agent の判断でも config 不備でもない。再開は人手の
+                # 判断で行うため auto-resume 候補にしない。
+                return FailureClassification(
+                    cause="user_interrupted",
+                    synthetic=True,
+                    source="external",
                     recoverability_hint="no",
                 )
 

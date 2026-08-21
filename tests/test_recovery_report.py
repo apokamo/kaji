@@ -170,6 +170,26 @@ def test_triage_comment_renders_user_precondition_error_cause() -> None:
     assert "incident 起票の対象外" in _CAUSE_DESCRIPTIONS["user_precondition_error"]
 
 
+def test_triage_comment_renders_user_interrupted_cause() -> None:
+    # Issue #403: 新 cause の説明文が欠けると render_triage_comment が KeyError で落ちる。
+    decision = _decision(
+        decision="comment_only",
+        recoverable=False,
+        resume_command=None,
+        resume_scheduled_at=None,
+        classification=FailureClassification(
+            cause="user_interrupted",
+            synthetic=True,
+            source="external",
+            recoverability_hint="no",
+        ),
+    )
+    body = render_triage_comment(decision=decision, issue_ref="#403")
+    assert "| classification | `user_interrupted` |" in body
+    assert _CAUSE_DESCRIPTIONS["user_interrupted"] in body
+    assert "incident 起票の対象外" in _CAUSE_DESCRIPTIONS["user_interrupted"]
+
+
 def test_triage_comment_masks_credentials_in_evidence() -> None:
     decision = _decision(evidence=["result.json error=Bearer sk-secret-token-value"])
     body = render_triage_comment(decision=decision, issue_ref="#288")

@@ -178,7 +178,8 @@ class RunLogger:
         """Issue #288: run を終端させた失敗を構造化記録する。
 
         ``kind`` は ``dispatch_exception`` / ``verdict_exception`` / ``cycle_exhausted`` /
-        ``ambiguous_worktree`` / ``agent_abort``。recovery classifier はこの event を
+        ``ambiguous_worktree`` / ``agent_abort`` / ``interrupted``（Issue #403: 利用者の
+        Ctrl-C による run 中断）。recovery classifier はこの event を
         一次入力とし、reason 文字列マッチには依存しない。``synthetic`` は failure record
         が runner 生成かを表す直交属性（agent の正規 ABORT のみ ``False``）。
         """

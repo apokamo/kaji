@@ -192,6 +192,10 @@ kaji run .kaji/wf/official/dev.yaml 224 --log-level WARNING
 6. `interactive_terminal_close_on_verdict = true` なら、verdict 検知後に `tmux kill-pane` で pane を
    **best-effort cleanup** する。これは cleanup であり「poll≤Ns で kill」のようなレイテンシ契約は持たない
    （次 step 開始後の kill も許容）。timeout 経路でも best-effort `kill-pane` してから fail-loud する。
+   ただし **利用者の Ctrl-C（`KeyboardInterrupt`）では pane を kill しない**（Issue #403）。
+   中断直前の agent 状態を目視・回収できるよう pane を残し、`pane-metadata.json` に
+   `pane_id` を記録して `KeyboardInterrupt` を再送出する。孤児 pane は手動で
+   `tmux kill-pane -t <pane_id>` する。
 7. `interactive_terminal_close_on_verdict = false` なら、polling 前に
    `tmux set-option -p -t %id remain-on-exit on` を設定し、verdict 後に `kill-pane` しない。pane は
    agent 自然終了後も `[dead]`（`#{pane_dead}=1`）として残り、ユーザーが後から内容を確認できる。次 step
@@ -216,6 +220,29 @@ kaji run .kaji/wf/official/dev.yaml 224 --log-level WARNING
   検知後に回収 grace（≤5s）を挟むことを許容する。
 - **Antigravity**: 公開 session ID を取得しない。result は常に `session_id=None` で、
   workflow の `resume:` は起動前に拒否する。
+
+#### 異常終了経路（timeout / pane-dead）の解決規則（Issue #403）
+
+verdict を得ずに終わった attempt でも、当該 attempt と**検証可能に**対応付く session ID を
+`result.json` の `session_id` に残す（診断・人手の再開判断のためであり、自動 resume は行わない）。
+verdict 検出経路とは規則が異なる。
+
+| agent | resume 入力 | 経路 | 解決結果 |
+|---|---|---|---|
+| codex | なし / あり | timeout / pane-dead | session store の一意一致 1 件のみ採用。0 件 / 複数 / 読取失敗は `null`（親 ID へ fallback しない） |
+| claude | なし | timeout | runner 採番の `--session-id` UUID |
+| claude | なし | pane-dead | `null`（起動失敗を含み、UUID に対応する session が実在しない可能性がある） |
+| claude | あり | timeout / pane-dead | resume 入力の ID（`--resume` は同一 session を継続する） |
+| antigravity | — | 全経路 | `null` |
+
+- codex の照合は `CODEX_HOME/sessions/**/*.jsonl` のうち **`prompt.txt` の mtime 以降に更新された**
+  rollout に限り、marker（attempt の `prompt.txt` / `verdict.yaml` の絶対 path）を含むものを数える。
+  `resume:` step では親 rollout も marker を含むが、attempt 開始前に更新が止まっているため除外される。
+- 異常終了経路は `terminal.log` を読まない（timeout 時は Codex の resume 行がまだ出ておらず、
+  transcript が巨大になりうるため）。grace wait も置かない。
+- **verdict 検出経路はこの一意性規則を適用しない**（従来どおり mtime 降順の最初の一致を採る）。
+  codex の resume は履歴を引き継ぐ新規 rollout を作るため同一 marker が正当に複数一致しえ、
+  verdict 経路に一意性を強制すると既存の `resume:` step が `MissingResumeSessionError` で退行する。
 
 ### effort の注意（Codex）
 
