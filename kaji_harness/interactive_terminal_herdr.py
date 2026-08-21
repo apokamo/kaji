@@ -234,9 +234,8 @@ def execute_interactive_terminal_herdr(
             return CLIResult(full_output="", session_id=result_session_id)
 
         process_info = _get_herdr_process_info(herdr, pane_id)
-        if _has_non_shell_foreground_process(process_info):
-            shell_only_observations = 0
-        else:
+        liveness = _classify_herdr_process_liveness(process_info)
+        if liveness == "confirmed_shell_only":
             shell_only_observations += 1
             if shell_only_observations >= _PROCESS_EXIT_CONFIRMATIONS:
                 pane_read = _capture_herdr_snapshot(herdr, pane_id, terminal_log)
@@ -261,6 +260,8 @@ def execute_interactive_terminal_herdr(
                         prefix="Herdr pane returned to its shell before writing verdict.yaml",
                     ),
                 )
+        else:
+            shell_only_observations = 0
         time.sleep(_VERDICT_POLL_INTERVAL_SECONDS)
 
     pane_read = _capture_herdr_snapshot(herdr, pane_id, terminal_log)
@@ -776,19 +777,29 @@ def _get_herdr_process_info(herdr: str, pane_id: str) -> dict[str, object]:
     return cast(dict[str, object], process_info)
 
 
-def _has_non_shell_foreground_process(process_info: dict[str, object]) -> bool:
-    """Return whether process info contains a foreground process other than the pane shell."""
+def _classify_herdr_process_liveness(
+    process_info: dict[str, object],
+) -> Literal["active", "confirmed_shell_only", "unknown"]:
+    """Classify process liveness without treating optional-field absence as shell exit."""
     shell_pid = process_info.get("shell_pid")
     foreground_processes = process_info.get("foreground_processes")
-    if not isinstance(foreground_processes, list):
-        return False
+    if type(shell_pid) is not int or not isinstance(foreground_processes, list):
+        return "unknown"
+    if not foreground_processes:
+        return "unknown"
+
+    process_pids: list[int] = []
     for process in foreground_processes:
         if not isinstance(process, dict):
-            continue
+            return "unknown"
         process_pid = process.get("pid")
-        if isinstance(process_pid, int) and process_pid != shell_pid:
-            return True
-    return False
+        if type(process_pid) is not int:
+            return "unknown"
+        process_pids.append(process_pid)
+
+    if any(process_pid != shell_pid for process_pid in process_pids):
+        return "active"
+    return "confirmed_shell_only"
 
 
 def _close_owned_herdr_pane(

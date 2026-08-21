@@ -21,8 +21,9 @@ from kaji_harness.interactive_terminal_herdr import (
     HerdrPaneRead,
     _build_herdr_marker_argv,
     _build_herdr_split_argv,
+    _classify_herdr_process_liveness,
     _close_owned_herdr_pane,
-    _has_non_shell_foreground_process,
+    _get_herdr_process_info,
     _launch_herdr_pane,
     _list_managed_herdr_panes,
     _mark_herdr_pane,
@@ -703,17 +704,52 @@ class TestHerdrCommandContract:
         assert closed is False
         run_json.assert_not_called()
 
-    def test_process_info_distinguishes_shell_from_agent(self) -> None:
-        shell_only = {
-            "shell_pid": 100,
-            "foreground_processes": [{"pid": 100, "name": "bash"}],
+    @pytest.mark.parametrize(
+        ("process_info", "expected"),
+        [
+            (
+                {
+                    "shell_pid": 100,
+                    "foreground_processes": [{"pid": 100, "name": "bash"}],
+                },
+                "confirmed_shell_only",
+            ),
+            (
+                {
+                    "shell_pid": 100,
+                    "foreground_processes": [{"pid": 200, "name": "claude"}],
+                },
+                "active",
+            ),
+            ({}, "unknown"),
+            ({"shell_pid": None, "foreground_processes": []}, "unknown"),
+            ({"shell_pid": 100, "foreground_processes": None}, "unknown"),
+            ({"shell_pid": 100, "foreground_processes": []}, "unknown"),
+            ({"shell_pid": 100, "foreground_processes": [{}]}, "unknown"),
+            ({"shell_pid": 100, "foreground_processes": [{"pid": "100"}]}, "unknown"),
+        ],
+    )
+    def test_process_info_liveness_classification(
+        self, process_info: dict[str, object], expected: str
+    ) -> None:
+        assert _classify_herdr_process_liveness(process_info) == expected
+
+    @pytest.mark.parametrize("process_info", [None, "invalid", []])
+    def test_process_info_rejects_missing_or_malformed_container(
+        self, process_info: object
+    ) -> None:
+        response = {
+            "result": {
+                "type": "pane_process_info",
+                "process_info": process_info,
+            }
         }
-        agent = {
-            "shell_pid": 100,
-            "foreground_processes": [{"pid": 200, "name": "claude"}],
-        }
-        assert _has_non_shell_foreground_process(shell_only) is False
-        assert _has_non_shell_foreground_process(agent) is True
+        with patch(
+            "kaji_harness.interactive_terminal_herdr._run_herdr_json",
+            return_value=response,
+        ):
+            with pytest.raises(CLIExecutionError, match="omitted process_info"):
+                _get_herdr_process_info("/usr/bin/herdr", "w1:p2")
 
 
 @pytest.mark.medium
@@ -948,6 +984,121 @@ class TestExecuteHerdr:
         assert metadata["close_on_verdict"] is True
         assert metadata["transcript_revision"] == 9
         assert metadata["transcript_truncated"] is True
+
+    def test_unknown_process_info_resets_shell_only_confirmations(self, tmp_path: Path) -> None:
+        prompt_path = tmp_path / "prompt.txt"
+        verdict_path = tmp_path / "verdict.yaml"
+        prompt_path.write_text("do work", encoding="utf-8")
+        step = Step(id="design", skill="design", agent="codex")
+        launch = HerdrPaneLaunch(
+            pane_id="w1:p2",
+            split_target_pane="w1:p1",
+            direction="right",
+            panes_before=[],
+            panes_pruned=[],
+        )
+        observations = 0
+
+        shell_only = {
+            "shell_pid": 100,
+            "foreground_processes": [{"pid": 100, "name": "bash"}],
+        }
+
+        def observations_then_verdict(*args: object, **kwargs: object) -> dict[str, object]:
+            nonlocal observations
+            observations += 1
+            if observations == 6:
+                verdict_path.write_text(
+                    "status: PASS\nreason: ok\nevidence: ok\n", encoding="utf-8"
+                )
+            if observations in {3, 6}:
+                return {}
+            return shell_only
+
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._preflight_herdr",
+                return_value=("/usr/bin/herdr", "w1:p1", "herdr 0.8.2"),
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._launch_herdr_pane",
+                return_value=launch,
+            ),
+            patch("kaji_harness.interactive_terminal_herdr._mark_herdr_pane"),
+            patch("kaji_harness.interactive_terminal_herdr._run_herdr_pane_command"),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._get_herdr_process_info",
+                side_effect=observations_then_verdict,
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._capture_herdr_snapshot",
+                return_value=HerdrPaneRead(text="eventual verdict\n", truncated=False, revision=11),
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
+                return_value=True,
+            ) as close,
+            patch(
+                "kaji_harness.interactive_terminal_herdr.time.monotonic",
+                side_effect=[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+            ),
+            patch("kaji_harness.interactive_terminal_herdr.time.sleep"),
+        ):
+            result = execute_interactive_terminal_herdr(
+                step=step,
+                prompt_path=prompt_path,
+                verdict_path=verdict_path,
+                workdir=tmp_path,
+                timeout=30,
+            )
+
+        assert observations == 6
+        assert result.session_id is None
+        close.assert_called_once()
+
+    def test_process_info_query_failure_does_not_cleanup_pane(self, tmp_path: Path) -> None:
+        prompt_path = tmp_path / "prompt.txt"
+        prompt_path.write_text("do work", encoding="utf-8")
+        step = Step(id="design", skill="design", agent="codex")
+        error = CLIExecutionError("interactive_terminal", 1, "process-info failed")
+
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._preflight_herdr",
+                return_value=("/usr/bin/herdr", "w1:p1", "herdr 0.8.2"),
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._launch_herdr_pane",
+                return_value=HerdrPaneLaunch(
+                    pane_id="w1:p2",
+                    split_target_pane="w1:p1",
+                    direction="right",
+                    panes_before=[],
+                    panes_pruned=[],
+                ),
+            ),
+            patch("kaji_harness.interactive_terminal_herdr._mark_herdr_pane"),
+            patch("kaji_harness.interactive_terminal_herdr._run_herdr_pane_command"),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._get_herdr_process_info",
+                side_effect=error,
+            ),
+            patch("kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane") as close,
+            patch(
+                "kaji_harness.interactive_terminal_herdr.time.monotonic",
+                side_effect=[0.0, 1.0],
+            ),
+        ):
+            with pytest.raises(CLIExecutionError, match="process-info failed"):
+                execute_interactive_terminal_herdr(
+                    step=step,
+                    prompt_path=prompt_path,
+                    verdict_path=tmp_path / "verdict.yaml",
+                    workdir=tmp_path,
+                    timeout=30,
+                )
+
+        close.assert_not_called()
 
     def test_verdict_retains_owned_pane_when_close_is_disabled(self, tmp_path: Path) -> None:
         prompt_path = tmp_path / "prompt.txt"

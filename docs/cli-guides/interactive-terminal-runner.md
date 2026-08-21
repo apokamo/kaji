@@ -286,7 +286,8 @@ verdict, and session-state contracts with the backend-specific differences below
 3. Split uses explicit cwd and `--no-focus`. Kaji marks the response-derived pane before running the
    packaged wrapper. Marker failure leaves the unowned pane untouched and fails loud.
 4. `verdict.yaml` is the only completion trigger. Foreground process observations only detect a
-   command that returned to its shell early; output/status text never completes a step.
+   command that returned to its shell early; output/status text never completes a step. Missing or
+   malformed optional process fields are treated as unknown and never count as a confirmed shell return.
 5. At verdict, early exit, or timeout, kaji saves a best-effort rendered snapshot. Verdict cleanup
    obeys `interactive_terminal_close_on_verdict`; failure cleanup remains ownership-checked.
 

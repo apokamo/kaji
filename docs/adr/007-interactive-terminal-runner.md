@@ -52,6 +52,8 @@ ADR 005 artifact-primary verdict 解決は不変。v3 は v2 の pane 配置契�
   exact paneを再取得しorigin/run一致を確認した場合だけ行う。marker設定失敗時はunowned paneを閉じない。
 - 配置はtmuxと同じ初回右・以後右列内の下分割・最大2枚。layoutのy座標で上側を最古としてpruneする。
 - 完了authorityは引き続きfilesystem `verdict.yaml`。Herdr process/status/outputは早期終了診断にだけ使う。
+  `process-info`のoptional fieldが欠落・null・型不正の場合はliveness unknownとし、shell復帰確認へ
+  加算しない。fieldを完全に検証できたshell-only観測が3回連続した場合だけ早期終了とする。
 - Herdrの`terminal.log`は`recent-unwrapped` rendered snapshotであり、tmux `pipe-pane`と同等のraw
   transcript保証を持たない。kind / availability / truncation / revisionをmetadataへ残す。
 - agent→pane→kajiの追加経路はrelease-matched Herdr skill + repository `herdr-kaji-launch` skillを使う。

@@ -245,7 +245,8 @@ backend固有差分だけを後段に示す。
 3. 明示cwdと`--no-focus`でsplitし、response由来paneをmarker付与してからwrapperを起動する。
    marker失敗時はunowned paneを閉じずfail-loudする。
 4. 完了triggerは`verdict.yaml`のみ。foreground processは早期shell復帰の診断にだけ使い、
-   output/status文字列ではstepを完了しない。
+   output/status文字列ではstepを完了しない。optional process fieldの欠落・型不正はunknownとして扱い、
+   shell復帰確認へ加算しない。
 5. verdict / 早期終了 / timeout時にrendered snapshotをbest-effort保存する。cleanupはownershipを再確認する。
 
 ### Codex / Claude Codeからkajiを起動
