@@ -131,19 +131,48 @@ bug 修正のため公開 IF は原則維持する。変更するのは以下だ
 
 | 対象 | 変更前 | 変更後 | 互換性 |
 |---|---|---|---|
-| `errors.StepTimeoutError.__init__` | `(step_id, timeout, returncode=None)` | `(step_id, timeout, returncode=None, *, session_id=None)` | 既存 3 呼び出し（`cli.py:273` / `interactive_terminal.py:487` / `script_exec.py:182`）は無変更で動作 |
-| `errors.CLIExecutionError.__init__` | `(step_id, returncode, stderr)` | `(step_id, returncode, stderr, *, session_id=None)` | 既存 10 呼び出しは無変更で動作。`TmuxSessionRequiredError` は `CLINotFoundError` 系で無関係 |
+| `errors.SessionResolution` | （存在しない） | 新規 frozen dataclass。`session_id: str \| None` の 1 フィールドのみ | 追加のみ |
+| `errors.StepTimeoutError.__init__` | `(step_id, timeout, returncode=None)` | `(step_id, timeout, returncode=None, *, session_resolution=None)` | 既存 3 呼び出し（`cli.py:273` / `interactive_terminal.py:487` / `script_exec.py:182`）は無変更で動作 |
+| `errors.CLIExecutionError.__init__` | `(step_id, returncode, stderr)` | `(step_id, returncode, stderr, *, session_resolution=None)` | 既存 10 呼び出しは無変更で動作。`TmuxSessionRequiredError` は `CLINotFoundError` 系で無関係 |
 | `logger.RunLogger.log_failure_event` | signature 変更なし | `kind` の値集合に `"interrupted"` を追加（docstring の列挙も更新） | JSONL の field 集合は不変 |
 
-`session_id` を例外に載せる方式は、Issue #222 が `StepTimeoutError.returncode` で確立した
+例外に情報を載せる方式自体は、Issue #222 が `StepTimeoutError.returncode` で確立した
 「異常終了時に runner が `result.json` へ写すための情報を例外に運ばせる」既存パターンの踏襲であり、
 `_record_dispatch_failure` の `getattr(exc, "returncode", None)` と同じ読み取り方で扱う。
+
+**`str | None` ではなく `SessionResolution | None` を運ぶ理由**（`session_id` を直接載せると
+成立しない要件）: 異常終了経路では 2 つの `None` を区別しなければならない。
+
+| 状態 | 意味 | runner の扱い |
+|---|---|---|
+| `session_resolution is None` | この経路は session 解決を**試みていない**（headless `cli.py` / `script_exec.py` / pane 生成前の tmux 制御失敗） | 既存 fallback `result_session_id or session_id` を維持（挙動不変） |
+| `SessionResolution(session_id="…")` | 当該 attempt の session として**検証済み** | その値を `result.json.session_id` に書く |
+| `SessionResolution(session_id=None)` | 解決を試みた結果、一意に対応付く session が**無かった** | `result.json.session_id` を `null` にする。**resume 入力への fallback を明示的に抑止する** |
+
+3 番目の状態が本設計の要点である。Codex の `resume:` step が異常終了したとき、resume 入力
+（親 session ID）は Codex が新規 rollout を作る性質上「当該 attempt で進行していた session」では
+ないため、これを保存すると Issue #403 完了条件「session ID が存在しない、複数候補、marker 不一致、
+読取失敗の場合は ID を推測せず fail-safe に `null` とする」に反し、運用者を誤った再開先へ誘導する。
+`str | None` 1 本では「未試行」と「試行して null」が同じ値になり、この抑止を表現できない。
+
+```python
+@dataclass(frozen=True)
+class SessionResolution:
+    """異常終了経路で確定した session ID の解決結果。
+
+    ``session_id is None`` は「解決を試みたが、当該 attempt に一意対応する session が
+    無かった」ことを表す確定値であり、呼び出し側の推測（resume 入力等）で埋めてはならない。
+    解決自体を試みていない経路は、例外にこのオブジェクトを載せない。
+    """
+
+    session_id: str | None
+```
 
 ### 出力（変更点）
 
 | artifact | 変更 | schema |
 |---|---|---|
-| `steps/<step>/attempt-NNN/result.json` | 異常終了時に `session_id` が `null` 以外になり得る | **キー集合は不変**（`AttemptResult.session_id` は既存フィールド） |
+| `steps/<step>/attempt-NNN/result.json` | 異常終了時に `session_id` が `null` 以外になり得る。逆に Codex の `resume:` step が異常終了し新 rollout を一意特定できない場合は、従来 resume 入力の親 ID が書かれていた位置が `null` になる（fail-safe 側への意図した変更） | **キー集合は不変**（`AttemptResult.session_id` は既存フィールド） |
 | `run.log` `failure_event` | `kind="interrupted"`（`step_id` / `exception_type="KeyboardInterrupt"` / `synthetic=true` 付き）を新規に emit | **field 集合は不変**。既存 field の新しい値のみ。`workflow_start.schema_version` は 1 のまま |
 | `run.log` `workflow_end` | 割込み時 `status="ERROR"` / `error="KeyboardInterrupt: <説明>"` | 不変（既存 field の値） |
 | `steps/<step>/attempt-NNN/pane-metadata.json` | 割込み時にも書き出す（pane は kill しない） | 不変（既存キーのみ） |
@@ -152,13 +181,16 @@ bug 修正のため公開 IF は原則維持する。変更するのは以下だ
 ### 使用例
 
 ```python
-# 1) timeout 経路: attempt に一意対応する session ID を例外に載せる（interactive_terminal 内部）
-raise StepTimeoutError(step.id, timeout, session_id=resolved)   # resolved は None になり得る
+# 1) timeout 経路: 解決結果を確定値として例外に載せる（interactive_terminal 内部）
+#    resolved.session_id が None でも「解決して null」という確定値として運ばれる
+resolved = _resolve_abnormal_exit_session(step.agent, ..., pane_alive=True)
+raise StepTimeoutError(step.id, timeout, session_resolution=resolved)
 
-# 2) runner: 例外が運んできた ID を優先して result.json に写す（_record_dispatch_failure 内部）
-exc_session_id = getattr(exc, "session_id", None)
-if exc_session_id is not None:
-    session_id = exc_session_id
+# 2) runner: 確定値があればそれで上書きし、無い経路だけ既存 fallback を残す
+#    （_record_dispatch_failure 内部。resolution.session_id is None なら null を書く）
+resolution = getattr(exc, "session_resolution", None)
+if resolution is not None:
+    session_id = resolution.session_id
 
 # 3) 割込み: run レベルのみ記録し、例外はそのまま再送出する（WorkflowRunner.run 内部）
 except KeyboardInterrupt as exc:
@@ -166,7 +198,7 @@ except KeyboardInterrupt as exc:
     end_error = f"{type(exc).__name__}: workflow interrupted by user"
     logger.log_failure_event(
         kind="interrupted",
-        step_id=current_step.id if current_step else None,
+        step_id=in_flight_step_id,      # dispatch 中の step。未 dispatch なら None
         exception_type="KeyboardInterrupt",
         synthetic=True,
     )
@@ -198,13 +230,19 @@ $ kaji recover .kaji/wf/official/dev.yaml 403  # ← 中断 run が triage 対�
    `_SESSION_ID_GRACE_SECONDS` を用いる既存の verdict 経路（`:439-458`）は一切変更しない。
    newest-match-wins を維持する（変更すると `resume:` step が `MissingResumeSessionError` で退行する）。
 6. **推測しない**: 一意に検証できない候補は `null` にする。「複数候補のうち最新」「pane が死んだ
-   直後だからおそらくこれ」といった推定は行わない。
-7. **中断時に pane を kill しない**: 中断直前の agent 状態を人間が目視・回収できる状態を保つ。
-8. **対象外の raise site**: pane 生成前 / pipe-pane setup 失敗の `CLIExecutionError` は
+   直後だからおそらくこれ」といった推定は行わない。**resume 入力（親 session ID）による代替も
+   推測に含める**: Codex の異常終了で新 rollout を一意特定できない場合、runner の既存 fallback
+   `result_session_id or session_id` が親 ID を書き込むことを `SessionResolution(None)` で抑止する。
+7. **終端記録の保護範囲**: `log_workflow_start()` の emit 完了直後から run 終了までのすべての処理を
+   `KeyboardInterrupt` 終端記録の保護範囲に入れる。「窓が短い」「現状より悪化しない」を理由に
+   未保護区間を残さない。
+8. **中断時に pane を kill しない**: 中断直前の agent 状態を人間が目視・回収できる状態を保つ。
+9. **対象外の raise site**: pane 生成前 / pipe-pane setup 失敗の `CLIExecutionError` は
    session 解決の対象にしない（agent プロセスがまだ session を作っていないため、
-   照合しても常に `null` になるか、無関係な session に一致するリスクだけが残る）。
-9. **Antigravity**: 公開 session ID を持たない（`docs/cli-guides/interactive-terminal-runner.ja.md`
-   § session 継続）。異常終了でも常に `None`。
+   照合しても常に `null` になるか、無関係な session に一致するリスクだけが残る）。これらは
+   `session_resolution` を載せない = 「未試行」として既存 fallback を維持する。
+10. **Antigravity**: 公開 session ID を持たない（`docs/cli-guides/interactive-terminal-runner.ja.md`
+    § session 継続）。異常終了でも常に `SessionResolution(None)`。
 
 ## 方針
 
@@ -213,21 +251,44 @@ $ kaji recover .kaji/wf/official/dev.yaml 403  # ← 中断 run が triage 対�
 異常終了専用の private helper を 1 本追加し、timeout / pane-dead の 2 箇所から呼ぶ。
 
 ```python
-def _resolve_abnormal_exit_session_id(
+def _resolve_abnormal_exit_session(
     agent: str, *, prompt_path: Path, verdict_path: Path,
-    launch_session_id: str, pane_alive: bool,
-) -> str | None:
-    """verdict を得ずに終わった attempt の session ID を、一意に検証できる場合だけ返す。"""
+    resume_session_id: str | None, launch_session_id: str, pane_alive: bool,
+) -> SessionResolution:
+    """verdict を得ずに終わった attempt の session を解決する。
+
+    戻り値は常に確定値。``SessionResolution(None)`` は「一意対応する session は無い」
+    という結論であり、呼び出し側が resume 入力で埋め直してはならない。
+    """
     if agent == "claude":
-        # pane が生存したまま timeout した = wrapper の `claude --session-id <uuid>` が
-        # 受理され session が実在する。pane-dead は起動失敗を含むため採用しない。
-        return launch_session_id or None if pane_alive else None
+        # `--resume <id>` は同一 session を継続するため、resume 入力そのものが
+        # 当該 attempt の session ID。pane の生死に依らず検証済み。
+        if resume_session_id:
+            return SessionResolution(resume_session_id)
+        # fresh は `--session-id <uuid>` で session を新規作成する。pane が全 timeout 区間を
+        # 生存した = wrapper の起動が受理された証拠。pane-dead は起動失敗を含むため採用しない。
+        return SessionResolution(launch_session_id or None if pane_alive else None)
     if agent != "codex":
-        return None
-    return _unique_codex_session_id_from_store(
-        prompt_path=prompt_path, verdict_path=verdict_path
+        return SessionResolution(None)
+    # codex は resume でも新規 rollout を作るため、resume 入力は当該 attempt の session では
+    # ない。store 照合で一意特定できなければ None（親 ID への fallback は行わない）。
+    return SessionResolution(
+        _unique_codex_session_id_from_store(
+            prompt_path=prompt_path, verdict_path=verdict_path
+        )
     )
 ```
+
+agent × resume 状態 × 経路ごとの結論:
+
+| agent | resume 入力 | 経路 | 解決結果 | 根拠 |
+|---|---|---|---|---|
+| codex | なし | timeout / pane-dead | store 一意一致 1 件 → その UUID / それ以外 → `None` | marker + mtime で当該 attempt の rollout を検証 |
+| codex | あり | timeout / pane-dead | 同上（**親 ID へ fallback しない**） | `codex resume` は履歴を引き継ぐ**新規** rollout を生成するため、親 ID は当該 attempt で進行していた session ではない（Issue #403 `## 決定事項` と grill-me provenance の確認事項） |
+| claude | なし | timeout | `launch_session_id` | pane が全区間生存 = `claude --session-id <uuid>`（`wrapper.sh:72`）が受理された |
+| claude | なし | pane-dead | `None` | 起動失敗を含み、UUID に対応する session が実在しない可能性がある |
+| claude | あり | timeout / pane-dead | resume 入力の ID | `claude --resume <id>`（`wrapper.sh:69`）は**同一** session を継続する。その session は先行 attempt が作成し `SessionState` に記録済みで実在が保証される |
+| antigravity | — | timeout / pane-dead | `None` | 公開 session ID を持たない |
 
 `_unique_codex_session_id_from_store` の規則（既存 `_extract_codex_session_id_from_store` は変更せず、
 別関数として追加する）:
@@ -264,56 +325,153 @@ resume 行を待つ」ためのものだが、timeout 時点で既に time budge
 ```python
 # timeout 分岐（現 :477-487）
 _write_pane_metadata(...)
-resolved = _resolve_abnormal_exit_session_id(step.agent, ..., pane_alive=True)
+resolved = _resolve_abnormal_exit_session(step.agent, ..., pane_alive=True)
 _kill_pane(tmux, pane_id)
-raise StepTimeoutError(step.id, timeout, session_id=resolved)
+raise StepTimeoutError(step.id, timeout, session_resolution=resolved)
 
 # pane-dead 分岐（現 :461-474）
 _write_pane_metadata(..., terminal_log=terminal_log)
-resolved = _resolve_abnormal_exit_session_id(step.agent, ..., pane_alive=False)
-raise CLIExecutionError(step.id, 1, _terminal_exit_detail(terminal_log), session_id=resolved)
+resolved = _resolve_abnormal_exit_session(step.agent, ..., pane_alive=False)
+raise CLIExecutionError(
+    step.id, 1, _terminal_exit_detail(terminal_log), session_resolution=resolved
+)
 ```
 
-`session_id`（resume 入力）が非 `None` の resume step でも helper を呼ぶ。一意な新 rollout が
-見つかればそちらを優先し、見つからなければ runner 側の既存 fallback（`result_session_id or
-session_id`）で親 session ID が残る。どちらも「検証済みの ID」であり推測ではない。
+この 2 経路は resume 入力の有無に関わらず必ず `SessionResolution` を載せる。したがって
+runner 側の既存 fallback（`result_session_id or session_id`）はこの 2 経路では働かず、
+Codex resume の異常終了で親 session ID が `result.json` に残ることは構造的に起きない。
+
+**失われる情報とその回収手段**: Codex resume の異常終了で `session_id` が `null` になると、
+親 session ID は当該 attempt の `result.json` からは辿れなくなる。ただし親 ID は
+(a) 同一 run の session 生成元 step の `result.json.session_id`、(b) `session-state.json` の
+`session_ids`、から従来どおり参照できる。誤った再開先を提示するリスクの方が、同じ run 内で
+別 artifact から辿れる情報の重複を失うコストより大きいため、fail-safe `null` を採る
+（Issue #403 完了条件「ID を推測せず fail-safe に `null` とする」）。
 
 ### 2. runner 側の写し取り（`runner.py`）
 
-`_record_dispatch_failure` に `getattr(exc, "session_id", None)` の読み取りを 1 箇所追加し、
-非 `None` なら引数の `session_id` を上書きする（`returncode` と同じ形）。`execute()` 側の
-呼び出し（`:330`）は変更しない。`state.save_session_id` は呼ばない（制約 4）。
+`_record_dispatch_failure` に `getattr(exc, "session_resolution", None)` の読み取りを 1 箇所
+追加する（`returncode` と同じ形）。
+
+```python
+resolution = getattr(exc, "session_resolution", None)
+if resolution is not None:
+    session_id = resolution.session_id     # None なら null をそのまま書く
+```
+
+`resolution is None`（= 解決を試みていない経路。headless / exec / pane 生成前の tmux 制御失敗）の
+ときだけ、`execute()` が渡した既存値 `result_session_id or session_id`（`:330`）が使われる。
+`execute()` 側の呼び出しは変更しない。`state.save_session_id` は呼ばない（制約 4）。
 
 ### 3. 割込みの終端整合（`runner.py` / `interactive_terminal.py`）
 
-`WorkflowRunner.run()` のメインループ try に `except KeyboardInterrupt` を
-`except Exception` の**前**に追加する（型階層上は排他だが、読み手に「BaseException を明示的に
-扱っている」ことを示す配置）。処理は 3 つだけ:
+#### 3-1. 終端記録の保護範囲を `workflow_start` emit 直後まで広げる
+
+現行の `try` はメインループだけを覆っており（`runner.py:987`）、`log_workflow_start`
+（`:951`）から `try` 突入までの区間 — ローカル変数初期化 / `ambiguous_abort` の早期 return /
+`_apply_cycle_reset` / `_StepExecutor` 構築 — が保護されていない。Issue #403 の EB は
+「workflow 開始後の `KeyboardInterrupt`」を `ERROR` として記録することを求めているため、
+この区間も保護範囲に入れる。
+
+構造は次のとおり（`workflow_start` の採時と全ローカル初期化を `log_workflow_start()` の**前**へ
+移し、`try:` を `log_workflow_start()` の**直後**に置く）:
+
+```python
+total_cost = 0.0
+end_status = "COMPLETE"
+end_error: str | None = None
+last_verdict: Verdict | None = None
+barrier_hit = False
+step_dispatched = False
+in_flight_step_id: str | None = None      # 追加: dispatch 中の step
+workflow_end_logged = False               # 追加: 二重 workflow_end の抑止
+workflow_start = time.monotonic()
+
+logger = RunLogger(log_path=run_dir / "run.log")
+logger.log_workflow_start(run_ctx.canonical_id, self.workflow.name)
+try:
+    _console.info("workflow start: ...")
+    if ambiguous_abort is not None:
+        self._emit_ambiguous_worktree_abort(ambiguous_abort, state, logger, workflow_start)
+        workflow_end_logged = True        # 当該 helper が自前で workflow_end を書く
+        return state
+    self._apply_cycle_reset(cycle_reset_target, state, logger)
+    executor = _StepExecutor(...)
+    while current_step and current_step.id != "end":
+        ...
+        in_flight_step_id = current_step.id
+        outcome = executor.execute(...)
+        in_flight_step_id = None
+        ...
+    if last_verdict and last_verdict.status == "ABORT":
+        end_status = "ABORT"
+except KeyboardInterrupt as exc:
+    ...
+except Exception as exc:
+    ...
+finally:
+    if not workflow_end_logged:
+        logger.log_workflow_end(end_status, ...)
+```
+
+`workflow_end_logged` が必要な理由: `_emit_ambiguous_worktree_abort`（`:877-906`）は自前で
+`log_workflow_end("ABORT", ...)` を書く。これを `try` の中へ移すと `return` 時にも `finally` が
+走り、`ABORT` の直後に初期値 `COMPLETE` の `workflow_end` が二重記録される。フラグで
+`finally` を no-op にすることで、現行の「ABORT が 1 件だけ」という挙動を保存する。
+
+#### 3-2. `except KeyboardInterrupt` の処理
+
+`except Exception` の**前**に置く（型階層上は排他だが、`BaseException` を明示的に扱っていることを
+読み手に示す配置）。処理は 3 つだけ:
 
 1. `end_status = "ERROR"` / `end_error = "KeyboardInterrupt: workflow interrupted by user"`
    （既存 `except Exception` と同じ `"<Type>: <message>"` 形。`str(KeyboardInterrupt())` は
    空文字なので固定文を使う。`workflow_end_exception_type` は `"KeyboardInterrupt"` と解決され、
-   `_DEFINITION_EXCEPTIONS` には含まれない）
-2. `logger.log_failure_event(kind="interrupted", step_id=<中断時の current_step.id>,
+   `_DEFINITION_EXCEPTIONS` には含まれないため `config_or_definition_error` にはならない）
+2. `logger.log_failure_event(kind="interrupted", step_id=in_flight_step_id,
    exception_type="KeyboardInterrupt", synthetic=True)`
 3. `_console.warning(...)` の後に `raise`（再送出）
+
+`step_id` は `current_step.id` ではなく `in_flight_step_id` を使う。dispatch 中に割り込まれた
+場合のみ step 名が入り、main-loop 突入前 / step 間の遷移解決中に割り込まれた場合は `None` に
+なる。これは (a) 実行されていない step を「失敗した step」と誤読させない、(b) 孤児 pane は
+dispatch 中の step にしか存在しないため § 方針 5 の pane 対応付けと一致する、という 2 点による。
+`failure_event.step_id` は既存の nullable field（`cycle_name` と同様）であり、`None` でも
+`_detect_contradiction` は `interrupted` を `_ATTEMPT_BACKED_KINDS` に含めないため矛盾検出に
+落ちない。
 
 進行中 attempt の `result.json` は**作らない**。Ctrl-C は runner プロセスにしか届かず tmux pane 内の
 agent は生存しうるため、exit_code / session を best-effort で埋めると誤情報になる。
 `_record_dispatch_failure` は呼ばない。
 
-`interactive_terminal` 側は polling ループを `try` で包み、`KeyboardInterrupt` 時に
-`_write_pane_metadata` を best-effort（`OSError` / `subprocess.SubprocessError` を握る）で実行して
-そのまま `raise` する。`_kill_pane` は呼ばない。これで孤児 pane の `pane_id` / `pane_pid` /
-`pane_dead` が `steps/<step>/attempt-NNN/pane-metadata.json` に残り、path が step と attempt を、
-`failure_event.step_id` が run レベルの step を示す。metadata write 中の例外で `KeyboardInterrupt`
-が別の例外に置き換わらないよう、握る例外型を限定したうえで `raise` を必ず実行する。
+#### 3-3. 保護範囲拡大に伴う既存挙動への影響（意図した変更）
 
-> **記録されない窓**: `log_workflow_start` 直後〜メインループ try 突入前に届いた
-> `KeyboardInterrupt` は `workflow_end` を残さない（`finally` が try に属するため）。この run は
-> `select_target_run_dir` に「実行中」として拒否される。窓は数ミリ秒で、既存の
-> `_emit_ambiguous_worktree_abort` 経路も同じ構造にあるため、try 範囲の再設計は本 Issue の
-> scope 外とする（挙動は現状と同じ = 悪化しない）。
+`try` を広げた結果、`ambiguous_abort` 処理 / `_apply_cycle_reset` / `_StepExecutor` 構築で
+`Exception` が出た場合も `except Exception` → `finally` を通り、`workflow_end status=ERROR` が
+記録されるようになる。現行はこの区間の例外が `workflow_end` を残さないまま伝播し、
+`select_target_run_dir` が「実行中（`workflow_end` event なし）」として triage を拒否していた。
+本変更はこれを triage 可能にする方向の変更であり、`cmd_run` の exit code map
+（`HarnessError`→3 等）には影響しない。制約 1〜3（公開 CLI / artifact schema / safety gate）を
+侵さないことは変わらない。
+
+#### 3-4. 残る窓（原理的に除去できない区間）
+
+`log_workflow_start()` の呼び出しが戻ってから `try` に入るまでの 1 バイトコード境界だけが
+未保護として残る。これは Python の signal 配送モデル上、`try` の位置をどこに置いても
+消せない（消すには `signal.signal` でカスタム SIGINT ハンドラを導入する必要があり、
+Issue #403 が「維持」と定めた signal 伝播契約の変更にあたるため採らない）。
+`RunLogger` 構築中および `log_workflow_start` 自体の実行中に届いた割込みは
+`workflow_start` すら記録されないため、Issue の「workflow 開始後」の対象外である。
+
+#### 3-5. `interactive_terminal` 側（孤児 pane の記録）
+
+polling ループを `try` で包み、`KeyboardInterrupt` 時に `_write_pane_metadata` を best-effort
+（`OSError` / `subprocess.SubprocessError` を握る）で実行してそのまま `raise` する。
+`_kill_pane` は呼ばない。これで孤児 pane の `pane_id` / `pane_pid` / `pane_dead` が
+`steps/<step>/attempt-NNN/pane-metadata.json` に残り、path が step と attempt を、
+`failure_event.step_id` が run レベルの step を示す。metadata write 中の例外で
+`KeyboardInterrupt` が別の例外に置き換わらないよう、握る例外型を限定したうえで `raise` を必ず
+実行する。
 
 ### 4. 分類と incident 抑止（`recovery/`）
 
@@ -364,8 +522,13 @@ incident の署名 hash は変わらず既存 dedup は壊れない。
 | 割込み証跡の粒度 | run レベル（`failure_event` + `workflow_end status=ERROR`）のみ。進行中 attempt の `result.json` は作らない | Issue #403 `## 決定事項`（grill-me 人間決定） | `_record_dispatch_failure` を呼ばないことを明示。pane snapshot は `result.json` ではないため許容範囲と整理 |
 | 割込み時の pane 後始末 | kill せず、孤児 pane の pane_id / step を中断 evidence に記録 | Issue #403 `## 決定事項`（grill-me 人間決定） | polling ループの `except KeyboardInterrupt` で `_write_pane_metadata` のみ実行（`_kill_pane` なし）。pane_id は既存 `pane-metadata.json`、step は path と `failure_event.step_id` から辿れる形にし、snapshot evidence へ 1 行出す |
 | session ID 保存の対象経路 | timeout（codex / claude）と pane-dead の 3 経路を同一境界として扱う | Issue #403 `## 決定事項`（grill-me 人間決定） | 3 経路に加え、対象外とする raise site（pipe-pane setup / tmux 制御失敗 / headless / exec）を根拠付きで列挙（制約 8・根本原因 A の表） |
-| 複数候補時の fail-safe の適用範囲 | 一意でなければ `null`。適用は異常終了経路のみ。verdict 経路は newest-match-wins を維持 | Issue #403 `## 決定事項`（grill-me 人間決定）。理由も Issue に記載済み | 既存 `_extract_codex_session_id_from_store` を変更せず別関数を追加する構成に分解し、「経路ごとに規則が異なる理由」を § 方針 1 と制約 5 に明記 |
+| 複数候補時の fail-safe の適用範囲 | 一意でなければ `null`。適用は異常終了経路のみ。verdict 経路は newest-match-wins を維持 | Issue #403 `## 決定事項`（grill-me 人間決定）。理由も Issue に記載済み | 既存 `_extract_codex_session_id_from_store` を変更せず別関数を追加する構成に分解し、「経路ごとに規則が異なる理由」を § 方針 1 と制約 5 に明記。**fail-safe の適用対象に resume 入力への fallback を含める**ため、例外の運搬型を `str \| None` から `SessionResolution \| None` に変え、「未試行」と「試行して null」を区別できるようにした（review 指摘 1 への対応） |
 | recovery での提示方法 | `FailureSnapshot` に保持し既存 `evidence` へ行追加。`RecoveryDecision` / `recovery.json` にフィールドを足さない | Issue #403 `## 決定事項`（grill-me 人間決定） | 追加フィールド 2 つと evidence 行の書式・出力条件を確定。`pane-metadata.json` 読取失敗を `artifact_read_errors` に入れない理由を明記 |
+| Codex resume の異常終了で親 session ID を保存しない | 一意な新 rollout を特定できなければ `result.json.session_id` は `null`。resume 入力へ fallback しない | Issue #403 完了条件「session ID が存在しない、複数候補、marker 不一致、読取失敗の場合は ID を推測せず fail-safe に `null` とする」+ `issue-review-design` 指摘 1（https://github.com/apokamo/kaji/issues/403#issuecomment-5373730963 ） | `SessionResolution(None)` を確定値として運ぶ契約に分解し、runner の既存 fallback が働く条件を「例外が resolution を載せていない経路のみ」に限定。失われる親 ID の回収手段（session 生成元 step の `result.json` / `session-state.json`）を § 方針 1 に明記 |
+| `workflow_start` emit 後の全区間を割込み保護範囲にする | `try` を `log_workflow_start()` 直後へ移し、`ambiguous_abort` / `_apply_cycle_reset` / executor 構築も覆う | Issue #403 EB「workflow 開始後の `KeyboardInterrupt` は `workflow_end status=ERROR` と error evidence を記録した上で再送出する」+ `issue-review-design` 指摘 2（https://github.com/apokamo/kaji/issues/403#issuecomment-5373730963 ） | `workflow_end_logged` フラグで `_emit_ambiguous_worktree_abort` の自前 `workflow_end` と二重記録しない構造に分解。原理的に除去できない 1 バイトコード境界のみを残余として明示（§ 方針 3-4） |
+| 割込み時の `failure_event.step_id` | dispatch 中のみ step 名、未 dispatch なら `None` | AI の仮定。根拠: 実行されていない step を「失敗した step」と誤読させないため。孤児 pane は dispatch 中の step にしか存在せず § 方針 5 の対応付けと一致する。`step_id` は既存の nullable field で、`interrupted` は `_ATTEMPT_BACKED_KINDS` 外のため `None` でも矛盾検出に落ちない。検査先: `issue-review-design` | `in_flight_step_id` ローカル変数を dispatch 直前に設定し完了時に解除する形へ具体化 |
+| claude の resume 入力は異常終了でも保存する | timeout / pane-dead いずれでも resume 入力の ID を `SessionResolution` に載せる | AI の仮定。根拠: `claude --resume <id>`（`wrapper.sh:69`）は**同一** session を継続するため、resume 入力そのものが当該 attempt の session ID。その session は先行 attempt が作成し `SessionState` に記録済みで実在が保証される（Codex の `resume` が新規 rollout を作るのとは性質が異なる）。検査先: `issue-review-design` | agent × resume × 経路の表（§ 方針 1）として明文化 |
+| 保護範囲拡大による `Exception` 経路の副次変化 | pre-loop 区間の `Exception` も `workflow_end status=ERROR` を残すようになることを受け入れる | AI の仮定。根拠: 現行はこの区間の例外が `workflow_end` を欠き `select_target_run_dir` に「実行中」として triage を拒否されていた。ERROR 記録は triage 可能にする方向の変更で、exit code map / artifact field 集合を侵さない。検査先: `issue-review-design` / `issue-review-code` | § 方針 3-3 に影響範囲として明記し、通常 `COMPLETE` / 正規 `ABORT` / ambiguous ABORT の非退行を Medium 回帰観点に追加 |
 | pane-dead × claude の `launch_session_id` 保存可否 | **保存しない**。timeout × claude では保存する | AI の仮定。根拠: pane 死亡は「wrapper が claude を起動できなかった / 起動直後に落ちた」を含み、その場合 kaji が採番した UUID に対応する session は実在しない。一方 timeout は pane が全 timeout 区間を生存した（実障害 2 run とも `pane_dead=0`）＝ `claude --session-id <uuid>`（`assets/interactive-terminal/wrapper.sh:72`）が受理された証拠になる。検査先: `issue-review-design` | `pane_alive` フラグで分岐する helper として実装。制約 6「推測しない」の具体化 |
 | timeout 経路の grace wait | **置かない**。`_kill_pane` の前に 1 回だけ解決し、kill 後の再走査もしない | AI の仮定。根拠: timeout は既に time budget 超過であり、Codex の resume 行は pane 終了時にしか出ないため待っても得られない。rollout file はセッション進行中に逐次追記される（実障害 run で timeout の 21〜32 秒前まで追記を確認）。検査先: `issue-design`（本書で決定）→ `issue-review-code` | 呼び出し位置を `_write_pane_metadata` の後・`_kill_pane` の前に固定 |
 | 巨大 `terminal.log`（51MB / 52MB）の読込コスト | 異常終了経路では `terminal.log` を**読まない**（store 照合のみ）。加えて store 走査を mtime 下限でフィルタする | AI の仮定。根拠: timeout 時は resume 行が未出力で読む価値がない、pane-dead 経路の全文走査は Issue #296 の別契約として不変、store 照合の方が attempt との対応を直接検証できる。検査先: `issue-review-code` | tail 読み / 上限バイト数という選択肢を採らず、読込自体を無くす形で解決。走査上限は既存 `_CODEX_SESSION_SCAN_LIMIT` を再利用 |
@@ -402,6 +565,10 @@ OB を直接示す実障害ログ（3 run の timeout 値・Codex session ID・`
 - `report`: `_CAUSE_DESCRIPTIONS["user_interrupted"]` が triage コメント本文に載る。
 - `plan_recovery`（handler の純関数）: cause `user_interrupted` → `decision="comment_only"` /
   `recoverable=False`。既存 cause の decision が変わらないこと。
+- `_resolve_abnormal_exit_session` の非 I/O 分岐: claude × resume 入力あり → resume ID、
+  claude × fresh × `pane_alive=True` → `launch_session_id`、claude × fresh × `pane_alive=False` →
+  `None`、antigravity → `None`。いずれも `SessionResolution` を返し「未試行（`None`）」とは
+  区別できること。
 
 ### Medium テスト
 
@@ -411,17 +578,31 @@ OB を直接示す実障害ログ（3 run の timeout 値・Codex session ID・`
 
 session 解決:
 
-- timeout × codex: `CODEX_HOME` に marker 一致 rollout が 1 件（mtime > `prompt.txt`）→
-  `StepTimeoutError.session_id` にその UUID が載り、runner 経由の `result.json.session_id` が一致する。
-- timeout × codex: marker 一致 rollout が 2 件 → `session_id is None`（fail-safe）。
-- timeout × codex: marker 一致 rollout が 0 件 / `CODEX_HOME/sessions` 不在 → `None`。
+- timeout × codex（fresh）: `CODEX_HOME` に marker 一致 rollout が 1 件（mtime > `prompt.txt`）→
+  `StepTimeoutError.session_resolution.session_id` にその UUID が載り、runner 経由の
+  `result.json.session_id` が一致する。
+- timeout × codex（fresh）: marker 一致 rollout が 2 件 → `result.json.session_id is None`（fail-safe）。
+- timeout × codex（fresh）: marker 一致 rollout が 0 件 / `CODEX_HOME/sessions` 不在 →
+  `result.json.session_id is None`。
 - timeout × codex: marker には一致するが mtime が `prompt.txt` より古い rollout のみ → `None`
   （resume 親 rollout を誤採用しない回帰）。
+- **timeout × codex（`resume:` step、resume 入力あり）: 一意な新 rollout 1 件 → その新 UUID が
+  `result.json.session_id` に入り、resume 入力の親 ID とは異なる。**
+- **timeout × codex（`resume:` step）: 一致 0 件 → `result.json.session_id is None`。
+  resume 入力の親 ID が書き込まれ**ない**ことを明示的に assert する（review 指摘 1 の回帰）。**
+- **timeout × codex（`resume:` step）: 一致 2 件以上 → `result.json.session_id is None`。
+  同上、親 ID へ fallback しない。**
+- **pane-dead × codex（`resume:` step）: 一致 0 件 → `result.json.session_id is None`（親 ID なし）。**
 - timeout × codex: 異常終了経路で `terminal.log` を読まない（巨大 log を置いても
   `codex resume <uuid>` を採用しない）。
-- timeout × claude: `launch_session_id` が `result.json.session_id` に載る。
-- pane-dead × claude: `launch_session_id` を載せない（`None`）。
-- pane-dead × codex: marker 一致 1 件 → `CLIExecutionError.session_id` に載る。
+- timeout × claude（fresh）: `launch_session_id` が `result.json.session_id` に載る。
+- pane-dead × claude（fresh）: `launch_session_id` を載せない（`None`）。
+- timeout / pane-dead × claude（`resume:` step）: resume 入力の ID が `result.json.session_id` に
+  載る（`--resume` は同一 session 継続。既存挙動の維持）。
+- pane-dead × codex（fresh）: marker 一致 1 件 → `CLIExecutionError.session_resolution` に載る。
+- **`session_resolution` を載せない経路の非退行: headless（`cli.py`）/ `exec_script` の
+  `StepTimeoutError` では既存 fallback が働き、resume 入力の session ID が
+  `result.json.session_id` に残る（`getattr(exc, "session_resolution", None) is None` の分岐）。**
 - verdict 検出経路の回帰: 既存 `TestCodexSessionIdExtraction` の 3 ケース
   （terminal.log 抽出 / store fallback / 無関係 rollout 無視）が現状の期待値のまま green。
 - `resume:` step の回帰: 既存の resume 経路が `MissingResumeSessionError` を出さない。
@@ -431,8 +612,16 @@ session 解決:
 - `WorkflowRunner.run()` の step dispatch が `KeyboardInterrupt` を送出 →
   (a) `KeyboardInterrupt` が呼出元へ再送出される、(b) `run.log` 末尾が
   `workflow_end status=ERROR` かつ `error` が `KeyboardInterrupt:` で始まる、
-  (c) `failure_event kind="interrupted"` が `step_id` 付きで 1 件、
+  (c) `failure_event kind="interrupted"` が `step_id=<dispatch 中の step>` 付きで 1 件、
   (d) 進行中 attempt に `result.json` が**作られない**。
+- **main-loop dispatch 前の割込み（`_apply_cycle_reset` から `KeyboardInterrupt`）→
+  (a) 再送出される、(b) `workflow_end status=ERROR` が記録される、
+  (c) `failure_event kind="interrupted"` が `step_id=None` で 1 件、
+  (d) `result.json` は 1 件も作られない（review 指摘 2 の回帰）。**
+- **`ambiguous_worktree` ABORT 経路の非退行: `workflow_end` が 1 件だけ（`status=ABORT`）で、
+  保護範囲拡大による `COMPLETE` の二重記録が起きない（`workflow_end_logged` フラグの回帰）。**
+- **pre-loop 区間で `Exception`（`_apply_cycle_reset` が送出）→ `workflow_end status=ERROR` が
+  記録され、例外が伝播する（§ 方針 3-3 の意図した変更を固定する）。**
 - `interactive_terminal` の polling 中に `KeyboardInterrupt` →
   `pane-metadata.json` が書かれ、`kill-pane` が呼ばれず（fake tmux の argv 記録で検証）、
   `KeyboardInterrupt` がそのまま伝播する。
