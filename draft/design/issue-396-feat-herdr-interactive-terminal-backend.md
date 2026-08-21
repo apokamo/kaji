@@ -236,6 +236,16 @@ kaji_step=<step id>
 marker設定またはexact readbackに失敗した場合はfail-loudし、ownership未確認paneを自動closeしない。
 markerなしpaneを後続prune対象にしない。
 
+paneを閉じるauthorityは、次の2経路を区別する。
+
+1. **current attempt cleanup**: `pane split` responseから得たpane IDだけを対象にし、作成時の
+   `kaji_origin` / `kaji_run`とclose直前のtokenがexact一致する場合だけcloseする。IDまたはtokenを
+   再取得できない、不一致、workspace ID欠落の場合はfail-closedで残す。
+2. **past-run prune**: origin workspaceを明示した`pane list` responseに含まれ、
+   `kaji_origin == origin`と非空の`kaji_run`を持つ右列paneだけをmanaged候補にする。対象pane IDと
+   list responseから得たrun tokenをclose直前の`pane get`で再確認し、exact一致する場合だけcloseする。
+   markerなし、別origin、originと同じ列、layout欠落、不一致のpaneはpruneしない。
+
 `pane list --workspace <origin workspace>` から `tokens.kaji_origin == origin` のpaneだけを管理対象にする。
 layout snapshotの `rect.y` / `rect.x` で右列内の順序を決め、tmux版と同じく最大2枚を維持する。
 
@@ -361,7 +371,8 @@ plugin v1はruntime argv pane registrationを持たないため、core runnerの
 - agent入力、workflow値、pathをshell command文字列へ未quoteで連結しない
 - wrapper commandは既存 `shlex.join` を再利用
 - Herdr CLIはargvで起動しshellを介さない
-- cleanup対象は作成response由来ID + kaji marker一致の両方で検証
+- current attempt cleanupは作成response由来ID + current run marker一致の両方で検証
+- past-run pruneはworkspace-scoped list response由来ID + list/get間で一致するorigin/run markerで検証
 - user pane、unmarked pane、別origin paneをprune/closeしない
 - `HERDR_ENV`だけでfocused paneを信用せず、`HERDR_PANE_ID`と`pane current --current`を照合
 - pluginはユーザー権限でunsandboxed実行されることをdocsに明記
@@ -369,14 +380,20 @@ plugin v1はruntime argv pane registrationを持たないため、core runnerの
 
 ## 重要判断 provenance
 
-| 判断 / 方針 | 出典または仮定 | 設計で行った詳細化 | 後段の検査先 |
-|---|---|---|---|
-| explicit response pane IDだけを操作し、focusへ依存しない | Issue本文と引継ぎ時の人間指定 | originを`HERDR_PANE_ID`へ固定し、split responseから得たID以外をrun/closeしない | command argv tests、stateful fake、live pane inventory |
-| close前にownershipを再確認し、今回作成したpane以外をclose/reuseしない | 引継ぎ時の人間指定（安全上のone-way door） | durable `kaji_origin` / `kaji_run` tokenのexact readbackとpost-close target absenceを必須化 | ownership mismatch tests、retained-pane live smoke |
-| server stop、session delete、force kill、prune等の破壊的live検証を行わない | 引継ぎ時の人間指定 | selection契約はfake CLIで検証し、real pruneを未検証として明記 | testsと最終report |
-| Claude `-p`とplugin自動installを使わない | Issue本文と引継ぎ時の人間指定 | real interactive pane commandとrepository skillを採用 | agent-to-kaji live run、利用者docs |
-| runner modeとterminal backendを別軸にし、backendを明示選択する | Issue要件を満たすための設計詳細化（two-way door） | `Literal["tmux", "herdr"]`、tmux default、CLI override、暗黙fallbackなし | config / dispatch tests、full regression |
-| Herdr command responseをcommand別に扱う | installed 0.8.2 live responseと`herdr --skill` / schema | mutation empty-successとquery/read responseを分離し、strict failureを維持 | RED/GREEN tests、installed-Herdr live smoke |
+人間指定の安全条件は、[作業終了時handoffコメント](https://github.com/apokamo/kaji/issues/396#issuecomment-5359779314)
+を具体的な出典とする。このコメントの「今回作成したpane以外をclose/reuseしない」は、resume時の
+追加live検証に対する操作境界であり、製品の既存tmux契約であるownership確認済みpast-run pruneを
+廃止する決定ではない。製品契約では上記のcurrent attempt cleanupとpast-run pruneを分離する。
+
+| 判断 | 方針 | 出典または仮定 | 設計で行った詳細化 | 後段の検査先 |
+|---|---|---|---|---|
+| pane targetの識別 | focusや予測IDへ依存せず、CLI response由来IDだけを使う | [Issue本文](https://github.com/apokamo/kaji/issues/396)とhandoffコメントの人間決定 | current attemptはsplit response、past-run pruneはworkspace-scoped list responseをID sourceにし、両方でexplicit IDを後続commandへ渡す | command argv tests、stateful fake、live pane inventory |
+| destructive pane操作のownership | close直前のorigin/run tokenがauthority sourceとexact一致する場合だけcloseする | handoffコメントの人間決定（安全上のone-way door） | current attemptとpast-run pruneのauthorityを上記2経路に分離し、token欠落・不一致・workspace不明はfail-closedにする | ownership mismatch tests、retained-pane live smoke、fake prune test |
+| 追加live検証の破壊範囲 | server stop、session delete、force kill、real prune等を無断実行しない | handoffコメントの人間決定 | selection/close契約はfake CLIで検証し、real pruneを未検証として明記する | testsと最終report |
+| agentからkajiを起動する経路 | Claude `-p`を使わず、plugin installを必須にしない | [Issue本文](https://github.com/apokamo/kaji/issues/396)の人間決定。plugin自動install禁止はhandoffコメント | real interactive pane commandとrepository skillを採用する | agent-to-kaji live run、利用者docs |
+| backend選択と互換性 | backendを明示選択してfail-fastし、既定tmuxを維持する | [Issue本文](https://github.com/apokamo/kaji/issues/396)「主要件」の人間決定 | runner modeとbackendを別軸にする | config / dispatch tests、full regression |
+| config surface | `interactive_terminal_backend`とrun単位CLI overrideを追加する | AIのtwo-way-door仮定。既存execution config / override patternが根拠で、review-design / review-codeで検査 | `Literal["tmux", "herdr"]`、tmux default、暗黙fallbackなし | config / parser / dispatch tests |
+| Herdr command response | commandごとのinstalled 0.8.2契約を採用する | installed 0.8.2 live responseと`herdr --skill` / schemaによる検証済み事実 | mutation empty-successとquery/read responseを分離し、strict failureを維持 | RED/GREEN tests、installed-Herdr live smoke |
 
 ## テスト戦略
 
