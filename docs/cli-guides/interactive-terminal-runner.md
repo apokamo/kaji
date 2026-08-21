@@ -280,7 +280,7 @@ verdict, and session-state contracts with the backend-specific differences below
 
 ### Herdr behavior
 
-1. Preflight validates Herdr >= 0.8.2, `HERDR_ENV=1`, `HERDR_PANE_ID`, and an exact `pane get` match.
+1. Preflight validates `HERDR_ENV=1` and `HERDR_PANE_ID` before resolving the binary, then validates Herdr >= 0.8.2 and an exact `pane current --current` match.
 2. Kaji reads token-owned panes and origin layout. It opens the first pane to the right, later panes
    downward, and keeps at most two. Prune re-reads current origin/run tokens before closing.
 3. Split uses explicit cwd and `--no-focus`. Kaji marks the response-derived pane before running the

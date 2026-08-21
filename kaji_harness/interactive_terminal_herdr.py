@@ -342,8 +342,8 @@ def _parse_herdr_version(text: str) -> tuple[int, int, int]:
 
 def _preflight_herdr() -> tuple[str, str, str]:
     """Validate CLI version, caller context, and origin pane visibility."""
-    herdr = _resolve_herdr()
     origin_pane = _resolve_herdr_origin()
+    herdr = _resolve_herdr()
     completed = _run_herdr(herdr, ["--version"])
     try:
         version = _parse_herdr_version(completed.stdout)
@@ -587,7 +587,11 @@ def _list_managed_herdr_panes(herdr: str, origin_pane: str) -> list[HerdrManaged
     """List marker-owned panes in the origin tab ordered from top to bottom."""
     origin = _get_herdr_pane(herdr, origin_pane)
     workspace_id = origin.get("workspace_id")
-    if origin.get("pane_id") != origin_pane or not isinstance(workspace_id, str):
+    if (
+        origin.get("pane_id") != origin_pane
+        or not isinstance(workspace_id, str)
+        or not workspace_id
+    ):
         raise CLIExecutionError(
             "interactive_terminal", 1, "Herdr origin pane omitted its workspace ID"
         )
@@ -632,13 +636,13 @@ def _list_managed_herdr_panes(herdr: str, origin_pane: str) -> list[HerdrManaged
             continue
         pane_id = item.get("pane_id")
         tokens = item.get("tokens")
-        if not isinstance(pane_id, str) or not isinstance(tokens, dict):
+        if not isinstance(pane_id, str) or not pane_id or not isinstance(tokens, dict):
             continue
         if tokens.get("kaji_origin") != origin_pane:
             continue
         run_id = tokens.get("kaji_run")
         position = pane_positions.get(pane_id)
-        if not isinstance(run_id, str) or position is None:
+        if not isinstance(run_id, str) or not run_id or position is None:
             raise CLIExecutionError(
                 "interactive_terminal",
                 1,
@@ -814,6 +818,8 @@ def _close_owned_herdr_pane(
     Returns:
         True when the owned pane was closed, otherwise false.
     """
+    if not pane_id or not origin_pane or not run_id:
+        return False
     try:
         pane = _get_herdr_pane(herdr, pane_id)
     except CLIExecutionError:

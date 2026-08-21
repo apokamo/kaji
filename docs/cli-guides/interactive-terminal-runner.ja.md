@@ -239,7 +239,7 @@ backend固有差分だけを後段に示す。
 
 ### Herdrの振る舞い
 
-1. Herdr >= 0.8.2、`HERDR_ENV=1`、`HERDR_PANE_ID`、exact `pane get`一致をpreflightする。
+1. binary解決前に`HERDR_ENV=1`と`HERDR_PANE_ID`を検証し、その後Herdr >= 0.8.2と`pane current --current`のexact一致をpreflightする。
 2. token所有paneとorigin layoutを読み、初回は右、以後は下へsplitし最大2枚に保つ。prune前に
    current origin/run tokenを再取得する。
 3. 明示cwdと`--no-focus`でsplitし、response由来paneをmarker付与してからwrapperを起動する。

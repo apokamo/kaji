@@ -76,6 +76,19 @@ class TestHerdrPreflight:
         with pytest.raises(HerdrSessionRequiredError, match="HERDR_PANE_ID"):
             _resolve_herdr_origin()
 
+    def test_preflight_checks_caller_context_before_binary(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("HERDR_ENV", raising=False)
+        monkeypatch.delenv("HERDR_PANE_ID", raising=False)
+        with (
+            patch("kaji_harness.interactive_terminal_herdr._resolve_herdr") as resolve,
+            pytest.raises(HerdrSessionRequiredError, match="inside Herdr"),
+        ):
+            _preflight_herdr()
+
+        resolve.assert_not_called()
+
     @pytest.mark.parametrize(
         ("text", "expected"),
         [
@@ -681,6 +694,79 @@ class TestHerdrCommandContract:
         ]
         assert launch.panes_before == ["w1:p2", "w1:p3"]
         assert launch.panes_pruned == ["w1:p2"]
+
+    @pytest.mark.parametrize("workspace_id", [None, ""])
+    def test_managed_pane_listing_rejects_missing_or_empty_workspace(
+        self, workspace_id: object
+    ) -> None:
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._get_herdr_pane",
+                return_value={"pane_id": "w1:p1", "workspace_id": workspace_id},
+            ),
+            patch("kaji_harness.interactive_terminal_herdr._run_herdr_json") as run_json,
+            pytest.raises(CLIExecutionError, match="omitted its workspace ID"),
+        ):
+            _list_managed_herdr_panes("/usr/bin/herdr", "w1:p1")
+
+        run_json.assert_not_called()
+
+    @pytest.mark.parametrize("run_token", [None, ""])
+    def test_managed_pane_listing_rejects_missing_or_empty_run_token(
+        self, run_token: object
+    ) -> None:
+        pane_list = {
+            "result": {
+                "type": "pane_list",
+                "panes": [
+                    {
+                        "pane_id": "w1:p2",
+                        "tokens": {"kaji_origin": "w1:p1", "kaji_run": run_token},
+                    }
+                ],
+            }
+        }
+        layout = {
+            "result": {
+                "type": "pane_layout",
+                "layout": {
+                    "panes": [
+                        {"pane_id": "w1:p1", "rect": {"x": 0, "y": 0}},
+                        {"pane_id": "w1:p2", "rect": {"x": 60, "y": 20}},
+                    ]
+                },
+            }
+        }
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._get_herdr_pane",
+                return_value={"pane_id": "w1:p1", "workspace_id": "w1"},
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._run_herdr_json",
+                side_effect=[pane_list, layout],
+            ),
+            pytest.raises(CLIExecutionError, match="missing run token"),
+        ):
+            _list_managed_herdr_panes("/usr/bin/herdr", "w1:p1")
+
+    @pytest.mark.parametrize(
+        ("pane_id", "origin_pane", "run_id"),
+        [("w1:p2", "w1:p1", ""), ("w1:p2", "", "run-1"), ("", "w1:p1", "run-1")],
+    )
+    def test_close_refuses_empty_ownership_authority(
+        self, pane_id: str, origin_pane: str, run_id: str
+    ) -> None:
+        with patch("kaji_harness.interactive_terminal_herdr._get_herdr_pane") as get_pane:
+            closed = _close_owned_herdr_pane(
+                "/usr/bin/herdr",
+                pane_id,
+                origin_pane=origin_pane,
+                run_id=run_id,
+            )
+
+        assert closed is False
+        get_pane.assert_not_called()
 
     def test_close_refuses_changed_ownership(self) -> None:
         pane = {
