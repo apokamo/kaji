@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-08-22
+
+This release removes the deprecated `inject_verdict` workflow field, adds the
+TypeScript managed starter, and expands the maintained workflow and Codex
+worktree guidance.
+
 ### BREAKING CHANGE
 
 - **`inject_verdict`** (workflow step field) has been removed from the engine
@@ -30,6 +36,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the prior verdict explicitly. See `docs/dev/workflow-authoring.md` §
     削除済みフィールド for details, and issue #383 and its PR for the
     contract removal.
+
+### Added
+
+- Registered `apokamo/kaji-starter-typescript` as a managed starter and added
+  English and Japanese setup guides for using kaji in TypeScript repositories
+  (#391).
+- Added the `dev-thorough-codex` custom workflow variant, assigning design and
+  implementation to Codex and independent review and verification to Claude.
+
+### Changed
+
+- Updated the `docs-fable` custom workflow so Claude handles documentation
+  updates and fixes while Codex performs review and verification.
+
+### Docs
+
+- Documented the Codex-specific Serena code-intelligence policy, including
+  absolute-path worktree root validation, process and cache isolation, stable
+  version pinning, and the boundary with native search tools (#78).
 
 ## [0.18.0] - 2026-07-25
 
