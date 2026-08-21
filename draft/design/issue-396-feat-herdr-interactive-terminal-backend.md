@@ -225,7 +225,7 @@ focused pane省略形は使わない。preflight後はoriginまたはresponse由
 
 ### 4. pane markerと配置
 
-作成直後、agent起動前にsource `kaji:interactive-terminal` のmetadata tokenを設定する。
+作成直後、agent起動前にsource `kaji` のmetadata tokenを設定する。
 
 ```text
 kaji_origin=<origin pane id>
