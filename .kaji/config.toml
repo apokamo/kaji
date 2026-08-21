@@ -10,6 +10,7 @@ worktree_prefix = "kaji"            # worktree dir 名の先頭 segment（<prefi
 [execution]
 default_timeout = 2400
 agent_runner = "headless"           # "headless"（既定） | "interactive_terminal"
+# interactive_terminal_backend = "tmux"  # "tmux"（既定） | "herdr"
 # interactive_terminal_close_on_verdict = true   # interactive_terminal のときのみ作用（headless では無効）
 
 # Repository default. 各 user は `kaji local init` で

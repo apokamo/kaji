@@ -1,7 +1,7 @@
 """Medium tests: WorkflowRunner runner-backend dispatch (Issue #224 / #230).
 
 Verifies that ``config.execution.agent_runner`` routes the agent step to either
-``execute_interactive_terminal`` (tmux path) or ``execute_cli`` (headless),
+``execute_interactive_terminal`` (tmux/Herdr path) or ``execute_cli`` (headless),
 without changing the existing headless behavior, and that both backends receive
 the same ``effective_workdir`` (Issue #230 MF3 regression guard).
 """
@@ -17,7 +17,7 @@ from unittest.mock import patch
 import pytest
 
 from kaji_harness.config import KajiConfig
-from kaji_harness.errors import TmuxSessionRequiredError
+from kaji_harness.errors import HerdrSessionRequiredError, TmuxSessionRequiredError
 from kaji_harness.models import CLIResult, Step, Workflow
 from kaji_harness.runner import WorkflowRunner
 from kaji_harness.skill import SkillMetadata
@@ -92,9 +92,37 @@ class TestRunnerBackendDispatch:
         assert state.last_completed_step == "design"
         # close_on_verdict flag is threaded from config into the runner call.
         assert captured["close_on_verdict"] is False
+        assert captured["backend"] == "tmux"
         assert captured["execution_policy"] == "auto"
         assert captured["prompt_path"].name == "prompt.txt"
         assert captured["verdict_path"].name == "verdict.yaml"
+
+    def test_herdr_backend_is_threaded_to_interactive_runner(self, tmp_path: Path) -> None:
+        config = _make_config(
+            tmp_path,
+            execution_extra=(
+                'agent_runner = "interactive_terminal"\ninteractive_terminal_backend = "herdr"'
+            ),
+        )
+        runner = _make_runner(config, tmp_path)
+        captured: dict[str, Any] = {}
+
+        def fake_interactive(**kwargs: Any) -> CLIResult:
+            captured.update(kwargs)
+            kwargs["verdict_path"].write_text(_PASS_YAML, encoding="utf-8")
+            return CLIResult(full_output="", session_id="sess-herdr")
+
+        plain_meta = SkillMetadata(name="plain", description="", exec_script=None)
+        with (
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.runner.load_skill_metadata", return_value=plain_meta),
+            patch("kaji_harness.runner.execute_interactive_terminal", side_effect=fake_interactive),
+            patch("kaji_harness.runner.execute_cli"),
+        ):
+            state = runner.run()
+
+        assert state.last_completed_step == "design"
+        assert captured["backend"] == "herdr"
 
     def test_tmux_session_required_type_name_reaches_run_log(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -127,6 +155,40 @@ class TestRunnerBackendDispatch:
         assert len(failure) == 1
         assert failure[0]["kind"] == "dispatch_exception"
         assert failure[0]["exception_type"] == "TmuxSessionRequiredError"
+
+    def test_herdr_session_required_type_name_reaches_run_log(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config = _make_config(
+            tmp_path,
+            execution_extra=(
+                'agent_runner = "interactive_terminal"\ninteractive_terminal_backend = "herdr"'
+            ),
+        )
+        artifacts_dir = tmp_path / "art-herdr"
+        runner = _make_runner(config, tmp_path, artifacts_dir=artifacts_dir)
+        plain_meta = SkillMetadata(name="plain", description="", exec_script=None)
+        monkeypatch.delenv("HERDR_ENV", raising=False)
+        monkeypatch.delenv("HERDR_PANE_ID", raising=False)
+
+        with (
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.runner.load_skill_metadata", return_value=plain_meta),
+            patch(
+                "kaji_harness.interactive_terminal_herdr.shutil.which",
+                return_value="/usr/bin/herdr",
+            ),
+        ):
+            with pytest.raises(HerdrSessionRequiredError):
+                runner.run()
+
+        run_logs = sorted(artifacts_dir.glob("*/runs/*/run.log"))
+        assert len(run_logs) == 1
+        events = [json.loads(line) for line in run_logs[0].read_text().splitlines()]
+        failure = [event for event in events if event["event"] == "failure_event"]
+        assert len(failure) == 1
+        assert failure[0]["kind"] == "dispatch_exception"
+        assert failure[0]["exception_type"] == "HerdrSessionRequiredError"
 
     def test_headless_config_routes_to_execute_cli(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path)  # default agent_runner = headless

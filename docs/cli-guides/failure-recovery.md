@@ -152,10 +152,10 @@ is opened, no occurrence comment is posted, and nothing is appended to `incident
 These are known user precondition mistakes that need no investigation, and promoting them to
 incidents would drown out the real failure signal.
 
-Today exactly one case qualifies: `TmuxSessionRequiredError`, raised when the interactive terminal
-runner is started outside a tmux session. The decision keys off the exception type name recorded in
+Two cases qualify: `TmuxSessionRequiredError` and `HerdrSessionRequiredError`, raised when the
+selected interactive terminal backend is started outside its required session context. The decision keys off the exception type name recorded in
 `failure_event.exception_type`, never off the raw error message. A missing tmux binary, an
-insufficient tmux version, a missing `TMUX_PANE`, and every other `CLINotFoundError` keep their
+insufficient backend version, a missing pane-ID variable, and every other `CLINotFoundError` keep their
 existing incident recording behavior.
 
 Even when incident recording is suppressed, the console error, the run artifacts, and the triage

@@ -40,7 +40,7 @@ def _apply_execution_overrides(config: KajiConfig, args: argparse.Namespace) -> 
     """Apply ``kaji run`` CLI overrides onto ``config.execution`` (precedence 1).
 
     ``--agent-runner interactive-terminal`` is normalized to the config value
-    ``interactive_terminal``. Each option is independent: when an option is
+    ``interactive_terminal``. The terminal backend override is already in config form. Each option is
     unspecified (``None``) the resolved config value is kept. The three-state
     ``close_on_verdict`` (``None`` / ``True`` / ``False``) distinguishes "not
     given" from an explicit ``--no-...``.
@@ -55,6 +55,12 @@ def _apply_execution_overrides(config: KajiConfig, args: argparse.Namespace) -> 
     runner_override = getattr(args, "agent_runner", None)
     if runner_override is not None:
         execution = dataclasses.replace(execution, agent_runner=runner_override.replace("-", "_"))
+        changed = True
+    terminal_backend_override = getattr(args, "interactive_terminal_backend", None)
+    if terminal_backend_override is not None:
+        execution = dataclasses.replace(
+            execution, interactive_terminal_backend=terminal_backend_override
+        )
         changed = True
     close_override = getattr(args, "close_on_verdict", None)
     if close_override is not None:

@@ -12,7 +12,7 @@ class AgentCapabilities:
     Attributes:
         binary: 実行する CLI binary 名。
         supports_resume: workflow の resume を実行できるか。
-        supports_interactive_terminal: tmux interactive runner を利用できるか。
+        supports_interactive_terminal: interactive terminal runnerを利用できるか。
         emits_jsonl: stdout が JSONL event stream か。
         effort_allowed: 許容する effort 値。None は検証を行わない。
     """

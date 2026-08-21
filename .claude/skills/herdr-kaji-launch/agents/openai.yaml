@@ -1,0 +1,4 @@
+interface:
+  display_name: "Launch kaji in Herdr"
+  short_description: "Open a Herdr pane and launch interactive kaji"
+  default_prompt: "Use $herdr-kaji-launch to open a sibling Herdr pane and start kaji interactively."

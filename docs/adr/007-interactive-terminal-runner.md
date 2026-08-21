@@ -1,8 +1,12 @@
-# ADR 007: interactive_terminal runner（terminal backend は tmux）
+# ADR 007: interactive_terminal runner（tmux / Herdr terminal backend）
 
 ## ステータス
 
-承認 (2026-06-07) — Issue #229 / #227 の real-agent PoC 検証（WSL2 / tmux 3.4 / claude haiku + codex gpt-5.4-mini）で
+承認 (2026-08-21) — Issue #396でHerdr 0.8.2 backendを追加。fake lifecycle、
+Claude / Codex / Antigravity fresh、Claude / Codex resume、agent起点のnested interactive kajiを
+実機検証済み。Antigravity resumeはadapter capabilityとして非対応。
+
+旧: 承認 (2026-06-07) — Issue #229 / #227 の real-agent PoC 検証（WSL2 / tmux 3.4 / claude haiku + codex gpt-5.4-mini）で
 terminal backend = `tmux` 単一の実現性を確定し、本版を承認に確定した。検証詳細は
 `tmp/2026-06-tmux-lifecycle-real-agent-verification/report.md`。
 旧: 改訂提案 (2026-06-06) — Issue #229 の PoC 検証後に承認へ確定する。
@@ -29,11 +33,31 @@ terminal backend = `tmux` 単一の実現性を確定し、本版を承認に確
 |----|------|------|------|
 | v1 | 2026-06-05 | terminal backend = `kitty` 単一 | GUI ウィンドウを spawn して並列可視性を得る前提。`/proc` cmdline scan による cleanup、util-linux `script(1)` による transcript |
 | v2 | 2026-06-06 | terminal backend = `tmux` 単一 | 「kaji を tmux 内で起動 → runner が `split-window` で pane 追加」で**並列可視性をディスプレイ無しで再現できる**と判明し、v1 の前提が崩れたため改訂 |
-| v3（本版） | 2026-06-08 | pane 配置を「初回右・以後右列内・最大2枚」に変更、最小 tmux を 3.1 に引き上げ | v2 の「毎 step で現在 pane の右に追加」は `close_on_verdict=false` で pane を残すと横幅が step ごとに狭くなる。Issue #238 で、初回のみ origin の右、2枚目以降は右列内の上下分割、右列の kaji 管理 pane を最大2枚に制限する配置へ更新。pane を kaji marker（pane user option）で識別するため最小 tmux を 3.1 に引き上げ |
+| v3 | 2026-06-08 | pane 配置を「初回右・以後右列内・最大2枚」に変更、最小 tmux を 3.1 に引き上げ | v2 の「毎 step で現在 pane の右に追加」は `close_on_verdict=false` で pane を残すと横幅が step ごとに狭くなる。Issue #238 で、初回のみ origin の右、2枚目以降は右列内の上下分割、右列の kaji 管理 pane を最大2枚に制限する配置へ更新。pane を kaji marker（pane user option）で識別するため最小 tmux を 3.1 に引き上げ |
+| v4 | 2026-08-21 | `tmux | herdr`を明示選択可能にし、既定tmuxを維持 | Issue #396。Herdr 0.8.2 / protocol 20のCLI、caller-context guard、metadata ownership token、rendered snapshotを採用 |
 
 v2 / v3 は v1 の **runner 抽象・verdict 解決経路・session 継続方針を維持**し、terminal backend の実体だけを
 `kitty` → `tmux` に差し替える。`agent_runner = "interactive_terminal"` という設定面・workflow 契約・
 ADR 005 artifact-primary verdict 解決は不変。v3 は v2 の pane 配置契約のみを更新し、その他の決定は維持する。
+
+### v4の決定（Issue #396）
+
+- `[execution].interactive_terminal_backend = "tmux" | "herdr"`を追加する。既定は`tmux`で、
+  environment auto-detectionと暗黙fallbackは行わない。
+- Herdr backendはinstalled `herdr` CLIをargvで呼び、JSON response由来IDを使う。raw socket clientや
+  pluginをcore transportにしない。最低versionは0.8.2。
+- `HERDR_ENV=1`と`HERDR_PANE_ID`をcaller-context guardとし、Herdr外からfocused sessionを操作しない。
+- pane ownershipはsource-scoped token `kaji_origin` / `kaji_run` / `kaji_step`で表現する。tokenは
+  `--ttl-ms`を省略し、置換・明示消去・pane closeまで保持するHerdr契約を利用する。close/pruneは
+  exact paneを再取得しorigin/run一致を確認した場合だけ行う。marker設定失敗時はunowned paneを閉じない。
+- 配置はtmuxと同じ初回右・以後右列内の下分割・最大2枚。layoutのy座標で上側を最古としてpruneする。
+- 完了authorityは引き続きfilesystem `verdict.yaml`。Herdr process/status/outputは早期終了診断にだけ使う。
+- Herdrの`terminal.log`は`recent-unwrapped` rendered snapshotであり、tmux `pipe-pane`と同等のraw
+  transcript保証を持たない。kind / availability / truncation / revisionをmetadataへ残す。
+- agent→pane→kajiの追加経路はrelease-matched Herdr skill + repository `herdr-kaji-launch` skillを使う。
+  Claude Code `-p`は使用しない。Herdr pluginは任意の人間向けlauncherとしてのみ後段評価する。
+
+以下のv3「決定」節はtmux backend固有契約として維持し、v4の共通/Herdr契約と組み合わせて読む。
 
 ## コンテキスト
 
@@ -76,10 +100,10 @@ agent の様子を同一画面で並列に見せられる**ことが分かった
 ## 決定
 
 repository config の `[execution] agent_runner`（または `kaji run --agent-runner`）で選べる
-runner backend `interactive_terminal` の terminal backend を **`tmux` 単一**とする（Issue #229）。
+runner backend `interactive_terminal` の既定terminal backendを **`tmux`** とする（Issue #229 / #396）。
 
-- **terminal backend は `tmux` 単独**。`kitty` その他の terminal は使わない。広い backend 抽象
-  （`wt.exe` / `wezterm` / `gnome-terminal` / `kitty` への選択式）は **作らない**（§ 代替案）。
+- **tmux backend**は従来契約を維持する。`kitty`その他のterminalは追加しない。選択肢はv4で追加した
+  `tmux | herdr`に限定し、広いterminal抽象は作らない（§ 代替案）。
 - runner（`execute_interactive_terminal()`）は **`kaji run` が tmux session 内で起動されている
   こと（`$TMUX` が設定されていること）を前提**とする。`$TMUX` が無ければ step failure として
   **fail-fast**（「`tmux` 内で `kaji run` を実行してください」）。自動 fallback はしない。
@@ -140,8 +164,8 @@ runner backend `interactive_terminal` の terminal backend を **`tmux` 単一**
 - `kaji_harness/assets/interactive-terminal/wrapper.sh`: `script(1)` 経路を廃止し、transcript は
   runner 側 `tmux pipe-pane` に移す。wrapper は `cd <workdir>` → 通常 `claude` / `codex` 起動に
   専念する。
-- `kaji_harness/config.py`: `ExecutionConfig` の `agent_runner` /
-  `interactive_terminal_close_on_verdict` は不変（backend 切替の config key は**追加しない**）。
+- `kaji_harness/config.py`: `ExecutionConfig` に`interactive_terminal_backend`を追加し、
+  `agent_runner` / `interactive_terminal_close_on_verdict`は不変。
 - `kaji_harness/cli_main.py`: `kaji run` の `--agent-runner` /
   `--interactive-terminal-close-on-verdict` / `--no-...` は不変。
 - docs: 本 ADR、`docs/ARCHITECTURE.md` § runner backend dispatch、

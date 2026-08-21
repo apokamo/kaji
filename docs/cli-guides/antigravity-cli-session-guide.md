@@ -88,6 +88,7 @@ Set the repository execution backend to interactive terminal:
 [execution]
 default_timeout = 2400
 agent_runner = "interactive_terminal"
+interactive_terminal_backend = "tmux"  # or "herdr"
 interactive_terminal_close_on_verdict = true
 ```
 

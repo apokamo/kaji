@@ -128,6 +128,14 @@ class TmuxSessionRequiredError(CLINotFoundError):
     """
 
 
+class HerdrSessionRequiredError(CLINotFoundError):
+    """Herdr backendをHerdr session外から起動した。
+
+    Herdr公式agent skillのcaller-context guardrailに対応する既知のユーザー前提エラー。
+    ``TmuxSessionRequiredError`` と同様にartifactへ残る型名は互換契約として扱う。
+    """
+
+
 class ScriptExecutionError(HarnessError):
     """決定論 command の subprocess が非ゼロ終了。verdict 有無を問わず fail-loud。
 

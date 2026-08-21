@@ -105,9 +105,12 @@ worktree）基準で解決される（Issue #177、[ワークフロー作成](..
 |-----|----------|----|------|----------|---------|
 | `default_timeout` | 必須 | int | —（未設定はエラー） | `> 0` の整数（bool 不可） | `config.py:219-231` |
 | `agent_runner` | 任意 | `"headless"` \| `"interactive_terminal"` | `"headless"` | 列挙外は `ConfigLoadError` | `config.py:233-244` |
+| `interactive_terminal_backend` | 任意 | `"tmux"` \| `"herdr"` | `"tmux"` | 列挙外は `ConfigLoadError` | `config.py` |
 | `interactive_terminal_close_on_verdict` | 任意 | bool | `true` | bool 以外は `ConfigLoadError` | `config.py:246-252` |
 
-- `agent_runner` は agent step を headless CLI で起動するか tmux pane 上の対話 CLI で起動するかを選ぶ。
+- `agent_runner` は agent step を headless CLI で起動するかterminal pane上の対話CLIで起動するかを選ぶ。
+  `interactive_terminal_backend` は `tmux` / `herdr` を選ぶ。既定は `tmux` のままで、環境による
+  自動判定や暗黙fallbackは行わない。headless runnerではこのkeyは作用しない。
   `interactive_terminal` の挙動・CLI option・優先順位は
   [Interactive Terminal Runner ガイド](../cli-guides/interactive-terminal-runner.md) を参照。
   headless と interactive terminal は Claude / Codex / Antigravity に対応する。
@@ -194,6 +197,7 @@ worktree_prefix = "kaji"            # worktree dir 名の先頭 segment（<prefi
 [execution]
 default_timeout = 2400
 agent_runner = "headless"           # "headless"（既定） | "interactive_terminal"
+# interactive_terminal_backend = "tmux"  # "tmux"（既定） | "herdr"
 # interactive_terminal_close_on_verdict = true   # interactive_terminal のときのみ作用
 
 [provider]

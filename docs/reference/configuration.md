@@ -107,12 +107,15 @@ definition. `validate-series` and `run-series --dry-run` do not create the direc
 |-----|-------------------|------|---------|------------|--------|
 | `default_timeout` | Required | int | — (unset is an error) | Integer `> 0` (bool not allowed) | `config.py:226-238` |
 | `agent_runner` | Optional | `"headless"` \| `"interactive_terminal"` | `"headless"` | Out-of-enum is `ConfigLoadError` | `config.py:240-251` |
+| `interactive_terminal_backend` | Optional | `"tmux"` \| `"herdr"` | `"tmux"` | Out-of-enum is `ConfigLoadError` | `config.py` |
 | `interactive_terminal_close_on_verdict` | Optional | bool | `true` | Non-bool is `ConfigLoadError` | `config.py:253-259` |
 | `failure_triage` | Optional | bool | `true` | Non-bool is `ConfigLoadError` | `config.py:261-268` |
 | `auto_recover` | Optional | bool | `false` | Non-bool is `ConfigLoadError` | `config.py:261-268` |
 
 - `agent_runner` selects whether agent steps launch via a headless CLI or an interactive CLI inside a
-  tmux pane. For `interactive_terminal` behavior, CLI options, and precedence, see the
+  terminal pane. `interactive_terminal_backend` selects `tmux` or `herdr`; it is inert for the
+  headless runner. The default remains `tmux`, and there is no environment-based auto-detection or
+  fallback. For behavior, CLI options, and precedence, see the
   [Interactive Terminal Runner guide](../cli-guides/interactive-terminal-runner.md).
   Headless and interactive terminal modes support Claude, Codex, and Antigravity. Antigravity is
   single-run only and rejects workflow `resume:` in both backends.
@@ -229,6 +232,7 @@ worktree_prefix = "kaji"            # leading segment of the worktree dir name (
 [execution]
 default_timeout = 2400
 agent_runner = "headless"           # "headless" (default) | "interactive_terminal"
+# interactive_terminal_backend = "tmux"  # "tmux" (default) | "herdr"
 # interactive_terminal_close_on_verdict = true   # only takes effect under interactive_terminal
 # failure_triage = true             # classify failures and post a triage comment (default: true)
 # auto_recover = false              # opt-in: resume once per recovery chain after a 10-minute wait

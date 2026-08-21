@@ -16,13 +16,16 @@ from kaji_harness.commands.run import _apply_execution_overrides
 from kaji_harness.config import ExecutionConfig, KajiConfig, PathsConfig
 
 
-def _config(*, agent_runner: str = "headless", close: bool = True) -> KajiConfig:
+def _config(
+    *, agent_runner: str = "headless", backend: str = "tmux", close: bool = True
+) -> KajiConfig:
     return KajiConfig(
         repo_root=Path("/repo"),
         paths=PathsConfig(artifacts_dir=".kaji/artifacts", skill_dir=".claude/skills"),
         execution=ExecutionConfig(
             default_timeout=1800,
             agent_runner=agent_runner,  # type: ignore[arg-type]
+            interactive_terminal_backend=backend,  # type: ignore[arg-type]
             interactive_terminal_close_on_verdict=close,
         ),
     )
@@ -39,6 +42,7 @@ class TestRunParserThreeState:
     def test_no_flags_default_to_none(self) -> None:
         args = _parse([])
         assert args.agent_runner is None
+        assert args.interactive_terminal_backend is None
         assert args.close_on_verdict is None
 
     def test_close_flag_sets_true(self) -> None:
@@ -62,6 +66,18 @@ class TestRunParserThreeState:
         )
         with pytest.raises(SystemExit):
             _parse(["--agent-runner", "interactive_terminal"])
+
+    def test_interactive_terminal_backend_choices(self) -> None:
+        assert (
+            _parse(["--interactive-terminal-backend", "herdr"]).interactive_terminal_backend
+            == "herdr"
+        )
+        assert (
+            _parse(["--interactive-terminal-backend", "tmux"]).interactive_terminal_backend
+            == "tmux"
+        )
+        with pytest.raises(SystemExit):
+            _parse(["--interactive-terminal-backend", "kitty"])
 
 
 @pytest.mark.small
@@ -87,6 +103,14 @@ class TestApplyExecutionOverrides:
         config = _config(agent_runner="interactive_terminal")
         result = _apply_execution_overrides(config, _parse(["--agent-runner", "headless"]))
         assert result.execution.agent_runner == "headless"
+
+    def test_cli_overrides_interactive_terminal_backend(self) -> None:
+        config = _config(agent_runner="interactive_terminal", backend="tmux")
+        result = _apply_execution_overrides(
+            config, _parse(["--interactive-terminal-backend", "herdr"])
+        )
+        assert result.execution.interactive_terminal_backend == "herdr"
+        assert result.execution.agent_runner == "interactive_terminal"
 
     def test_no_close_flag_overrides_config_true(self) -> None:
         config = _config(agent_runner="interactive_terminal", close=True)

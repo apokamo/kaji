@@ -1,13 +1,13 @@
 """Interactive terminal runner.
 
-This runner starts a real interactive agent CLI (``claude`` / ``codex`` /
-``antigravity``) inside
-a ``tmux`` pane and waits for the agent-written ``verdict.yaml`` artifact. It
+This module dispatches the selected terminal backend and contains the tmux implementation.
+It starts a real interactive agent CLI (``claude`` / ``codex`` / ``antigravity``) and waits for
+the agent-written ``verdict.yaml`` artifact. It
 intentionally avoids parsing stdout: completion is decided by the
 artifact-primary verdict resolution introduced in Issue #220.
 
-The terminal backend is tmux only (ADR 007 v2, Issue #230). ``kaji run`` must
-run inside a tmux session; the runner adds a pane to the current window,
+Tmux remains the default backend (ADR 007 v4, Issue #396). When selected, ``kaji run`` must run
+inside a tmux session; the runner adds a pane to the current window,
 records the transcript with ``tmux pipe-pane``, decides liveness via
 ``#{pane_dead}``, and cleans up with ``tmux kill-pane``. There is no ``/proc``
 scan and no util-linux ``script(1)`` dependency, so Linux and macOS share one
@@ -40,6 +40,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from .agents import AGENT_CAPABILITIES
 from .cli import find_high_confidence_sensitive_pattern, find_transient_pattern
@@ -180,7 +181,9 @@ def read_terminal_diagnostic(terminal_log: Path) -> TerminalDiagnostic:
     return extract_terminal_diagnostic(text)
 
 
-def _terminal_exit_detail(terminal_log: Path) -> str:
+def _terminal_exit_detail(
+    terminal_log: Path, *, prefix: str = "tmux pane exited before writing verdict.yaml"
+) -> str:
     """Build a diagnostic string for early pane exits from the transcript.
 
     Issue #296: ``kind`` で分岐する。``provider_error`` は transcript の部分文字列を
@@ -193,7 +196,6 @@ def _terminal_exit_detail(terminal_log: Path) -> str:
     生 transcript は読まないため、ここで literal を残さないと transient+sensitive
     混在 failure の gate が構造的に迂回されてしまう。
     """
-    prefix = "tmux pane exited before writing verdict.yaml"
     diagnostic = read_terminal_diagnostic(terminal_log)
     if diagnostic.kind == "provider_error":
         detail = (
@@ -325,6 +327,7 @@ def execute_interactive_terminal(
     workdir: Path,
     timeout: int,
     session_id: str | None = None,
+    backend: Literal["tmux", "herdr"] = "tmux",
     close_on_verdict: bool = True,
     execution_policy: str = "auto",
 ) -> CLIResult:
@@ -339,6 +342,7 @@ def execute_interactive_terminal(
             runner (backend-independent).
         timeout: Seconds to wait for ``verdict.yaml`` before failing.
         session_id: Previous session id to resume (``None`` → fresh run).
+        backend: Terminal backend selected for this run.
         close_on_verdict: ``kill-pane`` after the verdict artifact appears
             (best-effort cleanup). When ``False`` the pane is left with
             ``remain-on-exit on`` so it survives the agent's natural exit.
@@ -357,6 +361,19 @@ def execute_interactive_terminal(
         ValueError: ``step.agent`` is missing or unsupported.
         FileNotFoundError: ``prompt.txt`` or the wrapper script is missing.
     """
+    if backend == "herdr":
+        from .interactive_terminal_herdr import execute_interactive_terminal_herdr
+
+        return execute_interactive_terminal_herdr(
+            step=step,
+            prompt_path=prompt_path,
+            verdict_path=verdict_path,
+            workdir=workdir,
+            timeout=timeout,
+            session_id=session_id,
+            close_on_verdict=close_on_verdict,
+            execution_policy=execution_policy,
+        )
     if step.agent is None:
         raise ValueError(f"interactive terminal runner requires step.agent (step={step.id})")
     capabilities = AGENT_CAPABILITIES.get(step.agent)

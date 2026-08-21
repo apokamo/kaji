@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""Stateful fake Herdr CLI for non-destructive backend experiments."""
+
+from __future__ import annotations
+
+import json
+import os
+import shlex
+import sys
+from pathlib import Path
+from typing import NoReturn
+
+
+def _fail(message: str) -> NoReturn:
+    """Exit with a deterministic fake-CLI error."""
+    print(message, file=sys.stderr)
+    raise SystemExit(2)
+
+
+def _state_path() -> Path:
+    """Return the explicitly scoped fake state file."""
+    if os.environ.get("KAJI_FAKE_HERDR") != "1":
+        _fail("KAJI_FAKE_HERDR=1 is required")
+    value = os.environ.get("KAJI_FAKE_HERDR_STATE")
+    if not value:
+        _fail("KAJI_FAKE_HERDR_STATE is required")
+    return Path(value)
+
+
+def _load_state() -> dict[str, object]:
+    """Load fake state or return an empty initial state."""
+    path = _state_path()
+    if not path.is_file():
+        return {"calls": [], "tokens": {}, "closed": False}
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        _fail("fake state root must be an object")
+    return value
+
+
+def _save_state(state: dict[str, object]) -> None:
+    """Persist fake state under the caller-provided temporary path."""
+    path = _state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _respond(result: dict[str, object]) -> NoReturn:
+    """Emit one Herdr-style JSON response and exit successfully."""
+    print(json.dumps({"id": "fake-request", "result": result}))
+    raise SystemExit(0)
+
+
+def _pane(
+    pane_id: str, tokens: dict[str, str] | None = None, *, revision: int = 1
+) -> dict[str, object]:
+    """Build the minimum protocol-20 PaneInfo fixture."""
+    return {
+        "pane_id": pane_id,
+        "terminal_id": f"terminal-{pane_id}",
+        "workspace_id": "w1",
+        "tab_id": "t1",
+        "focused": pane_id == "w1:p1",
+        "agent_status": "unknown",
+        "revision": revision,
+        "tokens": tokens or {},
+    }
+
+
+def main() -> NoReturn:
+    """Dispatch the small Herdr command subset used by the experiment."""
+    if sys.argv[1:] == ["--version"]:
+        print("herdr 0.8.2")
+        raise SystemExit(0)
+
+    state = _load_state()
+    arguments = sys.argv[1:]
+    calls = state.setdefault("calls", [])
+    if not isinstance(calls, list):
+        _fail("fake calls state must be a list")
+    calls.append(arguments)
+
+    if arguments == ["status"]:
+        _save_state(state)
+        print("server: running compatible")
+        raise SystemExit(0)
+    if arguments == ["pane", "current", "--current"]:
+        _save_state(state)
+        _respond({"type": "pane_current", "pane": _pane("w1:p1")})
+    if arguments[:2] == ["pane", "get"]:
+        pane_id = arguments[2]
+        tokens = state.get("tokens", {}) if pane_id == "w1:p2" else {}
+        if not isinstance(tokens, dict):
+            _fail("fake token state must be an object")
+        _save_state(state)
+        revision = 7 if pane_id == "w1:p2" else 1
+        _respond({"type": "pane_info", "pane": _pane(pane_id, tokens, revision=revision)})
+    if arguments == ["pane", "list"]:
+        _save_state(state)
+        _respond({"type": "pane_list", "panes": [_pane("w1:p1")]})
+    if arguments == ["pane", "list", "--workspace", "w1"]:
+        panes = [_pane("w1:p1")]
+        if state.get("created") is True and state.get("closed") is not True:
+            tokens = state.get("tokens", {})
+            if not isinstance(tokens, dict):
+                _fail("fake token state must be an object")
+            panes.append(_pane("w1:p2", tokens))
+        _save_state(state)
+        _respond({"type": "pane_list", "panes": panes})
+    if arguments == ["pane", "layout", "--pane", "w1:p1"]:
+        _save_state(state)
+        _respond(
+            {
+                "type": "pane_layout",
+                "layout": {
+                    "workspace_id": "w1",
+                    "tab_id": "t1",
+                    "zoomed": False,
+                    "area": {"x": 0, "y": 0, "width": 120, "height": 40},
+                    "focused_pane_id": "w1:p1",
+                    "panes": [
+                        {
+                            "pane_id": "w1:p1",
+                            "focused": True,
+                            "rect": {"x": 0, "y": 0, "width": 120, "height": 40},
+                        }
+                    ],
+                    "splits": [],
+                },
+            }
+        )
+    if arguments[:2] == ["pane", "split"]:
+        state["created"] = True
+        _save_state(state)
+        _respond({"type": "pane_info", "pane": _pane("w1:p2")})
+    if arguments[:2] == ["pane", "report-metadata"]:
+        tokens: dict[str, str] = {}
+        for index, argument in enumerate(arguments):
+            if argument == "--token":
+                name, separator, value = arguments[index + 1].partition("=")
+                if not separator:
+                    _fail("invalid fake token")
+                tokens[name] = value
+        state["tokens"] = tokens
+        _save_state(state)
+        raise SystemExit(0)
+    if arguments[:3] == ["pane", "run", "w1:p2"]:
+        command = shlex.split(arguments[3])
+        if len(command) >= 2 and command[0] == "env" and command[1].startswith("PATH="):
+            command = command[2:]
+        if len(command) < 4:
+            _fail("wrapper command is incomplete")
+        verdict_path = Path(command[3])
+        verdict_path.write_text(
+            "status: PASS\nreason: fake Herdr completed\nevidence: subprocess contract\n",
+            encoding="utf-8",
+        )
+        state["command"] = command
+        _save_state(state)
+        raise SystemExit(0)
+    if arguments[:3] == ["pane", "read", "w1:p2"]:
+        _save_state(state)
+        print("fake interactive agent screen")
+        raise SystemExit(0)
+    if arguments == ["pane", "close", "w1:p2"]:
+        state["closed"] = True
+        _save_state(state)
+        raise SystemExit(0)
+
+    _fail(f"unsupported fake Herdr command: {arguments!r}")
+
+
+if __name__ == "__main__":
+    main()

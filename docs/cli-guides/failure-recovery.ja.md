@@ -128,10 +128,10 @@ kaji recover .kaji/wf/official/dev.yaml 288 --run-id 260710120000
 occurrence コメントも `incidents/occurrences.jsonl` への追記も行わない。調査を要さない既知の
 ユーザー前提エラーであり、incident 一覧に載せると障害の信号が薄まるため。
 
-現時点で該当するのは `TmuxSessionRequiredError`（interactive terminal runner を tmux セッション
-外から起動した）1 ケースのみ。判定は run.log の `failure_event.exception_type` の型名で行い、
-エラーメッセージの文字列一致には依存しない。tmux 未インストール・tmux バージョン不足・
-`TMUX_PANE` 欠落・その他の `CLINotFoundError` は従来どおり incident 記録の対象。
+該当するのは `TmuxSessionRequiredError` と `HerdrSessionRequiredError`（選択したinteractive terminal
+backendのsession外から起動した）の2ケース。判定はrun.logの`failure_event.exception_type`の型名で行い、
+エラーメッセージの文字列一致には依存しない。CLI未インストール・version不足・session内でのpane ID欠落・
+その他の `CLINotFoundError` は従来どおりincident記録の対象。
 
 抑止した場合も、console のエラー表示・run artifact・発生元 Issue への triage コメントは
 維持される。抑止の事実と理由は `run.log` の `incident_suppressed` event（`cause` /

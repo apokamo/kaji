@@ -2,18 +2,20 @@
 
 Language: [English](interactive-terminal-runner.md) | 日本語
 
-`kaji run` の agent step を、headless CLI ではなく **tmux pane 上**の通常 `claude` / `codex` /
+`kaji run` のagent stepを、headless CLIではなく **tmuxまたはHerdr pane上**の通常`claude` / `codex` /
 Antigravity（`agy`）
 対話 CLI で実行する runner backend（Issue #224 / tmux 化は #230）。agent が attempt directory の
 `verdict.yaml` を書いたら、kaji は artifact-primary 経路（[ADR 005](../adr/005-artifact-primary-verdict.md)）
 で verdict を読み、次 step へ進む。
 
-`kaji run` を tmux session 内で起動し、runner が `tmux split-window` で現ウィンドウに pane を
+`interactive_terminal_backend = "tmux"`が既定。`"herdr"`を明示するとrelease-matched Herdr CLIと
+明示pane IDを使う。どちらも選択したterminal session内で`kaji run`を起動し、runnerがpaneを
 追加して agent を起動するため、ディスプレイ無し環境（WSL2 / SSH / headless）でも `kaji run` の出力と
 agent を同一画面で並列に見られる。pane 配置は **初回のみ origin pane の右、2枚目以降は右列内の上下
 分割**で、kaji が作成した agent pane は右列に**最大2枚**まで残す（Issue #238）。cleanup は
 `tmux kill-pane`、transcript は `tmux pipe-pane` で行い、`/proc` scan も util-linux `script(1)` 依存も
-無いため Linux / macOS で同一に動く。
+無いため Linux / macOS で同一に動く。Herdr backendの`terminal.log`は
+`recent-unwrapped`のrendered snapshotで、tmux raw transcriptと同等とは扱わない。
 
 技術選定の経緯は [ADR 007](../adr/007-interactive-terminal-runner.md)、runner dispatch の
 位置づけは [ARCHITECTURE](../ARCHITECTURE.md) § Runner backend dispatch を参照。
@@ -33,6 +35,10 @@ agent を同一画面で並列に見られる。pane 配置は **初回のみ or
 
 ## 前提
 
+terminal backendは明示選択する。自動判定・暗黙fallbackは行わない。
+
+### tmux
+
 - **tmux session 内で `kaji run` していること**。runner は `$TMUX` を検査し、未設定なら step
   failure として **fail-fast** する（自動 fallback / 他 terminal 探索はしない）。tmux 外で使いたい
   場合は `--agent-runner headless` に戻す。この失敗は既知のユーザー前提エラーとして扱われ、
@@ -48,6 +54,20 @@ agent を同一画面で並列に見られる。pane 配置は **初回のみ or
   親 shell に `NO_COLOR=1` があっても、interactive terminal runner 内の agent は
   truecolor 表示を使える。
 
+### Herdr
+
+- Herdr **>= 0.8.2**がPATHにあり、client/server protocolがcompatibleであること。
+  `HERDR_BIN_PATH`が実行可能なCLIを指す場合は、PATH探索よりrelease-matchedなそのCLIを優先する。
+- Herdr内で`kaji run`すること。`HERDR_ENV=1`と`HERDR_PANE_ID`を必須とし、外側からfocused
+  sessionを操作しない。不足時は`HerdrSessionRequiredError`でfail-fastする。preflightは
+  `herdr status`も実行し、`pane current --current`が`HERDR_PANE_ID`とexact一致することを要求する。
+- kajiはinstalled CLIをargvで呼び、JSON response由来pane IDだけを使う。raw socket client、plugin、
+  Herdr agent integrationは必須ではない。
+- 作成paneへ`kaji_origin` / `kaji_run` / `kaji_step` tokenを付け、close前にorigin/run一致を再確認する。
+- `terminal.log`はrendered snapshot。kind / availability / revisionを`pane-metadata.json`へ保存する。
+  Herdr 0.8.2の`pane read` CLIはstructured truncation flagを含まないplain textを返すため、
+  `transcript_truncated`は推測せず`null`（unknown）とする。
+
 ## 設定
 
 `[execution]` は **workflow YAML ではなく repository config** に書く（`.kaji/config.toml` の
@@ -61,6 +81,7 @@ tracked な既定値は `.kaji/config.toml`、個人環境だけで切り替え�
 [execution]
 default_timeout = 2400
 agent_runner = "interactive_terminal"            # "headless"（既定） | "interactive_terminal"
+interactive_terminal_backend = "tmux"            # "tmux"（既定） | "herdr"
 interactive_terminal_close_on_verdict = true     # 既定 true
 ```
 
@@ -97,6 +118,7 @@ agent_runner = "interactive_terminal"
 
 ```bash
 --agent-runner <headless|interactive-terminal>
+--interactive-terminal-backend <tmux|herdr>
 --interactive-terminal-close-on-verdict
 --no-interactive-terminal-close-on-verdict
 ```
@@ -104,6 +126,7 @@ agent_runner = "interactive_terminal"
 - `--agent-runner interactive-terminal`: この実行だけ interactive terminal runner を使う
   （config value `interactive_terminal` に正規化。CLI 公開値は hyphen 区切りのみ）。
 - `--agent-runner headless`: この実行だけ headless に戻す（config が interactive_terminal でも上書き）。
+- `--interactive-terminal-backend`: この実行だけpane実装を選ぶ。interactive runner自体を暗黙に有効化しない。
 - `--interactive-terminal-close-on-verdict` / `--no-...`: この実行だけ close-on-verdict を上書き。
   どちらも未指定なら config 値を維持する。
 
@@ -112,7 +135,8 @@ agent_runner = "interactive_terminal"
 1. `kaji run` CLI option
 2. `.kaji/config.local.toml` の `[execution]`
 3. `.kaji/config.toml` の `[execution]`
-4. built-in default（`agent_runner = "headless"`, `interactive_terminal_close_on_verdict = true`）
+4. built-in default（`agent_runner = "headless"`, `interactive_terminal_backend = "tmux"`,
+   `interactive_terminal_close_on_verdict = true`）
 
 ### 使用例
 
@@ -127,6 +151,11 @@ kaji run .kaji/wf/official/dev.yaml 224
 kaji run .kaji/wf/official/dev.yaml 224 \
   --agent-runner interactive-terminal \
   --no-interactive-terminal-close-on-verdict
+
+# Herdr内からHerdr backendを使う
+kaji run .kaji/wf/official/dev.yaml 396 \
+  --agent-runner interactive-terminal \
+  --interactive-terminal-backend herdr
 
 # この実行だけ headless に戻す（tmux 不要）
 kaji run .kaji/wf/official/dev.yaml 224 --agent-runner headless
@@ -162,6 +191,9 @@ kaji run .kaji/wf/official/dev.yaml 224 --log-level WARNING
 ```
 
 ## 振る舞い
+
+以下の番号付きlifecycleはtmux実装。Herdrもwrapper / verdict / session state契約を共有し、
+backend固有差分だけを後段に示す。
 
 1. runner は launch 前に `tmux list-panes` で同一 window の kaji 管理 agent pane（pane user option
    `@kaji_interactive_terminal` が `origin=<origin pane>` 一致）を列挙し、配置を決める（Issue #238）:
@@ -204,6 +236,25 @@ kaji run .kaji/wf/official/dev.yaml 224 --log-level WARNING
 > `[dead]` への遷移は `remain-on-exit on` が保証する最終状態で、metadata snapshot とは別物。
 > Issue #238 以降は配置診断として `layout_target_pane` / `split_target_pane` / `split_direction`
 > （`horizontal` / `vertical`）/ `kaji_agent_panes_before` / `kaji_agent_panes_pruned` も記録する。
+
+### Herdrの振る舞い
+
+1. Herdr >= 0.8.2、`HERDR_ENV=1`、`HERDR_PANE_ID`、exact `pane get`一致をpreflightする。
+2. token所有paneとorigin layoutを読み、初回は右、以後は下へsplitし最大2枚に保つ。prune前に
+   current origin/run tokenを再取得する。
+3. 明示cwdと`--no-focus`でsplitし、response由来paneをmarker付与してからwrapperを起動する。
+   marker失敗時はunowned paneを閉じずfail-loudする。
+4. 完了triggerは`verdict.yaml`のみ。foreground processは早期shell復帰の診断にだけ使い、
+   output/status文字列ではstepを完了しない。
+5. verdict / 早期終了 / timeout時にrendered snapshotをbest-effort保存する。cleanupはownershipを再確認する。
+
+### Codex / Claude Codeからkajiを起動
+
+Herdr内agentからrepository skill `herdr-kaji-launch`を使う。Claudeは
+`.claude/skills/herdr-kaji-launch`、Codexは`.agents/skills/herdr-kaji-launch` symlinkから同じ正本を読む。
+skillはrelease-matched `herdr --skill`を読み、explicit caller paneからcwd/focusを保ってsplitし、
+kajiを通常interactive commandとして起動する。Claude Code `-p` / print modeとHerdr `agent start`は使わず、
+kaji paneは対話用に残す。pluginは任意の人間向けlauncher UXでありcore依存ではない。
 
 ### session 継続
 
@@ -265,6 +316,10 @@ Codex の `reasoning.effort = minimal` は現 tool 構成（`image_gen` / `web_s
 | `requires tmux. Run kaji run inside tmux` で即終了 | tmux session の外で実行している。`tmux new-session` 内で再実行するか `--agent-runner headless` |
 | `requires tmux >= 3.1` で即終了 | tmux が古い。3.1 以上へ更新する（kaji marker の pane user option `set-option -p` が 3.1、`#{pane_dead}` / `split-window -P -F` が 3.0 を要求） |
 | `TMUX_PANE is not set` で即終了 | tmux pane 内で実行していない。通常の tmux session なら自動設定される |
+| `CLI 'herdr' not found` で即終了 | Herdr >= 0.8.2をinstallするかtmux backendを選ぶ |
+| `must run inside Herdr` で即終了 | Herdr pane内で再実行する。外側からfocused sessionは操作しない |
+| `HERDR_PANE_ID is not set` | caller identityを得られる通常のHerdr pane内で再起動する |
+| Herdr `terminal.log`の過去行が足りない | raw transcriptではなくrendered snapshot。Herdr 0.8.2で`transcript_truncated=null`ならplain-text CLIが省略有無を公開していない。revisionはsnapshot識別に使い、完全性の証明にはしない |
 | step が timeout する | agent が `verdict.yaml` を書いていない。prompt の verdict 書き出し指示と path を確認 |
 | pane が verdict 前に消える / `tmux pane exited before writing verdict.yaml` | agent が起動失敗。`terminal.log` の tail（エラー文面に添付）を確認 |
 | 色が出ない | wrapper は `NO_COLOR` unset / `COLORTERM=truecolor` を設定する。端末側の color support と agent 側設定も確認 |
