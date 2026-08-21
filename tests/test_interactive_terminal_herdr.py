@@ -711,6 +711,43 @@ class TestHerdrCommandContract:
 
         run_json.assert_not_called()
 
+    @pytest.mark.parametrize("pane_id", [None, ""])
+    def test_managed_pane_listing_ignores_missing_or_empty_pane_id(self, pane_id: object) -> None:
+        pane_list = {
+            "result": {
+                "type": "pane_list",
+                "panes": [
+                    {
+                        "pane_id": pane_id,
+                        "tokens": {"kaji_origin": "w1:p1", "kaji_run": "run-1"},
+                    }
+                ],
+            }
+        }
+        layout = {
+            "result": {
+                "type": "pane_layout",
+                "layout": {
+                    "panes": [
+                        {"pane_id": "w1:p1", "rect": {"x": 0, "y": 0}},
+                    ]
+                },
+            }
+        }
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._get_herdr_pane",
+                return_value={"pane_id": "w1:p1", "workspace_id": "w1"},
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._run_herdr_json",
+                side_effect=[pane_list, layout],
+            ),
+        ):
+            panes = _list_managed_herdr_panes("/usr/bin/herdr", "w1:p1")
+
+        assert panes == []
+
     @pytest.mark.parametrize("run_token", [None, ""])
     def test_managed_pane_listing_rejects_missing_or_empty_run_token(
         self, run_token: object
