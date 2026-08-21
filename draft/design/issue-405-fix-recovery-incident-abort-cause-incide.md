@@ -66,7 +66,8 @@ cycle : <no-error-text> 4ee617eee91581490c4cc7ee12e93589d7f688ce6a775e4f771b5253
 ### Expected Behavior（EB）
 
 - **EB-1**: `agent_declared_abort` は incident 記録（新規起票 / 再発追記 /
-  `occurrences.jsonl` 追記）の対象外になる。triage コメント・run artifact・console 表示は維持。
+  `occurrences.jsonl` 追記）の対象外になる。triage コメント・run artifact・console 表示は維持
+  （triage コメントは投稿と構成が維持され、cause 説明 1 行のみ改訂する。契約の正本は § 方針 2）。
   - 根拠: `kaji_harness/recovery/report.py:48-51` が当該 cause を
     「agent が正規の ABORT verdict を返した。安全停止・手動確認要求であり、自動再開の対象に
     しない」と定義する。契約上の正常終端であり障害ではない。
@@ -115,12 +116,14 @@ c = sig("implement", cause="cycle_exhausted", kind="cycle_exhausted")
 print("design:", a.fingerprint, a.fingerprint_hash)
 print("close :", b.fingerprint, b.fingerprint_hash)
 print("matches:", a.matches(b))
-print("cycle :", c.fingerprint, c.fingerprint_hash)
+print("cycle :", c.fingerprint, c.fingerprint_hash, "matches_design:", c.matches(a))
 PY
 ```
 
-3. 観測: `design` と `close` の `fingerprint` がともに `<no-error-text>`、`fingerprint_hash` が
-   ともに `4ee617ee…`、`matches: True`。step が異なるにもかかわらず同一 incident として照合される。
+3. 観測: § OB-1 に掲載した 4 行がそのまま出力される。`design` と `close` の `fingerprint` が
+   ともに `<no-error-text>`、`fingerprint_hash` がともに `4ee617ee…`、`matches: True`。step が
+   異なるにもかかわらず同一 incident として照合される。`cycle` 行は同一 hash だが
+   `matches_design: False`（`cause` が署名キーに含まれるため別バケット）。
 
 この再現は artifact も provider も要さない純関数レベルで決定論的に成立するため、実ログ代替
 （`_shared/design-by-type/bug.md` § escape clause）は使わず、実装前 Red 証跡を取得する。
@@ -167,7 +170,7 @@ incident 記録経路からは除外されておらず、退化した署名が�
 
 当初案（`_canonical_input()` の fallback に abort reason を足す）は成立しない。
 
-abort reason は `kaji_harness/runner.py:851` の `Verdict.reason` として
+abort reason は `kaji_harness/runner.py:852` の `Verdict.reason` として
 `f"multiple worktrees match issue {run_ctx.canonical_id}"` と組まれる。`canonical_id` は
 `391` のような裸の数字であり、`normalize_error_text()` の `_ISSUE_REF_RE`（`#\d+`,
 `signature.py:62`）にも `_LONG_NUM_RE`（`\d{4,}`, `signature.py:68`）にもマッチしない。
@@ -233,7 +236,8 @@ bug 修正であり、公開 IF（CLI 引数・exit code・artifact schema）は
 | `recovery.json` | `incident_suppressed=true` / `incident_suppression_reason=<固定文>`、`incident_ref` / `incident_action` は `null` |
 | `<artifacts_dir>/incidents/occurrences.jsonl` | 当該 2 cause の行を追記しない |
 | GitHub | 当該 2 cause で incident イシューの起票・追記・検索を一切行わない |
-| triage コメント / stderr サマリ / exit code / `decision` 値 | **不変**（`agent_declared_abort` は `comment_only`、`cycle_exhausted` は `not_resumable` のまま） |
+| triage コメント | **投稿・構成は不変**。変わるのは `### 原因（機械判定）` 直下の cause 説明 1 行のみ（§ 方針 2 の契約表を参照） |
+| stderr サマリ / exit code / `decision` 値 | **完全に不変**（`agent_declared_abort` は `comment_only`、`cycle_exhausted` は `not_resumable` のまま） |
 
 ### 使用例
 
@@ -265,6 +269,11 @@ jq -r '.incident_suppressed, .incident_suppression_reason' \
 - `_COMMENT_ONLY_CAUSES`（`handler.py:96-104`）は変更しない。recovery decision の値は
   本修正の対象外であり、`agent_declared_abort` = `comment_only`、
   `cycle_exhausted` = `not_resumable` は現状のまま維持する。
+- `append_occurrence()`（`incident.py:339-345`）へ file lock を導入することは本 Issue の
+  scope 外（`incident.py` 無変更の制約）。並行 append に対する保全は掃除手順側で行う
+  （§ 方針 3）。writer 側の排他が必要になるのは「複数の `kaji run` を常時並行させる運用」へ
+  移行した場合であり、現行の単一オペレータ運用では顕在化しない。必要になった時点で別 Issue
+  として判断する。
 - 既存の incident イシュー #350 / #359 / #367 / #369 / #392 は削除・改変しない
   （処遇は人間が行う。#392 の扱いは Issue の「ワークフロー完了後の確認項目」）。
   修正後は `_record_incident` が検索前に return するため、これらが再照合されることはない。
@@ -281,10 +290,39 @@ jq -r '.incident_suppressed, .incident_suppression_reason' \
 ### 2. `recovery/report.py`: cause 説明文の改訂
 
 `_CAUSE_DESCRIPTIONS` の当該 2 cause に「障害ではないため incident 起票の対象外とする」を足す。
-triage コメントに `_CAUSE_DESCRIPTIONS[cause]` がそのまま出る（`report.py:193`）ため、
-利用者は incident が起票されない理由を triage コメント上で確認できる。
+
+**triage コメントの変更契約（本設計が定める正本）**: `render_triage_comment()` は
+`_CAUSE_DESCRIPTIONS[classification.cause]` を `### 原因（機械判定）` の直下へ 1 行そのまま
+出力する（`report.py:192-193`）。したがって本変更は **triage コメント本文を 1 箇所だけ変える**。
+
+| triage コメントの構成要素 | 本変更での扱い |
+|---|---|
+| コメントの投稿有無・投稿タイミング・`Comment.ref` の扱い | 不変 |
+| 見出し `## Workflow failure triage` と項目表（`report.py:189-190`） | 不変 |
+| `### 原因（機械判定）` 直下の cause 説明 1 行 | **変更**（当該 2 cause のみ。他 10 cause は不変） |
+| `判定理由`（`decision.reason`）・`## 判断根拠`（`decision.evidence`） | 不変（`decision` 値自体を変えないため文言も変わらない） |
+| 次アクション行（`_next_action_lines()`。`cycle_exhausted` の `--reset-cycle` 行を含む） | 不変 |
+| `## 元 run の artifact` / `## 自動再開の実施有無` | 不変 |
+
+「triage コメントは維持される」という EB-1 / EB-2 の主張は、**incident 記録を抑止しても triage
+コメントの投稿と情報量が失われない**という意味であり、cause 説明 1 行の改訂と両立する。
+テスト期待もこの定義に揃える（§ テスト戦略 Small 3 / Medium 5・6）。
 
 ### 3. `occurrences.jsonl` の掃除（ローカルデータ操作）
+
+対象は `/home/aki/dev/kaji/main/.kaji-artifacts/incidents/occurrences.jsonl`（`kaji run` が
+main worktree から起動される際の `artifacts_dir`）。
+
+#### 書き込み側の性質（保全設計の前提）
+
+`append_occurrence()` は `open(path, "a")` による lock なしの追記である
+（`incident.py:339-345`）。`O_APPEND` の 1 行 write は同一ファイルへの並行 append に対しては
+安全だが、**別 inode へ差し替える書き換え（`jq > tmp && mv`）とは協調しない**。tmp を作って
+から `mv` するまでの間に別 run が旧 inode へ append すると、その正常な occurrence は
+`mv` で失われる。writer 側へ lock を導入するのは本 Issue の scope 外（`incident.py` 無変更の
+制約）であるため、**掃除側を quiescence + 競合検出 + 検証で保全する**。
+
+#### 手順（quiescence 確認 → 不変 backup → filter → 検証 → 必要なら復旧）
 
 対象は `/home/aki/dev/kaji/main/.kaji-artifacts/incidents/occurrences.jsonl`（`kaji run` が
 main worktree から起動される際の `artifacts_dir`）。
@@ -292,17 +330,58 @@ main worktree から起動される際の `artifacts_dir`）。
 ```bash
 cd /home/aki/dev/kaji/main
 F=.kaji-artifacts/incidents/occurrences.jsonl
-cp "$F" "$F.bak-405"                                   # 復旧用（repo 外に出さず gitignore 下に置く）
-jq -c 'select(.signature.cause != "agent_declared_abort")' "$F" > "$F.tmp" && mv "$F.tmp" "$F"
-jq -r '.signature.cause' "$F" | sort | uniq -c          # 期待: dispatch_failure 5 件のみ
+
+# 1. quiescence: 「自 run 以外の writer」が動いていないことを確認する。1 件でも出たら中止。
+#    本手順は Issue #405 の workflow 内（implement step）で実行するため、自分自身の
+#    `kaji run .kaji/wf/official/dev.yaml 405` は必ずヒットする。これだけを除外する。
+pgrep -af 'kaji (run|recover)' | grep -v 'dev.yaml 405' \
+    && { echo "ABORT: another writer is running"; exit 1; }
+
+# 2. 競合検出用の基準値を採る（掃除の直前と直後で比較する）。
+BEFORE_HASH=$(sha256sum "$F" | cut -d" " -f1)
+BEFORE_N=$(wc -l < "$F")
+DROP_N=$(grep -c '"cause": "agent_declared_abort"' "$F")
+
+# 3. 上書きしない backup（同名が既にあれば失敗させる。再実行しても初回原本を潰さない）。
+BAK="$F.bak-405-$(date -u +%Y%m%dT%H%M%SZ)"
+[ -e "$BAK" ] && { echo "ABORT: backup exists"; exit 1; }
+cp "$F" "$BAK"
+
+# 4. filter（同一ディレクトリ内 tmp → mv。直前に再ハッシュして競合を検出する）。
+jq -c 'select(.signature.cause != "agent_declared_abort")' "$F" > "$F.tmp"
+if [ "$(sha256sum "$F" | cut -d" " -f1)" != "$BEFORE_HASH" ]; then
+    rm -f "$F.tmp"; echo "ABORT: concurrent append detected; retry from step 1"; exit 1
+fi
+mv "$F.tmp" "$F"
+
+# 5. 検証: 行数が期待どおり減り、残った行が backup の非 ABORT 行と byte 単位で一致すること。
+AFTER_N=$(wc -l < "$F")
+[ "$AFTER_N" -eq "$((BEFORE_N - DROP_N))" ] || echo "FAIL: line count mismatch"
+diff <(jq -c 'select(.signature.cause != "agent_declared_abort")' "$BAK") "$F" \
+    && echo "OK: retained lines are identical to the backup"
+jq -r '.signature.cause' "$F" | sort | uniq -c    # 期待: dispatch_failure 5 件のみ
 ```
 
-- `jq` の select filter は**冪等**であり、掃除後に新しい ABORT 行が混入しても同じコマンドで
-  再収束する。
+- **quiescence（step 1）**: 実測で、本 workflow 自身の `kaji run .kaji/wf/official/dev.yaml 405`
+  が `pgrep -af 'kaji (run|recover)'` にヒットすることを確認した（PID 247699 / 247702、
+  2026-08-22）。したがって「writer が 1 つも無い」は本手順の実行条件として成立せず、
+  **自 run のみを除外した上で他の writer が無いこと**を条件とする。
+  自 run を除外してよい理由: 自 run が `occurrences.jsonl` へ append するのは自身が失敗した
+  ときだけであり、その時点で workflow は終了して掃除 step 自体が走らない。掃除の実行中に
+  自 run が失敗して append する余地は step 4 の再ハッシュで検出される。
+- **競合検出（step 4）**: quiescence 確認をすり抜けた並行 append は、`mv` 直前の再ハッシュで
+  検出して中止する（tmp を捨てるだけで原本は無傷）。検出時は step 1 からやり直す。
+  quiescence + 検出の二段構えで、writer に lock を導入せずに保全する。
+- **不変 backup（step 3）**: backup 名に UTC タイムスタンプを含め、既存なら失敗させる。
+  手順を再実行しても初回の 13 行原本を上書きしない。
+- **復旧**: step 5 の検証がいずれか失敗したら `cp "$BAK" "$F"` で原状復帰し、原因を確認してから
+  やり直す。backup は `.kaji-artifacts/` 配下（`.gitignore:49`）に残すため repo は汚さない。
+- **冪等性**: filter 自体は冪等であり、掃除後に新しい ABORT 行が混入しても手順全体を
+  再実行すれば同じ状態へ収束する（backup は新しい名前で追加される）。
 - **順序の制約**: 掃除と修正 merge の間に main で agent ABORT run が起きると再び 1 行増えうる。
   実装フェーズで掃除して before/after を証跡化し、merge 後の事後確認（Issue の
   「ワークフロー完了後の確認項目」）で cause 分布を再測定し、`agent_declared_abort` が 0 件で
-  あることを確かめる。増えていた場合は同じ冪等コマンドを再実行する。
+  あることを確かめる。増えていた場合は本手順を再実行する。
 - `cycle_exhausted` の occurrence は現時点で 0 件のため掃除対象に含まれない（filter は
   `agent_declared_abort` のみを落とす）。
 
@@ -326,11 +405,12 @@ Issue が明示する `docs/dev/incident-labels.md` に加え、**現行 docs �
 | source of truth | incident イシュー #392 の 2 コメント（調査結果 / PR #404 影響確認）を一次情報とする | 人間決定（2026-08-22、#392 のやり取り）。Issue #405 § 重要判断に明記 | 本設計は当該コメントの結論を実装可能な粒度へ分解しただけで、優先順位を変更していない |
 | 対応方針 | 案 A（`INCIDENT_EXEMPT_CAUSES` へ追加）を採用。案 B（fingerprint に step / 正規化 reason / abort category を含める）は不採用 | 人間決定「案A採用です」（2026-08-22）。#392 調査結果コメント § 5 | 変更点を `models.py` の 2 定数 + `report.py` の 2 文面に限定し、`signature.py` / `handler.py` / `incident.py` を無変更にすることで案 B の副作用（既存 hash 不安定化）を構造的に排除 |
 | scope（対象 cause） | `agent_declared_abort` と `cycle_exhausted` の 2 cause | 人間決定（2026-08-22、選択肢提示に対する回答） | 退化しうる cause を全列挙（3 件）し、3 件目 `ambiguous_worktree_abort` を除外対象に含めないことを § 根本原因の表で明示 |
-| `ambiguous_worktree_abort` の扱い | 本 Issue の対象外・現状維持 | AI が技術検証で反証し人間へ報告済み（2026-08-22）。two-way door として先送り | 反証の根拠（`runner.py:851` の reason 文字列と `_ISSUE_REF_RE` / `_LONG_NUM_RE` の非マッチ、#304 設計 L381 の決定 E 違反）を § 根本原因へ転記。再判断の条件（実発生 + 集約による実害）を明記 |
+| `ambiguous_worktree_abort` の扱い | 本 Issue の対象外・現状維持 | AI が技術検証で反証し人間へ報告済み（2026-08-22）。two-way door として先送り | 反証の根拠（`runner.py:852` の reason 文字列と `_ISSUE_REF_RE` / `_LONG_NUM_RE` の非マッチ、#304 設計 L381 の決定 E 違反）を § 根本原因へ転記。再判断の条件（実発生 + 集約による実害）を明記 |
 | 一方向性の評価 | 本変更は two-way door | AI の評価（Issue § 重要判断に記載、人間が受領） | 取り消しは frozenset から 2 要素を戻すだけで済み、run artifact の記録形式・署名 schema・既存 hash を変えないことを § 制約で確認 |
 | docs 更新範囲を 4 ファイルへ拡大 | Issue が挙げる `incident-labels.md` に加え、除外 cause を「2 つ」と明記している 3 ファイルも更新 | **AI の仮定**。根拠は grep 実測で当該 3 ファイルが cause 数を明記していること（`failure-recovery.ja.md:145-160` / `failure-recovery.md:151-166` / `workflow_guide.md:216-227`）。後段の検査先は review-design と `/i-dev-final-check` の docs 整合確認 | 振る舞いの scope は広げず、記述の事実整合のみを対象とする |
 | 抑止理由・説明文の具体的文面 | 既存 2 件の書式（英語小文字始まり + `; excluded from incident recording` / 和文に「incident 起票の対象外」）を踏襲 | **AI の仮定**。根拠は `models.py:90-98` と `report.py:72-76` の既存慣習、および `tests/test_recovery_report.py:170,190` が「incident 起票の対象外」を assert していること。後段の検査先は review-code | 文面を § インターフェースに確定値として記載し、実装時の裁量を残さない |
-| `occurrences.jsonl` 掃除の実施タイミングと冪等性 | 実装フェーズで掃除し、merge 後の事後確認で再測定する | **AI の仮定**。根拠は #392 の「実装順序の制約」コメントと `handler.py:522-524` の backfill 依存。後段の検査先は Issue の「ワークフロー完了後の確認項目」 | `jq select` による冪等 filter と before/after 証跡の取り方を § 方針 3 に固定 |
+| `occurrences.jsonl` 掃除のタイミング・排他・復旧 | 実装フェーズで quiescence（自 run 以外の writer 不在）を確認してから掃除し、merge 後の事後確認で再測定する | **AI の仮定**。根拠は #392 の「実装順序の制約」コメント、`handler.py:522-524` の backfill 依存、`incident.py:339-345` が lock なし append であること、および自 run が `pgrep` にヒットする実測（PID 247699 / 247702、2026-08-22）。後段の検査先は verify-design / review-code と Issue の「ワークフロー完了後の確認項目」 | 冪等 filter に加え、自 run 除外の quiescence 条件・`mv` 直前の再ハッシュによる競合検出・タイムスタンプ付き非上書き backup・件数と byte 一致の検証・失敗時の復旧手順を § 方針 3 に固定 |
+| writer 側（`append_occurrence`）の排他 | 導入しない（`incident.py` 無変更を維持） | **AI の仮定**。根拠は Issue #405 § 影響範囲の「`incident.py` は無変更」指定と、現行が単一オペレータ運用であること。後段の検査先は review-code | 掃除側の quiescence + 競合検出で代替する方針と、writer 側排他が必要になる条件（複数 run の常時並行運用）を § 制約に明記 |
 
 ## テスト戦略
 
@@ -349,19 +429,39 @@ Issue が明示する `docs/dev/incident-labels.md` に加え、**現行 docs �
    → 修正前 Red（現在は 2 要素）。
 2. **不変条件の維持**（EB-3）: `set(INCIDENT_SUPPRESSION_REASONS) == set(INCIDENT_EXEMPT_CAUSES)`
    と、追加 2 key の固定文が非空であること。→ 修正前 Red（key 不足）。
-3. **triage コメント文面**: `agent_declared_abort` / `cycle_exhausted` の triage 本文に
-   `_CAUSE_DESCRIPTIONS[cause]` が含まれ、その文面が「incident 起票の対象外」を含むこと
-   （既存の `user_precondition_error` / `user_interrupted` 検査と同型）。→ 修正前 Red。
-4. **署名 hash の不変性**（EB-4）: 実運用 occurrence から採取した実データを golden 値として
-   pin する。`normalize_error_text()` + sha256 が次を返すことを検査する。
+3. **triage コメント文面**（§ 方針 2 の契約に対応）: `agent_declared_abort` /
+   `cycle_exhausted` の triage 本文に `_CAUSE_DESCRIPTIONS[cause]` が含まれ、その文面が
+   「incident 起票の対象外」を含むこと（既存の `user_precondition_error` /
+   `user_interrupted` 検査と同型）。併せて `### 原因（機械判定）` 以外の構成要素
+   （項目表・`## 判断根拠`・次アクション行）が従来どおり出力されることを検査する。
+   → 修正前 Red。
+4. **署名 hash の不変性**（EB-4）: Issue #405 の完了条件は非 exempt cause として
+   **`dispatch_failure` と `verdict_resolution_failure` の両方**の `fingerprint_hash` 不変を
+   要求している。両 cause の golden 値を実データから pin し、`compute_signature()` の
+   `fingerprint_hash` が次を返すことを検査する。
 
-   | 生エラー文字列 | 期待 `fingerprint_hash` | 出所 |
-   |---|---|---|
-   | `StepTimeoutError: Step 'implement' timed out after 3600s` | `5a0e69f403a1e37cb09cc23e5a40ee64a77501a9655ce37264d4d044dbf0a046` | occurrences.jsonl の run 260730222002 / 260731015910（#391 implement） |
-   | `StepTimeoutError: Step 'pr' timed out after 1800s` | `6dd57a743123862400b6b3294be7648c11432f79b681d9e445a64bcab88ddaa3` | 同 run 260715021013（#328 pr） |
-   | `CLINotFoundError: interactive terminal runner requires tmux. Run \`kaji run\` inside tmux or use agent_runner='headless'.` | `d7b6c1ecd57db0f730316cf705304375b143c8b6b79394e2e5f9b1aa781ef4cb` | 同 run 260714000453（#314 review-ready） |
+   | # | cause | 入力（実データ） | 期待 `fingerprint_hash` | 出所 |
+   |---|---|---|---|---|
+   | 4-a | `dispatch_failure` | `StepTimeoutError: Step 'implement' timed out after 3600s` | `5a0e69f403a1e37cb09cc23e5a40ee64a77501a9655ce37264d4d044dbf0a046` | `occurrences.jsonl` の run 260730222002 / 260731015910（#391 implement） |
+   | 4-b | `dispatch_failure` | `StepTimeoutError: Step 'pr' timed out after 1800s` | `6dd57a743123862400b6b3294be7648c11432f79b681d9e445a64bcab88ddaa3` | 同 run 260715021013（#328 pr） |
+   | 4-c | `dispatch_failure` | `CLINotFoundError: interactive terminal runner requires tmux. Run \`kaji run\` inside tmux or use agent_runner='headless'.` | `d7b6c1ecd57db0f730316cf705304375b143c8b6b79394e2e5f9b1aa781ef4cb` | 同 run 260714000453（#314 review-ready） |
+   | 4-d | `verdict_resolution_failure` | `tests/fixtures/incident/verdict_notfound_run{1,2,3}.txt`（#301 の 3 再発の実ログ。repo 内に既存） | `35856983d74433e1b1db9a4089da1de1fbf3d1e736ab130150121d10b33d0fc4`（3 件とも同値） | 既存 fixture。`tests/test_recovery_signature.py:52` の `test_three_recurrences_share_one_fingerprint_hash` が同じ入力を使う |
 
-   3 件とも本設計作成時に main（`221997d`）で実測し、記録済み hash と一致することを確認済み。
+   **検査方法**: 4-a〜4-c は `_snapshot(attempt_error=<生文字列>, exception_type=<型名>)` +
+   `_classification("dispatch_failure")` を `compute_signature()` に通し、
+   `fingerprint_hash` を期待値と `==` で比較する。4-d は既存の `_load()` / `_snapshot()` /
+   `_classification()`（default が `verdict_resolution_failure`。
+   `tests/test_recovery_signature.py:34-46`）をそのまま再利用し、3 fixture すべての
+   `fingerprint_hash` が上記 1 値に等しいことを検査する。既存テストは「3 件が同値」だけを
+   検査して**値そのものを固定していない**ため、正規化規則が変わっても検出できない。本テストが
+   その穴を塞ぐ（既存テストの置き換えではなく追加）。
+
+   **完了条件との対応**: 4-a〜4-c が `dispatch_failure`、4-d が `verdict_resolution_failure` を
+   カバーし、Issue の「S: 非 exempt cause（`dispatch_failure` / `verdict_resolution_failure`）の
+   `fingerprint_hash` が本修正前後で不変であること」を満たす。
+
+   4 件とも本設計フェーズで main（`221997d`）にて実測済み。4-a〜4-c は `occurrences.jsonl` の
+   記録値と一致し、4-d は 3 fixture が同一 hash を返すことを確認した。
    これは **invariant guard であり回帰テストではない**ため、修正前後どちらでも Green になる。
    意図は「`signature.py` を将来触ったときに既存 incident イシューとの照合が静かに壊れることを
    検出する」ことであり、Red→Green 遷移を求めない理由をテスト docstring に明記する。
@@ -374,7 +474,10 @@ Issue が明示する `docs/dev/incident-labels.md` に加え、**現行 docs �
 5. **agent ABORT の run で incident が抑止される**: `run.log` に
    `failure_event kind=agent_abort` + `workflow_end status=ABORT` を持つ run を組み、
    `RecoveryHandler.run()` を実行して次を検査する。
-   - triage コメントは 1 件投稿される（本文は従来どおり）
+   - triage コメントは 1 件投稿され、本文が § 方針 2 の契約表どおりであること。すなわち
+     `## Workflow failure triage` 見出し・項目表・`## 判断根拠`・次アクション行は従来どおりで、
+     `### 原因（機械判定）` 直下に改訂後の `_CAUSE_DESCRIPTIONS["agent_declared_abort"]` が
+     出ること（改訂前の文面が残っていないことも併せて検査する）
    - occurrence コメントは 0 件、`provider.searches` / `provider.created` /
      `provider.comment_lists` がすべて空（起票経路に到達しない）
    - `occurrences_path(artifacts_dir)` が存在しない
@@ -384,7 +487,9 @@ Issue が明示する `docs/dev/incident-labels.md` に加え、**現行 docs �
      `incident_ref is None` / `incident_action is None` / `decision == "comment_only"`
    → 修正前 Red（現在は incident 起票 + occurrence 追記が起きる）。
 6. **cycle exhaust の run で incident が抑止される**: `failure_event kind=cycle_exhausted` の run で
-   5 と同型の検査。`decision == "not_resumable"` を追加で固定する。→ 修正前 Red。
+   5 と同型の検査。`decision == "not_resumable"` と、triage 本文に改訂後の
+   `_CAUSE_DESCRIPTIONS["cycle_exhausted"]` および `--reset-cycle` の次アクション行
+   （`report.py:142-148`）が**両方**残ることを追加で固定する。→ 修正前 Red。
 7. **stderr サマリの維持**: 5 / 6 の run で stderr サマリに `--- failure triage ---` 以下の行が
    従来どおり出力されること（抑止対象が incident 記録のみであることの確認）。
 8. **除外境界の回帰（既存テスト）**: `test_cli_not_found_dispatch_still_records_incident` が
@@ -404,9 +509,14 @@ Issue が明示する `docs/dev/incident-labels.md` に加え、**現行 docs �
 
 ### 変更固有検証（恒久テスト化しない）
 
-- `occurrences.jsonl` の掃除: 実行前後で
-  `jq -r '.signature.cause' … | sort | uniq -c` を取り、13 行 → 5 行、
-  `agent_declared_abort` 8 件 → 0 件を Issue コメントへ証跡として貼る。
+- `occurrences.jsonl` の掃除: § 方針 3 の手順（quiescence → 不変 backup → filter →
+  検証）をそのまま実行し、次を Issue コメントへ証跡として貼る。
+  - step 1 の `pgrep` 出力（自 run 以外の writer が無いこと）
+  - `BEFORE_N=13` / `DROP_N=8` / `AFTER_N=5`、および `AFTER_N == BEFORE_N - DROP_N` の成立
+  - step 5 の `diff` が差分なし（残存行が backup の非 ABORT 行と byte 単位で一致）
+  - `jq -r '.signature.cause' | sort | uniq -c` が `dispatch_failure 5` のみ
+  - 作成した backup ファイル名（`occurrences.jsonl.bak-405-<UTC>`）
+
   ローカル運用データであり repo にコミットされないため恒久テストにはしない。
 - `make check`（`ruff` / `mypy` / `pytest` 全件）を実装後に実行する。
 
