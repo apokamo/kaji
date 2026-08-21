@@ -166,7 +166,10 @@ target (`user_interrupted` maps to the `comment_only` decision; it is never auto
 interruption is recorded at run level only — no `result.json` is written for the in-flight attempt.
 The interactive terminal runner leaves the agent pane alive and surfaces its `pane_id` in the triage
 evidence (see the [interactive terminal runner guide](./interactive-terminal-runner.md) § session
-continuation).
+continuation). Only an in-flight attempt — one without a `result.json` — contributes orphan pane
+evidence; a completed attempt's pane has already been cleaned up. Without that distinction an
+interruption that lands before the next attempt directory exists would report the previous,
+already-killed pane as an orphan.
 
 Even when incident recording is suppressed, the console error, the run artifacts, and the triage
 comment on the originating Issue are all preserved. The suppression itself is auditable from the

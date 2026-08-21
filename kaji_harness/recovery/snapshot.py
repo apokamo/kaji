@@ -286,11 +286,20 @@ def _latest_attempt_result(run_dir: Path, step_id: str | None) -> dict[str, Any]
 def _orphan_pane_id(attempt_dir: Path | None) -> str | None:
     """割込みで残した pane の ``pane_id`` を ``pane-metadata.json`` から読む（Issue #403）。
 
+    ``result.json`` を持つ attempt は完了済みで pane も cleanup 済みなので採用しない。
+    ``WorkflowRunner`` は ``_StepExecutor.execute()`` の *前* に ``in_flight_step_id`` を
+    設定するため、新 attempt directory 作成前に割り込まれると最新 attempt が同 step の
+    直前の完了済み attempt になり、殺し済み pane を孤児と誤報しうる。割込み時に
+    進行中 attempt の ``result.json`` を作らない契約（``runner.run()`` の
+    ``KeyboardInterrupt`` ハンドラ）により、``result.json`` の実在で両者を判別できる。
+
     silent best-effort とし、不在 / 破損を ``artifact_read_errors`` に入れない
     （入れると pane metadata を持たない headless run で ``kaji_bug_suspected`` に倒れ、
     bug issue を誤起票する）。
     """
     if attempt_dir is None:
+        return None
+    if (attempt_dir / "result.json").is_file():
         return None
     path = attempt_dir / "pane-metadata.json"
     if not path.is_file():

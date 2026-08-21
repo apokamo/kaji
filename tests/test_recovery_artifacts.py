@@ -349,11 +349,18 @@ def _interrupted_events(step_id: str = "review-code") -> list[dict[str, object]]
     ]
 
 
-def _write_pane_metadata(run_dir: Path, step_id: str, pane_id: str) -> None:
-    attempt = run_dir / "steps" / step_id / "attempt-001"
+def _write_pane_metadata(
+    run_dir: Path,
+    step_id: str,
+    pane_id: str,
+    *,
+    attempt_name: str = "attempt-001",
+    pane_dead: str = "0",
+) -> None:
+    attempt = run_dir / "steps" / step_id / attempt_name
     attempt.mkdir(parents=True, exist_ok=True)
     (attempt / "pane-metadata.json").write_text(
-        json.dumps({"pane_id": pane_id, "pane_dead": "0"}), encoding="utf-8"
+        json.dumps({"pane_id": pane_id, "pane_dead": pane_dead}), encoding="utf-8"
     )
 
 
@@ -419,6 +426,37 @@ def test_collect_snapshot_ignores_broken_pane_metadata(tmp_path: Path) -> None:
 
     assert snap.orphan_pane_id is None
     assert snap.artifact_read_errors == ()
+
+
+def test_collect_snapshot_skips_orphan_pane_for_completed_attempt(tmp_path: Path) -> None:
+    # 割込みが新 attempt 作成前（in_flight_step_id 設定後）に入ると、最新 attempt は
+    # 同 step の直前の完了済み attempt になる。完了済み attempt の pane は cleanup 済みなので
+    # 孤児 pane evidence に採用しない（採用すると人手 recovery を誤誘導する）。
+    _seed_state(tmp_path, _git_repo(tmp_path))
+    run_dir = _build_run(tmp_path, "260710120016", events=_interrupted_events(), result=_result())
+    _write_pane_metadata(run_dir, "review-code", "%old", pane_dead="1")
+
+    snap = _collect(tmp_path, run_dir)
+
+    assert snap.orphan_pane_id is None
+    assert not any("orphan pane" in e for e in snap.evidence)
+
+
+def test_collect_snapshot_reports_orphan_pane_from_in_flight_attempt(tmp_path: Path) -> None:
+    # 完了済み attempt-001 の後に in-flight の attempt-002（result.json なし）がある場合は、
+    # in-flight 側の pane を孤児として提示する。
+    _seed_state(tmp_path, _git_repo(tmp_path))
+    run_dir = _build_run(tmp_path, "260710120017", events=_interrupted_events(), result=_result())
+    _write_pane_metadata(run_dir, "review-code", "%old", pane_dead="1")
+    _write_pane_metadata(run_dir, "review-code", "%new", attempt_name="attempt-002")
+
+    snap = _collect(tmp_path, run_dir)
+
+    assert snap.orphan_pane_id == "%new"
+    assert any(
+        "attempt-002/pane-metadata.json: orphan pane pane_id=%new (not killed)" in e
+        for e in snap.evidence
+    )
 
 
 def test_collect_snapshot_skips_orphan_pane_for_non_interrupted_run(tmp_path: Path) -> None:

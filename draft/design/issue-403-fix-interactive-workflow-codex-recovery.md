@@ -500,7 +500,13 @@ bug issue を誤起票する。この非対称性はコメントで明示する�
 | フィールド | 取得元 | evidence 行 | 出す条件 |
 |---|---|---|---|
 | `attempt_session_id: str \| None` | 既存 `_latest_attempt_result()` が読む `result.json` の `session_id` | `steps/<step>/result.json session_id=<id>` | 非 `None` のときだけ |
-| `orphan_pane_id: str \| None` | `steps/<step>/attempt-*/pane-metadata.json`（最新 attempt）の `pane_id` | `steps/<step>/attempt-NNN/pane-metadata.json: orphan pane pane_id=<id> (not killed)` | `failure_event.kind == "interrupted"` かつ読めたときだけ |
+| `orphan_pane_id: str \| None` | `steps/<step>/attempt-*/pane-metadata.json`（最新 attempt）の `pane_id` | `steps/<step>/attempt-NNN/pane-metadata.json: orphan pane pane_id=<id> (not killed)` | `failure_event.kind == "interrupted"` かつ最新 attempt が **`result.json` を持たない**（進行中）かつ読めたときだけ |
+
+最新 attempt に `result.json` がある場合は「完了済み attempt」であり pane は cleanup 済みなので
+孤児として採用しない。`in_flight_step_id` は `_StepExecutor.execute()` の *前* に設定されるため、
+新 attempt directory の作成前に割り込むと最新 attempt が同 step の直前の完了済み attempt になり、
+この判別がないと殺し済み pane を孤児と誤報する。割込み時は進行中 attempt の `result.json` を
+作らない（§ 方針 3-2）ので、`result.json` の実在で進行中 / 完了済みを判別できる。
 
 `pane-metadata.json` の読み取りは silent best-effort とし、失敗を `artifact_read_errors` に
 **入れない**（入れると `_detect_contradiction` が `kaji_bug_suspected` に倒れ、pane metadata が

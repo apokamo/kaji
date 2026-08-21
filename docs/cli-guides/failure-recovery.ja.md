@@ -143,6 +143,10 @@ kaji recover .kaji/wf/official/dev.yaml 288 --run-id 260710120000
 中断時の証跡は run レベルのみで、進行中 attempt の `result.json` は作らない。interactive
 terminal runner では pane を kill せずに残し、その `pane_id` を triage コメントの根拠一覧に
 出す（[interactive terminal runner ガイド](./interactive-terminal-runner.ja.md) § session 継続）。
+孤児 pane として提示するのは `result.json` を持たない進行中 attempt の `pane-metadata.json`
+だけで、完了済み attempt の pane（cleanup 済み）は採用しない。新 attempt 作成前に割り込むと
+最新 attempt が直前の完了済み attempt になるため、この判別がないと殺し済み pane を
+孤児と誤報する。
 
 抑止した場合も、console のエラー表示・run artifact・発生元 Issue への triage コメントは
 維持される。抑止の事実と理由は `run.log` の `incident_suppressed` event（`cause` /
