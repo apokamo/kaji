@@ -49,6 +49,10 @@ _CAUSE_DESCRIPTIONS: dict[str, str] = {
         "agent が正規の ABORT verdict を返した。安全停止・手動確認要求であり、"
         "自動再開の対象にしない。"
     ),
+    "user_interrupted": (
+        "利用者が run を中断した（Ctrl-C）。harness の不具合ではないため incident 起票の"
+        "対象外にする。再開の要否は残った artifact と worktree を見て人間が判断する。"
+    ),
     "ambiguous_worktree_abort": (
         "同一 Issue に複数の worktree が該当したため、runner が dispatch 前に停止した。"
     ),

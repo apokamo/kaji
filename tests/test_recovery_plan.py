@@ -465,6 +465,24 @@ def test_user_precondition_error_is_not_resumable() -> None:
     assert d.recoverable is False
 
 
+def test_user_interrupted_is_comment_only() -> None:
+    # Issue #403: 中断 run は手動再開が正当なので `not_resumable` ではなく `comment_only`。
+    # どちらでも auto-resume には入らない（recoverable=False）。
+    d = _plan(
+        _snapshot(
+            failure_event=FailureEvent(
+                kind="interrupted", step_id="implement", exception_type="KeyboardInterrupt"
+            ),
+            failed_step="implement",
+            workflow_end_status="ERROR",
+            attempt_error=None,
+        )
+    )
+    assert d.classification.cause == "user_interrupted"
+    assert d.decision == "comment_only"
+    assert d.recoverable is False
+
+
 def test_runtime_error_is_comment_only() -> None:
     d = _plan(
         _snapshot(

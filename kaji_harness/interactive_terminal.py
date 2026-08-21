@@ -46,6 +46,7 @@ from .cli import find_high_confidence_sensitive_pattern, find_transient_pattern
 from .errors import (
     CLIExecutionError,
     CLINotFoundError,
+    SessionResolution,
     StepTimeoutError,
     TmuxSessionRequiredError,
 )
@@ -423,45 +424,73 @@ def execute_interactive_terminal(
         _set_remain_on_exit(tmux, pane_id)
 
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if verdict_path.is_file():
-            # Snapshot the pane state at verdict detection (diagnostic evidence).
-            # Under the verdict-trigger contract the agent CLI is still alive
-            # here, so #{pane_dead} is normally 0.
-            _write_pane_metadata(
-                tmux,
-                pane_id,
-                metadata_path,
-                target_pane=target_pane,
-                close_on_verdict=close_on_verdict,
-                layout=launch,
-            )
-            result_session_id = session_id or launch_session_id or None
-            if result_session_id is None and step.agent == "codex":
-                _wait_for_pane_exit_or_session_id(
+    try:
+        while time.monotonic() < deadline:
+            if verdict_path.is_file():
+                # Snapshot the pane state at verdict detection (diagnostic evidence).
+                # Under the verdict-trigger contract the agent CLI is still alive
+                # here, so #{pane_dead} is normally 0.
+                _write_pane_metadata(
                     tmux,
                     pane_id,
-                    terminal_log,
-                    prompt_path=prompt_path,
-                    verdict_path=verdict_path,
-                    deadline=min(deadline, time.monotonic() + _SESSION_ID_GRACE_SECONDS),
+                    metadata_path,
+                    target_pane=target_pane,
+                    close_on_verdict=close_on_verdict,
+                    layout=launch,
                 )
-                result_session_id = _extract_codex_session_id(
-                    terminal_log, prompt_path=prompt_path, verdict_path=verdict_path
-                )
-            if close_on_verdict:
-                _kill_pane(tmux, pane_id)
-            if result_session_id is None and step.agent == "codex":
-                # Re-scan after cleanup: the rollout file may finalize on exit.
-                result_session_id = _extract_codex_session_id(
-                    terminal_log, prompt_path=prompt_path, verdict_path=verdict_path
-                )
-            return CLIResult(full_output="", session_id=result_session_id)
+                result_session_id = session_id or launch_session_id or None
+                if result_session_id is None and step.agent == "codex":
+                    _wait_for_pane_exit_or_session_id(
+                        tmux,
+                        pane_id,
+                        terminal_log,
+                        prompt_path=prompt_path,
+                        verdict_path=verdict_path,
+                        deadline=min(deadline, time.monotonic() + _SESSION_ID_GRACE_SECONDS),
+                    )
+                    result_session_id = _extract_codex_session_id(
+                        terminal_log, prompt_path=prompt_path, verdict_path=verdict_path
+                    )
+                if close_on_verdict:
+                    _kill_pane(tmux, pane_id)
+                if result_session_id is None and step.agent == "codex":
+                    # Re-scan after cleanup: the rollout file may finalize on exit.
+                    result_session_id = _extract_codex_session_id(
+                        terminal_log, prompt_path=prompt_path, verdict_path=verdict_path
+                    )
+                return CLIResult(full_output="", session_id=result_session_id)
 
-        if _pane_dead(tmux, pane_id):
-            # The pane exited before any verdict appeared (e.g. the agent failed
-            # at launch). Fail loud with the real error instead of polling until
-            # the much longer step timeout.
+            if _pane_dead(tmux, pane_id):
+                # The pane exited before any verdict appeared (e.g. the agent failed
+                # at launch). Fail loud with the real error instead of polling until
+                # the much longer step timeout.
+                _write_pane_metadata(
+                    tmux,
+                    pane_id,
+                    metadata_path,
+                    target_pane=target_pane,
+                    close_on_verdict=close_on_verdict,
+                    layout=launch,
+                    terminal_log=terminal_log,
+                )
+                raise CLIExecutionError(
+                    step.id,
+                    1,
+                    _terminal_exit_detail(terminal_log),
+                    session_resolution=_resolve_abnormal_exit_session(
+                        step.agent,
+                        prompt_path=prompt_path,
+                        verdict_path=verdict_path,
+                        resume_session_id=session_id,
+                        launch_session_id=launch_session_id,
+                        pane_alive=False,
+                    ),
+                )
+            time.sleep(_VERDICT_POLL_INTERVAL_SECONDS)
+    except KeyboardInterrupt:
+        # Issue #403: 中断直前の agent 状態を人間が目視・回収できるよう pane は kill せず、
+        # 孤児 pane の識別子だけを artifact に残す。KeyboardInterrupt は再送出する。
+        try:
             _write_pane_metadata(
                 tmux,
                 pane_id,
@@ -469,10 +498,11 @@ def execute_interactive_terminal(
                 target_pane=target_pane,
                 close_on_verdict=close_on_verdict,
                 layout=launch,
-                terminal_log=terminal_log,
             )
-            raise CLIExecutionError(step.id, 1, _terminal_exit_detail(terminal_log))
-        time.sleep(_VERDICT_POLL_INTERVAL_SECONDS)
+        except (OSError, subprocess.SubprocessError) as exc:
+            # metadata 書き出しの失敗で KeyboardInterrupt を別の例外に置き換えない。
+            _console.warning("orphan pane metadata snapshot failed: %s", exc)
+        raise
 
     # Timeout: verdict never appeared. Best-effort cleanup, then fail-loud.
     _write_pane_metadata(
@@ -483,8 +513,17 @@ def execute_interactive_terminal(
         close_on_verdict=close_on_verdict,
         layout=launch,
     )
+    # Issue #403: session 解決は kill の *前* に 1 回だけ行う（kill 後の再走査はしない）。
+    resolved = _resolve_abnormal_exit_session(
+        step.agent,
+        prompt_path=prompt_path,
+        verdict_path=verdict_path,
+        resume_session_id=session_id,
+        launch_session_id=launch_session_id,
+        pane_alive=True,
+    )
     _kill_pane(tmux, pane_id)
-    raise StepTimeoutError(step.id, timeout)
+    raise StepTimeoutError(step.id, timeout, session_resolution=resolved)
 
 
 def _resolve_tmux() -> str:
@@ -852,6 +891,110 @@ def _wait_for_pane_exit_or_session_id(
         ):
             return
         time.sleep(0.2)
+
+
+def _resolve_abnormal_exit_session(
+    agent: str,
+    *,
+    prompt_path: Path,
+    verdict_path: Path,
+    resume_session_id: str | None,
+    launch_session_id: str,
+    pane_alive: bool,
+) -> SessionResolution:
+    """verdict を得ずに終わった attempt の session を解決する（Issue #403）。
+
+    戻り値は常に確定値であり、``SessionResolution(None)`` は「当該 attempt に一意対応
+    する session は無い」という結論を表す。呼び出し側（runner）が resume 入力などで
+    埋め直してはならない。verdict 検出経路の newest-match-wins 規則はここでは使わない
+    （異常終了経路だけが一意性を要求する。詳細は設計書 § 方針 1）。
+
+    Args:
+        agent: step の agent 名（``claude`` / ``codex`` / ``antigravity``）。
+        prompt_path: 当該 attempt の ``prompt.txt``。marker かつ attempt 開始時刻の代理。
+        verdict_path: 当該 attempt の ``verdict.yaml``。marker の一方。
+        resume_session_id: ``resume:`` step で wrapper へ渡した親 session ID。
+        launch_session_id: claude fresh 起動時に runner が採番した UUID（他は空文字）。
+        pane_alive: pane が生存したまま終わったか（timeout=True / pane-dead=False）。
+
+    Returns:
+        当該 attempt の session として検証できた ID を持つ ``SessionResolution``。
+        検証できない場合は ``SessionResolution(None)``。
+    """
+    if agent == "claude":
+        # `claude --resume <id>` は同一 session を継続するため、resume 入力そのものが
+        # 当該 attempt の session ID（先行 attempt が作成済みで実在が保証される）。
+        if resume_session_id:
+            return SessionResolution(resume_session_id)
+        # fresh は `claude --session-id <uuid>` で session を新規作成する。pane が全区間
+        # 生存した = wrapper の起動が受理された証拠。pane-dead は起動失敗を含むため、
+        # 採番 UUID に対応する session が実在しない可能性があり採用しない。
+        if pane_alive:
+            return SessionResolution(launch_session_id or None)
+        return SessionResolution(None)
+    if agent != "codex":
+        # antigravity は公開 session ID を持たない。
+        return SessionResolution(None)
+    # codex は resume でも履歴を引き継ぐ *新規* rollout を作るため、resume 入力は当該
+    # attempt の session ではない。store 照合で一意特定できなければ None にする
+    # （親 ID への fallback は「推測」にあたる）。
+    return SessionResolution(
+        _unique_codex_session_id_from_store(prompt_path=prompt_path, verdict_path=verdict_path)
+    )
+
+
+def _unique_codex_session_id_from_store(*, prompt_path: Path, verdict_path: Path) -> str | None:
+    """当該 attempt に **一意** 対応する Codex rollout の UUID を返す（Issue #403）。
+
+    ``CODEX_HOME/sessions/**/*.jsonl`` のうち、``prompt.txt`` の mtime 以降に更新された
+    rollout だけを走査し、本文が当該 attempt の marker（prompt / verdict の絶対 path）を
+    含むものを数える。mtime 下限は (a) ``resume:`` step で正当に複数一致する親 rollout を
+    除外し、(b) 走査コストを attempt 開始後のファイルへ限定するために置く。
+
+    異常終了経路は ``terminal.log`` を読まない: timeout 時は pane が生存しており Codex の
+    resume 行がまだ出力されていないうえ、実障害の transcript は 50MB 規模で読込コストが
+    大きい。
+
+    Returns:
+        一致がちょうど 1 件のときその UUID。0 件 / 2 件以上 / 読取失敗 / ``prompt.txt`` の
+        stat 失敗はすべて None（fail-safe。推測で埋めない）。
+    """
+    markers = [str(prompt_path), str(verdict_path)]
+    sessions_dir = _codex_home() / "sessions"
+    if not sessions_dir.is_dir():
+        return None
+    try:
+        prompt_mtime = prompt_path.stat().st_mtime
+        candidates = [
+            (path.stat().st_mtime, path)
+            for path in sessions_dir.rglob("*.jsonl")
+            if _CODEX_SESSION_FILE_RE.match(path.name)
+        ]
+    except OSError:
+        return None
+
+    fresh = sorted(
+        (entry for entry in candidates if entry[0] >= prompt_mtime),
+        key=lambda entry: entry[0],
+        reverse=True,
+    )[:_CODEX_SESSION_SCAN_LIMIT]
+
+    matched: list[str] = []
+    for _, path in fresh:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            # 読めない候補があると「ちょうど 1 件」を保証できない。
+            return None
+        if not any(marker in text for marker in markers):
+            continue
+        match = _CODEX_SESSION_FILE_RE.match(path.name)
+        if match is None:  # pragma: no cover - fresh は match 済みのみを含む
+            continue
+        matched.append(match.group(1))
+        if len(matched) > 1:
+            return None
+    return matched[0] if len(matched) == 1 else None
 
 
 def _extract_codex_session_id(

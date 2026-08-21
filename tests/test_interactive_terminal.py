@@ -23,6 +23,7 @@ from kaji_harness.cli import _TRANSIENT_PATTERNS, is_transient_error_text
 from kaji_harness.errors import (
     CLIExecutionError,
     CLINotFoundError,
+    SessionResolution,
     StepTimeoutError,
     TmuxSessionRequiredError,
 )
@@ -33,6 +34,7 @@ from kaji_harness.interactive_terminal import (
     _pane_dead,
     _parse_kaji_pane_marker,
     _prune_kaji_agent_panes,
+    _resolve_abnormal_exit_session,
     _terminal_exit_detail,
     execute_interactive_terminal,
     extract_terminal_diagnostic,
@@ -816,6 +818,389 @@ class TestCodexSessionIdExtraction:
             )
             is None
         )
+
+
+@pytest.mark.small
+class TestResolveAbnormalExitSessionPureBranches:
+    """Issue #403: 異常終了経路の session 解決のうち、store I/O を伴わない分岐。"""
+
+    def _resolve(
+        self,
+        agent: str,
+        *,
+        resume_session_id: str | None = None,
+        launch_session_id: str = "",
+        pane_alive: bool = True,
+    ) -> SessionResolution:
+        return _resolve_abnormal_exit_session(
+            agent,
+            prompt_path=Path("/tmp/attempt-001/prompt.txt"),
+            verdict_path=Path("/tmp/attempt-001/verdict.yaml"),
+            resume_session_id=resume_session_id,
+            launch_session_id=launch_session_id,
+            pane_alive=pane_alive,
+        )
+
+    def test_claude_resume_returns_resume_input(self) -> None:
+        # `claude --resume <id>` は同一 session を継続するため、resume 入力が当該 attempt の ID。
+        assert self._resolve("claude", resume_session_id="parent-sess") == SessionResolution(
+            "parent-sess"
+        )
+        assert self._resolve(
+            "claude", resume_session_id="parent-sess", pane_alive=False
+        ) == SessionResolution("parent-sess")
+
+    def test_claude_fresh_timeout_returns_launch_session_id(self) -> None:
+        assert self._resolve(
+            "claude", launch_session_id="launch-uuid", pane_alive=True
+        ) == SessionResolution("launch-uuid")
+
+    def test_claude_fresh_pane_dead_returns_none(self) -> None:
+        # pane 死亡は起動失敗を含むため、採番 UUID に対応する session が実在しない。
+        assert self._resolve(
+            "claude", launch_session_id="launch-uuid", pane_alive=False
+        ) == SessionResolution(None)
+
+    def test_antigravity_always_returns_none(self) -> None:
+        assert self._resolve("antigravity", launch_session_id="x") == SessionResolution(None)
+
+    def test_resolution_none_is_distinguishable_from_untried(self) -> None:
+        # 「解決を試みて null」は確定値であり、「未試行（例外に載せない）」とは別物。
+        resolved = self._resolve("antigravity")
+        assert resolved is not None
+        assert resolved.session_id is None
+
+
+@pytest.mark.medium
+class TestAbnormalExitSessionResolution:
+    """Issue #403: timeout / pane-dead の session 解決（Codex session store 照合）。"""
+
+    def _rollout(
+        self, codex_home: Path, uuid_str: str, body: str, *, mtime: float | None = None
+    ) -> Path:
+        sessions_dir = codex_home / "sessions" / "2026" / "07" / "30"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        path = sessions_dir / f"rollout-2026-07-30T22-20-02-{uuid_str}.jsonl"
+        path.write_text(body, encoding="utf-8")
+        if mtime is not None:
+            os.utime(path, (mtime, mtime))
+        return path
+
+    def _prompt(self, tmp_path: Path) -> Path:
+        """``prompt.txt`` は runner が dispatch 直前に 1 度だけ書く（mtime を更新しない）。"""
+        prompt = tmp_path / "prompt.txt"
+        if not prompt.exists():
+            prompt.write_text("prompt", encoding="utf-8")
+        return prompt
+
+    def _timeout(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        agent: str = "codex",
+        session_id: str | None = None,
+        calls: list[list[str]] | None = None,
+    ) -> StepTimeoutError:
+        prompt = self._prompt(tmp_path)
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        fake_run = _make_fake_tmux(calls=calls)  # pane alive, verdict never appears
+
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=fake_run),
+            patch("kaji_harness.interactive_terminal.time.sleep", return_value=None),
+            patch(
+                "kaji_harness.interactive_terminal.time.monotonic",
+                side_effect=[0.0, 0.5, 2.0],
+            ),
+            pytest.raises(StepTimeoutError) as excinfo,
+        ):
+            execute_interactive_terminal(
+                step=_step(agent),
+                prompt_path=prompt,
+                verdict_path=tmp_path / "verdict.yaml",
+                workdir=tmp_path,
+                timeout=1,
+                session_id=session_id,
+            )
+        return excinfo.value
+
+    def _pane_dead_failure(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        agent: str = "codex",
+        session_id: str | None = None,
+    ) -> CLIExecutionError:
+        prompt = self._prompt(tmp_path)
+        (tmp_path / "terminal.log").write_text("agent exited\n", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        fake_run = _make_fake_tmux(pane_dead="1")
+
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=fake_run),
+            pytest.raises(CLIExecutionError) as excinfo,
+        ):
+            execute_interactive_terminal(
+                step=_step(agent),
+                prompt_path=prompt,
+                verdict_path=tmp_path / "verdict.yaml",
+                workdir=tmp_path,
+                timeout=600,
+                session_id=session_id,
+            )
+        return excinfo.value
+
+    def _marker_body(self, tmp_path: Path) -> str:
+        prompt = tmp_path / "prompt.txt"
+        verdict = tmp_path / "verdict.yaml"
+        return f'{{"type":"user","text":"read {prompt} and write {verdict}"}}\n'
+
+    def test_timeout_codex_unique_match_is_carried_on_exception(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        codex_home = tmp_path / "codex-home"
+        monkeypatch.setenv("CODEX_HOME", str(codex_home))
+        self._prompt(tmp_path)
+        self._rollout(
+            codex_home, "019fb36d-1346-7773-b7c9-b18a9da494d2", self._marker_body(tmp_path)
+        )
+
+        exc = self._timeout(tmp_path, monkeypatch)
+
+        assert exc.session_resolution == SessionResolution("019fb36d-1346-7773-b7c9-b18a9da494d2")
+
+    def test_timeout_codex_two_matches_resolve_to_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        codex_home = tmp_path / "codex-home"
+        monkeypatch.setenv("CODEX_HOME", str(codex_home))
+        self._prompt(tmp_path)
+        body = self._marker_body(tmp_path)
+        self._rollout(codex_home, "11111111-1111-4111-8111-111111111111", body)
+        self._rollout(codex_home, "22222222-2222-4222-8222-222222222222", body)
+
+        exc = self._timeout(tmp_path, monkeypatch)
+
+        assert exc.session_resolution == SessionResolution(None)
+
+    def test_timeout_codex_no_match_resolves_to_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        codex_home = tmp_path / "codex-home"
+        monkeypatch.setenv("CODEX_HOME", str(codex_home))
+        self._rollout(codex_home, "33333333-3333-4333-8333-333333333333", '{"text":"unrelated"}\n')
+
+        exc = self._timeout(tmp_path, monkeypatch)
+
+        assert exc.session_resolution == SessionResolution(None)
+
+    def test_timeout_codex_missing_session_store_resolves_to_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "absent-codex-home"))
+
+        exc = self._timeout(tmp_path, monkeypatch)
+
+        assert exc.session_resolution == SessionResolution(None)
+
+    def test_timeout_codex_ignores_rollout_older_than_prompt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """resume 親 rollout（attempt 開始前に更新が止まっている）を誤採用しない。"""
+        codex_home = tmp_path / "codex-home"
+        monkeypatch.setenv("CODEX_HOME", str(codex_home))
+        prompt = self._prompt(tmp_path)
+        self._rollout(
+            codex_home,
+            "44444444-4444-4444-8444-444444444444",
+            self._marker_body(tmp_path),
+            mtime=prompt.stat().st_mtime - 3600,
+        )
+
+        exc = self._timeout(tmp_path, monkeypatch)
+
+        assert exc.session_resolution == SessionResolution(None)
+
+    def test_timeout_codex_resume_adopts_new_rollout_not_parent_id(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`resume:` step: codex は新規 rollout を作るため、親 ID ではなく新 UUID を採る。"""
+        codex_home = tmp_path / "codex-home"
+        monkeypatch.setenv("CODEX_HOME", str(codex_home))
+        prompt = self._prompt(tmp_path)
+        parent_mtime = prompt.stat().st_mtime - 3600
+        self._rollout(
+            codex_home,
+            "55555555-5555-4555-8555-555555555555",
+            self._marker_body(tmp_path),
+            mtime=parent_mtime,
+        )
+        self._rollout(
+            codex_home, "66666666-6666-4666-8666-666666666666", self._marker_body(tmp_path)
+        )
+
+        exc = self._timeout(
+            tmp_path, monkeypatch, session_id="55555555-5555-4555-8555-555555555555"
+        )
+
+        assert exc.session_resolution == SessionResolution("66666666-6666-4666-8666-666666666666")
+
+    def test_timeout_codex_resume_without_match_does_not_fall_back_to_parent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+
+        exc = self._timeout(
+            tmp_path, monkeypatch, session_id="55555555-5555-4555-8555-555555555555"
+        )
+
+        assert exc.session_resolution == SessionResolution(None)
+
+    def test_timeout_codex_ignores_terminal_log_resume_line(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """異常終了経路は `terminal.log` を読まない（store 照合のみ）。"""
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+        (tmp_path / "terminal.log").write_text(
+            "To continue, run codex resume 77777777-7777-4777-8777-777777777777\n",
+            encoding="utf-8",
+        )
+
+        exc = self._timeout(tmp_path, monkeypatch)
+
+        assert exc.session_resolution == SessionResolution(None)
+
+    def test_timeout_claude_fresh_carries_launch_session_id(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[list[str]] = []
+        exc = self._timeout(tmp_path, monkeypatch, agent="claude", calls=calls)
+
+        split = [argv for argv in calls if argv[:2] == ["/usr/bin/tmux", "split-window"]]
+        assert len(split) == 1
+        assert exc.session_resolution is not None
+        launch_session_id = exc.session_resolution.session_id
+        assert launch_session_id
+        # wrapper command は最終 argv の 1 文字列。採番 UUID がそこに渡っている。
+        assert launch_session_id in split[0][-1]
+
+    def test_timeout_claude_resume_carries_resume_input(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        exc = self._timeout(tmp_path, monkeypatch, agent="claude", session_id="prev-sess")
+
+        assert exc.session_resolution == SessionResolution("prev-sess")
+
+    def test_pane_dead_claude_fresh_resolves_to_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        exc = self._pane_dead_failure(tmp_path, monkeypatch, agent="claude")
+
+        assert exc.session_resolution == SessionResolution(None)
+
+    def test_pane_dead_claude_resume_carries_resume_input(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        exc = self._pane_dead_failure(tmp_path, monkeypatch, agent="claude", session_id="prev-sess")
+
+        assert exc.session_resolution == SessionResolution("prev-sess")
+
+    def test_pane_dead_codex_unique_match_is_carried(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        codex_home = tmp_path / "codex-home"
+        monkeypatch.setenv("CODEX_HOME", str(codex_home))
+        self._prompt(tmp_path)
+        self._rollout(
+            codex_home, "88888888-8888-4888-8888-888888888888", self._marker_body(tmp_path)
+        )
+
+        exc = self._pane_dead_failure(tmp_path, monkeypatch)
+
+        assert exc.session_resolution == SessionResolution("88888888-8888-4888-8888-888888888888")
+
+    def test_pane_dead_codex_resume_without_match_does_not_fall_back_to_parent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+
+        exc = self._pane_dead_failure(
+            tmp_path, monkeypatch, session_id="55555555-5555-4555-8555-555555555555"
+        )
+
+        assert exc.session_resolution == SessionResolution(None)
+
+
+@pytest.mark.medium
+class TestInteractiveTerminalInterrupt:
+    """Issue #403: polling 中の KeyboardInterrupt は pane を残し metadata だけ書く。"""
+
+    def _run_interrupted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, calls: list[list[str]]
+    ) -> None:
+        prompt = tmp_path / "prompt.txt"
+        prompt.write_text("prompt", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        fake_run = _make_fake_tmux(calls=calls)
+
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=fake_run),
+            patch("kaji_harness.interactive_terminal.time.sleep", side_effect=KeyboardInterrupt()),
+            pytest.raises(KeyboardInterrupt),
+        ):
+            execute_interactive_terminal(
+                step=_step("claude"),
+                prompt_path=prompt,
+                verdict_path=tmp_path / "verdict.yaml",
+                workdir=tmp_path,
+                timeout=600,
+            )
+
+    def test_interrupt_writes_pane_metadata_without_killing_pane(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[list[str]] = []
+        self._run_interrupted(tmp_path, monkeypatch, calls)
+
+        metadata = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
+        assert metadata["pane_id"] == "%99"
+        assert metadata["pane_dead"] == "0"
+        assert not [argv for argv in calls if argv[:2] == ["/usr/bin/tmux", "kill-pane"]]
+
+    def test_pane_metadata_failure_does_not_replace_keyboard_interrupt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        prompt = tmp_path / "prompt.txt"
+        prompt.write_text("prompt", encoding="utf-8")
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+        fake_run = _make_fake_tmux()
+
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=fake_run),
+            patch("kaji_harness.interactive_terminal.time.sleep", side_effect=KeyboardInterrupt()),
+            patch(
+                "kaji_harness.interactive_terminal._write_pane_metadata",
+                side_effect=OSError("disk full"),
+            ),
+            pytest.raises(KeyboardInterrupt),
+        ):
+            execute_interactive_terminal(
+                step=_step("claude"),
+                prompt_path=prompt,
+                verdict_path=tmp_path / "verdict.yaml",
+                workdir=tmp_path,
+                timeout=600,
+            )
 
 
 @pytest.mark.medium

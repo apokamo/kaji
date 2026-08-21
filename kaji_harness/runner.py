@@ -563,6 +563,13 @@ class _StepExecutor:
         if exc_returncode is not None:
             exit_code = exc_returncode
             signal_name = derive_signal(exit_code)
+        # Issue #403: 異常終了経路が確定させた session 解決結果を優先する。``None`` は
+        # 「解決を試みていない経路」であり、その場合だけ既存 fallback（resume 入力）が
+        # 残る。``SessionResolution(None)`` は「一意対応する session 無し」の確定値で、
+        # resume 入力での埋め直しを抑止する。
+        resolution = getattr(exc, "session_resolution", None)
+        if resolution is not None:
+            session_id = resolution.session_id
         started_at = attempt_started_at if attempt_started_at is not None else ended_at
         verdict_exception = isinstance(
             exc,
@@ -947,44 +954,53 @@ class WorkflowRunner:
                 root_run_id=self.recovery_root,
                 parent_run_id=self.recovery_parent or self.recovery_root,
             )
-        logger = RunLogger(log_path=run_dir / "run.log")
-        logger.log_workflow_start(run_ctx.canonical_id, self.workflow.name)
-        _console.info("workflow start: %s issue %s", self.workflow.name, run_ctx.issue_ref)
-
         total_cost = 0.0
-        workflow_start = time.monotonic()
         end_status = "COMPLETE"
         end_error: str | None = None
         last_verdict: Verdict | None = None
         barrier_hit = False
         step_dispatched = False
+        # Issue #403: dispatch 中に割り込まれた step だけを failure_event に載せる
+        # （未 dispatch の step を「失敗した step」と誤読させないため）。
+        in_flight_step_id: str | None = None
+        # ``_emit_ambiguous_worktree_abort`` は自前で workflow_end を書くため、
+        # finally の二重記録を抑止する。
+        workflow_end_logged = False
+        workflow_start = time.monotonic()
 
-        if ambiguous_abort is not None:
-            return self._emit_ambiguous_worktree_abort(
-                ambiguous_abort,
-                state,
-                logger,
-                workflow_start,
+        logger = RunLogger(log_path=run_dir / "run.log")
+        logger.log_workflow_start(run_ctx.canonical_id, self.workflow.name)
+        # Issue #403: workflow_start emit 直後から run 終了までを終端記録の保護範囲にする。
+        try:
+            _console.info("workflow start: %s issue %s", self.workflow.name, run_ctx.issue_ref)
+
+            if ambiguous_abort is not None:
+                self._emit_ambiguous_worktree_abort(
+                    ambiguous_abort,
+                    state,
+                    logger,
+                    workflow_start,
+                )
+                workflow_end_logged = True
+                return state
+
+            # 6. --reset-cycle の適用（state / logger が確定済み、メインループ前）
+            self._apply_cycle_reset(cycle_reset_target, state, logger)
+
+            executor = _StepExecutor(
+                workflow=self.workflow,
+                config=self.config,
+                provider=provider,
+                run_ctx=run_ctx,
+                run_dir=run_dir,
+                logger=logger,
+                state=state,
+                project_root=self.project_root,
+                verbose=self.verbose,
+                resolve_pr_context=self._resolve_pr_context_safe,
             )
 
-        # 6. --reset-cycle の適用（state / logger が確定済み、メインループ前）
-        self._apply_cycle_reset(cycle_reset_target, state, logger)
-
-        executor = _StepExecutor(
-            workflow=self.workflow,
-            config=self.config,
-            provider=provider,
-            run_ctx=run_ctx,
-            run_dir=run_dir,
-            logger=logger,
-            state=state,
-            project_root=self.project_root,
-            verbose=self.verbose,
-            resolve_pr_context=self._resolve_pr_context_safe,
-        )
-
-        # 7. メインループ
-        try:
+            # 7. メインループ
             while current_step and current_step.id != "end":
                 # --before barrier: dispatch 直前で停止（開始 step / --from 開始 step も含む）
                 if self.before_step and current_step.id == self.before_step:
@@ -1033,12 +1049,14 @@ class WorkflowRunner:
                         dispatch=dispatch_kind,
                     )
                 else:
+                    in_flight_step_id = current_step.id
                     outcome = executor.execute(
                         current_step,
                         step_metadata,
                         issue_context,
                         iteration_started,
                     )
+                    in_flight_step_id = None
 
                 verdict = outcome.verdict
                 duration_ms = outcome.duration_ms
@@ -1130,19 +1148,37 @@ class WorkflowRunner:
             # 正常終了時のステータス判定
             if last_verdict and last_verdict.status == "ABORT":
                 end_status = "ABORT"
+        except KeyboardInterrupt:
+            # Issue #403: 割込みは ``BaseException`` なので ``except Exception`` を素通りし、
+            # 初期値 ``COMPLETE`` のまま workflow_end が書かれていた。run レベルの終端だけを
+            # 整合させ、進行中 attempt の result.json は作らない（tmux pane 内の agent は
+            # 生存しうるため exit_code / session の best-effort 推定は誤情報になる）。
+            end_status = "ERROR"
+            end_error = "KeyboardInterrupt: workflow interrupted by user"
+            logger.log_failure_event(
+                kind="interrupted",
+                step_id=in_flight_step_id,
+                exception_type="KeyboardInterrupt",
+                synthetic=True,
+            )
+            _console.warning("workflow interrupted by user: step=%s", in_flight_step_id)
+            raise
         except Exception as exc:
             end_status = "ERROR"
             end_error = f"{type(exc).__name__}: {exc}"
             _console.error("workflow error: %s", end_error)
             raise
         finally:
-            total_duration_ms = int((time.monotonic() - workflow_start) * 1000)
-            logger.log_workflow_end(
-                end_status,
-                state.cycle_counts,
-                total_duration_ms=total_duration_ms,
-                total_cost=total_cost if total_cost > 0 else None,
-                error=end_error,
-            )
-            _console.info("workflow end: status=%s duration=%dms", end_status, total_duration_ms)
+            if not workflow_end_logged:
+                total_duration_ms = int((time.monotonic() - workflow_start) * 1000)
+                logger.log_workflow_end(
+                    end_status,
+                    state.cycle_counts,
+                    total_duration_ms=total_duration_ms,
+                    total_cost=total_cost if total_cost > 0 else None,
+                    error=end_error,
+                )
+                _console.info(
+                    "workflow end: status=%s duration=%dms", end_status, total_duration_ms
+                )
         return state
