@@ -319,27 +319,54 @@ main worktree から起動される際の `artifacts_dir`）。
 close する**（`incident.py:339-345`）。lock は取らない。ここから 2 つの性質が導かれる。
 
 - **性質 A**: 同一ファイルへの並行 append は `O_APPEND` により互いに壊さない。
-- **性質 B**: path を別 inode へ差し替えた後の append は、**新しい inode** に対して行われる
-  （writer は fd を保持し続けないため）。旧 inode へ書かれうるのは、差し替え直前に
-  `open()` を終えていた writer の 1 write だけである。
+- **性質 B**: path を別 inode へ差し替えた後、**新規の `open(path, "a")` は新しい inode を開く**。
+  旧 inode へ write しうるのは、差し替え前に `open()` を終えた fd を持つ process だけである。
+  ただしその write が **いつ起きるか**は保証されない（`open()` と `write()` の間で任意に遅れうる）。
+  したがって「旧 inode への write はもう来ない」と言うには、**そのような fd が存在しないこと**を
+  確認する必要がある。
 
-前案は「`mv` 直前に再ハッシュして競合を検出する」方式だったが、**再ハッシュから `mv` までの
+ここから 2 つの要件が分かれる。
+
+| 要件 | 内容 | 本設計での保証手段 |
+|---|---|---|
+| 無損失（データ） | 並行 append されたデータを 1 行も消さない | 旧 inode を hard link で保持し、`mv` で unlink しない |
+| 回収の完了性 | 「もう追加は来ない」と確定した上で回収・検証を終える | 旧 inode を開いている fd が 0 件であることを直接確認する（性質 B より、0 件なら以後到達不能） |
+
+前々案は「`mv` 直前に再ハッシュして競合を検出する」方式だったが、**再ハッシュから `mv` までの
 間に旧 inode へ届いた append を検出できず、`mv` が旧 inode を unlink するため復元もできない**。
-また `pgrep` による quiescence は一時点の観測にすぎず、検査後に起動した writer を排他できない。
-writer 側へ lock を入れるのは scope 外（`incident.py` 無変更）であるため、
-**検出に頼らず「旧 inode を破棄しない」構造にして無損失性を保証する**方式へ改める。
+前案は hard link で無損失（データ）を解決したが、**完了性**を「差し替え直前の 1 write だけが
+対象」と誤って仮定しており、pre-swap fd を保持した writer の遅延 write で破れた
+（§ 実測による検証 2）。`pgrep` による process 有無の確認は一時点の観測にすぎず、完了性の根拠に
+ならない。writer 側へ lock を入れるのは scope 外（`incident.py` 無変更）であるため、
+**無損失は hard link、完了性は fd 到達不能性の確認**という 2 段構えで保証する方式へ改める。
 
-#### 方式: 旧 inode を hard link で保全し、取りこぼしを append-only で回収する
+#### 方式: 旧 inode を hard link で保全し、到達不能を確認してから回収を確定する
 
 1. 掃除の前に、原本へ **2 本目の hard link**（`$OLD`）を張る。以後 `$OLD` は原本 inode を
    参照し続け、`mv` で path のリンクが差し替わっても inode は生存する。
 2. `$OLD` を入力に filter して tmp を作り、`mv` で path を新 inode へ差し替える（唯一の
    atomic 操作）。**unlink される inode は存在しない**ため、この時点で失われるデータはない。
-3. 差し替え直前に旧 inode へ届いた append（性質 B の 1 write）は `$OLD` に残っている。
-   `$OLD` と現ファイルの差集合を取り、不足行を **append (`>>` = `O_APPEND`) で戻す**。
-   append は writer と同じ操作であり、性質 A により競合しない。
-4. したがって **quiescence は正しさの要件ではなくなる**（並行 append が発生しても回収される）。
-   `pgrep` は「回収の回数を減らすための任意の事前確認」に降格し、必須手順から外す。
+3. 差し替え後、旧 inode へ write できるのは **swap 前に `open()` を終えた fd を持つ process
+   だけ**である（性質 B。新規の `open(path, "a")` は新 inode を開く）。したがって
+   **旧 inode を開いている fd が 0 件**であることを確認できれば、以後その inode への write は
+   **不可能**であり、その時点の回収結果が最終になる。
+4. fd の有無は `/proc/[0-9]*/fd/*` の実体を `stat -Lc '%d:%i'` で照合して数える。0 件になるまで
+   待ち（上限付き）、0 件を確認してから最終回収と検証を行う。
+5. 回収は `$OLD` と現ファイルの差集合を **append（`>>` = `O_APPEND`）で戻す**操作であり、
+   writer と同じ操作なので競合しない。
+
+> **前案からの変更点**: 前案は「差し替え直前に旧 inode へ届いた 1 write だけが回収対象」と述べ、
+> 「どの時点の append も step 3 が回収する」と主張していた。これは誤りである。swap 前に
+> `open()` を済ませた writer が、回収ループと最終検証の**後**に `write()` すると、その行は
+> `$OLD` に残るが現 path には現れず、検証済みの `LOST=0` が事後に破れる（レビューで
+> 決定論的な反例が提示され、本設計フェーズでも再現した。§ 実測による検証）。
+> hard link により**データ自体は失われない**が、「回収の完了性」は別に保証する必要がある。
+> 本案はそれを **fd 到達不能性の確認**（step 3-4）で与える。
+>
+> `pgrep` による process 有無の確認は一時点の観測にすぎず、検査後に起動した writer を排他
+> できないため完了性の根拠にならない。一方 fd 照合は「この inode に到達しうる経路が現在
+> 存在しない」ことの直接確認であり、**新規 `open()` は新 inode を開く**（性質 B）ため、
+> 0 件確認以降に旧 inode へ到達する経路は生じない。両者は観測対象が異なる。
 
 #### 手順
 
@@ -365,17 +392,54 @@ if ! jq -c "$FILTER" "$OLD" > "$F.tmp"; then
 fi
 mv "$F.tmp" "$F"                     # 旧 inode は $OLD が保持しているので unlink されない
 
-# 3. 取りこぼし回収（append-only。writer と競合しない）。3 周で収束しなければ停止。
+# 3. 旧 inode への到達不能を確認する。swap 前に open() を終えた fd だけが旧 inode へ
+#    write しうる（新規 open(path,"a") は新 inode を開く）。0 件になれば以後 write は不可能。
+OLD_ID=$(stat -Lc '%d:%i' "$OLD")
+holders() {
+    local fd id
+    for fd in /proc/[0-9]*/fd/*; do
+        id=$(stat -Lc '%d:%i' "$fd" 2>/dev/null) || continue
+        [ "$id" = "$OLD_ID" ] && echo "$fd"
+    done
+    true                             # 該当なしでも 0 を返す（set -e 対策）
+}
+SETTLED=0
+for _ in $(seq 1 120); do            # 上限 60 秒（0.5s × 120）
+    if [ "$(holders | wc -l)" -eq 0 ]; then SETTLED=1; break; fi
+    sleep 0.5
+done
+if [ "$SETTLED" -ne 1 ]; then
+    echo "FAIL: processes still hold the old inode ($OLD_ID):" >&2; holders >&2
+    comm -23 <(sort "$OLD") <(sort "$F") >> "$F"      # append-only rollback
+    exit 1
+fi
+
+# 4. 最終回収（append-only。到達不能確認後なので、この結果が最終になる）。
+#    jq は必ず実ファイルへ materialize してから使う。process substitution 内で jq が失敗
+#    （torn write による壊れた行など）しても終了コードが伝播せず、切り詰めた入力で
+#    「LOST=0」と誤判定するため。
+# 作業用 keep list は backup glob（*.pre405-*）と紛れない名前にし、終了時に必ず消す。
+KEEP="$F.keep.$$"
+trap 'rm -f "$KEEP"' EXIT
+keep_list() {                        # $OLD の非 ABORT 行を $KEEP へ書き出す
+    if ! jq -c "$FILTER" "$OLD" > "$KEEP"; then
+        echo "FAIL: jq could not parse $OLD (torn write?); rolling back" >&2
+        comm -23 <(sort "$OLD") <(sort "$F") >> "$F"
+        exit 1
+    fi
+}
 for _ in 1 2 3; do
-    MISSING=$(comm -23 <(jq -c "$FILTER" "$OLD" | sort) <(sort "$F"))
+    keep_list
+    MISSING=$(comm -23 <(sort "$KEEP") <(sort "$F"))
     # `[ -z ... ] && break` は set -e 下で非空時に exit 1 になるため if で書く。
     if [ -z "$MISSING" ]; then break; fi
     printf '%s\n' "$MISSING" >> "$F"
     echo "reconciled $(printf '%s\n' "$MISSING" | wc -l) line(s) that landed on the old inode"
 done
 
-# 4. 検証（すべて失敗時に停止する。echo だけで通過させない）。
-LOST=$(comm -23 <(jq -c "$FILTER" "$OLD" | sort) <(sort "$F") | wc -l)
+# 5. 検証（すべて失敗時に停止する。echo だけで通過させない）。
+keep_list
+LOST=$(comm -23 <(sort "$KEEP") <(sort "$F") | wc -l)
 if [ "$LOST" -ne 0 ]; then
     echo "FAIL: $LOST line(s) lost; rolling back" >&2
     comm -23 <(sort "$OLD") <(sort "$F") >> "$F"      # append-only rollback
@@ -392,27 +456,41 @@ if [ "$AFTER_N" -lt "$KEEP_N" ]; then
     comm -23 <(sort "$OLD") <(sort "$F") >> "$F"
     exit 1
 fi
+# 到達不能が最後まで保たれたことを再確認する（0 件でなければ検証は最終ではない）。
+if [ "$(holders | wc -l)" -ne 0 ]; then
+    echo "FAIL: old inode reopened during verification; rolling back" >&2
+    comm -23 <(sort "$OLD") <(sort "$F") >> "$F"
+    exit 1
+fi
 echo "OK: BEFORE_N=$BEFORE_N DROP_N=$DROP_N AFTER_N=$AFTER_N LOST=0 OLD=$OLD"
 jq -r '.signature.cause' "$F" | sort | uniq -c        # 期待: dispatch_failure 5 件のみ
 ```
 
 #### この手順が満たす性質
 
-- **無損失（構造による保証）**: `mv` は path のリンクを差し替えるだけで、原本 inode は `$OLD`
-  が保持する。どの時点で並行 append が起きても、そのデータは `$OLD` か `$F` のどちらかに必ず
-  存在し、step 3 が差集合を append で戻す。「検出できたら中止」ではなく「取りこぼしても回収」
-  であるため、検査と `mv` の間の窓が残っても損失にならない。
-- **quiescence 非依存**: 上記により、`pgrep` の一時点確認が検査後の writer 起動を防げない
-  という制約は正しさに影響しない。事前確認は任意（回収回数を減らすだけ）とし、必須手順から
-  外した。
-- **停止と復旧**: `set -euo pipefail` を置き、step 4 の 3 検査はいずれも `exit 1` で停止する。
-  停止前に **append-only の rollback**（`comm -23 <(sort "$OLD") <(sort "$F") >> "$F"`）で
-  原本の全行を戻す。`cp "$OLD" "$F"` による上書き復旧は、swap 後に新 inode へ届いた正常な
-  append を消すため採用しない。
+- **無損失（データ）**: `mv` は path のリンクを差し替えるだけで、原本 inode は `$OLD` が保持する。
+  どの時点の並行 append も `$OLD` か `$F` のどちらかに必ず存在し、失われない。
+- **回収の完了性（到達不能性による保証）**: 旧 inode へ write しうるのは swap 前に `open()` を
+  終えた fd だけであり（性質 B）、その fd が 0 件であることを step 3 で直接確認する。0 件確認後は
+  旧 inode への write が不可能なので、step 4 の回収結果と step 5 の `LOST=0` は**事後に破れない**。
+  step 5 末尾で 0 件を再確認し、検証期間中の再 open も排除する。
+- **`pgrep` を完了性の根拠にしない**: process 有無の観測は一時点の情報で、検査後の writer 起動を
+  排他できない。本手順は fd 照合（到達経路の直接確認）に置き換え、`pgrep` は必須手順から外した。
+- **`jq` 失敗を握り潰さない**: `comm <(jq …)` のような process substitution は内側の終了コードを
+  伝播しないため、壊れた行で `jq` が失敗しても切り詰めた入力のまま `LOST=0` と誤判定しうる
+  （本設計フェーズの検証中に実際に踏んだ。§ 実測による検証 4）。回収・検証で使う非 ABORT 行は
+  `keep_list()` で実ファイル `$KEEP`（`trap … EXIT` で必ず削除。backup glob と紛れない名前）へ
+  materialize し、`jq` の失敗をその場で `exit 1` +
+  rollback に落とす。
+- **停止と復旧**: `set -euo pipefail` を置き、fd 未解放（step 3 の上限超過）、`jq` の parse 失敗、
+  step 5 の 4 検査は、いずれも `exit 1` で停止する。停止前に **append-only の rollback**
+  （`comm -23 <(sort "$OLD") <(sort "$F") >> "$F"`）で原本の全行を戻す。
+  `cp "$OLD" "$F"` による上書き復旧は、swap 後に新 inode へ届いた正常な append を消すため
+  採用しない。
 - **上書きしない backup**: `$OLD` は UTC タイムスタンプ付きで、既存なら `exit 1`。手順を
   再実行しても初回の 13 行原本を潰さない。`.kaji-artifacts/` 配下（`.gitignore:49`）に残るため
   repo は汚さない。
-- **行順の扱い**: step 3 で戻した行はファイル末尾に付く。`read_occurrences()` の結果は
+- **行順の扱い**: step 4 で戻した行はファイル末尾に付く。`read_occurrences()` の結果は
   backfill entry の **列挙順**にのみ影響し、run_id による重複排除（`incident.py:514,534-536`）
   と署名同値判定・再発回数には影響しない。各行は `recorded_at` を保持するため時系列は復元できる。
 - **冪等性**: filter は冪等であり、掃除後に新しい ABORT 行が混入しても手順全体を再実行すれば
@@ -426,26 +504,40 @@ jq -r '.signature.cause' "$F" | sort | uniq -c        # 期待: dispatch_failure
 
 #### 実測による検証（本設計フェーズで実施済み）
 
-**上の `#### 手順` の code block をそのまま抽出し**（`cd` 先だけを検証用ディレクトリに置換）、
-`occurrences.jsonl` の複製に対して verbatim 実行した。同時に、`append_occurrence()` と同じ
-「毎回 `open(path, "a")` → 1 行 write → close」を 20ms 間隔で 60 回行う writer を並走させた
-（scratchpad 上、2026-08-24）。
+いずれも **`#### 手順` の code block をそのまま抽出し**（`cd` 先だけ検証用ディレクトリへ置換）、
+`occurrences.jsonl` の複製に対して verbatim 実行した結果である（2026-08-24）。
+
+**検証 1: 並行 writer（毎回 `open`→write→`close`）下での実行**
+
+`append_occurrence()` と同型の writer を 20ms 間隔で 60 回並走させた。
 
 | 観測項目 | 結果 |
 |---|---|
-| script の終了コード | `0`（`set -euo pipefail` 下で最後まで完走） |
-| script の出力 | `OK: BEFORE_N=22 DROP_N=8 AFTER_N=14 LOST=0 OLD=…pre405-20260823T164740Z` |
+| 終了コード / 出力 | `0` / `OK: BEFORE_N=22 DROP_N=8 AFTER_N=14 LOST=0` |
 | `BEFORE_N=22` の内訳 | 原本 13 行 + swap 前に届いた並行 append 9 行 |
-| `DROP_N` / `AFTER_N` | 8 / 14（= 22 − 8。ABORT 8 行だけが落ちている） |
-| step 3 の回収 | `jq` 読み取り〜`mv` の窓で旧 inode に届いた行を append で復元（前案が失っていた行） |
-| `LOST`（`$OLD` の非 ABORT 行のうち `$F` に無いもの） | **0** |
-| writer 終了後の `$F` | 66 行（swap 後の append はすべて新 inode に届いた = 性質 B の実証） |
-| writer 終了後の `LOST` 再測定 | **0** |
-| `$F` に残る `agent_declared_abort` | **0** |
-| `$OLD` に残る `agent_declared_abort` | **8**（原本 inode が保全されている） |
-| `jq -r '.signature.cause' \| sort \| uniq -c` | `dispatch_failure` のみ |
+| writer 終了後の `$F` / `LOST` | 66 行 / **0**（swap 後の append はすべて新 inode = 性質 B の実証） |
+| `$F` / `$OLD` の `agent_declared_abort` | **0** / **8**（原本 inode が保全されている） |
 
-rollback 行（`comm -23 <(sort "$OLD") <(sort "$F") >> "$F"`）も単独で実行して検証した。
+**検証 2: 前案の反例（pre-swap fd を保持し、回収後に遅延 write）**
+
+レビューで提示された反例を再現した。writer は swap 前に `open()` した fd を保持したまま 4 秒
+待ち、回収ループが終わる時刻に 1 行 `write()` してから `close()` する。
+
+| 段階 | 前案（fd gate なし） | 本案（fd gate あり） |
+|---|---|---|
+| 回収直後の判定 | `LOST=0` で終了 | fd holder **1 件**を検出（`/proc/998695/fd/3`、`device:inode = 2128:3448823`）→ 待機 |
+| 遅延 `write()` 到達後 | `LOST=1`（検証済みの結論が事後に破れる） | holder **0 件**に遷移 → 到達不能が確定 |
+| 最終回収 | — | `reconciled 1 line(s) that landed on the old inode` |
+| script 終了コード / 出力 | — | `0` / `OK: BEFORE_N=14 DROP_N=8 AFTER_N=7 LOST=0` |
+| 遅延行（`run_id=LATE`）の所在 | `$OLD` のみ（現 path に無い） | **現 path に存在**（`grep -c LATE = 1`） |
+| `$F` の `agent_declared_abort` | — | **0** |
+
+前案の主張「どの時点の append も回収する」が破れる条件を実際に踏み、fd gate を挟むことで
+解消されることを確認した。
+
+**検証 3: rollback**
+
+rollback 行（`comm -23 <(sort "$OLD") <(sort "$F") >> "$F"`）を単独実行した。
 
 | 観測項目 | rollback 前 | rollback 後 |
 |---|---|---|
@@ -456,6 +548,19 @@ rollback 行（`comm -23 <(sort "$OLD") <(sort "$F") >> "$F"`）も単独で実�
 
 `cp "$OLD" "$F"` による上書き復旧ではこの 60 行が消えるため、append-only rollback を採用した
 判断が実測で裏付けられている。
+
+**検証 4: torn write（壊れた行）で停止・復旧すること**
+
+検証 2 と同じ構成で、遅延 write の内容を不正な JSON（`{"broken": ,,,}`）にした。
+この検証は、初期実装で `comm <(jq …)` の process substitution が `jq` の失敗を握り潰し、
+切り詰めた入力のまま `LOST=0` と誤判定していたのを発見して `keep_list()` を導入した経緯を持つ。
+
+| 観測項目 | 結果 |
+|---|---|
+| script 終了コード | **1**（`set -euo pipefail` + 明示 `exit 1`） |
+| 出力 | `jq: parse error: Expected value before ','` に続き `FAIL: jq could not parse …pre405-…(torn write?); rolling back` |
+| rollback 後の `$F` の `agent_declared_abort` | **8**（原本の全行が append-only rollback で戻った） |
+| 作業用 keep list の残骸（`$F.keep.*`） | **0 件**（`trap … EXIT` で削除） |
 
 ### 4. docs 更新
 
