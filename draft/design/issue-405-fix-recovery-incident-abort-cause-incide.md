@@ -315,75 +315,147 @@ main worktree から起動される際の `artifacts_dir`）。
 
 #### 書き込み側の性質（保全設計の前提）
 
-`append_occurrence()` は `open(path, "a")` による lock なしの追記である
-（`incident.py:339-345`）。`O_APPEND` の 1 行 write は同一ファイルへの並行 append に対しては
-安全だが、**別 inode へ差し替える書き換え（`jq > tmp && mv`）とは協調しない**。tmp を作って
-から `mv` するまでの間に別 run が旧 inode へ append すると、その正常な occurrence は
-`mv` で失われる。writer 側へ lock を導入するのは本 Issue の scope 外（`incident.py` 無変更の
-制約）であるため、**掃除側を quiescence + 競合検出 + 検証で保全する**。
+`append_occurrence()` は **呼び出しのたびに `open(path, "a")` で path を開き直し、1 行 write して
+close する**（`incident.py:339-345`）。lock は取らない。ここから 2 つの性質が導かれる。
 
-#### 手順（quiescence 確認 → 不変 backup → filter → 検証 → 必要なら復旧）
+- **性質 A**: 同一ファイルへの並行 append は `O_APPEND` により互いに壊さない。
+- **性質 B**: path を別 inode へ差し替えた後の append は、**新しい inode** に対して行われる
+  （writer は fd を保持し続けないため）。旧 inode へ書かれうるのは、差し替え直前に
+  `open()` を終えていた writer の 1 write だけである。
 
-対象は `/home/aki/dev/kaji/main/.kaji-artifacts/incidents/occurrences.jsonl`（`kaji run` が
-main worktree から起動される際の `artifacts_dir`）。
+前案は「`mv` 直前に再ハッシュして競合を検出する」方式だったが、**再ハッシュから `mv` までの
+間に旧 inode へ届いた append を検出できず、`mv` が旧 inode を unlink するため復元もできない**。
+また `pgrep` による quiescence は一時点の観測にすぎず、検査後に起動した writer を排他できない。
+writer 側へ lock を入れるのは scope 外（`incident.py` 無変更）であるため、
+**検出に頼らず「旧 inode を破棄しない」構造にして無損失性を保証する**方式へ改める。
+
+#### 方式: 旧 inode を hard link で保全し、取りこぼしを append-only で回収する
+
+1. 掃除の前に、原本へ **2 本目の hard link**（`$OLD`）を張る。以後 `$OLD` は原本 inode を
+   参照し続け、`mv` で path のリンクが差し替わっても inode は生存する。
+2. `$OLD` を入力に filter して tmp を作り、`mv` で path を新 inode へ差し替える（唯一の
+   atomic 操作）。**unlink される inode は存在しない**ため、この時点で失われるデータはない。
+3. 差し替え直前に旧 inode へ届いた append（性質 B の 1 write）は `$OLD` に残っている。
+   `$OLD` と現ファイルの差集合を取り、不足行を **append (`>>` = `O_APPEND`) で戻す**。
+   append は writer と同じ操作であり、性質 A により競合しない。
+4. したがって **quiescence は正しさの要件ではなくなる**（並行 append が発生しても回収される）。
+   `pgrep` は「回収の回数を減らすための任意の事前確認」に降格し、必須手順から外す。
+
+#### 手順
 
 ```bash
+#!/usr/bin/env bash
+set -euo pipefail
 cd /home/aki/dev/kaji/main
 F=.kaji-artifacts/incidents/occurrences.jsonl
+FILTER='select(.signature.cause != "agent_declared_abort")'
 
-# 1. quiescence: 「自 run 以外の writer」が動いていないことを確認する。1 件でも出たら中止。
-#    本手順は Issue #405 の workflow 内（implement step）で実行するため、自分自身の
-#    `kaji run .kaji/wf/official/dev.yaml 405` は必ずヒットする。これだけを除外する。
-pgrep -af 'kaji (run|recover)' | grep -v 'dev.yaml 405' \
-    && { echo "ABORT: another writer is running"; exit 1; }
+# 1. 原本 inode への 2 本目のリンクを張る（上書きしない。既存なら停止）。
+OLD="$F.pre405-$(date -u +%Y%m%dT%H%M%SZ)"
+if [ -e "$OLD" ]; then echo "ABORT: $OLD already exists" >&2; exit 1; fi
+ln "$F" "$OLD"                       # cp ではなく ln。以後 $OLD == 原本 inode
 
-# 2. 競合検出用の基準値を採る（掃除の直前と直後で比較する）。
-BEFORE_HASH=$(sha256sum "$F" | cut -d" " -f1)
-BEFORE_N=$(wc -l < "$F")
-DROP_N=$(grep -c '"cause": "agent_declared_abort"' "$F")
+BEFORE_N=$(wc -l < "$OLD")
+KEEP_N=$(jq -c "$FILTER" "$OLD" | wc -l)
+DROP_N=$((BEFORE_N - KEEP_N))
 
-# 3. 上書きしない backup（同名が既にあれば失敗させる。再実行しても初回原本を潰さない）。
-BAK="$F.bak-405-$(date -u +%Y%m%dT%H%M%SZ)"
-[ -e "$BAK" ] && { echo "ABORT: backup exists"; exit 1; }
-cp "$F" "$BAK"
-
-# 4. filter（同一ディレクトリ内 tmp → mv。直前に再ハッシュして競合を検出する）。
-jq -c 'select(.signature.cause != "agent_declared_abort")' "$F" > "$F.tmp"
-if [ "$(sha256sum "$F" | cut -d" " -f1)" != "$BEFORE_HASH" ]; then
-    rm -f "$F.tmp"; echo "ABORT: concurrent append detected; retry from step 1"; exit 1
+# 2. filter → atomic swap。jq が失敗した時点では path は未変更なので原状のまま停止する。
+if ! jq -c "$FILTER" "$OLD" > "$F.tmp"; then
+    rm -f "$F.tmp"; echo "ABORT: jq failed (partial line?); nothing changed" >&2; exit 1
 fi
-mv "$F.tmp" "$F"
+mv "$F.tmp" "$F"                     # 旧 inode は $OLD が保持しているので unlink されない
 
-# 5. 検証: 行数が期待どおり減り、残った行が backup の非 ABORT 行と byte 単位で一致すること。
+# 3. 取りこぼし回収（append-only。writer と競合しない）。3 周で収束しなければ停止。
+for _ in 1 2 3; do
+    MISSING=$(comm -23 <(jq -c "$FILTER" "$OLD" | sort) <(sort "$F"))
+    # `[ -z ... ] && break` は set -e 下で非空時に exit 1 になるため if で書く。
+    if [ -z "$MISSING" ]; then break; fi
+    printf '%s\n' "$MISSING" >> "$F"
+    echo "reconciled $(printf '%s\n' "$MISSING" | wc -l) line(s) that landed on the old inode"
+done
+
+# 4. 検証（すべて失敗時に停止する。echo だけで通過させない）。
+LOST=$(comm -23 <(jq -c "$FILTER" "$OLD" | sort) <(sort "$F") | wc -l)
+if [ "$LOST" -ne 0 ]; then
+    echo "FAIL: $LOST line(s) lost; rolling back" >&2
+    comm -23 <(sort "$OLD") <(sort "$F") >> "$F"      # append-only rollback
+    exit 1
+fi
+if [ "$(grep -c '"cause": "agent_declared_abort"' "$F" || true)" -ne 0 ]; then
+    echo "FAIL: agent_declared_abort rows remain; rolling back" >&2
+    comm -23 <(sort "$OLD") <(sort "$F") >> "$F"
+    exit 1
+fi
 AFTER_N=$(wc -l < "$F")
-[ "$AFTER_N" -eq "$((BEFORE_N - DROP_N))" ] || echo "FAIL: line count mismatch"
-diff <(jq -c 'select(.signature.cause != "agent_declared_abort")' "$BAK") "$F" \
-    && echo "OK: retained lines are identical to the backup"
-jq -r '.signature.cause' "$F" | sort | uniq -c    # 期待: dispatch_failure 5 件のみ
+if [ "$AFTER_N" -lt "$KEEP_N" ]; then
+    echo "FAIL: line count $AFTER_N < expected $KEEP_N; rolling back" >&2
+    comm -23 <(sort "$OLD") <(sort "$F") >> "$F"
+    exit 1
+fi
+echo "OK: BEFORE_N=$BEFORE_N DROP_N=$DROP_N AFTER_N=$AFTER_N LOST=0 OLD=$OLD"
+jq -r '.signature.cause' "$F" | sort | uniq -c        # 期待: dispatch_failure 5 件のみ
 ```
 
-- **quiescence（step 1）**: 実測で、本 workflow 自身の `kaji run .kaji/wf/official/dev.yaml 405`
-  が `pgrep -af 'kaji (run|recover)'` にヒットすることを確認した（PID 247699 / 247702、
-  2026-08-22）。したがって「writer が 1 つも無い」は本手順の実行条件として成立せず、
-  **自 run のみを除外した上で他の writer が無いこと**を条件とする。
-  自 run を除外してよい理由: 自 run が `occurrences.jsonl` へ append するのは自身が失敗した
-  ときだけであり、その時点で workflow は終了して掃除 step 自体が走らない。掃除の実行中に
-  自 run が失敗して append する余地は step 4 の再ハッシュで検出される。
-- **競合検出（step 4）**: quiescence 確認をすり抜けた並行 append は、`mv` 直前の再ハッシュで
-  検出して中止する（tmp を捨てるだけで原本は無傷）。検出時は step 1 からやり直す。
-  quiescence + 検出の二段構えで、writer に lock を導入せずに保全する。
-- **不変 backup（step 3）**: backup 名に UTC タイムスタンプを含め、既存なら失敗させる。
-  手順を再実行しても初回の 13 行原本を上書きしない。
-- **復旧**: step 5 の検証がいずれか失敗したら `cp "$BAK" "$F"` で原状復帰し、原因を確認してから
-  やり直す。backup は `.kaji-artifacts/` 配下（`.gitignore:49`）に残すため repo は汚さない。
-- **冪等性**: filter 自体は冪等であり、掃除後に新しい ABORT 行が混入しても手順全体を
-  再実行すれば同じ状態へ収束する（backup は新しい名前で追加される）。
+#### この手順が満たす性質
+
+- **無損失（構造による保証）**: `mv` は path のリンクを差し替えるだけで、原本 inode は `$OLD`
+  が保持する。どの時点で並行 append が起きても、そのデータは `$OLD` か `$F` のどちらかに必ず
+  存在し、step 3 が差集合を append で戻す。「検出できたら中止」ではなく「取りこぼしても回収」
+  であるため、検査と `mv` の間の窓が残っても損失にならない。
+- **quiescence 非依存**: 上記により、`pgrep` の一時点確認が検査後の writer 起動を防げない
+  という制約は正しさに影響しない。事前確認は任意（回収回数を減らすだけ）とし、必須手順から
+  外した。
+- **停止と復旧**: `set -euo pipefail` を置き、step 4 の 3 検査はいずれも `exit 1` で停止する。
+  停止前に **append-only の rollback**（`comm -23 <(sort "$OLD") <(sort "$F") >> "$F"`）で
+  原本の全行を戻す。`cp "$OLD" "$F"` による上書き復旧は、swap 後に新 inode へ届いた正常な
+  append を消すため採用しない。
+- **上書きしない backup**: `$OLD` は UTC タイムスタンプ付きで、既存なら `exit 1`。手順を
+  再実行しても初回の 13 行原本を潰さない。`.kaji-artifacts/` 配下（`.gitignore:49`）に残るため
+  repo は汚さない。
+- **行順の扱い**: step 3 で戻した行はファイル末尾に付く。`read_occurrences()` の結果は
+  backfill entry の **列挙順**にのみ影響し、run_id による重複排除（`incident.py:514,534-536`）
+  と署名同値判定・再発回数には影響しない。各行は `recorded_at` を保持するため時系列は復元できる。
+- **冪等性**: filter は冪等であり、掃除後に新しい ABORT 行が混入しても手順全体を再実行すれば
+  同じ状態へ収束する（`$OLD` は新しい名前で追加される）。
 - **順序の制約**: 掃除と修正 merge の間に main で agent ABORT run が起きると再び 1 行増えうる。
-  実装フェーズで掃除して before/after を証跡化し、merge 後の事後確認（Issue の
-  「ワークフロー完了後の確認項目」）で cause 分布を再測定し、`agent_declared_abort` が 0 件で
-  あることを確かめる。増えていた場合は本手順を再実行する。
+  実装フェーズで掃除して証跡化し、merge 後の事後確認（Issue の「ワークフロー完了後の確認項目」）
+  で cause 分布を再測定して `agent_declared_abort` が 0 件であることを確かめる。増えていた場合は
+  本手順を再実行する。
 - `cycle_exhausted` の occurrence は現時点で 0 件のため掃除対象に含まれない（filter は
   `agent_declared_abort` のみを落とす）。
+
+#### 実測による検証（本設計フェーズで実施済み）
+
+**上の `#### 手順` の code block をそのまま抽出し**（`cd` 先だけを検証用ディレクトリに置換）、
+`occurrences.jsonl` の複製に対して verbatim 実行した。同時に、`append_occurrence()` と同じ
+「毎回 `open(path, "a")` → 1 行 write → close」を 20ms 間隔で 60 回行う writer を並走させた
+（scratchpad 上、2026-08-24）。
+
+| 観測項目 | 結果 |
+|---|---|
+| script の終了コード | `0`（`set -euo pipefail` 下で最後まで完走） |
+| script の出力 | `OK: BEFORE_N=22 DROP_N=8 AFTER_N=14 LOST=0 OLD=…pre405-20260823T164740Z` |
+| `BEFORE_N=22` の内訳 | 原本 13 行 + swap 前に届いた並行 append 9 行 |
+| `DROP_N` / `AFTER_N` | 8 / 14（= 22 − 8。ABORT 8 行だけが落ちている） |
+| step 3 の回収 | `jq` 読み取り〜`mv` の窓で旧 inode に届いた行を append で復元（前案が失っていた行） |
+| `LOST`（`$OLD` の非 ABORT 行のうち `$F` に無いもの） | **0** |
+| writer 終了後の `$F` | 66 行（swap 後の append はすべて新 inode に届いた = 性質 B の実証） |
+| writer 終了後の `LOST` 再測定 | **0** |
+| `$F` に残る `agent_declared_abort` | **0** |
+| `$OLD` に残る `agent_declared_abort` | **8**（原本 inode が保全されている） |
+| `jq -r '.signature.cause' \| sort \| uniq -c` | `dispatch_failure` のみ |
+
+rollback 行（`comm -23 <(sort "$OLD") <(sort "$F") >> "$F"`）も単独で実行して検証した。
+
+| 観測項目 | rollback 前 | rollback 後 |
+|---|---|---|
+| `$F` の行数 | 66 | 88 |
+| `$F` の `agent_declared_abort` | 0 | **8**（原本の 8 行が戻る） |
+| 並行 append 由来の行（`run_id` が `RACE*`） | 60 | **60**（1 行も失われない） |
+| `$OLD` にあって `$F` に無い行 | — | **0** |
+
+`cp "$OLD" "$F"` による上書き復旧ではこの 60 行が消えるため、append-only rollback を採用した
+判断が実測で裏付けられている。
 
 ### 4. docs 更新
 
