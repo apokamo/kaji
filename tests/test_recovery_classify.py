@@ -408,6 +408,53 @@ def test_runtime_error_fallback() -> None:
     assert c.recoverability_hint == "no"
 
 
+def test_user_interrupted_is_external_and_not_recoverable() -> None:
+    # Issue #403: Ctrl-C は harness の外から届く signal であり、agent の判断でも config
+    # 不備でもない。auto-resume 候補にはしない（人手の再開判断が正当）。
+    c = classify_failure(
+        _snapshot(
+            failure_event=FailureEvent(
+                kind="interrupted", step_id="implement", exception_type="KeyboardInterrupt"
+            ),
+            failed_step="implement",
+            attempt_result_present=False,
+        )
+    )
+    assert c.cause == "user_interrupted"
+    assert c.synthetic is True
+    assert c.source == "external"
+    assert c.recoverability_hint == "no"
+
+
+def test_user_interrupted_without_attempt_result_is_not_kaji_bug_suspected() -> None:
+    # 中断では進行中 attempt の result.json を意図的に作らないため、``interrupted`` を
+    # ``_ATTEMPT_BACKED_KINDS`` に入れてはならない（入れると bug issue を誤起票する）。
+    c = classify_failure(
+        _snapshot(
+            workflow_end_status="ERROR",
+            workflow_end_error="KeyboardInterrupt: workflow interrupted by user",
+            failure_event=FailureEvent(
+                kind="interrupted", step_id="implement", exception_type="KeyboardInterrupt"
+            ),
+            failed_step="implement",
+            attempt_result_present=False,
+        )
+    )
+    assert c.cause == "user_interrupted"
+
+
+def test_user_interrupted_before_dispatch_has_no_step_id() -> None:
+    c = classify_failure(
+        _snapshot(
+            failure_event=FailureEvent(
+                kind="interrupted", step_id=None, exception_type="KeyboardInterrupt"
+            ),
+            attempt_result_present=False,
+        )
+    )
+    assert c.cause == "user_interrupted"
+
+
 def test_missing_attempt_result_is_kaji_bug_suspected() -> None:
     c = classify_failure(
         _snapshot(

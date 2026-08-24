@@ -122,16 +122,39 @@ kaji recover .kaji/wf/official/dev.yaml 288 --run-id 260710120000
 [incident-labels.md](../dev/incident-labels.md) を参照。`incidents/occurrences.jsonl` は triage が
 有効な失敗に対して必ず生成され、GitHub provider では加えてインシデントイシューへ集約される。
 
-### incident 記録の対象外（Issue #322）
+### incident 記録の対象外（Issue #322 / #403 / #405）
 
-分類が `user_precondition_error` の失敗だけは、第1層の記録経路に一切入らない。新規起票も
-occurrence コメントも `incidents/occurrences.jsonl` への追記も行わない。調査を要さない既知の
-ユーザー前提エラーであり、incident 一覧に載せると障害の信号が薄まるため。
+分類が `user_precondition_error` / `user_interrupted` / `agent_declared_abort` /
+`cycle_exhausted` の失敗は、第1層の記録経路に一切入らない。新規起票も occurrence コメントも
+`incidents/occurrences.jsonl` への追記も行わない。調査を要さない既知のユーザー起因の終了、
+または契約上の正常終端であり、incident 一覧に載せると障害の信号が薄まるため。
 
-該当するのは `TmuxSessionRequiredError` と `HerdrSessionRequiredError`（選択したinteractive terminal
-backendのsession外から起動した）の2ケース。判定はrun.logの`failure_event.exception_type`の型名で行い、
-エラーメッセージの文字列一致には依存しない。CLI未インストール・version不足・session内でのpane ID欠落・
-その他の `CLINotFoundError` は従来どおりincident記録の対象。
+| 分類 | 該当ケース | 判定入力 |
+|---|---|---|
+| `user_precondition_error` | interactive terminal runner を選択した backend の session 外から起動した（`TmuxSessionRequiredError` / `HerdrSessionRequiredError`） | `failure_event.exception_type` の型名 |
+| `user_interrupted` | 利用者が `kaji run` を Ctrl-C で中断した | `failure_event.kind == "interrupted"` |
+| `agent_declared_abort` | agent が正規の ABORT verdict を返した（安全停止・手動確認要求） | `failure_event.kind == "agent_abort"` |
+| `cycle_exhausted` | cycle が `max_iterations` に到達した（安全弁の正常作動） | `failure_event.kind == "cycle_exhausted"` |
+
+いずれも判定は run.log の構造化 `failure_event` で行い、エラーメッセージの文字列一致には
+依存しない。backend CLI 未インストール・version 不足・その他の `CLINotFoundError` は
+従来どおり incident 記録の対象。
+
+`agent_declared_abort` / `cycle_exhausted` は例外を伴わない終端のため、識別署名の
+canonical input が常に空になり、fingerprint が cause ごとの定数へ退化する。`cause` 自体は
+照合キーに含まれるため、この 2 cause 同士が混ざることはない。除外しない場合、同じ cause
+内で対象 step や実際の停止理由が異なる安全停止が、cause ごとに 1 つの incident イシューへ
+誤って集約される（Issue #405）。
+
+中断した run は `workflow_end status=ERROR` として終端されるため、`kaji recover` の triage
+対象として選択できる（`user_interrupted` の decision は `comment_only` で、自動再開はしない）。
+中断時の証跡は run レベルのみで、進行中 attempt の `result.json` は作らない。interactive
+terminal runner では pane を kill せずに残し、その `pane_id` を triage コメントの根拠一覧に
+出す（[interactive terminal runner ガイド](./interactive-terminal-runner.ja.md) § session 継続）。
+孤児 pane として提示するのは `result.json` を持たない進行中 attempt の `pane-metadata.json`
+だけで、完了済み attempt の pane（cleanup 済み）は採用しない。新 attempt 作成前に割り込むと
+最新 attempt が直前の完了済み attempt になるため、この判別がないと殺し済み pane を
+孤児と誤報する。
 
 抑止した場合も、console のエラー表示・run artifact・発生元 Issue への triage コメントは
 維持される。抑止の事実と理由は `run.log` の `incident_suppressed` event（`cause` /

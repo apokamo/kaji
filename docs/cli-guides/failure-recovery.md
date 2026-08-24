@@ -145,18 +145,40 @@ The `comment:` line of the stderr summary shows `Comment.ref`: the created comme
 GitHub provider, the repo-root-relative comment file path for the local provider, and `n/a` when the
 reference could not be captured.
 
-### Incident recording exemption (Issue #322)
+### Incident recording exemption (Issue #322 / #403 / #405)
 
-Failures classified as `user_precondition_error` never enter the incident layer: no incident Issue
-is opened, no occurrence comment is posted, and nothing is appended to `incidents/occurrences.jsonl`.
-These are known user precondition mistakes that need no investigation, and promoting them to
-incidents would drown out the real failure signal.
+Failures classified as `user_precondition_error`, `user_interrupted`, `agent_declared_abort`, or
+`cycle_exhausted` never enter the incident layer: no incident Issue is opened, no occurrence
+comment is posted, and nothing is appended to `incidents/occurrences.jsonl`. These are known
+user-originated endings that need no investigation, or contractually normal terminations, and
+promoting them to incidents would drown out the real failure signal.
 
-Two cases qualify: `TmuxSessionRequiredError` and `HerdrSessionRequiredError`, raised when the
-selected interactive terminal backend is started outside its required session context. The decision keys off the exception type name recorded in
-`failure_event.exception_type`, never off the raw error message. A missing tmux binary, an
-insufficient backend version, a missing pane-ID variable, and every other `CLINotFoundError` keep their
-existing incident recording behavior.
+| Cause | Case | Decision input |
+|---|---|---|
+| `user_precondition_error` | The interactive terminal runner was started outside its selected backend session (`TmuxSessionRequiredError` / `HerdrSessionRequiredError`) | `failure_event.exception_type` |
+| `user_interrupted` | The operator interrupted `kaji run` with Ctrl-C | `failure_event.kind == "interrupted"` |
+| `agent_declared_abort` | The agent returned a legitimate ABORT verdict (safe stop / manual confirmation requested) | `failure_event.kind == "agent_abort"` |
+| `cycle_exhausted` | A cycle reached `max_iterations` (safety valve worked as designed) | `failure_event.kind == "cycle_exhausted"` |
+
+All four decisions key off the structured `failure_event` recorded in `run.log`, never off the raw
+error message. A missing backend binary, an insufficient backend version, and every other
+`CLINotFoundError` keep their existing incident recording behavior.
+
+`agent_declared_abort` and `cycle_exhausted` end without an exception, so the identity signature's
+canonical input is always empty and the fingerprint degenerates to a per-cause constant. `cause` is
+itself part of the match key, so the two causes never collapse into each other. Without this
+exemption, unrelated safe stops that share a cause — regardless of their step or actual stop
+reason — would all collapse into a single incident Issue per cause (Issue #405).
+
+An interrupted run ends with `workflow_end status=ERROR`, so `kaji recover` can select it as a triage
+target (`user_interrupted` maps to the `comment_only` decision; it is never auto-resumed). The
+interruption is recorded at run level only — no `result.json` is written for the in-flight attempt.
+The interactive terminal runner leaves the agent pane alive and surfaces its `pane_id` in the triage
+evidence (see the [interactive terminal runner guide](./interactive-terminal-runner.md) § session
+continuation). Only an in-flight attempt — one without a `result.json` — contributes orphan pane
+evidence; a completed attempt's pane has already been cleaned up. Without that distinction an
+interruption that lands before the next attempt directory exists would report the previous,
+already-killed pane as an orphan.
 
 Even when incident recording is suppressed, the console error, the run artifacts, and the triage
 comment on the originating Issue are all preserved. The suppression itself is auditable from the

@@ -1,7 +1,8 @@
 """Medium tests: runner が emit する ``failure_event`` と ``AttemptResult.synthetic`` (Issue #288).
 
-emit 箇所 4 / kind 5 種（dispatch 例外 / verdict 例外 / cycle exhaust /
-ambiguous worktree / agent ABORT）が ``run.log`` に構造化記録されること、
+emit 箇所 5 / kind 6 種（dispatch 例外 / verdict 例外 / cycle exhaust /
+ambiguous worktree / agent ABORT / 割込み）が ``run.log`` に構造化記録されること、
+Issue #403 の終端 status 契約（``COMPLETE`` / ``ABORT`` / ``ERROR`` / 割込み）、
 ``result.json`` の ``synthetic`` が except 経路で true・agent ABORT で false に
 なること、``recovery-chain.json`` が ``--recovery-*`` 付き run でのみ書かれることを
 tmp fs + stub dispatch で検証する。
@@ -411,3 +412,132 @@ def test_legacy_result_json_without_synthetic_key_loads(tmp_path: Path) -> None:
     path.write_text(json.dumps(legacy), encoding="utf-8")
     loaded = AttemptResult(**json.loads(path.read_text(encoding="utf-8")))
     assert loaded.synthetic is False
+
+
+# --- Issue #403: 割込みの終端整合と workflow_end 契約 ---
+
+
+def _workflow_end(run_dir: Path) -> list[dict[str, object]]:
+    return _events(run_dir, "workflow_end")
+
+
+def test_keyboard_interrupt_during_dispatch_records_error_end(tmp_path: Path) -> None:
+    runner = _make_runner(tmp_path, _single_step_workflow())
+    with (
+        patch("kaji_harness.runner.execute_cli", side_effect=KeyboardInterrupt()),
+        patch("kaji_harness.runner.validate_skill_exists"),
+        pytest.raises(KeyboardInterrupt),
+    ):
+        runner.run()
+
+    run_dir = _run_dir(tmp_path)
+    ends = _workflow_end(run_dir)
+    assert len(ends) == 1
+    assert ends[0]["status"] == "ERROR"
+    assert str(ends[0]["error"]).startswith("KeyboardInterrupt:")
+    events = _events(run_dir, "failure_event")
+    assert len(events) == 1
+    assert events[0]["kind"] == "interrupted"
+    assert events[0]["step_id"] == "implement"
+    assert events[0]["exception_type"] == "KeyboardInterrupt"
+    assert events[0]["synthetic"] is True
+    # 進行中 attempt の result.json は作らない（pane 内 agent は生存しうるため）。
+    assert list(run_dir.glob("steps/*/attempt-*/result.json")) == []
+
+
+def test_keyboard_interrupt_before_dispatch_records_error_end_without_step_id(
+    tmp_path: Path,
+) -> None:
+    runner = _make_runner(tmp_path, _single_step_workflow())
+    with (
+        patch.object(WorkflowRunner, "_apply_cycle_reset", side_effect=KeyboardInterrupt()),
+        patch("kaji_harness.runner.validate_skill_exists"),
+        pytest.raises(KeyboardInterrupt),
+    ):
+        runner.run()
+
+    run_dir = _run_dir(tmp_path)
+    ends = _workflow_end(run_dir)
+    assert len(ends) == 1
+    assert ends[0]["status"] == "ERROR"
+    events = _events(run_dir, "failure_event")
+    assert len(events) == 1
+    assert events[0]["kind"] == "interrupted"
+    assert events[0]["step_id"] is None
+    assert list(run_dir.glob("steps/*/attempt-*/result.json")) == []
+
+
+def test_pre_loop_exception_records_error_workflow_end(tmp_path: Path) -> None:
+    # Issue #403 § 方針 3-3: 保護範囲拡大で pre-loop の Exception も triage 可能になる。
+    runner = _make_runner(tmp_path, _single_step_workflow())
+    with (
+        patch.object(WorkflowRunner, "_apply_cycle_reset", side_effect=RuntimeError("boom")),
+        patch("kaji_harness.runner.validate_skill_exists"),
+        pytest.raises(RuntimeError),
+    ):
+        runner.run()
+
+    run_dir = _run_dir(tmp_path)
+    ends = _workflow_end(run_dir)
+    assert len(ends) == 1
+    assert ends[0]["status"] == "ERROR"
+    assert ends[0]["error"] == "RuntimeError: boom"
+
+
+def test_ambiguous_worktree_abort_logs_single_workflow_end(tmp_path: Path) -> None:
+    # workflow_end_logged フラグの回帰: 保護範囲拡大で ABORT + COMPLETE の二重記録に
+    # ならないこと。
+    runner = _make_runner(tmp_path, _single_step_workflow())
+    err = AmbiguousWorktreeError(_CANONICAL, [("/a", "feat/99"), ("/b", "fix/99")])
+    with (
+        patch("kaji_harness.runner.discover_existing_worktree", side_effect=err),
+        patch("kaji_harness.runner.validate_skill_exists"),
+    ):
+        runner.run()
+
+    ends = _workflow_end(_run_dir(tmp_path))
+    assert len(ends) == 1
+    assert ends[0]["status"] == "ABORT"
+
+
+def test_normal_completion_records_complete_workflow_end(tmp_path: Path) -> None:
+    runner = _make_runner(tmp_path, _single_step_workflow())
+    with (
+        patch("kaji_harness.runner.execute_cli", return_value=_cli_result(_verdict_block("PASS"))),
+        patch("kaji_harness.runner.validate_skill_exists"),
+    ):
+        runner.run()
+
+    ends = _workflow_end(_run_dir(tmp_path))
+    assert len(ends) == 1
+    assert ends[0]["status"] == "COMPLETE"
+    assert ends[0].get("error") is None
+
+
+def test_agent_abort_records_abort_workflow_end(tmp_path: Path) -> None:
+    runner = _make_runner(tmp_path, _single_step_workflow())
+    with (
+        patch("kaji_harness.runner.execute_cli", return_value=_cli_result(_verdict_block("ABORT"))),
+        patch("kaji_harness.runner.validate_skill_exists"),
+    ):
+        runner.run()
+
+    ends = _workflow_end(_run_dir(tmp_path))
+    assert len(ends) == 1
+    assert ends[0]["status"] == "ABORT"
+
+
+def test_dispatch_exception_records_error_workflow_end(tmp_path: Path) -> None:
+    runner = _make_runner(tmp_path, _single_step_workflow())
+    with (
+        patch("kaji_harness.runner.execute_cli", side_effect=StepTimeoutError("implement", 5)),
+        patch("kaji_harness.runner.validate_skill_exists"),
+        pytest.raises(StepTimeoutError),
+    ):
+        runner.run()
+
+    run_dir = _run_dir(tmp_path)
+    ends = _workflow_end(run_dir)
+    assert len(ends) == 1
+    assert ends[0]["status"] == "ERROR"
+    assert _events(run_dir, "failure_event")[0]["kind"] == "dispatch_exception"

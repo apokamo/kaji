@@ -6,7 +6,7 @@ name: incident-fix
 # Incident Fix（修正）
 
 直近の査読 RETRY コメントの指摘に対応し、調査 artifact を更新する。`incident.yaml` では
-`resume: investigate`（調査セッションを継続）＋ `inject_verdict: true`（査読要約の注入）で起動される。
+`resume: investigate`（調査セッションを継続）で起動される。
 
 **収束保証**: 指摘対応以外の scope 拡大（新しい調査論点の追加）は行わない。
 
@@ -21,7 +21,7 @@ name: incident-fix
 | `step_id` | str | 現在のステップ ID |
 | `cycle_count` / `max_iterations` | int | サイクル内ステップのため注入される |
 
-`inject_verdict: true` により直近査読 verdict の要約が prompt に注入される。手動実行時は
+`resume: investigate` により直近査読 verdict の要約が prompt に注入される。手動実行時は
 `$ARGUMENTS` 第 1 トークンを `issue_id` とする。
 
 ## 共通ルール

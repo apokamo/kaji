@@ -208,8 +208,8 @@ class TestWorkflowParsing:
         assert not hasattr(step, "max_turns")
 
     @pytest.mark.small
-    def test_inject_verdict_declared_false_when_key_absent(self) -> None:
-        """未指定の場合、observed フィールドと従来フィールドの両方が False（#381）。"""
+    def test_workflow_without_inject_verdict_parses_successfully(self) -> None:
+        """'inject_verdict' を含まない workflow は削除後も従来どおり成功する（回帰防止、#383）。"""
         yaml_str = dedent("""\
             name: test
             execution_policy: auto
@@ -224,32 +224,20 @@ class TestWorkflowParsing:
 
         step = wf.find_step("step1")
         assert step is not None
-        assert step.inject_verdict_declared is False
-        assert step.inject_verdict is False
+        assert not hasattr(step, "inject_verdict")
+
+
+# ============================================================
+# Test class: removed step keys（#383）
+# ============================================================
+
+
+class TestRemovedStepKeys:
+    """'inject_verdict' は削除済み step キー。値ではなくキーの存在だけで
+    L1 parse 時に migration error となる（silent ignore はしない、ADR 008）。"""
 
     @pytest.mark.small
-    def test_inject_verdict_declared_true_for_explicit_false(self) -> None:
-        """明示 false でもキーが存在するため inject_verdict_declared は True（#381）。"""
-        yaml_str = dedent("""\
-            name: test
-            execution_policy: auto
-            steps:
-              - id: step1
-                skill: s
-                agent: claude
-                inject_verdict: false
-                on:
-                  PASS: end
-        """)
-        wf = load_workflow_from_str(yaml_str)
-
-        step = wf.find_step("step1")
-        assert step is not None
-        assert step.inject_verdict_declared is True
-        assert step.inject_verdict is False
-
-    @pytest.mark.small
-    def test_inject_verdict_declared_true_for_explicit_true(self) -> None:
+    def test_inject_verdict_true_raises_migration_error(self) -> None:
         yaml_str = dedent("""\
             name: test
             execution_policy: auto
@@ -261,12 +249,113 @@ class TestWorkflowParsing:
                 on:
                   PASS: end
         """)
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            load_workflow_from_str(yaml_str)
+
+        message = str(exc_info.value)
+        assert "inject_verdict" in message
+        assert "resume" in message
+        assert "kaji issue resolve-verdict" in message
+        assert "#383" in message
+
+    @pytest.mark.small
+    def test_inject_verdict_false_also_raises_migration_error(self) -> None:
+        """判定は値ではなくキーの存在。明示 false でも受理しない。"""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+                inject_verdict: false
+                on:
+                  PASS: end
+        """)
+
+        with pytest.raises(WorkflowValidationError, match="inject_verdict"):
+            load_workflow_from_str(yaml_str)
+
+    @pytest.mark.small
+    def test_inject_verdict_non_bool_value_raises_migration_error_not_type_error(self) -> None:
+        """旧 `'inject_verdict' must be a boolean` 型検証パスは消滅し、migration error になる。"""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+                inject_verdict: "yes"
+                on:
+                  PASS: end
+        """)
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            load_workflow_from_str(yaml_str)
+
+        message = str(exc_info.value)
+        assert "was removed from the workflow step schema" in message
+        assert "must be a boolean" not in message
+
+    @pytest.mark.small
+    def test_exec_step_with_inject_verdict_raises_migration_error_not_forbidden_key(self) -> None:
+        """exec-step + 削除済みキーは汎用の `must not set` ではなく移行手順つきエラーになる。"""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: step1
+                exec: ["true"]
+                inject_verdict: true
+                on:
+                  PASS: end
+        """)
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            load_workflow_from_str(yaml_str)
+
+        message = str(exc_info.value)
+        assert "was removed from the workflow step schema" in message
+        assert "must not set" not in message
+
+    @pytest.mark.small
+    @pytest.mark.parametrize("step_id", ["fix\ncode", "fix code"])
+    def test_error_message_stays_single_line_for_line_separator_step_id(self, step_id: str) -> None:
+        """改行 / U+2028 を含む step ID でも repr() エスケープにより 1 行のまま（#381 Must Fix）。"""
+        yaml_str = (
+            "name: test\nexecution_policy: auto\nsteps:\n"
+            f"  - id: {step_id!r}\n    skill: s\n    agent: claude\n"
+            "    inject_verdict: true\n    on:\n      PASS: end\n"
+        )
+
+        with pytest.raises(WorkflowValidationError) as exc_info:
+            load_workflow_from_str(yaml_str)
+
+        message = str(exc_info.value)
+        assert len(message.splitlines()) == 1
+
+    @pytest.mark.small
+    def test_unrelated_unknown_key_is_still_silently_ignored(self) -> None:
+        """未知キー一般の方針は変更しない。削除済みキーの named rejection のみが対象。"""
+        yaml_str = dedent("""\
+            name: test
+            execution_policy: auto
+            steps:
+              - id: step1
+                skill: s
+                agent: claude
+                bogus_key: 1
+                on:
+                  PASS: end
+        """)
+
         wf = load_workflow_from_str(yaml_str)
 
         step = wf.find_step("step1")
         assert step is not None
-        assert step.inject_verdict_declared is True
-        assert step.inject_verdict is True
+        assert not hasattr(step, "bogus_key")
 
 
 # ============================================================

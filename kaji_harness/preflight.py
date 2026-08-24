@@ -19,24 +19,6 @@ from .workflow import load_workflow, validate_workflow
 SkillExistsValidator = Callable[[str, Path, str], Path]
 SkillMetadataLoader = Callable[[str, Path, str], SkillMetadata]
 
-# #381: inject_verdict は次回 minor release で削除予定。#383 で本定数と
-# _deprecated_field_warnings() を inject_verdict / inject_verdict_declared と共に削除する。
-_INJECT_VERDICT_DEPRECATION = (
-    "WARNING: 'inject_verdict' is deprecated and will be removed in the next minor "
-    "release (apokamo/kaji#310); step(s) {steps}: remove the field and use "
-    "'resume: <step-id>' for same-agent session continuation, or read the prior "
-    "verdict with 'kaji issue resolve-verdict <issue-id> --step <step-id>'."
-)
-
-
-def _deprecated_field_warnings(workflow: Workflow) -> list[str]:
-    """廃止予定 field の警告を workflow 単位で 1 件に集約する。"""
-    step_ids = [step.id for step in workflow.steps if step.inject_verdict_declared]
-    if not step_ids:
-        return []
-    # step ID は利用者入力。repr() で 1 行にエスケープしてから埋め込む。
-    return [_INJECT_VERDICT_DEPRECATION.format(steps=", ".join(repr(sid) for sid in step_ids))]
-
 
 @dataclass(frozen=True)
 class WorkflowPreflightResult:
@@ -82,7 +64,7 @@ def preflight_workflow(
         OSError: A workflow skill file could not be read.
     """
     errors: list[str] = []
-    warnings: list[str] = _deprecated_field_warnings(workflow)
+    warnings: list[str] = []
     skill_metadata: dict[str, SkillMetadata | None] = {}
     validate_exists = skill_exists_validator or validate_skill_exists
     load_metadata = skill_metadata_loader or load_skill_metadata

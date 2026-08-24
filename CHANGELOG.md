@@ -6,6 +6,56 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-08-22
+
+This release removes the deprecated `inject_verdict` workflow field, adds the
+TypeScript managed starter, and expands the maintained workflow and Codex
+worktree guidance.
+
+### BREAKING CHANGE
+
+- **`inject_verdict`** (workflow step field) has been removed from the engine
+  and the public workflow schema (apokamo/kaji#310, #383).
+  - **Broken contract**: workflow steps that declare `inject_verdict` (any
+    value, including `false`) no longer parse. `kaji validate`, `kaji run`,
+    `kaji recover`, and series member validation all stop with an explicit
+    migration error instead of silently ignoring the field or injecting
+    `previous_verdict` into the step prompt. `resume`-based `previous_verdict`
+    injection is unchanged.
+  - **How to check whether you are affected**: run
+    `rg -n 'inject_verdict' .kaji/wf/` in your repository. Zero hits means you
+    are not affected. You can also confirm with
+    `find .kaji/wf -name '*.yaml' -exec kaji validate {} +` (recurses into
+    every depth regardless of shell `globstar` settings, unlike
+    `.kaji/wf/**/*.yaml`); an affected file fails with the migration error.
+  - **How to migrate**: for an uncustomized managed workflow, refresh it from
+    the upstream copy. For a customized workflow, remove the `inject_verdict`
+    line from the affected step. If that step needs the prior step's verdict,
+    replace it with `resume: <step-id>` for same-agent session continuation,
+    or call `kaji issue resolve-verdict <issue-id> --step <step-id>` to read
+    the prior verdict explicitly. See `docs/dev/workflow-authoring.md` §
+    削除済みフィールド for details, and issue #383 and its PR for the
+    contract removal.
+
+### Added
+
+- Registered `apokamo/kaji-starter-typescript` as a managed starter and added
+  English and Japanese setup guides for using kaji in TypeScript repositories
+  (#391).
+- Added the `dev-thorough-codex` custom workflow variant, assigning design and
+  implementation to Codex and independent review and verification to Claude.
+
+### Changed
+
+- Updated the `docs-fable` custom workflow so Claude handles documentation
+  updates and fixes while Codex performs review and verification.
+
+### Docs
+
+- Documented the Codex-specific Serena code-intelligence policy, including
+  absolute-path worktree root validation, process and cache isolation, stable
+  version pinning, and the boundary with native search tools (#78).
+
 ## [0.18.0] - 2026-07-25
 
 This release adds Antigravity CLI support and a managed starter synchronization

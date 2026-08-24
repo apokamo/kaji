@@ -2,11 +2,28 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 
 class HarnessError(Exception):
     """ハーネスの基底例外。"""
+
+
+@dataclass(frozen=True)
+class SessionResolution:
+    """異常終了経路で確定した session ID の解決結果（Issue #403）。
+
+    ``session_id is None`` は「解決を試みたが、当該 attempt に一意対応する session が
+    無かった」ことを表す確定値であり、呼び出し側の推測（resume 入力等）で埋めては
+    ならない。解決自体を試みていない経路は、例外にこのオブジェクトを載せない
+    （``session_resolution is None`` = 未試行）。
+
+    Attributes:
+        session_id: 当該 attempt の session として検証できた ID。検証できなければ None。
+    """
+
+    session_id: str | None
 
 
 # --- cache 同期エラー ---
@@ -101,12 +118,26 @@ class SecurityError(HarnessError):
 
 # --- CLI 実行エラー ---
 class CLIExecutionError(HarnessError):
-    """CLI プロセスが非ゼロ終了。"""
+    """CLI プロセスが非ゼロ終了。
 
-    def __init__(self, step_id: str, returncode: int, stderr: str):
+    Issue #403: interactive terminal の pane-dead 早期終了では、当該 attempt の
+    session 解決結果を ``session_resolution`` として運ぶ。runner はこれを
+    ``result.json`` の ``session_id`` へ写す。解決を試みない経路では ``None``
+    のままにし、runner 側の既存 fallback を維持する。
+    """
+
+    def __init__(
+        self,
+        step_id: str,
+        returncode: int,
+        stderr: str,
+        *,
+        session_resolution: SessionResolution | None = None,
+    ):
         self.step_id = step_id
         self.returncode = returncode
         self.stderr = stderr
+        self.session_resolution = session_resolution
         super().__init__(f"Step '{step_id}' CLI exited with code {returncode}: {stderr[:200]}")
 
 
@@ -173,12 +204,23 @@ class StepTimeoutError(HarnessError):
     運ぶ（best-effort）。timeout の kill は SIGTERM が初手のため通常 ``-15``、
     SIGKILL までエスカレートした場合は ``-9``。取得不能なら ``None``。
     runner はこの値から attempt result.json の ``exit_code`` / ``signal`` を導出する。
+
+    Issue #403: interactive terminal の timeout では、当該 attempt の session 解決結果を
+    ``session_resolution`` として同じ方式で運ぶ（解決を試みない経路では ``None``）。
     """
 
-    def __init__(self, step_id: str, timeout: int, returncode: int | None = None):
+    def __init__(
+        self,
+        step_id: str,
+        timeout: int,
+        returncode: int | None = None,
+        *,
+        session_resolution: SessionResolution | None = None,
+    ):
         self.step_id = step_id
         self.timeout = timeout
         self.returncode = returncode
+        self.session_resolution = session_resolution
         super().__init__(f"Step '{step_id}' timed out after {timeout}s")
 
 

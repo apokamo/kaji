@@ -41,8 +41,11 @@ FailureCause = Literal[
     "runtime_error",
     "unknown_external_error",
     # Issue #322: 調査を要さない既知のユーザー前提エラー（tmux 外での interactive
-    # runner 起動）。incident 記録の対象外にする唯一の cause。
+    # runner 起動）。incident 記録の対象外にする cause の 1 つ。
     "user_precondition_error",
+    # Issue #403: 利用者の Ctrl-C による run 中断。harness の不具合ではないため
+    # incident 記録の対象外にする。
+    "user_interrupted",
     # 予約値。セッション異常の機械判定は pure code では不可能なため初期 classifier は
     # emit しない（将来の深掘り調査 agent 導入時に使用）。
     "external_upstream_anomaly",
@@ -73,20 +76,41 @@ FAILURE_CAUSES: frozenset[str] = frozenset(
         "runtime_error",
         "unknown_external_error",
         "user_precondition_error",
+        "user_interrupted",
         "external_upstream_anomaly",
     }
 )
 
 #: incident 記録（新規起票 / 再発追記 / ローカル occurrence 追記）の対象外にする cause。
-#: triage コメント・run artifact・console 表示は維持する（Issue #322）。
-#: 他のユーザー操作ミス・設定ミスの一般化は scope 外であり、要素追加は別 Issue で判断する。
-INCIDENT_EXEMPT_CAUSES: frozenset[str] = frozenset({"user_precondition_error"})
+#: triage コメント・run artifact・console 表示は維持する（Issue #322 / #403 / #405）。
+#: 「ユーザー起因で調査を要さない」cause（#322 / #403）に加え、「契約上の正常終端であり
+#: 識別署名が定数へ退化する」cause（#405）も対象になる。他の cause の一般化は scope 外
+#: であり、要素追加は別 Issue で判断する。
+INCIDENT_EXEMPT_CAUSES: frozenset[str] = frozenset(
+    {
+        "user_precondition_error",
+        "user_interrupted",
+        "agent_declared_abort",
+        "cycle_exhausted",
+    }
+)
 
 #: 抑止理由の固定文（``run.log`` の ``incident_suppressed`` event と ``recovery.json``）。
 INCIDENT_SUPPRESSION_REASONS: dict[str, str] = {
     "user_precondition_error": (
         "known user precondition error (interactive terminal runner requires a tmux "
         "session); excluded from incident recording"
+    ),
+    "user_interrupted": (
+        "run interrupted by the operator (KeyboardInterrupt); excluded from incident recording"
+    ),
+    "agent_declared_abort": (
+        "agent returned a legitimate ABORT verdict (safe stop / manual confirmation "
+        "requested); excluded from incident recording"
+    ),
+    "cycle_exhausted": (
+        "cycle reached max_iterations (safety valve worked as designed); "
+        "excluded from incident recording"
     ),
 }
 

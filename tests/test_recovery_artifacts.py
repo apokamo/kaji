@@ -325,3 +325,146 @@ def test_probe_git_state_for_missing_directory(tmp_path: Path) -> None:
     summary = probe_git_state(tmp_path / "nope")
     assert summary.available is False
     assert summary.branch is None
+
+
+# --- Issue #403: 診断用 session ID / 孤児 pane の evidence 提示 ---
+
+
+def _interrupted_events(step_id: str = "review-code") -> list[dict[str, object]]:
+    return [
+        {"event": "workflow_start", "issue": _ISSUE, "workflow": "dev", "schema_version": 1},
+        {
+            "event": "failure_event",
+            "kind": "interrupted",
+            "step_id": step_id,
+            "exception_type": "KeyboardInterrupt",
+            "cycle_name": None,
+            "synthetic": True,
+        },
+        {
+            "event": "workflow_end",
+            "status": "ERROR",
+            "error": "KeyboardInterrupt: workflow interrupted by user",
+        },
+    ]
+
+
+def _write_pane_metadata(
+    run_dir: Path,
+    step_id: str,
+    pane_id: str,
+    *,
+    attempt_name: str = "attempt-001",
+    pane_dead: str = "0",
+) -> None:
+    attempt = run_dir / "steps" / step_id / attempt_name
+    attempt.mkdir(parents=True, exist_ok=True)
+    (attempt / "pane-metadata.json").write_text(
+        json.dumps({"pane_id": pane_id, "pane_dead": pane_dead}), encoding="utf-8"
+    )
+
+
+def test_collect_snapshot_exposes_attempt_session_id_in_evidence(tmp_path: Path) -> None:
+    _seed_state(tmp_path, _git_repo(tmp_path))
+    run_dir = _build_run(tmp_path, "260710120010", events=_failing_events(), result=_result())
+
+    snap = _collect(tmp_path, run_dir)
+
+    assert snap.attempt_session_id == "sess"
+    assert any("steps/review-code/result.json session_id=sess" in e for e in snap.evidence)
+
+
+def test_collect_snapshot_omits_session_id_line_when_null(tmp_path: Path) -> None:
+    _seed_state(tmp_path, _git_repo(tmp_path))
+    result = _result()
+    result["session_id"] = None
+    run_dir = _build_run(tmp_path, "260710120011", events=_failing_events(), result=result)
+
+    snap = _collect(tmp_path, run_dir)
+
+    assert snap.attempt_session_id is None
+    assert not any("session_id=" in e for e in snap.evidence)
+
+
+def test_collect_snapshot_reports_orphan_pane_for_interrupted_run(tmp_path: Path) -> None:
+    _seed_state(tmp_path, _git_repo(tmp_path))
+    run_dir = _build_run(tmp_path, "260710120012", events=_interrupted_events())
+    _write_pane_metadata(run_dir, "review-code", "%42")
+
+    snap = _collect(tmp_path, run_dir)
+
+    assert snap.orphan_pane_id == "%42"
+    assert any(
+        "attempt-001/pane-metadata.json: orphan pane pane_id=%42 (not killed)" in e
+        for e in snap.evidence
+    )
+
+
+def test_collect_snapshot_interrupted_without_pane_metadata_adds_no_read_error(
+    tmp_path: Path,
+) -> None:
+    # pane metadata の不在 / 破損を artifact_read_errors に入れると headless run で
+    # kaji_bug_suspected を誤判定する。
+    _seed_state(tmp_path, _git_repo(tmp_path))
+    run_dir = _build_run(tmp_path, "260710120013", events=_interrupted_events())
+
+    snap = _collect(tmp_path, run_dir)
+
+    assert snap.orphan_pane_id is None
+    assert snap.artifact_read_errors == ()
+    assert not any("pane-metadata" in e for e in snap.evidence)
+
+
+def test_collect_snapshot_ignores_broken_pane_metadata(tmp_path: Path) -> None:
+    _seed_state(tmp_path, _git_repo(tmp_path))
+    run_dir = _build_run(tmp_path, "260710120014", events=_interrupted_events())
+    attempt = run_dir / "steps" / "review-code" / "attempt-001"
+    attempt.mkdir(parents=True, exist_ok=True)
+    (attempt / "pane-metadata.json").write_text("{not json", encoding="utf-8")
+
+    snap = _collect(tmp_path, run_dir)
+
+    assert snap.orphan_pane_id is None
+    assert snap.artifact_read_errors == ()
+
+
+def test_collect_snapshot_skips_orphan_pane_for_completed_attempt(tmp_path: Path) -> None:
+    # 割込みが新 attempt 作成前（in_flight_step_id 設定後）に入ると、最新 attempt は
+    # 同 step の直前の完了済み attempt になる。完了済み attempt の pane は cleanup 済みなので
+    # 孤児 pane evidence に採用しない（採用すると人手 recovery を誤誘導する）。
+    _seed_state(tmp_path, _git_repo(tmp_path))
+    run_dir = _build_run(tmp_path, "260710120016", events=_interrupted_events(), result=_result())
+    _write_pane_metadata(run_dir, "review-code", "%old", pane_dead="1")
+
+    snap = _collect(tmp_path, run_dir)
+
+    assert snap.orphan_pane_id is None
+    assert not any("orphan pane" in e for e in snap.evidence)
+
+
+def test_collect_snapshot_reports_orphan_pane_from_in_flight_attempt(tmp_path: Path) -> None:
+    # 完了済み attempt-001 の後に in-flight の attempt-002（result.json なし）がある場合は、
+    # in-flight 側の pane を孤児として提示する。
+    _seed_state(tmp_path, _git_repo(tmp_path))
+    run_dir = _build_run(tmp_path, "260710120017", events=_interrupted_events(), result=_result())
+    _write_pane_metadata(run_dir, "review-code", "%old", pane_dead="1")
+    _write_pane_metadata(run_dir, "review-code", "%new", attempt_name="attempt-002")
+
+    snap = _collect(tmp_path, run_dir)
+
+    assert snap.orphan_pane_id == "%new"
+    assert any(
+        "attempt-002/pane-metadata.json: orphan pane pane_id=%new (not killed)" in e
+        for e in snap.evidence
+    )
+
+
+def test_collect_snapshot_skips_orphan_pane_for_non_interrupted_run(tmp_path: Path) -> None:
+    _seed_state(tmp_path, _git_repo(tmp_path))
+    run_dir = _build_run(tmp_path, "260710120015", events=_failing_events(), result=_result())
+    _write_pane_metadata(run_dir, "review-code", "%42")
+
+    snap = _collect(tmp_path, run_dir)
+
+    assert snap.orphan_pane_id is None
+    assert not any("orphan pane" in e for e in snap.evidence)

@@ -170,6 +170,72 @@ def test_triage_comment_renders_user_precondition_error_cause() -> None:
     assert "incident 起票の対象外" in _CAUSE_DESCRIPTIONS["user_precondition_error"]
 
 
+def test_triage_comment_renders_user_interrupted_cause() -> None:
+    # Issue #403: 新 cause の説明文が欠けると render_triage_comment が KeyError で落ちる。
+    decision = _decision(
+        decision="comment_only",
+        recoverable=False,
+        resume_command=None,
+        resume_scheduled_at=None,
+        classification=FailureClassification(
+            cause="user_interrupted",
+            synthetic=True,
+            source="external",
+            recoverability_hint="no",
+        ),
+    )
+    body = render_triage_comment(decision=decision, issue_ref="#403")
+    assert "| classification | `user_interrupted` |" in body
+    assert _CAUSE_DESCRIPTIONS["user_interrupted"] in body
+    assert "incident 起票の対象外" in _CAUSE_DESCRIPTIONS["user_interrupted"]
+
+
+def test_triage_comment_renders_agent_declared_abort_cause() -> None:
+    # Issue #405: agent ABORT は incident 記録の対象外になるが、triage コメントの構成
+    # （項目表・判断根拠・次アクション）は不変であることを固定する（§ 方針 2 の契約）。
+    decision = _decision(
+        decision="comment_only",
+        recoverable=False,
+        resume_command=None,
+        resume_scheduled_at=None,
+        classification=FailureClassification(
+            cause="agent_declared_abort",
+            synthetic=False,
+            source="agent",
+            recoverability_hint="no",
+        ),
+    )
+    body = render_triage_comment(decision=decision, issue_ref="#405")
+    assert "| classification | `agent_declared_abort` |" in body
+    assert _CAUSE_DESCRIPTIONS["agent_declared_abort"] in body
+    assert "incident 起票の対象外" in _CAUSE_DESCRIPTIONS["agent_declared_abort"]
+    # 改訂前の文面（incident 言及なし）が残っていないことも確認する。
+    assert "自動再開の対象にしない。障害ではないため incident 起票の対象外とする。" in body
+    # 構成要素は他 cause と同様に不変（見出し・項目表・判断根拠・次アクション）。
+    assert body.startswith("## Workflow failure triage")
+    assert "### 根拠" in body
+    assert "### 次アクション" in body
+
+
+def test_triage_comment_renders_cycle_exhausted_cause_with_reset_cycle() -> None:
+    # Issue #405: cycle_exhausted も incident 記録対象外だが、triage コメント本文と
+    # `--reset-cycle` の次アクション行は両方とも維持される。
+    decision = _decision(
+        decision="not_resumable",
+        recoverable=False,
+        resume_command=None,
+        resume_scheduled_at=None,
+        classification=FailureClassification(
+            cause="cycle_exhausted", synthetic=True, source="runner", recoverability_hint="no"
+        ),
+    )
+    body = render_triage_comment(decision=decision, issue_ref="#405")
+    assert "| classification | `cycle_exhausted` |" in body
+    assert _CAUSE_DESCRIPTIONS["cycle_exhausted"] in body
+    assert "incident 起票の対象外" in _CAUSE_DESCRIPTIONS["cycle_exhausted"]
+    assert "--reset-cycle" in body
+
+
 def test_triage_comment_masks_credentials_in_evidence() -> None:
     decision = _decision(evidence=["result.json error=Bearer sk-secret-token-value"])
     body = render_triage_comment(decision=decision, issue_ref="#288")
