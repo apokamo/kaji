@@ -82,9 +82,18 @@ FAILURE_CAUSES: frozenset[str] = frozenset(
 )
 
 #: incident 記録（新規起票 / 再発追記 / ローカル occurrence 追記）の対象外にする cause。
-#: triage コメント・run artifact・console 表示は維持する（Issue #322 / #403）。
-#: 他のユーザー操作ミス・設定ミスの一般化は scope 外であり、要素追加は別 Issue で判断する。
-INCIDENT_EXEMPT_CAUSES: frozenset[str] = frozenset({"user_precondition_error", "user_interrupted"})
+#: triage コメント・run artifact・console 表示は維持する（Issue #322 / #403 / #405）。
+#: 「ユーザー起因で調査を要さない」cause（#322 / #403）に加え、「契約上の正常終端であり
+#: 識別署名が定数へ退化する」cause（#405）も対象になる。他の cause の一般化は scope 外
+#: であり、要素追加は別 Issue で判断する。
+INCIDENT_EXEMPT_CAUSES: frozenset[str] = frozenset(
+    {
+        "user_precondition_error",
+        "user_interrupted",
+        "agent_declared_abort",
+        "cycle_exhausted",
+    }
+)
 
 #: 抑止理由の固定文（``run.log`` の ``incident_suppressed`` event と ``recovery.json``）。
 INCIDENT_SUPPRESSION_REASONS: dict[str, str] = {
@@ -94,6 +103,14 @@ INCIDENT_SUPPRESSION_REASONS: dict[str, str] = {
     ),
     "user_interrupted": (
         "run interrupted by the operator (KeyboardInterrupt); excluded from incident recording"
+    ),
+    "agent_declared_abort": (
+        "agent returned a legitimate ABORT verdict (safe stop / manual confirmation "
+        "requested); excluded from incident recording"
+    ),
+    "cycle_exhausted": (
+        "cycle reached max_iterations (safety valve worked as designed); "
+        "excluded from incident recording"
     ),
 }
 

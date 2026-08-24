@@ -96,13 +96,22 @@ def test_failure_cause_domain() -> None:
 
 
 def test_incident_exempt_causes_is_limited_to_known_non_incident_causes() -> None:
-    # Issue #322 / #403: 除外集合は「調査を要さないと確定した cause」だけに固定する
-    # （一般化は別 Issue で判断する）。
-    assert INCIDENT_EXEMPT_CAUSES == frozenset({"user_precondition_error", "user_interrupted"})
+    # Issue #322 / #403 / #405: 除外集合は「調査を要さないと確定した cause」だけに固定する
+    # （一般化は別 Issue で判断する）。#405 は署名が定数へ退化する契約上の正常終端 2 件を追加する。
+    assert INCIDENT_EXEMPT_CAUSES == frozenset(
+        {
+            "user_precondition_error",
+            "user_interrupted",
+            "agent_declared_abort",
+            "cycle_exhausted",
+        }
+    )
     assert INCIDENT_EXEMPT_CAUSES <= FAILURE_CAUSES
     assert set(INCIDENT_SUPPRESSION_REASONS) == set(INCIDENT_EXEMPT_CAUSES)
     assert INCIDENT_SUPPRESSION_REASONS["user_precondition_error"]
     assert INCIDENT_SUPPRESSION_REASONS["user_interrupted"]
+    assert INCIDENT_SUPPRESSION_REASONS["agent_declared_abort"]
+    assert INCIDENT_SUPPRESSION_REASONS["cycle_exhausted"]
 
 
 def test_user_interrupted_classification_is_constructible() -> None:

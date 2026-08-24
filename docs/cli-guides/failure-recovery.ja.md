@@ -122,21 +122,29 @@ kaji recover .kaji/wf/official/dev.yaml 288 --run-id 260710120000
 [incident-labels.md](../dev/incident-labels.md) を参照。`incidents/occurrences.jsonl` は triage が
 有効な失敗に対して必ず生成され、GitHub provider では加えてインシデントイシューへ集約される。
 
-### incident 記録の対象外（Issue #322 / #403）
+### incident 記録の対象外（Issue #322 / #403 / #405）
 
-分類が `user_precondition_error` または `user_interrupted` の失敗だけは、第1層の記録経路に
-一切入らない。新規起票も occurrence コメントも `incidents/occurrences.jsonl` への追記も
-行わない。調査を要さない既知のユーザー起因の終了であり、incident 一覧に載せると障害の信号が
-薄まるため。
+分類が `user_precondition_error` / `user_interrupted` / `agent_declared_abort` /
+`cycle_exhausted` の失敗は、第1層の記録経路に一切入らない。新規起票も occurrence コメントも
+`incidents/occurrences.jsonl` への追記も行わない。調査を要さない既知のユーザー起因の終了、
+または契約上の正常終端であり、incident 一覧に載せると障害の信号が薄まるため。
 
 | 分類 | 該当ケース | 判定入力 |
 |---|---|---|
 | `user_precondition_error` | interactive terminal runner を tmux セッション外から起動した（`TmuxSessionRequiredError`） | `failure_event.exception_type` の型名 |
 | `user_interrupted` | 利用者が `kaji run` を Ctrl-C で中断した | `failure_event.kind == "interrupted"` |
+| `agent_declared_abort` | agent が正規の ABORT verdict を返した（安全停止・手動確認要求） | `failure_event.kind == "agent_abort"` |
+| `cycle_exhausted` | cycle が `max_iterations` に到達した（安全弁の正常作動） | `failure_event.kind == "cycle_exhausted"` |
 
 いずれも判定は run.log の構造化 `failure_event` で行い、エラーメッセージの文字列一致には
 依存しない。tmux 未インストール・tmux バージョン不足・`TMUX_PANE` 欠落・その他の
 `CLINotFoundError` は従来どおり incident 記録の対象。
+
+`agent_declared_abort` / `cycle_exhausted` は例外を伴わない終端のため、識別署名の
+canonical input が常に空になり、fingerprint が cause ごとの定数へ退化する。`cause` 自体は
+照合キーに含まれるため、この 2 cause 同士が混ざることはない。除外しない場合、同じ cause
+内で対象 step や実際の停止理由が異なる安全停止が、cause ごとに 1 つの incident イシューへ
+誤って集約される（Issue #405）。
 
 中断した run は `workflow_end status=ERROR` として終端されるため、`kaji recover` の triage
 対象として選択できる（`user_interrupted` の decision は `comment_only` で、自動再開はしない）。

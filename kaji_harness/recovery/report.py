@@ -43,11 +43,11 @@ _CAUSE_DESCRIPTIONS: dict[str, str] = {
     ),
     "cycle_exhausted": (
         "cycle が `max_iterations` に到達した。これは安全弁の正常作動であり、"
-        "自動再開の対象にしない。"
+        "自動再開の対象にしない。障害ではないため incident 起票の対象外とする。"
     ),
     "agent_declared_abort": (
         "agent が正規の ABORT verdict を返した。安全停止・手動確認要求であり、"
-        "自動再開の対象にしない。"
+        "自動再開の対象にしない。障害ではないため incident 起票の対象外とする。"
     ),
     "user_interrupted": (
         "利用者が run を中断した（Ctrl-C）。harness の不具合ではないため incident 起票の"

@@ -159,6 +159,72 @@ def test_ratio_can_be_asymmetric_between_arg_orders() -> None:
     assert isinstance(similarity(b, a), float)
 
 
+# --- 非 exempt cause の fingerprint_hash 不変性（Issue #405 EB-4） ---
+
+
+def test_non_exempt_cause_fingerprint_hash_is_pinned() -> None:
+    """``signature.py`` を無変更にする Issue #405 の制約を、golden hash 4 件で固定する。
+
+    invariant guard であり回帰テストではない: #405 の実装前後どちらでも Green になる
+    （修正対象は ``models.py`` / ``report.py`` の定数のみで ``signature.py`` は触らない）。
+    意図は「将来 ``signature.py`` を触ったときに既存 incident イシューとの照合が静かに
+    壊れることを検出する」こと。値は実運用データ（``occurrences.jsonl``）と既存 fixture
+    から 2026-08-24 に main（``221997d``）で実測した。
+    """
+    dispatch_cls = FailureClassification(
+        cause="dispatch_failure", synthetic=True, source="external", recoverability_hint="no"
+    )
+
+    def _dispatch_snapshot(attempt_error: str, exception_type: str) -> FailureSnapshot:
+        return FailureSnapshot(
+            run_id="260712010000",
+            run_dir=Path("/nonexistent/runs/260712010000"),
+            attempt_error=attempt_error,
+            failure_event=FailureEvent(kind="dispatch_exception", exception_type=exception_type),
+        )
+
+    cases = [
+        (
+            _dispatch_snapshot(
+                "StepTimeoutError: Step 'implement' timed out after 3600s", "StepTimeoutError"
+            ),
+            dispatch_cls,
+            "5a0e69f403a1e37cb09cc23e5a40ee64a77501a9655ce37264d4d044dbf0a046",
+        ),
+        (
+            _dispatch_snapshot(
+                "StepTimeoutError: Step 'pr' timed out after 1800s", "StepTimeoutError"
+            ),
+            dispatch_cls,
+            "6dd57a743123862400b6b3294be7648c11432f79b681d9e445a64bcab88ddaa3",
+        ),
+        (
+            _dispatch_snapshot(
+                "CLINotFoundError: interactive terminal runner requires tmux. "
+                "Run `kaji run` inside tmux or use agent_runner='headless'.",
+                "CLINotFoundError",
+            ),
+            dispatch_cls,
+            "d7b6c1ecd57db0f730316cf705304375b143c8b6b79394e2e5f9b1aa781ef4cb",
+        ),
+    ]
+    for snapshot, classification, expected_hash in cases:
+        sig = compute_signature(snapshot, classification)
+        assert sig.fingerprint_hash == expected_hash
+
+    # 4-d: verdict_resolution_failure は既存 fixture を再利用し、3 件すべてが 1 値に固定
+    # されることを検査する（既存 test_three_recurrences_share_one_fingerprint_hash は
+    # 「3 件が同値」だけを検査し、値そのものは固定していない）。
+    expected_verdict_hash = "35856983d74433e1b1db9a4089da1de1fbf3d1e736ab130150121d10b33d0fc4"
+    for name in (
+        "verdict_notfound_run1.txt",
+        "verdict_notfound_run2.txt",
+        "verdict_notfound_run3.txt",
+    ):
+        sig = compute_signature(_snapshot(_load(name)), _classification())
+        assert sig.fingerprint_hash == expected_verdict_hash
+
+
 def test_signature_matches_ignores_fingerprint_text_only_hash() -> None:
     base = IncidentSignature(
         schema_version=1, cause="c", exception_type="E", fingerprint="text A", fingerprint_hash="h"

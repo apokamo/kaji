@@ -145,21 +145,30 @@ The `comment:` line of the stderr summary shows `Comment.ref`: the created comme
 GitHub provider, the repo-root-relative comment file path for the local provider, and `n/a` when the
 reference could not be captured.
 
-### Incident recording exemption (Issue #322 / #403)
+### Incident recording exemption (Issue #322 / #403 / #405)
 
-Failures classified as `user_precondition_error` or `user_interrupted` never enter the incident
-layer: no incident Issue is opened, no occurrence comment is posted, and nothing is appended to
-`incidents/occurrences.jsonl`. These are known user-originated endings that need no investigation,
-and promoting them to incidents would drown out the real failure signal.
+Failures classified as `user_precondition_error`, `user_interrupted`, `agent_declared_abort`, or
+`cycle_exhausted` never enter the incident layer: no incident Issue is opened, no occurrence
+comment is posted, and nothing is appended to `incidents/occurrences.jsonl`. These are known
+user-originated endings that need no investigation, or contractually normal terminations, and
+promoting them to incidents would drown out the real failure signal.
 
 | Cause | Case | Decision input |
 |---|---|---|
 | `user_precondition_error` | The interactive terminal runner was started outside a tmux session (`TmuxSessionRequiredError`) | `failure_event.exception_type` |
 | `user_interrupted` | The operator interrupted `kaji run` with Ctrl-C | `failure_event.kind == "interrupted"` |
+| `agent_declared_abort` | The agent returned a legitimate ABORT verdict (safe stop / manual confirmation requested) | `failure_event.kind == "agent_abort"` |
+| `cycle_exhausted` | A cycle reached `max_iterations` (safety valve worked as designed) | `failure_event.kind == "cycle_exhausted"` |
 
-Both decisions key off the structured `failure_event` recorded in `run.log`, never off the raw error
-message. A missing tmux binary, an insufficient tmux version, a missing `TMUX_PANE`, and every other
-`CLINotFoundError` keep their existing incident recording behavior.
+All four decisions key off the structured `failure_event` recorded in `run.log`, never off the raw
+error message. A missing tmux binary, an insufficient tmux version, a missing `TMUX_PANE`, and
+every other `CLINotFoundError` keep their existing incident recording behavior.
+
+`agent_declared_abort` and `cycle_exhausted` end without an exception, so the identity signature's
+canonical input is always empty and the fingerprint degenerates to a per-cause constant. `cause` is
+itself part of the match key, so the two causes never collapse into each other. Without this
+exemption, unrelated safe stops that share a cause — regardless of their step or actual stop
+reason — would all collapse into a single incident Issue per cause (Issue #405).
 
 An interrupted run ends with `workflow_end status=ERROR`, so `kaji recover` can select it as a triage
 target (`user_interrupted` maps to the `comment_only` decision; it is never auto-resumed). The
