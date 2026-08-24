@@ -213,15 +213,19 @@ triage コメント投稿の**直後**に、同じ失敗を「識別署名」で
 - **無効化**: 第1層は failure triage の内部ステップであり、`--no-failure-triage`
   （`[execution] failure_triage = false`）で triage ごと無効になる。「全失敗を例外なく記録」は
   triage が有効な失敗に対する契約。
-- **記録の対象外**（Issue #322 / #403）: 分類が `user_precondition_error` /
-  `user_interrupted` の失敗は、調査を要さない既知のユーザー起因の終了として incident 記録を
+- **記録の対象外**（Issue #322 / #403 / #405）: 分類が `user_precondition_error` /
+  `user_interrupted` / `agent_declared_abort` / `cycle_exhausted` の失敗は incident 記録を
   行わない（新規起票・occurrence コメント・`incidents/occurrences.jsonl` 追記のいずれもしない）。
   triage コメント・run artifact・console のエラー表示は従来どおり維持し、抑止した事実と理由は
   `run.log` の `incident_suppressed` event で監査できる。該当するのは「interactive terminal
-  runner を tmux セッション外から起動した」（`TmuxSessionRequiredError`）と「利用者が Ctrl-C で
-  run を中断した」（`failure_event.kind = "interrupted"`）の 2 ケース。tmux 未インストール・
-  tmux バージョン不足・`TMUX_PANE` 欠落・その他の `CLINotFoundError` は従来どおり incident
-  記録の対象。
+  runner を tmux セッション外から起動した」（`TmuxSessionRequiredError`）、「利用者が Ctrl-C で
+  run を中断した」（`failure_event.kind = "interrupted"`）、「agent が正規の ABORT verdict を
+  返した」（`failure_event.kind = "agent_abort"`）、「cycle が `max_iterations` に到達した」
+  （`failure_event.kind = "cycle_exhausted"`）の 4 ケース。前 2 者は調査を要さない既知の
+  ユーザー起因の終了、後 2 者は契約上の正常終端であり、かつ例外を伴わないため識別署名が
+  cause ごとの定数へ退化する（除外しないと無関係な安全停止が 1 incident へ誤って集約される）。
+  tmux 未インストール・tmux バージョン不足・`TMUX_PANE` 欠落・その他の `CLINotFoundError` は
+  従来どおり incident 記録の対象。
 - ラベル 2 軸の意味と遷移意図は [incident-labels.md](./incident-labels.md) を参照。
 
 ### 第2層: 調査・提案（Issue #305）

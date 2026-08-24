@@ -675,6 +675,143 @@ def test_tmux_session_required_keeps_triage_but_suppresses_incident(tmp_path: Pa
     assert result.decision.decision == "not_resumable"
 
 
+def _build_agent_abort_run(
+    tmp_path: Path, *, run_id: str = "260716025951", step_id: str = "design"
+) -> Path:
+    """agent が正規の ABORT verdict を返した run（Issue #405 OB-1 と同型）。"""
+    run_dir = tmp_path / ".kaji-artifacts" / _ISSUE / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    events = [
+        {"event": "workflow_start", "issue": _ISSUE, "workflow": "dev", "schema_version": 1},
+        {"event": "step_start", "step_id": step_id, "agent": "claude", "attempt": 1},
+        {
+            "event": "failure_event",
+            "kind": "agent_abort",
+            "step_id": step_id,
+            "exception_type": None,
+            "cycle_name": None,
+            "synthetic": False,
+        },
+        {"event": "workflow_end", "status": "ABORT", "error": None},
+    ]
+    (run_dir / "run.log").write_text(
+        "".join(json.dumps(e) + "\n" for e in events), encoding="utf-8"
+    )
+    attempt = run_dir / "steps" / step_id / "attempt-001"
+    attempt.mkdir(parents=True)
+    (attempt / "result.json").write_text(
+        json.dumps(
+            {"step_id": step_id, "attempt": 1, "status": "ABORT", "error": None, "synthetic": False}
+        ),
+        encoding="utf-8",
+    )
+    return run_dir
+
+
+def _build_cycle_exhausted_run(
+    tmp_path: Path, *, run_id: str = "260824014705", step_id: str = "fix-design"
+) -> Path:
+    """cycle が ``max_iterations`` に到達した run（Issue #405 OB-2 の実運用と同型）。"""
+    run_dir = tmp_path / ".kaji-artifacts" / _ISSUE / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    events = [
+        {"event": "workflow_start", "issue": _ISSUE, "workflow": "dev", "schema_version": 1},
+        {
+            "event": "failure_event",
+            "kind": "cycle_exhausted",
+            "step_id": step_id,
+            "exception_type": None,
+            "cycle_name": "review_fix_loop",
+            "synthetic": True,
+        },
+        {"event": "workflow_end", "status": "ABORT", "error": None},
+    ]
+    (run_dir / "run.log").write_text(
+        "".join(json.dumps(e) + "\n" for e in events), encoding="utf-8"
+    )
+    return run_dir
+
+
+def test_agent_declared_abort_keeps_triage_but_suppresses_incident(tmp_path: Path) -> None:
+    # Issue #405 EB-1: agent ABORT の署名は定数へ退化するため incident 記録の対象外にする。
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_agent_abort_run(tmp_path)
+    provider = _IncidentProvider()
+    stderr = io.StringIO()
+
+    result = _handler(tmp_path, run_dir, provider=provider, stderr=stderr).run()
+
+    # triage コメントは 1 件投稿され、§ 方針 2 の契約表どおり cause 説明 1 行だけが改訂される。
+    assert len(provider.comments_posted) == 1
+    triage_body = provider.comments_posted[0][1]
+    assert triage_body.startswith("## Workflow failure triage")
+    assert "| classification | `agent_declared_abort` |" in triage_body
+    assert "incident 起票の対象外" in triage_body
+    assert "### 根拠" in triage_body
+    assert "### 次アクション" in triage_body
+    # occurrence コメントは 0 件、起票経路の provider 呼び出しに一切到達しない。
+    assert _occurrence_comments(provider) == []
+    assert provider.searches == []
+    assert provider.created == []
+    assert provider.comment_lists == []
+    # ローカル occurrence 記録も作らない（将来の backfill 入力を残さない）。
+    assert not occurrences_path(tmp_path / ".kaji-artifacts").exists()
+    # run.log に抑止の構造化 event が 1 件。
+    events = [json.loads(x) for x in (run_dir / "run.log").read_text().splitlines()]
+    suppressed = [e for e in events if e["event"] == "incident_suppressed"]
+    assert len(suppressed) == 1
+    assert suppressed[0]["cause"] == "agent_declared_abort"
+    assert suppressed[0]["failed_step"] == "design"
+    assert suppressed[0]["reason"]
+    assert not any(e["event"] == "incident_recorded" for e in events)
+    # recovery.json に抑止の痕跡が残り、incident 参照は付かない。
+    persisted = read_recovery_json(run_dir / RECOVERY_FILE)
+    assert persisted.incident_suppressed is True
+    assert persisted.incident_suppression_reason == suppressed[0]["reason"]
+    assert persisted.incident_ref is None
+    assert persisted.incident_action is None
+    assert result.decision.decision == "comment_only"
+    # stderr サマリ（抑止対象は incident 記録のみで、triage 表示は維持される）。
+    assert "--- failure triage ---" in stderr.getvalue()
+    assert "classification: agent_declared_abort" in stderr.getvalue()
+
+
+def test_cycle_exhausted_keeps_triage_but_suppresses_incident(tmp_path: Path) -> None:
+    # Issue #405 EB-2: cycle_exhausted も同様に対象外。`--reset-cycle` の次アクションは維持。
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_cycle_exhausted_run(tmp_path)
+    provider = _IncidentProvider()
+    stderr = io.StringIO()
+
+    result = _handler(tmp_path, run_dir, provider=provider, stderr=stderr).run()
+
+    assert len(provider.comments_posted) == 1
+    triage_body = provider.comments_posted[0][1]
+    assert "| classification | `cycle_exhausted` |" in triage_body
+    assert "incident 起票の対象外" in triage_body
+    assert "--reset-cycle" in triage_body
+    assert _occurrence_comments(provider) == []
+    assert provider.searches == []
+    assert provider.created == []
+    assert not occurrences_path(tmp_path / ".kaji-artifacts").exists()
+    events = [json.loads(x) for x in (run_dir / "run.log").read_text().splitlines()]
+    suppressed = [e for e in events if e["event"] == "incident_suppressed"]
+    assert len(suppressed) == 1
+    assert suppressed[0]["cause"] == "cycle_exhausted"
+    assert suppressed[0]["failed_step"] == "fix-design"
+    assert not any(e["event"] == "incident_recorded" for e in events)
+    persisted = read_recovery_json(run_dir / RECOVERY_FILE)
+    assert persisted.incident_suppressed is True
+    assert persisted.incident_suppression_reason == suppressed[0]["reason"]
+    assert persisted.incident_ref is None
+    assert persisted.incident_action is None
+    assert result.decision.decision == "not_resumable"
+    assert "--- failure triage ---" in stderr.getvalue()
+    assert "classification: cycle_exhausted" in stderr.getvalue()
+
+
 def test_cli_not_found_dispatch_still_records_incident(tmp_path: Path) -> None:
     # 除外境界の回帰: 同じ fixture の例外型だけを差し替えると incident 記録が従来どおり動く。
     wt = _git_repo(tmp_path)

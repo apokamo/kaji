@@ -57,6 +57,24 @@ status 軸の `mitigated` / `resolved` と、classification 軸の `internal` / 
   reopen せず新規起票して旧イシューへリンクする（resolve 済みを蒸し返さず、リグレッションを
   独立に追跡する）。
 
+## 第1層が incident 記録しない cause
+
+`INCIDENT_EXEMPT_CAUSES`（`kaji_harness/recovery/models.py`）に属する cause は、新規起票 /
+再発追記 / ローカル `occurrences.jsonl` 追記のいずれも行わない（照合の母集団に入らない）。
+triage コメント・run artifact・console 表示は維持され、失われる情報はない。
+
+| cause | 除外理由 | 出典 |
+|-------|----------|------|
+| `user_precondition_error` | 既知のユーザー前提エラー（例: tmux セッション必須）。原因と対処がエラー文に含まれ、障害調査を要さない | Issue #322 |
+| `user_interrupted` | 利用者による中断（Ctrl-C）。harness の不具合ではなく、再開要否は人間が artifact を見て判断する | Issue #403 |
+| `agent_declared_abort` | agent が返した正規の ABORT verdict（安全停止・手動確認要求）。契約上の正常終端であり障害ではない | Issue #405 |
+| `cycle_exhausted` | cycle が `max_iterations` に到達した安全弁の正常作動。triage コメントが `--reset-cycle` の次アクションを既に提示する | Issue #405 |
+
+`agent_declared_abort` / `cycle_exhausted` は例外を伴わない終端のため、識別署名の
+canonical input（`attempt_error` / `workflow_end_error`）が常に空になり、fingerprint が
+cause ごとの定数へ退化する。除外前はこの退化により、原因も対象 step も異なる安全停止が
+すべて 1 つの incident イシューへ誤って集約されていた（Issue #405）。
+
 ## 遷移の機械強制はしない
 
 status 軸・classification 軸の遷移順序（例: investigating → mitigated → resolved）は
