@@ -33,7 +33,7 @@ cycle : <no-error-text> 4ee617eee91581490c4cc7ee12e93589d7f688ce6a775e4f771b5253
 
 #### OB-2: 実運用データで 8 occurrence が 1 署名へ集約されている
 
-`/home/aki/dev/kaji/main/.kaji-artifacts/incidents/occurrences.jsonl` の実測（13 行）:
+`/home/aki/dev/kaji/main/.kaji-artifacts/incidents/occurrences.jsonl` の実測（2026-08-25 再測定、15 行）:
 
 | run_id | source issue | failed_step | cause | hash 先頭 |
 |---|---|---|---|---|
@@ -50,8 +50,12 @@ cycle : <no-error-text> 4ee617eee91581490c4cc7ee12e93589d7f688ce6a775e4f771b5253
 | 260730222002 | 391 | implement | dispatch_failure | 5a0e69f4 |
 | 260731015910 | 391 | implement | dispatch_failure | 5a0e69f4 |
 | 260821001117 | 396 | review-ready | dispatch_failure | 82b0c1d7 |
+| 260822045729 | 405 | fix-design | dispatch_failure | f173c145 |
+| 260824014705 | 405 | fix-design | cycle_exhausted | 4ee617ee |
 
-実障害は `dispatch_failure` 5 件のみ。5 issue・6 step にまたがる別物の ABORT 8 件が
+初稿時の 13 行から、#405 の設計修正 workflow 中に `dispatch_failure` と `cycle_exhausted` が
+1 行ずつ増えた。現在の内訳は `dispatch_failure` 6 件 / `agent_declared_abort` 8 件 /
+`cycle_exhausted` 1 件。5 issue・6 step にまたがる別物の agent ABORT 8 件が
 1 署名（`4ee617ee…`）に集約され、incident イシュー #350 / #359 / #367 / #369 / #392 を生んだ。
 
 #### OB-3: 偽のリグレッション判定が連鎖する
@@ -82,8 +86,8 @@ cycle : <no-error-text> 4ee617eee91581490c4cc7ee12e93589d7f688ce6a775e4f771b5253
 - **EB-3**: `set(INCIDENT_SUPPRESSION_REASONS) == set(INCIDENT_EXEMPT_CAUSES)` の既存不変条件が
   保たれる（`tests/test_recovery_models.py:103`）。
 - **EB-4**: 既存の非 exempt cause の署名・hash は変化しない。`signature.py` は無変更。
-- **EB-5**: `occurrences.jsonl` から `agent_declared_abort` の 8 行が削除され、将来の backfill で
-  incident が再生成されない。
+- **EB-5**: `occurrences.jsonl` から `agent_declared_abort` の 8 行と、初稿後に記録された
+  `cycle_exhausted` の 1 行を削除し、将来の backfill で両 cause の incident が再生成されない。
   - 根拠: `handler.py:522-524` のコメント「`append_occurrence` より前に抜ける
     （`occurrences.jsonl` は backfill の入力でもあるため、1 行でも残すと後から incident を
     再生成しうる）」。
@@ -157,14 +161,14 @@ incident 記録経路からは除外されておらず、退化した署名が�
 | cause | 退化するか | 実 occurrence | 本 Issue での扱い |
 |---|---|---|---|
 | `agent_declared_abort` | する | 8 件 | 除外する（EB-1） |
-| `cycle_exhausted` | する | 0 件 | 除外する（EB-2） |
+| `cycle_exhausted` | する | 1 件 | 除外する（EB-2） |
 | `ambiguous_worktree_abort` | する | 0 件 | **対象外・現状維持**（下記） |
 
 その他の cause（`dispatch_failure` / `verdict_resolution_failure` / `runtime_error` /
 `config_or_definition_error` / `unknown_external_error` / `kaji_bug_suspected` /
 `user_precondition_error` / `user_interrupted`）は例外を伴うため canonical input が非空になる。
-実データ上も `dispatch_failure` の 5 件は `d7b6c1ec` / `6dd57a74` / `5a0e69f4`（×2）/ `82b0c1d7`
-の 4 種に正しく分かれており、退化していない。
+実データ上も `dispatch_failure` の 6 件は `d7b6c1ec` / `6dd57a74` / `5a0e69f4`（×2）/
+`82b0c1d7` / `f173c145` の 5 種に正しく分かれており、退化していない。
 
 #### `ambiguous_worktree_abort` を対象外とする技術的根拠
 
@@ -375,12 +379,21 @@ close する**（`incident.py:339-345`）。lock は取らない。ここから 
 set -euo pipefail
 cd /home/aki/dev/kaji/main
 F=.kaji-artifacts/incidents/occurrences.jsonl
-FILTER='select(.signature.cause != "agent_declared_abort")'
+FILTER='select(
+    .signature.cause != "agent_declared_abort"
+    and .signature.cause != "cycle_exhausted"
+)'
 
 # 1. 原本 inode への 2 本目のリンクを張る（上書きしない。既存なら停止）。
 OLD="$F.pre405-$(date -u +%Y%m%dT%H%M%SZ)"
 if [ -e "$OLD" ]; then echo "ABORT: $OLD already exists" >&2; exit 1; fi
 ln "$F" "$OLD"                       # cp ではなく ln。以後 $OLD == 原本 inode
+F_ID=$(stat -Lc '%d:%i' "$F")
+OLD_ID=$(stat -Lc '%d:%i' "$OLD")
+if [ "$F_ID" != "$OLD_ID" ]; then
+    echo "ABORT: hard link does not preserve the original inode" >&2; exit 1
+fi
+echo "preserved original inode: F=$F_ID OLD=$OLD_ID path=$OLD"
 
 BEFORE_N=$(wc -l < "$OLD")
 KEEP_N=$(jq -c "$FILTER" "$OLD" | wc -l)
@@ -394,7 +407,6 @@ mv "$F.tmp" "$F"                     # 旧 inode は $OLD が保持している�
 
 # 3. 旧 inode への到達不能を確認する。swap 前に open() を終えた fd だけが旧 inode へ
 #    write しうる（新規 open(path,"a") は新 inode を開く）。0 件になれば以後 write は不可能。
-OLD_ID=$(stat -Lc '%d:%i' "$OLD")
 holders() {
     local fd id
     for fd in /proc/[0-9]*/fd/*; do
@@ -445,8 +457,12 @@ if [ "$LOST" -ne 0 ]; then
     comm -23 <(sort "$OLD") <(sort "$F") >> "$F"      # append-only rollback
     exit 1
 fi
-if [ "$(grep -c '"cause": "agent_declared_abort"' "$F" || true)" -ne 0 ]; then
-    echo "FAIL: agent_declared_abort rows remain; rolling back" >&2
+EXEMPT_LEFT=$(jq -r 'select(
+    .signature.cause == "agent_declared_abort"
+    or .signature.cause == "cycle_exhausted"
+) | .signature.cause' "$F" | wc -l)
+if [ "$EXEMPT_LEFT" -ne 0 ]; then
+    echo "FAIL: $EXEMPT_LEFT newly exempt occurrence row(s) remain; rolling back" >&2
     comm -23 <(sort "$OLD") <(sort "$F") >> "$F"
     exit 1
 fi
@@ -463,7 +479,7 @@ if [ "$(holders | wc -l)" -ne 0 ]; then
     exit 1
 fi
 echo "OK: BEFORE_N=$BEFORE_N DROP_N=$DROP_N AFTER_N=$AFTER_N LOST=0 OLD=$OLD"
-jq -r '.signature.cause' "$F" | sort | uniq -c        # 期待: dispatch_failure 5 件のみ
+jq -r '.signature.cause' "$F" | sort | uniq -c        # 現在の期待: dispatch_failure 6 件のみ
 ```
 
 #### この手順が満たす性質
@@ -488,19 +504,22 @@ jq -r '.signature.cause' "$F" | sort | uniq -c        # 期待: dispatch_failure
   `cp "$OLD" "$F"` による上書き復旧は、swap 後に新 inode へ届いた正常な append を消すため
   採用しない。
 - **上書きしない backup**: `$OLD` は UTC タイムスタンプ付きで、既存なら `exit 1`。手順を
-  再実行しても初回の 13 行原本を潰さない。`.kaji-artifacts/` 配下（`.gitignore:49`）に残るため
+  再実行しても実行時の原本を潰さない。`.kaji-artifacts/` 配下（`.gitignore:49`）に残るため
   repo は汚さない。
 - **行順の扱い**: step 4 で戻した行はファイル末尾に付く。`read_occurrences()` の結果は
   backfill entry の **列挙順**にのみ影響し、run_id による重複排除（`incident.py:514,534-536`）
   と署名同値判定・再発回数には影響しない。各行は `recorded_at` を保持するため時系列は復元できる。
 - **冪等性**: filter は冪等であり、掃除後に新しい ABORT 行が混入しても手順全体を再実行すれば
   同じ状態へ収束する（`$OLD` は新しい名前で追加される）。
-- **順序の制約**: 掃除と修正 merge の間に main で agent ABORT run が起きると再び 1 行増えうる。
+- **順序の制約**: 掃除と修正 merge の間に main で newly exempt cause の run が起きると
+  再び行が増えうる。
   実装フェーズで掃除して証跡化し、merge 後の事後確認（Issue の「ワークフロー完了後の確認項目」）
-  で cause 分布を再測定して `agent_declared_abort` が 0 件であることを確かめる。増えていた場合は
+  で cause 分布を再測定して `agent_declared_abort` / `cycle_exhausted` が 0 件であることを確かめる。
+  増えていた場合は
   本手順を再実行する。
-- `cycle_exhausted` の occurrence は現時点で 0 件のため掃除対象に含まれない（filter は
-  `agent_declared_abort` のみを落とす）。
+- 初稿時に `cycle_exhausted` の occurrence は 0 件だったが、#405 の設計修正 workflow が
+  cycle 上限へ到達したことで 1 件記録された。両 cause は修正後に同じ exempt 集合へ入るため、
+  filter は `agent_declared_abort` と `cycle_exhausted` の両方を落とし、backfill の入力を残さない。
 
 #### 実測による検証（本設計フェーズで実施済み）
 
@@ -586,8 +605,8 @@ Issue が明示する `docs/dev/incident-labels.md` に加え、**現行 docs �
 | 一方向性の評価 | 本変更は two-way door | AI の評価（Issue § 重要判断に記載、人間が受領） | 取り消しは frozenset から 2 要素を戻すだけで済み、run artifact の記録形式・署名 schema・既存 hash を変えないことを § 制約で確認 |
 | docs 更新範囲を 4 ファイルへ拡大 | Issue が挙げる `incident-labels.md` に加え、除外 cause を「2 つ」と明記している 3 ファイルも更新 | **AI の仮定**。根拠は grep 実測で当該 3 ファイルが cause 数を明記していること（`failure-recovery.ja.md:145-160` / `failure-recovery.md:151-166` / `workflow_guide.md:216-227`）。後段の検査先は review-design と `/i-dev-final-check` の docs 整合確認 | 振る舞いの scope は広げず、記述の事実整合のみを対象とする |
 | 抑止理由・説明文の具体的文面 | 既存 2 件の書式（英語小文字始まり + `; excluded from incident recording` / 和文に「incident 起票の対象外」）を踏襲 | **AI の仮定**。根拠は `models.py:90-98` と `report.py:72-76` の既存慣習、および `tests/test_recovery_report.py:170,190` が「incident 起票の対象外」を assert していること。後段の検査先は review-code | 文面を § インターフェースに確定値として記載し、実装時の裁量を残さない |
-| `occurrences.jsonl` 掃除のタイミング・排他・復旧 | 実装フェーズで quiescence（自 run 以外の writer 不在）を確認してから掃除し、merge 後の事後確認で再測定する | **AI の仮定**。根拠は #392 の「実装順序の制約」コメント、`handler.py:522-524` の backfill 依存、`incident.py:339-345` が lock なし append であること、および自 run が `pgrep` にヒットする実測（PID 247699 / 247702、2026-08-22）。後段の検査先は verify-design / review-code と Issue の「ワークフロー完了後の確認項目」 | 冪等 filter に加え、自 run 除外の quiescence 条件・`mv` 直前の再ハッシュによる競合検出・タイムスタンプ付き非上書き backup・件数と byte 一致の検証・失敗時の復旧手順を § 方針 3 に固定 |
-| writer 側（`append_occurrence`）の排他 | 導入しない（`incident.py` 無変更を維持） | **AI の仮定**。根拠は Issue #405 § 影響範囲の「`incident.py` は無変更」指定と、現行が単一オペレータ運用であること。後段の検査先は review-code | 掃除側の quiescence + 競合検出で代替する方針と、writer 側排他が必要になる条件（複数 run の常時並行運用）を § 制約に明記 |
+| `occurrences.jsonl` 掃除のタイミング・並行 append 保全・復旧 | 実装フェーズで原本 inode を hard link に保全してから filter + atomic swap し、旧 inode の fd holder が 0 件になった後に append-only で最終回収・検証する。merge 後の事後確認でも cause 分布を再測定する | **AI の仮定**。根拠は #392 の「実装順序の制約」コメント、`handler.py:522-524` の backfill 依存、`incident.py:339-345` が呼び出しごとに `open(path, "a")` して lock なしで append すること、および pre-swap fd の遅延 write が fd gate なしでは回収後に到達する反例（§ 実測による検証 2）。後段の検査先は verify-design / review-code と Issue の「ワークフロー完了後の確認項目」 | 無損失はタイムスタンプ付き非上書き hard link（`*.pre405-*`）、回収の完了性は旧 inode の fd holder 1→0 遷移と到達不能確認で保証する。到達不能後の append-only 回収、`LOST=0`、cause 分布、torn write 時の停止、append-only rollback を § 方針 3 の実行手順と検証項目に固定 |
+| writer 側（`append_occurrence`）の排他 | 導入しない（`incident.py` 無変更を維持） | **AI の仮定**。根拠は Issue #405 § 影響範囲の「`incident.py` は無変更」指定と、現行が単一オペレータ運用であること。後段の検査先は review-code | 掃除側の hard-link 保全 + fd 到達不能 gate + append-only 回収で pre-swap fd の遅延 write を保全する。writer 側排他が必要になる条件（複数 run の常時並行運用）は § 制約に明記 |
 
 ## テスト戦略
 
@@ -686,13 +705,20 @@ Issue が明示する `docs/dev/incident-labels.md` に加え、**現行 docs �
 
 ### 変更固有検証（恒久テスト化しない）
 
-- `occurrences.jsonl` の掃除: § 方針 3 の手順（quiescence → 不変 backup → filter →
-  検証）をそのまま実行し、次を Issue コメントへ証跡として貼る。
-  - step 1 の `pgrep` 出力（自 run 以外の writer が無いこと）
-  - `BEFORE_N=13` / `DROP_N=8` / `AFTER_N=5`、および `AFTER_N == BEFORE_N - DROP_N` の成立
-  - step 5 の `diff` が差分なし（残存行が backup の非 ABORT 行と byte 単位で一致）
-  - `jq -r '.signature.cause' | sort | uniq -c` が `dispatch_failure 5` のみ
-  - 作成した backup ファイル名（`occurrences.jsonl.bak-405-<UTC>`）
+- `occurrences.jsonl` の掃除: § 方針 3 の手順（hard-link 保全 → filter + atomic swap →
+  fd 到達不能 gate → append-only 回収 → 検証）をそのまま実行し、次を Issue コメントへ証跡として
+  貼る。
+  - 作成した原本 inode の hard link 名（`occurrences.jsonl.pre405-<UTC>`）と、swap 前に `$F` と
+    `$OLD` の `device:inode` が一致すること
+  - pre-swap fd 遅延 write の決定論的検証で、旧 inode の holder が **1 件 → 0 件**へ遷移し、
+    遅延行を append-only で回収したこと
+  - 実データ掃除の `OK: BEFORE_N=<実行時件数> DROP_N=<両 exempt cause の件数>
+    AFTER_N=<保持件数以上> LOST=0 OLD=<path>` と、検証末尾でも holder が 0 件であること。
+    2026-08-25 時点の期待値は `BEFORE_N=15 DROP_N=9 AFTER_N=6`
+  - `jq -r '.signature.cause' "$F" | sort | uniq -c` が非 exempt cause のみであること。
+    2026-08-25 時点の期待値は `dispatch_failure 6` のみ
+  - rollback 検証で原本の全行と並行 append 行が残ること、および torn-write 検証が exit 1 で停止し、
+    append-only rollback 後に検証 fixture の agent ABORT 8 行が戻り、`$F.keep.*` が残らないこと
 
   ローカル運用データであり repo にコミットされないため恒久テストにはしない。
 - `make check`（`ruff` / `mypy` / `pytest` 全件）を実装後に実行する。
@@ -722,7 +748,7 @@ Issue が明示する `docs/dev/incident-labels.md` に加え、**現行 docs �
 | 除外分岐の実装 | `kaji_harness/recovery/handler.py:520-538` | 「`append_occurrence` より前に抜ける（`occurrences.jsonl` は backfill の入力でもあるため、1 行でも残すと後から incident を再生成しうる）」= EB-5 の根拠 |
 | cause 説明の正本 | `kaji_harness/recovery/report.py:44-51` | 両 cause を「安全弁の正常作動」「安全停止・手動確認要求」と定義 = EB-1 / EB-2 の根拠 |
 | 既存不変条件 | `tests/test_recovery_models.py:101-105` | `set(INCIDENT_SUPPRESSION_REASONS) == set(INCIDENT_EXEMPT_CAUSES)` = EB-3 |
-| 実運用 occurrence データ | `/home/aki/dev/kaji/main/.kaji-artifacts/incidents/occurrences.jsonl`（`.gitignore:49` により非追跡） | OB-2 の 13 行の内訳と、EB-4 golden hash の出所。本設計 § OB-2 に全行を転記済み（レビュワーが repo 内で内容を参照できるようにするため） |
+| 実運用 occurrence データ | `/home/aki/dev/kaji/main/.kaji-artifacts/incidents/occurrences.jsonl`（`.gitignore:49` により非追跡） | OB-2 の 15 行の内訳と、EB-4 golden hash の出所。本設計 § OB-2 に全行を転記済み（レビュワーが repo 内で内容を参照できるようにするため） |
 | 除外機構の前例 | `draft/design/issue-322-feat-tmux-interactive-runner-incident.md` / `draft/design/issue-403-fix-interactive-workflow-codex-recovery.md:480,527` | `INCIDENT_EXEMPT_CAUSES` へ cause を足す際の変更点一式（`FAILURE_CAUSES` / `INCIDENT_SUPPRESSION_REASONS` / `_CAUSE_DESCRIPTIONS` / `_COMMENT_ONLY_CAUSES`）。今回は cause 自体が既存のため前 2 者と説明文のみが対象 |
 | ラベル運用と照合規則 | `docs/dev/incident-labels.md:43-58` | 「closed かつ transient なし → 新規起票し旧イシューへリンク」= OB-3 の偽リグレッションの機序 |
 | テスト規約 | `docs/dev/testing-convention.md` | Large 省略の 4 条件、bug の再現テスト必須ルール |
