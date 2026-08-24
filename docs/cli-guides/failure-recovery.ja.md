@@ -131,14 +131,14 @@ kaji recover .kaji/wf/official/dev.yaml 288 --run-id 260710120000
 
 | 分類 | 該当ケース | 判定入力 |
 |---|---|---|
-| `user_precondition_error` | interactive terminal runner を tmux セッション外から起動した（`TmuxSessionRequiredError`） | `failure_event.exception_type` の型名 |
+| `user_precondition_error` | interactive terminal runner を選択した backend の session 外から起動した（`TmuxSessionRequiredError` / `HerdrSessionRequiredError`） | `failure_event.exception_type` の型名 |
 | `user_interrupted` | 利用者が `kaji run` を Ctrl-C で中断した | `failure_event.kind == "interrupted"` |
 | `agent_declared_abort` | agent が正規の ABORT verdict を返した（安全停止・手動確認要求） | `failure_event.kind == "agent_abort"` |
 | `cycle_exhausted` | cycle が `max_iterations` に到達した（安全弁の正常作動） | `failure_event.kind == "cycle_exhausted"` |
 
 いずれも判定は run.log の構造化 `failure_event` で行い、エラーメッセージの文字列一致には
-依存しない。tmux 未インストール・tmux バージョン不足・`TMUX_PANE` 欠落・その他の
-`CLINotFoundError` は従来どおり incident 記録の対象。
+依存しない。backend CLI 未インストール・version 不足・その他の `CLINotFoundError` は
+従来どおり incident 記録の対象。
 
 `agent_declared_abort` / `cycle_exhausted` は例外を伴わない終端のため、識別署名の
 canonical input が常に空になり、fingerprint が cause ごとの定数へ退化する。`cause` 自体は

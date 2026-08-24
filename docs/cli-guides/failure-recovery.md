@@ -155,14 +155,14 @@ promoting them to incidents would drown out the real failure signal.
 
 | Cause | Case | Decision input |
 |---|---|---|
-| `user_precondition_error` | The interactive terminal runner was started outside a tmux session (`TmuxSessionRequiredError`) | `failure_event.exception_type` |
+| `user_precondition_error` | The interactive terminal runner was started outside its selected backend session (`TmuxSessionRequiredError` / `HerdrSessionRequiredError`) | `failure_event.exception_type` |
 | `user_interrupted` | The operator interrupted `kaji run` with Ctrl-C | `failure_event.kind == "interrupted"` |
 | `agent_declared_abort` | The agent returned a legitimate ABORT verdict (safe stop / manual confirmation requested) | `failure_event.kind == "agent_abort"` |
 | `cycle_exhausted` | A cycle reached `max_iterations` (safety valve worked as designed) | `failure_event.kind == "cycle_exhausted"` |
 
 All four decisions key off the structured `failure_event` recorded in `run.log`, never off the raw
-error message. A missing tmux binary, an insufficient tmux version, a missing `TMUX_PANE`, and
-every other `CLINotFoundError` keep their existing incident recording behavior.
+error message. A missing backend binary, an insufficient backend version, and every other
+`CLINotFoundError` keep their existing incident recording behavior.
 
 `agent_declared_abort` and `cycle_exhausted` end without an exception, so the identity signature's
 canonical input is always empty and the fingerprint degenerates to a per-cause constant. `cause` is

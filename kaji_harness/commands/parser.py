@@ -170,6 +170,13 @@ def _register_run(subparsers: argparse._SubParsersAction[argparse.ArgumentParser
         default=None,
         help="Override the agent runner backend for this run.",
     )
+    p.add_argument(
+        "--interactive-terminal-backend",
+        dest="interactive_terminal_backend",
+        choices=["tmux", "herdr"],
+        default=None,
+        help="Override the terminal backend used by the interactive runner.",
+    )
     close_group = p.add_mutually_exclusive_group()
     close_group.add_argument(
         "--interactive-terminal-close-on-verdict",

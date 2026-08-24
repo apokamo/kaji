@@ -1302,6 +1302,7 @@ class TestExecutionRunnerConfig:
     def test_defaults_when_runner_keys_absent(self, tmp_path: Path) -> None:
         config = KajiConfig._load(_write_config(tmp_path, execution_body="default_timeout = 1800"))
         assert config.execution.agent_runner == "headless"
+        assert config.execution.interactive_terminal_backend == "tmux"
         assert config.execution.interactive_terminal_close_on_verdict is True
 
     def test_explicit_interactive_terminal(self, tmp_path: Path) -> None:
@@ -1317,6 +1318,39 @@ class TestExecutionRunnerConfig:
         )
         assert config.execution.agent_runner == "interactive_terminal"
         assert config.execution.interactive_terminal_close_on_verdict is False
+
+    def test_explicit_herdr_backend(self, tmp_path: Path) -> None:
+        config = KajiConfig._load(
+            _write_config(
+                tmp_path,
+                execution_body=(
+                    "default_timeout = 2400\n"
+                    'agent_runner = "interactive_terminal"\n'
+                    'interactive_terminal_backend = "herdr"'
+                ),
+            )
+        )
+        assert config.execution.interactive_terminal_backend == "herdr"
+
+    def test_invalid_interactive_terminal_backend_fails_fast(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigLoadError, match="interactive_terminal_backend must be"):
+            KajiConfig._load(
+                _write_config(
+                    tmp_path,
+                    execution_body=(
+                        'default_timeout = 1800\ninteractive_terminal_backend = "kitty"'
+                    ),
+                )
+            )
+
+    def test_non_string_interactive_terminal_backend_fails_fast(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigLoadError, match="interactive_terminal_backend must be a string"):
+            KajiConfig._load(
+                _write_config(
+                    tmp_path,
+                    execution_body="default_timeout = 1800\ninteractive_terminal_backend = 42",
+                )
+            )
 
     def test_invalid_agent_runner_fails_fast(self, tmp_path: Path) -> None:
         with pytest.raises(ConfigLoadError, match="agent_runner must be"):
@@ -1380,6 +1414,16 @@ class TestExecutionOverlay:
         )
         assert config.execution.agent_runner == "interactive_terminal"
         assert config.execution.interactive_terminal_close_on_verdict is False
+
+    def test_overlay_overrides_interactive_terminal_backend(self, tmp_path: Path) -> None:
+        config = KajiConfig._load(
+            _write_config(
+                tmp_path,
+                execution_body=('default_timeout = 1800\ninteractive_terminal_backend = "tmux"'),
+                local_body='[execution]\ninteractive_terminal_backend = "herdr"\n',
+            )
+        )
+        assert config.execution.interactive_terminal_backend == "herdr"
 
     def test_overlay_invalid_value_reports_overlay_path(self, tmp_path: Path) -> None:
         # An invalid runner value coming from the overlay should point at the

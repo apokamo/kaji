@@ -103,11 +103,16 @@ worktree）基準で解決される（Issue #177、[ワークフロー作成](..
 
 | key | 必須/任意 | 型 | 既定 | 検証規則 | 一次情報 |
 |-----|----------|----|------|----------|---------|
-| `default_timeout` | 必須 | int | —（未設定はエラー） | `> 0` の整数（bool 不可） | `config.py:219-231` |
-| `agent_runner` | 任意 | `"headless"` \| `"interactive_terminal"` | `"headless"` | 列挙外は `ConfigLoadError` | `config.py:233-244` |
-| `interactive_terminal_close_on_verdict` | 任意 | bool | `true` | bool 以外は `ConfigLoadError` | `config.py:246-252` |
+| `default_timeout` | 必須 | int | —（未設定はエラー） | `> 0` の整数（bool 不可） | `config.py:227-239` |
+| `agent_runner` | 任意 | `"headless"` \| `"interactive_terminal"` | `"headless"` | 列挙外は `ConfigLoadError` | `config.py:241-252` |
+| `interactive_terminal_backend` | 任意 | `"tmux"` \| `"herdr"` | `"tmux"` | 列挙外は `ConfigLoadError` | `config.py:254-266` |
+| `interactive_terminal_close_on_verdict` | 任意 | bool | `true` | bool 以外は `ConfigLoadError` | `config.py:268-275` |
+| `failure_triage` | 任意 | bool | `true` | bool 以外は `ConfigLoadError` | `config.py:276-291` |
+| `auto_recover` | 任意 | bool | `false` | bool 以外は `ConfigLoadError` | `config.py:276-291` |
 
-- `agent_runner` は agent step を headless CLI で起動するか tmux pane 上の対話 CLI で起動するかを選ぶ。
+- `agent_runner` は agent step を headless CLI で起動するかterminal pane上の対話CLIで起動するかを選ぶ。
+  `interactive_terminal_backend` は `tmux` / `herdr` を選ぶ。既定は `tmux` のままで、環境による
+  自動判定や暗黙fallbackは行わない。headless runnerではこのkeyは作用しない。
   `interactive_terminal` の挙動・CLI option・優先順位は
   [Interactive Terminal Runner ガイド](../cli-guides/interactive-terminal-runner.md) を参照。
   headless と interactive terminal は Claude / Codex / Antigravity に対応する。
@@ -115,12 +120,12 @@ worktree）基準で解決される（Issue #177、[ワークフロー作成](..
 - `interactive_terminal_close_on_verdict` は `agent_runner = "interactive_terminal"` のときのみ作用する
   （verdict 検知後に pane を閉じるか）。headless 運用では無効。
 
-> **`failure_triage` / `auto_recover`（Issue #288 / #296）**: 本節の日本語訳はこの2 keyに
-> 追随できていない（正本は英語版）。詳細は英語正本 [configuration.md](configuration.md)
-> § `[execution]` の `failure_triage` / `auto_recover` 行を参照。`auto_recover` は
-> interactive terminal 経路で tmux pane が transient provider error（例: `"at capacity"`）と
-> ともに終了した場合の自動再開挙動にも及ぶ（[Failure Triage / Recovery CLI（日本語）]
-> (../cli-guides/failure-recovery.ja.md) § Interactive terminal を参照）。
+- `failure_triage` は失敗分類、triage comment、`recovery.json` / `run.log`、stderr summaryを有効にする。
+  既定は`true`で、証跡記録だけを行う。
+- `auto_recover` は安全gateを通過した場合にrecovery chainあたり1回だけ、固定10分待機後のchild runを
+  許可する。既定は`false`で、`failure_triage = false`なら常に無効になる。interactive terminalで
+  transient provider error（例: `"at capacity"`）を検出した場合にも適用する。詳細は
+  [Failure Triage / Recovery CLI（日本語）](../cli-guides/failure-recovery.ja.md)を参照。
 
 `timeout` の解決順位は step.timeout → workflow.default_timeout → `config.execution.default_timeout`
 （[ワークフロー作成](../dev/workflow-authoring.md) § ステップフィールド 参照）。
@@ -194,6 +199,7 @@ worktree_prefix = "kaji"            # worktree dir 名の先頭 segment（<prefi
 [execution]
 default_timeout = 2400
 agent_runner = "headless"           # "headless"（既定） | "interactive_terminal"
+# interactive_terminal_backend = "tmux"  # "tmux"（既定） | "herdr"
 # interactive_terminal_close_on_verdict = true   # interactive_terminal のときのみ作用
 
 [provider]

@@ -80,6 +80,7 @@ skill_dir = ".claude/skills"
 [execution]
 default_timeout = 1800
 # agent_runner = "headless"          # 任意。"headless"（既定） | "interactive_terminal"
+# interactive_terminal_backend = "tmux"  # 任意。"tmux"（既定） | "herdr"
 # interactive_terminal_close_on_verdict = true   # 任意
 
 [provider]

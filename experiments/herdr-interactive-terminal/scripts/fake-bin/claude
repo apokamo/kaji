@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""Fake interactive Claude used only by the live Herdr pane smoke test."""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+
+def main() -> None:
+    """Extract the wrapper-provided verdict path and write a deterministic verdict."""
+    prompt = sys.argv[-1]
+    match = re.search(r"exact path:\n([^\n]+)", prompt)
+    if match is None:
+        raise SystemExit("fake Claude could not find verdict path")
+    verdict_path = Path(match.group(1))
+    print("fake Claude running interactively in a real Herdr pane", flush=True)
+    verdict_path.write_text(
+        "status: PASS\n"
+        "reason: live Herdr pane lifecycle completed\n"
+        "evidence: packaged wrapper launched fake Claude and wrote this artifact\n"
+        'suggestion: ""\n',
+        encoding="utf-8",
+    )
+    print("fake Claude wrote verdict.yaml", flush=True)
+
+
+if __name__ == "__main__":
+    main()

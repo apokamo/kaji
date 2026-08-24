@@ -29,6 +29,7 @@ MODULE_LAYERS: dict[str, str] = {
     "kaji_harness.config": "application",
     "kaji_harness.console_log": "application",
     "kaji_harness.interactive_terminal": "application",
+    "kaji_harness.interactive_terminal_herdr": "application",
     "kaji_harness.local_init": "application",
     "kaji_harness.logger": "application",
     "kaji_harness.models": "application",

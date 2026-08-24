@@ -236,15 +236,17 @@ agent 経路の起動 backend は repository config の `[execution] agent_runne
 - **`headless`（既定）**: `execute_cli()` が `claude -p --output-format stream-json` /
   `codex exec --json` / `agy -p` を起動する。
   Antigravity の stdout は JSONL decode せず plain text 全行を保持する。
-- **`interactive_terminal`**: `execute_interactive_terminal()` が **tmux pane** 上で通常の
-  対話 `claude` / `codex` / `agy -i` を起動し（初回は `split-window -h` で origin の右、2枚目以降は右列内を
+- **`interactive_terminal`**: `execute_interactive_terminal()` が
+  `[execution].interactive_terminal_backend` で `tmux`（既定）または `herdr` を明示選択し、pane上で通常の
+  対話 `claude` / `codex` / `agy -i` を起動する。tmuxでは初回を `split-window -h` でoriginの右、2枚目以降を右列内で
   `-v` で上下分割し、kaji 管理 agent pane を右列に最大2枚まで維持 / Issue #238）、
   stdout を読まずに attempt directory の `verdict.yaml` を polling する。完了判定は
-  artifact-primary 経路（Issue #220）に完全に乗る。`tmux`（>= 3.1）/ `$TMUX` 不在は
-  fail-fast、`interactive_terminal_close_on_verdict` で verdict 検知後に pane を `kill-pane`
-  するか（best-effort cleanup）を制御する。transcript は `tmux pipe-pane` で `terminal.log` に
-  常時記録され、`/proc` scan も util-linux `script(1)` 依存も無く Linux / macOS 同一に動く
-  （tmux 単一 backend / Issue #230, [ADR 007](./adr/007-interactive-terminal-runner.md) v3）。
+  artifact-primary 経路（Issue #220）に完全に乗る。Herdrでは `HERDR_ENV=1` / `HERDR_PANE_ID` と
+  Herdr >= 0.8.2を必須にし、CLI JSON response由来pane IDとsource-scoped ownership tokenを使う。
+  `interactive_terminal_close_on_verdict` はどちらのbackendでもverdict後の所有pane cleanupを制御する。
+  tmux transcriptは`pipe-pane`の連続記録、Herdr transcriptは`recent-unwrapped`のrendered snapshotで、
+  kind / truncation / revisionを`pane-metadata.json`へ記録する（Issue #396、
+  [ADR 007](./adr/007-interactive-terminal-runner.md) v4）。
 
 設定方法と手動検証手順は
 [Interactive Terminal Runner ガイド](./cli-guides/interactive-terminal-runner.md) を参照。
@@ -468,7 +470,7 @@ member ごとの workflow / child PID / run ID / exit code / 成功ゲートを�
       attempt-001/
         prompt.txt                # agent step の build_prompt 結果（再現用）
         stdout.log / console.log / stderr.log
-        terminal.log              # interactive_terminal runner の transcript（tmux pipe-pane で常時記録。Issue #224 / #230）
+        terminal.log              # tmux: pipe-pane transcript / Herdr: rendered recent-unwrapped snapshot
         pane-metadata.json        # interactive_terminal runner の pane 状態 snapshot（診断用。Issue #230）
         verdict.yaml              # resolve 後に harness が正規化保存
         result.json               # attempt 終了情報（Issue #222。下記参照）

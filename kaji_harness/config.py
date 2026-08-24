@@ -35,6 +35,7 @@ class ExecutionConfig:
 
     default_timeout: int  # Required. No default.
     agent_runner: Literal["headless", "interactive_terminal"] = "headless"
+    interactive_terminal_backend: Literal["tmux", "herdr"] = "tmux"
     interactive_terminal_close_on_verdict: bool = True
     failure_triage: bool = True
     auto_recover: bool = False
@@ -250,6 +251,20 @@ class KajiConfig:
                 f"got {raw_agent_runner!r}",
             )
 
+        raw_interactive_terminal_backend = merged.get("interactive_terminal_backend", "tmux")
+        if not isinstance(raw_interactive_terminal_backend, str):
+            raise ConfigLoadError(
+                source("interactive_terminal_backend"),
+                "execution.interactive_terminal_backend must be a string, "
+                f"got {type(raw_interactive_terminal_backend).__name__}",
+            )
+        if raw_interactive_terminal_backend not in {"tmux", "herdr"}:
+            raise ConfigLoadError(
+                source("interactive_terminal_backend"),
+                "execution.interactive_terminal_backend must be 'tmux' or 'herdr', "
+                f"got {raw_interactive_terminal_backend!r}",
+            )
+
         raw_close = merged.get("interactive_terminal_close_on_verdict", True)
         if not isinstance(raw_close, bool):
             raise ConfigLoadError(
@@ -270,6 +285,7 @@ class KajiConfig:
         return ExecutionConfig(
             default_timeout=raw_timeout,
             agent_runner=raw_agent_runner,  # type: ignore[arg-type]
+            interactive_terminal_backend=raw_interactive_terminal_backend,  # type: ignore[arg-type]
             interactive_terminal_close_on_verdict=raw_close,
             failure_triage=parse_bool("failure_triage", True),
             auto_recover=parse_bool("auto_recover", False),

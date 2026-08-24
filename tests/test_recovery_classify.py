@@ -251,6 +251,24 @@ def test_dispatch_tmux_session_required_is_user_precondition_error() -> None:
     assert c.recoverability_hint == "no"
 
 
+def test_dispatch_herdr_session_required_is_user_precondition_error() -> None:
+    c = classify_failure(
+        _snapshot(
+            failure_event=FailureEvent(
+                kind="dispatch_exception",
+                step_id="review-ready",
+                exception_type="HerdrSessionRequiredError",
+            ),
+            failed_step="review-ready",
+            attempt_error="Herdr backend must run inside Herdr (HERDR_ENV=1).",
+        )
+    )
+    assert c.cause == "user_precondition_error"
+    assert c.synthetic is True
+    assert c.source == "config"
+    assert c.recoverability_hint == "no"
+
+
 def test_dispatch_exception_with_unknown_type_is_opaque_external() -> None:
     c = classify_failure(
         _snapshot(

@@ -1,0 +1,15 @@
+name: herdr-kaji-launch-smoke
+description: |
+  Non-destructive live smoke for launching a real interactive kaji command in a
+  sibling Herdr pane. The caller pins PATH to the experiment fake-agent bin so
+  the nested agent only writes kaji's temporary verdict artifact.
+execution_policy: auto
+default_timeout: 60
+
+steps:
+  - id: launch-smoke
+    skill: herdr-kaji-launch
+    agent: claude
+    on:
+      PASS: end
+      ABORT: end
