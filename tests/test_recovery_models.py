@@ -108,7 +108,9 @@ def test_incident_exempt_causes_is_limited_to_known_non_incident_causes() -> Non
     )
     assert INCIDENT_EXEMPT_CAUSES <= FAILURE_CAUSES
     assert set(INCIDENT_SUPPRESSION_REASONS) == set(INCIDENT_EXEMPT_CAUSES)
-    assert INCIDENT_SUPPRESSION_REASONS["user_precondition_error"]
+    user_precondition_reason = INCIDENT_SUPPRESSION_REASONS["user_precondition_error"]
+    assert "selected backend session" in user_precondition_reason
+    assert "tmux" not in user_precondition_reason
     assert INCIDENT_SUPPRESSION_REASONS["user_interrupted"]
     assert INCIDENT_SUPPRESSION_REASONS["agent_declared_abort"]
     assert INCIDENT_SUPPRESSION_REASONS["cycle_exhausted"]

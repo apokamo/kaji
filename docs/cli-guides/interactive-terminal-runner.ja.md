@@ -252,6 +252,9 @@ backend固有差分だけを後段に示す。
    output/status文字列ではstepを完了しない。optional process fieldの欠落・型不正はunknownとして扱い、
    shell復帰確認へ加算しない。
 5. verdict / 早期終了 / timeout時にrendered snapshotをbest-effort保存する。cleanupはownershipを再確認する。
+6. 利用者のCtrl-Cではagent paneを閉じず、ownershipとrendered snapshotを`pane-metadata.json`へ
+   記録して`KeyboardInterrupt`を再送出する。snapshot保存に失敗しても元の中断を優先する。
+   状態確認後、孤児paneは`herdr pane close <pane_id>`で手動cleanupする。
 
 ### Codex / Claude Codeからkajiを起動
 
@@ -277,7 +280,9 @@ kaji paneは対話用に残す。pluginは任意の人間向けlauncher UXであ
 
 verdict を得ずに終わった attempt でも、当該 attempt と**検証可能に**対応付く session ID を
 `result.json` の `session_id` に残す（診断・人手の再開判断のためであり、自動 resume は行わない）。
-verdict 検出経路とは規則が異なる。
+verdict 検出経路とは規則が異なる。この規則は両terminal backendに適用する。Herdrで確認済みの
+shell復帰は、container pane自体はownership確認後のcleanupまで残るが、起動したagent processは
+終了済みなので表の`pane-dead`経路として扱う。
 
 | agent | resume 入力 | 経路 | 解決結果 |
 |---|---|---|---|

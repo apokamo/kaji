@@ -293,6 +293,10 @@ verdict, and session-state contracts with the backend-specific differences below
    malformed optional process fields are treated as unknown and never count as a confirmed shell return.
 5. At verdict, early exit, or timeout, kaji saves a best-effort rendered snapshot. Verdict cleanup
    obeys `interactive_terminal_close_on_verdict`; failure cleanup remains ownership-checked.
+6. An operator Ctrl-C leaves the agent pane open, records its ownership and rendered snapshot in
+   `pane-metadata.json`, and re-raises `KeyboardInterrupt`. If snapshot persistence fails, the
+   original interrupt still wins. Close the orphan manually with `herdr pane close <pane_id>` after
+   inspection.
 
 ### Launch kaji from Codex or Claude Code
 
@@ -322,7 +326,9 @@ open. Plugins remain an optional human launcher UX, not a core dependency.
 An attempt that ends without a verdict still records a session ID in
 `result.json` when one can be **verifiably** tied to that attempt (for diagnosis
 and manual resume decisions; nothing is auto-resumed). The rules differ from the
-verdict-detection path.
+verdict-detection path. These rules apply to both terminal backends; Herdr's confirmed return to
+the shell uses the `pane-dead` row because the launched agent process has ended even though the
+container pane remains available until ownership-checked cleanup.
 
 | Agent | Resume input | Path | Resolution |
 |---|---|---|---|

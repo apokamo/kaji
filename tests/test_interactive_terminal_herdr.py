@@ -13,6 +13,7 @@ from kaji_harness.errors import (
     CLIExecutionError,
     CLINotFoundError,
     HerdrSessionRequiredError,
+    SessionResolution,
     StepTimeoutError,
 )
 from kaji_harness.interactive_terminal_herdr import (
@@ -989,10 +990,11 @@ class TestExecuteHerdr:
         assert close.call_args_list == []
 
     def test_shell_return_before_verdict_fails_early_and_closes_owned_pane(
-        self, tmp_path: Path
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         prompt_path = tmp_path / "prompt.txt"
         prompt_path.write_text("do work", encoding="utf-8")
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "empty-codex-home"))
         step = Step(id="design", skill="design", agent="codex")
         launch = HerdrPaneLaunch(
             pane_id="w1:p2",
@@ -1035,7 +1037,7 @@ class TestExecuteHerdr:
             ),
             patch("kaji_harness.interactive_terminal_herdr.time.sleep"),
         ):
-            with pytest.raises(CLIExecutionError, match="returned to its shell"):
+            with pytest.raises(CLIExecutionError, match="returned to its shell") as exc_info:
                 execute_interactive_terminal_herdr(
                     step=step,
                     prompt_path=prompt_path,
@@ -1045,10 +1047,14 @@ class TestExecuteHerdr:
                 )
 
         close.assert_called_once()
+        assert exc_info.value.session_resolution == SessionResolution(None)
 
-    def test_timeout_captures_metadata_and_closes_owned_pane(self, tmp_path: Path) -> None:
+    def test_timeout_captures_metadata_and_closes_owned_pane(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         prompt_path = tmp_path / "prompt.txt"
         prompt_path.write_text("do work", encoding="utf-8")
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "empty-codex-home"))
         step = Step(id="design", skill="design", agent="codex")
         launch = HerdrPaneLaunch(
             pane_id="w1:p2",
@@ -1087,7 +1093,7 @@ class TestExecuteHerdr:
                 return_value="22222222-2222-4222-8222-222222222222",
             ),
         ):
-            with pytest.raises(StepTimeoutError, match="design"):
+            with pytest.raises(StepTimeoutError, match="design") as exc_info:
                 execute_interactive_terminal_herdr(
                     step=step,
                     prompt_path=prompt_path,
@@ -1107,6 +1113,118 @@ class TestExecuteHerdr:
         assert metadata["close_on_verdict"] is True
         assert metadata["transcript_revision"] == 9
         assert metadata["transcript_truncated"] is True
+        assert exc_info.value.session_resolution == SessionResolution(None)
+
+    def test_fresh_claude_timeout_carries_launch_session_resolution(self, tmp_path: Path) -> None:
+        prompt_path = tmp_path / "prompt.txt"
+        prompt_path.write_text("do work", encoding="utf-8")
+        step = Step(id="design", skill="design", agent="claude")
+        launch = HerdrPaneLaunch(
+            pane_id="w1:p2",
+            split_target_pane="w1:p1",
+            direction="right",
+            panes_before=[],
+            panes_pruned=[],
+        )
+
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._preflight_herdr",
+                return_value=("/usr/bin/herdr", "w1:p1", "herdr 0.8.2"),
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._launch_herdr_pane",
+                return_value=launch,
+            ),
+            patch("kaji_harness.interactive_terminal_herdr._mark_herdr_pane"),
+            patch("kaji_harness.interactive_terminal_herdr._run_herdr_pane_command"),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._capture_herdr_snapshot",
+                return_value=None,
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
+                return_value=True,
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr.time.monotonic",
+                side_effect=[0.0, 1.0],
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr.uuid.uuid4",
+                side_effect=["run-id", "launch-session-id"],
+            ),
+            pytest.raises(StepTimeoutError) as exc_info,
+        ):
+            execute_interactive_terminal_herdr(
+                step=step,
+                prompt_path=prompt_path,
+                verdict_path=tmp_path / "verdict.yaml",
+                workdir=tmp_path,
+                timeout=1,
+            )
+
+        assert exc_info.value.session_resolution == SessionResolution("launch-session-id")
+
+    @pytest.mark.parametrize("snapshot_error", [None, OSError("snapshot failed")])
+    def test_interrupt_preserves_pane_and_original_exception(
+        self, tmp_path: Path, snapshot_error: OSError | None
+    ) -> None:
+        prompt_path = tmp_path / "prompt.txt"
+        prompt_path.write_text("do work", encoding="utf-8")
+        step = Step(id="design", skill="design", agent="codex")
+        launch = HerdrPaneLaunch(
+            pane_id="w1:p2",
+            split_target_pane="w1:p1",
+            direction="right",
+            panes_before=[],
+            panes_pruned=[],
+        )
+
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._preflight_herdr",
+                return_value=("/usr/bin/herdr", "w1:p1", "herdr 0.8.2"),
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._launch_herdr_pane",
+                return_value=launch,
+            ),
+            patch("kaji_harness.interactive_terminal_herdr._mark_herdr_pane"),
+            patch("kaji_harness.interactive_terminal_herdr._run_herdr_pane_command"),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._get_herdr_process_info",
+                return_value={
+                    "shell_pid": 100,
+                    "foreground_processes": [{"pid": 200, "name": "codex"}],
+                },
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._capture_herdr_snapshot",
+                return_value=None,
+                side_effect=snapshot_error,
+            ),
+            patch("kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane") as close,
+            patch(
+                "kaji_harness.interactive_terminal_herdr.time.monotonic",
+                side_effect=[0.0, 1.0],
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr.time.sleep",
+                side_effect=KeyboardInterrupt(),
+            ),
+            pytest.raises(KeyboardInterrupt),
+        ):
+            execute_interactive_terminal_herdr(
+                step=step,
+                prompt_path=prompt_path,
+                verdict_path=tmp_path / "verdict.yaml",
+                workdir=tmp_path,
+                timeout=30,
+            )
+
+        close.assert_not_called()
+        assert (tmp_path / "pane-metadata.json").is_file() is (snapshot_error is None)
 
     def test_unknown_process_info_resets_shell_only_confirmations(self, tmp_path: Path) -> None:
         prompt_path = tmp_path / "prompt.txt"

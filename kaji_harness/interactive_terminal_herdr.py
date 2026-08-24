@@ -32,6 +32,7 @@ from .errors import (
 from .interactive_terminal import (
     _build_wrapper_command,
     _extract_codex_session_id,
+    _resolve_abnormal_exit_session,
     _terminal_exit_detail,
     _wrapper_path,
 )
@@ -208,36 +209,10 @@ def execute_interactive_terminal_herdr(
 
     deadline = time.monotonic() + timeout
     shell_only_observations = 0
-    while time.monotonic() < deadline:
-        if verdict_path.is_file():
-            pane_read = _capture_herdr_snapshot(herdr, pane_id, terminal_log)
-            _write_herdr_metadata(
-                metadata_path,
-                herdr_version=herdr_version,
-                pane_id=pane_id,
-                origin_pane=origin_pane,
-                run_id=run_id,
-                close_on_verdict=close_on_verdict,
-                marker_confirmed=True,
-                pane_read=pane_read,
-                layout=launch,
-            )
-            result_session_id = session_id or launch_session_id or None
-            if result_session_id is None and step.agent == "codex":
-                result_session_id = _extract_codex_session_id(
-                    terminal_log,
-                    prompt_path=prompt_path,
-                    verdict_path=verdict_path,
-                )
-            if close_on_verdict:
-                _close_owned_herdr_pane(herdr, pane_id, origin_pane=origin_pane, run_id=run_id)
-            return CLIResult(full_output="", session_id=result_session_id)
-
-        process_info = _get_herdr_process_info(herdr, pane_id)
-        liveness = _classify_herdr_process_liveness(process_info)
-        if liveness == "confirmed_shell_only":
-            shell_only_observations += 1
-            if shell_only_observations >= _PROCESS_EXIT_CONFIRMATIONS:
+    process_info: dict[str, object] | None = None
+    try:
+        while time.monotonic() < deadline:
+            if verdict_path.is_file():
                 pane_read = _capture_herdr_snapshot(herdr, pane_id, terminal_log)
                 _write_herdr_metadata(
                     metadata_path,
@@ -248,21 +223,78 @@ def execute_interactive_terminal_herdr(
                     close_on_verdict=close_on_verdict,
                     marker_confirmed=True,
                     pane_read=pane_read,
-                    process_info=process_info,
                     layout=launch,
                 )
-                _close_owned_herdr_pane(herdr, pane_id, origin_pane=origin_pane, run_id=run_id)
-                raise CLIExecutionError(
-                    step.id,
-                    1,
-                    _terminal_exit_detail(
+                result_session_id = session_id or launch_session_id or None
+                if result_session_id is None and step.agent == "codex":
+                    result_session_id = _extract_codex_session_id(
                         terminal_log,
-                        prefix="Herdr pane returned to its shell before writing verdict.yaml",
-                    ),
-                )
-        else:
-            shell_only_observations = 0
-        time.sleep(_VERDICT_POLL_INTERVAL_SECONDS)
+                        prompt_path=prompt_path,
+                        verdict_path=verdict_path,
+                    )
+                if close_on_verdict:
+                    _close_owned_herdr_pane(herdr, pane_id, origin_pane=origin_pane, run_id=run_id)
+                return CLIResult(full_output="", session_id=result_session_id)
+
+            process_info = _get_herdr_process_info(herdr, pane_id)
+            liveness = _classify_herdr_process_liveness(process_info)
+            if liveness == "confirmed_shell_only":
+                shell_only_observations += 1
+                if shell_only_observations >= _PROCESS_EXIT_CONFIRMATIONS:
+                    pane_read = _capture_herdr_snapshot(herdr, pane_id, terminal_log)
+                    _write_herdr_metadata(
+                        metadata_path,
+                        herdr_version=herdr_version,
+                        pane_id=pane_id,
+                        origin_pane=origin_pane,
+                        run_id=run_id,
+                        close_on_verdict=close_on_verdict,
+                        marker_confirmed=True,
+                        pane_read=pane_read,
+                        process_info=process_info,
+                        layout=launch,
+                    )
+                    resolved = _resolve_abnormal_exit_session(
+                        cast(str, step.agent),
+                        prompt_path=prompt_path,
+                        verdict_path=verdict_path,
+                        resume_session_id=session_id,
+                        launch_session_id=launch_session_id,
+                        pane_alive=False,
+                    )
+                    _close_owned_herdr_pane(herdr, pane_id, origin_pane=origin_pane, run_id=run_id)
+                    raise CLIExecutionError(
+                        step.id,
+                        1,
+                        _terminal_exit_detail(
+                            terminal_log,
+                            prefix="Herdr pane returned to its shell before writing verdict.yaml",
+                        ),
+                        session_resolution=resolved,
+                    )
+            else:
+                shell_only_observations = 0
+            time.sleep(_VERDICT_POLL_INTERVAL_SECONDS)
+    except KeyboardInterrupt:
+        # Preserve the live pane for inspection and leave enough ownership metadata for
+        # recovery to report the orphan. Metadata failure must not mask Ctrl-C.
+        try:
+            pane_read = _capture_herdr_snapshot(herdr, pane_id, terminal_log)
+            _write_herdr_metadata(
+                metadata_path,
+                herdr_version=herdr_version,
+                pane_id=pane_id,
+                origin_pane=origin_pane,
+                run_id=run_id,
+                close_on_verdict=close_on_verdict,
+                marker_confirmed=True,
+                pane_read=pane_read,
+                process_info=process_info,
+                layout=launch,
+            )
+        except OSError as exc:
+            _console.warning("orphan pane metadata snapshot failed: %s", exc)
+        raise
 
     pane_read = _capture_herdr_snapshot(herdr, pane_id, terminal_log)
     _write_herdr_metadata(
@@ -276,8 +308,16 @@ def execute_interactive_terminal_herdr(
         pane_read=pane_read,
         layout=launch,
     )
+    resolved = _resolve_abnormal_exit_session(
+        cast(str, step.agent),
+        prompt_path=prompt_path,
+        verdict_path=verdict_path,
+        resume_session_id=session_id,
+        launch_session_id=launch_session_id,
+        pane_alive=True,
+    )
     _close_owned_herdr_pane(herdr, pane_id, origin_pane=origin_pane, run_id=run_id)
-    raise StepTimeoutError(step.id, timeout)
+    raise StepTimeoutError(step.id, timeout, session_resolution=resolved)
 
 
 def _validate_step(step: Step, prompt_path: Path) -> None:

@@ -56,6 +56,10 @@ ADR 005 artifact-primary verdict 解決は不変。v3 は v2 の pane 配置契�
   加算しない。fieldを完全に検証できたshell-only観測が3回連続した場合だけ早期終了とする。
 - Herdrの`terminal.log`は`recent-unwrapped` rendered snapshotであり、tmux `pipe-pane`と同等のraw
   transcript保証を持たない。kind / availability / truncation / revisionをmetadataへ残す。
+- timeoutと確認済みshell復帰ではtmux backendと同じ異常終了session解決規則をcleanup前に適用する。
+  Herdrのshell復帰はagent process終了を意味するため、session解決上は`pane-dead`として扱う。
+  利用者のCtrl-Cではpaneを閉じず、ownershipとrendered snapshotをmetadataへbest-effort保存して
+  `KeyboardInterrupt`を再送出する。metadata保存失敗で元の中断を置換しない。
 - agent→pane→kajiの追加経路はrelease-matched Herdr skill + repository `herdr-kaji-launch` skillを使う。
   Claude Code `-p`は使用しない。Herdr pluginは任意の人間向けlauncherとしてのみ後段評価する。
 

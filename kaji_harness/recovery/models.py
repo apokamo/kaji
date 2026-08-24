@@ -40,8 +40,8 @@ FailureCause = Literal[
     "kaji_bug_suspected",
     "runtime_error",
     "unknown_external_error",
-    # Issue #322: 調査を要さない既知のユーザー前提エラー（tmux 外での interactive
-    # runner 起動）。incident 記録の対象外にする cause の 1 つ。
+    # Issue #322 / #396: 調査を要さない既知のユーザー前提エラー（選択した terminal
+    # backend の session 外での interactive runner 起動）。incident 記録の対象外にする。
     "user_precondition_error",
     # Issue #403: 利用者の Ctrl-C による run 中断。harness の不具合ではないため
     # incident 記録の対象外にする。
@@ -98,8 +98,8 @@ INCIDENT_EXEMPT_CAUSES: frozenset[str] = frozenset(
 #: 抑止理由の固定文（``run.log`` の ``incident_suppressed`` event と ``recovery.json``）。
 INCIDENT_SUPPRESSION_REASONS: dict[str, str] = {
     "user_precondition_error": (
-        "known user precondition error (interactive terminal runner requires a tmux "
-        "session); excluded from incident recording"
+        "known user precondition error (interactive terminal runner requires its selected "
+        "backend session); excluded from incident recording"
     ),
     "user_interrupted": (
         "run interrupted by the operator (KeyboardInterrupt); excluded from incident recording"
