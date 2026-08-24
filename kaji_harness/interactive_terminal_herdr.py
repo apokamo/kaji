@@ -16,7 +16,7 @@ import shutil
 import subprocess
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, cast
 
@@ -35,6 +35,7 @@ from .interactive_terminal import (
     _resolve_abnormal_exit_session,
     _terminal_exit_detail,
     _wrapper_path,
+    read_terminal_diagnostic,
 )
 from .models import CLIResult, Step
 
@@ -83,6 +84,7 @@ class HerdrPaneLaunch:
     direction: Literal["right", "down"]
     panes_before: list[str]
     panes_pruned: list[str]
+    panes_skipped: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -184,6 +186,12 @@ def execute_interactive_terminal_herdr(
         _run_herdr_pane_command(herdr, pane_id, command, workdir=workdir)
     except CLIExecutionError:
         pane_read = _capture_herdr_snapshot(herdr, pane_id, terminal_log)
+        close_error = _close_owned_herdr_pane_best_effort(
+            herdr,
+            pane_id,
+            origin_pane=origin_pane,
+            run_id=run_id,
+        )
         _write_herdr_metadata(
             metadata_path,
             herdr_version=herdr_version,
@@ -193,9 +201,10 @@ def execute_interactive_terminal_herdr(
             close_on_verdict=close_on_verdict,
             marker_confirmed=True,
             pane_read=pane_read,
+            terminal_log=terminal_log,
+            close_error=close_error,
             layout=launch,
         )
-        _close_owned_herdr_pane(herdr, pane_id, origin_pane=origin_pane, run_id=run_id)
         raise
 
     _console.info(
@@ -214,6 +223,21 @@ def execute_interactive_terminal_herdr(
         while time.monotonic() < deadline:
             if verdict_path.is_file():
                 pane_read = _capture_herdr_snapshot(herdr, pane_id, terminal_log)
+                result_session_id = session_id or launch_session_id or None
+                if result_session_id is None and step.agent == "codex":
+                    result_session_id = _extract_codex_session_id(
+                        terminal_log,
+                        prompt_path=prompt_path,
+                        verdict_path=verdict_path,
+                    )
+                close_error = None
+                if close_on_verdict:
+                    close_error = _close_owned_herdr_pane_best_effort(
+                        herdr,
+                        pane_id,
+                        origin_pane=origin_pane,
+                        run_id=run_id,
+                    )
                 _write_herdr_metadata(
                     metadata_path,
                     herdr_version=herdr_version,
@@ -223,17 +247,9 @@ def execute_interactive_terminal_herdr(
                     close_on_verdict=close_on_verdict,
                     marker_confirmed=True,
                     pane_read=pane_read,
+                    close_error=close_error,
                     layout=launch,
                 )
-                result_session_id = session_id or launch_session_id or None
-                if result_session_id is None and step.agent == "codex":
-                    result_session_id = _extract_codex_session_id(
-                        terminal_log,
-                        prompt_path=prompt_path,
-                        verdict_path=verdict_path,
-                    )
-                if close_on_verdict:
-                    _close_owned_herdr_pane(herdr, pane_id, origin_pane=origin_pane, run_id=run_id)
                 return CLIResult(full_output="", session_id=result_session_id)
 
             process_info = _get_herdr_process_info(herdr, pane_id)
@@ -242,6 +258,20 @@ def execute_interactive_terminal_herdr(
                 shell_only_observations += 1
                 if shell_only_observations >= _PROCESS_EXIT_CONFIRMATIONS:
                     pane_read = _capture_herdr_snapshot(herdr, pane_id, terminal_log)
+                    resolved = _resolve_abnormal_exit_session(
+                        cast(str, step.agent),
+                        prompt_path=prompt_path,
+                        verdict_path=verdict_path,
+                        resume_session_id=session_id,
+                        launch_session_id=launch_session_id,
+                        pane_alive=False,
+                    )
+                    close_error = _close_owned_herdr_pane_best_effort(
+                        herdr,
+                        pane_id,
+                        origin_pane=origin_pane,
+                        run_id=run_id,
+                    )
                     _write_herdr_metadata(
                         metadata_path,
                         herdr_version=herdr_version,
@@ -252,23 +282,19 @@ def execute_interactive_terminal_herdr(
                         marker_confirmed=True,
                         pane_read=pane_read,
                         process_info=process_info,
+                        terminal_log=terminal_log,
+                        close_error=close_error,
                         layout=launch,
                     )
-                    resolved = _resolve_abnormal_exit_session(
-                        cast(str, step.agent),
-                        prompt_path=prompt_path,
-                        verdict_path=verdict_path,
-                        resume_session_id=session_id,
-                        launch_session_id=launch_session_id,
-                        pane_alive=False,
-                    )
-                    _close_owned_herdr_pane(herdr, pane_id, origin_pane=origin_pane, run_id=run_id)
                     raise CLIExecutionError(
                         step.id,
                         1,
                         _terminal_exit_detail(
                             terminal_log,
-                            prefix="Herdr pane returned to its shell before writing verdict.yaml",
+                            prefix=(
+                                "Herdr pane returned to its shell before writing verdict.yaml; "
+                                "rendered snapshot may be incomplete"
+                            ),
                         ),
                         session_resolution=resolved,
                     )
@@ -297,6 +323,20 @@ def execute_interactive_terminal_herdr(
         raise
 
     pane_read = _capture_herdr_snapshot(herdr, pane_id, terminal_log)
+    resolved = _resolve_abnormal_exit_session(
+        cast(str, step.agent),
+        prompt_path=prompt_path,
+        verdict_path=verdict_path,
+        resume_session_id=session_id,
+        launch_session_id=launch_session_id,
+        pane_alive=True,
+    )
+    close_error = _close_owned_herdr_pane_best_effort(
+        herdr,
+        pane_id,
+        origin_pane=origin_pane,
+        run_id=run_id,
+    )
     _write_herdr_metadata(
         metadata_path,
         herdr_version=herdr_version,
@@ -306,17 +346,10 @@ def execute_interactive_terminal_herdr(
         close_on_verdict=close_on_verdict,
         marker_confirmed=True,
         pane_read=pane_read,
+        terminal_log=terminal_log,
+        close_error=close_error,
         layout=launch,
     )
-    resolved = _resolve_abnormal_exit_session(
-        cast(str, step.agent),
-        prompt_path=prompt_path,
-        verdict_path=verdict_path,
-        resume_session_id=session_id,
-        launch_session_id=launch_session_id,
-        pane_alive=True,
-    )
-    _close_owned_herdr_pane(herdr, pane_id, origin_pane=origin_pane, run_id=run_id)
     raise StepTimeoutError(step.id, timeout, session_resolution=resolved)
 
 
@@ -540,7 +573,6 @@ def _get_current_herdr_pane(herdr: str) -> dict[str, object]:
 def _build_herdr_split_argv(
     herdr: str,
     *,
-    origin_pane: str,
     split_target_pane: str,
     direction: Literal["right", "down"],
     workdir: Path,
@@ -558,8 +590,6 @@ def _build_herdr_split_argv(
         "--cwd",
         str(workdir),
         "--no-focus",
-        "--env",
-        f"KAJI_HERDR_ORIGIN_PANE={origin_pane}",
     ]
     caller_path = os.environ.get("PATH")
     if caller_path:
@@ -569,28 +599,27 @@ def _build_herdr_split_argv(
 
 def _launch_herdr_pane(herdr: str, origin_pane: str, *, workdir: Path) -> HerdrPaneLaunch:
     """Prune owned panes, split the right column, and return launch metadata."""
-    existing = _list_managed_herdr_panes(herdr, origin_pane)
+    existing, skipped = _list_managed_herdr_panes(herdr, origin_pane)
     prune_count = max(0, len(existing) - (_MAX_VISIBLE_AGENT_PANES - 1))
     pruned = existing[:prune_count]
     remaining = existing[prune_count:]
+    pruned_pane_ids: list[str] = []
     for pane in pruned:
-        if not _close_owned_herdr_pane(
+        close_error = _close_owned_herdr_pane_best_effort(
             herdr,
             pane.pane_id,
             origin_pane=origin_pane,
             run_id=pane.run_id,
-        ):
-            raise CLIExecutionError(
-                "interactive_terminal",
-                1,
-                f"refused to prune Herdr pane without current ownership: {pane.pane_id}",
-            )
+        )
+        if close_error is None:
+            pruned_pane_ids.append(pane.pane_id)
+        else:
+            skipped.append(pane.pane_id)
 
     selected_target, direction = _select_herdr_launch_placement(remaining)
     split_target_pane = selected_target or origin_pane
     argv = _build_herdr_split_argv(
         herdr,
-        origin_pane=origin_pane,
         split_target_pane=split_target_pane,
         direction=direction,
         workdir=workdir,
@@ -609,7 +638,8 @@ def _launch_herdr_pane(herdr: str, origin_pane: str, *, workdir: Path) -> HerdrP
         split_target_pane=split_target_pane,
         direction=direction,
         panes_before=[pane.pane_id for pane in existing],
-        panes_pruned=[pane.pane_id for pane in pruned],
+        panes_pruned=pruned_pane_ids,
+        panes_skipped=skipped,
     )
 
 
@@ -623,8 +653,10 @@ def _select_herdr_launch_placement(
     return bottom.pane_id, "down"
 
 
-def _list_managed_herdr_panes(herdr: str, origin_pane: str) -> list[HerdrManagedPane]:
-    """List marker-owned panes in the origin tab ordered from top to bottom."""
+def _list_managed_herdr_panes(
+    herdr: str, origin_pane: str
+) -> tuple[list[HerdrManagedPane], list[str]]:
+    """List valid marker-owned panes and stale candidates skipped from management."""
     origin = _get_herdr_pane(herdr, origin_pane)
     workspace_id = origin.get("workspace_id")
     if (
@@ -671,6 +703,7 @@ def _list_managed_herdr_panes(herdr: str, origin_pane: str) -> list[HerdrManaged
     origin_x = origin_position[0]
 
     managed: list[HerdrManagedPane] = []
+    skipped: list[str] = []
     for item in cast(list[object], panes):
         if not isinstance(item, dict):
             continue
@@ -683,16 +716,17 @@ def _list_managed_herdr_panes(herdr: str, origin_pane: str) -> list[HerdrManaged
         run_id = tokens.get("kaji_run")
         position = pane_positions.get(pane_id)
         if not isinstance(run_id, str) or not run_id or position is None:
-            raise CLIExecutionError(
-                "interactive_terminal",
-                1,
-                f"owned Herdr pane is missing run token or layout: {pane_id}",
+            _console.warning(
+                "stale Herdr pane candidate skipped: pane=%s reason=missing run token or layout",
+                pane_id,
             )
+            skipped.append(pane_id)
+            continue
         if position[0] <= origin_x:
             continue
         managed.append(HerdrManagedPane(pane_id=pane_id, y=position[1], run_id=run_id))
     managed.sort(key=lambda pane: pane.y)
-    return managed
+    return managed, skipped
 
 
 def _build_herdr_marker_argv(
@@ -800,10 +834,13 @@ def _capture_herdr_snapshot(herdr: str, pane_id: str, terminal_log: Path) -> Her
     """Save a best-effort rendered pane snapshot without masking the main result."""
     try:
         pane_read = _read_herdr_pane(herdr, pane_id)
-    except CLIExecutionError:
+        terminal_log.parent.mkdir(parents=True, exist_ok=True)
+        terminal_log.write_text(pane_read.text, encoding="utf-8")
+    except (CLIExecutionError, OSError) as error:
+        _console.warning(
+            "Herdr rendered snapshot capture failed: pane=%s detail=%s", pane_id, error
+        )
         return None
-    terminal_log.parent.mkdir(parents=True, exist_ok=True)
-    terminal_log.write_text(pane_read.text, encoding="utf-8")
     return pane_read
 
 
@@ -885,6 +922,35 @@ def _close_owned_herdr_pane(
     return True
 
 
+def _close_owned_herdr_pane_best_effort(
+    herdr: str,
+    pane_id: str,
+    *,
+    origin_pane: str,
+    run_id: str,
+) -> str | None:
+    """Try an ownership-safe close without replacing the caller's main outcome.
+
+    Returns:
+        None when close was confirmed, otherwise a diagnostic error string.
+    """
+    try:
+        closed = _close_owned_herdr_pane(
+            herdr,
+            pane_id,
+            origin_pane=origin_pane,
+            run_id=run_id,
+        )
+    except (CLIExecutionError, OSError) as error:
+        detail = str(error)
+    else:
+        if closed:
+            return None
+        detail = f"Herdr pane ownership was not confirmed at cleanup: {pane_id}"
+    _console.warning("Herdr pane cleanup failed: pane=%s detail=%s", pane_id, detail)
+    return detail
+
+
 def _confirm_herdr_pane_closed(herdr: str, pane_id: str, *, workspace_id: str) -> None:
     """Confirm that one closed pane ID is absent from its exact workspace."""
     pane_list = _herdr_result(
@@ -921,6 +987,8 @@ def _write_herdr_metadata(
     pane_read: HerdrPaneRead | None = None,
     process_info: dict[str, object] | None = None,
     layout: HerdrPaneLaunch | None = None,
+    terminal_log: Path | None = None,
+    close_error: str | None = None,
 ) -> None:
     """Write a structured Herdr pane diagnostic snapshot."""
     metadata: dict[str, object] = {
@@ -939,11 +1007,22 @@ def _write_herdr_metadata(
         metadata["transcript_revision"] = pane_read.revision
     if process_info is not None:
         metadata["process_info"] = process_info
+    if terminal_log is not None:
+        diagnostic = read_terminal_diagnostic(terminal_log)
+        metadata["terminal_diagnostic"] = {
+            "kind": diagnostic.kind,
+            "matched_pattern": diagnostic.matched_pattern,
+            "clean_excerpt": diagnostic.clean_excerpt,
+            "clean_tail": diagnostic.clean_tail,
+        }
+    if close_error is not None:
+        metadata["close_error"] = close_error
     if layout is not None:
         metadata["layout_target_pane"] = origin_pane
         metadata["split_target_pane"] = layout.split_target_pane
         metadata["split_direction"] = layout.direction
         metadata["kaji_agent_panes_before"] = layout.panes_before
         metadata["kaji_agent_panes_pruned"] = layout.panes_pruned
+        metadata["kaji_agent_panes_skipped"] = layout.panes_skipped
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")

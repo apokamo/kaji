@@ -34,7 +34,7 @@ terminal backend = `tmux` 単一の実現性を確定し、本版を承認に確
 | v1 | 2026-06-05 | terminal backend = `kitty` 単一 | GUI ウィンドウを spawn して並列可視性を得る前提。`/proc` cmdline scan による cleanup、util-linux `script(1)` による transcript |
 | v2 | 2026-06-06 | terminal backend = `tmux` 単一 | 「kaji を tmux 内で起動 → runner が `split-window` で pane 追加」で**並列可視性をディスプレイ無しで再現できる**と判明し、v1 の前提が崩れたため改訂 |
 | v3 | 2026-06-08 | pane 配置を「初回右・以後右列内・最大2枚」に変更、最小 tmux を 3.1 に引き上げ | v2 の「毎 step で現在 pane の右に追加」は `close_on_verdict=false` で pane を残すと横幅が step ごとに狭くなる。Issue #238 で、初回のみ origin の右、2枚目以降は右列内の上下分割、右列の kaji 管理 pane を最大2枚に制限する配置へ更新。pane を kaji marker（pane user option）で識別するため最小 tmux を 3.1 に引き上げ |
-| v4 | 2026-08-21 | `tmux | herdr`を明示選択可能にし、既定tmuxを維持 | Issue #396。Herdr 0.8.2 / protocol 20のCLI、caller-context guard、metadata ownership token、rendered snapshotを採用 |
+| v4 | 2026-08-21 | `tmux` \| `herdr`を明示選択可能にし、既定tmuxを維持 | Issue #396。Herdr 0.8.2 / protocol 20のCLI、caller-context guard、metadata ownership token、rendered snapshotを採用 |
 
 v2 / v3 は v1 の **runner 抽象・verdict 解決経路・session 継続方針を維持**し、terminal backend の実体だけを
 `kitty` → `tmux` に差し替える。`agent_runner = "interactive_terminal"` という設定面・workflow 契約・
@@ -51,6 +51,8 @@ ADR 005 artifact-primary verdict 解決は不変。v3 は v2 の pane 配置契�
   `--ttl-ms`を省略し、置換・明示消去・pane closeまで保持するHerdr契約を利用する。close/pruneは
   exact paneを再取得しorigin/run一致を確認した場合だけ行う。marker設定失敗時はunowned paneを閉じない。
 - 配置はtmuxと同じ初回右・以後右列内の下分割・最大2枚。layoutのy座標で上側を最古としてpruneする。
+  past-run候補のrun token / layout欠落やclose直前のownership不一致は、そのpaneをskipしてwarningと
+  `kaji_agent_panes_skipped`へ残す。一時的に2枚を超えても、不確かなpaneを閉じたりstepを中断したりしない。
 - 完了authorityは引き続きfilesystem `verdict.yaml`。Herdr process/status/outputは早期終了診断にだけ使う。
   `process-info`のoptional fieldが欠落・null・型不正の場合はliveness unknownとし、shell復帰確認へ
   加算しない。fieldを完全に検証できたshell-only観測が3回連続した場合だけ早期終了とする。
@@ -58,6 +60,8 @@ ADR 005 artifact-primary verdict 解決は不変。v3 は v2 の pane 配置契�
   transcript保証を持たない。kind / availability / truncation / revisionをmetadataへ残す。
 - timeoutと確認済みshell復帰ではtmux backendと同じ異常終了session解決規則をcleanup前に適用する。
   Herdrのshell復帰はagent process終了を意味するため、session解決上は`pane-dead`として扱う。
+  verdict / pane run失敗 / timeout / shell復帰のcleanupはbest-effortとし、close失敗はwarningと
+  `close_error`へ残すが、verdictや元の例外、解決済みsession情報を置換しない。
   利用者のCtrl-Cではpaneを閉じず、ownershipとrendered snapshotをmetadataへbest-effort保存して
   `KeyboardInterrupt`を再送出する。metadata保存失敗で元の中断を置換しない。
 - agent→pane→kajiの追加経路はrelease-matched Herdr skill + repository `herdr-kaji-launch` skillを使う。

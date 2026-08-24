@@ -105,12 +105,12 @@ definition. `validate-series` and `run-series --dry-run` do not create the direc
 
 | key | Required/Optional | Type | Default | Validation | Source |
 |-----|-------------------|------|---------|------------|--------|
-| `default_timeout` | Required | int | — (unset is an error) | Integer `> 0` (bool not allowed) | `config.py:226-238` |
-| `agent_runner` | Optional | `"headless"` \| `"interactive_terminal"` | `"headless"` | Out-of-enum is `ConfigLoadError` | `config.py:240-251` |
+| `default_timeout` | Required | int | — (unset is an error) | Integer `> 0` (bool not allowed) | `config.py:227-239` |
+| `agent_runner` | Optional | `"headless"` \| `"interactive_terminal"` | `"headless"` | Out-of-enum is `ConfigLoadError` | `config.py:241-252` |
 | `interactive_terminal_backend` | Optional | `"tmux"` \| `"herdr"` | `"tmux"` | Out-of-enum is `ConfigLoadError` | `config.py:254-266` |
 | `interactive_terminal_close_on_verdict` | Optional | bool | `true` | Non-bool is `ConfigLoadError` | `config.py:268-275` |
-| `failure_triage` | Optional | bool | `true` | Non-bool is `ConfigLoadError` | `config.py:261-268` |
-| `auto_recover` | Optional | bool | `false` | Non-bool is `ConfigLoadError` | `config.py:261-268` |
+| `failure_triage` | Optional | bool | `true` | Non-bool is `ConfigLoadError` | `config.py:276-291` |
+| `auto_recover` | Optional | bool | `false` | Non-bool is `ConfigLoadError` | `config.py:276-291` |
 
 - `agent_runner` selects whether agent steps launch via a headless CLI or an interactive CLI inside a
   terminal pane. `interactive_terminal_backend` selects `tmux` or `herdr`; it is inert for the

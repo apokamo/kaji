@@ -285,14 +285,19 @@ verdict, and session-state contracts with the backend-specific differences below
 
 1. Preflight validates `HERDR_ENV=1` and `HERDR_PANE_ID` before resolving the binary, then validates Herdr >= 0.8.2 and an exact `pane current --current` match.
 2. Kaji reads token-owned panes and origin layout. It opens the first pane to the right, later panes
-   downward, and keeps at most two. Prune re-reads current origin/run tokens before closing.
+   downward, and keeps at most two. Prune re-reads current origin/run tokens before closing. A stale
+   candidate with a missing run token/layout or changed ownership is skipped; kaji logs a warning and
+   records its ID in `kaji_agent_panes_skipped` instead of blocking every later step.
 3. Split uses explicit cwd and `--no-focus`. Kaji marks the response-derived pane before running the
    packaged wrapper. Marker failure leaves the unowned pane untouched and fails loud.
 4. `verdict.yaml` is the only completion trigger. Foreground process observations only detect a
    command that returned to its shell early; output/status text never completes a step. Missing or
    malformed optional process fields are treated as unknown and never count as a confirmed shell return.
-5. At verdict, early exit, or timeout, kaji saves a best-effort rendered snapshot. Verdict cleanup
-   obeys `interactive_terminal_close_on_verdict`; failure cleanup remains ownership-checked.
+5. At verdict, pane-run failure, early exit, or timeout, kaji saves a best-effort rendered snapshot.
+   Verdict cleanup obeys `interactive_terminal_close_on_verdict`; failure cleanup remains
+   ownership-checked. A close failure is a warning recorded as `close_error` and never replaces the
+   verdict, the original failure/timeout, or its resolved session. Early-exit metadata also includes
+   the structured `terminal_diagnostic`; its message warns that a rendered snapshot may be incomplete.
 6. An operator Ctrl-C leaves the agent pane open, records its ownership and rendered snapshot in
    `pane-metadata.json`, and re-raises `KeyboardInterrupt`. If snapshot persistence fails, the
    original interrupt still wins. Close the orphan manually with `herdr pane close <pane_id>` after
@@ -315,9 +320,11 @@ open. Plugins remain an optional human launcher UX, not a core dependency.
   `terminal.log`. If unavailable, it scans `CODEX_HOME/sessions/**/*.jsonl`, then
   `~/.codex/sessions/**/*.jsonl`, in descending mtime and adopts the UUID from a
   rollout file that contains the attempt's `prompt.txt` / `verdict.yaml` path.
-  Resume steps launch `codex resume <uuid>`. A Codex fresh run whose session id
-  was not resolved may wait through a collection grace period (<=5s) after
-  verdict detection.
+  Resume steps launch `codex resume <uuid>`. The tmux backend may wait through a
+  collection grace period (<=5s) and re-scan after cleanup. The Herdr backend deliberately performs
+  one rendered snapshot plus the session-store fallback without that grace: this avoids adding up to
+  five seconds to every Herdr verdict, and the real Herdr 0.8.2 Codex run resolved its session with
+  this path.
 - **Antigravity**: no public session ID is collected. The result always carries
   `session_id=None`, and workflow `resume:` is rejected before launch.
 

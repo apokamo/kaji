@@ -245,13 +245,17 @@ backend固有差分だけを後段に示す。
 
 1. binary解決前に`HERDR_ENV=1`と`HERDR_PANE_ID`を検証し、その後Herdr >= 0.8.2と`pane current --current`のexact一致をpreflightする。
 2. token所有paneとorigin layoutを読み、初回は右、以後は下へsplitし最大2枚に保つ。prune前に
-   current origin/run tokenを再取得する。
+   current origin/run tokenを再取得する。run token / layout欠落またはownership変化がある古い候補は
+   stepを止めずskipし、warningと`kaji_agent_panes_skipped`へpane IDを残す。
 3. 明示cwdと`--no-focus`でsplitし、response由来paneをmarker付与してからwrapperを起動する。
    marker失敗時はunowned paneを閉じずfail-loudする。
 4. 完了triggerは`verdict.yaml`のみ。foreground processは早期shell復帰の診断にだけ使い、
    output/status文字列ではstepを完了しない。optional process fieldの欠落・型不正はunknownとして扱い、
    shell復帰確認へ加算しない。
-5. verdict / 早期終了 / timeout時にrendered snapshotをbest-effort保存する。cleanupはownershipを再確認する。
+5. verdict / pane run失敗 / 早期終了 / timeout時にrendered snapshotをbest-effort保存する。cleanupは
+   ownershipを再確認する。close失敗はwarningと`close_error`へ記録し、verdict、元の失敗/timeout、
+   解決済みsessionを置換しない。早期終了metadataには構造化`terminal_diagnostic`も残し、失敗詳細には
+   rendered snapshotが不完全な可能性を明記する。
 6. 利用者のCtrl-Cではagent paneを閉じず、ownershipとrendered snapshotを`pane-metadata.json`へ
    記録して`KeyboardInterrupt`を再送出する。snapshot保存に失敗しても元の中断を優先する。
    状態確認後、孤児paneは`herdr pane close <pane_id>`で手動cleanupする。
@@ -271,8 +275,9 @@ kaji paneは対話用に残す。pluginは任意の人間向けlauncher UXであ
 - **Codex**: fresh run 後、runner は `terminal.log` の `codex resume <uuid>` を抽出する。取れない
   場合は `CODEX_HOME/sessions/**/*.jsonl` → `~/.codex/sessions/**/*.jsonl` を mtime 降順に走査し、
   当該 attempt の `prompt.txt` / `verdict.yaml` path を含む rollout file の UUID を採用する。
-  resume step では `codex resume <uuid>` で起動する。session id 未解決の Codex fresh では、verdict
-  検知後に回収 grace（≤5s）を挟むことを許容する。
+  resume step では `codex resume <uuid>` で起動する。tmux backendはverdict検知後に回収grace（≤5s）と
+  cleanup後の再走査を行いうる。Herdr backendは各verdictへ最大5秒を追加しないため、意図的にrendered
+  snapshot 1回とsession store fallbackだけを使う。実Herdr 0.8.2のCodex runではこの経路で解決済み。
 - **Antigravity**: 公開 session ID を取得しない。result は常に `session_id=None` で、
   workflow の `resume:` は起動前に拒否する。
 

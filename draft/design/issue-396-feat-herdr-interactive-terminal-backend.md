@@ -138,7 +138,7 @@ defaultを `tmux` にし、既存直接呼び出しtestの互換を保つ。runn
 ```json
 {
   "backend": "herdr",
-  "herdr_version": "0.8.2",
+  "herdr_version": "herdr 0.8.2",
   "pane_id": "w1:p2",
   "origin_pane": "w1:p1",
   "marker_confirmed": true,
@@ -221,7 +221,8 @@ paneを閉じるauthorityは、次の2経路を区別する。
 2. **past-run prune**: origin workspaceを明示した`pane list` responseに含まれ、
    `kaji_origin == origin`と非空の`kaji_run`を持つ右列paneだけをmanaged候補にする。対象pane IDと
    list responseから得たrun tokenをclose直前の`pane get`で再確認し、exact一致する場合だけcloseする。
-   markerなし、別origin、originと同じ列、layout欠落、不一致のpaneはpruneしない。
+   markerなし、別origin、originと同じ列、layout欠落、不一致のpaneはpruneしない。run token / layout欠落や
+   close直前の不一致は候補をskipしてwarningと`kaji_agent_panes_skipped`へ残し、stepは継続する。
 
 `pane list --workspace <origin workspace>` から `tokens.kaji_origin == origin` のpaneだけを管理対象にする。
 layout snapshotの `rect.y` / `rect.x` で右列内の順序を決め、tmux版と同じく最大2枚を維持する。
@@ -300,6 +301,8 @@ terminal observer frame再構成とportable PTY recorderはMVP対象外。完全
 
 official Herdr integrationと`agent_session`はoptional enhancementとして初期実装に採用しない。未installでも
 既存fallbackだけでfresh/resumeが成立することを実機受入条件とし、Claude/Codexで確認済み。
+tmuxのverdict経路にある最大5秒の回収graceとcleanup後の再走査はHerdrには適用しない。Herdrはrendered
+snapshot 1回とstore fallbackで解決し、各verdictへの待ち時間追加を避ける。
 
 ### 8. close / retain / timeout
 
@@ -307,6 +310,9 @@ official Herdr integrationと`agent_session`はoptional enhancementとして初�
 - verdict + `false`: paneを残す。Herdrではagent終了後shellへ戻るためtmuxの`[dead]`表示と同一ではない
 - early exit: diagnostic capture後、origin/run ownershipを再確認できたresponse paneだけをcloseする
 - timeout: diagnostic / metadata capture後、marker一致paneだけをclose
+
+closeはすべてownership-safeかつbest-effortとする。close失敗はwarningとmetadataの`close_error`へ残すが、
+verdict、pane runの元例外、早期終了、`StepTimeoutError`、それぞれのsession解決結果を置換しない。
 
 real timeout / forced close / server stop / session deleteは破壊的検証として後段に分ける。
 
@@ -349,12 +355,12 @@ plugin v1はruntime argv pane registrationを持たないため、core runnerの
 | server停止 / incompatible | `CLIExecutionError` |
 | JSON不正 / required ID欠落 | `CLIExecutionError`、作成済みpaneが判明する場合のみcleanup |
 | marker設定 / exact readback失敗 | ownership未確認paneをcloseせずfail-loud |
-| verdict前にforegroundがshellへ復帰 | transcript snapshot + metadata後fail-loud |
+| verdict前にforegroundがshellへ復帰 | transcript snapshot + 構造化diagnostic metadata後fail-loud。rendered snapshotの不完全性を明記 |
 | verdict前agent消失 | transcript diagnostic付き`CLIExecutionError` |
 | process field欠落 / null / 型不正 / 空list | liveness `unknown`。shell-only連続回数をresetし、polling継続 |
 | process-info query失敗 / container欠落・型不正 | `CLIExecutionError`。liveness未確認のためpaneを自動closeしない |
 | read失敗 | metadataへ記録。verdictがあれば成功をmaskしない |
-| timeout | diagnostic capture + safe close後`StepTimeoutError` |
+| timeout | diagnostic capture + safe close後`StepTimeoutError`。close失敗は記録するがtimeoutを置換しない |
 
 ## security / safety
 

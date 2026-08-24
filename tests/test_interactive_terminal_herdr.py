@@ -22,6 +22,7 @@ from kaji_harness.interactive_terminal_herdr import (
     HerdrPaneRead,
     _build_herdr_marker_argv,
     _build_herdr_split_argv,
+    _capture_herdr_snapshot,
     _classify_herdr_process_liveness,
     _close_owned_herdr_pane,
     _get_herdr_process_info,
@@ -150,7 +151,6 @@ class TestHerdrCommandContract:
         monkeypatch.setenv("PATH", "/experiment/fake-bin:/usr/bin")
         assert _build_herdr_split_argv(
             "/usr/bin/herdr",
-            origin_pane="w1:p1",
             split_target_pane="w1:p4",
             direction="down",
             workdir=tmp_path,
@@ -166,8 +166,6 @@ class TestHerdrCommandContract:
             "--cwd",
             str(tmp_path),
             "--no-focus",
-            "--env",
-            "KAJI_HERDR_ORIGIN_PANE=w1:p1",
             "--env",
             "PATH=/experiment/fake-bin:/usr/bin",
         ]
@@ -649,9 +647,10 @@ class TestHerdrCommandContract:
                 side_effect=[pane_list, layout],
             ) as run_json,
         ):
-            panes = _list_managed_herdr_panes("/usr/bin/herdr", "w1:p1")
+            panes, skipped = _list_managed_herdr_panes("/usr/bin/herdr", "w1:p1")
 
         assert panes == [HerdrManagedPane("w1:p2", y=20, run_id="right-run")]
+        assert skipped == []
         assert run_json.call_args_list[0].args[1] == [
             "pane",
             "list",
@@ -671,7 +670,7 @@ class TestHerdrCommandContract:
         with (
             patch(
                 "kaji_harness.interactive_terminal_herdr._list_managed_herdr_panes",
-                return_value=panes,
+                return_value=(panes, []),
             ),
             patch(
                 "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
@@ -695,6 +694,54 @@ class TestHerdrCommandContract:
         ]
         assert launch.panes_before == ["w1:p2", "w1:p3"]
         assert launch.panes_pruned == ["w1:p2"]
+        assert launch.panes_skipped == []
+
+    def test_launch_skips_prune_candidate_when_ownership_changes(self, tmp_path: Path) -> None:
+        panes = [
+            HerdrManagedPane("w1:p2", y=0, run_id="old"),
+            HerdrManagedPane("w1:p3", y=20, run_id="new"),
+        ]
+        response = {
+            "result": {"type": "pane_info", "pane": {"pane_id": "w1:p4"}},
+        }
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._list_managed_herdr_panes",
+                return_value=(panes, []),
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
+                return_value=False,
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._run_herdr_json",
+                return_value=response,
+            ),
+        ):
+            launch = _launch_herdr_pane("/usr/bin/herdr", "w1:p1", workdir=tmp_path)
+
+        assert launch.panes_pruned == []
+        assert launch.panes_skipped == ["w1:p2"]
+
+    @pytest.mark.parametrize("pane_id", [None, "", "w1:p1"])
+    def test_launch_rejects_missing_empty_or_origin_split_pane_id(
+        self, tmp_path: Path, pane_id: object
+    ) -> None:
+        response = {
+            "result": {"type": "pane_info", "pane": {"pane_id": pane_id}},
+        }
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._list_managed_herdr_panes",
+                return_value=([], []),
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._run_herdr_json",
+                return_value=response,
+            ),
+            pytest.raises(CLIExecutionError, match="omitted a pane ID|invalid pane ID"),
+        ):
+            _launch_herdr_pane("/usr/bin/herdr", "w1:p1", workdir=tmp_path)
 
     @pytest.mark.parametrize("workspace_id", [None, ""])
     def test_managed_pane_listing_rejects_missing_or_empty_workspace(
@@ -745,14 +792,13 @@ class TestHerdrCommandContract:
                 side_effect=[pane_list, layout],
             ),
         ):
-            panes = _list_managed_herdr_panes("/usr/bin/herdr", "w1:p1")
+            panes, skipped = _list_managed_herdr_panes("/usr/bin/herdr", "w1:p1")
 
         assert panes == []
+        assert skipped == []
 
     @pytest.mark.parametrize("run_token", [None, ""])
-    def test_managed_pane_listing_rejects_missing_or_empty_run_token(
-        self, run_token: object
-    ) -> None:
+    def test_managed_pane_listing_skips_missing_or_empty_run_token(self, run_token: object) -> None:
         pane_list = {
             "result": {
                 "type": "pane_list",
@@ -784,9 +830,92 @@ class TestHerdrCommandContract:
                 "kaji_harness.interactive_terminal_herdr._run_herdr_json",
                 side_effect=[pane_list, layout],
             ),
-            pytest.raises(CLIExecutionError, match="missing run token"),
+        ):
+            panes, skipped = _list_managed_herdr_panes("/usr/bin/herdr", "w1:p1")
+
+        assert panes == []
+        assert skipped == ["w1:p2"]
+
+    def test_managed_pane_listing_skips_owned_pane_missing_from_layout(self) -> None:
+        pane_list = {
+            "result": {
+                "type": "pane_list",
+                "panes": [
+                    {
+                        "pane_id": "w1:p2",
+                        "tokens": {"kaji_origin": "w1:p1", "kaji_run": "run-1"},
+                    }
+                ],
+            }
+        }
+        layout = {
+            "result": {
+                "type": "pane_layout",
+                "layout": {
+                    "panes": [
+                        {"pane_id": "w1:p1", "rect": {"x": 0, "y": 0}},
+                    ]
+                },
+            }
+        }
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._get_herdr_pane",
+                return_value={"pane_id": "w1:p1", "workspace_id": "w1"},
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._run_herdr_json",
+                side_effect=[pane_list, layout],
+            ),
+        ):
+            panes, skipped = _list_managed_herdr_panes("/usr/bin/herdr", "w1:p1")
+
+        assert panes == []
+        assert skipped == ["w1:p2"]
+
+    @pytest.mark.parametrize("panes", [None, {}])
+    def test_managed_pane_listing_rejects_malformed_pane_list(self, panes: object) -> None:
+        pane_list = {"result": {"type": "pane_list", "panes": panes}}
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._get_herdr_pane",
+                return_value={"pane_id": "w1:p1", "workspace_id": "w1"},
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._run_herdr_json",
+                return_value=pane_list,
+            ),
+            pytest.raises(CLIExecutionError, match="pane_list omitted panes"),
         ):
             _list_managed_herdr_panes("/usr/bin/herdr", "w1:p1")
+
+    @pytest.mark.parametrize("layout", [None, {}, {"panes": None}])
+    def test_managed_pane_listing_rejects_malformed_layout(self, layout: object) -> None:
+        pane_list = {"result": {"type": "pane_list", "panes": []}}
+        pane_layout = {"result": {"type": "pane_layout", "layout": layout}}
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._get_herdr_pane",
+                return_value={"pane_id": "w1:p1", "workspace_id": "w1"},
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._run_herdr_json",
+                side_effect=[pane_list, pane_layout],
+            ),
+            pytest.raises(CLIExecutionError, match="pane_layout omitted panes"),
+        ):
+            _list_managed_herdr_panes("/usr/bin/herdr", "w1:p1")
+
+    def test_snapshot_read_failure_is_best_effort(self, tmp_path: Path) -> None:
+        terminal_log = tmp_path / "terminal.log"
+        with patch(
+            "kaji_harness.interactive_terminal_herdr._read_herdr_pane",
+            side_effect=CLIExecutionError("interactive_terminal", 1, "pane read rejected"),
+        ):
+            pane_read = _capture_herdr_snapshot("/usr/bin/herdr", "w1:p2", terminal_log)
+
+        assert pane_read is None
+        assert not terminal_log.exists()
 
     @pytest.mark.parametrize(
         ("pane_id", "origin_pane", "run_id"),
@@ -954,6 +1083,107 @@ class TestExecuteHerdr:
         assert metadata["transcript_kind"] == "rendered_recent_unwrapped_snapshot"
         assert metadata["transcript_truncated"] is False
 
+    def test_verdict_result_survives_cleanup_failure(self, tmp_path: Path) -> None:
+        prompt_path = tmp_path / "prompt.txt"
+        verdict_path = tmp_path / "verdict.yaml"
+        prompt_path.write_text("do work", encoding="utf-8")
+        verdict_path.write_text("status: PASS\nreason: ok\nevidence: ok\n", encoding="utf-8")
+        step = Step(id="design", skill="design", agent="claude")
+        cleanup_error = CLIExecutionError(
+            "interactive_terminal", 1, "Herdr pane close was not confirmed: w1:p2"
+        )
+
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._preflight_herdr",
+                return_value=("/usr/bin/herdr", "w1:p1", "herdr 0.8.2"),
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._launch_herdr_pane",
+                return_value=HerdrPaneLaunch(
+                    pane_id="w1:p2",
+                    split_target_pane="w1:p1",
+                    direction="right",
+                    panes_before=[],
+                    panes_pruned=[],
+                ),
+            ),
+            patch("kaji_harness.interactive_terminal_herdr._mark_herdr_pane"),
+            patch("kaji_harness.interactive_terminal_herdr._run_herdr_pane_command"),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._capture_herdr_snapshot",
+                return_value=None,
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
+                side_effect=cleanup_error,
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr.uuid.uuid4",
+                side_effect=["run-id", "launch-session-id"],
+            ),
+        ):
+            result = execute_interactive_terminal_herdr(
+                step=step,
+                prompt_path=prompt_path,
+                verdict_path=verdict_path,
+                workdir=tmp_path,
+                timeout=30,
+            )
+
+        assert result.session_id == "launch-session-id"
+        metadata = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
+        assert "close was not confirmed" in metadata["close_error"]
+
+    def test_pane_run_failure_survives_cleanup_failure(self, tmp_path: Path) -> None:
+        prompt_path = tmp_path / "prompt.txt"
+        prompt_path.write_text("do work", encoding="utf-8")
+        step = Step(id="design", skill="design", agent="codex")
+        run_error = CLIExecutionError("interactive_terminal", 7, "pane run rejected")
+        cleanup_error = CLIExecutionError("interactive_terminal", 8, "pane close rejected")
+
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._preflight_herdr",
+                return_value=("/usr/bin/herdr", "w1:p1", "herdr 0.8.2"),
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._launch_herdr_pane",
+                return_value=HerdrPaneLaunch(
+                    pane_id="w1:p2",
+                    split_target_pane="w1:p1",
+                    direction="right",
+                    panes_before=[],
+                    panes_pruned=[],
+                ),
+            ),
+            patch("kaji_harness.interactive_terminal_herdr._mark_herdr_pane"),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._run_herdr_pane_command",
+                side_effect=run_error,
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._capture_herdr_snapshot",
+                return_value=None,
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
+                side_effect=cleanup_error,
+            ),
+            pytest.raises(CLIExecutionError, match="pane run rejected") as exc_info,
+        ):
+            execute_interactive_terminal_herdr(
+                step=step,
+                prompt_path=prompt_path,
+                verdict_path=tmp_path / "verdict.yaml",
+                workdir=tmp_path,
+                timeout=30,
+            )
+
+        assert exc_info.value.returncode == 7
+        metadata = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
+        assert "pane close rejected" in metadata["close_error"]
+
     def test_marker_failure_does_not_close_unowned_pane(self, tmp_path: Path) -> None:
         prompt_path = tmp_path / "prompt.txt"
         prompt_path.write_text("do work", encoding="utf-8")
@@ -1029,7 +1259,9 @@ class TestExecuteHerdr:
             ),
             patch(
                 "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
-                return_value=True,
+                side_effect=CLIExecutionError(
+                    "interactive_terminal", 1, "Herdr pane close was not confirmed: w1:p2"
+                ),
             ) as close,
             patch(
                 "kaji_harness.interactive_terminal_herdr.time.monotonic",
@@ -1048,6 +1280,10 @@ class TestExecuteHerdr:
 
         close.assert_called_once()
         assert exc_info.value.session_resolution == SessionResolution(None)
+        assert "rendered snapshot may be incomplete" in exc_info.value.stderr
+        metadata = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
+        assert metadata["terminal_diagnostic"]["kind"] == "no_log"
+        assert "close was not confirmed" in metadata["close_error"]
 
     def test_timeout_captures_metadata_and_closes_owned_pane(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1082,7 +1318,9 @@ class TestExecuteHerdr:
             ) as capture,
             patch(
                 "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
-                return_value=True,
+                side_effect=CLIExecutionError(
+                    "interactive_terminal", 124, "Herdr command timed out: pane close"
+                ),
             ) as close,
             patch(
                 "kaji_harness.interactive_terminal_herdr.time.monotonic",
@@ -1113,6 +1351,8 @@ class TestExecuteHerdr:
         assert metadata["close_on_verdict"] is True
         assert metadata["transcript_revision"] == 9
         assert metadata["transcript_truncated"] is True
+        assert metadata["terminal_diagnostic"]["kind"] == "no_log"
+        assert "pane close" in metadata["close_error"]
         assert exc_info.value.session_resolution == SessionResolution(None)
 
     def test_fresh_claude_timeout_carries_launch_session_resolution(self, tmp_path: Path) -> None:
