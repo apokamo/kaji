@@ -795,6 +795,7 @@ def test_cycle_exhausted_keeps_triage_but_suppresses_incident(tmp_path: Path) ->
     assert _occurrence_comments(provider) == []
     assert provider.searches == []
     assert provider.created == []
+    assert provider.comment_lists == []
     assert not occurrences_path(tmp_path / ".kaji-artifacts").exists()
     events = [json.loads(x) for x in (run_dir / "run.log").read_text().splitlines()]
     suppressed = [e for e in events if e["event"] == "incident_suppressed"]

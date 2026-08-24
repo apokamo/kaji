@@ -521,7 +521,11 @@ class RecoveryHandler:
         する（GitHub 起票の成否と無関係）。
         """
         try:
-            # Issue #322: 調査を要さない既知のユーザー前提エラーは incident 記録の対象外。
+            # INCIDENT_EXEMPT_CAUSES に属する cause は incident 記録の対象外。
+            # - Issue #322: 調査を要さない既知のユーザー前提エラー（user_precondition_error）
+            # - Issue #403: 利用者による中断（user_interrupted）
+            # - Issue #405: agent の正規 ABORT / cycle 上限到達（agent_declared_abort /
+            #   cycle_exhausted）。契約上の正常終端であり障害ではない
             # ``append_occurrence`` より前に抜ける（occurrences.jsonl は backfill の入力でも
             # あるため、1 行でも残すと後から incident を再生成しうる）。
             if classification.cause in INCIDENT_EXEMPT_CAUSES:

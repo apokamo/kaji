@@ -165,9 +165,10 @@ error message. A missing tmux binary, an insufficient tmux version, a missing `T
 every other `CLINotFoundError` keep their existing incident recording behavior.
 
 `agent_declared_abort` and `cycle_exhausted` end without an exception, so the identity signature's
-canonical input is always empty and the fingerprint degenerates to a per-cause constant. Without
-this exemption, unrelated safe stops across different causes and steps would all collapse into a
-single incident Issue (Issue #405).
+canonical input is always empty and the fingerprint degenerates to a per-cause constant. `cause` is
+itself part of the match key, so the two causes never collapse into each other. Without this
+exemption, unrelated safe stops that share a cause — regardless of their step or actual stop
+reason — would all collapse into a single incident Issue per cause (Issue #405).
 
 An interrupted run ends with `workflow_end status=ERROR`, so `kaji recover` can select it as a triage
 target (`user_interrupted` maps to the `comment_only` decision; it is never auto-resumed). The

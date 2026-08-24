@@ -72,8 +72,9 @@ triage コメント・run artifact・console 表示は維持され、失われ�
 
 `agent_declared_abort` / `cycle_exhausted` は例外を伴わない終端のため、識別署名の
 canonical input（`attempt_error` / `workflow_end_error`）が常に空になり、fingerprint が
-cause ごとの定数へ退化する。除外前はこの退化により、原因も対象 step も異なる安全停止が
-すべて 1 つの incident イシューへ誤って集約されていた（Issue #405）。
+cause ごとの定数へ退化する。`cause` 自体は照合キーに含まれるため、この 2 cause 同士が
+混ざることはない。除外前はこの退化により、同じ cause 内で対象 step や実際の停止理由が
+異なる安全停止が、cause ごとに 1 つの incident イシューへ誤って集約されていた（Issue #405）。
 
 ## 遷移の機械強制はしない
 

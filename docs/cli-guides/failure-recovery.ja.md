@@ -141,9 +141,10 @@ kaji recover .kaji/wf/official/dev.yaml 288 --run-id 260710120000
 `CLINotFoundError` は従来どおり incident 記録の対象。
 
 `agent_declared_abort` / `cycle_exhausted` は例外を伴わない終端のため、識別署名の
-canonical input が常に空になり、fingerprint が cause ごとの定数へ退化する。除外しない場合、
-原因も対象 step も異なる安全停止がすべて 1 つの incident イシューへ誤って集約される
-（Issue #405）。
+canonical input が常に空になり、fingerprint が cause ごとの定数へ退化する。`cause` 自体は
+照合キーに含まれるため、この 2 cause 同士が混ざることはない。除外しない場合、同じ cause
+内で対象 step や実際の停止理由が異なる安全停止が、cause ごとに 1 つの incident イシューへ
+誤って集約される（Issue #405）。
 
 中断した run は `workflow_end status=ERROR` として終端されるため、`kaji recover` の triage
 対象として選択できる（`user_interrupted` の decision は `comment_only` で、自動再開はしない）。
