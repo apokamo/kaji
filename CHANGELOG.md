@@ -6,6 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-08-25
+
+This release adds Herdr as an interactive-terminal backend and improves the
+recovery evidence and incident handling for abnormal interactive workflow
+termination.
+
+### Added
+
+- Added a Herdr 0.8.2+ backend for `interactive_terminal` steps, selectable
+  with `[execution].interactive_terminal_backend = "herdr"`. The existing
+  tmux backend remains the default. The integration covers pane lifecycle and
+  ownership, agent launch, verdict collection, cleanup, and recovery (#396,
+  #412).
+
+### Fixed
+
+- Persist recoverable Codex session IDs when an interactive workflow times out
+  or its pane exits unexpectedly, record user interruption as an explicit
+  workflow error, and include session and orphan-pane evidence in recovery
+  reports (#403, #404).
+- Exclude the normal safety-stop causes `agent_declared_abort` and
+  `cycle_exhausted` from incident creation and occurrence recording while
+  preserving triage output and run artifacts (#405, #410).
+
 ## [0.19.0] - 2026-08-22
 
 This release removes the deprecated `inject_verdict` workflow field, adds the
