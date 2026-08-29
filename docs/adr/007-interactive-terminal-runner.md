@@ -53,7 +53,9 @@ ADR 005 artifact-primary verdict 解決は不変。v3 は v2 の pane 配置契�
 - ownership確認後、継承PATHと長いwrapper argvをattempt-local `herdr-launcher.sh`へmode `0700`で
   atomic publishする。fresh paneへは`<launcher path>`という短いchild commandを一度だけ送る。
   Herdrが公開しないshell input modeをreadiness markerから推測せず、長文PTY input自体を除去する。
-  launcher作成またはpane run失敗は同じownership確認済みcleanupへ進む。
+  launcherがprivateなstart markerをatomic publishするまでboundedに待ち、marker確認前のshell-onlyは
+  agent終了として数えない。timeoutは最後のprocess stateを含むdispatch errorとし、launcher作成・
+  pane run失敗と同じownership確認済みcleanupへ進む。
 - 配置はtmuxと同じ初回右・以後右列内の下分割・最大2枚。layoutのy座標で上側を最古としてpruneする。
   past-run候補のrun token / layout欠落やclose直前のownership不一致は、そのpaneをskipしてwarningと
   `kaji_agent_panes_skipped`へ残す。一時的に2枚を超えても、不確かなpaneを閉じたりstepを中断したりしない。

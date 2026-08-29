@@ -251,7 +251,9 @@ backend固有差分だけを後段に示す。
    private（mode `0700`）な`herdr-launcher.sh`をatomic publishし、paneには短い
    `<launcher path>`という短いchild commandだけを一度送る。shell processはliveness判定のためpaneに残し、
    継承PATHと長いwrapper argvはlauncher内に置くため、fresh shellの観測不能なinput modeへ正しさを
-   依存させない。launcher作成またはpane run失敗時はownership確認済みpaneを
+   依存させない。launcherはwrapper起動前にprivateなstart markerをatomic publishし、kajiはboundedに
+   markerを待つ。marker前のshell-only観測はagent終了として数えない。launcher作成、pane run、または
+   start確認失敗時はownership確認済みpaneを
    cleanupしてfail-loudする。ownership marker失敗時はunowned paneを閉じない。
 4. 完了triggerは`verdict.yaml`のみ。foreground processは早期shell復帰の診断にだけ使い、
    output/status文字列ではstepを完了しない。optional process fieldの欠落・型不正はunknownとして扱い、

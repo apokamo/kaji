@@ -292,8 +292,10 @@ verdict, and session-state contracts with the backend-specific differences below
    a private (`0700`) `herdr-launcher.sh` in the attempt directory, and sends only the short
    `<launcher path>` child command once. The shell remains the pane's shell process for liveness
    checks, while the inherited PATH and long wrapper argv stay in the launcher. Correctness therefore
-   does not depend on a fresh shell's unobservable input mode. Launcher creation or
-   pane-run failure cleans up the owned pane and fails loud. Ownership marker failure leaves the
+   does not depend on a fresh shell's unobservable input mode. The launcher atomically publishes a
+   private start marker before the wrapper exec; kaji waits for it within a fixed bound and does not
+   count pre-marker shell-only observations as agent exit. Launcher creation, pane-run, or start
+   confirmation failure cleans up the owned pane and fails loud. Ownership marker failure leaves the
    unowned pane untouched.
 4. `verdict.yaml` is the only completion trigger. Foreground process observations only detect a
    command that returned to its shell early; output/status text never completes a step. Missing or

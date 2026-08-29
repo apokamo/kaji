@@ -18,9 +18,10 @@ review-code で再発した。run `260829181754` の `terminal.log` では wrapp
 
 ### Expected Behavior (EB)
 
-長い wrapper payload を fresh PTY input から除外する。pane には attempt-local launcher を `exec`
-する短い command を一度だけ送り、wrapper argv は file から shell process へ渡す。launcher 作成・
-dispatch に失敗した場合は既存の snapshot・ownership 再確認・best-effort cleanup 契約へ流す。
+長い wrapper payload を fresh PTY input から除外する。pane には attempt-local launcher pathだけを
+短い child command として一度送り、wrapper argv は file から渡す。launcher が atomic start markerを
+作るまでboundedに待ち、作成・dispatch・start確認に失敗した場合は既存のsnapshot・ownership再確認・
+best-effort cleanup契約へ流す。
 
 ## 根本原因
 
@@ -50,6 +51,8 @@ executable の POSIX shell script で、継承 PATH と shell-quoted wrapper arg
   と同じ process-visible 情報である。
 - ownership marker は launcher 作成より先に確認する。作成・dispatch failure は既存 cleanup 経路で
   扱い、cleanup error で元 error を置換しない。
+- launcher start marker確認前のshell-only観測はagent終了として数えない。markerを確定証跡、
+  `process-info`をtimeout診断として使い、bounded timeout後はfocused dispatch errorにする。
 - fixed sleep、prompt regex、pane revision、`process-info` は正しさの前提にしない。
 
 ## 変更スコープ
@@ -64,11 +67,14 @@ executable の POSIX shell script で、継承 PATH と shell-quoted wrapper arg
 
 1. 既存 `_build_wrapper_command()` で wrapper argv を shell quote する。
 2. attempt directory に `herdr-launcher.sh.tmp` を mode `0700` かつ exclusive create する。
-3. `#!/bin/sh` と `exec env PATH=... <wrapper command>` を書き、flush / fsync / atomic replace する。
+3. `#!/bin/sh`、privateなatomic start marker作成、`exec env PATH=... <wrapper command>`を書き、
+   flush / fsync / atomic replaceする。
 4. pane へ `<launcher path>` を child command として一回だけ `pane run` する。pane-level `exec` は
    Herdr の `shell_pid` を agent PID に変え、早期 shell 復帰を誤検知させるため使用しない。
 5. 旧 readiness marker / `wait-output` の二段階 dispatch は削除する。
-6. 以降の verdict polling、session resolution、snapshot、cleanup は変更しない。
+6. dispatch後、start markerをboundedに待つ。marker前のshell-onlyはstartup stateとして扱い、
+   timeout時は最後のprocess livenessを添えたfocused dispatch errorにする。
+7. marker確認後のverdict polling、3回連続shell-only、session resolution、snapshot、cleanupは変更しない。
 
 ## 重要判断 provenance
 
@@ -88,10 +94,13 @@ executable の POSIX shell script で、継承 PATH と shell-quoted wrapper arg
 - launcher mode が `0700`、temporary file から `os.replace` されること。
 - space を含む launcher path が quote され、pane command が短いこと。
 - launcher materialize error が focused `CLIExecutionError` になること。
+- marker前のshell-only観測を無視し、start marker確認で成功すること。
+- start marker timeoutがlast process stateを含むfocused `CLIExecutionError`になること。
 
 ### Medium
 
 - stateful fake Herdr が short command から launcher を読み、verdict、snapshot、exact close まで完走する。
+- published launcherをshebang経由で実行し、start markerとwrapper側artifactの両方が作られる。
 - launcher failure / pane dispatch failure で wrapper を実行せず、owned pane cleanup と元 error を保つ。
 - verdict success / timeout / early shell return / provider session の既存回帰を通す。
 

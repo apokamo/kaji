@@ -149,9 +149,12 @@ def main() -> NoReturn:
         if len(command) == 1:
             launcher_path = Path(command[0])
             launcher_lines = launcher_path.read_text(encoding="utf-8").splitlines()
-            if len(launcher_lines) != 2 or launcher_lines[0] != "#!/bin/sh":
+            if len(launcher_lines) < 2 or launcher_lines[0] != "#!/bin/sh":
                 _fail("launcher content is invalid")
-            command = shlex.split(launcher_lines[1])
+            launcher_path.with_name("herdr-launcher-started").write_text(
+                "fake-pid\n", encoding="utf-8"
+            )
+            command = shlex.split(launcher_lines[-1])
             if command and command[0] == "exec":
                 command = command[1:]
         if len(command) >= 2 and command[0] == "env" and command[1].startswith("PATH="):
@@ -166,21 +169,6 @@ def main() -> NoReturn:
         state["command"] = command
         _save_state(state)
         raise SystemExit(0)
-    if arguments[:3] == ["pane", "wait-output", "w1:p2"]:
-        try:
-            marker = arguments[arguments.index("--match") + 1]
-        except (ValueError, IndexError):
-            _fail("fake wait-output requires --match")
-        if state.get("shell_ready_marker") != marker:
-            _fail("fake shell readiness marker was not executed")
-        _save_state(state)
-        _respond(
-            {
-                "type": "output_matched",
-                "pane_id": "w1:p2",
-                "matched_line": marker,
-            }
-        )
     if arguments[:3] == ["pane", "read", "w1:p2"]:
         _save_state(state)
         print("fake interactive agent screen")
