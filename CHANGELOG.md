@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-08-30
+
+This patch release hardens Herdr startup on fresh panes and restores statusline
+reset-time compatibility with BSD `date`.
+
+### Fixed
+
+- Wait for a fresh Herdr pane's shell to become ready before dispatching a
+  short, attempt-local launcher; confirm the launcher start marker before
+  liveness polling, preserve shell-only liveness identity, and scope the
+  launcher's `umask` to its marker file (#415, #418).
+- Support BSD `date` when calculating the statusline reset time.
+
 ## [0.20.0] - 2026-08-25
 
 This release adds Herdr as an interactive-terminal backend and improves the
