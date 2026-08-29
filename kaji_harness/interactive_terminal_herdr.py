@@ -48,6 +48,9 @@ _TRANSCRIPT_LINES = 2000
 _HERDR_METADATA_SOURCE = "kaji"
 _MAX_VISIBLE_AGENT_PANES = 2
 _HERDR_COMMAND_TIMEOUT_SECONDS = 10
+_HERDR_LAUNCHER_START_TIMEOUT_SECONDS = 10
+_HERDR_LAUNCHER_START_POLL_INTERVAL_SECONDS = 0.1
+_HERDR_LAUNCHER_STARTED_FILENAME = "herdr-launcher-started"
 
 
 class _HerdrResultEnvelope(BaseModel):
@@ -183,7 +186,17 @@ def execute_interactive_terminal_herdr(
         execution_policy=execution_policy,
     )
     try:
-        _run_herdr_pane_command(herdr, pane_id, command, workdir=workdir)
+        launcher_path = prompt_path.parent / "herdr-launcher.sh"
+        pane_command = _materialize_herdr_launcher(
+            launcher_path,
+            command,
+        )
+        _run_herdr_pane_command(herdr, pane_id, pane_command, workdir=workdir)
+        _wait_for_herdr_launcher_start(
+            herdr,
+            pane_id,
+            _herdr_launcher_started_path(launcher_path),
+        )
     except CLIExecutionError:
         pane_read = _capture_herdr_snapshot(herdr, pane_id, terminal_log)
         close_error = _close_owned_herdr_pane_best_effort(
@@ -796,14 +809,103 @@ def _mark_herdr_pane(
 
 
 def _run_herdr_pane_command(herdr: str, pane_id: str, command: str, *, workdir: Path) -> None:
-    """Run the packaged interactive wrapper in an explicit Herdr pane."""
-    caller_path = os.environ.get("PATH")
-    if caller_path:
-        command = f"env {shlex.quote(f'PATH={caller_path}')} {command}"
+    """Run one short launcher command in an explicit Herdr pane."""
     _run_herdr_optional_ok_json(
         herdr,
         ["pane", "run", pane_id, command],
         workdir=workdir,
+    )
+
+
+def _materialize_herdr_launcher(launcher_path: Path, wrapper_command: str) -> str:
+    """Publish a private launcher and return the short pane command.
+
+    Herdr encodes ``pane run`` text according to terminal mode observed at request time.
+    Keeping the long wrapper payload in a file avoids depending on fresh-shell input mode.
+
+    Args:
+        launcher_path: Executable path in a unique attempt directory. The uniqueness
+            makes the fixed ``.tmp`` name safe with exclusive creation.
+        wrapper_command: Shell-quoted packaged wrapper command.
+
+    Returns:
+        Short child command that runs the launcher without replacing the interactive shell.
+
+    Raises:
+        CLIExecutionError: The launcher cannot be written or published atomically.
+    """
+    caller_path = os.environ.get("PATH")
+    environment_prefix = f"env {shlex.quote(f'PATH={caller_path}')} " if caller_path else ""
+    started_path = _herdr_launcher_started_path(launcher_path)
+    started_temporary_path = started_path.with_suffix(".tmp")
+    content = (
+        "#!/bin/sh\n"
+        "set -eu\n"
+        f"(umask 077; printf '%s\\n' \"$$\" > "
+        f"{shlex.quote(str(started_temporary_path))})\n"
+        f"mv -f {shlex.quote(str(started_temporary_path))} {shlex.quote(str(started_path))}\n"
+        f"exec {environment_prefix}{wrapper_command}\n"
+    )
+    temporary_path = launcher_path.with_suffix(launcher_path.suffix + ".tmp")
+    try:
+        launcher_path.parent.mkdir(parents=True, exist_ok=True)
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        descriptor = os.open(temporary_path, flags, 0o700)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as launcher:
+            launcher.write(content)
+            launcher.flush()
+            os.fsync(launcher.fileno())
+        os.replace(temporary_path, launcher_path)
+    except OSError as error:
+        try:
+            temporary_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise CLIExecutionError(
+            "interactive_terminal",
+            1,
+            f"Herdr launcher creation failed for {launcher_path}: {error}",
+        ) from error
+    return shlex.quote(str(launcher_path))
+
+
+def _herdr_launcher_started_path(launcher_path: Path) -> Path:
+    """Return the attempt-local launcher start marker path."""
+    return launcher_path.with_name(_HERDR_LAUNCHER_STARTED_FILENAME)
+
+
+def _wait_for_herdr_launcher_start(herdr: str, pane_id: str, started_path: Path) -> None:
+    """Wait boundedly for proof that the dispatched launcher executed.
+
+    Shell-only observations before the marker are startup state, not agent exit. Process
+    information is sampled only to make timeout diagnostics actionable; the atomically
+    published filesystem marker is the start authority.
+
+    Raises:
+        CLIExecutionError: The marker does not appear within the bounded wait.
+    """
+    deadline = time.monotonic() + _HERDR_LAUNCHER_START_TIMEOUT_SECONDS
+    while True:
+        if started_path.is_file():
+            return
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(_HERDR_LAUNCHER_START_POLL_INTERVAL_SECONDS)
+
+    last_process_state: str
+    try:
+        process_info = _get_herdr_process_info(herdr, pane_id)
+        last_process_state = _classify_herdr_process_liveness(process_info)
+    except CLIExecutionError as error:
+        last_process_state = f"unavailable ({error.stderr})"
+    raise CLIExecutionError(
+        "interactive_terminal",
+        124,
+        (
+            f"Herdr launcher start confirmation timed out for pane {pane_id} after "
+            f"{_HERDR_LAUNCHER_START_TIMEOUT_SECONDS} seconds; "
+            f"last process state: {last_process_state}"
+        ),
     )
 
 

@@ -247,8 +247,14 @@ backend固有差分だけを後段に示す。
 2. token所有paneとorigin layoutを読み、初回は右、以後は下へsplitし最大2枚に保つ。prune前に
    current origin/run tokenを再取得する。run token / layout欠落またはownership変化がある古い候補は
    stepを止めずskipし、warningと`kaji_agent_panes_skipped`へpane IDを残す。
-3. 明示cwdと`--no-focus`でsplitし、response由来paneをmarker付与してからwrapperを起動する。
-   marker失敗時はunowned paneを閉じずfail-loudする。
+3. 明示cwdと`--no-focus`でsplitし、response由来paneをmarker付与する。続いてattempt directoryへ
+   private（mode `0700`）な`herdr-launcher.sh`をatomic publishし、paneには短い
+   `<launcher path>`という短いchild commandだけを一度送る。shell processはliveness判定のためpaneに残し、
+   継承PATHと長いwrapper argvはlauncher内に置くため、fresh shellの観測不能なinput modeへ正しさを
+   依存させない。launcherはwrapper起動前にprivateなstart markerをatomic publishし、kajiはboundedに
+   markerを待つ。marker前のshell-only観測はagent終了として数えない。launcher作成、pane run、または
+   start確認失敗時はownership確認済みpaneを
+   cleanupしてfail-loudする。ownership marker失敗時はunowned paneを閉じない。
 4. 完了triggerは`verdict.yaml`のみ。foreground processは早期shell復帰の診断にだけ使い、
    output/status文字列ではstepを完了しない。optional process fieldの欠落・型不正はunknownとして扱い、
    shell復帰確認へ加算しない。

@@ -288,8 +288,15 @@ verdict, and session-state contracts with the backend-specific differences below
    downward, and keeps at most two. Prune re-reads current origin/run tokens before closing. A stale
    candidate with a missing run token/layout or changed ownership is skipped; kaji logs a warning and
    records its ID in `kaji_agent_panes_skipped` instead of blocking every later step.
-3. Split uses explicit cwd and `--no-focus`. Kaji marks the response-derived pane before running the
-   packaged wrapper. Marker failure leaves the unowned pane untouched and fails loud.
+3. Split uses explicit cwd and `--no-focus`. Kaji marks the response-derived pane, atomically publishes
+   a private (`0700`) `herdr-launcher.sh` in the attempt directory, and sends only the short
+   `<launcher path>` child command once. The shell remains the pane's shell process for liveness
+   checks, while the inherited PATH and long wrapper argv stay in the launcher. Correctness therefore
+   does not depend on a fresh shell's unobservable input mode. The launcher atomically publishes a
+   private start marker before the wrapper exec; kaji waits for it within a fixed bound and does not
+   count pre-marker shell-only observations as agent exit. Launcher creation, pane-run, or start
+   confirmation failure cleans up the owned pane and fails loud. Ownership marker failure leaves the
+   unowned pane untouched.
 4. `verdict.yaml` is the only completion trigger. Foreground process observations only detect a
    command that returned to its shell early; output/status text never completes a step. Missing or
    malformed optional process fields are treated as unknown and never count as a confirmed shell return.

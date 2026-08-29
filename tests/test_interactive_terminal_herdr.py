@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import shlex
+import stat
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
 
@@ -26,9 +29,11 @@ from kaji_harness.interactive_terminal_herdr import (
     _classify_herdr_process_liveness,
     _close_owned_herdr_pane,
     _get_herdr_process_info,
+    _herdr_launcher_started_path,
     _launch_herdr_pane,
     _list_managed_herdr_panes,
     _mark_herdr_pane,
+    _materialize_herdr_launcher,
     _parse_herdr_version,
     _preflight_herdr,
     _read_herdr_pane,
@@ -38,6 +43,7 @@ from kaji_harness.interactive_terminal_herdr import (
     _run_herdr_json,
     _run_herdr_pane_command,
     _select_herdr_launch_placement,
+    _wait_for_herdr_launcher_start,
     execute_interactive_terminal_herdr,
 )
 from kaji_harness.models import Step
@@ -193,6 +199,132 @@ class TestHerdrCommandContract:
             "kaji_step=design",
         ]
         assert "--ttl-ms" not in argv
+
+    def test_launcher_moves_long_payload_out_of_pane_command(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PATH", "/a/very/long/path:" + "x" * 1200)
+        launcher_path = tmp_path / "attempt with spaces" / "herdr-launcher.sh"
+        wrapper_command = "/wrapper codex '/prompt with spaces' /verdict /work '' '' '' '' auto"
+
+        pane_command = _materialize_herdr_launcher(launcher_path, wrapper_command)
+
+        launcher = launcher_path.read_text(encoding="utf-8")
+        assert launcher.startswith("#!/bin/sh\nset -eu\n(umask 077; printf ")
+        assert "herdr-launcher-started.tmp" in launcher
+        assert "herdr-launcher-started" in launcher
+        assert launcher.index("herdr-launcher-started") < launcher.index("exec env ")
+        assert "PATH=/a/very/long/path:" in launcher
+        assert wrapper_command in launcher
+        assert pane_command == shlex.quote(str(launcher_path))
+        assert not pane_command.startswith("exec ")
+        assert "PATH=" not in pane_command
+        assert "/prompt" not in pane_command
+        assert len(pane_command) < 200
+        assert stat.S_IMODE(launcher_path.stat().st_mode) == 0o700
+
+    def test_launcher_is_published_atomically(self, tmp_path: Path) -> None:
+        launcher_path = tmp_path / "herdr-launcher.sh"
+
+        with patch("kaji_harness.interactive_terminal_herdr.os.replace") as replace:
+            _materialize_herdr_launcher(launcher_path, "/wrapper codex")
+
+        temporary_path, published_path = replace.call_args.args
+        assert Path(temporary_path).name == "herdr-launcher.sh.tmp"
+        assert published_path == launcher_path
+        assert stat.S_IMODE(Path(temporary_path).stat().st_mode) == 0o700
+
+    def test_launcher_creation_wraps_filesystem_failure(self, tmp_path: Path) -> None:
+        launcher_path = tmp_path / "herdr-launcher.sh"
+
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr.os.open",
+                side_effect=OSError("disk unavailable"),
+            ),
+            pytest.raises(CLIExecutionError, match="Herdr launcher creation failed") as exc_info,
+        ):
+            _materialize_herdr_launcher(launcher_path, "/wrapper codex")
+
+        assert "disk unavailable" in exc_info.value.stderr
+        assert str(launcher_path) in exc_info.value.stderr
+
+    def test_launcher_cleanup_failure_does_not_replace_creation_error(self, tmp_path: Path) -> None:
+        launcher_path = tmp_path / "herdr-launcher.sh"
+
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr.os.replace",
+                side_effect=OSError("publish failed"),
+            ),
+            patch.object(Path, "unlink", side_effect=OSError("cleanup failed")),
+            pytest.raises(CLIExecutionError, match="publish failed"),
+        ):
+            _materialize_herdr_launcher(launcher_path, "/wrapper codex")
+
+    def test_launcher_start_wait_ignores_shell_only_until_marker(self, tmp_path: Path) -> None:
+        started_path = tmp_path / "herdr-launcher-started"
+        polls = 0
+
+        def create_marker(*args: object, **kwargs: object) -> None:
+            nonlocal polls
+            polls += 1
+            if polls == 3:
+                started_path.write_text("123\n", encoding="utf-8")
+
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._get_herdr_process_info",
+            ) as process_info,
+            patch("kaji_harness.interactive_terminal_herdr.time.monotonic", return_value=0.0),
+            patch("kaji_harness.interactive_terminal_herdr.time.sleep", side_effect=create_marker),
+        ):
+            _wait_for_herdr_launcher_start("/usr/bin/herdr", "w1:p2", started_path)
+
+        assert polls == 3
+        process_info.assert_not_called()
+
+    def test_launcher_start_timeout_reports_last_process_state(self, tmp_path: Path) -> None:
+        started_path = tmp_path / "herdr-launcher-started"
+        shell_only = {"shell_pid": 100, "foreground_processes": [{"pid": 100}]}
+
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._get_herdr_process_info",
+                return_value=shell_only,
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr.time.monotonic",
+                side_effect=[0.0, 1.0, 11.0],
+            ),
+            patch("kaji_harness.interactive_terminal_herdr.time.sleep"),
+            pytest.raises(CLIExecutionError, match="start confirmation timed out") as exc_info,
+        ):
+            _wait_for_herdr_launcher_start("/usr/bin/herdr", "w1:p2", started_path)
+
+        assert exc_info.value.returncode == 124
+        assert "last process state: confirmed_shell_only" in exc_info.value.stderr
+        assert "pane w1:p2" in exc_info.value.stderr
+
+    def test_launcher_start_timeout_survives_process_info_failure(self, tmp_path: Path) -> None:
+        started_path = tmp_path / "herdr-launcher-started"
+
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._get_herdr_process_info",
+                side_effect=CLIExecutionError("herdr", 1, "pane disappeared"),
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr.time.monotonic",
+                side_effect=[0.0, 1.0, 11.0],
+            ),
+            patch("kaji_harness.interactive_terminal_herdr.time.sleep"),
+            pytest.raises(CLIExecutionError, match="start confirmation timed out") as exc_info,
+        ):
+            _wait_for_herdr_launcher_start("/usr/bin/herdr", "w1:p2", started_path)
+
+        assert exc_info.value.returncode == 124
+        assert "last process state: unavailable (pane disappeared)" in exc_info.value.stderr
 
     def test_marker_accepts_empty_success_then_confirms_exact_tokens(self) -> None:
         completed = subprocess.CompletedProcess(["herdr"], 0, stdout="", stderr="")
@@ -401,7 +533,7 @@ class TestHerdrCommandContract:
             "pane",
             "run",
             "w1:p2",
-            "env PATH=/experiment/fake-bin:/usr/bin kaji run workflow.yaml 396",
+            "kaji run workflow.yaml 396",
         ]
         assert run.call_args.kwargs["cwd"] == tmp_path
 
@@ -1009,6 +1141,12 @@ class TestHerdrCommandContract:
 class TestExecuteHerdr:
     """The high-level lifecycle remains artifact-driven and ownership-safe."""
 
+    @pytest.fixture(autouse=True)
+    def launcher_started(self) -> Iterator[None]:
+        """Keep lifecycle tests focused after bounded launcher confirmation."""
+        with patch("kaji_harness.interactive_terminal_herdr._wait_for_herdr_launcher_start"):
+            yield
+
     def test_verdict_snapshot_and_owned_cleanup(self, tmp_path: Path) -> None:
         prompt_path = tmp_path / "prompt.txt"
         verdict_path = tmp_path / "verdict.yaml"
@@ -1070,6 +1208,12 @@ class TestExecuteHerdr:
             step_id="design",
         )
         run.assert_called_once()
+        pane_command = run.call_args.args[2]
+        launcher_path = tmp_path / "herdr-launcher.sh"
+        assert pane_command == str(launcher_path)
+        assert launcher_path.read_text(encoding="utf-8").startswith(
+            "#!/bin/sh\nset -eu\n(umask 077; printf "
+        )
         close.assert_called_once_with(
             "/usr/bin/herdr",
             "w1:p2",
@@ -1082,6 +1226,126 @@ class TestExecuteHerdr:
         assert metadata["backend"] == "herdr"
         assert metadata["transcript_kind"] == "rendered_recent_unwrapped_snapshot"
         assert metadata["transcript_truncated"] is False
+
+    def test_launcher_failure_never_dispatches_and_closes_owned_pane(self, tmp_path: Path) -> None:
+        prompt_path = tmp_path / "prompt.txt"
+        prompt_path.write_text("do work", encoding="utf-8")
+        step = Step(id="design", skill="design", agent="codex")
+        launcher_error = CLIExecutionError(
+            "interactive_terminal", 1, "Herdr launcher creation failed"
+        )
+
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._preflight_herdr",
+                return_value=("/usr/bin/herdr", "w1:p1", "herdr 0.8.2"),
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._launch_herdr_pane",
+                return_value=HerdrPaneLaunch(
+                    pane_id="w1:p2",
+                    split_target_pane="w1:p1",
+                    direction="right",
+                    panes_before=[],
+                    panes_pruned=[],
+                ),
+            ),
+            patch("kaji_harness.interactive_terminal_herdr._mark_herdr_pane"),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._materialize_herdr_launcher",
+                side_effect=launcher_error,
+            ),
+            patch("kaji_harness.interactive_terminal_herdr._run_herdr_pane_command") as run_wrapper,
+            patch(
+                "kaji_harness.interactive_terminal_herdr._capture_herdr_snapshot",
+                return_value=None,
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
+                return_value=True,
+            ) as close,
+            patch(
+                "kaji_harness.interactive_terminal_herdr.uuid.uuid4",
+                return_value="run-123",
+            ),
+            pytest.raises(CLIExecutionError, match="launcher creation failed") as exc_info,
+        ):
+            execute_interactive_terminal_herdr(
+                step=step,
+                prompt_path=prompt_path,
+                verdict_path=tmp_path / "verdict.yaml",
+                workdir=tmp_path,
+                timeout=30,
+            )
+
+        assert exc_info.value is launcher_error
+        run_wrapper.assert_not_called()
+        close.assert_called_once_with(
+            "/usr/bin/herdr",
+            "w1:p2",
+            origin_pane="w1:p1",
+            run_id="run-123",
+        )
+
+    def test_launcher_start_timeout_cleans_up_owned_pane(self, tmp_path: Path) -> None:
+        prompt_path = tmp_path / "prompt.txt"
+        prompt_path.write_text("do work", encoding="utf-8")
+        step = Step(id="design", skill="design", agent="codex")
+        start_error = CLIExecutionError(
+            "interactive_terminal", 124, "Herdr launcher start confirmation timed out"
+        )
+
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._preflight_herdr",
+                return_value=("/usr/bin/herdr", "w1:p1", "herdr 0.8.2"),
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._launch_herdr_pane",
+                return_value=HerdrPaneLaunch(
+                    pane_id="w1:p2",
+                    split_target_pane="w1:p1",
+                    direction="right",
+                    panes_before=[],
+                    panes_pruned=[],
+                ),
+            ),
+            patch("kaji_harness.interactive_terminal_herdr._mark_herdr_pane"),
+            patch("kaji_harness.interactive_terminal_herdr._run_herdr_pane_command") as dispatch,
+            patch(
+                "kaji_harness.interactive_terminal_herdr._wait_for_herdr_launcher_start",
+                side_effect=start_error,
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._capture_herdr_snapshot",
+                return_value=None,
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
+                return_value=True,
+            ) as close,
+            patch(
+                "kaji_harness.interactive_terminal_herdr.uuid.uuid4",
+                return_value="run-123",
+            ),
+            pytest.raises(CLIExecutionError, match="start confirmation timed out") as exc_info,
+        ):
+            execute_interactive_terminal_herdr(
+                step=step,
+                prompt_path=prompt_path,
+                verdict_path=tmp_path / "verdict.yaml",
+                workdir=tmp_path,
+                timeout=30,
+            )
+
+        assert exc_info.value is start_error
+        dispatch.assert_called_once()
+        close.assert_called_once_with(
+            "/usr/bin/herdr",
+            "w1:p2",
+            origin_pane="w1:p1",
+            run_id="run-123",
+        )
 
     def test_verdict_result_survives_cleanup_failure(self, tmp_path: Path) -> None:
         prompt_path = tmp_path / "prompt.txt"
@@ -1631,6 +1895,45 @@ class TestExecuteHerdr:
         metadata = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
         assert metadata["close_on_verdict"] is False
         assert metadata["transcript_revision"] == 10
+
+
+@pytest.mark.medium
+def test_materialized_launcher_is_directly_executable(tmp_path: Path) -> None:
+    """Keep the marker private without changing the wrapper's inherited umask."""
+    launcher_path = tmp_path / "herdr-launcher.sh"
+    wrapper_output = tmp_path / "wrapper-output"
+    wrapper_umask = tmp_path / "wrapper-umask"
+    wrapper_command = shlex.join(
+        [
+            "/bin/sh",
+            "-c",
+            (
+                f"umask > {shlex.quote(str(wrapper_umask))}; "
+                f"printf '%s\\n' completed > {shlex.quote(str(wrapper_output))}"
+            ),
+        ]
+    )
+    pane_command = _materialize_herdr_launcher(launcher_path, wrapper_command)
+
+    completed = subprocess.run(
+        [
+            "/bin/sh",
+            "-c",
+            'umask 022; exec "$1"',
+            "launcher-test",
+            shlex.split(pane_command)[0],
+        ],
+        check=False,
+        capture_output=True,
+    )
+
+    assert completed.returncode == 0
+    assert wrapper_output.read_text(encoding="utf-8") == "completed\n"
+    assert int(wrapper_umask.read_text(encoding="utf-8").strip(), 8) == 0o022
+    assert stat.S_IMODE(wrapper_output.stat().st_mode) == 0o644
+    started_path = _herdr_launcher_started_path(launcher_path)
+    assert started_path.is_file()
+    assert stat.S_IMODE(started_path.stat().st_mode) == 0o600
 
 
 @pytest.mark.medium
