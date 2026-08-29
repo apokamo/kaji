@@ -90,7 +90,8 @@ fmt_limit() {
     col=$(color_for "$pct_int")
     local when=""
     if [ -n "$reset" ]; then
-        when=$(TZ=Asia/Tokyo date -d "@$reset" "+$tfmt" 2>/dev/null)
+        when=$(TZ=Asia/Tokyo date -r "$reset" "+$tfmt" 2>/dev/null \
+            || TZ=Asia/Tokyo date -d "@$reset" "+$tfmt" 2>/dev/null)
     fi
     if [ -n "$when" ]; then
         printf "  \033[%sm%s\033[0m \033[%sm%d%%\033[0m \033[%sm%s\033[0m" \
