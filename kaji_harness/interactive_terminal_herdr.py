@@ -841,8 +841,8 @@ def _materialize_herdr_launcher(launcher_path: Path, wrapper_command: str) -> st
     content = (
         "#!/bin/sh\n"
         "set -eu\n"
-        "umask 077\n"
-        f"printf '%s\\n' \"$$\" > {shlex.quote(str(started_temporary_path))}\n"
+        f"(umask 077; printf '%s\\n' \"$$\" > "
+        f"{shlex.quote(str(started_temporary_path))})\n"
         f"mv -f {shlex.quote(str(started_temporary_path))} {shlex.quote(str(started_path))}\n"
         f"exec {environment_prefix}{wrapper_command}\n"
     )

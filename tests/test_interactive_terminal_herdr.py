@@ -210,7 +210,7 @@ class TestHerdrCommandContract:
         pane_command = _materialize_herdr_launcher(launcher_path, wrapper_command)
 
         launcher = launcher_path.read_text(encoding="utf-8")
-        assert launcher.startswith("#!/bin/sh\nset -eu\numask 077\n")
+        assert launcher.startswith("#!/bin/sh\nset -eu\n(umask 077; printf ")
         assert "herdr-launcher-started.tmp" in launcher
         assert "herdr-launcher-started" in launcher
         assert launcher.index("herdr-launcher-started") < launcher.index("exec env ")
@@ -1212,7 +1212,7 @@ class TestExecuteHerdr:
         launcher_path = tmp_path / "herdr-launcher.sh"
         assert pane_command == str(launcher_path)
         assert launcher_path.read_text(encoding="utf-8").startswith(
-            "#!/bin/sh\nset -eu\numask 077\n"
+            "#!/bin/sh\nset -eu\n(umask 077; printf "
         )
         close.assert_called_once_with(
             "/usr/bin/herdr",
@@ -1899,19 +1899,41 @@ class TestExecuteHerdr:
 
 @pytest.mark.medium
 def test_materialized_launcher_is_directly_executable(tmp_path: Path) -> None:
-    """Execute the published launcher through its shebang and observe both artifacts."""
+    """Keep the marker private without changing the wrapper's inherited umask."""
     launcher_path = tmp_path / "herdr-launcher.sh"
     wrapper_output = tmp_path / "wrapper-output"
+    wrapper_umask = tmp_path / "wrapper-umask"
     wrapper_command = shlex.join(
-        ["/bin/sh", "-c", f"printf '%s\\n' completed > {shlex.quote(str(wrapper_output))}"]
+        [
+            "/bin/sh",
+            "-c",
+            (
+                f"umask > {shlex.quote(str(wrapper_umask))}; "
+                f"printf '%s\\n' completed > {shlex.quote(str(wrapper_output))}"
+            ),
+        ]
     )
     pane_command = _materialize_herdr_launcher(launcher_path, wrapper_command)
 
-    completed = subprocess.run([shlex.split(pane_command)[0]], check=False, capture_output=True)
+    completed = subprocess.run(
+        [
+            "/bin/sh",
+            "-c",
+            'umask 022; exec "$1"',
+            "launcher-test",
+            shlex.split(pane_command)[0],
+        ],
+        check=False,
+        capture_output=True,
+    )
 
     assert completed.returncode == 0
     assert wrapper_output.read_text(encoding="utf-8") == "completed\n"
-    assert _herdr_launcher_started_path(launcher_path).is_file()
+    assert int(wrapper_umask.read_text(encoding="utf-8").strip(), 8) == 0o022
+    assert stat.S_IMODE(wrapper_output.stat().st_mode) == 0o644
+    started_path = _herdr_launcher_started_path(launcher_path)
+    assert started_path.is_file()
+    assert stat.S_IMODE(started_path.stat().st_mode) == 0o600
 
 
 @pytest.mark.medium
