@@ -39,7 +39,7 @@ dispatch に失敗した場合は既存の snapshot・ownership 再確認・best
 
 内部では `prompt.txt` と同じ attempt directory に `herdr-launcher.sh` を作成する。内容は owner-only
 executable の POSIX shell script で、継承 PATH と shell-quoted wrapper argv を `exec` する。Herdr
-へ渡す command は `exec <quoted-launcher-path>` のみとする。
+へ渡す command は `<quoted-launcher-path>` のみとし、shell process は liveness 判定用に残す。
 
 ## 制約・安全性
 
@@ -65,7 +65,8 @@ executable の POSIX shell script で、継承 PATH と shell-quoted wrapper arg
 1. 既存 `_build_wrapper_command()` で wrapper argv を shell quote する。
 2. attempt directory に `herdr-launcher.sh.tmp` を mode `0700` かつ exclusive create する。
 3. `#!/bin/sh` と `exec env PATH=... <wrapper command>` を書き、flush / fsync / atomic replace する。
-4. pane へ `exec <launcher path>` を一回だけ `pane run` する。
+4. pane へ `<launcher path>` を child command として一回だけ `pane run` する。pane-level `exec` は
+   Herdr の `shell_pid` を agent PID に変え、早期 shell 復帰を誤検知させるため使用しない。
 5. 旧 readiness marker / `wait-output` の二段階 dispatch は削除する。
 6. 以降の verdict polling、session resolution、snapshot、cleanup は変更しない。
 

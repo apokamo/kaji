@@ -819,7 +819,7 @@ def _materialize_herdr_launcher(launcher_path: Path, wrapper_command: str) -> st
         wrapper_command: Shell-quoted packaged wrapper command.
 
     Returns:
-        Short shell command that replaces the interactive shell with the launcher.
+        Short child command that runs the launcher without replacing the interactive shell.
 
     Raises:
         CLIExecutionError: The launcher cannot be written or published atomically.
@@ -847,7 +847,7 @@ def _materialize_herdr_launcher(launcher_path: Path, wrapper_command: str) -> st
             1,
             f"Herdr launcher creation failed for {launcher_path}: {error}",
         ) from error
-    return f"exec {shlex.quote(str(launcher_path))}"
+    return shlex.quote(str(launcher_path))
 
 
 def _read_herdr_pane(herdr: str, pane_id: str) -> HerdrPaneRead:

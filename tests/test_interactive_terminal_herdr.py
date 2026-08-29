@@ -210,7 +210,8 @@ class TestHerdrCommandContract:
         assert launcher.startswith("#!/bin/sh\nexec env ")
         assert "PATH=/a/very/long/path:" in launcher
         assert wrapper_command in launcher
-        assert pane_command == f"exec {shlex.quote(str(launcher_path))}"
+        assert pane_command == shlex.quote(str(launcher_path))
+        assert not pane_command.startswith("exec ")
         assert "PATH=" not in pane_command
         assert "/prompt" not in pane_command
         assert len(pane_command) < 200
@@ -1133,7 +1134,7 @@ class TestExecuteHerdr:
         run.assert_called_once()
         pane_command = run.call_args.args[2]
         launcher_path = tmp_path / "herdr-launcher.sh"
-        assert pane_command == f"exec {launcher_path}"
+        assert pane_command == str(launcher_path)
         assert launcher_path.read_text(encoding="utf-8").startswith("#!/bin/sh\nexec env 'PATH=")
         close.assert_called_once_with(
             "/usr/bin/herdr",

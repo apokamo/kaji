@@ -290,8 +290,9 @@ verdict, and session-state contracts with the backend-specific differences below
    records its ID in `kaji_agent_panes_skipped` instead of blocking every later step.
 3. Split uses explicit cwd and `--no-focus`. Kaji marks the response-derived pane, atomically publishes
    a private (`0700`) `herdr-launcher.sh` in the attempt directory, and sends only the short
-   `exec <launcher path>` command once. The inherited PATH and long wrapper argv stay in the launcher,
-   so correctness does not depend on a fresh shell's unobservable input mode. Launcher creation or
+   `<launcher path>` child command once. The shell remains the pane's shell process for liveness
+   checks, while the inherited PATH and long wrapper argv stay in the launcher. Correctness therefore
+   does not depend on a fresh shell's unobservable input mode. Launcher creation or
    pane-run failure cleans up the owned pane and fails loud. Ownership marker failure leaves the
    unowned pane untouched.
 4. `verdict.yaml` is the only completion trigger. Foreground process observations only detect a
