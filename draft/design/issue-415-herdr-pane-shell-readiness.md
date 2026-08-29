@@ -1,143 +1,121 @@
-# [設計] Herdr pane の shell readiness handshake
+# [設計] Herdr pane の short launcher dispatch
 
 Issue: #415
 
 ## 概要
 
-`kaji_harness.interactive_terminal_herdr` が新規 pane の shell 初期化完了前に長い
-wrapper command を送る競合を、短い execution marker による bounded handshake で防ぐ。
+fresh Herdr pane へ長い wrapper command を terminal input として送る競合を、attempt-local の
+executable launcher と短い一回の `pane run` に置き換えて防ぐ。
 
 ## 背景・目的
 
 ### Observed Behavior (OB)
 
-macOS / zsh / Herdr 0.8.2 では、split 直後に送った 1,424 文字の first command が
-3/3 で途中欠落し、marker を出力しなかった。Issue 本文「macOS / zsh 直接再現証跡」には、
-入力末尾の `END415_N` と後続 `printf` が `recent-unwrapped` に存在しない実ログがある。
+macOS / zsh / Herdr 0.8.2 では、split 直後の 1,424 文字の first command が 3/3 で途中欠落した。
+初回修正は短い marker の実行完了後に長い wrapper を送ったが、公式 dev workflow の
+review-code で再発した。run `260829181754` の `terminal.log` では wrapper command が prompt と
+混在し、wrapper banner、agent 起動、verdict のいずれも現れなかった。
 
 ### Expected Behavior (EB)
 
-新規 pane の shell が command を実行できることを確認してから wrapper command を一度だけ送る。
-確認できなければ wrapper command は送らず、dispatch error として既存の snapshot・ownership
-再確認・best-effort cleanup 契約へ流す。これは Issue 本文の完了条件と
-`docs/adr/007-interactive-terminal-runner.md` の Herdr pane lifecycle 契約に基づく。
-
-## 再現手順
-
-1. macOS / zsh / Herdr 0.8.2 で fresh pane を `pane split --no-focus` する。
-2. split response の pane ID へ、1,300 個の `x`、一意 suffix、結果 marker を含む
-   1,424 文字の command を直ちに `pane run` で送る。
-3. `pane read --source recent-unwrapped` を確認する。
-4. 修正前は 3/3 で末尾と marker が欠落する。修正後は handshake の出力確認後に同じ長さの
-   wrapper 相当 command が完全に一度だけ実行される。
+長い wrapper payload を fresh PTY input から除外する。pane には attempt-local launcher を `exec`
+する短い command を一度だけ送り、wrapper argv は file から shell process へ渡す。launcher 作成・
+dispatch に失敗した場合は既存の snapshot・ownership 再確認・best-effort cleanup 契約へ流す。
 
 ## 根本原因
 
-- `_launch_herdr_pane()` の split response は pane 作成だけを確定し、interactive shell が
-  command を実行可能であることを確定しない。
-- `execute_interactive_terminal_herdr()` は ownership marker 確認後、readiness barrier なしで
-  `_run_herdr_pane_command()` を呼ぶため、zsh 初期化中の PTY 入力処理と競合する。
-- Herdr backend 初回導入 commit `8ede4e9d` から存在する。既存設計も
-  `wait-output --match` が echo 済み command line に一致し得ることを把握しているが、split と
-  wrapper dispatch の間には execution barrier を置いていなかった。
-- 同根箇所を検索した結果、fresh Herdr pane へ最初の payload を送る production 経路はこの
-  wrapper dispatch だけである。tmux backend と既存 pane への通常操作は対象外である。
+- Herdr v0.8.2 の `pane run` は text と Enter を一 request で enqueue するが、text の encoding は
+  request 時点の `runtime.bracketed_paste_enabled()` に依存する。
+- zsh が marker を実行したことと、次 request の処理時に Herdr が ZLE の terminal mode 更新を
+  観測済みであることは同値ではない。初回修正の二 request 間には観測不能な race が残った。
+- Herdr v0.8.2 の `PaneInfo` / `process-info` は bracketed-paste / line-editor readiness を公開しない。
+  prompt、revision、foreground shell の polling では直接的な barrier を作れない。
+- 初回 live probe は marker 後の一般的な長文を検査したが、実 wrapper と同じ PATH 長、artifact
+  argv、直後 timing を再現せず、実運用 payload に対する検証が不足した。
 
 ## インターフェース
 
-### 入力
+公開 CLI、workflow YAML、provider session、verdict artifact の契約は変更しない。
 
-- 既存の `herdr` executable、split response 由来 pane ID、trusted workdir。
-- 公開 CLI、設定、workflow YAML の入力は変更しない。
+内部では `prompt.txt` と同じ attempt directory に `herdr-launcher.sh` を作成する。内容は owner-only
+executable の POSIX shell script で、継承 PATH と shell-quoted wrapper argv を `exec` する。Herdr
+へ渡す command は `exec <quoted-launcher-path>` のみとする。
 
-### 出力
+## 制約・安全性
 
-- 正常時: shell が生成した一意 readiness marker を確認した後、既存 wrapper command を一度送る。
-- timeout / Herdr error 時: readiness に焦点を当てた `CLIExecutionError` を返し、wrapper command は
-  未送信のまま既存 dispatch failure cleanup へ進む。
-
-### 使用例
-
-利用者向け API は不変であり、既存どおり Herdr backend を選択して `kaji run` を実行する。
-
-## 制約・前提条件
-
-- prompt 文字列、shell 名、prompt 表示タイミングには依存しない。
-- `pane wait-output` は入力 echo にも一致するため、待機対象の完成 marker を probe command の
-  リテラルに含めない。shell が断片を結合して出力して初めて一致する構成にする。
-- readiness 待機は既存 Herdr request timeout 内で bounded にする。
-- ownership marker は readiness より先に確認し、失敗時 cleanup の対象 pane を確定する。
-- verdict timeout、pane ownership、snapshot、cleanup、session resolution の既存契約を変えない。
+- launcher は Kaji が組み立てた trusted path / option のみを `shlex` quote して格納する。
+- mode `0700` の temporary file を作り、flush / fsync 後に `os.replace` して部分 file を公開しない。
+- launcher path 自体も quote し、space 等を許容する。
+- prompt 本文や credential は launcher に複製しない。PATH と artifact path は既存 wrapper command
+  と同じ process-visible 情報である。
+- ownership marker は launcher 作成より先に確認する。作成・dispatch failure は既存 cleanup 経路で
+  扱い、cleanup error で元 error を置換しない。
+- fixed sleep、prompt regex、pane revision、`process-info` は正しさの前提にしない。
 
 ## 変更スコープ
 
-- `kaji_harness/interactive_terminal_herdr.py`: readiness probe / wait と dispatch 順序。
-- `tests/test_interactive_terminal_herdr.py`: probe の argv、execution marker 検証、timeout、dispatch 順序。
-- `docs/adr/007-interactive-terminal-runner.md` と CLI guide: shell-ready barrier の契約追記。
-- PATH command prefix の重複除去は race の根治に不要なため対象外とする。
+- `kaji_harness/interactive_terminal_herdr.py`: launcher の atomic materialize と short dispatch。
+- `tests/test_interactive_terminal_herdr.py`: content / permission / quoting / lifecycle / failure tests。
+- `experiments/herdr-interactive-terminal/scripts/herdr`: stateful fake の launcher 契約対応。
+- `docs/adr/007-interactive-terminal-runner.md`: Herdr pane lifecycle 契約。
+- `docs/cli-guides/interactive-terminal-runner.md` と `.ja.md`: 利用者向け dispatch / diagnostic。
 
 ## 方針
 
-1. ownership marker 確認後、UUID 由来の一意 token を二分した短い `printf` command を
-   `pane run` で送る。完成 token は command line に連続して現れない。
-2. `pane wait-output --match <完成 token> --source recent-unwrapped --timeout <bounded ms>` を実行し、
-   typed `output_matched` response と exact pane ID を検証する。
-3. marker 確認後だけ既存 wrapper dispatch を呼ぶ。probe / wait の失敗は readiness diagnostic を
-   付けた `CLIExecutionError` とし、既存の dispatch failure snapshot・cleanup 経路で扱う。
-4. wrapper command 自体、verdict polling、session resolution、pane ownership cleanup は変更しない。
+1. 既存 `_build_wrapper_command()` で wrapper argv を shell quote する。
+2. attempt directory に `herdr-launcher.sh.tmp` を mode `0700` かつ exclusive create する。
+3. `#!/bin/sh` と `exec env PATH=... <wrapper command>` を書き、flush / fsync / atomic replace する。
+4. pane へ `exec <launcher path>` を一回だけ `pane run` する。
+5. 旧 readiness marker / `wait-output` の二段階 dispatch は削除する。
+6. 以降の verdict polling、session resolution、snapshot、cleanup は変更しない。
 
 ## 重要判断 provenance
 
-| 判断 | 方針 | 出典または仮定 | 設計で行った詳細化 |
-|------|------|----------------|--------------------|
-| wrapper 前の readiness barrier | bounded handshake を必須化 | Issue 本文「対応案」「完了条件」（人間決定） | shell 実行結果だけに一致する分割 marker と `wait-output` を使用 |
-| readiness failure | wrapper 未送信で dispatch error | Issue 本文「Expected behavior」（人間決定） | `CLIExecutionError` に focused diagnostic を付け既存 cleanup 経路へ統合 |
-| 公開 IF | 変更しない | ADR 007 と CLI guide の既存 backend 契約 | private helper 内に局所化 |
-| handshake timeout | 既存 Herdr command timeout の範囲内で固定 | AI の仮定。内部 timing detail で可逆。review-code と live probe で検査 | wait-output の ms 引数と subprocess 上限の順序を明示 |
+| 判断 | 方針 | 根拠 |
+|------|------|------|
+| readiness の扱い | 推測せず、長文 PTY input を除去 | Herdr 0.8.2 は必要な terminal state を公開しない |
+| dispatch 回数 | short command 一回 | 二 request 間 race を構造的に除去する |
+| payload 保管 | attempt-local executable | wrapper が既に参照する artifact directory と lifecycle を揃える |
+| file publish | `0700` + fsync + atomic replace | 部分 script の実行と他 user の読み取りを防ぐ |
+| failure | 既存 dispatch cleanup 契約 | ADR 007 の ownership / diagnostic 方針を維持する |
 
 ## テスト戦略
 
-### 変更タイプ
+### Small
 
-- 実行時コード変更（過去障害の再発防止）。恒久回帰テストを追加する。
+- 長い PATH / wrapper argv が launcher 内にあり、pane command に含まれないこと。
+- launcher mode が `0700`、temporary file から `os.replace` されること。
+- space を含む launcher path が quote され、pane command が短いこと。
+- launcher materialize error が focused `CLIExecutionError` になること。
 
-### Small テスト
+### Medium
 
-- readiness probe の完成 marker が command argv に連続して含まれず、入力 echo では成功判定できないこと。
-- `output_matched` の type と pane ID を検証し、不正 response を拒否すること。
-- timeout / command failure を shell readiness の diagnostic を持つ `CLIExecutionError` として保持すること。
+- stateful fake Herdr が short command から launcher を読み、verdict、snapshot、exact close まで完走する。
+- launcher failure / pane dispatch failure で wrapper を実行せず、owned pane cleanup と元 error を保つ。
+- verdict success / timeout / early shell return / provider session の既存回帰を通す。
 
-### Medium テスト
+### Large / live
 
-- subprocess mock を使い、split → ownership marker → readiness `pane run` → `wait-output` → wrapper
-  `pane run` の順序と wrapper 一回送信を検証する。
-- readiness failure 時に wrapper を未送信のまま snapshot、ownership 再確認、best-effort close を実行し、
-  元の readiness error を close error で置換しないことを検証する。
-
-### Large テスト
-
-- macOS / zsh / Herdr 0.8.2 の live pane で、split 直後の handshake 後に 1,424 文字以上の payload が
-  suffix と marker を完全に一回だけ出力することを確認する。
-- Linux / bash の環境差は unit/medium の決定論的契約を変えない。CI で Herdr UI session を必須に
-  できないため live probe は実装時の実機証跡とし、恒久回帰は mock-based Medium test で保持する。
+- macOS / zsh / Herdr 0.8.2 の fresh pane で、実 wrapper 相当の長い payload を launcher に格納し、
+  short dispatch 直後でも suffix / marker が複数回欠落なく一度だけ出力されること。
+- `kaji-run-verify` に従い、公式 dev workflow を `review-code` から `pr` 手前まで Herdr backend で
+  一回実行する。失敗時は再実行せず artifact と原因を Issue に記録する。
 
 ## 影響ドキュメント
 
-| ドキュメント | 影響の有無 | 理由 |
-|-------------|-----------|------|
-| docs/adr/007-interactive-terminal-runner.md | あり | Herdr pane lifecycle に readiness barrier を追加 |
-| docs/ARCHITECTURE.md | なし | backend 境界・artifact 構造は不変 |
-| docs/dev/ | なし | workflow 開発手順は不変 |
-| docs/reference/ | なし | 公開設定・Python 規約は不変 |
-| docs/cli-guides/interactive-terminal-runner.md / `.ja.md` | あり | dispatch / failure 診断契約を利用者向けに同期 |
-| AGENTS.md / CLAUDE.md | なし | agent 作業規約は不変 |
+| ドキュメント | 影響 | 理由 |
+|-------------|------|------|
+| `docs/adr/007-interactive-terminal-runner.md` | あり | Herdr dispatch lifecycle の変更 |
+| `docs/cli-guides/interactive-terminal-runner.md` / `.ja.md` | あり | launcher と failure diagnostic の同期 |
+| `docs/ARCHITECTURE.md` | なし | backend 境界と artifact-driven completion は不変 |
+| `docs/reference/` | なし | 公開設定と Python 規約は不変 |
 
 ## 参照情報（Primary Sources）
 
-| 情報源 | URL/パス | 根拠（引用/要約） |
-|--------|----------|-------------------|
-| Issue #415 | GitHub Issue #415 本文 | macOS/zsh の OB、wrapper 未送信 timeout、既存契約維持を要求 |
-| Herdr 0.8.2 CLI skill | `herdr --skill` の「Run an ordinary command」 | `pane run` は command と Enter を送り、`wait-output` は既存 snapshot を即時検索する |
-| Herdr backend ADR | `docs/adr/007-interactive-terminal-runner.md` | explicit pane ID、ownership 再確認、failure cleanup、rendered snapshot の既存契約 |
-| 初回 Herdr backend 設計 | `draft/design/issue-396-feat-herdr-interactive-terminal-backend.md` | `wait-output --match` は shell に echo された command line へ先に一致し得る |
-| テスト規約 | `docs/dev/testing-convention.md` | 過去障害の再発防止は恒久テスト対象で、subprocess 結合は Medium |
+| 情報源 | URL/パス | 根拠 |
+|--------|----------|------|
+| Issue #415 | GitHub Issue 本文・調査コメント | OB、実 workflow failure、修正計画 |
+| Herdr 0.8.2 source | commit `9eb521456ac0d19d3ab3d9d7cea3cca10baa8a4c` の `src/cli/pane.rs`, `src/app/api/panes.rs`, `src/app/api_helpers.rs`, `src/api/schema/panes.rs` | atomic request、live bracketed-paste encoding、公開 state の限界 |
+| failure artifact | `.kaji-artifacts/415/runs/260829181754` | wrapper 未起動の terminal / result 証跡 |
+| Herdr backend ADR | `docs/adr/007-interactive-terminal-runner.md` | ownership、snapshot、cleanup の既存契約 |
+| テスト規約 | `docs/dev/testing-convention.md` | 過去障害の恒久回帰と Medium subprocess 結合 |

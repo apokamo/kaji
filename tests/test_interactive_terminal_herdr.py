@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import shlex
+import stat
 import subprocess
-from collections.abc import Iterator
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -30,6 +31,7 @@ from kaji_harness.interactive_terminal_herdr import (
     _launch_herdr_pane,
     _list_managed_herdr_panes,
     _mark_herdr_pane,
+    _materialize_herdr_launcher,
     _parse_herdr_version,
     _preflight_herdr,
     _read_herdr_pane,
@@ -39,7 +41,6 @@ from kaji_harness.interactive_terminal_herdr import (
     _run_herdr_json,
     _run_herdr_pane_command,
     _select_herdr_launch_placement,
-    _wait_for_herdr_shell_ready,
     execute_interactive_terminal_herdr,
 )
 from kaji_harness.models import Step
@@ -196,103 +197,63 @@ class TestHerdrCommandContract:
         ]
         assert "--ttl-ms" not in argv
 
-    def test_shell_readiness_waits_for_executed_marker_not_echoed_command(
-        self, tmp_path: Path
+    def test_launcher_moves_long_payload_out_of_pane_command(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        response = {
-            "result": {
-                "type": "output_matched",
-                "pane_id": "w1:p2",
-                "matched_line": "__KAJI_SHELL_READY_run123__",
-            }
-        }
+        monkeypatch.setenv("PATH", "/a/very/long/path:" + "x" * 1200)
+        launcher_path = tmp_path / "attempt with spaces" / "herdr-launcher.sh"
+        wrapper_command = "/wrapper codex '/prompt with spaces' /verdict /work '' '' '' '' auto"
+
+        pane_command = _materialize_herdr_launcher(launcher_path, wrapper_command)
+
+        launcher = launcher_path.read_text(encoding="utf-8")
+        assert launcher.startswith("#!/bin/sh\nexec env ")
+        assert "PATH=/a/very/long/path:" in launcher
+        assert wrapper_command in launcher
+        assert pane_command == f"exec {shlex.quote(str(launcher_path))}"
+        assert "PATH=" not in pane_command
+        assert "/prompt" not in pane_command
+        assert len(pane_command) < 200
+        assert stat.S_IMODE(launcher_path.stat().st_mode) == 0o700
+
+    def test_launcher_is_published_atomically(self, tmp_path: Path) -> None:
+        launcher_path = tmp_path / "herdr-launcher.sh"
+
+        with patch("kaji_harness.interactive_terminal_herdr.os.replace") as replace:
+            _materialize_herdr_launcher(launcher_path, "/wrapper codex")
+
+        temporary_path, published_path = replace.call_args.args
+        assert Path(temporary_path).name == "herdr-launcher.sh.tmp"
+        assert published_path == launcher_path
+        assert stat.S_IMODE(Path(temporary_path).stat().st_mode) == 0o700
+
+    def test_launcher_creation_wraps_filesystem_failure(self, tmp_path: Path) -> None:
+        launcher_path = tmp_path / "herdr-launcher.sh"
+
         with (
             patch(
-                "kaji_harness.interactive_terminal_herdr._run_herdr_optional_ok_json"
-            ) as run_command,
-            patch(
-                "kaji_harness.interactive_terminal_herdr._run_herdr_json",
-                return_value=response,
-            ) as wait_output,
-        ):
-            _wait_for_herdr_shell_ready(
-                "/usr/bin/herdr",
-                "w1:p2",
-                readiness_id="run-123",
-                workdir=tmp_path,
-            )
-
-        readiness_command = run_command.call_args.args[1][-1]
-        assert "__KAJI_SHELL_READY_run123__" not in readiness_command
-        assert "printf" in readiness_command
-        wait_arguments = wait_output.call_args.args[1]
-        assert wait_arguments == [
-            "pane",
-            "wait-output",
-            "w1:p2",
-            "--match",
-            "__KAJI_SHELL_READY_run123__",
-            "--source",
-            "recent-unwrapped",
-            "--timeout",
-            "5000",
-        ]
-
-    def test_shell_readiness_rejects_match_from_another_pane(self, tmp_path: Path) -> None:
-        response = {
-            "result": {
-                "type": "output_matched",
-                "pane_id": "w1:p9",
-                "matched_line": "__KAJI_SHELL_READY_run123__",
-            }
-        }
-        with (
-            patch("kaji_harness.interactive_terminal_herdr._run_herdr_optional_ok_json"),
-            patch(
-                "kaji_harness.interactive_terminal_herdr._run_herdr_json",
-                return_value=response,
+                "kaji_harness.interactive_terminal_herdr.os.open",
+                side_effect=OSError("disk unavailable"),
             ),
-            pytest.raises(CLIExecutionError, match="different pane"),
+            pytest.raises(CLIExecutionError, match="Herdr launcher creation failed") as exc_info,
         ):
-            _wait_for_herdr_shell_ready(
-                "/usr/bin/herdr",
-                "w1:p2",
-                readiness_id="run-123",
-                workdir=tmp_path,
-            )
+            _materialize_herdr_launcher(launcher_path, "/wrapper codex")
 
-    @pytest.mark.parametrize("failure_stage", ["probe", "wait"])
-    def test_shell_readiness_wraps_command_failure_with_focused_diagnostic(
-        self, tmp_path: Path, failure_stage: str
-    ) -> None:
-        command_error = CLIExecutionError(
-            "interactive_terminal",
-            124 if failure_stage == "wait" else 7,
-            f"{failure_stage} command failed",
-        )
-        run_side_effect = command_error if failure_stage == "probe" else None
-        wait_side_effect = command_error if failure_stage == "wait" else None
+        assert "disk unavailable" in exc_info.value.stderr
+        assert str(launcher_path) in exc_info.value.stderr
+
+    def test_launcher_cleanup_failure_does_not_replace_creation_error(self, tmp_path: Path) -> None:
+        launcher_path = tmp_path / "herdr-launcher.sh"
+
         with (
             patch(
-                "kaji_harness.interactive_terminal_herdr._run_herdr_optional_ok_json",
-                side_effect=run_side_effect,
+                "kaji_harness.interactive_terminal_herdr.os.replace",
+                side_effect=OSError("publish failed"),
             ),
-            patch(
-                "kaji_harness.interactive_terminal_herdr._run_herdr_json",
-                side_effect=wait_side_effect,
-            ),
-            pytest.raises(CLIExecutionError, match="shell readiness failed") as exc_info,
+            patch.object(Path, "unlink", side_effect=OSError("cleanup failed")),
+            pytest.raises(CLIExecutionError, match="publish failed"),
         ):
-            _wait_for_herdr_shell_ready(
-                "/usr/bin/herdr",
-                "w1:p2",
-                readiness_id="run-123",
-                workdir=tmp_path,
-            )
-
-        assert exc_info.value.returncode == command_error.returncode
-        assert f"{failure_stage} command failed" in exc_info.value.stderr
-        assert "pane w1:p2" in exc_info.value.stderr
+            _materialize_herdr_launcher(launcher_path, "/wrapper codex")
 
     def test_marker_accepts_empty_success_then_confirms_exact_tokens(self) -> None:
         completed = subprocess.CompletedProcess(["herdr"], 0, stdout="", stderr="")
@@ -501,7 +462,7 @@ class TestHerdrCommandContract:
             "pane",
             "run",
             "w1:p2",
-            "env PATH=/experiment/fake-bin:/usr/bin kaji run workflow.yaml 396",
+            "kaji run workflow.yaml 396",
         ]
         assert run.call_args.kwargs["cwd"] == tmp_path
 
@@ -1109,29 +1070,15 @@ class TestHerdrCommandContract:
 class TestExecuteHerdr:
     """The high-level lifecycle remains artifact-driven and ownership-safe."""
 
-    @pytest.fixture(autouse=True)
-    def shell_ready(self) -> Iterator[MagicMock]:
-        """Keep unrelated lifecycle tests focused beyond the readiness barrier."""
-        with patch("kaji_harness.interactive_terminal_herdr._wait_for_herdr_shell_ready") as ready:
-            yield ready
-
-    def test_verdict_snapshot_and_owned_cleanup(
-        self, tmp_path: Path, shell_ready: MagicMock
-    ) -> None:
+    def test_verdict_snapshot_and_owned_cleanup(self, tmp_path: Path) -> None:
         prompt_path = tmp_path / "prompt.txt"
         verdict_path = tmp_path / "verdict.yaml"
         prompt_path.write_text("do work", encoding="utf-8")
         step = Step(id="design", skill="design", agent="claude")
-        dispatch_order: list[str] = []
-
-        def confirm_readiness(*args: object, **kwargs: object) -> None:
-            dispatch_order.append("readiness")
 
         def run_command(*args: object, **kwargs: object) -> None:
-            dispatch_order.append("wrapper")
             verdict_path.write_text("status: PASS\nreason: ok\nevidence: ok\n", encoding="utf-8")
 
-        shell_ready.side_effect = confirm_readiness
         pane_read = HerdrPaneRead(text="interactive screen\n", truncated=False, revision=4)
         with (
             patch(
@@ -1184,13 +1131,10 @@ class TestExecuteHerdr:
             step_id="design",
         )
         run.assert_called_once()
-        shell_ready.assert_called_once_with(
-            "/usr/bin/herdr",
-            "w1:p2",
-            readiness_id="11111111-1111-4111-8111-111111111111",
-            workdir=tmp_path,
-        )
-        assert dispatch_order == ["readiness", "wrapper"]
+        pane_command = run.call_args.args[2]
+        launcher_path = tmp_path / "herdr-launcher.sh"
+        assert pane_command == f"exec {launcher_path}"
+        assert launcher_path.read_text(encoding="utf-8").startswith("#!/bin/sh\nexec env 'PATH=")
         close.assert_called_once_with(
             "/usr/bin/herdr",
             "w1:p2",
@@ -1204,16 +1148,13 @@ class TestExecuteHerdr:
         assert metadata["transcript_kind"] == "rendered_recent_unwrapped_snapshot"
         assert metadata["transcript_truncated"] is False
 
-    def test_readiness_failure_never_dispatches_wrapper_and_closes_owned_pane(
-        self, tmp_path: Path, shell_ready: MagicMock
-    ) -> None:
+    def test_launcher_failure_never_dispatches_and_closes_owned_pane(self, tmp_path: Path) -> None:
         prompt_path = tmp_path / "prompt.txt"
         prompt_path.write_text("do work", encoding="utf-8")
         step = Step(id="design", skill="design", agent="codex")
-        readiness_error = CLIExecutionError(
-            "interactive_terminal", 124, "Herdr shell readiness timed out for pane w1:p2"
+        launcher_error = CLIExecutionError(
+            "interactive_terminal", 1, "Herdr launcher creation failed"
         )
-        shell_ready.side_effect = readiness_error
 
         with (
             patch(
@@ -1231,6 +1172,10 @@ class TestExecuteHerdr:
                 ),
             ),
             patch("kaji_harness.interactive_terminal_herdr._mark_herdr_pane"),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._materialize_herdr_launcher",
+                side_effect=launcher_error,
+            ),
             patch("kaji_harness.interactive_terminal_herdr._run_herdr_pane_command") as run_wrapper,
             patch(
                 "kaji_harness.interactive_terminal_herdr._capture_herdr_snapshot",
@@ -1244,7 +1189,7 @@ class TestExecuteHerdr:
                 "kaji_harness.interactive_terminal_herdr.uuid.uuid4",
                 return_value="run-123",
             ),
-            pytest.raises(CLIExecutionError, match="shell readiness timed out") as exc_info,
+            pytest.raises(CLIExecutionError, match="launcher creation failed") as exc_info,
         ):
             execute_interactive_terminal_herdr(
                 step=step,
@@ -1254,7 +1199,7 @@ class TestExecuteHerdr:
                 timeout=30,
             )
 
-        assert exc_info.value is readiness_error
+        assert exc_info.value is launcher_error
         run_wrapper.assert_not_called()
         close.assert_called_once_with(
             "/usr/bin/herdr",
