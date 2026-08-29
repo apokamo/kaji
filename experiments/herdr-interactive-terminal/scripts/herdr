@@ -146,6 +146,10 @@ def main() -> NoReturn:
         raise SystemExit(0)
     if arguments[:3] == ["pane", "run", "w1:p2"]:
         command = shlex.split(arguments[3])
+        if len(command) == 4 and command[:2] == ["printf", "%s%s\\n"]:
+            state["shell_ready_marker"] = "".join(command[2:])
+            _save_state(state)
+            raise SystemExit(0)
         if len(command) >= 2 and command[0] == "env" and command[1].startswith("PATH="):
             command = command[2:]
         if len(command) < 4:
@@ -158,6 +162,21 @@ def main() -> NoReturn:
         state["command"] = command
         _save_state(state)
         raise SystemExit(0)
+    if arguments[:3] == ["pane", "wait-output", "w1:p2"]:
+        try:
+            marker = arguments[arguments.index("--match") + 1]
+        except (ValueError, IndexError):
+            _fail("fake wait-output requires --match")
+        if state.get("shell_ready_marker") != marker:
+            _fail("fake shell readiness marker was not executed")
+        _save_state(state)
+        _respond(
+            {
+                "type": "output_matched",
+                "pane_id": "w1:p2",
+                "matched_line": marker,
+            }
+        )
     if arguments[:3] == ["pane", "read", "w1:p2"]:
         _save_state(state)
         print("fake interactive agent screen")

@@ -50,6 +50,9 @@ ADR 005 artifact-primary verdict 解決は不変。v3 は v2 の pane 配置契�
 - pane ownershipはsource-scoped token `kaji_origin` / `kaji_run` / `kaji_step`で表現する。tokenは
   `--ttl-ms`を省略し、置換・明示消去・pane closeまで保持するHerdr契約を利用する。close/pruneは
   exact paneを再取得しorigin/run一致を確認した場合だけ行う。marker設定失敗時はunowned paneを閉じない。
+- ownership確認後、shellが実行した一意markerをboundedに待ってからwrapper commandを送る。
+  readinessを確認できない場合はwrapperを送らず、pane run failureと同じownership確認済みcleanupへ進む。
+  markerは入力echoだけでは一致しない構成にする。
 - 配置はtmuxと同じ初回右・以後右列内の下分割・最大2枚。layoutのy座標で上側を最古としてpruneする。
   past-run候補のrun token / layout欠落やclose直前のownership不一致は、そのpaneをskipしてwarningと
   `kaji_agent_panes_skipped`へ残す。一時的に2枚を超えても、不確かなpaneを閉じたりstepを中断したりしない。

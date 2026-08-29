@@ -48,6 +48,7 @@ _TRANSCRIPT_LINES = 2000
 _HERDR_METADATA_SOURCE = "kaji"
 _MAX_VISIBLE_AGENT_PANES = 2
 _HERDR_COMMAND_TIMEOUT_SECONDS = 10
+_HERDR_SHELL_READY_TIMEOUT_MILLISECONDS = 5000
 
 
 class _HerdrResultEnvelope(BaseModel):
@@ -183,6 +184,12 @@ def execute_interactive_terminal_herdr(
         execution_policy=execution_policy,
     )
     try:
+        _wait_for_herdr_shell_ready(
+            herdr,
+            pane_id,
+            readiness_id=run_id,
+            workdir=workdir,
+        )
         _run_herdr_pane_command(herdr, pane_id, command, workdir=workdir)
     except CLIExecutionError:
         pane_read = _capture_herdr_snapshot(herdr, pane_id, terminal_log)
@@ -805,6 +812,78 @@ def _run_herdr_pane_command(herdr: str, pane_id: str, command: str, *, workdir: 
         ["pane", "run", pane_id, command],
         workdir=workdir,
     )
+
+
+def _wait_for_herdr_shell_ready(
+    herdr: str,
+    pane_id: str,
+    *,
+    readiness_id: str,
+    workdir: Path,
+) -> None:
+    """Wait until a new pane's interactive shell executes a marker command.
+
+    The completed marker is split across two shell arguments so ``wait-output`` cannot
+    match the terminal's echoed input before the shell actually executes ``printf``.
+
+    Args:
+        herdr: Resolved executable path.
+        pane_id: Explicit split response pane ID.
+        readiness_id: Per-launch identifier used to make the marker unique.
+        workdir: Trusted cwd for Herdr client processes.
+
+    Raises:
+        CLIExecutionError: The probe cannot run, times out, or matches another pane.
+    """
+    normalized_id = re.sub(r"[^A-Za-z0-9]", "", readiness_id)
+    marker = f"__KAJI_SHELL_READY_{normalized_id}__"
+    split_at = len(marker) // 2
+    marker_start = marker[:split_at]
+    marker_end = marker[split_at:]
+    readiness_command = f"printf '%s%s\\n' {shlex.quote(marker_start)} {shlex.quote(marker_end)}"
+    try:
+        _run_herdr_optional_ok_json(
+            herdr,
+            ["pane", "run", pane_id, readiness_command],
+            workdir=workdir,
+        )
+        result = _herdr_result(
+            _run_herdr_json(
+                herdr,
+                [
+                    "pane",
+                    "wait-output",
+                    pane_id,
+                    "--match",
+                    marker,
+                    "--source",
+                    "recent-unwrapped",
+                    "--timeout",
+                    str(_HERDR_SHELL_READY_TIMEOUT_MILLISECONDS),
+                ],
+                workdir=workdir,
+            ),
+            "output_matched",
+        )
+        if result.get("pane_id") != pane_id:
+            raise CLIExecutionError(
+                "interactive_terminal",
+                1,
+                f"Herdr shell readiness matched a different pane: expected {pane_id}",
+            )
+        matched_line = result.get("matched_line")
+        if not isinstance(matched_line, str) or marker not in matched_line:
+            raise CLIExecutionError(
+                "interactive_terminal",
+                1,
+                f"Herdr shell readiness response omitted the execution marker: {pane_id}",
+            )
+    except CLIExecutionError as error:
+        raise CLIExecutionError(
+            "interactive_terminal",
+            error.returncode,
+            f"Herdr shell readiness failed for pane {pane_id}: {error.stderr}",
+        ) from error
 
 
 def _read_herdr_pane(herdr: str, pane_id: str) -> HerdrPaneRead:
