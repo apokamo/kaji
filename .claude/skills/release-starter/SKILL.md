@@ -11,7 +11,8 @@ description: "独立 review 済み starter candidate を承認 gate 後に atomi
 
 1. tracking Issue と [starter sync runbook](../../../docs/operations/release/starter-sync-runbook.md) から
    target（= 本文の現在の `syncing` batch から求まる `active_target`）、`covered_targets`（同じ
-   batch の target 集合）、starter identity、local path を解決する。
+   batch の target 集合）、starter identity、local path を解決する。同じ本文読み取りから
+   `tracking_issue_has_pending_tasks`（現在の batch 以外に `open` 行が残っているか）も導出する。
 2. `kaji issue resolve-verdict <id> --step review-starter-update --require-meta target
    --require-meta base --require-meta candidate` を実行し、最新 verdict が独立 review PASS で、
    meta.target == active_target、meta.candidate == local main HEAD であることを確認する。未検出、
@@ -21,9 +22,9 @@ description: "独立 review 済み starter candidate を承認 gate 後に atomi
    release-plan を呼ばない。ただし N/A でも close 前に remote main == meta.base
    (== meta.candidate) を必須とし、review PASS 後に remote main が前進していれば
    stale review evidence として ABORT する。変更 candidate の場合だけ、この時点で初めて
-   [pre-flight and recovery](references/preflight-and-recovery.md) を読み、観測 JSON を release-plan へ
-   渡す。未公開 path は remote main == meta.base、公開済み残処理 path は remote main ==
-   meta.candidate を必須にする。
+   [pre-flight and recovery](references/preflight-and-recovery.md) を読み、手順1で導出した
+   `tracking_issue_has_pending_tasks` を含む観測 JSON を release-plan へ渡す。未公開 path は
+   remote main == meta.base、公開済み残処理 path は remote main == meta.candidate を必須にする。
 
 ## Publish
 
@@ -35,7 +36,12 @@ description: "独立 review 済み starter candidate を承認 gate 後に atomi
   **人間の明示承認**を得てから annotated tag と main を `git push --atomic` する。
 - push 後は [Release notes template](templates/release-notes.md) から `gh release create` を実行し、
   続けて完了 bookkeeping を行う。
-- route 2 の部分成功再実行は release-plan が返す不足分だけを処理する。新 tag、ref push、再承認は不要。
+- route 2 の部分成功再実行は release-plan の `remaining_actions` のうち `create_release` だけを
+  実行する（不足していれば `gh release create` を再試行。新 tag、ref push、再承認は不要）。
+  `update_state_table` / `close_tracking_issue` / `promote_next_task` は状態表更新・Issue
+  close が未完了であることを示す参考情報に留め、直接実行しない。実行は必ず下記の完了
+  bookkeeping（`kaji starter task-plan`）経由で行う（判定の二重化防止。詳細は
+  [pre-flight and recovery](references/preflight-and-recovery.md)）。
 
 ### 完了 bookkeeping（`kaji starter task-plan` の `completion`）
 

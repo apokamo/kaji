@@ -313,14 +313,30 @@ def test_tracking_plan_ignores_issues_for_other_starters() -> None:
     assert plan.decision == "CREATE"
 
 
-def test_tracking_plan_ignores_legacy_schema_issues_without_starter_repo_line() -> None:
+def test_tracking_plan_aborts_on_starter_sync_labeled_issue_without_starter_repo() -> None:
+    """指摘3回帰: starter-sync labeled Issue が識別不能(starter_repo 欠落)なら fail-loud ABORT する
+    (そのIssueを「別starter」として無視すると、実は同じstarterのIssueだった場合に重複作成しうる)。
+    """
     legacy = "target_kaji_release: v0.16.0\nstatus: PENDING\n"
     plan = build_tracking_plan(
         _tracking_input(open_tracking_issues=[{"issue_id": 401, "body": legacy}])
     )
 
-    assert plan.route == 1
-    assert plan.decision == "CREATE"
+    assert plan.route == 5
+    assert plan.decision == "ABORT"
+    assert "401" in plan.reason
+
+
+def test_tracking_plan_aborts_on_starter_sync_labeled_issue_missing_schema_marker() -> None:
+    """指摘3回帰: schema marker 欠落の labeled Issue も無視されず ABORT する。"""
+    malformed = "starter_repo: apokamo/kaji-starter-python\nno schema marker here\n"
+    plan = build_tracking_plan(
+        _tracking_input(open_tracking_issues=[{"issue_id": 402, "body": malformed}])
+    )
+
+    assert plan.route == 5
+    assert plan.decision == "ABORT"
+    assert "402" in plan.reason
 
 
 # --- build_task_plan: route 1-7 ---------------------------------------------
@@ -566,7 +582,7 @@ def test_task_plan_completion_to_promotion_sequence_never_aborts() -> None:
         {
             "batch": "b1",
             "completed_targets": ["v0.20.0", "v0.20.1", "v0.20.99"],
-            "published_tag": "kaji-v0.20.1",
+            "published_tag": "kaji-v0.20.99",
         },
         {"batch": "b1", "completed_targets": ["v0.30.0"], "published_tag": "kaji-v0.30.0"},
         {"batch": "b9", "completed_targets": ["v0.20.0", "v0.20.1"], "published_tag": None},
@@ -637,6 +653,41 @@ def test_task_plan_route7_aborts_when_body_fails_to_parse() -> None:
     assert plan.decision == "ABORT"
 
 
+def test_task_plan_route7_aborts_on_batch_mixing_done_and_syncing_rows() -> None:
+    """review-code Must Fix 1 回帰: 同一 batch id が done 行と syncing 行に分裂した本文は、
+    route 1 が継続扱いする前に fail-closed で ABORT する（束ね集合が破損した状態で
+    covered_targets を計算・completion を適用させない）。
+    """
+    body = _body_text(
+        rows=[
+            ("v0.20.0", "syncing", "b1", "-"),
+            ("v0.20.1", "done", "b1", "kaji-v0.20.1"),
+        ]
+    )
+    plan = build_task_plan(_task_input(body=body))
+
+    assert plan.route == 7
+    assert plan.decision == "ABORT"
+    assert "b1" in plan.reason
+
+
+def test_task_plan_route7_aborts_when_done_batch_tag_is_not_on_the_max_target() -> None:
+    """review-code Must Fix 1 回帰: done batch の starter tag が batch 内最大 target 以外の
+    行に付いている本文は CLOSABLE を返さず ABORT する。
+    """
+    body = _body_text(
+        rows=[
+            ("v0.20.0", "done", "b1", "kaji-v0.20.0"),
+            ("v0.20.1", "done", "b1", "N/A"),
+        ]
+    )
+    plan = build_task_plan(_task_input(body=body))
+
+    assert plan.route == 7
+    assert plan.decision == "ABORT"
+    assert "b1" in plan.reason
+
+
 # --- TaskCompletion / TrackingIssueObservation validation -------------------
 
 
@@ -645,6 +696,66 @@ def test_task_completion_rejects_invalid_batch_id() -> None:
         TaskCompletion.model_validate(
             {"batch": "batch-1", "completed_targets": ["v0.20.0"], "published_tag": None}
         )
+
+
+def test_task_completion_rejects_duplicate_completed_targets() -> None:
+    """review-code Must Fix 2 回帰: 重複した target は set 比較を素通りさせず拒否する
+    (単一行 batch に重複を渡すと covered_targets が重複し coalesced が誤って真になる)。
+    """
+    with pytest.raises(Exception):  # noqa: B017 - pydantic ValidationError
+        TaskCompletion.model_validate(
+            {
+                "batch": "b1",
+                "completed_targets": ["v0.20.0", "v0.20.0"],
+                "published_tag": None,
+            }
+        )
+
+
+def test_task_completion_rejects_non_ascending_completed_targets() -> None:
+    """review-code Must Fix 2 回帰: 昇順でない completed_targets は拒否する。"""
+    with pytest.raises(Exception):  # noqa: B017 - pydantic ValidationError
+        TaskCompletion.model_validate(
+            {
+                "batch": "b1",
+                "completed_targets": ["v0.20.1", "v0.20.0"],
+                "published_tag": None,
+            }
+        )
+
+
+def test_task_completion_rejects_malformed_completed_target_version() -> None:
+    with pytest.raises(Exception):  # noqa: B017 - pydantic ValidationError
+        TaskCompletion.model_validate(
+            {"batch": "b1", "completed_targets": ["0.20.0"], "published_tag": None}
+        )
+
+
+def test_task_completion_rejects_published_tag_not_matching_active_target() -> None:
+    """review-code Must Fix 2 回帰: published_tag は active target(= 昇順 completed_targets の
+    最大値)に対応する starter tag でなければならない(starter-sync-runbook.md: 初回 tag は
+    kaji-vX.Y.Z)。active target v0.20.0 に無関係な kaji-v9.9.9 を受理してはならない。
+    """
+    with pytest.raises(Exception):  # noqa: B017 - pydantic ValidationError
+        TaskCompletion.model_validate(
+            {
+                "batch": "b1",
+                "completed_targets": ["v0.20.0"],
+                "published_tag": "kaji-v9.9.9",
+            }
+        )
+
+
+def test_task_completion_accepts_revision_tag_for_active_target() -> None:
+    """`kaji-vX.Y.Z-rN` revision suffix は active target への対応として受理する。"""
+    completion = TaskCompletion.model_validate(
+        {
+            "batch": "b1",
+            "completed_targets": ["v0.20.0", "v0.20.1"],
+            "published_tag": "kaji-v0.20.1-r2",
+        }
+    )
+    assert completion.published_tag == "kaji-v0.20.1-r2"
 
 
 def test_tracking_issue_observation_requires_issue_id_and_body() -> None:

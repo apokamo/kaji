@@ -39,6 +39,12 @@ class ReleasePlanInput(BaseModel):
     state_table_row_exists: bool
     state_table_status: Literal["PENDING", "PASS", "N/A"]
     tracking_issue_state: Literal["open", "closed"]
+    # Default False only preserves route 1-4 output for callers that predate this field
+    # (see test_default_pending_tasks_field_preserves_existing_close_behavior). Every
+    # caller with a starter-sync tracking Issue (release-starter/SKILL.md Pre-flight
+    # step 1) must derive and pass this explicitly from the Issue body's ``open`` rows
+    # outside the current batch; the default must never be relied on to mean "no pending
+    # tasks".
     tracking_issue_has_pending_tasks: bool = False
 
 

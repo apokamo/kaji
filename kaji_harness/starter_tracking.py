@@ -24,7 +24,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .errors import TrackingBodyError
 
@@ -323,13 +323,17 @@ def build_tracking_plan(observation: TrackingPlanInput) -> TrackingPlan:
     """
     candidates: list[TrackingIssueObservation] = []
     for issue in observation.open_tracking_issues:
-        loose_repo = _extract_field(issue.body.splitlines(), "starter_repo")
-        if loose_repo != observation.starter_repo:
-            continue  # belongs to a different starter (or a legacy body without this field)
+        # ``starter-sync`` is the sole discovery key (may span multiple starters), so a
+        # labeled Issue whose body cannot be parsed (missing schema marker, missing/malformed
+        # ``starter_repo``, malformed table) is never silently skipped as "a different
+        # starter": its identity is unknown, and ignoring it risks creating a duplicate
+        # tracking Issue for this starter. Fail loud instead (ADR 008; Issue #423 review).
         try:
-            parse_tracking_issue_body(issue.body)
+            body = parse_tracking_issue_body(issue.body)
         except TrackingBodyError as exc:
             return _tracking_abort(f"Tracking Issue #{issue.issue_id} body failed to parse: {exc}")
+        if body.starter_repo != observation.starter_repo:
+            continue  # belongs to a different starter
         candidates.append(issue)
 
     if observation.selected_issue_id is not None:
@@ -429,6 +433,42 @@ class TaskCompletion(BaseModel):
     published_tag: str | None = Field(
         default=None, pattern=r"^kaji-v[0-9]+\.[0-9]+\.[0-9]+(-r[1-9][0-9]*)?$"
     )
+
+    @field_validator("completed_targets")
+    @classmethod
+    def _validate_completed_targets(cls, value: list[str]) -> list[str]:
+        """Enforce the design's "ascending vX.Y.Z set" contract (no duplicates, no gaps in order)."""
+        if not value:
+            raise ValueError("completed_targets must not be empty.")
+        try:
+            parsed = [parse_release_version(target) for target in value]
+        except ValueError as exc:
+            raise ValueError(f"completed_targets contains an invalid vX.Y.Z entry: {exc}") from exc
+        if len(set(value)) != len(value):
+            raise ValueError(f"completed_targets must not contain duplicates, got {value!r}.")
+        if parsed != sorted(parsed):
+            raise ValueError(f"completed_targets must be in ascending order, got {value!r}.")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_published_tag_matches_active_target(self) -> TaskCompletion:
+        """A starter tag names the kaji Release it was published for (runbook: initial tag
+        is ``kaji-vX.Y.Z``, revisions append ``-rN``); it must correspond to the batch's
+        active target (the max of ``completed_targets``), never an unrelated version.
+        """
+        if self.published_tag is None:
+            return self
+        active_target = self.completed_targets[-1]  # already validated ascending
+        expected_prefix = f"kaji-{active_target}"
+        if self.published_tag != expected_prefix and not self.published_tag.startswith(
+            f"{expected_prefix}-r"
+        ):
+            raise ValueError(
+                f"published_tag {self.published_tag!r} does not correspond to active target "
+                f"{active_target!r} (expected {expected_prefix!r} or a {expected_prefix!r}-rN "
+                "revision)."
+            )
+        return self
 
 
 class TaskPlanInput(BaseModel):
@@ -590,6 +630,23 @@ def build_task_plan(observation: TaskPlanInput) -> TaskPlan:
             f"open={open_targets} syncing_batch={syncing_batches or None}.",
         )
 
+    # A batch id is one sync attempt; every row sharing it must be in the same lifecycle
+    # phase (all 'syncing' or all 'done'). A batch split across two statuses cannot happen
+    # under the normal SYNC -> COMPLETED transition (both are rewritten together), so a
+    # mixed observation is a contradiction and must not be allowed to continue as if the
+    # batch were still syncing or already closable.
+    statuses_by_batch: dict[str, set[TaskStatus]] = {}
+    for task in body.tasks:
+        if task.batch != "-":
+            statuses_by_batch.setdefault(task.batch, set()).add(task.status)
+    for batch_id, statuses in statuses_by_batch.items():
+        if len(statuses) > 1:
+            return _task_abort(
+                7,
+                f"Tracking issue #{observation.issue_id} batch {batch_id} mixes statuses "
+                f"{sorted(statuses)}; a batch must be entirely 'syncing' or entirely 'done'.",
+            )
+
     done_batches: dict[str, list[TrackingTaskRow]] = {}
     for task in body.tasks:
         if task.status == "done":
@@ -602,6 +659,17 @@ def build_task_plan(observation: TaskPlanInput) -> TaskPlan:
                 f"Tracking issue #{observation.issue_id} done batch {batch_id} has "
                 f"{len(tag_rows)} starter tag results; expected at most 1.",
             )
+        if tag_rows:
+            expected_active = max(
+                (row.target_kaji_release for row in rows), key=parse_release_version
+            )
+            if tag_rows[0].target_kaji_release != expected_active:
+                return _task_abort(
+                    7,
+                    f"Tracking issue #{observation.issue_id} done batch {batch_id} carries "
+                    f"its starter tag on {tag_rows[0].target_kaji_release}, but the batch's "
+                    f"max target is {expected_active}.",
+                )
 
     if observation.completion is None:
         return _build_sync_or_closable_plan(body, syncing_batches, open_targets)

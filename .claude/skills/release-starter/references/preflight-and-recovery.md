@@ -6,16 +6,34 @@
 
 N/A (`meta.base == meta.candidate`) は本 helper を呼ぶ前に分岐する。変更 candidate だけが
 `kaji starter release-plan` の stdin へ target、candidate、対象 version の tag 名 / SHA / annotated、
-GitHub Release tag 名、kaji Release 状態表行、tracking Issue state を JSON で渡す。出力 route:
+GitHub Release tag 名、kaji Release 状態表行、tracking Issue state、
+`tracking_issue_has_pending_tasks` を JSON で渡す。
+
+`tracking_issue_has_pending_tasks` は、tracking Issue 本文に現在の batch（`active_target` /
+`covered_targets`）以外の `open` 行が 1 行でも残っているかどうかで決める（Pre-flight 手順1で
+本文を読んだ時点で判定できる）。1行でも残っていれば `true`、本文の全行が現在の batch に
+含まれる（後続 `open` 行がない）なら `false`。既定値 `false` を省略して呼ぶと、pending task が
+あっても `close_tracking_issue` が返る（Issue #423 レビュー指摘）ため、本文から導出した値を
+必ず明示的に渡すこと。
+
+出力 route:
 
 1. tag なし: `kaji-vX.Y.Z` を新規公開
 2. latest tag SHA == candidate: 同じ tag を再利用し不足 bookkeeping のみ実行
 3. latest SHA != candidate: `kaji-vX.Y.Z-r(maxN+1)` を新規公開
 4. 旧 revision SHA == candidate: ABORT
-5. tag / Release / annotated / 状態表の観測矛盾: ABORT
+5. tag / Release / annotated / 状態表 / `tracking_issue_has_pending_tasks` の観測矛盾: ABORT
 
 route 1 / 3 は人間承認後に `git push --atomic <remote> main <tag>`。route 2 は新 tag と ref push を
 行わず、(a) Release 作成、(b) 完了 bookkeeping（後述）の不足 suffix だけを順に実行する。
+
+`remaining_actions` に含まれる `update_state_table` / `close_tracking_issue` /
+`promote_next_task` は、state table 更新・Issue close が未完了であることを示す参考情報に
+留める。実際に kaji Release の状態表へ書き込む値・tracking Issue 本文更新・close 実行は、
+下記「完了 bookkeeping」の `kaji starter task-plan` の出力（`state_table_updates` /
+`next_body` / `close_allowed`）だけを正本として適用する。`release-plan` の
+`remaining_actions` の値を見て close や状態表更新を直接実行しない（判定の二重化を防ぐ）。
+`create_release` だけは `release-plan` の出力どおり `gh release create` を実行する。
 
 ## 完了 bookkeeping（`kaji starter task-plan` の `completion`）
 

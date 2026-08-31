@@ -117,6 +117,27 @@ def test_release_starter_references_completion_bookkeeping() -> None:
         assert term in preflight
 
 
+def test_release_starter_wires_pending_tasks_and_separates_planner_authority() -> None:
+    """review-code Must Fix 4 回帰: release-plan の `tracking_issue_has_pending_tasks` の
+    導出元と、`remaining_actions`(update_state_table/close_tracking_issue/promote_next_task)
+    が task-plan に対して参考情報に留まる(実行の正本ではない)ことを skill / reference が
+    明記する。
+    """
+    release = (ROOT / ".claude/skills/release-starter/SKILL.md").read_text(encoding="utf-8")
+    preflight = (
+        ROOT / ".claude/skills/release-starter/references/preflight-and-recovery.md"
+    ).read_text(encoding="utf-8")
+
+    assert "tracking_issue_has_pending_tasks" in release
+    assert "tracking_issue_has_pending_tasks" in preflight
+    assert "open" in preflight  # 導出規則: 現在の batch 以外に open 行が残っているか
+
+    for term in ("直接実行しない", "正本"):
+        assert term in preflight
+    assert "参考情報" in release
+    assert "参考情報" in preflight
+
+
 def test_release_skill_references_tracking_plan_and_pending_on_abort() -> None:
     """Issue #423: /release Step 8 が tracking-plan と ABORT 時の PENDING 維持を明記する。"""
     release_skill = (ROOT / ".claude/skills/release/SKILL.md").read_text(encoding="utf-8")
