@@ -281,6 +281,11 @@ kaji starter tracking-plan <<EOF
 EOF
 ```
 
+managed starter の checkout が
+[Tracking Issue の表](../../../docs/operations/release/starter-sync-runbook.md#managed-starters)の
+default local path と異なる場合は、`starter_path` にその絶対パスを渡す
+（新規作成される tracking Issue 本文へそのまま反映される。省略時は本文に出力しない = 既定パス）。
+
 `decision` ごとの対応:
 
 | decision | 対応 |

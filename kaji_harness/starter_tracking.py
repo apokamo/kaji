@@ -273,7 +273,21 @@ class TrackingIssueObservation(BaseModel):
 
 
 class TrackingPlanInput(BaseModel):
-    """Validated release-time observation used to select a tracking-plan route."""
+    """Validated release-time observation used to select a tracking-plan route.
+
+    Attributes:
+        starter_repo: The managed starter's ``owner/repo``.
+        new_target: The kaji Release that just published (``vX.Y.Z``).
+        open_tracking_issues: Every currently open ``starter-sync``-labeled
+            Issue (regardless of starter).
+        selected_issue_id: A human-selected Issue id, required when route 4
+            (multiple candidates) previously fired.
+        starter_path: Optional non-standard local checkout path, preserved
+            into a newly created tracking issue's body (route 1). A managed
+            starter at the documented default path
+            (docs/operations/release/starter-sync-runbook.md) has no need to
+            set this (PR #424 review).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -281,6 +295,7 @@ class TrackingPlanInput(BaseModel):
     new_target: str = Field(pattern=r"^v[0-9]+\.[0-9]+\.[0-9]+$")
     open_tracking_issues: list[TrackingIssueObservation]
     selected_issue_id: int | None = None
+    starter_path: str | None = None
 
 
 class TrackingPlan(BaseModel):
@@ -350,7 +365,7 @@ def build_tracking_plan(observation: TrackingPlanInput) -> TrackingPlan:
     elif not candidates:
         empty_body = TrackingIssueBody(
             starter_repo=observation.starter_repo,
-            starter_path=None,
+            starter_path=observation.starter_path,
             tasks=(
                 TrackingTaskRow(
                     target_kaji_release=observation.new_target, status="open", batch="-", result="-"
@@ -669,6 +684,20 @@ def build_task_plan(observation: TaskPlanInput) -> TaskPlan:
                     f"Tracking issue #{observation.issue_id} done batch {batch_id} carries "
                     f"its starter tag on {tag_rows[0].target_kaji_release}, but the batch's "
                     f"max target is {expected_active}.",
+                )
+            # The row placement check above only confirms *which row* carries the tag; it does
+            # not confirm the tag *value* names that row's release. A well-formed but unrelated
+            # tag (e.g. ``kaji-v9.9.9`` on the max row of a v0.20.1 batch) would otherwise pass
+            # here even though ``TaskCompletion`` rejects the same mismatch at sync time
+            # (PR #424 review).
+            expected_tag_prefix = f"kaji-{expected_active}"
+            tag = tag_rows[0].result
+            if tag != expected_tag_prefix and not tag.startswith(f"{expected_tag_prefix}-r"):
+                return _task_abort(
+                    7,
+                    f"Tracking issue #{observation.issue_id} done batch {batch_id} starter tag "
+                    f"{tag!r} does not correspond to the batch's max target {expected_active!r} "
+                    f"(expected {expected_tag_prefix!r} or a {expected_tag_prefix!r}-rN revision).",
                 )
 
     if observation.completion is None:

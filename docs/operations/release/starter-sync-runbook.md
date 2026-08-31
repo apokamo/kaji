@@ -20,9 +20,11 @@ manifest / lockfile / quality gate を repository から解決する。
 （title の owner/repo 文字列検索はしない。title 編集による under-collect と重複 Issue 作成を
 防ぐため）。
 
-```markdown
-# [starter-sync]: owner/repo の kaji 追随
+GitHub の Issue title: `[starter-sync]: owner/repo の kaji 追随`（version を含めない）。
+本文（**1 行目が schema marker** — `parse_tracking_issue_body` は marker が本文の先頭行にあることを
+要求するため、title の H1 をここに重ねてはならない）:
 
+```markdown
 <!-- kaji-starter-sync: v1 -->
 starter_repo: owner/repo
 starter_path: /optional/non-standard/path

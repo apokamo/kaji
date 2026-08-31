@@ -210,6 +210,24 @@ def test_tracking_plan_route1_creates_when_no_open_issue_exists() -> None:
     assert body.tasks[0].status == "open"
 
 
+def test_tracking_plan_route1_preserves_caller_supplied_starter_path() -> None:
+    """PR #424 review: 非標準 checkout path で release される starter は、route 1 の
+    新規作成本文にも ``starter_path`` を反映できる（省略時のみ本文に出力しない）。
+    """
+    plan = build_tracking_plan(_tracking_input(starter_path="/opt/checkouts/kaji-starter-python"))
+
+    assert plan.next_body is not None
+    body = parse_tracking_issue_body(plan.next_body)
+    assert body.starter_path == "/opt/checkouts/kaji-starter-python"
+
+
+def test_tracking_plan_route1_omits_starter_path_when_not_supplied() -> None:
+    plan = build_tracking_plan(_tracking_input())
+
+    assert plan.next_body is not None
+    assert "starter_path" not in plan.next_body
+
+
 def test_tracking_plan_route2_appends_without_disturbing_existing_rows() -> None:
     existing = _body_text(
         rows=[
@@ -686,6 +704,34 @@ def test_task_plan_route7_aborts_when_done_batch_tag_is_not_on_the_max_target() 
     assert plan.route == 7
     assert plan.decision == "ABORT"
     assert "b1" in plan.reason
+
+
+def test_task_plan_route7_aborts_when_done_batch_tag_value_does_not_match_max_target() -> None:
+    """PR #424 review: 正しい行（batch 内最大 target）に付いていても、tag の値自体が
+    その target を指していなければ ABORT する（``TaskCompletion`` の検証と対称）。
+    """
+    body = _body_text(
+        rows=[
+            ("v0.20.1", "done", "b1", "kaji-v9.9.9"),
+        ]
+    )
+    plan = build_task_plan(_task_input(body=body))
+
+    assert plan.route == 7
+    assert plan.decision == "ABORT"
+    assert "b1" in plan.reason
+
+
+def test_task_plan_accepts_revision_tag_on_max_target() -> None:
+    """``-rN`` revision tag は batch の最大 target に対応していれば許可する。"""
+    body = _body_text(
+        rows=[
+            ("v0.20.1", "done", "b1", "kaji-v0.20.1-r1"),
+        ]
+    )
+    plan = build_task_plan(_task_input(body=body))
+
+    assert plan.decision == "CLOSABLE"
 
 
 # --- TaskCompletion / TrackingIssueObservation validation -------------------
