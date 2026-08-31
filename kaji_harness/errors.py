@@ -306,3 +306,13 @@ class InvalidTransition(HarnessError):
         self.step_id = step_id
         self.verdict_status = verdict_status
         super().__init__(f"Step '{step_id}' has no transition for verdict '{verdict_status}'")
+
+
+# --- managed starter tracking エラー ---
+class TrackingBodyError(HarnessError):
+    """starter-sync tracking issue の本文が v1 schema に違反している（Issue #423）。
+
+    ``kaji_harness.starter_tracking.parse_tracking_issue_body`` が raise する。
+    呼び出し側の ``build_tracking_plan`` / ``build_task_plan`` はこれを捕捉し、
+    観測矛盾として ``decision: ABORT`` の plan へ変換する（例外を上位へ伝播させない）。
+    """

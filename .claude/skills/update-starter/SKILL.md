@@ -10,27 +10,39 @@ managed starter の local main に review 前の candidate を作る maintainer 
 
 ## 入力
 
-`/update-starter <tracking_issue_id>`。Issue 本文から `starter_repo`、
-`target_kaji_release`、任意の `starter_path` を読む。通常 path は kaji main worktree の
-sibling `../<repo-name>`。remote identity が `starter_repo` と一致しなければ ABORT。
+`/update-starter <tracking_issue_id>`。Issue 本文（v1 schema）から `starter_repo`、
+任意の `starter_path` を読む。今回追随する target は Issue 本文を直接読まず、
+`kaji starter task-plan` の `active_target`（batch 内 target の最大値）から決定的に求める
+（[starter sync runbook](../../../docs/operations/release/starter-sync-runbook.md)）。
+通常 path は kaji main worktree の sibling `../<repo-name>`。remote identity が
+`starter_repo` と一致しなければ ABORT。
 
 ## 実行順
 
-1. [starter sync runbook](../../../docs/operations/release/starter-sync-runbook.md) の前提と
-   managed starters 表を確認する。tracking Issue の必須 field、target kaji Release の
-   published 状態、対象 starter checkout と remote identity を検証する。
-2. 最新の公開済み starter GitHub Release tag を開始点にする。Release 不在、tag / Release /
-   dependency pin の矛盾、または同じ starter に古い `PENDING` があれば fallback せず ABORT。
+1. runbook の前提と managed starters 表を確認する。tracking Issue 本文が v1 schema
+   （`<!-- kaji-starter-sync: v1 -->`）であること、対象 starter checkout と remote identity を
+   検証する。
+2. `kaji starter task-plan` を実行し、Issue 番号・状態・本文（`completion` は渡さない）を
+   観測として渡す。`decision: SYNC` の `active_target` を今回の target、`covered_targets` を
+   今回束ねて追随する対象集合とする。
+   - route 2（新しい batch を開始）の場合、`next_body`（対象行を `syncing` + 新 batch id にした
+     本文）を **candidate 作成より前に** Issue 本文へ適用する（本文更新 → candidate 作成 →
+     marker 付き報告、の順序を守る。部分失敗時に同じ batch を安全に再開できるようにするため）。
+   - route 1（既存 batch を継続）の場合、Issue 本文は変更しない（進行中の証跡を保護する）。
+   - `decision: ABORT` は fallback せず停止する（自動選択・自動統合をしない）。
+   最新の公開済み starter GitHub Release tag を開始点にする。開始点の Release 不在、
+   tag / Release / dependency pin の矛盾があれば ABORT。
 3. この時点で初めて [classification guide](references/classification-guide.md) を読み、開始点から
-   target までの CHANGELOG、commit、changed assets を全件 3 区分する。dependency / lockfile
-   更新だけで完了と判定しない。
+   `active_target` までの CHANGELOG、commit、changed assets を全件 3 区分する。dependency /
+   lockfile 更新だけで完了と判定しない。
 4. starter の remote main と同期した local main に区分 (1) だけを直接 commit する。
    feature branch / worktree / PR / merge は使わず、review 前に push しない。
 5. repository 実体から manifest、lockfile、quality gate を解決して実行する。Python 固有名を
    前提にしない。`update-starter` / `review-starter-update` / `release-starter` 自身は starter に
    コピーしない。
-6. 3 区分表、根拠、target、base SHA、candidate SHA、quality gate を同じ tracking Issue に報告する。
-   区分 (1) が空なら commit を作らず `base == candidate` と N/A 根拠を報告する。
+6. 3 区分表、根拠、target（= `active_target`）、base SHA、candidate SHA、quality gate を同じ
+   tracking Issue に報告する。区分 (1) が空なら commit を作らず `base == candidate` と N/A
+   根拠を報告する。
 
 ## Guardrails
 

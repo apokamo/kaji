@@ -29,7 +29,9 @@ Trusted Publisher + uv publish で PyPI に公開
     ↓
 GitHub Release の managed starter 各行を PENDING で追跡
     ↓
-tracking Issue → update → 別 session review → starter snapshot release / N/A
+tracking-plan で tracking Issue へ追随タスクを反映（新規 or 未完了期間ごとに 1 件へ APPEND）
+    ↓
+update → 別 session review → starter snapshot release / N/A → task-plan で状態表更新・close 判定
     ↓
 consumer (kamo2 等) が `uv lock --upgrade-package kaji` で新版取得
 ```
@@ -62,8 +64,10 @@ skill 側で以下を guide する:
 7. `gh release create vX.Y.Z --notes "<CHANGELOG 抜粋>"`
 8. GitHub Actions `publish-pypi.yml` の起動と `pypi` environment approval を確認
 9. PyPI 公開後、`uv tool install kaji && kaji --help` をクリーン環境で確認
-10. managed starter ごとの tracking Issue を作成し、Release 状態表へリンクして
-    `/update-starter <tracking_issue_id>` へ handoff
+10. managed starter ごとに `kaji starter tracking-plan` を実行し、未完了の open tracking Issue が
+    なければ新規作成（`CREATE`）、あれば同じ Issue に追随タスクを追加（`APPEND`）して Release
+    状態表へリンクし、`/update-starter <tracking_issue_id>` へ handoff（複数の未完了 Issue が
+    見つかった場合は `ABORT` し、人間が明示指定してから再実行する）
 
 詳細は [`.claude/skills/release/SKILL.md`](../../../.claude/skills/release/SKILL.md) を参照。
 starter 追随・独立 review・snapshot 公開の正本は

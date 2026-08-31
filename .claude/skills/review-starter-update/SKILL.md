@@ -10,12 +10,16 @@ description: "starter 追随 candidate を別 session で独立検証し、過�
 ## 入力
 
 `/review-starter-update <tracking_issue_id>`。tracking Issue、対象 kaji tag、starter remote main の
-base SHA、starter local main の candidate SHA を固定する。
+base SHA、starter local main の candidate SHA を固定する。target は tracking Issue 本文（v1 schema）
+の現在の `syncing` batch から決定的に求まる `active_target`（batch 内 target の最大値）と一致する
+ことを要求する。`update-starter` の verdict marker `meta.target` は当該 batch の `active_target` と
+完全一致で報告されているため、marker meta と本文由来の `active_target` の不一致は fail-closed で
+ABORT する。
 
 ## 実行順
 
 1. tracking Issue と [starter sync runbook](../../../docs/operations/release/starter-sync-runbook.md) を読み、
-   target / base / candidate と checkout identity を確認する。
+   target（= 本文の `active_target`） / base / candidate と checkout identity を確認する。
 2. updater の分類表を見ずに、target tag、CHANGELOG、upstream diff から調査集合を独立に再構成する。
 3. この時点で初めて [review rubric](references/review-rubric.md) を読み、全件 3 区分、移植の完全性、
    過剰コピー、dependency / lock / docs、template cleanliness、quality gate evidence を照合する。

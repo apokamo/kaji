@@ -260,9 +260,37 @@ user に以下を提示して終了:
 - PyPI publish workflow の状態または URL
 - PyPI 公開後の install 確認: `uv tool install kaji && kaji --help`
 - consumer 側に `uv lock --upgrade-package kaji` を案内する一文（kamo2 等の dependency consumer 向け）
-- managed starter ごとに kaji 側へ tracking Issue を作成し、Issue URL を GitHub Release の
-  repository 別状態表へ反映する post-release handoff
-- tracking Issue 作成後の `/update-starter <tracking_issue_id>` 案内
+
+managed starter ごとに、公開した version を追随タスクとして tracking Issue へ反映する。
+未完了期間ごとに 1 件へ集約するため、starter 側で新規 Issue を作る前に必ず
+`kaji starter tracking-plan` の判定を経由する
+（[starter sync runbook](../../../docs/operations/release/starter-sync-runbook.md)）:
+
+```bash
+# starter-sync label の open Issue 全件（他 starter 分も含む）を観測として渡す
+kaji issue list --label starter-sync --state open --json number,body \
+  | jq '[.[] | {issue_id: .number, body: .body}]' > /tmp/open-tracking.json
+
+kaji starter tracking-plan <<EOF
+{
+  "starter_repo": "apokamo/kaji-starter-python",
+  "new_target": "vX.Y.Z",
+  "open_tracking_issues": $(cat /tmp/open-tracking.json),
+  "selected_issue_id": null
+}
+EOF
+```
+
+`decision` ごとの対応:
+
+| decision | 対応 |
+|---|---|
+| `CREATE` | `required_labels`（`starter-sync`）を付けて `next_body` で新規 Issue を作成し、Issue URL を GitHub Release の状態表 `tracking Issue` 列へ反映する |
+| `APPEND` | 既存 Issue（`issue_id`）の本文を `next_body` へ更新する（新規 Issue は作らない）。状態表の `tracking Issue` 列は既存 Issue の URL のまま |
+| `IDEMPOTENT` | 本文を変更しない（同一 version への release-plan 再実行や retry で発生し得る） |
+| `ABORT` | 停止し `reason` を user に提示する。複数の未完了 Issue が見つかった場合は、どちらを使うか人間が `selected_issue_id` を指定してから再実行する。状態表は `PENDING` のまま維持し、kaji 本体の release は rollback しない |
+
+tracking Issue の作成・更新後、`/update-starter <tracking_issue_id>` を案内する。
 
 starter の追随・review・公開は kaji 本体 release とは独立したトランザクションとする。
 starter が `PENDING` または失敗しても、公開済み kaji tag / GitHub Release / PyPI を rollback しない。
@@ -355,8 +383,10 @@ PyPI API token による local `uv publish` は emergency fallback のみ。使�
 ### Starter post-release handoff が失敗
 
 kaji 本体 tag / GitHub Release / PyPI は公開済みのため rollback しない。GitHub Release の対象行を
-`PENDING` のまま維持し、tracking Issue 作成または状態表リンク更新だけを再試行する。starter の
-具体的な復旧は [starter sync runbook](../../../docs/operations/release/starter-sync-runbook.md) に従う。
+`PENDING` のまま維持し、`kaji starter tracking-plan` を同じ観測で再実行する（`CREATE` / `APPEND` は
+入力から決定的に再計算されるため再試行は冪等）。状態表リンク更新だけが失敗した場合も、その反映
+だけを再試行する。starter の具体的な復旧は
+[starter sync runbook](../../../docs/operations/release/starter-sync-runbook.md) に従う。
 
 ### 既に push 済みの release を撤回したい（緊急）
 

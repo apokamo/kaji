@@ -3,7 +3,7 @@
 # 配色: Catppuccin Mocha パレット（https://catppuccin.com/palette）
 # 同期: .github/workflows/labels-sync.yml が main への push / 手動 / 週次 cron で実行
 #
-# 管理対象は type:* (11) + meta (9) + incident (8) = 合計 28 ラベルのみ。
+# 管理対象は type:* (11) + meta (10) + incident (8) = 合計 29 ラベルのみ。
 # release-please が自動生成する `autorelease:*` / `release-please:*` は bot 所有で
 # 管理対象外（運用ガイド: docs/dev/labels.md を参照）。
 # incident 2 軸（status / classification）の意味と遷移意図: docs/dev/incident-labels.md。
@@ -58,7 +58,7 @@ labels:
     description: "CI/CD・GitHub Actions 関連"
 
   # ============================================================
-  # meta (9) — type:* と直交する補助ラベル
+  # meta (10) — type:* と直交する補助ラベル
   # ============================================================
 
   - name: "epic"
@@ -96,6 +96,10 @@ labels:
   - name: "wontfix"
     color: "45475a"
     description: "対応しない"
+
+  - name: "starter-sync"
+    color: "a6adc8"
+    description: "managed starter の未完了追随 tracking Issue（発見キー、Issue #423）"
 
   # ============================================================
   # incident (8) — 障害検知・集約層（第1層・Issue #304）の 2 軸ラベル

@@ -95,6 +95,63 @@ def test_starter_sync_runbook_contract_and_links() -> None:
     assert "update-starter" in release_skill
 
 
+def test_update_starter_references_task_plan_and_drops_old_pending_abort() -> None:
+    """Issue #423: 古い `PENDING` で ABORT する記述は消え、task-plan 参照に置き換わる。"""
+    update = (ROOT / ".claude/skills/update-starter/SKILL.md").read_text(encoding="utf-8")
+
+    assert "古い" not in update
+    assert "kaji starter task-plan" in update
+    assert "active_target" in update
+    assert "covered_targets" in update
+
+
+def test_release_starter_references_completion_bookkeeping() -> None:
+    """Issue #423: release-starter が task-plan completion / close_allowed を参照する。"""
+    release = (ROOT / ".claude/skills/release-starter/SKILL.md").read_text(encoding="utf-8")
+    preflight = (
+        ROOT / ".claude/skills/release-starter/references/preflight-and-recovery.md"
+    ).read_text(encoding="utf-8")
+
+    for term in ("kaji starter task-plan", "completion", "close_allowed", "covered_targets"):
+        assert term in release
+        assert term in preflight
+
+
+def test_release_skill_references_tracking_plan_and_pending_on_abort() -> None:
+    """Issue #423: /release Step 8 が tracking-plan と ABORT 時の PENDING 維持を明記する。"""
+    release_skill = (ROOT / ".claude/skills/release/SKILL.md").read_text(encoding="utf-8")
+
+    assert "kaji starter tracking-plan" in release_skill
+    assert "CREATE" in release_skill
+    assert "APPEND" in release_skill
+    assert "PENDING" in release_skill
+
+
+def test_starter_sync_runbook_documents_v1_schema_and_new_rules() -> None:
+    """Issue #423: runbook が新 schema・複数候補 fail-closed・束ね規則・close 条件を記載する。"""
+    runbook = (ROOT / "docs/operations/release/starter-sync-runbook.md").read_text(encoding="utf-8")
+
+    assert "<!-- kaji-starter-sync: v1 -->" in runbook
+    assert "starter-sync" in runbook  # label 名（発見キー）
+    assert "未完了期間ごとに 1 件" in runbook
+    assert "束ね" in runbook
+    assert "close 条件" in runbook
+    assert "fail-closed" in runbook
+    assert "selected_issue_id" in runbook
+
+
+def test_starter_sync_label_registered_and_counts_consistent() -> None:
+    """Issue #423: `.github/labels.yml` に `starter-sync` があり、labels.md の件数と整合する。"""
+    labels_yml = (ROOT / ".github/labels.yml").read_text(encoding="utf-8")
+    labels_md = (ROOT / "docs/dev/labels.md").read_text(encoding="utf-8")
+
+    assert 'name: "starter-sync"' in labels_yml
+    assert "meta (10)" in labels_md
+    assert "meta (10)" in labels_yml
+    assert "= 29" in labels_md
+    assert "合計 29" in labels_yml
+
+
 def test_managed_starter_sets_match_release_notes_template() -> None:
     runbook = (ROOT / "docs/operations/release/starter-sync-runbook.md").read_text(encoding="utf-8")
     release_skill = (ROOT / ".claude/skills/release/SKILL.md").read_text(encoding="utf-8")
