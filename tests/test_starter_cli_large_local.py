@@ -64,6 +64,114 @@ def test_starter_release_plan_invalid_json_exits_two() -> None:
     assert proc.returncode == 2
 
 
+def test_starter_tracking_plan_cli_dispatch() -> None:
+    payload = {
+        "starter_repo": "apokamo/kaji-starter-python",
+        "new_target": "v0.20.2",
+        "open_tracking_issues": [],
+        "selected_issue_id": None,
+    }
+    proc = subprocess.run(
+        [sys.executable, "-m", "kaji_harness.cli_main", "starter", "tracking-plan"],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    body = json.loads(proc.stdout)
+    assert body["decision"] == "CREATE"
+    assert body["route"] == 1
+
+
+def test_starter_tracking_plan_invalid_json_exits_two() -> None:
+    proc = subprocess.run(
+        [sys.executable, "-m", "kaji_harness.cli_main", "starter", "tracking-plan"],
+        input="not-json",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 2
+
+
+def test_starter_tracking_plan_body_parse_failure_still_exits_zero() -> None:
+    """観測矛盾（本文 parse 失敗）は decision: ABORT の plan を exit 0 で返す。"""
+    payload = {
+        "starter_repo": "apokamo/kaji-starter-python",
+        "new_target": "v0.20.2",
+        "open_tracking_issues": [
+            {"issue_id": 424, "body": "starter_repo: apokamo/kaji-starter-python\nbroken\n"}
+        ],
+        "selected_issue_id": None,
+    }
+    proc = subprocess.run(
+        [sys.executable, "-m", "kaji_harness.cli_main", "starter", "tracking-plan"],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["decision"] == "ABORT"
+
+
+def test_starter_task_plan_cli_dispatch() -> None:
+    body = (
+        "<!-- kaji-starter-sync: v1 -->\n"
+        "starter_repo: apokamo/kaji-starter-python\n\n"
+        "## Sync tasks\n\n"
+        "| target_kaji_release | status | batch | result |\n"
+        "|---|---|---|---|\n"
+        "| v0.20.0 | open | - | - |\n"
+    )
+    payload = {
+        "issue_id": 424,
+        "issue_state": "open",
+        "body": body,
+        "completion": None,
+    }
+    proc = subprocess.run(
+        [sys.executable, "-m", "kaji_harness.cli_main", "starter", "task-plan"],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    plan = json.loads(proc.stdout)
+    assert plan["decision"] == "SYNC"
+    assert plan["route"] == 2
+    assert plan["batch"] == "b1"
+
+
+def test_starter_task_plan_invalid_json_exits_two() -> None:
+    proc = subprocess.run(
+        [sys.executable, "-m", "kaji_harness.cli_main", "starter", "task-plan"],
+        input="not-json",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 2
+
+
+def test_starter_unknown_subcommand_prints_help_and_exits_nonzero() -> None:
+    proc = subprocess.run(
+        [sys.executable, "-m", "kaji_harness.cli_main", "starter", "bogus-command"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode != 0
+
+
 def test_issue_resolve_verdict_cli_dispatch(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

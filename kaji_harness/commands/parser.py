@@ -48,6 +48,14 @@ def _register_starter(
         "release-plan",
         help="Read release observations as JSON from stdin and emit a deterministic plan",
     )
+    starter_subs.add_parser(
+        "tracking-plan",
+        help="Read tracking-issue observations as JSON from stdin and emit a deterministic plan",
+    )
+    starter_subs.add_parser(
+        "task-plan",
+        help="Read task-sync observations as JSON from stdin and emit a deterministic plan",
+    )
 
 
 def _register_sync(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:

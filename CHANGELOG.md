@@ -6,6 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### BREAKING CHANGE
+
+- **starter-sync tracking Issue body schema** has moved from a single
+  `target_kaji_release:` field to the v1 `## Sync tasks` table schema, so that
+  a managed starter's unfinished sync work is tracked in one open Issue per
+  unfinished period instead of one Issue per kaji Release (#423).
+  - **Broken contract**: `kaji starter tracking-plan` / `kaji starter
+    task-plan` require the tracking Issue body's first line to be the
+    `<!-- kaji-starter-sync: v1 -->` schema marker followed by a `## Sync
+    tasks` table (`target_kaji_release` / `status` / `batch` / `result`
+    columns). A body without the marker (the old single-`target_kaji_release:`
+    schema) is rejected fail-loud (`decision: ABORT`, not silently accepted).
+  - **How to check whether you are affected**: run
+    `gh issue list --label starter-sync --state open --json number,body`
+    and check whether any body is missing the
+    `<!-- kaji-starter-sync: v1 -->` first line. The pre-existing #401 / #413
+    / #419 tracking Issues use the old schema and are unaffected until they
+    are next used by `/update-starter` or `/release`'s Step 8 handoff.
+  - **How to migrate**: rewrite each affected tracking Issue body to the v1
+    schema by hand (see
+    `docs/operations/release/starter-sync-runbook.md` § Tracking Issue for
+    the exact format). This Issue does not migrate #401 / #413 / #419
+    automatically; that is separate maintainer work.
+
 ## [0.20.1] - 2026-08-30
 
 This patch release hardens Herdr startup on fresh panes and restores statusline

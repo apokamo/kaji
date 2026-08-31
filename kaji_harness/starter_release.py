@@ -13,6 +13,7 @@ ReleaseAction = Literal[
     "create_release",
     "update_state_table",
     "close_tracking_issue",
+    "promote_next_task",
 ]
 
 
@@ -38,6 +39,13 @@ class ReleasePlanInput(BaseModel):
     state_table_row_exists: bool
     state_table_status: Literal["PENDING", "PASS", "N/A"]
     tracking_issue_state: Literal["open", "closed"]
+    # Default False only preserves route 1-4 output for callers that predate this field
+    # (see test_default_pending_tasks_field_preserves_existing_close_behavior). Every
+    # caller with a starter-sync tracking Issue (release-starter/SKILL.md Pre-flight
+    # step 1) must derive and pass this explicitly from the Issue body's ``open`` rows
+    # outside the current batch; the default must never be relied on to mean "no pending
+    # tasks".
+    tracking_issue_has_pending_tasks: bool = False
 
 
 class ReleasePlan(BaseModel):
@@ -126,7 +134,7 @@ def build_release_plan(observation: ReleasePlanInput) -> ReleasePlan:
                 "atomic_push",
                 "create_release",
                 "update_state_table",
-                "close_tracking_issue",
+                _final_bookkeeping_action(observation),
             ],
             reason="No tag exists for the target kaji release.",
         )
@@ -166,7 +174,7 @@ def build_release_plan(observation: ReleasePlanInput) -> ReleasePlan:
             "atomic_push",
             "create_release",
             "update_state_table",
-            "close_tracking_issue",
+            _final_bookkeeping_action(observation),
         ],
         reason="The candidate differs from the latest published revision.",
     )
@@ -212,6 +220,11 @@ def _observation_contradiction(
         return f"GitHub Release exists without a matching tag: {sorted(orphan_releases)[0]}."
     if observation.state_table_status == "N/A":
         return "N/A bookkeeping must use the dedicated no-change path, not release-plan."
+    if (
+        observation.tracking_issue_state == "closed"
+        and observation.tracking_issue_has_pending_tasks
+    ):
+        return "Tracking Issue is closed while pending starter-sync tasks remain."
     if observation.tracking_issue_state == "closed" and observation.state_table_status != "PASS":
         return "Tracking Issue is closed before the state table reached PASS."
     if observation.state_table_status == "PASS" and not target_releases:
@@ -219,17 +232,31 @@ def _observation_contradiction(
     return ""
 
 
+def _final_bookkeeping_action(observation: ReleasePlanInput) -> ReleaseAction:
+    """Return the terminal bookkeeping action for the tracking Issue.
+
+    ``close_tracking_issue`` when the tracking Issue has no other pending
+    starter-sync task, or ``promote_next_task`` when it does (Issue #423): a
+    tracking Issue with pending tasks must stay open for its next batch
+    instead of closing.
+    """
+    if observation.tracking_issue_has_pending_tasks:
+        return "promote_next_task"
+    return "close_tracking_issue"
+
+
 def _remaining_bookkeeping(
     observation: ReleasePlanInput,
     tag_name: str,
 ) -> list[ReleaseAction]:
     """Return the fixed suffix of publication bookkeeping still required."""
+    final_action = _final_bookkeeping_action(observation)
     if tag_name not in observation.releases:
-        return ["create_release", "update_state_table", "close_tracking_issue"]
+        return ["create_release", "update_state_table", final_action]
     if observation.state_table_status != "PASS":
-        return ["update_state_table", "close_tracking_issue"]
+        return ["update_state_table", final_action]
     if observation.tracking_issue_state != "closed":
-        return ["close_tracking_issue"]
+        return [final_action]
     return []
 
 

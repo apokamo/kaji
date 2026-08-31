@@ -26,7 +26,7 @@ Issue / PR の主分類。**1 Issue / PR に 1 ラベルのみ（single-select�
 | `type:build` | `build` | ビルドシステム・パッケージング |
 | `type:ci` | `ci` | CI/CD |
 
-### meta (9) — type:* と直交
+### meta (10) — type:* と直交
 
 | ラベル | 用途 |
 |--------|------|
@@ -39,6 +39,7 @@ Issue / PR の主分類。**1 Issue / PR に 1 ラベルのみ（single-select�
 | `duplicate` | 重複 |
 | `invalid` | 無効 |
 | `wontfix` | 対応しない |
+| `starter-sync` | managed starter の未完了追随 tracking Issue の発見キー（Issue #423） |
 
 ### incident (8) — 障害検知・集約層（第1層）の 2 軸
 
@@ -57,7 +58,7 @@ classification 軸の 2 軸からなり、`incident:cause:transient` のみ第1�
 | `incident:cause:environment` | classification | 人間 |
 | `incident:cause:transient` | classification | 第1層（auto-resume 自己回復時） |
 
-管理対象ラベル数: type:* (11) + meta (9) + incident (8) = 28。
+管理対象ラベル数: type:* (11) + meta (10) + incident (8) = 29。
 
 ## Epic 親 Issue の運用
 

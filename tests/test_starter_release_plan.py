@@ -127,6 +127,7 @@ def test_old_revision_candidate_aborts() -> None:
         {"state_table_row_exists": False},
         {"releases": ["kaji-v0.16.0"]},
         {"tags": [{"name": "kaji-v0.16.0", "sha": "bbb", "annotated": False}]},
+        {"tracking_issue_state": "closed", "tracking_issue_has_pending_tasks": True},
     ],
 )
 def test_observation_contradictions_abort(overrides: dict[str, object]) -> None:
@@ -135,6 +136,46 @@ def test_observation_contradictions_abort(overrides: dict[str, object]) -> None:
     assert plan.route == 5
     assert plan.decision == "ABORT"
     assert plan.reason
+
+
+def test_pending_tasks_promote_instead_of_close_tracking_issue() -> None:
+    """Issue #423: 未完了の後続タスクがある tracking Issue は close せず昇格させる。"""
+    plan = build_release_plan(
+        _input(tracking_issue_has_pending_tasks=True),
+    )
+
+    assert plan.remaining_actions == [
+        "atomic_push",
+        "create_release",
+        "update_state_table",
+        "promote_next_task",
+    ]
+    assert "close_tracking_issue" not in plan.remaining_actions
+
+
+def test_pending_tasks_promote_after_state_table_and_release_are_resumed() -> None:
+    plan = build_release_plan(
+        _input(
+            tags=[{"name": "kaji-v0.16.0", "sha": "bbb", "annotated": True}],
+            releases=["kaji-v0.16.0"],
+            state_table_status="PASS",
+            tracking_issue_has_pending_tasks=True,
+        )
+    )
+
+    assert plan.remaining_actions == ["promote_next_task"]
+
+
+def test_default_pending_tasks_field_preserves_existing_close_behavior() -> None:
+    """既定値 False で既存 route 1〜4 の出力が不変であること。"""
+    plan = build_release_plan(_input())
+
+    assert plan.remaining_actions == [
+        "atomic_push",
+        "create_release",
+        "update_state_table",
+        "close_tracking_issue",
+    ]
 
 
 def test_na_candidate_uses_sha_equality() -> None:
