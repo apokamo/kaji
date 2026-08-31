@@ -59,7 +59,7 @@ kaji starter task-plan <<EOF
   "completion": {
     "batch": "<active batch id>",
     "completed_targets": <covered_targets>,
-    "published_tag": "kaji-vX.Y.Z" 
+    "published_tag": "kaji-vX.Y.Z"
   }
 }
 EOF

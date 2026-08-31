@@ -49,9 +49,10 @@ release 順に candidate / review / publish を繰り返す必要がある。
 | 区分 | 対象 |
 |------|------|
 | 新規 | `kaji_harness/starter_tracking.py`、`tests/test_starter_tracking.py` |
-| 変更 | `kaji_harness/starter_release.py`、`kaji_harness/commands/starter.py`、`kaji_harness/commands/parser.py`、`kaji_harness/commands/main.py` |
+| 変更 | `kaji_harness/starter_release.py`、`kaji_harness/errors.py`、`kaji_harness/commands/starter.py`、`kaji_harness/commands/parser.py`、`kaji_harness/commands/main.py` |
 | 変更（skill） | `.claude/skills/release/SKILL.md`、`.claude/skills/update-starter/SKILL.md`、`.claude/skills/review-starter-update/SKILL.md`、`.claude/skills/release-starter/SKILL.md`、`.claude/skills/release-starter/references/preflight-and-recovery.md` |
 | 変更（docs / 設定） | `docs/operations/release/starter-sync-runbook.md`、`docs/operations/release/runbook.md`、`docs/dev/labels.md`、`.github/labels.yml`、`CHANGELOG.md`（BREAKING エントリ） |
+| 変更（tests） | `tests/test_starter_tracking.py`、`tests/test_starter_release_plan.py`、`tests/test_starter_skills.py`、`tests/test_starter_cli_large_local.py`、`tests/test_layer_imports.py` |
 | 対象外 | starter の実追随・snapshot 公開、#401 / #413 / #419 の統合・移行・close、既存 tag / Release / PyPI の rollback、starter-sync 以外の release workflow |
 
 ## インターフェース
