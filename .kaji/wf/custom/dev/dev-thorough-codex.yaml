@@ -2,7 +2,7 @@ name: dev-thorough-codex
 description: |
   series 自動選択対象外の明示 override 専用 variant。
   開発作業の丁寧版 workflow。dev-thorough-fable の役割を反転させ、
-  設計・実装フェーズの生成/修正を Codex (gpt-6-astra/medium)、
+  設計・実装フェーズの生成/修正を Codex (gpt-6-astra/high)、
   レビュー/検証を Claude (opus/xhigh) が担当する。
   定型 step (start / pr / close) は gpt-5.6-luna で軽く回す。
   issue-create は事前に完了していることが前提。
@@ -80,7 +80,7 @@ steps:
     skill: issue-design
     agent: codex
     model: gpt-6-astra
-    effort: medium
+    effort: high
     on:
       PASS: review-design
       ABORT: end
@@ -126,7 +126,7 @@ steps:
     skill: issue-implement
     agent: codex
     model: gpt-6-astra
-    effort: medium
+    effort: high
     timeout: 6000
     on:
       PASS: review-code

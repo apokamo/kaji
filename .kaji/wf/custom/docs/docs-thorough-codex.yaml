@@ -67,7 +67,7 @@ steps:
     skill: i-doc-update
     agent: codex
     model: gpt-6-astra
-    effort: medium
+    effort: high
     on:
       PASS: doc-review
       ABORT: end
@@ -76,7 +76,7 @@ steps:
     skill: i-doc-review
     agent: codex
     model: gpt-6-astra
-    effort: medium
+    effort: high
     on:
       PASS: final-check
       RETRY: doc-fix

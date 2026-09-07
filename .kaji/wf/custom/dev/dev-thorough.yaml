@@ -88,7 +88,7 @@ steps:
     skill: issue-review-design
     agent: codex
     model: gpt-6-astra
-    effort: medium
+    effort: high
     on:
       PASS: baseline
       RETRY: fix-design
@@ -137,7 +137,7 @@ steps:
     skill: issue-review-code
     agent: codex
     model: gpt-6-astra
-    effort: medium
+    effort: high
     on:
       PASS: final-check
       RETRY: fix-code
