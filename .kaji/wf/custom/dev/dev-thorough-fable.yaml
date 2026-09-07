@@ -50,7 +50,7 @@ steps:
   - id: review-ready
     skill: issue-review-ready
     agent: codex
-    model: gpt-5.6-sol
+    model: gpt-6-astra
     effort: medium
     on:
       PASS: start
@@ -87,8 +87,8 @@ steps:
   - id: review-design
     skill: issue-review-design
     agent: codex
-    model: gpt-5.6-sol
-    effort: high
+    model: gpt-6-astra
+    effort: medium
     on:
       PASS: baseline
       RETRY: fix-design
@@ -107,7 +107,7 @@ steps:
   - id: verify-design
     skill: issue-verify-design
     agent: codex
-    model: gpt-5.6-sol
+    model: gpt-6-astra
     effort: medium
     on:
       PASS: baseline
@@ -124,8 +124,8 @@ steps:
   - id: implement
     skill: issue-implement
     agent: codex
-    model: gpt-5.6-sol
-    effort: high
+    model: gpt-6-astra
+    effort: medium
     timeout: 6000
     on:
       PASS: review-code
@@ -148,8 +148,8 @@ steps:
   - id: fix-code
     skill: issue-fix-code
     agent: codex
-    model: gpt-5.6-sol
-    effort: high
+    model: gpt-6-astra
+    effort: medium
     timeout: 3600
     on:
       PASS: verify-code
@@ -168,7 +168,7 @@ steps:
   - id: final-check
     skill: i-dev-final-check
     agent: codex
-    model: gpt-5.6-sol
+    model: gpt-6-astra
     effort: medium
     on:
       PASS: pr
@@ -198,8 +198,8 @@ steps:
   - id: review
     skill: review
     agent: codex
-    model: gpt-5.6-sol
-    effort: high
+    model: gpt-6-astra
+    effort: medium
     on:
       PASS: close
       RETRY: pr-fix
@@ -217,7 +217,7 @@ steps:
   - id: pr-verify
     skill: pr-verify
     agent: codex
-    model: gpt-5.6-sol
+    model: gpt-6-astra
     effort: medium
     on:
       PASS: close

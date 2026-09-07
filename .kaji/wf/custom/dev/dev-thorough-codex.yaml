@@ -2,7 +2,7 @@ name: dev-thorough-codex
 description: |
   series 自動選択対象外の明示 override 専用 variant。
   開発作業の丁寧版 workflow。dev-thorough-fable の役割を反転させ、
-  設計・実装フェーズの生成/修正を Codex (gpt-5.6-sol/high)、
+  設計・実装フェーズの生成/修正を Codex (gpt-6-astra/medium)、
   レビュー/検証を Claude (opus/xhigh) が担当する。
   定型 step (start / pr / close) は gpt-5.6-luna で軽く回す。
   issue-create は事前に完了していることが前提。
@@ -51,7 +51,7 @@ steps:
   - id: review-ready
     skill: issue-review-ready
     agent: codex
-    model: gpt-5.6-sol
+    model: gpt-6-astra
     effort: medium
     on:
       PASS: start
@@ -79,8 +79,8 @@ steps:
   - id: design
     skill: issue-design
     agent: codex
-    model: gpt-5.6-sol
-    effort: high
+    model: gpt-6-astra
+    effort: medium
     on:
       PASS: review-design
       ABORT: end
@@ -98,8 +98,8 @@ steps:
   - id: fix-design
     skill: issue-fix-design
     agent: codex
-    model: gpt-5.6-sol
-    effort: high
+    model: gpt-6-astra
+    effort: medium
     resume: design
     on:
       PASS: verify-design
@@ -125,8 +125,8 @@ steps:
   - id: implement
     skill: issue-implement
     agent: codex
-    model: gpt-5.6-sol
-    effort: high
+    model: gpt-6-astra
+    effort: medium
     timeout: 6000
     on:
       PASS: review-code
@@ -149,8 +149,8 @@ steps:
   - id: fix-code
     skill: issue-fix-code
     agent: codex
-    model: gpt-5.6-sol
-    effort: high
+    model: gpt-6-astra
+    effort: medium
     timeout: 3600
     on:
       PASS: verify-code
@@ -169,7 +169,7 @@ steps:
   - id: final-check
     skill: i-dev-final-check
     agent: codex
-    model: gpt-5.6-sol
+    model: gpt-6-astra
     effort: medium
     on:
       PASS: pr
@@ -199,8 +199,8 @@ steps:
   - id: review
     skill: review
     agent: codex
-    model: gpt-5.6-sol
-    effort: high
+    model: gpt-6-astra
+    effort: medium
     on:
       PASS: close
       RETRY: pr-fix
@@ -218,7 +218,7 @@ steps:
   - id: pr-verify
     skill: pr-verify
     agent: codex
-    model: gpt-5.6-sol
+    model: gpt-6-astra
     effort: medium
     on:
       PASS: close
