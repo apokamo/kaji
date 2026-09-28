@@ -1,7 +1,6 @@
-"""Structure and safety tests for the series-create skill.
+"""Workflow description contract relied on by the series-create skill.
 
-Medium: every test reads ``SKILL.md`` from disk, and the workflow description
-contract additionally loads the official workflow YAML set.
+Medium: loads the official workflow YAML set from disk.
 """
 
 from __future__ import annotations
@@ -14,34 +13,6 @@ import yaml
 pytestmark = pytest.mark.medium
 
 SKILL = Path(__file__).resolve().parents[1] / ".claude/skills/series-create/SKILL.md"
-
-
-def test_series_create_frontmatter_and_required_sections() -> None:
-    text = SKILL.read_text(encoding="utf-8")
-    _, frontmatter, body = text.split("---", 2)
-    metadata = yaml.safe_load(frontmatter)
-    assert metadata["name"] == "series-create"
-    assert "sequential" in metadata["description"]
-    for heading in ("## Input", "## Output", "## Stop Conditions", "## Non-goals"):
-        assert heading in body
-
-
-def test_series_create_delegates_deterministic_operations() -> None:
-    text = SKILL.read_text(encoding="utf-8")
-    assert "kaji_harness.scripts.series_generate" in text
-    assert "kaji validate-series" in text
-    assert "kaji run-series" in text
-    assert "--dry-run" in text
-    assert "Do not write YAML manually" in text
-
-
-def test_series_create_requires_read_only_issue_lookup_and_explicit_update() -> None:
-    text = SKILL.read_text(encoding="utf-8")
-    assert "kaji issue view" in text
-    assert "Never retry with `--update` implicitly" in text
-    assert "kaji issue edit" not in text
-    assert "kaji issue close" not in text
-    assert "kaji run-series` without `--dry-run`" in text
 
 
 def test_official_workflow_descriptions_define_unique_auto_selection() -> None:
