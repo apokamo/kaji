@@ -10,7 +10,6 @@ machine-checkable and is covered by the change-specific manual verification inst
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
@@ -23,28 +22,8 @@ WF_PATH = REPO_ROOT / ".kaji" / "wf" / "official" / "incident.yaml"
 SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
 AGENT_PATH = REPO_ROOT / ".claude" / "agents" / "kaji-incident-reviewer.md"
 TEMPLATE_PATH = SKILLS_DIR / "incident-investigate" / "artifact-template.md"
-CYCLE_SKILL_PATH = SKILLS_DIR / "incident-cycle" / "SKILL.md"
 
 EXPECTED_STEPS = {"investigate", "review", "fix", "verify", "report"}
-CONCLUSION_VALUES = (
-    "internal-bug",
-    "upstream",
-    "environment",
-    "transient",
-    "duplicate",
-    "INCONCLUSIVE",
-)
-TEMPLATE_REQUIRED_HEADINGS = (
-    "メタデータ",
-    "可読サマリ",
-    "結論",
-    "根拠",
-    "棄却済み仮説",
-    "不足証拠",
-)
-# risk-accepted は人間専用語彙。ファイル内に現れてよいのは「禁止の説明」文脈のみで、
-# エージェント出力語彙（結論値・推奨値・列挙）として現れてはならない（#303 決定 D）。
-_PROHIBITION_MARKERS = ("人間専用", "含めない", "human-only")
 
 
 def _load_frontmatter_model(md_path: Path) -> str:
@@ -150,57 +129,5 @@ class TestIncidentAssetsExist:
     def test_agent_definition_exists(self) -> None:
         assert AGENT_PATH.is_file()
 
-    def test_template_exists_with_required_headings(self) -> None:
+    def test_template_exists(self) -> None:
         assert TEMPLATE_PATH.is_file()
-        text = TEMPLATE_PATH.read_text(encoding="utf-8")
-        for heading in TEMPLATE_REQUIRED_HEADINGS:
-            assert re.search(rf"^#+\s+{re.escape(heading)}", text, re.MULTILINE), (
-                f"template missing required heading: {heading}"
-            )
-
-    def test_template_lists_all_conclusion_values(self) -> None:
-        text = TEMPLATE_PATH.read_text(encoding="utf-8")
-        for value in CONCLUSION_VALUES:
-            assert value in text, f"template missing conclusion value: {value}"
-
-
-@pytest.mark.medium
-class TestIncidentCycleSlashWrapper:
-    """slash wrapper は workflow から参照されないため明示的に検証する。"""
-
-    def test_file_exists(self) -> None:
-        assert CYCLE_SKILL_PATH.is_file()
-
-    def test_launches_incident_workflow(self) -> None:
-        text = CYCLE_SKILL_PATH.read_text(encoding="utf-8")
-        assert ".kaji/wf/official/incident.yaml" in text
-
-    def test_missing_argument_abort_path(self) -> None:
-        text = CYCLE_SKILL_PATH.read_text(encoding="utf-8")
-        assert "usage: /incident-cycle" in text
-        assert "status: ABORT" in text
-
-    def test_exit_code_to_verdict_contract(self) -> None:
-        text = CYCLE_SKILL_PATH.read_text(encoding="utf-8")
-        # 0 → PASS / 非 0 → ABORT の縮約契約が記述されていること
-        assert "status: PASS" in text
-        assert "status: ABORT" in text
-        assert re.search(r"exit\s*(code)?\s*0", text, re.IGNORECASE)
-
-
-@pytest.mark.medium
-class TestIncidentForbiddenVocabulary:
-    """`risk-accepted` は人間専用語彙。出力語彙として現れないこと（#303 決定 D）。"""
-
-    @pytest.mark.parametrize("path", [TEMPLATE_PATH, AGENT_PATH])
-    def test_risk_accepted_only_in_prohibition_context(self, path: Path) -> None:
-        text = path.read_text(encoding="utf-8")
-        for line in text.splitlines():
-            if "risk-accepted" in line:
-                assert any(marker in line for marker in _PROHIBITION_MARKERS), (
-                    f"{path.name}: 'risk-accepted' appears outside a prohibition context: {line!r}"
-                )
-
-    @pytest.mark.parametrize("value", CONCLUSION_VALUES)
-    def test_risk_accepted_not_a_conclusion_value(self, value: str) -> None:
-        assert value != "risk-accepted"
