@@ -58,14 +58,15 @@ entrypoint は worktree の `.venv/bin/python` を使い、shell を介さず py
 
 `issue-implement` は artifact を検証し、`measured_commit` が HEAD の ancestor であることを
 確認する。`known_failures` の場合、設計書の変更 scope を次の評価関数へ渡す。
+`--evaluate` / `--compare` の呼び出しでは `--worktree [worktree_dir]` を必ず渡す
+（agent step には `KAJI_WORKTREE_DIR` が注入されない）。
 
 ```bash
-python -m kaji_harness.scripts.baseline_precheck \
+python -m kaji_harness.scripts.baseline_precheck --worktree [worktree_dir] \
   --evaluate --scope kaji_harness/example.py --scope tests/test_example.py
 ```
 
-dev-small では設計書を持たないため、scope の入力は次のとおりとする。`--evaluate` / `--compare` の
-呼び出しでは `--worktree [worktree_dir]` を必ず渡す（agent step には `KAJI_WORKTREE_DIR` が注入されない）。
+dev-small では設計書を持たないため、scope の入力は次のとおりとする。
 
 - `issue-small-change-execute`: 編集前に方針として確定した変更対象 path
 - `issue-small-change-review`: `git diff --name-only [default_branch]...HEAD` の実 diff の path
@@ -85,7 +86,7 @@ artifact が `clean` の場合は通常どおり `make check` を使う。`known
 非 pytest gate を全対象へ実行した上で、pytest を次の比較へ置換する。
 
 ```bash
-python -m kaji_harness.scripts.baseline_precheck --compare
+python -m kaji_harness.scripts.baseline_precheck --worktree [worktree_dir] --compare
 ```
 
 コミットを許可するのは、ruff / format / mypy が全 PASS し、`--compare` が

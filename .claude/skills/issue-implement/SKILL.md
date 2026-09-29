@@ -163,7 +163,7 @@ cd [worktree_dir] && source .venv/bin/activate && ruff check kaji_harness/ tests
 #### 7b. pytest regression 比較
 
 ```bash
-cd [worktree_dir] && source .venv/bin/activate && python -m kaji_harness.scripts.baseline_precheck --compare
+cd [worktree_dir] && source .venv/bin/activate && python -m kaji_harness.scripts.baseline_precheck --worktree [worktree_dir] --compare
 ```
 
 `--compare` が pytest を実行し、artifact の3タプルと機械比較する。

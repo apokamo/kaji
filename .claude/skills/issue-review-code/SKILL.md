@@ -121,7 +121,7 @@ PHR_ROUTE_COUNT=$(kaji issue view [issue_id] --comments 2>/dev/null | grep -cE '
 
 3. **テスト実行と regression 比較**:
    ```bash
-   cd [worktree_dir] && source .venv/bin/activate && python -m kaji_harness.scripts.baseline_precheck --compare
+   cd [worktree_dir] && source .venv/bin/activate && python -m kaji_harness.scripts.baseline_precheck --worktree [worktree_dir] --compare
    ```
    `--compare` が全 pytest を実行し、artifact と3タプル比較する。
 
