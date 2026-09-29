@@ -187,7 +187,8 @@ commit、変更報告。PR 公開・merge・cleanup は持たない。
 **手順（fix-change）の差分**
 
 - 入力は直近の review 系 `RETRY` 報告 1 件の指摘と引き継ぎ状態。指摘ごとに修正するか、根拠を示して反論する。指摘外の改善を混ぜない。
-- 「報告 SHA と HEAD の不一致」指摘の場合は、追加 commit の差分を確認し、手順 6〜8 を行って報告に含める。
+- 「報告 SHA と HEAD の不一致」指摘の場合は、追加 commit の差分を確認し、手順 6〜7 を行って報告に含める。HEAD が確認済みの差分をすでに含み
+  working tree が clean なら手順 8 の commit は行わない（空 commit を作らない）。全指摘を反論で対応し差分が生じない場合も同様。
 - 引き継いだ dirty path は、下記の判定で受け入れた場合だけ扱う。Issue scope 内の実装変更（例: レビュー前停止中の未 commit 変更）は
   差分確認・検証の上で commit する。レビューの検証が生成・変更した path は、原因（テストや設定が tracked file を書き換える等）を
   修正したうえで、報告で検証由来と特定された path に限り HEAD の内容へ戻す。scope 外・意図を判断できない変更は保全して ABORT。
@@ -223,7 +224,7 @@ session-state 編集・他 workflow 起動はしない。
 | change | PASS | 実装・必須検証・commit・報告が完了し、working tree が clean |
 | change | RETRY | 新しい session で解消できる実装・検証・報告の失敗が残る（cycle `small-execute` が上限を管理。dirty path は原因付きで報告） |
 | change | ABORT | 適用外、type ラベル不正、baseline 前提違反・停止、引き継ぎ条件を満たさない dirty tree・HEAD 不一致、provider 障害 |
-| fix-change | PASS | 全指摘に対応（修正または反論）し、必須検証・commit・報告が完了し、working tree が clean |
+| fix-change | PASS | 全指摘に対応（修正または反論）し、必須検証・報告が完了し（差分があれば commit 済み）、working tree が clean |
 | fix-change | ABORT | 適用外、検証失敗を解消できない、入力の RETRY 報告を特定できない、引き継ぎ条件を満たさない dirty tree・HEAD 不一致、scope 外・意図不明の未 commit 変更、provider 障害 |
 
 ### skill IF: `issue-small-change-review`（step: review-change / verify-change）

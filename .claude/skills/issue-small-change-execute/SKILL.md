@@ -145,6 +145,7 @@ commit message・報告に auto-close hazard pattern（closing keyword + Issue �
 
 ### Step 8: commit
 
+commit 対象の差分がある場合だけ行う（fix-change で差分がなければ省略し、報告に「新規 commit なし」と理由を記す）。
 対象 path を明示して stage し、Issue type に対応する Conventional Commits prefix（feat / fix / refactor / test / docs / chore）で
 commit する。commit 後に `git status --porcelain` が空であることと HEAD の full SHA を確認する。
 
@@ -157,7 +158,9 @@ commit する。commit 後に `git status --porcelain` が空であることと 
 change との差分だけを示す。Step 1 と Step 6〜9 は共通。
 
 - 入力は直近の review 系 `RETRY` 報告 1 件。特定できなければ ABORT。指摘ごとに修正するか、根拠を示して反論する。指摘外の改善を混ぜない。
-- 「報告 SHA と HEAD の不一致」指摘は、追加 commit の差分を確認し、Step 6〜8 を行って報告に含める。
+- 「報告 SHA と HEAD の不一致」指摘は、追加 commit の差分を確認し、Step 6〜7 を行って報告に含める。
+  HEAD が確認済みの差分をすでに含み working tree が clean なら、Step 8 の commit は行わない（空 commit を作らない）。
+- 全指摘を反論で対応した場合など、修正による差分が生じなければ Step 8 の commit は行わない。
 - 引き継いだ dirty path は「入場時の working tree 判定」で受け入れた場合だけ扱う。
   - Issue scope 内の実装変更（例: レビュー前停止中の未 commit 変更）: 差分確認・検証の上で commit する
   - review の検証が生成・変更した path: 原因（テストや設定が tracked file を書き換える等）を修正したうえで、
@@ -241,5 +244,5 @@ suggestion: |
 | change | PASS | 実装・必須検証・commit・報告が完了し、working tree が clean |
 | change | RETRY | 新しい session で解消できる実装・検証・報告の失敗が残る（dirty path は原因付きで報告） |
 | change | ABORT | 適用外、type ラベル不正、baseline 前提違反・停止、引き継ぎ条件を満たさない dirty tree・HEAD 不一致、provider 障害 |
-| fix-change | PASS | 全指摘に対応（修正または反論）し、必須検証・commit・報告が完了し、working tree が clean |
+| fix-change | PASS | 全指摘に対応（修正または反論）し、必須検証・報告が完了し（差分があれば commit 済み）、working tree が clean |
 | fix-change | ABORT | 適用外、検証失敗を解消できない、入力の RETRY 報告を特定できない、引き継ぎ条件を満たさない dirty tree・HEAD 不一致、scope 外・意図不明の未 commit 変更、provider 障害 |
