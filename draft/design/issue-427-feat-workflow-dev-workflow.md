@@ -71,6 +71,11 @@ provider は `github` 必須（`requires_provider: github`）。`i-pr` と revie
 `RETRY` が最新 `fix-change` 報告より新しければ `fix-change`、それ以外は `change`。review: 最新 `fix-change`
 `PASS` が最新の review 報告より新しければ `verify-change`、それ以外は `review-change`）。
 
+以降の `[worktree_dir]` は、harness 起動では注入値、手動実行では worktree-resolve で得た絶対パスを指す。
+baseline CLI（`kaji_harness.scripts.baseline_precheck`）は cwd から対象を推論せず、`--worktree` か環境変数
+`KAJI_WORKTREE_DIR` を必須とする。runner が `KAJI_*` を注入するのは script-like step だけで、agent step と手動実行には
+注入されないため、両 skill は `--evaluate` / `--compare` の全呼び出しで `--worktree [worktree_dir]` を明示する。
+
 ### 出力
 
 | 出力 | 内容 |
@@ -150,8 +155,7 @@ commit、変更報告。PR 公開・merge・cleanup は持たない。
 **手順（change）**
 
 1. 前提確認: worktree・branch の存在。`type:*` ラベルが 1 件でなければ ABORT。`type:docs` は docs workflow
-   を案内して ABORT（type を付け替えない）。初回入場で working tree が dirty なら、不明な変更を保全して ABORT。
-   RETRY 再入時は直近の自 step 報告と現在の差分から続ける。
+   を案内して ABORT（type を付け替えない）。working tree の扱いは下記「入場時の working tree 判定」に従う。
 2. 適用判定: 次のいずれかを満たさなければ適用外 ABORT。期待動作・対象・受け入れ条件が明確 / 大きな設計判断が
    残らない（公開互換性・権限境界・データ移行・再開処理・状態永続化・merge 条件等の判断を伴わない） /
    影響範囲を説明できる / 既存検証または局所的な回帰テストで確認できる / 通常の revert で戻せる。
@@ -159,7 +163,8 @@ commit、変更報告。PR 公開・merge・cleanup は持たない。
 3. 短い方針（編集前に確定。承認待ちにしない）: 変更内容・維持する不変条件・変更対象 path・確認方法
    （追加/変更するテストと実行する検証コマンド）・docs 影響。
 4. baseline scope 評価（毎回 1 回）:
-   `python -m kaji_harness.scripts.baseline_precheck --evaluate --scope <変更対象 path>...`。
+   `python -m kaji_harness.scripts.baseline_precheck --worktree [worktree_dir] --evaluate --scope <path1> --scope <path2> ...`
+   （変更対象 path ごとに `--scope` を繰り返す）。
    出力の `verdict` が `missing_baseline` / `stale_baseline`、または `baseline_status` が `blocked` / `invalid` なら ABORT。
    `known_failures` で `stop: true`、または `stop: false` でも既知 failure が変更対象と意味的に関連する場合は ABORT
    （`docs/dev/baseline-check.md` の既存停止基準）。`clean` と無関係な `known_failures` は継続し、手順 7 の gate を決める。
@@ -172,7 +177,7 @@ commit、変更報告。PR 公開・merge・cleanup は持たない。
 7. commit 前の必須検証（成功まで commit しない。検証後に編集したら再検証）:
    - baseline `clean`: `source .venv/bin/activate && make check`
    - baseline `known_failures`: `ruff check kaji_harness/ tests/ experiments/` / `ruff format --check kaji_harness/ tests/ experiments/` /
-     `mypy kaji_harness/` の全 PASS と、`python -m kaji_harness.scripts.baseline_precheck --compare` の
+     `mypy kaji_harness/` の全 PASS と、`python -m kaji_harness.scripts.baseline_precheck --worktree [worktree_dir] --compare` の
      `verdict: ok` かつ `regressions: []`。空配列や終了コードだけで成功扱いしない
    - 変更に応じた追加検証（docs を変更したら `make verify-docs` 等）
 8. commit: 対象 path を明示して stage し、Issue type に対応する Conventional Commits prefix で commit。
@@ -181,25 +186,45 @@ commit、変更報告。PR 公開・merge・cleanup は持たない。
 
 **手順（fix-change）の差分**
 
-- 入力は直近の `RETRY` 報告 1 件の指摘。指摘ごとに修正するか、根拠を示して反論する。指摘外の改善を混ぜない。
+- 入力は直近の review 系 `RETRY` 報告 1 件の指摘と引き継ぎ状態。指摘ごとに修正するか、根拠を示して反論する。指摘外の改善を混ぜない。
 - 「報告 SHA と HEAD の不一致」指摘の場合は、追加 commit の差分を確認し、手順 6〜8 を行って報告に含める。
+- 引き継いだ dirty path は、下記の判定で受け入れた場合だけ扱う。Issue scope 内の実装変更（例: レビュー前停止中の未 commit 変更）は
+  差分確認・検証の上で commit する。レビューの検証が生成・変更した path は、原因（テストや設定が tracked file を書き換える等）を
+  修正したうえで、報告で検証由来と特定された path に限り HEAD の内容へ戻す。scope 外・意図を判断できない変更は保全して ABORT。
+  どの扱いにしたかを指摘対応表に記録する。
 - 修正で大きな設計判断が必要と判明したら適用外 ABORT。検証失敗を解消できない場合も ABORT（`fix-change` は `RETRY` を持たない）。
 - 手順 4 の scope 評価は、修正で変更対象 path が増えた場合だけ再実行する。
 
-**報告の内容**: change は方針、fix-change は指摘対応表（指摘 N → 修正 / 反論と根拠）。共通で対象 commit（full SHA）、
-変更ファイル要約、検証（コマンド・終了状態・pytest 集計・`--evaluate` / `--compare` JSON の要点）、docs 更新、
-未解決事項。成功時の検証ログ全文は貼らず、失敗時は関連部分を引用する。同じ説明を他工程・PR へ全文複製しない。
+**入場時の working tree 判定**（change / fix-change 共通。dirty tree を無条件に取り込まない）
 
-**副作用の境界**: 対象 worktree 内の編集・commit と Issue コメント投稿のみ。push・PR 作成・merge・label 変更・
-worktree 作成/削除・Issue 本文編集・session-state 編集・他 workflow 起動はしない。
+| 入場の種類 | 入力報告 | working tree が dirty の場合 |
+|------------|----------|------------------------------|
+| change 初回（自 step の報告なし） | なし | 不明な変更として保全し ABORT |
+| change の RETRY 再入 | 直近の自 step `RETRY` 報告 | 下記 3 条件をすべて満たす場合だけ引き継ぐ |
+| fix-change | 直近の review 系（`review-change` / `verify-change`）`RETRY` 報告 | 下記 3 条件をすべて満たす場合だけ引き継ぐ |
+
+引き継ぐ条件: (1) 現在の HEAD full SHA が入力報告の記載 SHA と一致する (2) 現在の `git status --porcelain` の全 path が
+入力報告の dirty path 一覧に含まれる (3) 各 path の実際の差分が報告記載の原因（作業途中の実装変更 / レビュー前停止中の未 commit 変更 /
+検証による変更 等）と矛盾しない。1 つでも満たさなければ、報告外の変更として restore・stash・commit のいずれもせず保全し ABORT する
+（ABORT 報告に該当 path と不一致の内容を記載）。working tree が clean の場合は入力報告の記載 SHA と HEAD の一致だけを確認し、
+不一致なら同様に ABORT する。
+
+**報告の内容**: change は方針、fix-change は指摘対応表（指摘 N → 修正 / 反論と根拠 / 引き継いだ dirty path の扱い）。共通で対象 commit
+（full SHA）、変更ファイル要約、検証（コマンド・終了状態・pytest 集計・`--evaluate` / `--compare` JSON の要点）、docs 更新、未解決事項、
+引き継ぎ状態（報告時の HEAD full SHA と working tree。dirty なら path ごとの原因）。成功時の検証ログ全文は貼らず、失敗時は関連部分を
+引用する。同じ説明を他工程・PR へ全文複製しない。
+
+**副作用の境界**: 対象 worktree 内の編集・commit と Issue コメント投稿のみ。既存 commit の書き換え（amend / rebase / reset）は
+しない（レビュー済み範囲の祖先関係を保つため）。push・PR 作成・merge・label 変更・worktree 作成/削除・Issue 本文編集・
+session-state 編集・他 workflow 起動はしない。
 
 | step | status | 条件 |
 |------|--------|------|
 | change | PASS | 実装・必須検証・commit・報告が完了し、working tree が clean |
-| change | RETRY | 新しい session で解消できる実装・検証・報告の失敗が残る（cycle `small-execute` が上限を管理） |
-| change | ABORT | 適用外、type ラベル不正、baseline 前提違反・停止、初回入場時の dirty tree、provider 障害 |
-| fix-change | PASS | 全指摘に対応（修正または反論）し、必須検証・commit・報告が完了 |
-| fix-change | ABORT | 適用外、検証失敗を解消できない、入力の RETRY 報告を特定できない、provider 障害 |
+| change | RETRY | 新しい session で解消できる実装・検証・報告の失敗が残る（cycle `small-execute` が上限を管理。dirty path は原因付きで報告） |
+| change | ABORT | 適用外、type ラベル不正、baseline 前提違反・停止、引き継ぎ条件を満たさない dirty tree・HEAD 不一致、provider 障害 |
+| fix-change | PASS | 全指摘に対応（修正または反論）し、必須検証・commit・報告が完了し、working tree が clean |
+| fix-change | ABORT | 適用外、検証失敗を解消できない、入力の RETRY 報告を特定できない、引き継ぎ条件を満たさない dirty tree・HEAD 不一致、scope 外・意図不明の未 commit 変更、provider 障害 |
 
 ### skill IF: `issue-small-change-review`（step: review-change / verify-change）
 
@@ -214,7 +239,7 @@ tracked file は編集しない。修正が必要なら実装側へ戻す（RETR
 | 通常時 | 入力報告: 最新の `change` `PASS` 報告 | review-change |
 | 通常時 | 入力報告: 最新の `fix-change` `PASS` 報告と、それが対応した直前の最新 `RETRY` 報告 | verify-change |
 | 通常時 | `git diff [default_branch]...HEAD` と変更ファイル実体 | review-change |
-| 通常時 | `git diff <前回レビュー SHA>..HEAD` と変更ファイル実体 | verify-change（前回 SHA は RETRY 報告に記載） |
+| 通常時 | `git diff <全体レビュー済み SHA>..HEAD` と変更ファイル実体 | verify-change（SHA は直近の review 系報告に記載。記録なし・非 ancestor なら `[default_branch]...HEAD`） |
 | 通常時 | 自身の検証出力（成功時は終了状態・集計・JSON） | 常時 |
 | 例外時 | `docs/dev/baseline-check.md` | `known_failures` / baseline 不整合 |
 | 例外時 | 失敗した検証の関連ログ全文 | 検証失敗時 |
@@ -227,18 +252,24 @@ tracked file は編集しない。修正が必要なら実装側へ戻す（RETR
 **手順（review-change）**
 
 1. 前提: type ラベル確認（execute と同じ ABORT 条件）。入力報告（最新 `step=change status=PASS` marker）が無ければ ABORT。
-2. 状態確認: `git status --porcelain` が空でなければ未 commit 変更を指摘して RETRY（ファイルは触らない）。
-   HEAD full SHA を記録し、入力報告の SHA と一致しなければ追加 commit の範囲を指摘に含める（レビュー自体は HEAD 全体に行う）。
-3. レビュー観点: (a) Issue の決定事項・受け入れ条件・不変条件の充足 / (b) Scope 混在（Issue スコープ外・type 責任範囲外・
+2. 状態確認: HEAD full SHA を記録する。入力報告の SHA と一致しなければ追加 commit の範囲を指摘に含める。
+   `git status --porcelain` が空でなければ、path ごとの差分を読んで原因（レビュー前停止中の未 commit 変更 / 原因不明 等）を
+   指摘に記載する（ファイルは触らない）。どちらの場合もレビューを打ち切らず、手順 3 の全体レビューを commit 済みの
+   `[default_branch]...HEAD` に対して行う（未 commit 変更はレビュー対象外として指摘に残す）。
+3. レビュー観点（`[default_branch]...HEAD` の全体に対して行う）: (a) Issue の決定事項・受け入れ条件・不変条件の充足 / (b) Scope 混在（Issue スコープ外・type 責任範囲外・
    無関係なついで修正） / (c) 検証の妥当性（bug の回帰テスト、feat の新挙動テスト、refactor の振る舞い非変更、
    docs/metadata-only の変更固有検証） / (d) docs 整合 / (e) auto-close 規約（commit message・追加/変更ファイル・報告に
    hazard pattern がない） / (f) 適用条件の維持（大きな設計判断が現れていない） / (g) 報告と実物の対応（SHA・検証内容）。
    (b)(e) は標準 dev の Pre-Handoff Review 観点を独立レビューへ集約したもの。
-4. 自身の品質検証（HEAD に対して 1 回）: `git diff --name-only [default_branch]...HEAD` の path で
-   `--evaluate --scope` を実行し `baseline_status` を得る。`known_failures` で `stop: true` または意味的関連があれば ABORT。
-   `clean` は `make check`、`known_failures` は非 pytest gate 全 PASS かつ `--compare` の `verdict: ok`・`regressions: []`。
+4. 自身の品質検証（HEAD に対して 1 回）: `git diff --name-only [default_branch]...HEAD` の各 path を `--scope` に繰り返し渡して
+   `python -m kaji_harness.scripts.baseline_precheck --worktree [worktree_dir] --evaluate --scope <path1> --scope <path2> ...`
+   を実行し `baseline_status` を得る。`known_failures` で `stop: true` または意味的関連があれば ABORT。
+   `clean` は `make check`、`known_failures` は非 pytest gate 全 PASS かつ
+   `python -m kaji_harness.scripts.baseline_precheck --worktree [worktree_dir] --compare` の `verdict: ok`・`regressions: []`。
    変更に応じた追加検証（docs 変更時の `make verify-docs` 等）。失敗は関連ログを引用して RETRY。
-   検証で tracked file が変化した場合は保全して RETRY。
+   手順 2 で working tree が dirty だった場合は、結果が HEAD に対応しないため品質検証を実行せず「未実施（dirty tree）」と記録する
+   （PASS にはならず、次の verify-change が HEAD で実行する）。検証で tracked file が変化した場合は、変化した path と
+   「検証（コマンド名）による変更」という原因を指摘に記載して保全し RETRY。
 5. 判定:
    - blocking finding がある → RETRY。指摘は `指摘 N` 形式で file:line・根拠・期待する修正を書く。好み・scope 外改善・
      将来の改善だけでは RETRY にしない（非 blocking 所見として記載可）。
@@ -248,14 +279,21 @@ tracked file は編集しない。修正が必要なら実装側へ戻す（RETR
      `[default_branch]` より先行する commit が 1 件以上）→ Issue 本文を再取得し確認済み項目だけ `[x]` に更新
      （`kaji issue edit [issue_id] --commit --body-file <file>`。失敗は ABORT）→ PASS。
 6. 報告（1 コメント）→ stdout → `verdict_path`。内容: レビュー対象 full SHA、入力報告の参照（step・created_at）、判定、
-   指摘または所見、自身の検証（コマンド・終了状態・集計・JSON 要点）、完了条件照合と本文更新結果、PR 前提。
+   指摘または所見、自身の検証（コマンド・終了状態・集計・JSON 要点、または未実施とその理由）、完了条件照合と本文更新結果、
+   PR 前提、**全体レビュー済み範囲**（`[default_branch]...<SHA>` の全体レビューを完了した SHA。完了していなければ「未完了」と
+   未実施の範囲・理由）、引き継ぎ状態（報告時の HEAD full SHA と working tree。dirty なら path ごとの原因）。
 
 **手順（verify-change）の差分**
 
-- 確認範囲は、直前 RETRY 報告の各指摘の解消（または反論の妥当性）と、`git diff <前回レビュー SHA>..HEAD` の修正影響
-  （回帰・scope）。解消済み指摘を再開しない。新たに RETRY にしてよいのは、修正差分起因の問題・HEAD での検証失敗・
-  HEAD で未充足の完了条件・報告と実物の不一致に限る（レビューサイクル収束のため）。
-- 手順 4〜6（検証・完了条件照合・本文更新・PR 前提・報告）は review-change と同じ。
+- 確認範囲の起点: 直近の review 系報告（review-change / verify-change）に記録された全体レビュー済み SHA を使う。
+  記録が無い（初回の全体レビューが未完了）、またはその SHA が HEAD の ancestor でない場合は、手順 3 の全体レビューを
+  `[default_branch]...HEAD` に対して review-change と同じ規則（新規指摘可）で行い、完了を報告に記録する。
+- 全体レビュー済み SHA がある場合の確認範囲は、直前 RETRY 報告の各指摘の解消（または反論の妥当性）と、
+  `git diff <全体レビュー済み SHA>..HEAD` の修正影響（回帰・scope・auto-close 規約）。解消済み指摘を再開しない。新たに RETRY に
+  してよいのは、修正差分起因の問題・HEAD での検証失敗・HEAD で未充足の完了条件・報告と実物の不一致・working tree の dirty に
+  限る（レビューサイクル収束のため）。収束制約は全体レビューが完了した範囲の後の修正差分にだけ適用する。
+- 手順 2・4〜6（状態確認・検証・完了条件照合・本文更新・PR 前提・報告）は review-change と同じ。報告の全体レビュー済み範囲は
+  確認を終えた HEAD に更新する。
 
 **副作用の境界**: Issue コメント投稿と、`PASS` 時の Issue 本文チェックボックス更新のみ。tracked file の編集・commit・push・
 PR 作成・merge・label 変更・worktree 作成/削除・session-state 編集・他 workflow 起動はしない。人間レビューはこの工程の
@@ -263,8 +301,8 @@ PR 作成・merge・label 変更・worktree 作成/削除・session-state 編集
 
 | status | 条件（review-change / verify-change 共通） |
 |--------|------|
-| PASS | finding なし、HEAD で自身の検証が成功、完了条件を全件確認し本文更新済み、PR 前提を満たす |
-| RETRY | 具体的な修正を要する blocking finding（未 commit 変更・SHA 不一致・検証失敗・未充足の完了条件を含む） |
+| PASS | `[default_branch]...HEAD` の全体レビューが完了済み、finding なし、working tree clean、HEAD で自身の検証が成功、完了条件を全件確認し本文更新済み、PR 前提を満たす |
+| RETRY | 具体的な修正を要する blocking finding（未 commit 変更・SHA 不一致・検証失敗・検証による tracked file の変化・未充足の完了条件を含む） |
 | ABORT | 適用外、入力報告の欠落、baseline 停止基準、type ラベル不正、Issue 本文更新・コメント投稿の失敗 |
 
 ### 既存 skill の接続と変更（依存確認の結果）
@@ -290,8 +328,11 @@ kaji run .kaji/wf/custom/dev/dev-small.yaml 431
 kaji run .kaji/wf/custom/dev/dev-small.yaml 431 --before review-change
 kaji run .kaji/wf/custom/dev/dev-small.yaml 431 --from review-change
 
-# 停止中に人間が commit を追加した場合: review-change が報告 SHA と HEAD の不一致を指摘して RETRY
-#   → fix-change が追加差分を確認・検証・報告 → verify-change が確認
+# 停止中に人間が commit を追加した場合: review-change が HEAD 全体をレビューしたうえで報告 SHA と HEAD の
+#   不一致を指摘して RETRY → fix-change が追加差分を確認・検証・報告 → verify-change が確認
+# 停止中の変更を未 commit のまま残した場合: review-change は commit 済みの [default_branch]...HEAD を全体レビューし、
+#   未 commit の path と原因を報告して RETRY（品質検証は未実施と記録）→ fix-change は報告に載った path だけを
+#   引き継いで扱い commit → verify-change は全体レビュー済み SHA 以降の差分を確認し、HEAD で検証する
 
 # 適用外 ABORT 後に初めからやり直す（中途再開・標準 dev への引継ぎはしない）
 #   1. ABORT 報告を確認し、再実行するかを人間が判断する
@@ -312,6 +353,11 @@ kaji run .kaji/wf/custom/dev/dev-small.yaml 431          # 原因を解消して
 | change の検証失敗 | 修正して再検証。解消できず新 session で解消可能なら RETRY（上限 3、超過は runner が ABORT） |
 | fix-change の検証失敗 | 解消できなければ ABORT |
 | review-change / verify-change の検証失敗 | RETRY → fix-change（`small-change-review` 上限 3、超過は runner が ABORT） |
+| review 開始時の未 commit 変更 | 全体レビューは commit 済み差分に対して完了させ、未 commit path と原因を報告して RETRY（品質検証は未実施と記録） |
+| review の検証が tracked file を変更 | 変化した path と原因を報告し、保全して RETRY。fix-change が原因を修正し、検証由来と特定された path だけを HEAD の内容へ戻す |
+| execute 入場時の報告外 dirty path・HEAD 不一致 | 保全して ABORT（該当 path と不一致内容を報告） |
+| 初回の全体レビューが未完了のまま verify-change に到達 | verify-change が `[default_branch]...HEAD` の全体レビューを review-change と同じ規則で行う |
+| baseline CLI の対象未指定 | 起こさない。全呼び出しで `--worktree [worktree_dir]` を渡す（未指定時の CLI は `ValueError` で終了する） |
 | Issue コメント・本文更新の失敗 | ABORT。verdict は stdout と `verdict_path` に残す（`VerdictNotFound` を避ける） |
 
 ## 制約・前提条件
@@ -368,6 +414,14 @@ change ─RETRY→ change                             （small-execute: 上限 3
 `kaji issue view [issue_id] --json comments | jq`（1 行目 marker の厳密照合で最新 1 件）を使い、
 status だけで足りる判定には `kaji issue resolve-verdict` を使う。新しい artifact・台帳・metadata は追加しない。
 
+各報告の本文には、後続工程が必要とする引き継ぎ状態を既存の報告項目として書く。
+
+| 項目 | 書く工程 | 使う工程 |
+|------|----------|----------|
+| 報告時の HEAD full SHA | 全工程 | 次工程の SHA 照合（review の不一致指摘、execute の入場判定） |
+| working tree の状態（clean、または dirty path と path ごとの原因） | 全工程 | execute の入場時 working tree 判定 |
+| 全体レビュー済み範囲（`[default_branch]...<SHA>` の完了 SHA、または未完了と理由） | review-change / verify-change | verify-change の確認範囲の起点 |
+
 ### 停止と再開
 
 - `--before review-change` は change の PASS 後、review-change dispatch 直前で止まる（既存の exclusive barrier）。
@@ -418,8 +472,8 @@ Issue で決定した 4 差分:
 | 指標 | 測り方 |
 |------|--------|
 | 通常成功経路の agent 起動数 | 先頭 step から `PASS` だけを辿り、`agent` を持つ step を数える（下記 V3 のスクリプト）。dev.yaml と dev-small を同じ方法で算出 |
-| 通常経路で読む skill と参照先の総量 | 固定シナリオ「`type:bug`、Python コード変更あり、baseline `clean`、RETRY なし」で、各 agent step の SKILL.md と、その skill が通常時に無条件で読ませる repo 内ファイルの行数・バイト数（`wc -l -c`）を合計。Issue 本文・diff・コマンド出力など可変入力は数えない。両経路で共通の step（review-ready / start / pr / close）は別行にする |
-| 例外時だけの参照量 | 上記と同じ方法で、条件付き・例外時の参照先を別に合計 |
+| 通常経路で読む skill と参照先の総量 | 固定シナリオ「`type:bug`、Python コード変更あり（回帰テスト追加あり）、baseline `clean`、RETRY なし、手動実行でない」で、各 agent step の SKILL.md、その skill が無条件で読ませる repo 内ファイル、およびシナリオで条件が確定的に成立する条件付き参照（例: Python コードを書く → `docs/reference/python/*.md`、テストを追加する → `docs/dev/testing-convention.md` の該当節、標準 dev では type 別ガイド等）の行数・バイト数（`wc -l -c`、節指定の参照は該当節の範囲）を合計する。両経路に同じ規則を適用する。Issue 本文・diff・コマンド出力など可変入力は数えない。両経路で共通の step（review-ready / start / pr / close）は別行にする |
+| 例外時だけの参照量 | 上記と同じ方法で、固定シナリオでは条件が成立しない参照先（baseline 異常時、手動実行時、判断に迷う場合、検証失敗時 等）を別に合計 |
 | 必須 artifact 数 | dev: 設計書・`baseline.json`、dev-small: `baseline.json` |
 | 必須報告数（通常経路の Issue コメント・本文更新） | 各 skill が通常経路で必ず投稿する Issue コメントと本文更新の数 |
 | 引継ぎ数 | 通常成功経路上で agent step から次の agent step へ移る回数 |
@@ -453,6 +507,9 @@ Issue の「ワークフロー完了後の確認項目」で別途記録する�
 | review の known_failures 時 scope 照合 | 実 diff の path で `--evaluate` を実行し停止基準を適用 | AI の仮定。scope 評価維持（人間決定）の範囲内の具体化。known_failures 時だけの 1 コマンド。review-design で検査 | review 手順 4 |
 | `review` fallback の変更範囲 | 設計書なし かつ dev-small の review PASS marker がある場合だけ Issue 要件で評価 | AI の仮定。Issue「既存 skill を再利用する場合の前提条件更新」「標準 dev の要求は維持」の両立。review-design・review-code で検査 | 条件判定に既存 `kaji issue resolve-verdict` を使う |
 | 恒久テストを追加しない | custom YAML・新 skill に pytest を追加せず、一時の変更固有検証で確認 | AI の仮定。custom の pytest 対象外契約（`workflow-authoring.md`）と prose 検査テスト削除の方針（commit `4dfb343`）。Issue は独自 validator 追加を対象外とする。review-design で検査 | テスト戦略 |
+| 修正工程への dirty tree の引き継ぎ | 入力報告の HEAD SHA 一致・dirty path が報告記載の範囲内・差分が報告の原因と矛盾しない、の 3 条件を満たす場合だけ引き継ぐ。満たさなければ保全して ABORT | AI の仮定。人間決定「差し戻しは実装 skill を再利用」「docs・修正は実装側で完了」と、適用外・不明変更は保全して停止する方針の範囲内の具体化。設計レビュー指摘 1 を受けて補完。verify-design・review-code で検査 | execute の入場時 working tree 判定、fix-change の扱い（取り込み / 検証由来 path の復元 / ABORT）、報告の引き継ぎ状態 |
+| 全体レビューの完了追跡 | review 系報告に全体レビュー済み SHA を記録し、未完了・非 ancestor なら verify-change が全体レビューを行う。収束制約は完了済み範囲の後にだけ適用 | AI の仮定。人間決定「独立レビュー」「再レビューは未解決指摘と修正の影響」の両立。設計レビュー指摘 2 を受けて補完。新規 artifact・承認 gate は追加しない。verify-design・review-code で検査 | review-change は dirty・SHA 不一致でも commit 済み差分の全体レビューを完了させる。execute は既存 commit を書き換えない |
+| baseline CLI の対象指定 | `--evaluate` / `--compare` の全呼び出しで `--worktree [worktree_dir]`、複数 scope は `--scope` の繰り返し | 既存契約（`baseline_precheck.py` の `--worktree` / `KAJI_WORKTREE_DIR` 必須、runner は agent step に `KAJI_*` を注入しない）への適合。設計レビュー指摘 3 | 手動・harness 起動とも同じ明示引数で対象へ到達。既存標準 skill の同種問題は #430 として分離 |
 | docs の正本位置 | dev-small の選択基準・運用は `docs/dev/workflow_guide.md` § dev-small を正本にする | AI の仮定。custom variant（dev-thorough）の既存の記載位置に合わせる。新規 doc を作らない。review-design で検査 | 影響ドキュメント |
 | one-way door | 該当なし | 公開 CLI・永続化 schema・Python 実行時コード・標準 dev 契約を変えず、全変更が revert で戻せる新規 custom 資産と条件付き文書変更に限られるため（critical-decision-checklist の代表軸を確認） | — |
 
@@ -500,6 +557,11 @@ workflow 定義（custom YAML）・skill 指示（Markdown）・docs の追加�
 | V6 | 新 skill の verdict 例を `kaji_harness.verdict.parse_verdict` で各 step の valid status に対して parse | 例外なし |
 | V7 | 変更・追加ファイルと commit message に `rg -nP '(Clos(e[sd]?|ing)|Fix(e[sd]|ing)?|Resolv(e[sd]?|ing)|Implement(s|ing|ed)?)\s*:?\s*#[0-9]'` | 0 件 |
 | V8 | 「静的評価の方法」の表を算出 | 実装報告に記録。未測定値を含まない |
+| V9 | baseline CLI の対象指定: (1) 両 skill の `--evaluate` / `--compare` 呼び出しがすべて `--worktree [worktree_dir]` を含み、複数 scope を `--scope` の繰り返しで渡すことを確認 (2) 実装 worktree 以外の cwd（main checkout）から `env -u KAJI_WORKTREE_DIR .venv/bin/python -m kaji_harness.scripts.baseline_precheck --worktree <実装 worktree の絶対パス> --evaluate --scope kaji_harness --scope tests` を実行（読み取りのみ） | (1) 欠落 0 件 (2) exit 0 で構造化 JSON を返し、`measured_commit` が実装 worktree の `baseline.json` と一致する（`KAJI_WORKTREE_DIR` 未設定でも、手動・harness のどちらの起動形でも同じ対象に到達する）。比較として `--worktree` なしでは `ValueError` になることを記録 |
+| V10 | 例外経路のシナリオ確認: 実装した両 SKILL.md と YAML を次のシナリオに当て、各シナリオを処理する SKILL.md の手順（見出し・行）と YAML の遷移を対応表として実装報告に記録する。S1: review の検証が tracked file を変更 → 報告に path・原因・SHA → fix-change が 3 条件で受け入れ、原因修正と検証由来 path の復元 → commit → verify-change が HEAD で検証し PASS 可能 / S2: fix-change 入場時に報告外の dirty path または HEAD 不一致 → 保全して ABORT / S3: レビュー前停止中の未 commit 変更 → review-change が commit 済み差分を全体レビューし品質検証は未実施と記録して RETRY → fix-change が取り込み commit → verify-change は全体レビュー済み SHA 以降を確認 / S4: review 系報告に全体レビュー完了の記録がない → verify-change が `[default_branch]...HEAD` を全体レビュー（収束制約を適用しない） / S5: 全体レビュー済み SHA が HEAD の ancestor でない → S4 と同じ / S6: change 初回入場で dirty → ABORT / S7: review 開始時に working tree が dirty → PASS にならない | 全シナリオに処理箇所があり、元の実装差分が独立レビューを受けないまま PASS する経路、報告外の変更を取り込む経路、dirty tree で PASS する経路がない |
+
+既存の標準 dev skill（`issue-implement` / `issue-review-code` / `issue-fix-code` / `i-dev-final-check`）と
+`docs/dev/baseline-check.md` の例にも `--worktree` を渡さない同種の呼び出しがあるが、本 Issue の変更範囲外のため #430 で扱う。
 
 ### 恒久テストを追加しない理由（`docs/dev/testing-convention.md` の 4 条件）
 
@@ -508,7 +570,7 @@ workflow 定義（custom YAML）・skill 指示（Markdown）・docs の追加�
    skill markdown の禁止記述は既存の全件走査テスト、runner の意味論は既存テストが捕捉する。dev-small 固有の遷移は V3 で確認する。
 3. 回帰検出情報の増分: custom YAML は利用者所有で pytest 対象外という契約があり、恒久化すると所有権境界を崩す。
    skill 文言の部分一致テストは挙動を保証しない。
-4. 説明可能性: 本節と V1〜V8 の実行記録で、検証内容と省略理由をレビューできる。
+4. 説明可能性: 本節と V1〜V10 の実行記録で、検証内容と省略理由をレビューできる。
 
 ## 影響ドキュメント
 
@@ -517,7 +579,7 @@ workflow 定義（custom YAML）・skill 指示（Markdown）・docs の追加�
 | docs/dev/workflow_guide.md | あり | custom 表・選択表・provider 表・PR review 軸と baseline の記述に dev-small を追加。新節「dev-small（custom・試験導入）」に位置付け、経路、適用条件と選択基準（設計判断の大きさ）、候補と標準 dev の具体例、起動・レビュー前停止と再開・ABORT とやり直し（cycle 消費回数の持ち越しを含む）、既存 skill との関係、効果評価の扱い（起動回数 ≠ token）を書く。適用条件の正本 |
 | docs/dev/workflow_overview.md | あり | 「どの workflow を使うか」に dev-small の行と選択の考え方、workflow_guide への参照 |
 | docs/dev/development_workflow.md | あり | § 対象 / § Pre-Handoff Review / § 設計書の扱い が標準 dev（dev / dev-thorough 系 / dev-local）の規定であり、dev-small は持たないことを明記 |
-| docs/dev/baseline-check.md | あり | § workflow 上の位置に dev-small（start → baseline → change）、scope の入力（change が編集前に確定した path、review が実 diff の path）、artifact・比較関数の consumer に新 skill を追加 |
+| docs/dev/baseline-check.md | あり | § workflow 上の位置に dev-small（start → baseline → change）、scope の入力（change が編集前に確定した path、review が実 diff の path）、artifact・比較関数の consumer に新 skill を追加。dev-small について書く呼び出し例は `--worktree [worktree_dir]` 付きにする（既存例の修正は #430） |
 | docs/dev/workflow_completion_criteria.md | あり | § ステップ別の確認責務と証跡、§ 本文更新のタイミングと実行者に新 skill の行を追加 |
 | docs/dev/shared_skill_rules.md | あり | verdict marker の producer 一覧、レビューサイクルの責務境界、`/i-pr` が持たない責務の最終判定担当に新 skill を追加 |
 | docs/dev/workflow-authoring.md | あり | § ファイル配置のツリーに `dev-small.yaml` を追加 |
@@ -549,6 +611,8 @@ workflow 定義（custom YAML）・skill 指示（Markdown）・docs の追加�
 | self-RETRY 検査の範囲 | `tests/workflows/test_self_retry_cycle_membership.py` | official のみを glob 起点に検査 |
 | series 自動選択 | `.claude/skills/series-create/SKILL.md` Step 3、`tests/test_series_create_skill.py` | custom YAML の description も読み、「standard series auto-selection target」と書かれた候補だけを選ぶ。variant は「series 自動選択対象外」 |
 | baseline 契約 | `docs/dev/baseline-check.md`、`kaji_harness/scripts/baseline_precheck.py`（`_evaluate` / `_compare`）、`kaji_harness/baseline.py`（`ScopeEvaluation`） | `--evaluate` は artifact 検証・ancestor 確認の上で `verdict` / `stop` / `overlapping` / `baseline_status` を返す。`--compare` は baseline 欠落・非 ancestor でも `regressions: []` を返すため `verdict` の確認が必要。measure は `draft/design/**` 以外の commit があれば再測定しない |
+| baseline CLI の対象解決 | `kaji_harness/scripts/baseline_precheck.py` `_parse_args` / `main`、`kaji_harness/runner.py` `_dispatch` / `_build_context_env` | `--worktree` の既定値は環境変数 `KAJI_WORKTREE_DIR` で、どちらも無ければ `ValueError("KAJI_WORKTREE_DIR or --worktree is required")`。runner が `KAJI_*` を渡すのは `settings.is_script_like` の step だけ。`--scope` は `action="append"` で繰り返し指定する。設計修正時に `env -u KAJI_WORKTREE_DIR` で `--worktree` なしは `ValueError`、付与すると構造化 JSON に到達することを確認 |
+| 既存 skill の同種問題 | https://github.com/apokamo/kaji/issues/430 | 標準 dev skill の `--compare` 呼び出しに `--worktree` が無い問題を本 Issue と分離して起票 |
 | 既存 skill の設計書・PHR 依存 | `.claude/skills/issue-review-code/SKILL.md` Step 1-2・Step 1.4、`.claude/skills/i-dev-final-check/SKILL.md` Step 2-1・Step 6・Step 7.5、`.claude/skills/issue-implement/SKILL.md` Step 2・Step 8.5 | 軽量経路で再利用できない理由 |
 | PR 系 skill の依存確認 | `.claude/skills/i-pr/SKILL.md`、`.claude/skills/review/SKILL.md` Step 5、`.claude/skills/pr-fix/SKILL.md`、`.claude/skills/pr-verify/SKILL.md`、`.claude/skills/issue-close/SKILL.md` § 共通: ワークフロー完了後の確認項目の移管 | `review` Step 5 だけが設計書を前提にする。`issue-close` は事後確認の `[ ]` だけを移す |
 | type 別実装ガイド | `.claude/skills/_shared/implement-by-type/{feat,bug,refactor}.md` | 設計書の IF・再現手順・根本原因・改善指標を前提に書かれているため新 skill から参照しない |
