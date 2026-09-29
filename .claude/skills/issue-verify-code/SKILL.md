@@ -89,7 +89,7 @@ $ARGUMENTS = <issue_id>
 
 3. **Baseline artifact の確認**:
    [docs/dev/baseline-check.md](../../../docs/dev/baseline-check.md) に従い固定 path の artifact を確認する。
-   regression 判定は `python -m kaji_harness.scripts.baseline_precheck --compare` を使い、
+   regression 判定は `python -m kaji_harness.scripts.baseline_precheck --worktree [worktree_dir] --compare` を使い、
    `verdict: ok`、regression 0 件を必須とする。Issue コメントは正本として検索しない。
 
 4. **修正差分を確認**:

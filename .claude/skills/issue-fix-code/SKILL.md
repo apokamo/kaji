@@ -121,7 +121,7 @@ $ARGUMENTS = <issue_id>
    #### 3.2 テスト実行
 
    ```bash
-   cd [worktree_dir] && source .venv/bin/activate && python -m kaji_harness.scripts.baseline_precheck --compare
+   cd [worktree_dir] && source .venv/bin/activate && python -m kaji_harness.scripts.baseline_precheck --worktree [worktree_dir] --compare
    ```
 
    合否判定は `issue-implement` Step 7b と同一とし、`verdict: ok`、regression 0 件を必須とする。
