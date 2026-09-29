@@ -30,6 +30,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the exact format). This Issue does not migrate #401 / #413 / #419
     automatically; that is separate maintainer work.
 
+### Added
+
+- Added the `dev-small` custom workflow as a trial for small changes whose
+  design decisions are already settled in the Issue. It runs readiness,
+  worktree, baseline, a combined policy/implement/verify step
+  (`issue-small-change-execute`), and an independent review and final check
+  (`issue-small-change-review`) before the existing PR review and close steps,
+  without a design document, design review, Pre-Handoff Review, or final-check
+  step. It is repository-specific, explicitly selected, and not published to
+  the starters. The standard `dev` workflow is unchanged (#427).
+
 ## [0.20.1] - 2026-08-30
 
 This patch release hardens Herdr startup on fresh panes and restores statusline

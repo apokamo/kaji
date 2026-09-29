@@ -1,5 +1,5 @@
 ---
-description: PR に対し初回コードレビューを実施し、Approve / Changes Requested を投稿する。新規レビュー専用（修正確認は /pr-verify）。`dev` / `dev-thorough` / `docs` workflow では `review-poll` の `BACK_FALLBACK` を受けた fallback step として呼び出される。
+description: PR に対し初回コードレビューを実施し、Approve / Changes Requested を投稿する。新規レビュー専用（修正確認は /pr-verify）。`dev` / `dev-thorough` / `dev-small` / `docs` workflow では `review-poll` の `BACK_FALLBACK` を受けた fallback step として呼び出される。
 name: review
 ---
 
@@ -202,6 +202,12 @@ cd [worktree_dir] && source .venv/bin/activate && make check
 
 各観点について ✅ / ⚠️ / ❌ で判定し、❌ または ⚠️ がある項目を Must Fix / Should Fix として
 列挙する。
+
+**設計書を持たない dev-small 経路**: `draft/design/issue-[issue_id]-*.md` が存在せず、かつ
+`kaji issue resolve-verdict [issue_id] --step verify-change` または `--step review-change` が
+`status: PASS` を返す場合に限り、観点 1 / 3 / 4 / 5 の「設計書」を Issue 本文の決定事項・完了条件
+（要件の正本）に読み替えて評価する（設計書の不在だけを理由に ❌ にしない）。この条件に該当しない場合は
+上記のとおり設計書を前提とする。
 
 ### Step 6: 正式 review 投稿
 

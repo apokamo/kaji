@@ -14,14 +14,15 @@ workflow 固有の完了判定は持たず、PR 作成そのものに責務を�
 |-----------|-----------------|
 | `i-dev-final-check` 完了後 | ✅ 必須 |
 | `i-doc-final-check` 完了後 | ✅ 必須 |
+| `issue-small-change-review` PASS 後（custom `dev-small`） | ✅ 必須 |
 | `provider.type='github'` 配下 | ✅ 受理（gh CLI 経由） |
 | `provider.type='local'` 配下 | ❌ Step 0 で ABORT。代替は `/issue-close`（local merge） |
 
 ## このスキルがやらないこと
 
-- 品質チェック（`make check`）の実行 → `i-dev-final-check` / `i-doc-final-check` の責務
-- 設計書アーカイブ → `i-dev-final-check` の責務
-- エビデンス集約 → `i-dev-final-check` / `i-doc-final-check` の責務
+- 品質チェック（`make check`）の実行 → `i-dev-final-check` / `i-doc-final-check` / `issue-small-change-review`（dev-small）の責務
+- 設計書アーカイブ → `i-dev-final-check` の責務（dev-small は設計書を持たない）
+- エビデンス集約 → `i-dev-final-check` / `i-doc-final-check` / `issue-small-change-review`（dev-small）の責務
 - PR マージ・ブランチ削除 → `issue-close` の責務
 
 ## 入力
@@ -142,7 +143,7 @@ cd [worktree_dir] && git status
 ```
 
 未コミットの変更がある場合は先にコミットしてください。
-workflow 固有の docs 同梱判定は `i-dev-final-check` / `i-doc-final-check` 側の責務とする。
+workflow 固有の docs 同梱判定は `i-dev-final-check` / `i-doc-final-check` / `issue-small-change-review`（dev-small）側の責務とする。
 
 ### Step 3: コミット履歴の整理
 

@@ -25,6 +25,10 @@ typo やリンク修正など、one-way door がない軽微な Issue はスキ�
 |------|------------------|------------|
 | コード変更を含む | dev workflow | `/issue-create` → `/issue-review-ready` → `/issue-start` → `/issue-design` → `/issue-review-design` → `/issue-implement` → `/issue-review-code` → `/i-dev-final-check` → `/i-pr` → `/issue-close` |
 | docs のみ変更する | docs-only workflow | `/issue-create` → `/issue-review-ready` → `/issue-start` → `/i-doc-update` → `/i-doc-review` → `/i-doc-final-check` → `/i-pr` → `/issue-close` |
+| コード変更を含むが、期待動作と修正範囲が Issue で確定し大きな設計判断が残らない小修正（起動者が明示選択） | dev-small（custom・試験導入） | `/issue-create` → `/issue-review-ready` → `/issue-start` → `issue-small-change-execute` → `issue-small-change-review` → `/i-pr` → `/issue-close` |
+
+dev workflow と dev-small の選択は差分の行数ではなく、残っている設計判断の大きさで行う。迷う場合は dev workflow を使う。
+dev-small の適用条件・具体例・停止と再開・適用外時のやり直しは [workflow_guide.md § dev-small](workflow_guide.md) を参照。
 
 ## type 別のフロー分岐（dev workflow 内）
 

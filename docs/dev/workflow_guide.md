@@ -26,6 +26,7 @@ kaji の pytest 回帰対象外。`make validate-workflows` の L1/L2/L3 静的�
 |----------|----------|------|
 | `.kaji/wf/custom/dev/dev-thorough.yaml` | github | 丁寧版 dev workflow（dev.yaml と同じ骨格でモデル / effort を厚めに） |
 | `.kaji/wf/custom/dev/dev-thorough-fable.yaml` | github | dev-thorough の fable モデル variant |
+| `.kaji/wf/custom/dev/dev-small.yaml` | github | 設計判断済み小修正向けの軽量 dev workflow（試験導入。§ dev-small） |
 | `.kaji/wf/custom/docs/docs-codex.yaml` | github | docs workflow の codex variant |
 | `.kaji/wf/custom/docs/docs-fable.yaml` | github | docs workflow の fable variant |
 | `.kaji/wf/custom/docs/docs-thorough-codex.yaml` | github | 丁寧版 docs workflow の codex variant |
@@ -42,6 +43,7 @@ kaji の pytest 回帰対象外。`make validate-workflows` の L1/L2/L3 静的�
 |----------|------------------------|------------------------------|
 | 機能追加・バグ修正・リファクタ | `official/dev.yaml` | `official/local/dev-local.yaml` |
 | 丁寧に進めたいコード変更 | `custom/dev/dev-thorough.yaml`（このリポジトリ固有の custom variant） | `official/local/dev-local.yaml`（thorough の local 版は持たない） |
+| 設計判断が済んだ小修正（明示選択） | `custom/dev/dev-small.yaml`（試験導入の custom variant。§ dev-small の適用条件） | `official/local/dev-local.yaml`（small の local 版は持たない） |
 | スキルファイルの改善 | `official/dev.yaml` | `official/local/dev-local.yaml` |
 | ドキュメント修正のみ | `official/docs.yaml` | `official/local/docs-local.yaml` |
 | 既存 PR の review 収束のみ | `official/dev.yaml --from review-poll [--before close]` | （PR concept なし。local では非対象） |
@@ -100,6 +102,7 @@ provider API、Issue、artifact、state、lock、member workflow 実行への副
 | `official/local/docs-local.yaml` | official | `local` | `issue-close` | docs-only / local。GitHub 前提 step を持たない |
 | `official/incident.yaml` | official | `github` | `report` | 通常運用ではない failure triage 第2層（手動起動）。調査 → 査読 → 修正 → 確認 → 最終提案。終端は「提案」で close step を持たない（§ 第2層: 調査・提案） |
 | `custom/dev/dev-thorough.yaml` | custom | `github` | `issue-close` | forge 必須。丁寧版。kaji の pytest 回帰対象外 |
+| `custom/dev/dev-small.yaml` | custom | `github` | `issue-close` | forge 必須。設計判断済み小修正向け（試験導入）。kaji の pytest 回帰対象外 |
 | `custom/operations/starter-sync.yaml` | custom | `github` | `release-starter` | 通常運用ではない managed starter 同期（手動起動）。終端は publish で close step を持たない。kaji の pytest 回帰対象外 |
 
 custom workflow への `requires_provider` 追加は推奨（[workflow-authoring.md](workflow-authoring.md)
@@ -107,9 +110,9 @@ custom workflow への `requires_provider` 追加は推奨（[workflow-authoring
 
 ## PR レビュー後フェーズ（途中起動）
 
-official の `dev` / `docs` と custom の `dev-thorough` 系は review 軸（`review-poll` step +
-`pr-review` cycle: `entry: review-poll` / `loop: [pr-fix, pr-verify]` /
-`max_iterations: 3` / `on_exhaust: ABORT`）を内包している。PR review の収束だけを
+official の `dev` / `docs` と custom の `dev-thorough` 系・`dev-small` は review 軸（`review-poll` step +
+PR review cycle: `entry: review-poll` / `loop: [pr-fix, pr-verify]` /
+`max_iterations: 3` / `on_exhaust: ABORT`。`dev-small` の cycle 名は `small-pr-review`）を内包している。PR review の収束だけを
 回したい場合は専用 workflow を増やさず、`official/dev.yaml` を `--from review-poll` で
 途中起動する。review 以降の step 列はこれらで同一のため、canonical には
 `official/dev.yaml` を使えばよい。
@@ -121,7 +124,7 @@ official の `dev` / `docs` と custom の `dev-thorough` 系は review 軸（`r
 | PR 作成で停止（review に入らない） | `kaji run .kaji/wf/official/dev.yaml <id> --before review-poll` | ❌ |
 | `/review-cycle <id>` | review → 修正 → 確認ループを 1 コマンドで回す slash command wrapper（内部で `dev.yaml --from review-poll --before close` を起動）。終了後に `/issue-close` 案内を出力 | ❌（手動） |
 
-> **review-poll の前提**: `official/dev.yaml` / `official/docs.yaml` と custom の dev-thorough 系は `chatgpt-codex-connector[bot]` (id `199175422`) の auto-review が走っている GitHub 環境を前提に設計されている。`requires_provider: github` 固定で、local 環境では workflow load 時に exit 2 する。auto-review がクレジット不足等で走らない場合は、`review-poll` が `NO_REACTION_TIMEOUT_SEC` (60s) 経過で `BACK_FALLBACK` を返し、既存 `review` skill (codex agent による能動レビュー) に fallback する。詳細は [`.claude/skills/review-poll/SKILL.md`](../../.claude/skills/review-poll/SKILL.md) を参照。
+> **review-poll の前提**: `official/dev.yaml` / `official/docs.yaml` と custom の dev-thorough 系・dev-small は `chatgpt-codex-connector[bot]` (id `199175422`) の auto-review が走っている GitHub 環境を前提に設計されている。`requires_provider: github` 固定で、local 環境では workflow load 時に exit 2 する。auto-review がクレジット不足等で走らない場合は、`review-poll` が `NO_REACTION_TIMEOUT_SEC` (60s) 経過で `BACK_FALLBACK` を返し、既存 `review` skill (codex agent による能動レビュー) に fallback する。詳細は [`.claude/skills/review-poll/SKILL.md`](../../.claude/skills/review-poll/SKILL.md) を参照。
 
 ## 途中開始・途中終了・単発実行（`--from` / `--before` / `--step` / `--reset-cycle`）
 
@@ -131,6 +134,7 @@ official の `dev` / `docs` と custom の `dev-thorough` 系は review 軸（`r
 # 通常運用（GitHub）
 kaji run .kaji/wf/official/dev.yaml 247              # 標準 dev
 kaji run .kaji/wf/custom/dev/dev-thorough.yaml 247     # 丁寧版
+kaji run .kaji/wf/custom/dev/dev-small.yaml 247        # 設計判断済み小修正（試験導入。§ dev-small）
 kaji run .kaji/wf/official/docs.yaml 247             # docs-only
 
 # 緊急時 fallback（GitHub 障害・不通時）
@@ -345,6 +349,100 @@ kaji run .kaji/wf/official/dev.yaml 247 --agent-runner headless
 各 hand-off 直前（`design → review-design` / `implement → review-code`）には **pre-handoff review** が挟まる（capability-based: Claude Code は `kaji-code-reviewer` subagent、Codex / Antigravity は main-session self-check）。詳細は [development_workflow.md § Pre-Handoff Review](development_workflow.md#prehandoff-review) を参照。
 
 詳細: [development_workflow.md](development_workflow.md)
+
+## dev-small（custom・試験導入）
+
+`custom/dev/dev-small.yaml` は、期待動作と修正範囲が Issue で確定し、大きな設計判断が残らない小修正を
+「方針確認・実装・検証」と「独立レビュー・最終確認」の 2 工程で進める軽量 dev workflow。
+起動者が明示的に選ぶ（series 自動選択・自動切替の対象外）。このリポジトリ固有の試験導入物で、
+kaji の pytest 回帰対象外・starter 非公開。
+
+```text
+review-ready → start → baseline（script step）→ change → review-change → pr → review-poll → close
+                                  修正ループ: review-change ─RETRY→ fix-change → verify-change ─RETRY→ fix-change
+```
+
+| step | skill | 役割 |
+|------|-------|------|
+| `change` / `fix-change` | `issue-small-change-execute` | 短い方針 → baseline scope 評価 → 実装・テスト・docs → 差分確認 → commit 前の必須検証 → commit → 報告 |
+| `review-change` / `verify-change` | `issue-small-change-review` | 実装 session と別 context で実 diff と受け入れ条件を確認、自身で品質検証、完了条件の `[x]` 更新、PR 前提確認、判定 |
+
+- 設計書・設計レビュー・Pre-Handoff Review・final-check の独立工程を持たない。要件の正本は Issue 本文と
+  人間の決定事項で、設計書は要求しない。方針は変更前に報告へ記録するが、承認待ち工程にはしない。
+- readiness・worktree・baseline・独立レビュー・PR review・close は維持する。通常成功経路の agent 起動は
+  6 回（`official/dev.yaml` は 9 回）。起動回数の差を token 削減率とはみなさない。
+- 独立レビューの条件は「実装した session と同じ context でレビューしない」ことだけで、review 系 step は
+  `resume:` を持たない別 session で起動する。agent / model の別指定は条件にしない。
+- 標準 dev の Pre-Handoff Review が見る Scope 混在・auto-close 規約は、`review-change` の観点に集約する。
+- baseline は start の直後に 1 回測定する（[baseline-check.md](baseline-check.md)）。`change` は編集前に確定した
+  変更対象 path、`review-change` は実 diff の path を `--evaluate --scope` に渡し、既存の停止基準を適用する。
+  commit 前（`change` / `fix-change`）とレビュー側（`review-change` / `verify-change`）の双方が品質検証を実行する:
+  `clean` は `make check`、`known_failures` は非 pytest gate 全 PASS と `--compare` の `verdict: ok` かつ `regressions: []`。
+- 完了条件のチェックボックスは `review-change` / `verify-change` の PASS 時に確認済み項目だけ `[x]` にする。
+  `### ワークフロー完了後の確認項目` は `issue-close` の follow-up 移管対象として残す。
+- PR 作成・PR review・close は標準 dev と同じ `i-pr` / `review-poll`（fallback `review`）/ `pr-fix` / `pr-verify` /
+  `issue-close` を使う。`review` は dev-small の review PASS marker がある場合に限り、設計書の代わりに Issue の
+  決定事項・完了条件で評価する。
+
+### dev-small の適用条件
+
+選択は差分の行数・ファイル数ではなく、残っている設計判断の大きさで行う。次をすべて満たす変更が候補。
+
+- 期待動作・対象・受け入れ条件が Issue で明確
+- 大きな設計判断が残らない（公開互換性・権限境界・データ移行・再開処理・状態永続化・merge 条件等の判断を伴わない）
+- 影響範囲を説明できる
+- 既存検証または局所的な回帰テストで確認できる
+- 通常の revert で戻せる
+
+| 区分 | 具体例 |
+|------|--------|
+| dev-small 候補 | 原因と期待動作が明確な局所的 bug 修正（例: 特定入力での誤ったエラーメッセージ）、テスト修正（例: 環境依存で不安定な assertion の修正）、意味が限定された機械的変更（例: 設定値・定数の置換、決定済みの rename） |
+| 標準 dev | 調査後に要件・構成を決める機能開発、公開 CLI・永続化 schema の互換性判断、権限境界、データ移行、再開処理・状態永続化・merge 条件などの設計判断を伴う変更 |
+| docs workflow | docs-only の変更（軽量化目的で type を付け替えない） |
+
+### 起動・レビュー前停止・再開
+
+```bash
+# 起動（起動者が明示選択）
+kaji run .kaji/wf/custom/dev/dev-small.yaml 431
+
+# 独立レビューの前で止める → 人間が差分を確認 → 独立レビュー・最終確認から通常再開
+kaji run .kaji/wf/custom/dev/dev-small.yaml 431 --before review-change
+kaji run .kaji/wf/custom/dev/dev-small.yaml 431 --from review-change
+```
+
+- `--before review-change` での停止は Issue 完了やレビュー承認を意味しない。再開は `--from review-change` で行う。
+- 人間レビューを理由に `--from pr` で `review-change` を飛ばす運用、および人間のレビュー結果の自動取り込みは対象外
+  （`review-change` は品質検証・完了条件照合・PR 前提確認も担うため）。
+- 停止中に commit を追加した場合、`review-change` は HEAD の全体をレビューしたうえで報告 SHA との不一致を指摘して
+  RETRY し、`fix-change` が追加差分を確認・検証・報告する。未 commit のまま残した変更は、`review-change` が
+  path と原因を報告して RETRY し（品質検証は未実施と記録）、`fix-change` が報告に載った path だけを引き継いで commit する。
+
+### 適用外 ABORT とやり直し
+
+途中で適用外と判明した場合、`change` / `fix-change` / `review-change` / `verify-change` は理由と未完了事項を Issue に
+残して ABORT する。worktree・branch・未 commit 変更は保全し、session-state の編集・label 変更・他 workflow の起動はしない。
+標準 dev への引継ぎや途中からの再開は仕様に含めない。再実行が必要なら、人間が判断したうえで worktree を含めて初めからやり直す。
+
+1. ABORT 報告を確認し、再実行するか（標準 dev か、原因を解消した dev-small か）を人間が判断する
+2. 残す必要のある作業を確認したうえで、既存 worktree / branch を削除する
+   （[git-worktree.md § Worktree の削除](../guides/git-worktree.md)）
+3. `--from` なしで起動する
+
+```bash
+kaji run .kaji/wf/official/dev.yaml 431              # 標準 dev で初めから
+kaji run .kaji/wf/custom/dev/dev-small.yaml 431      # 原因を解消して dev-small で初めから
+```
+
+`session-state.json` の cycle 消費回数は Issue 単位で持ち越される。dev-small の cycle 名（`small-*`）は `official/dev.yaml` と
+重ならないため、標準 dev でのやり直しには影響しない。dev-small 自体を再実行した場合は exhaust 済み cycle が入口で再び停止する。
+その解除は人間判断で § cycle exhaust からの復旧 の `--reset-cycle` 手順に従う。
+
+### 効果評価
+
+試験導入の効果は、比較可能な小修正を数件試し、モデル・effort・取得可能な cache 条件を添えて所要時間・取得できる token・
+差し戻し・重複確認を記録して判断する。未取得値は未取得とし、起動回数の削減や固定の削減率を token 削減の根拠にしない。
+継続・見直し・official 化は試験結果から別途判断する。
 
 ## docs
 

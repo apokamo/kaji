@@ -1,0 +1,170 @@
+name: dev-small
+description: |
+  series 自動選択対象外の明示 override 専用 variant（試験導入）。
+  期待動作・対象・受け入れ条件が Issue で確定し、大きな設計判断が残らない小修正向けの軽量 dev workflow。
+  設計書・設計レビュー・Pre-Handoff Review・final-check の独立工程を持たず、
+  方針確認・実装・検証（change）と独立レビュー・最終確認（review-change）の 2 工程で進める。
+  baseline・make check 相当の検証・独立レビュー・PR review は維持する。
+  適用外と判明した場合は ABORT で停止し、再実行は初めから行う（中途再開・標準 dev への引継ぎはしない）。
+  選択基準と運用は docs/dev/workflow_guide.md § dev-small を正本とする。
+  issue-create は事前に完了していることが前提。
+execution_policy: auto
+requires_provider: github
+
+cycles:
+  small-ready:
+    entry: review-ready
+    loop: [fix-ready, review-ready]
+    max_iterations: 3
+    on_exhaust: ABORT
+  small-execute:
+    entry: change
+    loop: [change]
+    max_iterations: 3
+    on_exhaust: ABORT
+  small-change-review:
+    entry: review-change
+    loop: [fix-change, verify-change]
+    max_iterations: 3
+    on_exhaust: ABORT
+  small-publish:
+    entry: pr
+    loop: [pr]
+    max_iterations: 3
+    on_exhaust: ABORT
+  small-pr-review:
+    entry: review-poll
+    loop: [pr-fix, pr-verify]
+    max_iterations: 3
+    on_exhaust: ABORT
+
+steps:
+  - id: review-ready
+    skill: issue-review-ready
+    agent: codex
+    model: gpt-6-sol
+    effort: medium
+    on:
+      PASS: start
+      RETRY: fix-ready
+      ABORT: end
+
+  - id: fix-ready
+    skill: issue-fix-ready
+    agent: claude
+    model: opus
+    effort: medium
+    on:
+      PASS: review-ready
+      ABORT: end
+
+  - id: start
+    skill: issue-start
+    agent: codex
+    model: gpt-5.6-luna
+    effort: medium
+    on:
+      PASS: baseline
+      ABORT: end
+
+  - id: baseline
+    skill: baseline-precheck
+    timeout: 1800
+    on:
+      PASS: change
+      ABORT: end
+
+  - id: change
+    skill: issue-small-change-execute
+    agent: claude
+    model: opus
+    effort: medium
+    on:
+      PASS: review-change
+      RETRY: change
+      ABORT: end
+
+  - id: review-change
+    skill: issue-small-change-review
+    agent: codex
+    model: gpt-6-sol
+    effort: medium
+    on:
+      PASS: pr
+      RETRY: fix-change
+      ABORT: end
+
+  - id: fix-change
+    skill: issue-small-change-execute
+    agent: claude
+    model: opus
+    effort: medium
+    on:
+      PASS: verify-change
+      ABORT: end
+
+  - id: verify-change
+    skill: issue-small-change-review
+    agent: codex
+    model: gpt-6-sol
+    effort: medium
+    on:
+      PASS: pr
+      RETRY: fix-change
+      ABORT: end
+
+  - id: pr
+    skill: i-pr
+    agent: codex
+    model: gpt-5.6-luna
+    effort: medium
+    on:
+      PASS: review-poll
+      RETRY: pr
+      ABORT: end
+
+  - id: review-poll
+    exec: [kaji, pr, review-poll]
+    on:
+      PASS: close
+      RETRY: pr-fix
+      BACK_FALLBACK: review
+      ABORT: end
+
+  - id: review
+    skill: review
+    agent: codex
+    model: gpt-6-sol
+    effort: medium
+    on:
+      PASS: close
+      RETRY: pr-fix
+      ABORT: end
+
+  - id: pr-fix
+    skill: pr-fix
+    agent: claude
+    model: sonnet
+    effort: high
+    on:
+      PASS: pr-verify
+      ABORT: end
+
+  - id: pr-verify
+    skill: pr-verify
+    agent: codex
+    model: gpt-6-sol
+    effort: medium
+    on:
+      PASS: close
+      RETRY: pr-fix
+      ABORT: end
+
+  - id: close
+    skill: issue-close
+    agent: codex
+    model: gpt-5.6-luna
+    effort: medium
+    on:
+      PASS: end
+      ABORT: end

@@ -11,6 +11,11 @@
 
 docs-only の Issue は [docs_maintenance_workflow.md](./docs_maintenance_workflow.md) を使用する。
 
+本書の規定（設計フェーズ、Pre-Handoff Review、設計書の扱い、final-check）は標準 dev（`official/dev.yaml`、
+custom の dev-thorough 系、`official/local/dev-local.yaml`）に適用する。設計判断済み小修正向けの custom
+`dev-small`（試験導入）は設計書・Pre-Handoff Review・final-check の独立工程を持たず、
+[workflow_guide.md § dev-small](./workflow_guide.md) に従う。
+
 ## フロー
 
 ```mermaid
@@ -115,6 +120,9 @@ dev workflow のフローそのものは type に依存しないが、各スキ�
 
 `/issue-implement` は開始時に [implement-quickref.md](./implement-quickref.md) を読み、正本規約を状況依存で部分 Read する。Baseline Check は [baseline-check.md](./baseline-check.md) と構造化 artifact、Pre-Handoff Review の詳細手順と実装完了報告 template は skill 配下を正本とする。
 
+dev-small は Pre-Handoff Review の独立工程・報告を持たない。実装者の差分確認は `issue-small-change-execute` が行い、
+Scope 混在・auto-close 規約等の観点は `issue-small-change-review` の独立レビューに集約する。本節の必須化は標準 dev に適用する。
+
 **verdict 階層分離**: pre-handoff review が返すのは `Yes` / `No` / `With fixes` の **自己評価** であり、kaji workflow の正式 verdict（`PASS` / `RETRY` / `BACK` / `ABORT`）ではない。正式 verdict は `/issue-review-design` / `/issue-review-code` が後段で発行する。
 
 `kaji-code-reviewer` subagent の定義は `.claude/agents/kaji-code-reviewer.md`（tools: `Read` / `Grep` / `Glob` のみの hard boundary、`Bash` / `Edit` / `Write` / `WebFetch` 等は不付与）。Claude Code 以外の agent runtime では Agent tool 起動が失敗するため、main session が同 markdown 内の rubric を自セッションで適用する fallback ブランチを取る。
@@ -209,6 +217,7 @@ PR title も Conventional Commits に揃える。`--no-ff` merge により merge
 - `/i-dev-final-check` の PASS 時に Issue 本文の NOTE ブロック直下に `<details>` で添付（worktree 削除後も Issue から辿れる）
 - アーキテクチャ決定は `docs/adr/` に ADR として永続化（従来通り）
 - 既存 docs の更新が必要な場合は `_shared/promote-design.md` を参照
+- dev-small は設計書を作成・要求しない（要件の正本は Issue 本文と人間の決定事項）。設計書の添付・昇格も行わない
 
 ```mermaid
 flowchart LR

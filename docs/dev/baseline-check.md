@@ -14,6 +14,14 @@ review-design / verify-design --PASS--> baseline --PASS--> implement
                                       `--ABORT--> end
 ```
 
+custom の `dev-small`（設計工程を持たない試験導入 workflow）は `start` の PASS 後に同じ
+`baseline` step を実行し、PASS の場合だけ `change` へ進む。
+
+```text
+start --PASS--> baseline --PASS--> change
+                          `--ABORT--> end
+```
+
 baseline step は全 pytest を一度実行し、固定 path
 `[worktree]/.kaji-artifacts/baseline/baseline.json` へ atomic write する。
 「未実行」は artifact 不在、「実行済み clean」は `status: clean` であり、コメント有無では
@@ -56,6 +64,17 @@ python -m kaji_harness.scripts.baseline_precheck \
   --evaluate --scope kaji_harness/example.py --scope tests/test_example.py
 ```
 
+dev-small では設計書を持たないため、scope の入力は次のとおりとする。`--evaluate` / `--compare` の
+呼び出しでは `--worktree [worktree_dir]` を必ず渡す（agent step には `KAJI_WORKTREE_DIR` が注入されない）。
+
+- `issue-small-change-execute`: 編集前に方針として確定した変更対象 path
+- `issue-small-change-review`: `git diff --name-only [default_branch]...HEAD` の実 diff の path
+
+```bash
+python -m kaji_harness.scripts.baseline_precheck --worktree [worktree_dir] \
+  --evaluate --scope kaji_harness/example.py --scope tests/test_example.py
+```
+
 failure nodeid の file path が scope と完全一致、または scope directory の配下なら
 `stop: true`。`stop: false` でも間接依存など意味的に同一機能へ影響する場合は agent が停止する。
 件数・path overlap は deterministic entrypoint、意味的関連性は agent の責務とする。
@@ -71,7 +90,8 @@ python -m kaji_harness.scripts.baseline_precheck --compare
 
 コミットを許可するのは、ruff / format / mypy が全 PASS し、`--compare` が
 `verdict: ok`、`regressions: []` を返す場合だけ。`issue-implement` / `issue-review-code` /
-`issue-fix-code` / `issue-verify-code` / `i-dev-final-check` は同じ artifact と比較関数を使い、
+`issue-fix-code` / `issue-verify-code` / `i-dev-final-check`、dev-small の `issue-small-change-execute` /
+`issue-small-change-review` は同じ artifact と比較関数を使い、
 Issue コメントの検索、pytest text の再パース、手動 3 タプル比較を行わない。
 
 ## 再測定・resume
