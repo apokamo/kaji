@@ -127,6 +127,8 @@ production / staging 固有環境、外部サービスの非同期応答、admin
 | `issue-review-code` | 実装が設計と整合し、テスト・docs が揃っているか | 独立テスト実行、差分レビュー | Issue コメント（レビュー結果 + Approve/CR 判定） |
 | `i-dev-final-check` | **workflow 内の全条件**（事後確認を除く前段証跡の集約 + 未確認条件の最終確認） | 前段コメント、baseline artifact + `--compare`、最終品質ゲート | Issue コメント（最終チェック結果）+ **Issue 本文更新** |
 | `i-doc-final-check` | **docs-only workflow 内の全条件**（事後確認を除く docs 整合 + Issue 状態） | docs 差分 + リンクチェック | Issue コメント + **Issue 本文更新** |
+| `issue-small-change-execute`（dev-small） | 実装・テスト・docs で対応可能な条件（方針、実装完了、テスト通過、品質ゲート、docs 更新） | baseline `--evaluate`、`make check` または等価分離 gate（`--compare`） | Issue コメント（方針または指摘対応表 + 対象 commit + 検証結果） |
+| `issue-small-change-review`（dev-small） | **dev-small workflow 内の全条件**（事後確認を除く。実 diff と受け入れ条件の照合 + 自身の品質検証 + PR 前提） | 実 diff、自身で実行した baseline `--evaluate` と `make check` または等価分離 gate | Issue コメント（レビュー結果）+ PASS 時の **Issue 本文更新** |
 
 ### type 別に追加で確認する項目
 
@@ -180,6 +182,7 @@ Issue の `type:` ラベルに応じて、前段スキルが確認する完了�
 |-----------|--------|---------|
 | `/issue-start` 時 | `issue-start` | 本文先頭の NOTE ブロックに Worktree / Branch を追記 |
 | final-check PASS 時 | `i-dev-final-check` / `i-doc-final-check` | 事後確認を除く完了条件のチェックボックスを `[x]` に更新、設計書を NOTE 直下に添付（dev のみ） |
+| dev-small の review-change / verify-change PASS 時 | `issue-small-change-review` | 事後確認を除く確認済み完了条件のチェックボックスを `[x]` に更新（設計書添付なし） |
 | Issue close 前 | `issue-close` | 未完了の事後確認を follow-up Issue へ移管し、親本文へ冪等マーカーを追記 |
 | final-check BACK 時 | `i-dev-final-check` / `i-doc-final-check` | 本文更新なし（コメントで未充足条件と戻し先を明示） |
 | final-check RETRY 時 | `i-dev-final-check` / `i-doc-final-check` | 本文更新なし（軽微修正後に再実行するため） |

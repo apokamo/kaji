@@ -39,6 +39,7 @@ workflow YAML は所有権で 2 系統に分かれる。本節が official / cus
 │       └── docs-local.yaml
 └── custom/                         # リポジトリ固有・利用者管理
     ├── dev/
+    │   ├── dev-small.yaml             # 設計判断済み小修正向け（試験導入）
     │   ├── dev-thorough.yaml
     │   └── dev-thorough-fable.yaml
     ├── docs/

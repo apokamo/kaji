@@ -27,6 +27,7 @@ PR 作成後のレビュー収束サイクルを管理する。
 | 実装 | `/issue-implement` → `/issue-review-code` → (`/issue-fix-code` → `/issue-verify-code`) |
 | docs-only | `/i-doc-update` → `/i-doc-review` → (`/i-doc-fix` → `/i-doc-verify`) |
 | 最終チェック | `/i-dev-final-check` / `/i-doc-final-check` |
+| 軽量経路（custom `dev-small`・試験導入・明示選択。設計判断済み小修正） | `issue-small-change-execute`（change / fix-change）→ 別 session `issue-small-change-review`（review-change / verify-change） |
 | PR 作成 | `/i-pr` |
 | PR レビュー後 | `/pr-fix` / `/pr-verify` / `/review-cycle` |
 | 完了 | `/issue-close` |

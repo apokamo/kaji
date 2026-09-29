@@ -16,7 +16,7 @@ workflow 横断で使うスキルの責務境界を定義する。
 - docs 昇格や docs 同梱の妥当性判定
 - final-check 実行済みかの代行判断
 
-workflow 固有の最終判定は `i-dev-final-check` または `i-doc-final-check` が持つ。
+workflow 固有の最終判定は `i-dev-final-check` または `i-doc-final-check`（custom `dev-small` では `issue-small-change-review`）が持つ。
 
 ## レビューサイクルの責務境界
 
@@ -24,6 +24,7 @@ workflow 固有の最終判定は `i-dev-final-check` または `i-doc-final-che
 |------|-----------|
 | 新規指摘 | `issue-review-design`, `issue-review-code`, `i-doc-review` |
 | 修正確認のみ（新規指摘不可） | `issue-verify-design`, `issue-verify-code`, `i-doc-verify` |
+| dev-small の独立レビュー・最終確認 | `issue-small-change-review`（`review-change` は新規指摘、`verify-change` は修正確認。ただし全体レビューが未完了の範囲には新規指摘可） |
 
 `fix/verify` 系（`issue-fix-*` / `issue-verify-*` / `pr-fix` / `pr-verify` / `i-doc-fix` / `i-doc-verify`）はレビューサイクルの収束保証のため、新規指摘を行わない原則を共有する。
 
@@ -80,7 +81,8 @@ cross-skill 契約（BACK 再入検出など）は SKILL.md の散文ではな�
   本マーカー導入の契機となったバグの発生機序そのもの）。
   - 現行 producer: `issue-review-code` / `i-dev-final-check` / `issue-implement` /
     `issue-review-design` / `issue-design` / `update-starter` /
-    `review-starter-update` / `release-starter`
+    `review-starter-update` / `release-starter` / `issue-small-change-execute` /
+    `issue-small-change-review`
   - `update-starter` / `review-starter-update` は `--verdict-meta key=value` を繰り返し指定し、
     target / base / candidate を marker へ埋め込む。`release-starter` は resolver の consumer であり、
     自身の verdict marker へ meta を付けない。key は `^[a-z][a-z0-9_]*$`、value は
@@ -215,7 +217,8 @@ GitHub 仕様の対象では **ない** が、kaji workflow では起点で抑�
 `/issue-design`（Step 2.6 design self-check 出力）, `/issue-implement`（Step 8.5
 pre-handoff review 出力）, `/issue-review-design`, `/issue-review-code`,
 `/issue-fix-design`, `/issue-fix-code`, `/i-doc-review`, `/i-doc-fix`, `/pr-fix`,
-`/pr-verify`, `/i-pr`, `/i-dev-final-check`, `/i-doc-final-check`
+`/pr-verify`, `/i-pr`, `/i-dev-final-check`, `/i-doc-final-check`,
+`issue-small-change-execute`, `issue-small-change-review`（dev-small）
 
 pre-handoff review で起動する subagent（`.claude/agents/kaji-code-reviewer.md`）
 の system prompt および出力テンプレートも本規約に準拠する。指摘 index は
