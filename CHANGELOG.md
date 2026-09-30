@@ -8,6 +8,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### BREAKING CHANGE
 
+- **Default names of the failure-triage incident labels** now carry a `kaji:`
+  prefix so that kaji workflow incidents are not confused with product
+  incidents (#434). The eight labels are `kaji:incident`,
+  `kaji:incident:investigating`, `kaji:incident:mitigated`,
+  `kaji:incident:resolved`, `kaji:incident:cause:internal`,
+  `kaji:incident:cause:upstream`, `kaji:incident:cause:environment`, and
+  `kaji:incident:cause:transient`.
+  - **Broken contract**: with no `[incident]` configuration, kaji files,
+    searches, and transitions incident Issues with the new names. There is no
+    compatibility lookup: the duplicate search does not match the old
+    `incident` label, and the old `incident:cause:transient` label is not
+    recognised as transient. A repository that keeps the old labels and the
+    default configuration will file duplicate incident Issues, and GitHub
+    rejects the request if a configured label does not exist (recording is
+    fail-open, so triage continues with a WARNING).
+  - **How to keep the old names**: add this to `.kaji/config.toml`:
+
+    ```toml
+    [incident]
+    kind_label = "incident"
+    initial_status_label = "incident:investigating"
+    transient_label = "incident:cause:transient"
+    ```
+
+  - **Not migrated by this change**: existing labels and Issues are not
+    renamed or migrated, and `.github/labels.yml`, the `incident-*` skills, and
+    label docs still use the old names; the migration is tracked in a
+    follow-up Issue. The `incident-investigate` skill's precondition guard
+    checks for the old `incident` label, so a repository that adopts the new
+    default names must not rely on that skill until the follow-up lands.
+
 - **starter-sync tracking Issue body schema** has moved from a single
   `target_kaji_release:` field to the v1 `## Sync tasks` table schema, so that
   a managed starter's unfinished sync work is tracked in one open Issue per
@@ -32,6 +63,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Added an optional `[incident]` section to `.kaji/config.toml` to set the
+  incident kind / initial-status / transient label names and the label
+  operation guide path embedded in incident bodies. Invalid values (empty,
+  duplicate, unknown keys, and so on) fail at config load. The section is not
+  overlaid by `config.local.toml` (#434).
 - Added the `dev-small` custom workflow as a trial for small changes whose
   design decisions are already settled in the Issue. It runs readiness,
   worktree, baseline, a combined policy/implement/verify step

@@ -29,14 +29,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import IO, TYPE_CHECKING
 
+from ..config import IncidentConfig
 from ..logger import RunLogger
 from ..models import Workflow
 from ..providers.base import IncidentSearchCapable
 from .classify import classify_failure
 from .incident import (
-    INCIDENT_CAUSE_TRANSIENT,
-    INCIDENT_LABEL,
-    INCIDENT_STATUS_INVESTIGATING,
     OCCURRENCE_SCHEMA_VERSION,
     IncidentContext,
     OccurrenceRecord,
@@ -370,6 +368,8 @@ class RecoveryHandler:
     workdir: Path
     provider: IssueProvider | None
     auto_recover: bool
+    # 既定値を持たせない: 渡し忘れで黙って既定ラベル名に切り替わる事故を構築時に表に出す。
+    incident: IncidentConfig
     wait_seconds: int = RECOVERY_WAIT_SECONDS
     # 関数を dataclass の直接 default にすると descriptor として bound method 化される。
     # default_factory 経由で instance attribute として束縛する。
@@ -570,10 +570,13 @@ class RecoveryHandler:
             ):
                 return decision
 
+            incident_cfg = self.incident
             candidates = parse_candidates(
-                self.provider.search_issues_all(labels=[INCIDENT_LABEL], state="all")
+                self.provider.search_issues_all(labels=[incident_cfg.kind_label], state="all")
             )
-            action = plan_incident_action(signature, candidates)
+            action = plan_incident_action(
+                signature, candidates, transient_label=incident_cfg.transient_label
+            )
             fuzzy = compute_fuzzy_candidates(signature, candidates)
             existing = (
                 self.provider.list_issue_comments_all(action.target_id)
@@ -597,6 +600,7 @@ class RecoveryHandler:
                 ctx=ctx,
                 local_records=read_occurrences(self.artifacts_dir),
                 existing_comments=existing,
+                incident=incident_cfg,
             )
             self._run_logger.log_incident_recorded(
                 incident_ref=outcome.incident_ref,
@@ -617,7 +621,7 @@ class RecoveryHandler:
     def _close_transient_incident(self, decision: RecoveryDecision) -> RecoveryDecision:
         """auto-resume 自己回復時、この run が起票した incident を transient として即クローズする。
 
-        ``incident:cause:transient`` を付与し ``incident:investigating`` を外して close する
+        設定の transient ラベルを付与し status 初期値ラベルを外して close する
         （fail-open・best-effort・冪等）。close 完了で ``incident_transient_closed=True``。
         """
         if decision.incident_ref is None or self.provider is None:
@@ -625,8 +629,8 @@ class RecoveryHandler:
         try:
             self.provider.edit_issue(
                 decision.incident_ref,
-                add_labels=[INCIDENT_CAUSE_TRANSIENT],
-                remove_labels=[INCIDENT_STATUS_INVESTIGATING],
+                add_labels=[self.incident.transient_label],
+                remove_labels=[self.incident.initial_status_label],
             )
             self.provider.close_issue(decision.incident_ref, reason="completed")
         except Exception as exc:  # noqa: BLE001 — best-effort。修復は人間 1 操作で足りる

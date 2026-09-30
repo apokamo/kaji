@@ -9,6 +9,7 @@ import re
 
 import pytest
 
+from kaji_harness.config import IncidentConfig
 from kaji_harness.providers.models import Comment, Issue, Label
 from kaji_harness.recovery.incident import (
     BackfillEntry,
@@ -33,6 +34,9 @@ from kaji_harness.recovery.models import (
 from kaji_harness.recovery.signature import IncidentSignature
 
 pytestmark = pytest.mark.small
+
+_TRANSIENT = IncidentConfig().transient_label
+_GUIDE = IncidentConfig().labels_guide_path
 
 _HASH_A = "a" * 64
 _HASH_B = "b" * 64
@@ -125,7 +129,7 @@ def test_plan_open_match_recurs_to_min_issue() -> None:
         _candidate("310", "open", sig=_sig()),
         _candidate("305", "open", sig=_sig()),
     ]
-    action = plan_incident_action(sig, cands)
+    action = plan_incident_action(sig, cands, transient_label=_TRANSIENT)
     assert action.kind == "recur"
     assert action.target_id == "305"  # issue 番号最小（最古）
     assert action.also_matched == ("310",)
@@ -133,16 +137,46 @@ def test_plan_open_match_recurs_to_min_issue() -> None:
 
 def test_plan_closed_transient_recurs_without_reopen() -> None:
     sig = _sig()
-    cands = [_candidate("305", "closed", sig=_sig(), labels=("incident:cause:transient",))]
-    action = plan_incident_action(sig, cands)
+    cands = [_candidate("305", "closed", sig=_sig(), labels=(_TRANSIENT,))]
+    action = plan_incident_action(sig, cands, transient_label=_TRANSIENT)
     assert action.kind == "recur"
     assert action.target_id == "305"
 
 
+def test_plan_custom_transient_label_is_honoured() -> None:
+    sig = _sig()
+    custom = "ops:transient"
+    closed_custom = [_candidate("305", "closed", sig=_sig(), labels=(custom,))]
+    assert plan_incident_action(sig, closed_custom, transient_label=custom).kind == "recur"
+    # 既定の transient ラベルを持つだけの候補は、独自名を指定した場合 transient ではない。
+    closed_default = [_candidate("305", "closed", sig=_sig(), labels=(_TRANSIENT,))]
+    action = plan_incident_action(sig, closed_default, transient_label=custom)
+    assert action.kind == "create_regression"
+    assert action.regression_of == "305"
+
+
+def test_plan_transient_label_matches_case_insensitively() -> None:
+    """設定名と保存済みラベルの大文字小文字が異なっても transient と判定する。"""
+    sig = _sig()
+    cands = [_candidate("305", "closed", sig=_sig(), labels=("ops:transient",))]
+    action = plan_incident_action(sig, cands, transient_label="Ops:Transient")
+    assert action.kind == "recur"
+    assert action.target_id == "305"
+
+
+def test_plan_legacy_transient_label_is_not_recognised_by_default() -> None:
+    """旧 ``incident:cause:transient`` の互換判定は持たない（Issue #434 決定事項）。"""
+    sig = _sig()
+    cands = [_candidate("305", "closed", sig=_sig(), labels=("incident:cause:transient",))]
+    action = plan_incident_action(sig, cands, transient_label=_TRANSIENT)
+    assert action.kind == "create_regression"
+    assert action.regression_of == "305"
+
+
 def test_plan_closed_resolved_creates_regression() -> None:
     sig = _sig()
-    cands = [_candidate("305", "closed", sig=_sig(), labels=("incident:resolved",))]
-    action = plan_incident_action(sig, cands)
+    cands = [_candidate("305", "closed", sig=_sig(), labels=("kaji:incident:resolved",))]
+    action = plan_incident_action(sig, cands, transient_label=_TRANSIENT)
     assert action.kind == "create_regression"
     assert action.regression_of == "305"
 
@@ -150,17 +184,21 @@ def test_plan_closed_resolved_creates_regression() -> None:
 def test_plan_open_takes_priority_over_closed() -> None:
     sig = _sig()
     cands = [
-        _candidate("305", "closed", sig=_sig(), labels=("incident:resolved",)),
+        _candidate("305", "closed", sig=_sig(), labels=("kaji:incident:resolved",)),
         _candidate("320", "open", sig=_sig()),
     ]
-    action = plan_incident_action(sig, cands)
+    action = plan_incident_action(sig, cands, transient_label=_TRANSIENT)
     assert action.kind == "recur"
     assert action.target_id == "320"
 
 
 def test_plan_no_match_creates() -> None:
     assert (
-        plan_incident_action(_sig(_HASH_A), [_candidate("1", "open", sig=_sig(_HASH_B))]).kind
+        plan_incident_action(
+            _sig(_HASH_A),
+            [_candidate("1", "open", sig=_sig(_HASH_B))],
+            transient_label=_TRANSIENT,
+        ).kind
         == "create"
     )
 
@@ -174,11 +212,21 @@ def test_plan_schema_version_mismatch_creates() -> None:
         fingerprint="x",
         fingerprint_hash=_HASH_A,
     )
-    assert plan_incident_action(sig, [_candidate("1", "open", sig=other)]).kind == "create"
+    assert (
+        plan_incident_action(
+            sig, [_candidate("1", "open", sig=other)], transient_label=_TRANSIENT
+        ).kind
+        == "create"
+    )
 
 
 def test_plan_unreadable_identity_marker_candidate_skipped() -> None:
-    assert plan_incident_action(_sig(), [_candidate("1", "open", sig=None)]).kind == "create"
+    assert (
+        plan_incident_action(
+            _sig(), [_candidate("1", "open", sig=None)], transient_label=_TRANSIENT
+        ).kind
+        == "create"
+    )
 
 
 def test_parse_candidates_from_issues() -> None:
@@ -301,7 +349,7 @@ def test_fuzzy_excludes_exact_match_and_empty_fingerprint() -> None:
 
 def test_incident_issue_body_markers_and_no_auto_close() -> None:
     sig = _sig()
-    title, body = render_incident_issue(_ctx(sig))
+    title, body = render_incident_issue(_ctx(sig), labels_guide_path=_GUIDE)
     assert body.splitlines()[0] == render_identity_marker(sig)  # 1 行目 identity marker
     assert "```kaji-fingerprint" in body
     # 本文に occurrence marker は置かない。
@@ -311,8 +359,18 @@ def test_incident_issue_body_markers_and_no_auto_close() -> None:
     assert title.startswith("incident: verdict_resolution_failure / VerdictNotFound")
 
 
+def test_incident_issue_guide_link_uses_given_path() -> None:
+    _, default_body = render_incident_issue(_ctx(_sig()), labels_guide_path=_GUIDE)
+    assert "ラベル運用ガイド: [`docs/dev/incident-labels.md`](docs/dev/incident-labels.md)" in (
+        default_body
+    )
+    _, custom_body = render_incident_issue(_ctx(_sig()), labels_guide_path="docs/ops/labels.md")
+    assert "ラベル運用ガイド: [`docs/ops/labels.md`](docs/ops/labels.md)" in custom_body
+    assert "incident-labels.md" not in custom_body
+
+
 def test_incident_issue_regression_links_prior() -> None:
-    _, body = render_incident_issue(_ctx(_sig()), regression_of="305")
+    _, body = render_incident_issue(_ctx(_sig()), regression_of="305", labels_guide_path=_GUIDE)
     assert "#305" in body
     assert "リグレッション" in body
     assert not _AUTO_CLOSE_RE.search(body)

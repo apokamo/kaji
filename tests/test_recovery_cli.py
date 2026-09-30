@@ -23,8 +23,9 @@ from kaji_harness.commands.exit_codes import (
 from kaji_harness.commands.main import main
 from kaji_harness.commands.parser import create_parser
 from kaji_harness.commands.run import _apply_execution_overrides
-from kaji_harness.config import ExecutionConfig, KajiConfig, PathsConfig
+from kaji_harness.config import ExecutionConfig, IncidentConfig, KajiConfig, PathsConfig
 from kaji_harness.errors import ConfigLoadError, StepTimeoutError
+from kaji_harness.recovery.handler import RecoveryHandler
 from kaji_harness.recovery.models import RECOVERY_FILE
 
 _ISSUE = "local-pc1-99"
@@ -466,3 +467,73 @@ class TestCmdRecover:
         assert rc == EXIT_DEFINITION_ERROR
         assert "inject_verdict" in capsys.readouterr().err
         assert not (run_dir / RECOVERY_FILE).exists()
+
+
+# ============================================================
+# Medium: [incident] 設定の配線（Issue #434）
+# ============================================================
+
+_INCIDENT_TOML = (
+    "\n[incident]\n"
+    'kind_label = "ops:incident"\n'
+    'initial_status_label = "ops:investigating"\n'
+    'transient_label = "ops:transient"\n'
+    'labels_guide_path = "docs/ops/guide.md"\n'
+)
+
+
+def _append_incident_config(repo: Path) -> IncidentConfig:
+    config_path = repo / ".kaji" / "config.toml"
+    config_path.write_text(config_path.read_text() + _INCIDENT_TOML)
+    return KajiConfig.discover(repo).incident
+
+
+@pytest.mark.medium
+class TestIncidentConfigWiring:
+    def test_run_failure_triage_passes_config_incident_to_handler(self, tmp_path: Path) -> None:
+        repo = _repo(tmp_path)
+        expected = _append_incident_config(repo)
+        assert expected.kind_label == "ops:incident"
+        with (
+            patch("kaji_harness.runner.execute_cli", side_effect=StepTimeoutError("implement", 5)),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.commands.run.RecoveryHandler", wraps=RecoveryHandler) as handler,
+        ):
+            rc = main(["run", str(repo / "wf.yaml"), "99", "--workdir", str(repo)])
+
+        assert rc == EXIT_RUNTIME_ERROR
+        handler.assert_called_once()
+        assert handler.call_args.kwargs["incident"] == expected
+
+    def test_run_failure_triage_uses_default_incident_when_unconfigured(
+        self, tmp_path: Path
+    ) -> None:
+        repo = _repo(tmp_path)
+        with (
+            patch("kaji_harness.runner.execute_cli", side_effect=StepTimeoutError("implement", 5)),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.commands.run.RecoveryHandler", wraps=RecoveryHandler) as handler,
+        ):
+            main(["run", str(repo / "wf.yaml"), "99", "--workdir", str(repo)])
+
+        assert handler.call_args.kwargs["incident"] == IncidentConfig()
+
+    def test_recover_passes_config_incident_to_handler(self, tmp_path: Path) -> None:
+        repo = _repo(tmp_path)
+        expected = _append_incident_config(repo)
+        with (
+            patch("kaji_harness.runner.execute_cli", side_effect=StepTimeoutError("implement", 5)),
+            patch("kaji_harness.runner.validate_skill_exists"),
+        ):
+            main(
+                ["run", str(repo / "wf.yaml"), "99", "--workdir", str(repo), "--no-failure-triage"]
+            )
+
+        with patch(
+            "kaji_harness.commands.recover.RecoveryHandler", wraps=RecoveryHandler
+        ) as handler:
+            rc = main(["recover", str(repo / "wf.yaml"), "99", "--workdir", str(repo)])
+
+        assert rc == EXIT_OK
+        handler.assert_called_once()
+        assert handler.call_args.kwargs["incident"] == expected

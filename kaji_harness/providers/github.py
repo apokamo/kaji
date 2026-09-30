@@ -17,6 +17,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
+from urllib.parse import quote
 
 from ._mappings import labels_to_branch_prefix
 from .context import (
@@ -462,7 +463,8 @@ class GitHubProvider:
         """
         query = f"repos/{self.repo}/issues?state={state}"
         if labels:
-            query += "&labels=" + ",".join(labels)
+            # ラベル名ごとに percent-encode し、区切りのカンマだけを生のまま残す。
+            query += "&labels=" + ",".join(quote(name, safe="") for name in labels)
         query += "&per_page=100"
         raw = self._gh_json_slurp(query)
         result: list[Issue] = []

@@ -56,6 +56,8 @@ The overlay (`.kaji/config.local.toml`) can override tracked values in **only th
   overlay sets `type = "local"`, the provider switches even when tracked is `type = "github"`, and
   the `[provider.github]` / `[provider.local]` subtables are merged per key.
 - Only when neither tracked nor overlay defines `[provider]` does the loader return the provider as `None`.
+- `[incident]` is **not** overlaid either: it is read from tracked `.kaji/config.toml` only, and an
+  `[incident]` table in the overlay is ignored (label names are a per-repository convention).
 - `[paths]` (`artifacts_dir` / `skill_dir` / `worktree_prefix`) is **not** overlaid. `PathsConfig` is
   built solely from tracked `.kaji/config.toml`; the overlay is passed only to `[execution]` /
   `[provider]` parsing (`config.py:141-154`). A `[paths]` table in the overlay is ignored.
@@ -160,6 +162,48 @@ are normally added by the handler itself when it starts a child run. `--recovery
 `--recovery-root` exits with `EXIT_DEFINITION_ERROR (2)`. See
 [Workflow guide](../dev/workflow_guide.md) § Failure triage / auto recovery.
 
+### `[incident]`
+
+Optional. Controls the label names and the guide path that the failure-triage first layer
+(`kaji_harness/recovery/`) uses when it files, searches, and transitions incident Issues
+(GitHub provider only). If the section is absent, every key takes its default. If a key is omitted,
+only that key takes its default.
+
+| key | Required/Optional | Type | Default | Purpose |
+|-----|-------------------|------|---------|---------|
+| `kind_label` | Optional | str | `"kaji:incident"` | Kind label. Attached when filing; the search key for duplicate detection |
+| `initial_status_label` | Optional | str | `"kaji:incident:investigating"` | Initial status label. Attached when filing; removed on transient close |
+| `transient_label` | Optional | str | `"kaji:incident:cause:transient"` | Attached on transient close; also decides whether a closed match is transient |
+| `labels_guide_path` | Optional | str | `"docs/dev/incident-labels.md"` | Target of the "label operation guide" link at the end of an incident body |
+
+Validation (every violation is a `ConfigLoadError` at load time; the input boundary is a Pydantic
+model with `extra="forbid"` / `strict=True`):
+
+- Unknown keys are rejected (a typo such as `kind_lable` must not silently fall back to a default).
+- Every value must be a string (no type coercion).
+- The three labels must not be empty or whitespace-only, must not have leading/trailing whitespace,
+  and must not contain `,`, `"`, or control characters (`gh --label` splits on commas and parses
+  values as CSV, and the REST `labels` query is comma-separated).
+- The three labels must be distinct from each other, compared case-insensitively.
+- `labels_guide_path` must not be empty, and must not contain whitespace, control characters,
+  `` ` ``, `(`, or `)` (the value is embedded in a Markdown link). File existence is not checked.
+
+The section is **not overlaid**: it is read from tracked `.kaji/config.toml` only, and an
+`[incident]` table in `config.local.toml` is ignored. kaji does not create labels; the configured
+labels must already exist in the repository. There is no compatibility lookup for old names: the
+duplicate search uses `kind_label` only.
+
+To keep the pre-`kaji:` label names (the default changed in Issue #434):
+
+```toml
+[incident]
+kind_label = "incident"
+initial_status_label = "incident:investigating"
+transient_label = "incident:cause:transient"
+```
+
+See [incident label guide](../dev/incident-labels.md) for the meaning of each label.
+
 ### `[provider]`
 
 The `[provider]` section is optional at the config loader layer: when neither tracked nor overlay
@@ -236,6 +280,9 @@ agent_runner = "headless"           # "headless" (default) | "interactive_termin
 # interactive_terminal_close_on_verdict = true   # only takes effect under interactive_terminal
 # failure_triage = true             # classify failures and post a triage comment (default: true)
 # auto_recover = false              # opt-in: resume once per recovery chain after a 10-minute wait
+
+# [incident]                        # optional: incident label names / guide path (defaults use the `kaji:` prefix)
+# kind_label = "kaji:incident"
 
 [provider]
 type = "github"

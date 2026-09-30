@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from .errors import ConfigLoadError, ConfigNotFoundError
 
@@ -73,6 +75,73 @@ class ProviderConfig:
 
 
 @dataclass(frozen=True)
+class IncidentConfig:
+    """``[incident]`` セクション（Issue #434）。
+
+    failure triage 第1層が incident の起票・重複検索・transient 遷移に使うラベル名と、
+    incident 本文に埋め込む運用ガイドのパス。既定値の単一の正本はこの class。
+    """
+
+    kind_label: str = "kaji:incident"
+    initial_status_label: str = "kaji:incident:investigating"
+    transient_label: str = "kaji:incident:cause:transient"
+    labels_guide_path: str = "docs/dev/incident-labels.md"
+
+
+_INCIDENT_LABEL_KEYS = ("kind_label", "initial_status_label", "transient_label")
+
+
+class _IncidentSection(BaseModel):
+    """``[incident]`` の入力境界モデル。検証後は ``IncidentConfig`` へ詰め替える。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    kind_label: str = IncidentConfig.kind_label
+    initial_status_label: str = IncidentConfig.initial_status_label
+    transient_label: str = IncidentConfig.transient_label
+    labels_guide_path: str = IncidentConfig.labels_guide_path
+
+    @field_validator("kind_label", "initial_status_label", "transient_label")
+    @classmethod
+    def _validate_label(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be empty or whitespace-only")
+        if value != value.strip():
+            raise ValueError("must not have leading or trailing whitespace")
+        if "," in value:
+            raise ValueError("must not contain ','")
+        if '"' in value:
+            raise ValueError("must not contain '\"'")
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+            raise ValueError("must not contain control characters")
+        return value
+
+    @field_validator("labels_guide_path")
+    @classmethod
+    def _validate_guide_path(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be empty or whitespace-only")
+        if any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+            raise ValueError("must not contain whitespace or control characters")
+        if any(ch in value for ch in "`()"):
+            raise ValueError("must not contain '`', '(' or ')'")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_labels_distinct(self) -> _IncidentSection:
+        seen: dict[str, str] = {}
+        for key in _INCIDENT_LABEL_KEYS:
+            folded = getattr(self, key).casefold()
+            if folded in seen:
+                raise ValueError(
+                    f"labels must be distinct (case-insensitive): {seen[folded]} and {key} "
+                    f"are both {getattr(self, key)!r}"
+                )
+            seen[folded] = key
+        return self
+
+
+@dataclass(frozen=True)
 class KajiConfig:
     """Top-level kaji configuration.
 
@@ -90,6 +159,7 @@ class KajiConfig:
     execution: ExecutionConfig
     provider: ProviderConfig | None = None
     provider_overlay_present: bool = False
+    incident: IncidentConfig = field(default_factory=IncidentConfig)
 
     @property
     def artifacts_dir(self) -> Path:
@@ -161,13 +231,41 @@ class KajiConfig:
         repo_root = path.parent.parent
         provider = cls._parse_provider(path, data, overlay_data, local_overlay_path, repo_root)
 
+        incident = cls._parse_incident(path, data)
+
         return cls(
             repo_root=repo_root,
             paths=paths,
             execution=execution,
             provider=provider,
             provider_overlay_present=overlay_present,
+            incident=incident,
         )
+
+    @staticmethod
+    def _parse_incident(path: Path, data: dict[str, object]) -> IncidentConfig:
+        """Parse the optional ``[incident]`` section (tracked config only).
+
+        ``config.local.toml`` overlay は対象外（``[paths]`` と同じ扱い）。ラベル名は
+        リポジトリ単位の規約であり、利用者ごとに変わってはならない。検証は Pydantic
+        model（入力境界）で行い、``ValidationError`` は ``ConfigLoadError`` に変換する。
+        """
+        section = data.get("incident")
+        if section is None:
+            return IncidentConfig()
+        if not isinstance(section, dict):
+            raise ConfigLoadError(path, "[incident] must be a table")
+        try:
+            model = _IncidentSection.model_validate(section)
+        except ValidationError as exc:
+            details = "; ".join(
+                f"incident.{'.'.join(str(part) for part in err['loc'])}: {err['msg']}"
+                if err["loc"]
+                else f"incident: {err['msg']}"
+                for err in exc.errors()
+            )
+            raise ConfigLoadError(path, details) from exc
+        return IncidentConfig(**model.model_dump())
 
     @staticmethod
     def _read_overlay(local_overlay_path: Path) -> tuple[dict[str, object] | None, bool]:

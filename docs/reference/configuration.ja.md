@@ -57,6 +57,8 @@ overlay（`.kaji/config.local.toml`）が tracked を上書きできるのは **
   overlay が `type = "local"` を書けば tracked が `type = "github"` でも provider を切り替えられ、
   `[provider.github]` / `[provider.local]` のサブテーブルは key 単位でマージされる。
 - tracked と overlay の双方に `[provider]` が無い場合のみ、loader は provider を `None` として返す。
+- `[incident]` も overlay 対象外。tracked `.kaji/config.toml` のみから読み、overlay に書かれた
+  `[incident]` は無視される（ラベル名はリポジトリ単位の規約のため）。
 - `[paths]`（`artifacts_dir` / `skill_dir` / `worktree_prefix`）は overlay 対象外。`PathsConfig` は
   tracked `.kaji/config.toml` のみから組み立てられ、overlay は `[execution]` / `[provider]` の解析に
   しか渡されない（`config.py:141-154`）。overlay に `[paths]` を書いても無視される。
@@ -130,6 +132,45 @@ worktree）基準で解決される（Issue #177、[ワークフロー作成](..
 `timeout` の解決順位は step.timeout → workflow.default_timeout → `config.execution.default_timeout`
 （[ワークフロー作成](../dev/workflow-authoring.md) § ステップフィールド 参照）。
 
+### `[incident]`
+
+任意。failure triage 第1層（`kaji_harness/recovery/`）が incident Issue の起票・重複検索・transient
+遷移に使うラベル名と、運用ガイドのパスを指定する（GitHub provider のみ）。section が無ければ全 key が
+既定値になり、key を省いた場合はその key だけ既定値になる。
+
+| key | 必須/任意 | 型 | 既定 | 用途 |
+|-----|----------|----|------|------|
+| `kind_label` | 任意 | str | `"kaji:incident"` | 種別ラベル。起票時に付与し、重複検索のキーにする |
+| `initial_status_label` | 任意 | str | `"kaji:incident:investigating"` | status の初期値。起票時に付与し、transient クローズ時に外す |
+| `transient_label` | 任意 | str | `"kaji:incident:cause:transient"` | transient クローズ時に付与する。照合時の transient 判定にも使う |
+| `labels_guide_path` | 任意 | str | `"docs/dev/incident-labels.md"` | incident 本文末尾「ラベル運用ガイド」リンクの参照先 |
+
+検証規則（違反はすべて読み込み時の `ConfigLoadError`。入力境界は `extra="forbid"` / `strict=True` の
+Pydantic model）:
+
+- 未知の key は拒否する（`kind_lable` のような typo が黙って既定値に落ちるのを防ぐ）。
+- すべての値は str であること（型変換しない）。
+- 3 ラベルは、空文字・空白だけ・前後の空白・`,`・`"`・制御文字を含まないこと（`gh --label` はカンマで
+  分割し値を CSV として解析する。REST の `labels` クエリもカンマ区切り）。
+- 3 ラベルは互いに重複しないこと（大文字小文字を区別しない比較）。
+- `labels_guide_path` は空でなく、空白・制御文字・`` ` ``・`(`・`)` を含まないこと（Markdown リンクに
+  埋め込むため）。ファイルの存在は確認しない。
+
+この section は **overlay 対象外**。tracked `.kaji/config.toml` のみから読み、`config.local.toml` の
+`[incident]` は無視される。kaji はラベルを自動作成しない（設定したラベルは repo に存在する必要がある）。
+旧名の互換検索は持たず、重複検索は `kind_label` だけで行う。
+
+`kaji:` 接頭辞付きに変わる前の旧ラベル名を使い続ける場合（既定変更: Issue #434）:
+
+```toml
+[incident]
+kind_label = "incident"
+initial_status_label = "incident:investigating"
+transient_label = "incident:cause:transient"
+```
+
+各ラベルの意味は [incident ラベル運用ガイド](../dev/incident-labels.md) を参照。
+
 ### `[provider]`
 
 `[provider]` section は config loader 層では任意で、tracked / overlay の双方に無い場合 loader は
@@ -201,6 +242,9 @@ default_timeout = 2400
 agent_runner = "headless"           # "headless"（既定） | "interactive_terminal"
 # interactive_terminal_backend = "tmux"  # "tmux"（既定） | "herdr"
 # interactive_terminal_close_on_verdict = true   # interactive_terminal のときのみ作用
+
+# [incident]                        # 任意: incident のラベル名 / ガイドパス（既定は `kaji:` 接頭辞付き）
+# kind_label = "kaji:incident"
 
 [provider]
 type = "github"
