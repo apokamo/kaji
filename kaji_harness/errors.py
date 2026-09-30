@@ -294,6 +294,18 @@ class VerdictMarkerMetaMissingError(VerdictMarkerResolutionError):
     """The latest marker lacks required metadata."""
 
 
+class VerdictArtifactResolutionError(HarnessError):
+    """Local ``verdict.yaml`` artifact fallback cannot produce a verdict safely."""
+
+
+class VerdictArtifactNotFoundError(VerdictArtifactResolutionError):
+    """No artifact verdict can be located for the requested step and run context."""
+
+
+class VerdictArtifactUnusableError(VerdictArtifactResolutionError):
+    """The latest attempt exists but its artifact is missing, corrupt, or contradictory."""
+
+
 class InvalidVerdictValue(HarnessError):
     """on に未定義の status 値。プロンプト違反。回復不能・リトライしない。"""
 

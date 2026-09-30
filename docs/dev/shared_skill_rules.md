@@ -91,10 +91,26 @@ cross-skill 契約（BACK 再入検出など）は SKILL.md の散文ではな�
   1 行目を厳密照合し（`test()` の `^`、`m` フラグなし）、design を戻し先とする status
   集合 `{BACK, BACK_DESIGN}` を design 再入として数える。旧来の判定見出しゲート・
   regex は残さない（ADR 008 決定 1）。
-- **starter consumer**: `kaji issue resolve-verdict <issue_id> --step <step>
-  [--require-meta <key>]...` が対象 step の最新コメント一件を選び、`step / status / meta /
-  created_at` JSON を返す。未検出、最新 marker 不正、必須 meta 欠落は区別された非 0 で
-  fail-closed。後続 RETRY / ABORT は過去 PASS を構造的に失効させる
+- **resolve-verdict consumer**: `kaji issue resolve-verdict <issue_id> --step <step>
+  [--require-meta <key>]... [--run <run_id> | --current-verdict-path <path>]` が対象 step の
+  最新コメント一件を選び、`step / status / meta / created_at` JSON を返す。未検出、最新 marker
+  不正、必須 meta 欠落は区別された非 0 で fail-closed。後続 RETRY / ABORT は過去 PASS を構造的に
+  失効させる。marker が**存在する限り** artifact は一切読まない（marker 不正・必須 meta 欠落も
+  救済しない）
+  - **artifact fallback**: marker が存在せず run コンテキストがある場合に限り、その run（対象 step が
+    一度も実行されていなければ `recovery-chain.json` の復旧元 run）の**最新 attempt** の
+    `verdict.yaml` から解決する。過去 attempt には遡らない。run コンテキストは明示 option
+    （harness step は注入された `[verdict_path]` を `--current-verdict-path` へ渡す。人間は
+    `--run`）> 環境変数 `KAJI_VERDICT_PATH`（exec / exec_script step に runner が注入）の順。
+    特定できなければ従来どおり exit 4
+  - **出力の判別**: artifact 解決時のみ `source: "artifact"`、`run_id` / `requested_run_id` /
+    `attempt` / `verdict_path` / `ended_at`（`meta` は常に `{}`、`created_at` は無い）を返す。
+    `source` key が無ければ marker 解決。最新 attempt が採用不能（`verdict.yaml` 欠落・破損、
+    `result.json` の異常終了・status 矛盾）なら exit 7。artifact 解決時に `--require-meta` が
+    あれば exit 6
+  - **時刻比較**: 新旧比較は marker なら `created_at`、artifact なら `ended_at` を **ISO 8601 の
+    時刻として**比較する（`Z` と `+00:00` の表記差があるため文字列比較しない）。`ended_at` が
+    `null`（時刻不明）で新旧比較が必要な consumer は、推測せず停止する
 - **語彙**: `--verdict-step` は `^[a-z][a-z0-9_-]*$`、`--verdict-status` は
   `PASS` / `RETRY` / `ABORT` / `BACK` / `BACK_<UPPER>`（`BACK_[A-Z0-9_]+`、
   [`workflow-authoring.md`](workflow-authoring.md) § `BACK_*` 文法と整合）。不正語彙・

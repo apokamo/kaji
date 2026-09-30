@@ -290,3 +290,75 @@ def test_issue_resolve_verdict_not_found_exit_code(tmp_path: Path) -> None:
     )
 
     assert resolved.returncode == 4
+
+
+def test_issue_resolve_verdict_artifact_fallback_via_run_option(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "--initial-branch=main", str(repo)], check=True)
+    kaji_dir = repo / ".kaji"
+    kaji_dir.mkdir()
+    (kaji_dir / "config.toml").write_text(
+        "[paths]\n"
+        'artifacts_dir = ".kaji-artifacts"\n'
+        'skill_dir = ".claude/skills"\n\n'
+        "[execution]\n"
+        "default_timeout = 1800\n",
+        encoding="utf-8",
+    )
+    (repo / ".gitignore").write_text("", encoding="utf-8")
+    assert (
+        _run_kaji(repo, "local", "init", "--machine-id", "pc1", "--non-interactive").returncode == 0
+    )
+    assert (
+        _run_kaji(
+            repo,
+            "issue",
+            "create",
+            "--title",
+            "artifact fallback",
+            "--body",
+            "tracking",
+            "--slug",
+            "artifact-fallback",
+        ).returncode
+        == 0
+    )
+    assert (
+        _run_kaji(
+            repo, "issue", "comment", "local-pc1-1", "--body", "report without marker"
+        ).returncode
+        == 0
+    )
+    attempt = (
+        repo
+        / ".kaji-artifacts"
+        / "local-pc1-1"
+        / "runs"
+        / "260903210335"
+        / "steps"
+        / "implement-precheck"
+        / "attempt-001"
+    )
+    attempt.mkdir(parents=True)
+    (attempt / "verdict.yaml").write_text(
+        "status: PASS\nreason: r\nevidence: e\nsuggestion: ''\n", encoding="utf-8"
+    )
+
+    resolved = _run_kaji(
+        repo,
+        "issue",
+        "resolve-verdict",
+        "local-pc1-1",
+        "--step",
+        "implement-precheck",
+        "--run",
+        "260903210335",
+    )
+
+    assert resolved.returncode == 0, resolved.stderr
+    payload = json.loads(resolved.stdout)
+    assert payload["source"] == "artifact"
+    assert payload["status"] == "PASS"
+    assert payload["run_id"] == "260903210335"
+    assert payload["verdict_path"].endswith("attempt-001/verdict.yaml")

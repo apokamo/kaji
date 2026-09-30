@@ -426,7 +426,12 @@ BREAKING エントリを参照。
 
 - 同一 agent 内でのセッション継続には、`resume: <step-id>` へ置き換える（推奨・第一手段）。
 - cross-agent 等で `resume` が使えない step は、`kaji issue resolve-verdict <issue-id> --step
-  <step-id>` で対象 step の直前 verdict を明示的に取得する。
+  <step-id>` で対象 step の直前 verdict を明示的に取得する。agent step ではプロンプトに注入された
+  `[verdict_path]` を `--current-verdict-path [verdict_path]` として渡す。これにより producer の
+  verdict marker が欠落していても、同じ run の `verdict.yaml`（最新 attempt）から解決できる
+  （exec / exec_script step は runner 注入の `KAJI_VERDICT_PATH` が自動で使われる）。marker が
+  あれば従来どおり marker が優先される。出力契約は
+  [shared_skill_rules.md](shared_skill_rules.md) § resolve-verdict consumer を参照。
 
 ```yaml
 # Before（削除済み・エラーになる）

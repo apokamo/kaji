@@ -23,6 +23,7 @@ import yaml
 
 from .errors import InvalidVerdictValue, VerdictNotFound, VerdictParseError
 from .models import Verdict
+from .providers.markers import is_valid_verdict_status
 
 # Step 1: Strict delimiter pattern (original V7)
 STRICT_PATTERN = re.compile(
@@ -256,6 +257,11 @@ def _validate(verdict: Verdict, valid_statuses: set[str]) -> None:
             f"'{verdict.status}' not in {valid_statuses}. "
             "This indicates a prompt violation — do not retry."
         )
+    _require_suggestion(verdict)
+
+
+def _require_suggestion(verdict: Verdict) -> None:
+    """ABORT / BACK* は非空 suggestion を要求する。"""
     if (verdict.status == "ABORT" or verdict.status.startswith("BACK")) and not verdict.suggestion:
         raise VerdictParseError(f"{verdict.status} verdict requires non-empty suggestion")
 
@@ -604,6 +610,36 @@ def load_verdict_yaml(
     text = path.read_text(encoding="utf-8")
     verdict = _parse_yaml_fields(text, findings_sink=findings_sink)
     _validate(verdict, valid_statuses)
+    return verdict
+
+
+def load_verdict_yaml_for_marker_vocabulary(path: Path) -> Verdict:
+    """``verdict.yaml`` を verdict marker と同じ status 文法で読み込む。
+
+    ``load_verdict_yaml`` は step の ``on:`` キー集合を要求するが、provenance 解決 CLI
+    （``kaji issue resolve-verdict``）は workflow 定義を知らないため、status は
+    marker 文法（``PASS|RETRY|ABORT|BACK|BACK_[A-Z0-9_]+``）で検証する。
+
+    Args:
+        path: ``verdict.yaml`` の絶対パス。
+
+    Returns:
+        検証済み ``Verdict``。
+
+    Raises:
+        VerdictParseError: YAML parse 失敗 / 必須欠落 / ABORT・BACK で suggestion 空。
+        InvalidVerdictValue: status が marker 文法外。
+        OSError: ファイルを読めない。
+        UnicodeDecodeError: UTF-8 として読めない。
+    """
+    text = path.read_text(encoding="utf-8")
+    verdict = _parse_yaml_fields(text)
+    if not is_valid_verdict_status(verdict.status):
+        raise InvalidVerdictValue(
+            f"'{verdict.status}' is not a valid verdict status "
+            "(expected PASS / RETRY / ABORT / BACK or BACK_<UPPER>)"
+        )
+    _require_suggestion(verdict)
     return verdict
 
 

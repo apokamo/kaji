@@ -39,6 +39,18 @@ _VERDICT_MARKER_RE = re.compile(
 )
 
 
+def is_valid_verdict_status(status: str) -> bool:
+    """Return whether ``status`` matches the verdict marker status grammar.
+
+    Args:
+        status: Candidate status such as ``PASS`` or ``BACK_DESIGN``.
+
+    Returns:
+        ``True`` for ``PASS|RETRY|ABORT|BACK|BACK_[A-Z0-9_]+``.
+    """
+    return _VERDICT_STATUS_RE.fullmatch(status) is not None
+
+
 @dataclass(frozen=True)
 class KajiVerdictMarker:
     """Parsed provider-neutral verdict marker.

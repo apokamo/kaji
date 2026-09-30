@@ -131,7 +131,7 @@ key の追加・削除も値の変更もしない。
 | code | 条件 | 変更 |
 |------|------|------|
 | 0 | marker 解決成功 / artifact 解決成功 | artifact 成功を追加 |
-| 1 | コメント取得失敗（`GitHubProviderError` / `IssueNotFoundError`）。**artifact で迂回しない** | 不変 |
+| 3（既存 `EXIT_RUNTIME_ERROR`）| コメント取得失敗（`GitHubProviderError` / `IssueNotFoundError`）。**artifact で迂回しない** | 不変 |
 | 2 | 引数不正（既存）+ 明示 run option の形状不正・排他違反・issue 不一致 | 条件を追加 |
 | 4 | marker 不在で、かつ次のいずれか: run コンテキストなし / 特定不能、run dir がローカルに無い、run と記録済み復旧元のどれでも対象 step が一度も実行されていない、`recovery-chain.json` が読めない・不正 | 条件を拡張（意味は「解決できる verdict が無い」のまま） |
 | 5 | 最新 marker が不正。**fallback しない** | 不変 |
@@ -189,8 +189,8 @@ def handle_resolve_verdict(provider, rest, *, artifacts_dir_resolver=None):
     issue_id = normalize(ns.issue_id)       # 既存
     explicit_ctx = parse_explicit_run_context(ns, issue_id)   # 形状不正 → exit 2
     try:
-        comments = provider.list_issue_comments_all(issue_id)  # 失敗 → exit 1（迂回しない）
-    except ...: return 1
+        comments = provider.list_issue_comments_all(issue_id)  # 失敗 → exit 3（迂回しない）
+    except ...: return 3
     try:
         return emit(resolve_latest_verdict(comments, step=..., required_meta=...))  # 既存そのまま
     except VerdictMarkerNotFoundError as exc:
@@ -275,7 +275,7 @@ runner は異常終了経路で必ず `synthetic: true` と `error` を記録す
 | `result.json` の欠落・矛盾 | 欠落なら `verdict.yaml` 単独で採用。存在して異常終了・status 矛盾なら停止 | 「決定事項」表 6 行目（質問 6 への yes） | 異常終了 = `synthetic: true` または `error` 非 null。status 矛盾 = `result.status != verdict.status` |
 | verdict への時刻追加 | 今回は含めない（#440） | 「決定事項」表 7 行目 | 本設計は `verdict.yaml` の schema を変更しない |
 | 必須 meta の非推測 | artifact 解決時に `--require-meta` があれば exit 6 | Issue 本文「AI の仮定と後段の検査先」1 行目（記録承認済みの AI 仮定） | 設計・コードレビューとテストで検査 |
-| コメント取得失敗の非迂回 | 取得失敗は exit 1。artifact を見ない | 同 2 行目（AI 仮定） | コメント取得の try を marker 解決から分離 |
+| コメント取得失敗の非迂回 | 取得失敗は exit 3（既存 `EXIT_RUNTIME_ERROR`）。artifact を見ない | 同 2 行目（AI 仮定） | コメント取得の try を marker 解決から分離 |
 | marker 自動投稿なし | 読み取り専用のまま | 同 3 行目（AI 仮定） | 書き込み API を呼ばない。テストでコメント数の不変を確認 |
 | CLI option 名・終了コード割当・コンテキスト伝搬 | `--run` / `--current-verdict-path`、新 exit 7、明示 option > env | grill-me provenance コメント「CLI オプション名、artifact JSON の詳細 schema、停止理由ごとの終了コード割当、コンテキスト伝搬・artifact ディレクトリ解決の具体化は…設計する」（人間が設計へ委任した範囲） | 採用不能（7）を未検出（4）と分けた。consumer が「artifact はあるが最新 attempt が壊れている」ことを判別できるようにするため。既存の呼び出しでは 7 は発生しない |
 | `KAJI_VERDICT_PATH` の暗黙利用 | option が無ければ env を実行コンテキストとして使う。env が不正なら exit 2 にせず fallback しない | **AI の仮定**。根拠: exec / exec_script step の実行コンテキストは runner が注入する env であり、ADR 005 でも `verdict_path` と同じ役割を持つ。不正な env で exit 2 にすると、marker がある既存呼び出しまで壊れる。後段の検査先: review-design / review-code | 優先順位と、env 不正時に fallback しない扱いを定義 |
@@ -320,7 +320,7 @@ tmp_path 上に artifact dir と LocalProvider の Issue を構築し、`_handle
   `{step, status, meta, created_at}` のみで marker の値と一致し、exit 0 であること
 - **marker 不正 / 必須 meta 欠落**: artifact があっても exit 5 / exit 6 のままであること
 - **コメント取得失敗**: `list_issue_comments_all` が `GitHubProviderError` を送出する fake provider で、
-  artifact があっても exit 1 になり、artifact を読まないこと
+  artifact があっても exit 3 になり、artifact を読まないこと
 - **最新 attempt の採用**: attempt-001 が PASS、attempt-002 が RETRY → RETRY を返すこと。ABORT も素通しされること
 - **run 特定不能**: option も env も無い、または env が不正 → exit 4。同じ runs dir の別 run に PASS があっても
   採用しないこと
