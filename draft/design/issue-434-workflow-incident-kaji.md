@@ -56,6 +56,10 @@ failure triage 第1層（`kaji_harness/recovery/`）が起票・重複検索・t
 
 #### 検証規則（違反はすべて `ConfigLoadError`。設定読み込み時に fail-fast）
 
+入力境界は Pydantic model（`ConfigDict(extra="forbid", frozen=True, strict=True)`）で検証する
+（AGENTS.md「外部入力は Pydantic で検証する」、ADR 010 / ADR 011 と同じ方式）。下表の規則は、
+その model の field / model validator として実装する。
+
 | 対象 | 規則 | 理由 |
 |------|------|------|
 | `[incident]` | table であること | 既存セクションと同じ |
@@ -65,6 +69,7 @@ failure triage 第1層（`kaji_harness/recovery/`）が起票・重複検索・t
 | 3 ラベル各値 | 前後の空白を拒否する（`value != value.strip()`） | GitHub 側で空白が落とされ、kaji の保持値と一致しなくなる恐れがある |
 | 3 ラベル各値 | `,` を拒否する | `gh issue create --label` / `gh issue edit --add-label` はカンマで値を分割する。REST の `labels` クエリもカンマ区切りである（Primary Sources 参照） |
 | 3 ラベル各値 | 制御文字（改行など）を拒否する | CLI 引数やクエリ文字列を壊す |
+| 3 ラベル各値 | ダブルクォート `"` を拒否する | gh の `--label` / `--add-label` / `--remove-label` は pflag StringSlice で、値を Go の `encoding/csv` で解析する。裸の `"` は `bare " in non-quoted-field` で gh が失敗する（review-design で gh 2.100.0 により再現済み）。両端が `"` の値は引用符が除去され、kaji が検索に使う名前と付与される名前が食い違う。CSV エスケープして渡す案は採らない（provenance 参照） |
 | 3 ラベル相互 | 重複を拒否する。比較は大文字小文字を区別しない（`casefold`） | 完了条件「3 ラベルの重複」。同名だと transient 遷移で付与と除去が打ち消し合い、種別ラベルが外れる |
 | `labels_guide_path` | str であること。空白だけでないこと。空白文字・制御文字・`` ` ``・`(`・`)` を含まないこと | 値は本文の `` [`<path>`](<path>) `` にそのまま入る。これらの文字が入ると Markdown のリンクが壊れる。ファイルの存在は確認しない（URL の指定や、リポジトリ外の文書を許すため） |
 
@@ -121,15 +126,17 @@ handler = RecoveryHandler(..., incident=config.incident)   # commands/run.py・r
 - **layer**: `kaji_harness.config` と `kaji_harness.recovery` は同じ application 層である
   （`tests/test_layer_imports.py`）。`recovery/target.py` はすでに `..config` を import しているので、
   `recovery/incident.py` が `..config` から `IncidentConfig` を import しても層の違反にならない。
-- **検証の実装方式**: AGENTS.md は「外部入力は Pydantic で検証する」としている。ただし
-  `config.py` の既存セクションはすべて、手書きの検証と `ConfigLoadError` で統一されている。
-  本 Issue もこの既存の方式に合わせ、Pydantic は導入しない（provenance 参照）。
+- **検証の実装方式**: 新設の `[incident]` は新しい外部入力契約なので、AGENTS.md「外部入力は
+  Pydantic で検証する」をそのまま適用する。ADR 011 と同じく **入力境界のみ Pydantic、検証後は
+  frozen dataclass `IncidentConfig` へ詰め替えて `KajiConfig` に渡す**。既存セクション
+  （`[paths]` / `[execution]` / `[provider]`）の手書き検証は移行しない（ADR 010 が既存 parser を
+  対象外とした境界と同じ）。`pydantic>=2` は `pyproject.toml:27` の既存依存で、新規依存はない。
 
 ## 変更スコープ
 
 | ファイル | 変更 |
 |----------|------|
-| `kaji_harness/config.py` | `IncidentConfig`（既定値の単一の正本）、`KajiConfig.incident` フィールド、`_parse_incident()` を追加する |
+| `kaji_harness/config.py` | `IncidentConfig`（frozen dataclass・既定値の単一の正本）、入力境界の Pydantic model `_IncidentSection`、`KajiConfig.incident` フィールド、`_parse_incident()` を追加する |
 | `kaji_harness/recovery/incident.py` | 定数 `INCIDENT_LABEL` / `INCIDENT_STATUS_INVESTIGATING` / `INCIDENT_CAUSE_TRANSIENT` / `_LABELS_GUIDE` を削除する。transient 判定・本文描画・起票で、ラベル名とガイドパスを引数として受け取る |
 | `kaji_harness/recovery/__init__.py` | `__all__` から上の 3 定数を外す（package 外の利用者はいない。grep で確認済み） |
 | `kaji_harness/recovery/handler.py` | `RecoveryHandler` に必須フィールド `incident: IncidentConfig` を追加し、検索・起票・transient 遷移に渡す。docstring 中の固定ラベル名を一般的な表現に直す |
@@ -157,8 +164,19 @@ handler = RecoveryHandler(..., incident=config.incident)   # commands/run.py・r
    - `execute_incident_action(provider, *, action, ctx, local_records, existing_comments, incident: IncidentConfig)`:
      起票時のラベルを `incident` から組み立て、ガイドパスを `render_incident_issue` に渡す。
 4. **`_parse_incident(path, data) -> IncidentConfig`**: tracked の `data["incident"]` だけを見る
-   （overlay は渡さない）。上の検証規則を key ごとに適用した後、3 ラベルの casefold 重複を確認する。
-   エラーメッセージは既存にならい `incident.<key> must ...` の形式にする。
+   （overlay は渡さない）。流れは次のとおり。
+   - `[incident]` がなければ `IncidentConfig()`（既定値）を返す。dict でなければ
+     `ConfigLoadError(path, "[incident] must be a table")`。
+   - `_IncidentSection.model_validate(section)` で検証する。model は 4 フィールドを
+     `IncidentConfig` と同じ既定値付きで持ち、`extra="forbid"`（未知 key 拒否）・`strict=True`
+     （非 str を型変換せず拒否）とする。3 ラベルの文字規則は共通の `field_validator`、
+     `labels_guide_path` の文字規則は個別の `field_validator`、3 ラベルの casefold 重複は
+     `model_validator(mode="after")` で検査する。
+   - `pydantic.ValidationError` を捕捉し、`ConfigLoadError(path, ...)` に変換して `from exc` で
+     連鎖させる。メッセージは各 error の `loc` を `incident.<key>` に整形し、`msg` を続ける
+     （例: `incident.kind_label: must not contain ','`、`incident.kind_lable: Extra inputs are not
+     permitted`）。複数 error は `; ` で連結する。`ValidationError` は外へ漏らさない。
+   - 検証済みの model から `IncidentConfig(**model.model_dump())` を作って返す。
 5. **percent-encode**: `search_issues_all` の中で、ラベル名ごとに `quote(name, safe="")` をかけ、
    `,` で連結する。区切りのカンマはエンコードしない。ラベル名の中のカンマは設定検証で拒否済みである。
 
@@ -207,12 +225,13 @@ self.provider.edit_issue(ref, add_labels=[cfg.transient_label], remove_labels=[c
 | kaji 自身の設定 | 3 ラベルに旧名を明示し、`labels.yml` は変更しない | Issue「決定事項」3（人間決定） | ガイドパスは既定値と同じなので明示しない |
 | local provider | 対象外。v1 契約を維持する | Issue「決定事項」5、#304 の v1 契約（人間決定。前回の design ABORT を受けて起票者が記録） | 設定の読み込みと検証は provider に依存させない |
 | kaji 自身のラベル記述（docs/skills） | 変更しない | Issue 完了条件「影響ドキュメントの更新」（人間決定） | `incident-labels.md` への追記と設定リファレンスの更新だけを行う |
-| 不正値を読み込み時にエラーにする | `ConfigLoadError` | Issue 完了条件 7（人間決定。例として空文字と 3 ラベルの重複が挙がっている） | 追加の規則（カンマ・前後の空白・制御文字・casefold 重複・未知 key・ガイドパスの文字制約）は AI の仮定。根拠は gh / REST のカンマ区切り仕様と、typo の silent fallback 防止。review-design で検査する |
+| 不正値を読み込み時にエラーにする | `ConfigLoadError` | Issue 完了条件 7（人間決定。例として空文字と 3 ラベルの重複が挙がっている） | 追加の規則（カンマ・ダブルクォート・前後の空白・制御文字・casefold 重複・未知 key・ガイドパスの文字制約）は AI の仮定。根拠は gh の CSV 解析（pflag StringSlice → `encoding/csv`）と REST のカンマ区切り仕様、typo の silent fallback 防止。review-design で検査する |
+| `"` を含むラベル名の扱い | 読み込み時に拒否する（CSV エスケープして渡す方式は採らない） | AI の仮定（review-design R2 で選択を求められた 2 案から選んだ）。エスケープ方式は `GitHubProvider` の全ラベル受け渡し（create / edit の add / remove）に CSV 整形を入れる必要があり、他の呼び出し元の挙動も変える。`"` をラベル名に使う実需は想定しにくく、拒否は後から緩和できる（two-way door）。verify-design / review-code で検査する | 3 ラベル共通の field validator で拒否する |
 | セクション名・key 名 | `[incident]` / `kind_label` / `initial_status_label` / `transient_label` / `labels_guide_path` | AI の仮定。未リリースの新しい key なので、リリース前なら安く直せる（two-way door）。根拠は既存 key の snake_case 命名。review-design / PR review で検査する | — |
 | overlay の扱い | `[incident]` は overlay 対象外（無視する） | AI の仮定。ラベルはリポジトリ単位の規約であり、`[paths]` と同じ扱いにした。review-design で検査する | — |
 | `RecoveryHandler.incident` を必須にする | 既定値なし | AI の仮定。渡し忘れで kaji 自身が黙って新名に切り替わる事故を、構築時の失敗に変えるため。review-code で検査する | — |
 | 検索時の percent-encode | ラベル名ごとにエンコードする | AI の仮定。任意の名前を設定できる以上、クエリを壊す文字への対策が要るため。`incident` などの既存の値は変わらない。review-design / Large テストで検査する | — |
-| Pydantic を使わない | 既存の手書き検証に合わせる | AI の仮定。AGENTS.md の Pydantic 規約と、`config.py` の既存の実装方式（全セクション手書き）が食い違っている。1 セクションだけ Pydantic にすると検証方式が混在する。review-design で検査する | — |
+| `[incident]` の検証方式 | 入力境界を Pydantic model で検証し、`ValidationError` を `ConfigLoadError` に変換する。検証後は frozen dataclass に詰め替える | 既存規約: AGENTS.md Always-Apply Rules「外部入力は Pydantic で検証する」、ADR 010（既存 parser は対象外のまま新規入力に Pydantic）、ADR 011（入力境界のみ Pydantic・後段 dataclass 維持）。review-design R1 の指摘で初版の「Pydantic 不使用」から修正 | `extra="forbid"` / `strict=True` / field・model validator の割り当てと、エラーメッセージの `incident.<key>: <msg>` 整形 |
 | incident skill の前提ガード | 本 Issue では変更せず、フォローアップへ引き継ぐ | Issue 完了条件「影響ドキュメントの更新」が `.claude/skills/incident-*` を変更対象外としている（人間決定） | 既知の制約として記録し、Issue コメントで引き継ぎを依頼する |
 
 one-way door の未決はない。前回の design ABORT の論点（local provider）は、Issue「決定事項」5 で
@@ -229,9 +248,13 @@ A 案（v1 契約の維持）に決まっており、完了条件もそれに合
 - `tests/test_config.py`
   - `[incident]` がない場合、`IncidentConfig` の 4 値が既定値（`kaji:` 接頭辞付き、ガイドパス既定値）になる
   - 全 key を指定すると、その値が採用される。一部だけ指定すると、残りは既定値になる
-  - `ConfigLoadError` になるケース: table でない、非 str、空文字、空白だけ、前後の空白、カンマ、
-    改行、3 ラベルの完全一致の重複、大文字小文字だけが違う重複、未知 key、
-    `labels_guide_path` の空・空白・`` ` ``・括弧
+  - `ConfigLoadError` になるケース: table でない、非 str（int / bool を型変換せず拒否すること）、
+    空文字、空白だけ、前後の空白、カンマ、改行、3 ラベルの完全一致の重複、大文字小文字だけが
+    違う重複、未知 key、`labels_guide_path` の空・空白・`` ` ``・括弧
+  - ダブルクォートの拒否を 3 フィールドそれぞれで確認する（`'ops"incident'` のような途中の `"`、
+    `'"incident"'` のような両端の `"`）。parametrize で key × 値の組を網羅する
+  - 例外が `pydantic.ValidationError` ではなく `ConfigLoadError` であること、メッセージに
+    `incident.<key>` が含まれること、`__cause__` が `ValidationError` であること
   - overlay（`config.local.toml`）に書いた `[incident]` は無視され、tracked の値が採用される
 - `tests/test_recovery_incident.py`
   - `plan_incident_action` に独自の `transient_label` を渡したとき、そのラベルを持つ closed 候補は
@@ -270,7 +293,11 @@ A 案（v1 契約の維持）に決まっており、完了条件もそれに合
   - stub が受け取った argv を記録し、`GitHubProvider.search_issues_all(labels=["kaji:incident"])` が
     実プロセス越しに `labels=kaji%3Aincident` のクエリを渡すことを確認する
   - `create_issue(labels=["kaji:incident", "kaji:incident:investigating"])` が、`--label` 引数として
-    設定名をそのまま渡すことを確認する（カンマで分割されないこと）
+    設定名をそのまま渡すことを確認する
+  - 注: stub は argv を記録するだけで、gh 本体の CSV 解析（pflag → `encoding/csv`）は再現しない。
+    `,` と `"` を含む名前が gh に届かないことは、読み込み時に拒否する Small テスト（上記）で保証する
+    （本 Issue は受け渡し側で CSV 整形を行わないため、argv 一致の Large テストでは足りない部分を
+    入力境界で塞ぐ）
 - large_forge（実 GitHub API との疎通）は追加しない。実 incident の起票という破壊的な副作用があり、
   隔離された repo もないためである。#304 の設計（`tests/test_recovery_incident_large_local.py`
   の docstring）の判断を踏襲する。GitHub の API 仕様との整合は、Primary Sources の公式仕様と
@@ -308,11 +335,16 @@ A 案（v1 契約の維持）に決まっており、完了条件もそれに合
 | 現行 handler | `kaji_harness/recovery/handler.py:568-575`, `:618-635` | 検索は `INCIDENT_LABEL` だけで行う。非 `IncidentSearchCapable` の provider は remote に進まない。transient 遷移は add/remove 定数を使う |
 | #304 設計（v1 provider 契約） | `draft/design/issue-304-1-incident.md` | 非 GitHub provider では起票を no-op にし、ローカル記録だけを行う |
 | config ローダー | `kaji_harness/config.py`（`_load`, `_parse_execution`, `_read_overlay`） | 既存の検証は手書きで `ConfigLoadError` を使う。overlay は `[execution]` / `[provider]` だけに適用される |
+| 外部入力の検証規約 | `AGENTS.md`（Always-Apply Rules）、`docs/adr/010-pydantic-series-input-validation.md`、`docs/adr/011-workflow-overlay-single-layer.md` § overlay 表層は Pydantic model で検証する | 「外部入力は Pydantic で検証する」。ADR 011: 新規の外部入力契約には AGENTS.md の規約がそのまま適用され、入力境界のみ Pydantic、後段は既存 dataclass に渡す。unknown field は禁止する |
+| Pydantic の既存利用 | `kaji_harness/series/models.py:19`（`ConfigDict(extra="forbid", frozen=True, strict=True)`）、`kaji_harness/series/loader.py:41`（`ValidationError` の捕捉とドメイン例外への変換）、`pyproject.toml:27` | 同じ model 設定と例外変換の前例。依存は既存 |
+| Pydantic ドキュメント | https://docs.pydantic.dev/latest/concepts/validators/ 、https://docs.pydantic.dev/latest/api/config/#pydantic.config.ConfigDict.extra | `field_validator` / `model_validator(mode="after")` の用法。`extra="forbid"` は未定義の field を検証エラーにする |
 | 設定リファレンス | `docs/reference/configuration.md` § Overlay merge rule | `[paths]` は overlay されず、overlay 内の `[paths]` は無視される（本設計の `[incident]` と同じ扱い） |
 | 層の規約 | `tests/test_layer_imports.py`（`MODULE_LAYERS`）、`kaji_harness/recovery/target.py:7` | config と recovery はどちらも application 層で、recovery → config の import には前例がある |
 | GitHub REST: List repository issues | https://docs.github.com/en/rest/issues/issues#list-repository-issues | `labels` パラメータは "A list of comma separated label names"。ラベル名に含まれるカンマは区切りと区別できない |
 | gh issue create | https://cli.github.com/manual/gh_issue_create | `-l, --label <name>`: "Add labels by name"。help の例に `gh issue create --label "bug,help wanted"` がある（カンマで複数ラベルを指定できる）。実装は `StringSliceVarP(&opts.Labels, "label", "l", ...)`（https://github.com/cli/cli/blob/trunk/pkg/cmd/issue/create/create.go ） |
-| pflag StringSlice | https://pkg.go.dev/github.com/spf13/pflag#StringSlice | StringSlice フラグは、値をカンマ区切りの CSV として解釈する（`--label "a,b"` は 2 ラベルになる） |
+| pflag StringSlice | https://pkg.go.dev/github.com/spf13/pflag#StringSlice 、https://raw.githubusercontent.com/spf13/pflag/master/string_slice.go | StringSlice フラグは値を `encoding/csv` の Reader で解析する（`--label "a,b"` は 2 ラベルになる） |
+| Go `encoding/csv` | https://pkg.go.dev/encoding/csv | 引用符は CSV 構文として解釈され、引用されていない field 中の裸の `"` は `ErrBareQuote`（`bare " in non-quoted-field`）になる。両端の引用符は除去される |
+| review-design の再現 | Issue #434 の review-design コメント | gh 2.100.0 で `gh issue create --help --label 'ops"incident'` / `gh issue edit --help --add-label 'ops"incident'` がともに exit 1、`bare " in non-quoted-field` |
 | Python `urllib.parse.quote` | https://docs.python.org/3/library/urllib.parse.html#urllib.parse.quote | `safe=""` を指定すると `/` を含む予約文字をすべて `%XX` にエンコードする |
 | Python `tomllib` | https://docs.python.org/3/library/tomllib.html | TOML を dict に読み込む。table は `dict` になる（`[incident]` の table 判定の根拠） |
 | incident skill の前提ガード | `.claude/skills/incident-investigate/SKILL.md:69-72` | 前提として `incident` ラベルを確認している（既知の制約の根拠） |
