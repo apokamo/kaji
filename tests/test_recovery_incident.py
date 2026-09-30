@@ -155,6 +155,15 @@ def test_plan_custom_transient_label_is_honoured() -> None:
     assert action.regression_of == "305"
 
 
+def test_plan_transient_label_matches_case_insensitively() -> None:
+    """設定名と保存済みラベルの大文字小文字が異なっても transient と判定する。"""
+    sig = _sig()
+    cands = [_candidate("305", "closed", sig=_sig(), labels=("ops:transient",))]
+    action = plan_incident_action(sig, cands, transient_label="Ops:Transient")
+    assert action.kind == "recur"
+    assert action.target_id == "305"
+
+
 def test_plan_legacy_transient_label_is_not_recognised_by_default() -> None:
     """旧 ``incident:cause:transient`` の互換判定は持たない（Issue #434 決定事項）。"""
     sig = _sig()

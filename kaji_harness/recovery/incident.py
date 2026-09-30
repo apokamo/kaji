@@ -197,7 +197,7 @@ def plan_incident_action(
     優先順（上から評価）: open 一致 → closed+transient 一致 → closed 人間 resolve 一致
     （→ regression 新規）→ 一致なし（→ 新規）。同分岐内に複数一致した場合は issue 番号
     最小（最古）を選び、残りを ``also_matched`` に記録する（決定論）。transient 判定は
-    候補の labels が ``transient_label`` を含むかで行う（旧名の互換判定は持たない）。
+    候補の labels が ``transient_label`` を大文字小文字無視で含むかで行う（旧名の互換判定は持たない）。
     """
     matched = [c for c in candidates if c.signature is not None and c.signature.matches(signature)]
 
@@ -205,8 +205,11 @@ def plan_incident_action(
     if open_matches:
         return _recur(open_matches)
 
+    transient_folded = transient_label.casefold()
+
     def is_transient(c: IncidentCandidate) -> bool:
-        return transient_label in c.labels
+        # GitHub の label 名は大文字小文字を区別しないため casefold で比較する。
+        return any(label.casefold() == transient_folded for label in c.labels)
 
     transient_closed = [c for c in matched if c.state != "open" and is_transient(c)]
     if transient_closed:
