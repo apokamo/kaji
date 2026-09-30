@@ -96,19 +96,19 @@ baseline・検証・独立レビュー・PR review を維持すること、適�
 
 | step | skill / exec | agent / model / effort | on |
 |------|--------------|------------------------|----|
-| review-ready | `issue-review-ready` | codex / gpt-6-sol / medium | PASS: start, RETRY: fix-ready, ABORT: end |
+| review-ready | `issue-review-ready` | codex / gpt-6.1-sol / medium | PASS: start, RETRY: fix-ready, ABORT: end |
 | fix-ready | `issue-fix-ready` | claude / opus / medium | PASS: review-ready, ABORT: end |
 | start | `issue-start` | codex / gpt-5.6-luna / medium | PASS: baseline, ABORT: end |
 | baseline | `baseline-precheck`（exec_script。`timeout: 1800`） | なし | PASS: change, ABORT: end |
 | change | `issue-small-change-execute` | claude / opus / medium | PASS: review-change, RETRY: change, ABORT: end |
-| review-change | `issue-small-change-review` | codex / gpt-6-sol / medium | PASS: pr, RETRY: fix-change, ABORT: end |
+| review-change | `issue-small-change-review` | codex / gpt-6.1-sol / medium | PASS: pr, RETRY: fix-change, ABORT: end |
 | fix-change | `issue-small-change-execute` | claude / opus / medium | PASS: verify-change, ABORT: end |
-| verify-change | `issue-small-change-review` | codex / gpt-6-sol / medium | PASS: pr, RETRY: fix-change, ABORT: end |
+| verify-change | `issue-small-change-review` | codex / gpt-6.1-sol / medium | PASS: pr, RETRY: fix-change, ABORT: end |
 | pr | `i-pr` | codex / gpt-5.6-luna / medium | PASS: review-poll, RETRY: pr, ABORT: end |
 | review-poll | exec `[kaji, pr, review-poll]` | なし | PASS: close, RETRY: pr-fix, BACK_FALLBACK: review, ABORT: end |
-| review | `review` | codex / gpt-6-sol / medium | PASS: close, RETRY: pr-fix, ABORT: end |
+| review | `review` | codex / gpt-6.1-sol / medium | PASS: close, RETRY: pr-fix, ABORT: end |
 | pr-fix | `pr-fix` | claude / sonnet / high | PASS: pr-verify, ABORT: end |
-| pr-verify | `pr-verify` | codex / gpt-6-sol / medium | PASS: close, RETRY: pr-fix, ABORT: end |
+| pr-verify | `pr-verify` | codex / gpt-6.1-sol / medium | PASS: close, RETRY: pr-fix, ABORT: end |
 | close | `issue-close` | codex / gpt-5.6-luna / medium | PASS: end, ABORT: end |
 
 | cycle | entry | loop | max_iterations | on_exhaust |
@@ -460,7 +460,7 @@ Issue で決定した 4 差分:
 | 差異 | 理由 |
 |------|------|
 | 再利用 step の skill を kaji の同等 skill（`issue-review-ready` / `issue-fix-ready` / `issue-start` / `i-pr` / `review` / `pr-fix` / `pr-verify` / `issue-close`）と `kaji pr review-poll` exec に置換 | 差分 4（kaji 既存機構への置換）の適用 |
-| 再利用 step の agent / model / effort は `official/dev.yaml` と同一。change / fix-change は先行実装どおり claude / opus / medium、review-change / verify-change は codex / gpt-6-sol / medium | 再利用 step は標準 dev と揃えて事後比較の条件差を新規工程に限定する。新規工程は先行実装の運用値を踏襲 |
+| 再利用 step の agent / model / effort は `official/dev.yaml` と同一。change / fix-change は先行実装どおり claude / opus / medium、review-change / verify-change は codex / gpt-6.1-sol / medium | 再利用 step は標準 dev と揃えて事後比較の条件差を新規工程に限定する。新規工程は先行実装の運用値を踏襲 |
 | review が known_failures 時に実 diff の path で `--evaluate` を実行 | 差分 1（scope 評価維持）の具体化。設計レビューが無いため、実装者が申告した scope を独立に照合する |
 | 報告 SHA と HEAD の不一致を RETRY にする判定を、`--before` 停止中の人間 commit にも適用 | Issue 完了条件「対象 commit と対応しない証跡を成功扱いしない」の具体化（先行実装にも同趣旨の規定あり） |
 | `review` fallback skill に設計書なし経路の条件文を追加 | kaji の `review` skill が設計書を前提にしているため（kaji 固有の接続） |

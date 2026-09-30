@@ -104,7 +104,7 @@ steps:
   - id: review-starter-update      # update-starter と別 session（resume を持たない）
     skill: review-starter-update
     agent: codex
-    model: gpt-5.6-sol
+    model: gpt-6.1-sol
     effort: high
     on:
       PASS: release-starter
@@ -251,7 +251,7 @@ starter 側を向き、tracking Issue 操作が壊れる。
 | 独立 review の担保方法 | 3 step とも `resume` を持たせない | Issue #374 完了条件（人間決定）+ [review-starter-update SKILL.md](../../.claude/skills/review-starter-update/SKILL.md)「update と別 session で」 | `resume` 不使用に加え agent を claude / codex に分離。RETRY 時のフィードバック伝達路を tracking Issue コメントに固定 |
 | bounded retry の cycle 構造 | `entry: review-starter-update` / `loop: [update-starter, review-starter-update]` | AI の詳細化（決定範囲内）。根拠は `kaji_harness/runner.py:1061-1062` の increment 条件と `kaji_harness/workflow.py:660-671` の loop tail 制約。検査先: `/issue-review-design` と `kaji validate` | RETRY 発行 step を loop 末尾に置く形へ具体化。`entry` は既存 `docs-codex.yaml` の慣習に合わせた |
 | `max_iterations: 3` | 3 | AI の仮定。根拠: 既存 official / custom workflow の全 cycle が 3 で統一。検査先: `/issue-review-design`、#371 の forward test | cycle 定義へ反映 |
-| agent / model / effort 割当 | update=claude/opus/high、review=codex/gpt-5.6-sol/high、release=claude/opus/high | AI の仮定（two-way door）。根拠: `dev.yaml` の producer=claude / reviewer=codex 分業、`incident.yaml` の高難度調査 step への opus 割当。検査先: `/issue-review-design`、#371 の forward test | publish step を reviewer agent から外し、review と publish の実行主体を分離 |
+| agent / model / effort 割当 | update=claude/opus/high、review=codex/gpt-6.1-sol/high、release=claude/opus/high | AI の仮定（two-way door）。根拠: `dev.yaml` の producer=claude / reviewer=codex 分業、`incident.yaml` の高難度調査 step への opus 割当。検査先: `/issue-review-design`、#371 の forward test | publish step を reviewer agent から外し、review と publish の実行主体を分離 |
 | `default_timeout: 3600` | 3600 秒 | AI の仮定。根拠: `incident.yaml` が長時間 step を理由に 3600 を採用済み。repo 既定 2400 では全件分類 + quality gate 実行が不足しうる。検査先: #371 の forward test | workflow レベルに設定し、step 個別 timeout は置かない |
 | `workdir` を設定しない | 未設定（project root） | AI の詳細化。根拠: [update-starter SKILL.md](../../.claude/skills/update-starter/SKILL.md) § 入力 が starter path を tracking Issue から解決すると規定。検査先: #371 の forward test | starter repo を workdir にしない理由を設計書に明記 |
 | series 自動選択対象外の宣言 | `description` 先頭に明示 | AI の詳細化。根拠: [series-create SKILL.md](../../.claude/skills/series-create/SKILL.md) 手順 3 が custom description も読む。検査先: `/issue-review-design` | 既存 custom variant / `incident.yaml` と同じ宣言文言を採用 |

@@ -34,7 +34,7 @@ steps:
   - id: review-starter-update      # update-starter と別 session（resume を持たない）
     skill: review-starter-update
     agent: codex
-    model: gpt-5.6-sol
+    model: gpt-6.1-sol
     effort: high
     on:
       PASS: release-starter
