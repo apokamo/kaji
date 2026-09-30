@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 
-from kaji_harness import config as config_module
 from kaji_harness.commands.exit_codes import EXIT_INVALID_INPUT
 from kaji_harness.commands.sync import cmd_sync_from_github, cmd_sync_status
 from kaji_harness.config import (
@@ -29,11 +28,6 @@ _BASE_CONFIG = (
 )
 _LOCAL_PROVIDER = '[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\n'
 _GITHUB_PROVIDER = '[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n'
-
-
-@pytest.fixture(autouse=True)
-def _reset_emitted(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(config_module, "_LOCAL_PROVIDER_DEPRECATION_EMITTED", False)
 
 
 def _write_config(repo: Path, provider: str) -> Path:

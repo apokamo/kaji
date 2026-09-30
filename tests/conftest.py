@@ -304,3 +304,15 @@ def _stub_gh_version(request: pytest.FixtureRequest) -> Iterator[None]:
         return
     with patch.object(GitHubProvider, "_detect_gh_version", return_value=_MIN_GH_VERSION):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_local_provider_deprecation_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """local provider 非推奨警告の 1 プロセス 1 回フラグを各テスト前に reset する（#438）。
+
+    flag は interpreter 寿命で残るため、reset しないと ``pytest -n auto`` の
+    worker 割当やテスト順によって stderr 内容が変わる。
+    """
+    from kaji_harness import config as _config
+
+    monkeypatch.setattr(_config, "_LOCAL_PROVIDER_DEPRECATION_EMITTED", False)

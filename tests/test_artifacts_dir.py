@@ -19,6 +19,7 @@ import pytest
 from kaji_harness.artifacts import _try_resolve_main_worktree, resolve_artifacts_dir
 from kaji_harness.commands.main import main
 from kaji_harness.config import (
+    LOCAL_PROVIDER_DEPRECATION_WARNING,
     ExecutionConfig,
     GitHubProviderConfig,
     KajiConfig,
@@ -317,7 +318,8 @@ class TestConfigArtifactsDirCommand:
         rc, stdout, stderr = _run_cli(["config", "artifacts-dir", "--workdir", str(feat_wt)])
         assert rc == 0, stderr
         assert stdout == f"{main_wt.resolve() / '.kaji-artifacts'}\n"
-        assert stderr == ""
+        # #438: fixture の provider は local のため、非推奨警告のみが stderr に出る。
+        assert stderr == f"{LOCAL_PROVIDER_DEPRECATION_WARNING}\n"
         # cwd 相対では feature worktree 配下を指してしまうことの明示（回帰の核心）。
         assert stdout.strip() != str(feat_wt / ".kaji-artifacts")
 
