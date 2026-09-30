@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-01
+
+This release makes the incident label names configurable (with new `kaji:`
+default names), consolidates starter-sync tracking into one Issue per starter,
+adds the trial `dev-small` workflow, lets `kaji issue resolve-verdict` fall back
+to run artifacts, and deprecates the local provider.
+
 ### BREAKING CHANGE
 
 - **Default names of the failure-triage incident labels** now carry a `kaji:`
@@ -23,6 +30,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     default configuration will file duplicate incident Issues, and GitHub
     rejects the request if a configured label does not exist (recording is
     fail-open, so triage continues with a WARNING).
+  - **How to check whether you are affected**: you are affected if
+    `.kaji/config.toml` has no `[incident]` section and the repository uses
+    the old labels (`gh label list --search incident` lists `incident` or
+    `incident:*` labels without the `kaji:` prefix).
   - **How to keep the old names**: add this to `.kaji/config.toml`:
 
     ```toml
@@ -93,6 +104,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to the latest attempt of that run (or its recorded recovery parent when the
   step never ran) and return JSON with `source: "artifact"`, `run_id`,
   `requested_run_id`, `attempt`, `verdict_path` and `ended_at` (#426).
+- The standard skills and `docs/dev/baseline-check.md` now pass `--worktree`
+  to `baseline_precheck --compare` / `--evaluate`, because agent steps do not
+  receive `KAJI_WORKTREE_DIR` and could otherwise measure the wrong checkout
+  (#430).
+
 ### Deprecated
 
 - The local provider (`provider.type = "local"`) and the local-only commands
@@ -104,6 +120,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to `local` or one of those commands runs; stdout and exit codes are
   unchanged. Migrate to the GitHub provider (`provider.type = "github"`)
   (#438).
+
+### Changed
+
+- The official workflows (`.kaji/wf/official/`) now run the Codex steps that
+  used `gpt-5.6-sol` on `gpt-6.1-sol`, and five of those steps move from
+  `effort: high` to `effort: medium`. Steps on `gpt-5.6-luna` are unchanged
+  (#436).
+
 ## [0.20.1] - 2026-08-30
 
 This patch release hardens Herdr startup on fresh panes and restores statusline
