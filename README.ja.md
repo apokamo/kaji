@@ -197,7 +197,8 @@ git_remote = "origin"
 [設定リファレンス](docs/reference/configuration.md)（英語正本、[日本語版](docs/reference/configuration.ja.md)）を参照してください。
 
 > [!WARNING]
-> local provider は**非推奨**で、次の kaji リリースで削除されます。`provider.type` が
+> local provider は**非推奨**です。非推奨化を含むリリースでは引き続き利用でき、非推奨警告を
+> 1 リリース出した後の後続の kaji リリースで削除する予定です。`provider.type` が
 > `local` に解決されたとき、または `kaji local init` / `kaji sync from-github` /
 > `kaji sync status` の実行時に、kaji は stderr に非推奨警告を出します。GitHub provider
 > （`provider.type = "github"`）へ移行してください。

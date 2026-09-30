@@ -5,8 +5,9 @@ Language: English | [日本語](local-mode.ja.md)
 > [!WARNING]
 > **Deprecated.** The local provider (`provider.type = "local"`) and the
 > local-only commands (`kaji local init`, `kaji sync from-github`,
-> `kaji sync status`) are deprecated and will be removed in the next kaji
-> release. kaji prints a deprecation warning to stderr (stdout and exit codes
+> `kaji sync status`) are deprecated. They remain available in the release that
+> introduces the deprecation; removal is planned for a subsequent kaji release
+> after one release of deprecation warnings. kaji prints a deprecation warning to stderr (stdout and exit codes
 > are unchanged). Migrate to the GitHub provider (`provider.type = "github"`).
 
 A minimal guide for operating `kaji` without GitHub. Create an overlay with

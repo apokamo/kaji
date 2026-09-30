@@ -81,7 +81,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - The local provider (`provider.type = "local"`) and the local-only commands
   `kaji local init`, `kaji sync from-github`, and `kaji sync status` are
-  deprecated and will be removed in the next release. kaji now prints a
+  deprecated starting with this release. They remain available in this
+  release; removal is planned for a subsequent release after one release of
+  deprecation warnings (no removal version is fixed yet). kaji now prints a
   deprecation warning to stderr (once per process) when the provider resolves
   to `local` or one of those commands runs; stdout and exit codes are
   unchanged. Migrate to the GitHub provider (`provider.type = "github"`)

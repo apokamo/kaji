@@ -20,7 +20,8 @@ from .errors import ConfigLoadError, ConfigNotFoundError
 LOCAL_PROVIDER_DEPRECATION_WARNING = (
     'WARNING: provider.type = "local" and the local-only commands '
     "(`kaji local init`, `kaji sync from-github`, `kaji sync status`) are deprecated "
-    "and will be removed in the next kaji release. Migrate to the GitHub provider "
+    "starting with this release; removal is planned for a subsequent kaji release "
+    "after one release of deprecation warnings. Migrate to the GitHub provider "
     '(provider.type = "github"). See docs/cli-guides/local-mode.md.'
 )
 _LOCAL_PROVIDER_DEPRECATION_EMITTED = False

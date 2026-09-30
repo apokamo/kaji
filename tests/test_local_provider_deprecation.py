@@ -47,7 +47,12 @@ def _write_config(repo: Path, provider: str) -> Path:
 @pytest.mark.small
 def test_warning_names_removal_and_migration_target() -> None:
     assert "deprecated" in LOCAL_PROVIDER_DEPRECATION_WARNING
-    assert "removed in the next kaji release" in LOCAL_PROVIDER_DEPRECATION_WARNING
+    assert "deprecated starting with this release" in LOCAL_PROVIDER_DEPRECATION_WARNING
+    assert (
+        "removal is planned for a subsequent kaji release after one release of "
+        "deprecation warnings" in LOCAL_PROVIDER_DEPRECATION_WARNING
+    )
+    assert "next kaji release" not in LOCAL_PROVIDER_DEPRECATION_WARNING
     assert 'provider.type = "github"' in LOCAL_PROVIDER_DEPRECATION_WARNING
 
 
