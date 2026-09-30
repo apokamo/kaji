@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from kaji_harness.config import IncidentConfig
 from kaji_harness.interactive_terminal import _terminal_exit_detail
 from kaji_harness.models import Step, Workflow
 from kaji_harness.providers.models import Comment, Issue
@@ -177,6 +178,7 @@ def _handler(
         workdir=tmp_path,
         provider=provider,  # type: ignore[arg-type]
         auto_recover=auto_recover,
+        incident=IncidentConfig(),
         wait_seconds=wait_seconds,
         sleep=sleep or (lambda _s: None),
         child_launcher=child_launcher or (lambda _argv, _cwd: 0),

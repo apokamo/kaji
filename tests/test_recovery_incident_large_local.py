@@ -14,6 +14,7 @@ large_forge（実 GitHub API 疎通）は破壊的副作用（実インシデン
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 from pathlib import Path
@@ -34,6 +35,23 @@ import sys
 # argv: gh api --paginate --slurp <query>
 args = sys.argv[1:]
 query = args[-1] if args else ""
+
+import os
+
+_log = os.environ.get("STUB_GH_ARGV_LOG")
+if _log:
+    with open(_log, "a", encoding="utf-8") as _f:
+        _f.write(json.dumps(args) + "\\n")
+
+if args[:2] == ["issue", "create"]:
+    sys.stdout.write("https://github.com/owner/name/issues/901\\n")
+    sys.exit(0)
+if args[:2] == ["issue", "view"]:
+    sys.stdout.write(json.dumps({
+        "number": 901, "title": "t", "body": "b", "state": "OPEN",
+        "labels": [{"name": "kaji:incident"}], "comments": [],
+    }))
+    sys.exit(0)
 
 if "/comments" in query:
     # 100 件 + 1 件 = 2 page。2 種の run_id marker（+ crash window 二重投稿 1 件）。
@@ -88,3 +106,36 @@ def test_list_issue_comments_all_unique_run_id_derivation(stub_gh: Path, tmp_pat
     # crash window の重複 marker を含めても、hash 一致のユニーク run_id は 2 種。
     run_ids = posted_run_ids(comments, "a" * 64)
     assert run_ids == {"260712010000", "noise1"}
+
+
+@pytest.fixture
+def argv_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    log = tmp_path / "argv.log"
+    monkeypatch.setenv("STUB_GH_ARGV_LOG", str(log))
+    return log
+
+
+def _recorded_argv(log: Path) -> list[list[str]]:
+    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+
+
+def test_search_issues_all_passes_encoded_kaji_label_through_real_process(
+    stub_gh: Path, argv_log: Path, tmp_path: Path
+) -> None:
+    provider = GitHubProvider(repo="owner/name", repo_root=tmp_path / "main")
+    provider.search_issues_all(labels=["kaji:incident"], state="all")
+    argv = _recorded_argv(argv_log)[0]
+    assert argv[:3] == ["api", "--paginate", "--slurp"]
+    assert "labels=kaji%3Aincident" in argv[-1]
+
+
+def test_create_issue_passes_configured_label_names_as_label_args(
+    stub_gh: Path, argv_log: Path, tmp_path: Path
+) -> None:
+    provider = GitHubProvider(repo="owner/name", repo_root=tmp_path / "main")
+    provider.create_issue(
+        title="t", body="b", labels=["kaji:incident", "kaji:incident:investigating"]
+    )
+    create = next(a for a in _recorded_argv(argv_log) if a[:2] == ["issue", "create"])
+    label_values = [create[i + 1] for i, tok in enumerate(create) if tok == "--label"]
+    assert label_values == ["kaji:incident", "kaji:incident:investigating"]

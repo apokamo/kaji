@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from kaji_harness.config import IncidentConfig
 from kaji_harness.models import Step, Workflow
 from kaji_harness.providers.models import Comment, Issue, Label
 from kaji_harness.recovery.handler import RecoveryHandler
@@ -159,7 +160,12 @@ class _IncidentProvider:
         self.searches.append(list(labels))
         if self._search_error is not None:
             raise self._search_error
-        return list(self._issues)
+        # GitHub の labels 絞り込みは AND。要求ラベルをすべて持つ Issue だけ返す。
+        return [
+            issue
+            for issue in self._issues
+            if all(want in {lb.name for lb in issue.labels} for want in labels)
+        ]
 
     def list_issue_comments_all(self, issue_id: str) -> list[Comment]:
         self.comment_lists.append(issue_id)
@@ -184,6 +190,7 @@ def _handler(
     auto_recover: bool = False,
     child_launcher=None,
     stderr=None,
+    incident: IncidentConfig | None = None,
 ) -> RecoveryHandler:
     return RecoveryHandler(
         workflow=_workflow(),
@@ -195,6 +202,7 @@ def _handler(
         workdir=tmp_path,
         provider=provider,  # type: ignore[arg-type]
         auto_recover=auto_recover,
+        incident=incident or IncidentConfig(),
         wait_seconds=0,
         sleep=lambda _s: None,
         child_launcher=child_launcher or (lambda _a, _c: 0),
@@ -212,7 +220,7 @@ def _existing_incident_issue(
     *,
     issue_id: str = "800",
     state: str = "open",
-    labels: tuple[str, ...] = ("incident",),
+    labels: tuple[str, ...] = ("kaji:incident",),
 ) -> Issue:
     """当該 run の署名と同一の identity marker を持つ既存 incident issue を構築する。"""
     snap = collect_snapshot(
@@ -247,7 +255,7 @@ def test_new_incident_is_created_with_labels_and_first_occurrence(tmp_path: Path
 
     assert len(provider.created) == 1
     _title, _body, labels = provider.created[0]
-    assert labels == ["incident", "incident:investigating"]
+    assert labels == ["kaji:incident", "kaji:incident:investigating"]
     occ = _occurrence_comments(provider)
     assert len(occ) == 1  # 起票直後の初回 occurrence コメント
     assert "`1`" in occ[0][1]  # N=1
@@ -535,6 +543,7 @@ def test_transient_close_on_created_and_child_complete(tmp_path: Path) -> None:
         workdir=tmp_path,
         provider=provider,  # type: ignore[arg-type]
         auto_recover=True,
+        incident=IncidentConfig(),
         wait_seconds=RECOVERY_WAIT_SECONDS,
         sleep=lambda _s: None,
         child_launcher=_launch,
@@ -548,8 +557,8 @@ def test_transient_close_on_created_and_child_complete(tmp_path: Path) -> None:
     assert provider.edits, "transient label edit expected"
     eid, add, remove = provider.edits[0]
     assert eid == incident_id
-    assert "incident:cause:transient" in add
-    assert "incident:investigating" in remove
+    assert "kaji:incident:cause:transient" in add
+    assert "kaji:incident:investigating" in remove
     assert provider.closed and provider.closed[0][0] == incident_id
     persisted = read_recovery_json(run_dir / RECOVERY_FILE)
     assert persisted.incident_transient_closed is True
@@ -572,6 +581,7 @@ def test_recurred_incident_is_not_transient_closed(tmp_path: Path) -> None:
         workdir=tmp_path,
         provider=provider,  # type: ignore[arg-type]
         auto_recover=True,
+        incident=IncidentConfig(),
         wait_seconds=RECOVERY_WAIT_SECONDS,
         sleep=lambda _s: None,
         child_launcher=lambda _a, _c: 0,
@@ -865,3 +875,99 @@ def test_non_github_provider_records_locally_only(tmp_path: Path) -> None:
 
     assert provider.created == []  # 起票 no-op
     assert occurrences_path(tmp_path / ".kaji-artifacts").is_file()  # ローカル記録のみ
+
+
+# --- ラベル名の設定化（Issue #434） ---
+
+_LEGACY = IncidentConfig(
+    kind_label="incident",
+    initial_status_label="incident:investigating",
+    transient_label="incident:cause:transient",
+)
+_CUSTOM = IncidentConfig(
+    kind_label="ops:kaji-incident",
+    initial_status_label="ops:kaji-investigating",
+    transient_label="ops:kaji-transient",
+    labels_guide_path="docs/ops/incident-guide.md",
+)
+
+
+def test_custom_incident_config_drives_create_and_search_labels(tmp_path: Path) -> None:
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_run(tmp_path)
+    provider = _IncidentProvider()
+
+    _handler(tmp_path, run_dir, provider=provider, incident=_CUSTOM).run()
+
+    assert provider.searches == [["ops:kaji-incident"]]
+    assert len(provider.created) == 1
+    _title, body, labels = provider.created[0]
+    assert labels == ["ops:kaji-incident", "ops:kaji-investigating"]
+    assert "[`docs/ops/incident-guide.md`](docs/ops/incident-guide.md)" in body
+
+
+def test_default_incident_config_uses_kaji_prefixed_labels_and_guide(tmp_path: Path) -> None:
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_run(tmp_path)
+    provider = _IncidentProvider()
+
+    _handler(tmp_path, run_dir, provider=provider).run()
+
+    assert provider.searches == [["kaji:incident"]]
+    _title, body, labels = provider.created[0]
+    assert labels == ["kaji:incident", "kaji:incident:investigating"]
+    assert "[`docs/dev/incident-labels.md`](docs/dev/incident-labels.md)" in body
+
+
+def test_custom_transient_labels_used_on_transient_close(tmp_path: Path) -> None:
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_run(tmp_path)
+    provider = _IncidentProvider()
+
+    handler = _handler(
+        tmp_path,
+        run_dir,
+        provider=provider,
+        auto_recover=True,
+        incident=_CUSTOM,
+    )
+    # auto_recover の待機は固定値。_handler は wait_seconds=0 で注入済み。
+    result = handler.run()
+
+    assert result.decision.decision == "resume"
+    assert provider.edits == [("901", ["ops:kaji-transient"], ["ops:kaji-investigating"])]
+    assert provider.closed and provider.closed[0][0] == "901"
+
+
+def test_legacy_named_incident_is_not_found_with_default_config(tmp_path: Path) -> None:
+    """旧名 ``incident`` だけを持つ既存 incident は二重検索しないため、新規起票になる。"""
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_run(tmp_path)
+    legacy = _existing_incident_issue(tmp_path, run_dir, issue_id="800", labels=("incident",))
+    provider = _IncidentProvider(issues=[legacy])
+
+    result = _handler(tmp_path, run_dir, provider=provider).run()
+
+    assert provider.searches == [["kaji:incident"]]
+    assert len(provider.created) == 1
+    assert result.decision.incident_action == "created"
+
+
+def test_legacy_named_incident_recurs_with_legacy_config(tmp_path: Path) -> None:
+    """旧名を設定で指定すれば、同じ既存 incident を見つけて recur になる（kaji 自身の運用）。"""
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_run(tmp_path)
+    legacy = _existing_incident_issue(tmp_path, run_dir, issue_id="800", labels=("incident",))
+    provider = _IncidentProvider(issues=[legacy])
+
+    result = _handler(tmp_path, run_dir, provider=provider, incident=_LEGACY).run()
+
+    assert provider.searches == [["incident"]]
+    assert provider.created == []
+    assert result.decision.incident_action == "recurred"
+    assert result.decision.incident_ref is not None

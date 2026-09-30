@@ -19,9 +19,6 @@ from __future__ import annotations
 from .classify import classify_failure
 from .handler import RecoveryHandler, RecoveryResult, plan_recovery
 from .incident import (
-    INCIDENT_CAUSE_TRANSIENT,
-    INCIDENT_LABEL,
-    INCIDENT_STATUS_INVESTIGATING,
     OCCURRENCE_SCHEMA_VERSION,
     BackfillEntry,
     FuzzyCandidate,
@@ -79,9 +76,6 @@ from .snapshot import FailureEvent, FailureSnapshot, GitStateSummary, collect_sn
 __all__ = [
     "FAILURE_CAUSES",
     "FINGERPRINT_LIMIT",
-    "INCIDENT_CAUSE_TRANSIENT",
-    "INCIDENT_LABEL",
-    "INCIDENT_STATUS_INVESTIGATING",
     "NON_RESUMABLE_SKILLS",
     "OCCURRENCE_SCHEMA_VERSION",
     "RECOVERY_BUDGET",

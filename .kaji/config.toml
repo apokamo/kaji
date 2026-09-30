@@ -13,6 +13,13 @@ agent_runner = "headless"           # "headless"（既定） | "interactive_term
 # interactive_terminal_backend = "tmux"  # "tmux"（既定） | "herdr"
 # interactive_terminal_close_on_verdict = true   # interactive_terminal のときのみ作用（headless では無効）
 
+# incident ラベルは移行前のため、既定（kaji: 接頭辞付き）ではなく旧名を明示する（Issue #434）。
+# ラベル移行はフォローアップ Issue で扱い、その時点でこの section を撤去する。
+[incident]
+kind_label = "incident"
+initial_status_label = "incident:investigating"
+transient_label = "incident:cause:transient"
+
 # Repository default. 各 user は `kaji local init` で
 # .kaji/config.local.toml (gitignored) overlay を作って provider 切替できる。
 [provider]

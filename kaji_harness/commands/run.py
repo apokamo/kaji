@@ -283,6 +283,7 @@ def _run_failure_triage(
         workdir=workdir,
         provider=provider,
         auto_recover=config.execution.auto_recover,
+        incident=config.incident,
     )
     try:
         result = handler.run()

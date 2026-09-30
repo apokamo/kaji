@@ -107,6 +107,7 @@ def cmd_recover(args: argparse.Namespace) -> int:
         workdir=start_dir,
         provider=provider,
         auto_recover=args.auto_recover,
+        incident=config.incident,
     )
     try:
         handler.run()

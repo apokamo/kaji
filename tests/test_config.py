@@ -17,8 +17,9 @@ import sys
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
-from kaji_harness.config import KajiConfig, PathsConfig
+from kaji_harness.config import IncidentConfig, KajiConfig, PathsConfig
 from kaji_harness.errors import ConfigLoadError, ConfigNotFoundError
 
 # ============================================================
@@ -1448,3 +1449,146 @@ class TestExecutionOverlay:
             )
         )
         assert config.execution.agent_runner == "interactive_terminal"
+
+
+def _write_incident_config(
+    tmp_path: Path, incident_body: str | None, local_body: str | None = None
+) -> Path:
+    """Write a minimal config with an optional ``[incident]`` table."""
+    config_file = _write_config(
+        tmp_path, execution_body="default_timeout = 1800", local_body=local_body
+    )
+    if incident_body is not None:
+        with open(config_file, "a") as f:
+            f.write(f"\n[incident]\n{incident_body}\n")
+    return config_file
+
+
+@pytest.mark.small
+class TestIncidentConfig:
+    """``[incident]`` section: defaults, overrides, and validation (Issue #434)."""
+
+    def test_defaults_when_section_absent(self, tmp_path: Path) -> None:
+        config = KajiConfig._load(_write_incident_config(tmp_path, None))
+        assert config.incident == IncidentConfig()
+        assert config.incident.kind_label == "kaji:incident"
+        assert config.incident.initial_status_label == "kaji:incident:investigating"
+        assert config.incident.transient_label == "kaji:incident:cause:transient"
+        assert config.incident.labels_guide_path == "docs/dev/incident-labels.md"
+
+    def test_empty_section_uses_defaults(self, tmp_path: Path) -> None:
+        config = KajiConfig._load(_write_incident_config(tmp_path, ""))
+        assert config.incident == IncidentConfig()
+
+    def test_all_keys_override(self, tmp_path: Path) -> None:
+        config = KajiConfig._load(
+            _write_incident_config(
+                tmp_path,
+                'kind_label = "incident"\n'
+                'initial_status_label = "incident:investigating"\n'
+                'transient_label = "incident:cause:transient"\n'
+                'labels_guide_path = "docs/ops/labels.md"',
+            )
+        )
+        assert config.incident.kind_label == "incident"
+        assert config.incident.initial_status_label == "incident:investigating"
+        assert config.incident.transient_label == "incident:cause:transient"
+        assert config.incident.labels_guide_path == "docs/ops/labels.md"
+
+    def test_partial_override_keeps_other_defaults(self, tmp_path: Path) -> None:
+        config = KajiConfig._load(_write_incident_config(tmp_path, 'kind_label = "ops incident"'))
+        assert config.incident.kind_label == "ops incident"
+        assert config.incident.initial_status_label == "kaji:incident:investigating"
+        assert config.incident.transient_label == "kaji:incident:cause:transient"
+
+    def test_incident_section_not_table_raises(self, tmp_path: Path) -> None:
+        config_file = _write_config(tmp_path, execution_body="default_timeout = 1800")
+        text = config_file.read_text()
+        # Top-level scalar ``incident`` must precede any table header.
+        config_file.write_text('incident = "x"\n' + text)
+        with pytest.raises(ConfigLoadError, match=r"\[incident\] must be a table"):
+            KajiConfig._load(config_file)
+
+    @pytest.mark.parametrize(
+        ("body", "key"),
+        [
+            ("kind_label = 1", "kind_label"),
+            ("initial_status_label = true", "initial_status_label"),
+            ("transient_label = 3", "transient_label"),
+            ("labels_guide_path = 1", "labels_guide_path"),
+            ('kind_label = ""', "kind_label"),
+            ('initial_status_label = "   "', "initial_status_label"),
+            ('transient_label = ""', "transient_label"),
+            ('kind_label = " incident"', "kind_label"),
+            ('initial_status_label = "incident "', "initial_status_label"),
+            ('kind_label = "a,b"', "kind_label"),
+            ('transient_label = "a,b"', "transient_label"),
+            ('initial_status_label = "a\\nb"', "initial_status_label"),
+            ('labels_guide_path = ""', "labels_guide_path"),
+            ('labels_guide_path = "  "', "labels_guide_path"),
+            ('labels_guide_path = "docs/a b.md"', "labels_guide_path"),
+            ('labels_guide_path = "docs/`x`.md"', "labels_guide_path"),
+            ('labels_guide_path = "docs/(x).md"', "labels_guide_path"),
+            ('labels_guide_path = "docs/x)y.md"', "labels_guide_path"),
+            ('labels_guide_path = "docs/x\\ny.md"', "labels_guide_path"),
+        ],
+    )
+    def test_invalid_value_raises_config_load_error(
+        self, tmp_path: Path, body: str, key: str
+    ) -> None:
+        with pytest.raises(ConfigLoadError) as exc_info:
+            KajiConfig._load(_write_incident_config(tmp_path, body))
+        assert f"incident.{key}" in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, ValidationError)
+
+    @pytest.mark.parametrize("key", ["kind_label", "initial_status_label", "transient_label"])
+    @pytest.mark.parametrize("value", ['ops"incident', '"incident"'])
+    def test_double_quote_rejected_in_each_label(
+        self, tmp_path: Path, key: str, value: str
+    ) -> None:
+        body = f"{key} = '{value}'"
+        with pytest.raises(ConfigLoadError) as exc_info:
+            KajiConfig._load(_write_incident_config(tmp_path, body))
+        assert f"incident.{key}" in str(exc_info.value)
+        assert '"' in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            'kind_label = "x"\ninitial_status_label = "x"',
+            'initial_status_label = "x"\ntransient_label = "x"',
+            'kind_label = "x"\ntransient_label = "x"',
+            'kind_label = "Kaji:Incident:Investigating"',  # casefold duplicate with default
+            'kind_label = "KAJI:INCIDENT:CAUSE:TRANSIENT"',
+        ],
+    )
+    def test_duplicate_labels_rejected_case_insensitively(self, tmp_path: Path, body: str) -> None:
+        with pytest.raises(ConfigLoadError, match="incident"):
+            KajiConfig._load(_write_incident_config(tmp_path, body))
+
+    def test_unknown_key_rejected(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigLoadError) as exc_info:
+            KajiConfig._load(_write_incident_config(tmp_path, 'kind_lable = "incident"'))
+        assert "incident.kind_lable" in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, ValidationError)
+
+    def test_multiple_errors_joined(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigLoadError) as exc_info:
+            KajiConfig._load(
+                _write_incident_config(tmp_path, 'kind_label = ""\ntransient_label = "a,b"')
+            )
+        message = str(exc_info.value)
+        assert "incident.kind_label" in message
+        assert "incident.transient_label" in message
+        assert "; " in message
+
+    def test_overlay_incident_section_is_ignored(self, tmp_path: Path) -> None:
+        config = KajiConfig._load(
+            _write_incident_config(
+                tmp_path,
+                'kind_label = "tracked-incident"',
+                local_body='[incident]\nkind_label = "overlay-incident"\ntransient_label = ""\n',
+            )
+        )
+        assert config.incident.kind_label == "tracked-incident"
+        assert config.incident.transient_label == "kaji:incident:cause:transient"

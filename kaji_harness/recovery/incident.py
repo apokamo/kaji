@@ -23,6 +23,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..config import IncidentConfig
 from ..providers.models import Comment, Issue
 from .report import sanitize_evidence
 from .signature import (
@@ -38,16 +39,8 @@ OCCURRENCE_SCHEMA_VERSION = 1
 INCIDENTS_DIRNAME = "incidents"
 OCCURRENCES_FILE = "occurrences.jsonl"
 
-#: 起票時に必ず付与するラベル（種別キー + status 初期値）。
-INCIDENT_LABEL = "incident"
-INCIDENT_STATUS_INVESTIGATING = "incident:investigating"
-INCIDENT_CAUSE_TRANSIENT = "incident:cause:transient"
-
 #: あいまい候補の列挙上限。
 FUZZY_MAX = 5
-
-#: incident ラベル運用ガイドへのリンク。
-_LABELS_GUIDE = "docs/dev/incident-labels.md"
 
 _FINGERPRINT_FENCE = "kaji-fingerprint"
 
@@ -162,10 +155,6 @@ class IncidentCandidate:
     labels: tuple[str, ...]
     signature: IncidentSignature | None
 
-    @property
-    def is_transient(self) -> bool:
-        return INCIDENT_CAUSE_TRANSIENT in self.labels
-
 
 def parse_candidates(issues: list[Issue]) -> list[IncidentCandidate]:
     """search 結果の ``Issue`` を ``IncidentCandidate`` に変換する（identity marker 厳格 parse）。"""
@@ -198,13 +187,17 @@ def _issue_sort_key(issue_id: str) -> tuple[int, str]:
 
 
 def plan_incident_action(
-    signature: IncidentSignature, candidates: list[IncidentCandidate]
+    signature: IncidentSignature,
+    candidates: list[IncidentCandidate],
+    *,
+    transient_label: str,
 ) -> IncidentAction:
     """署名同値の候補を state / ラベルで分岐し、実行アクションを決める（純関数）。
 
     優先順（上から評価）: open 一致 → closed+transient 一致 → closed 人間 resolve 一致
     （→ regression 新規）→ 一致なし（→ 新規）。同分岐内に複数一致した場合は issue 番号
-    最小（最古）を選び、残りを ``also_matched`` に記録する（決定論）。
+    最小（最古）を選び、残りを ``also_matched`` に記録する（決定論）。transient 判定は
+    候補の labels が ``transient_label`` を含むかで行う（旧名の互換判定は持たない）。
     """
     matched = [c for c in candidates if c.signature is not None and c.signature.matches(signature)]
 
@@ -212,11 +205,14 @@ def plan_incident_action(
     if open_matches:
         return _recur(open_matches)
 
-    transient_closed = [c for c in matched if c.state != "open" and c.is_transient]
+    def is_transient(c: IncidentCandidate) -> bool:
+        return transient_label in c.labels
+
+    transient_closed = [c for c in matched if c.state != "open" and is_transient(c)]
     if transient_closed:
         return _recur(transient_closed)
 
-    resolved_closed = [c for c in matched if c.state != "open" and not c.is_transient]
+    resolved_closed = [c for c in matched if c.state != "open" and not is_transient(c)]
     if resolved_closed:
         ordered = sorted(resolved_closed, key=lambda c: _issue_sort_key(c.issue_id))
         return IncidentAction(
@@ -390,7 +386,7 @@ def _fuzzy_lines(fuzzy: tuple[FuzzyCandidate, ...]) -> list[str]:
 
 
 def render_incident_issue(
-    ctx: IncidentContext, *, regression_of: str | None = None
+    ctx: IncidentContext, *, regression_of: str | None = None, labels_guide_path: str
 ) -> tuple[str, str]:
     """新規 incident イシューの ``(title, body)`` を返す（identity marker が本文 1 行目）。
 
@@ -436,7 +432,7 @@ def render_incident_issue(
             f"- 過去に人間が resolve 済みの同一署名イシュー `#{regression_of}` の"
             "リグレッションの可能性がある。",
         ]
-    lines += ["", "---", "", f"ラベル運用ガイド: [`{_LABELS_GUIDE}`]({_LABELS_GUIDE})"]
+    lines += ["", "---", "", f"ラベル運用ガイド: [`{labels_guide_path}`]({labels_guide_path})"]
     return title, "\n".join(lines) + "\n"
 
 
@@ -559,12 +555,15 @@ def execute_incident_action(
     ctx: IncidentContext,
     local_records: list[OccurrenceRecord],
     existing_comments: list[Comment],
+    incident: IncidentConfig,
 ) -> IncidentOutcome:
     """照合結論を provider 操作に落とす。
 
     - ``create`` / ``create_regression``: ``create_issue`` → 直後に初回 occurrence コメント
       （起票 run の marker + ローカル backfill 分）を投稿する（投稿後 N ≥ 1）。
     - ``recur``: 追記先 1 件へ occurrence コメント 1 通（今回 + backfill markers）を追記する。
+
+    起票時のラベルと本文のガイドパスは ``incident`` 設定から組み立てる。
 
     provider は ``create_issue`` / ``comment_issue`` を持つ ``IssueProvider`` を想定する。
     例外は呼び出し側（handler）が fail-open で捕捉する。
@@ -597,11 +596,13 @@ def execute_incident_action(
 
     # create / create_regression
     regression_of = action.regression_of if action.kind == "create_regression" else None
-    title, body = render_incident_issue(ctx, regression_of=regression_of)
+    title, body = render_incident_issue(
+        ctx, regression_of=regression_of, labels_guide_path=incident.labels_guide_path
+    )
     issue = provider.create_issue(  # type: ignore[attr-defined]
         title=title,
         body=body,
-        labels=[INCIDENT_LABEL, INCIDENT_STATUS_INVESTIGATING],
+        labels=[incident.kind_label, incident.initial_status_label],
     )
     # 起票直後の初回 occurrence コメント（remote は空集合 = 全 backfill 対象）。
     marker_entries = backfill_entries(

@@ -107,3 +107,41 @@ def test_slurp_invalid_json_raises(provider: GitHubProvider) -> None:
     w, r = _patched(captured, "not json at all")
     with w, r, pytest.raises(GitHubProviderError, match="invalid JSON"):
         provider.search_issues_all(labels=["incident"])
+
+
+def _query_arg(cmd: list[str]) -> str:
+    return cmd[-1]
+
+
+def test_search_issues_all_percent_encodes_label_names(provider: GitHubProvider) -> None:
+    captured: list[list[str]] = []
+    w, r = _patched(captured, json.dumps([[]]))
+    with w, r:
+        provider.search_issues_all(labels=["kaji:incident"])
+    assert "labels=kaji%3Aincident" in _query_arg(captured[0])
+
+
+def test_search_issues_all_encodes_whitespace_in_label_names(provider: GitHubProvider) -> None:
+    captured: list[list[str]] = []
+    w, r = _patched(captured, json.dumps([[]]))
+    with w, r:
+        provider.search_issues_all(labels=["ops incident"])
+    query = _query_arg(captured[0])
+    assert "labels=ops%20incident" in query
+    assert " " not in query
+
+
+def test_search_issues_all_keeps_plain_label_unchanged(provider: GitHubProvider) -> None:
+    captured: list[list[str]] = []
+    w, r = _patched(captured, json.dumps([[]]))
+    with w, r:
+        provider.search_issues_all(labels=["incident"])
+    assert "labels=incident&" in _query_arg(captured[0])
+
+
+def test_search_issues_all_joins_multiple_labels_with_raw_comma(provider: GitHubProvider) -> None:
+    captured: list[list[str]] = []
+    w, r = _patched(captured, json.dumps([[]]))
+    with w, r:
+        provider.search_issues_all(labels=["a:b", "c d"])
+    assert "labels=a%3Ab,c%20d&" in _query_arg(captured[0])

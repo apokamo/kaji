@@ -28,6 +28,31 @@ incident ラベルは **種別キー 1 つ**と、直交する **2 軸**から�
 | `incident:cause:environment` | classification | 人間 | 実行環境起因。人間が付与 |
 | `incident:cause:transient` | classification | **第1層が自動付与** | 一過性。auto-resume 自己回復時に第1層が付与し即クローズ |
 
+## ラベル名は設定で変更できる（既定は `kaji:` 接頭辞付き）
+
+第1層が起票・検索・遷移で使うラベル名は `.kaji/config.toml` の `[incident]` で変更できる
+（key の仕様: [configuration.md § `[incident]`](../reference/configuration.md)）。
+未設定時の既定名は `kaji:` 接頭辞付きで、本番障害などの一般的な "incident" と区別しやすくするため。
+kaji のコードが参照するのは次の 3 ラベルだけで、残りは人間が付けるため設定 key を持たない
+（推奨する命名として下表に示す）。
+
+| 上の一覧の名前 | 既定名（推奨名） | 設定 key |
+|----------------|------------------|----------|
+| `incident` | `kaji:incident` | `kind_label` |
+| `incident:investigating` | `kaji:incident:investigating` | `initial_status_label` |
+| `incident:mitigated` | `kaji:incident:mitigated` | —（人間が付与） |
+| `incident:resolved` | `kaji:incident:resolved` | —（人間が付与） |
+| `incident:cause:internal` | `kaji:incident:cause:internal` | —（人間が付与） |
+| `incident:cause:upstream` | `kaji:incident:cause:upstream` | —（人間が付与） |
+| `incident:cause:environment` | `kaji:incident:cause:environment` | —（人間が付与） |
+| `incident:cause:transient` | `kaji:incident:cause:transient` | `transient_label` |
+
+- 旧名の互換検索・互換判定は持たない。重複検索は `kind_label` だけで行い、transient 判定は
+  `transient_label` だけで行う。旧名を使い続けるリポジトリは `[incident]` で旧名を指定する。
+- **kaji 自身のリポジトリは、ラベル移行までの間 `[incident]` に旧名（本書の一覧・以降の記述の名前）を
+  明示している**。そのため本書の以降の記述は旧名で書かれている。ラベルの移行は別 Issue で扱う。
+- incident 本文末尾のガイドリンクの参照先は `labels_guide_path` で変更できる。
+
 ## 自動付与の範囲（第1層がラベルに触れる箇所）
 
 第1層が**自動で**ラベルを操作するのは次の 2 箇所のみ。それ以外の遷移は人間が行う。
