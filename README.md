@@ -211,6 +211,14 @@ For the full `.kaji/config.toml` reference, including overlays and all
 available keys, see
 [Configuration Reference](docs/reference/configuration.md).
 
+> [!WARNING]
+> The local provider is **deprecated**. It remains available in the release that
+> introduces the deprecation; removal is planned for a subsequent kaji release
+> after one release of deprecation warnings. kaji prints a deprecation warning to stderr when `provider.type`
+> resolves to `local` or when `kaji local init` / `kaji sync from-github` /
+> `kaji sync status` runs. Migrate to the GitHub provider
+> (`provider.type = "github"`).
+
 For local issue storage without GitHub, use a local provider config and create a
 gitignored machine overlay:
 
