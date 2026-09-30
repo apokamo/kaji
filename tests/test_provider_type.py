@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from kaji_harness.commands.main import main as cli_main
-from kaji_harness.config import KajiConfig
+from kaji_harness.config import LOCAL_PROVIDER_DEPRECATION_WARNING, KajiConfig
 from kaji_harness.providers import actual_provider_type
 
 _BASE_CONFIG = """
@@ -102,7 +102,8 @@ def test_kaji_config_provider_type_local(tmp_path: Path) -> None:
     rc, stdout, stderr = _run_cli(["config", "provider-type", "--workdir", str(tmp_path)])
     assert rc == 0, stderr
     assert stdout == "local\n"
-    assert stderr == ""
+    # #438: local provider は非推奨。警告は stderr のみ（stdout は skill が解析する）。
+    assert LOCAL_PROVIDER_DEPRECATION_WARNING in stderr
 
 
 @pytest.mark.medium

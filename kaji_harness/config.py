@@ -7,6 +7,7 @@ The directory containing .kaji/ is the repo root.
 from __future__ import annotations
 
 import re
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,6 +16,28 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from .errors import ConfigLoadError, ConfigNotFoundError
+
+LOCAL_PROVIDER_DEPRECATION_WARNING = (
+    'WARNING: provider.type = "local" and the local-only commands '
+    "(`kaji local init`, `kaji sync from-github`, `kaji sync status`) are deprecated "
+    "starting with this release; removal is planned for a subsequent kaji release "
+    "after one release of deprecation warnings. Migrate to the GitHub provider "
+    '(provider.type = "github"). See docs/cli-guides/local-mode.md.'
+)
+_LOCAL_PROVIDER_DEPRECATION_EMITTED = False
+
+
+def warn_local_provider_deprecated() -> None:
+    """local provider の非推奨警告を stderr に 1 プロセス 1 回だけ出す。
+
+    設定読み込みは 1 回の CLI 実行の中で複数回行われるため、module-level flag で
+    重複を抑止する。stdout は skill が解析するため使わない。
+    """
+    global _LOCAL_PROVIDER_DEPRECATION_EMITTED
+    if _LOCAL_PROVIDER_DEPRECATION_EMITTED:
+        return
+    _LOCAL_PROVIDER_DEPRECATION_EMITTED = True
+    print(LOCAL_PROVIDER_DEPRECATION_WARNING, file=sys.stderr)
 
 
 @dataclass(frozen=True)
@@ -459,6 +482,8 @@ class KajiConfig:
                 path,
                 f"provider.type must be 'github' or 'local', got {ptype!r}",
             )
+        if ptype == "local":
+            warn_local_provider_deprecated()
 
         github_raw = merged.get("github") or {}
         if not isinstance(github_raw, dict):
