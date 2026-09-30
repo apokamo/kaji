@@ -77,6 +77,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   step. It is repository-specific, explicitly selected, and not published to
   the starters. The standard `dev` workflow is unchanged (#427).
 
+- Added `--run <run_id>` and `--current-verdict-path <path>` to `kaji issue
+  resolve-verdict` to give it a run context, and a new exit code `7` for
+  "the run's latest attempt artifact is unusable" (`verdict.yaml` missing or
+  corrupt, or `result.json` abnormal or contradicting it). Exit codes `4`-`6`
+  and the marker output are unchanged (#426).
+
+### Fixed
+
+- `kaji issue resolve-verdict` no longer stops with exit 4 when the producer
+  step already saved a harness-managed `verdict.yaml` but the verdict marker
+  comment is missing. The marker still wins when it exists; only when it is
+  absent and a run context is known (`--run`, `--current-verdict-path`, or the
+  `KAJI_VERDICT_PATH` that the runner injects into exec steps) does it fall back
+  to the latest attempt of that run (or its recorded recovery parent when the
+  step never ran) and return JSON with `source: "artifact"`, `run_id`,
+  `requested_run_id`, `attempt`, `verdict_path` and `ended_at` (#426).
 ### Deprecated
 
 - The local provider (`provider.type = "local"`) and the local-only commands
@@ -88,7 +104,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to `local` or one of those commands runs; stdout and exit codes are
   unchanged. Migrate to the GitHub provider (`provider.type = "github"`)
   (#438).
-
 ## [0.20.1] - 2026-08-30
 
 This patch release hardens Herdr startup on fresh panes and restores statusline

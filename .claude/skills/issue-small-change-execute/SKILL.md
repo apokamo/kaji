@@ -41,6 +41,8 @@ $ARGUMENTS = <issue_id>
 `step_id` が無い場合は verdict marker から phase を決める: `review-change` / `verify-change` の最新 `RETRY` が
 最新 `fix-change` 報告より新しければ `fix-change`、それ以外は `change`
 （`kaji issue resolve-verdict [issue_id] --step <step>` の `created_at` を比較）。
+marker が欠落して `source: "artifact"` で返った場合は
+`ended_at` を ISO 8601 の時刻として比較し、`null`（時刻不明）で比較が必要なら推測せず停止する。
 
 以降の `[worktree_dir]` は注入値または解決した絶対パス。Bash は毎回 `cd [worktree_dir] && ...` で実行する。
 

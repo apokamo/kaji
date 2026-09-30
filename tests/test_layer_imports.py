@@ -23,6 +23,7 @@ MODULE_LAYERS: dict[str, str] = {
     "kaji_harness.fsio": "foundation",
     "kaji_harness.providers": "provider",
     "kaji_harness.adapters": "application",
+    "kaji_harness.artifact_verdict": "application",
     "kaji_harness.artifacts": "application",
     "kaji_harness.baseline": "application",
     "kaji_harness.cli": "application",

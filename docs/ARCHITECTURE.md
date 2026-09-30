@@ -521,6 +521,27 @@ member ごとの workflow / child PID / run ID / exit code / 成功ゲートを�
 そのファイルの存在だけで「この run は recovery child である」= budget 消費済みが決まるため、
 chain をまたいだ retry storm が構造的に起きない。
 
+#### `kaji issue resolve-verdict` の解決規則（Issue #426）
+
+`resolve-verdict` は provenance を返す読み取り専用 CLI で、runner の `resolve_verdict()` とは独立している。
+
+- **marker 優先**: Issue コメントの verdict marker が存在すれば従来どおり解決し、artifact は一切読まない。
+  出力は `{step, status, meta, created_at}` で不変。最新 marker 不正（exit 5）・必須 meta 欠落（exit 6）も
+  artifact では救済しない。コメント取得失敗も artifact で迂回しない
+- **artifact fallback**: marker が無く run コンテキストがある場合だけ、その run の
+  `steps/<step>/attempt-NNN/verdict.yaml` を読む。run コンテキストは `--run <run_id>`（main worktree 基準の
+  artifacts dir を遅延解決）、`--current-verdict-path <verdict_path>`、環境変数 `KAJI_VERDICT_PATH` の順で
+  特定する（env が不正なら「特定不能」扱いで exit 4）
+- **run / attempt の選択**: 対象 step の `attempt-NNN` が 1 つも無い場合だけ、`recovery-chain.json` の
+  `parent_run_id` を辿る（同じ runs dir の他 run は探索しない。不正・循環は exit 4）。attempt があれば
+  数値最大の 1 件のみ採用し、`latest` symlink にも過去 attempt にも依存しない
+- **採用不能（exit 7）**: 最新 attempt の `verdict.yaml` が欠落・parse 不能・status 語彙外、または
+  `result.json` が読めない・異常終了（`synthetic: true` / `error` 非 null）・`verdict.yaml` と status 矛盾。
+  `result.json` の欠落は許容（`ended_at` は `null`）
+- **出力**: `{step, status, meta: {}, source: "artifact", run_id, requested_run_id, attempt, verdict_path,
+  ended_at}`。`ended_at` は `result.json` の記録値（tz 付き ISO 8601）で、取得できなければ `null`
+  （mtime や現在時刻で補完しない）。`--require-meta` 指定時は meta を推測せず exit 6
+
 ---
 
 ## CLI 対応マトリクス

@@ -205,7 +205,8 @@ cd [worktree_dir] && source .venv/bin/activate && make check
 
 **設計書を持たない dev-small 経路**: `draft/design/issue-[issue_id]-*.md` が存在せず、かつ
 `kaji issue resolve-verdict [issue_id] --step verify-change` または `--step review-change` が
-`status: PASS` を返す場合に限り、観点 1 / 3 / 4 / 5 の「設計書」を Issue 本文の決定事項・完了条件
+`status: PASS` を返す場合（harness 起動時は `--current-verdict-path [verdict_path]` を付けて marker
+欠落時に同じ run の `verdict.yaml` へ fall back させる。手動実行でコンテキスト変数が無い場合は付けない）に限り、観点 1 / 3 / 4 / 5 の「設計書」を Issue 本文の決定事項・完了条件
 （要件の正本）に読み替えて評価する（設計書の不在だけを理由に ❌ にしない）。この条件に該当しない場合は
 上記のとおり設計書を前提とする。
 

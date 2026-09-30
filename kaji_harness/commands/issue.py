@@ -4,13 +4,25 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..artifact_verdict import (
+    RunContext,
+    parse_run_id,
+    resolve_artifact_verdict,
+    run_context_from_env,
+    run_context_from_verdict_path,
+)
+from ..artifacts import resolve_artifacts_dir
 from ..errors import (
     ConfigLoadError,
     ConfigNotFoundError,
+    VerdictArtifactNotFoundError,
+    VerdictArtifactUnusableError,
     VerdictMarkerMalformedError,
     VerdictMarkerMetaMissingError,
     VerdictMarkerNotFoundError,
@@ -38,6 +50,7 @@ from .pr import _forward_to_gh
 EXIT_VERDICT_NOT_FOUND = 4
 EXIT_VERDICT_MALFORMED = 5
 EXIT_VERDICT_META_MISSING = 6
+EXIT_VERDICT_ARTIFACT_UNUSABLE = 7
 
 
 @dataclass(frozen=True)
@@ -151,7 +164,11 @@ def _handle_issue(raw_args: list[str]) -> int:
     if args and args[0] == "prepend-note":
         return _handle_issue_prepend_note(provider, args[1:])
     if args and args[0] == "resolve-verdict":
-        return _handle_issue_resolve_verdict(provider, args[1:])
+        return _handle_issue_resolve_verdict(
+            provider,
+            args[1:],
+            artifacts_dir_resolver=lambda: resolve_artifacts_dir(config),
+        )
 
     if isinstance(provider, LocalProvider):
         return _handle_issue_local(provider, raw_args)
@@ -266,21 +283,36 @@ def _has_verdict_flags(args: list[str]) -> bool:
     )
 
 
-def _handle_issue_resolve_verdict(provider: IssueProvider, rest: list[str]) -> int:
-    """Resolve the latest structured verdict marker for one Issue step.
+def _handle_issue_resolve_verdict(
+    provider: IssueProvider,
+    rest: list[str],
+    *,
+    artifacts_dir_resolver: Callable[[], Path] | None = None,
+) -> int:
+    """Resolve the latest structured verdict for one Issue step.
+
+    Issue comment markers always take priority. Only when no marker exists for the
+    step and a run context is available (``--run``, ``--current-verdict-path`` or the
+    ``KAJI_VERDICT_PATH`` environment variable) is the local ``verdict.yaml`` artifact
+    of that run consulted.
 
     Args:
         provider: Active provider implementation.
         rest: Arguments after ``kaji issue resolve-verdict``.
+        artifacts_dir_resolver: Lazily resolves the artifacts directory for ``--run``
+            (avoids running git unless the artifact fallback needs it).
 
     Returns:
-        Zero on success; distinct non-zero codes for not found, malformed, and
-        required-metadata-missing outcomes.
+        Zero on success; distinct non-zero codes for not found, malformed,
+        required-metadata-missing, and unusable-artifact outcomes.
     """
     parser = argparse.ArgumentParser(prog="kaji issue resolve-verdict", add_help=True)
     parser.add_argument("issue_id", type=str)
     parser.add_argument("--step", required=True, type=str)
     parser.add_argument("--require-meta", action="append", default=[])
+    run_group = parser.add_mutually_exclusive_group()
+    run_group.add_argument("--run", dest="run_id", default=None, type=str)
+    run_group.add_argument("--current-verdict-path", dest="current_verdict_path", default=None)
     namespace = parser.parse_args(rest)
 
     if isinstance(provider, LocalProvider):
@@ -300,15 +332,38 @@ def _handle_issue_resolve_verdict(provider: IssueProvider, rest: list[str]) -> i
             return EXIT_INVALID_INPUT
 
     try:
+        explicit_context = _explicit_run_context(namespace, issue_id)
+    except ValueError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+
+    try:
         comments = provider.list_issue_comments_all(issue_id)
+    except ValueError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+    except (GitHubProviderError, IssueNotFoundError) as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+
+    try:
         resolved = resolve_latest_verdict(
             comments,
             step=namespace.step,
             required_meta=tuple(namespace.require_meta),
         )
     except VerdictMarkerNotFoundError as exc:
-        sys.stderr.write(f"Error: {exc}\n")
-        return EXIT_VERDICT_NOT_FOUND
+        context = explicit_context or run_context_from_env(os.environ, issue_id)
+        if context is None:
+            sys.stderr.write(f"Error: {exc}\n")
+            return EXIT_VERDICT_NOT_FOUND
+        return _resolve_from_artifact(
+            context,
+            issue_id=issue_id,
+            step=namespace.step,
+            require_meta=bool(namespace.require_meta),
+            artifacts_dir_resolver=artifacts_dir_resolver,
+        )
     except VerdictMarkerMalformedError as exc:
         sys.stderr.write(f"Error: {exc}\n")
         return EXIT_VERDICT_MALFORMED
@@ -318,10 +373,52 @@ def _handle_issue_resolve_verdict(provider: IssueProvider, rest: list[str]) -> i
     except ValueError as exc:
         sys.stderr.write(f"Error: {exc}\n")
         return EXIT_INVALID_INPUT
-    except (GitHubProviderError, IssueNotFoundError) as exc:
-        sys.stderr.write(f"Error: {exc}\n")
-        return EXIT_RUNTIME_ERROR
     return _emit_json(dataclasses.asdict(resolved), jq_expr=None)
+
+
+def _explicit_run_context(namespace: argparse.Namespace, issue_id: str) -> RunContext | None:
+    """Build the run context from ``--run`` / ``--current-verdict-path`` (fail-fast).
+
+    Raises:
+        ValueError: The option value is malformed or belongs to another Issue.
+    """
+    if namespace.run_id is not None:
+        return RunContext(run_id=parse_run_id(namespace.run_id))
+    if namespace.current_verdict_path is not None:
+        return run_context_from_verdict_path(namespace.current_verdict_path, issue_id=issue_id)
+    return None
+
+
+def _resolve_from_artifact(
+    context: RunContext,
+    *,
+    issue_id: str,
+    step: str,
+    require_meta: bool,
+    artifacts_dir_resolver: Callable[[], Path] | None,
+) -> int:
+    """Resolve a verdict from ``verdict.yaml`` artifacts after a marker miss."""
+    run_dir = context.run_dir
+    if run_dir is None:
+        if artifacts_dir_resolver is None:
+            sys.stderr.write("Error: --run requires a resolvable artifacts directory\n")
+            return EXIT_INVALID_INPUT
+        run_dir = artifacts_dir_resolver() / issue_id / "runs" / context.run_id
+    try:
+        artifact = resolve_artifact_verdict(run_dir, step=step)
+    except VerdictArtifactNotFoundError as exc:
+        sys.stderr.write(f"Error: no verdict marker found for step {step!r}; {exc}\n")
+        return EXIT_VERDICT_NOT_FOUND
+    except VerdictArtifactUnusableError as exc:
+        sys.stderr.write(f"Error: artifact verdict for step {step!r} is unusable: {exc}\n")
+        return EXIT_VERDICT_ARTIFACT_UNUSABLE
+    if require_meta:
+        # Artifacts carry no marker metadata; never guess it.
+        sys.stderr.write(
+            f"Error: artifact verdict for step {step!r} cannot satisfy --require-meta\n"
+        )
+        return EXIT_VERDICT_META_MISSING
+    return _emit_json(artifact.as_json(), jq_expr=None)
 
 
 def _handle_issue_prepend_note(provider: IssueProvider, rest: list[str]) -> int:
