@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from ..config import KajiConfig
+from ..config import KajiConfig, warn_local_provider_deprecated
 from ..errors import ConfigLoadError, ConfigNotFoundError
 from .exit_codes import EXIT_INVALID_INPUT, EXIT_OK, EXIT_RUNTIME_ERROR
 
@@ -17,6 +17,7 @@ def cmd_sync_from_github(args: argparse.Namespace) -> int:
     将来予約 flag（``--include-closed`` / ``--state`` / ``--since``）は exit 2 で
     fail-fast する。
     """
+    warn_local_provider_deprecated()
     from ..errors import SyncError
     from ..sync import sync_from_github
 
@@ -68,6 +69,7 @@ def cmd_sync_from_github(args: argparse.Namespace) -> int:
 
 def cmd_sync_status(args: argparse.Namespace) -> int:
     """``kaji sync status`` の dispatcher (issue ``local-p1-8``)。"""
+    warn_local_provider_deprecated()
     import json as _json
 
     from ..errors import SyncError

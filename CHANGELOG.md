@@ -77,6 +77,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   step. It is repository-specific, explicitly selected, and not published to
   the starters. The standard `dev` workflow is unchanged (#427).
 
+### Deprecated
+
+- The local provider (`provider.type = "local"`) and the local-only commands
+  `kaji local init`, `kaji sync from-github`, and `kaji sync status` are
+  deprecated and will be removed in the next release. kaji now prints a
+  deprecation warning to stderr (once per process) when the provider resolves
+  to `local` or one of those commands runs; stdout and exit codes are
+  unchanged. Migrate to the GitHub provider (`provider.type = "github"`)
+  (#438).
+
 ## [0.20.1] - 2026-08-30
 
 This patch release hardens Herdr startup on fresh panes and restores statusline

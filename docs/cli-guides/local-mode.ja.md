@@ -2,6 +2,12 @@
 
 Language: [English](local-mode.md) | 日本語
 
+> [!WARNING]
+> **非推奨。** local provider（`provider.type = "local"`）と local 専用コマンド
+> （`kaji local init` / `kaji sync from-github` / `kaji sync status`）は非推奨で、
+> 次の kaji リリースで削除される。kaji は stderr に非推奨警告を出す（stdout と
+> 終了コードは変わらない）。GitHub provider（`provider.type = "github"`）へ移行すること。
+
 `kaji` を GitHub なしで運用するための最小ガイド。`kaji local init` で overlay を
 作り、local 専用 workflow（`dev-local.yaml` / `docs-local.yaml`）で回す。
 

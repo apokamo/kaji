@@ -16,6 +16,7 @@ import socket
 import sys
 from pathlib import Path
 
+from .config import warn_local_provider_deprecated
 from .providers.local import validate_machine_id
 
 EXIT_OK = 0
@@ -112,6 +113,7 @@ def cmd_local_init(args: argparse.Namespace) -> int:
     Returns:
         exit code（0: 正常 / 2: machine_id 不正 / 3: 既存 overlay）。
     """
+    warn_local_provider_deprecated()
     repo_root = (args.repo_root or Path.cwd()).resolve()
     kaji_dir = repo_root / ".kaji"
     config_path = kaji_dir / "config.toml"
