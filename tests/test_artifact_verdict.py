@@ -167,6 +167,18 @@ def test_evaluate_result_rejects_abnormal_or_conflicting(
 
 
 @pytest.mark.small
+@pytest.mark.parametrize("synthetic", ["true", 1, [], {}, None])
+def test_evaluate_result_rejects_invalid_synthetic_type(synthetic: object) -> None:
+    with pytest.raises(VerdictArtifactUnusableError, match="invalid"):
+        evaluate_result({"status": "PASS", "synthetic": synthetic}, "PASS")
+
+
+@pytest.mark.small
+def test_evaluate_result_accepts_legacy_record_without_synthetic() -> None:
+    assert evaluate_result({"status": "PASS", "error": None}, "PASS") is None
+
+
+@pytest.mark.small
 def test_evaluate_result_ignores_exit_code_and_signal() -> None:
     result = {"status": "PASS", "exit_code": 143, "signal": "SIGTERM", "synthetic": False}
     assert evaluate_result(result, "PASS") is None

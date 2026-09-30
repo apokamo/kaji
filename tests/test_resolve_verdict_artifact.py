@@ -390,6 +390,15 @@ def test_unreadable_chain_is_not_found(env: Env) -> None:
     assert env.run("--current-verdict-path", str(env.consumer_path())) == 4
 
 
+@pytest.mark.parametrize("payload", [b"[]", b"null", b"\xff", b'{"root_run_id": 1}'])
+def test_malformed_chain_shape_or_encoding_is_not_found(env: Env, payload: bytes) -> None:
+    (env.runs_dir / RUN).mkdir(parents=True)
+    (env.runs_dir / RUN / "recovery-chain.json").write_bytes(payload)
+    env.comment("no marker")
+
+    assert env.run("--current-verdict-path", str(env.consumer_path())) == 4
+
+
 # ---------- output / ended_at ----------
 
 
@@ -453,6 +462,36 @@ def test_abnormal_or_conflicting_result_json_is_unusable(env: Env, result: dict[
     env.comment("no marker")
 
     assert env.run("--current-verdict-path", str(env.consumer_path())) == 7
+
+
+@pytest.mark.parametrize(
+    "synthetic", ["true", 1, [], {}, None], ids=["str", "int", "list", "dict", "null"]
+)
+def test_invalid_synthetic_type_in_result_json_is_unusable(env: Env, synthetic: object) -> None:
+    env.write_attempt(1, result=_result(synthetic=synthetic))
+    env.comment("no marker")
+
+    assert env.run("--current-verdict-path", str(env.consumer_path())) == 7
+
+
+@pytest.mark.parametrize("error", [1, [], {}], ids=["int", "list", "dict"])
+def test_invalid_error_type_in_result_json_is_unusable(env: Env, error: object) -> None:
+    env.write_attempt(1, result=_result(error=error))
+    env.comment("no marker")
+
+    assert env.run("--current-verdict-path", str(env.consumer_path())) == 7
+
+
+def test_legacy_result_json_without_synthetic_is_accepted(
+    env: Env, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = _result()
+    del result["synthetic"]
+    env.write_attempt(1, result=result)
+    env.comment("no marker")
+
+    assert env.run("--current-verdict-path", str(env.consumer_path())) == 0
+    assert _out(capsys)["status"] == "PASS"
 
 
 @pytest.mark.parametrize("text", ["{broken", "[]", '"str"', "null"])

@@ -16,12 +16,13 @@ from datetime import datetime
 from pathlib import Path, PurePath
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr, ValidationError
+
 from .errors import (
     HarnessError,
     VerdictArtifactNotFoundError,
     VerdictArtifactUnusableError,
 )
-from .recovery.models import read_recovery_chain
 from .result import RESULT_FILE
 from .verdict import load_verdict_yaml_for_marker_vocabulary
 
@@ -162,6 +163,48 @@ def run_context_from_env(environ: Mapping[str, str], issue_id: str) -> RunContex
         return None
 
 
+class _ResultRecord(BaseModel):
+    """Fields of ``result.json`` that decide whether an attempt can be adopted.
+
+    ``ended_at`` stays untyped on purpose: an unknown or malformed value is reported as
+    ``None`` (provenance only) and never blocks adoption. Old records without
+    ``synthetic`` default to ``False``.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    status: StrictStr | None = None
+    synthetic: StrictBool = False
+    error: StrictStr | None = None
+    ended_at: object = None
+
+
+class _ChainRecord(BaseModel):
+    """Fields of ``recovery-chain.json`` needed to walk to the recovery parent."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    root_run_id: StrictStr
+    parent_run_id: StrictStr
+
+
+def _read_chain_parent(path: Path) -> str | None:
+    """Return ``parent_run_id`` from ``recovery-chain.json``, or ``None`` when absent.
+
+    Raises:
+        VerdictArtifactNotFoundError: The file exists but is unreadable, not valid
+            UTF-8 / JSON, or does not carry string ``root_run_id`` / ``parent_run_id``.
+    """
+    if not path.is_file():
+        return None
+    try:
+        record = _ChainRecord.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError) as exc:
+        # ValueError covers UnicodeDecodeError, JSONDecodeError and ValidationError.
+        raise VerdictArtifactNotFoundError(f"{path} is unreadable or invalid: {exc}") from exc
+    return record.parent_run_id
+
+
 def evaluate_result(result: Mapping[str, Any], verdict_status: str) -> str | None:
     """Check a parsed ``result.json`` against ``verdict.yaml`` and extract ``ended_at``.
 
@@ -180,16 +223,20 @@ def evaluate_result(result: Mapping[str, Any], verdict_status: str) -> str | Non
     Raises:
         VerdictArtifactUnusableError: The attempt ended abnormally or disagrees on status.
     """
-    if result.get("synthetic") is True or result.get("error") is not None:
+    try:
+        record = _ResultRecord.model_validate(result)
+    except ValidationError as exc:
+        raise VerdictArtifactUnusableError(f"result.json has invalid fields: {exc}") from exc
+    if record.synthetic or record.error is not None:
         raise VerdictArtifactUnusableError(
             "latest attempt ended abnormally (result.json records synthetic or error)"
         )
-    if result.get("status") != verdict_status:
+    if record.status != verdict_status:
         raise VerdictArtifactUnusableError(
-            f"result.json status {result.get('status')!r} conflicts with "
+            f"result.json status {record.status!r} conflicts with "
             f"verdict.yaml status {verdict_status!r}"
         )
-    ended_at = result.get("ended_at")
+    ended_at = record.ended_at
     if not isinstance(ended_at, str):
         return None
     try:
@@ -274,13 +321,12 @@ def resolve_artifact_verdict(run_dir: Path, *, step: str) -> ResolvedArtifactVer
         latest = _latest_attempt(current / "steps" / step)
         if latest is not None:
             return _adopt(step, latest[0], latest[1], current.name, requested)
-        chain = read_recovery_chain(current / "recovery-chain.json")
-        if chain is None:
+        parent = _read_chain_parent(current / "recovery-chain.json")
+        if parent is None:
             raise VerdictArtifactNotFoundError(
                 f"step {step!r} was never executed in run {requested!r} "
                 "or its recorded recovery sources"
             )
-        parent = chain[1]
         if _RUN_ID_RE.fullmatch(parent) is None or parent in visited:
             raise VerdictArtifactNotFoundError(
                 f"recovery chain of run {current.name!r} has an invalid or cyclic parent {parent!r}"
