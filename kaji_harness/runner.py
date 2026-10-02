@@ -10,7 +10,7 @@ import logging
 import os
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from itertools import count
@@ -45,7 +45,7 @@ from .result import RESULT_FILE, AttemptResult, derive_signal, write_result_json
 from .script_exec import execute_exec, execute_script
 from .skill import SkillMetadata, load_skill_metadata, validate_skill_exists
 from .state import SessionState
-from .verdict import create_verdict_formatter, resolve_verdict, write_verdict_yaml
+from .verdict import CommentLike, create_verdict_formatter, resolve_verdict, write_verdict_yaml
 from .worktree_discovery import AmbiguousWorktreeError, discover_existing_worktree
 
 # module-level stdlib logger. ``run()`` 内のローカル ``logger`` (RunLogger) と
@@ -528,12 +528,20 @@ class _StepExecutor:
                 model=step.model,
                 workdir=settings.workdir,
             )
+        # exec / exec_script の verdict 正本は stdout と KAJI_VERDICT_PATH のみ。
+        # 他 step の作業報告 comment を採用しないよう comment fallback を行わない（Issue #449）。
+        comment_loader: Callable[[], Sequence[CommentLike]] | None = (
+            None
+            if settings.is_script_like
+            else lambda: self.provider.view_issue(self.run_ctx.canonical_id).comments
+        )
         verdict, source, findings = resolve_verdict(
             attempt_dir=attempt_dir,
             full_output=result.full_output,
             valid_statuses=valid_statuses,
             attempt_started_at=attempt_started_at,
-            comment_loader=lambda: self.provider.view_issue(self.run_ctx.canonical_id).comments,
+            step_id=step.id,
+            comment_loader=comment_loader,
             ai_formatter=formatter,
         )
         self.logger.log_verdict_source(step.id, source, attempt_dir.name)

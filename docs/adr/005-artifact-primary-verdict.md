@@ -18,6 +18,7 @@ verdict の受け渡しを **artifact `verdict.yaml`（primary）→ 作業報�
 
 - agent / script は同じ verdict block を作業報告コメント末尾と stdout に残し、harness が注入する `verdict_path`（exec_script では env `KAJI_VERDICT_PATH`）へ pure YAML の `verdict.yaml`（`status` / `reason` / `evidence` / `suggestion`）を保存する。interactive terminal runner では `verdict.yaml` の出現が完了トリガになるため、agent は外部副作用を完了してから最後に artifact を保存する。
 - harness は `resolve_verdict()` で artifact → comment → stdout の順に解決する。artifact が存在すれば comment / stdout は見ない。comment fallback は当該 attempt の dispatch 直前に記録した `attempt_started_at` を下限に `created_at >= attempt_started_at` のコメントのみ対象とし、前 attempt の作業報告コメントを誤採用しない。
+- 追記（Issue #449）: comment fallback は agent step のみで行い、`exec` / `exec_script` step では行わない（verdict の正本は stdout と `KAJI_VERDICT_PATH` のみ）。agent step では body 1 行目の `kaji-verdict` marker（ADR 008）が別 step を指す comment、および marker 風だが文法外の comment を候補から除外する。marker 無し comment は後方互換で候補に残す。秒精度の `created_at` では同一秒の前 step comment と自 step comment を時刻だけでは区別できないため、`attempt_started_at` の下限（同一秒許容）は変更しない。
 - `verdict.yaml` が「存在するが壊れている」場合は fail-loud（comment / stdout へ fallthrough しない）。全 source 不在は従来どおり `VerdictNotFound`。
 - comment / stdout で解決した場合は harness が同じ verdict を `verdict.yaml` へ正規化保存し、未移行スキルでも attempt 単位の `verdict.yaml` が必ず残る。
 - artifact / log layout を `runs/<run_id>/steps/<step_id>/attempt-NNN/`（attempt 単位）へ移行する。`run.log` は `runs/<run_id>/` 直下に据え置く。新規 run は新 layout を正とし、旧 flat layout の読み取り互換は温存する（migration 必須化はしない）。

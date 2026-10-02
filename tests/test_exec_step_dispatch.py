@@ -19,6 +19,7 @@ import pytest
 from kaji_harness.config import KajiConfig
 from kaji_harness.errors import ScriptExecutionError, StepTimeoutError, VerdictNotFound
 from kaji_harness.models import CLIResult, Step, Workflow
+from kaji_harness.providers.local import LocalProvider
 from kaji_harness.runner import WorkflowRunner
 from kaji_harness.script_exec import execute_exec
 from kaji_harness.skill import SkillMetadata
@@ -287,6 +288,35 @@ class TestRunnerExecDispatch:
         events = [json.loads(line) for line in run_logs[0].read_text().splitlines() if line]
         sources = [e for e in events if e["event"] == "verdict_source"]
         assert sources and sources[-1]["source"] == "artifact"
+
+    def test_exec_ignores_other_step_pass_comment_and_follows_own_retry(
+        self, tmp_path: Path
+    ) -> None:
+        """Issue #449: 前 step の PASS 作業報告コメントではなく自身の stdout RETRY で遷移する。"""
+        step = Step(id="run", exec=["python", "-m", "foo"], on={"PASS": "end", "RETRY": "end"})
+        runner = _runner(tmp_path, step)
+        other_step_comment = MagicMock(
+            body="PR 作成を完了した\n\n" + _verdict("PASS"), created_at="2099-01-01T00:00:00Z"
+        )
+
+        with (
+            patch("kaji_harness.runner.execute_exec", return_value=CLIResult(_verdict("RETRY"))),
+            patch.object(
+                LocalProvider, "view_issue", return_value=MagicMock(comments=[other_step_comment])
+            ) as mock_view_issue,
+        ):
+            runner.run()
+
+        mock_view_issue.assert_not_called()
+        run_logs = list((tmp_path / ".kaji-artifacts").rglob("run.log"))
+        events = [json.loads(line) for line in run_logs[0].read_text().splitlines() if line]
+        sources = [e for e in events if e["event"] == "verdict_source"]
+        assert sources and sources[-1]["source"] == "stdout"
+        step_ends = [e for e in events if e["event"] == "step_end" and e["step_id"] == "run"]
+        assert step_ends and step_ends[-1]["verdict"]["status"] == "RETRY"
+        vfiles = list((tmp_path / ".kaji-artifacts").rglob("verdict.yaml"))
+        assert vfiles, "verdict.yaml not written"
+        assert "status: RETRY" in vfiles[0].read_text()
 
     def test_exec_nonzero_exit_records_abort_and_reraises(self, tmp_path: Path) -> None:
         """exec の non-zero exit は ScriptExecutionError として伝播し ABORT を記録する。"""
