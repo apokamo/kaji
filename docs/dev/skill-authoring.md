@@ -127,6 +127,8 @@ exec_script: kaji_harness.scripts.review_poll_entry
 
 **出力契約**:
 - verdict ブロックを stdout に出力する責務は script 側にある（既存 `kaji_harness.scripts.codex_review_poll.emit_verdict()` 同型）。
+- exec_script 経路では **comment fallback も行われない**（Issue #449）。verdict の正本は stdout と
+  `KAJI_VERDICT_PATH` のみで、Issue コメントにだけ verdict を残しても採用されない。
 - exec_script 経路では **AI formatter fallback は呼ばれない**（fabrication 防止 + 決定論性維持）。
   delimiter 不在は `VerdictNotFound` で fail-loud。
 - script は verdict を emit したら **必ず `return 0`** で終了する。ABORT / RETRY 等の業務失敗は
@@ -157,7 +159,7 @@ suggestion: |
 2. **stdout（互換 fallback）**: 同じ `---VERDICT---` block を stdout にも出力する。
 3. **artifact `verdict.yaml`（primary / 書き込みは最後）**: コンテキスト変数 `verdict_path`（exec_script では env `KAJI_VERDICT_PATH`）が指す絶対パスへ、`status` / `reason` / `evidence` / `suggestion` の **pure YAML**（`---VERDICT---` delimiter なし）を保存する。
 
-ハーネスはこの 3 経路を **artifact → comment → stdout** の順で解決する（詳細は [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) § Verdict 判定機構）。`verdict_path` への保存が primary 経路であり、`kaji issue comment --body` の引数や別コマンドの入力にだけ verdict を埋めても、artifact / 作業報告コメント末尾 / stdout のいずれにも残っていなければ判定されない。
+ハーネスはこの 3 経路を **artifact → comment → stdout** の順で解決する（詳細は [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) § Verdict 判定機構）。agent step の comment 経路では、body 1 行目の `kaji-verdict` marker が別 step を指すコメントは候補から除外される（Issue #449。marker 無しコメントは従来どおり候補）。exec / exec_script step は comment 経路を持たない。`verdict_path` への保存が primary 経路であり、`kaji issue comment --body` の引数や別コマンドの入力にだけ verdict を埋めても、artifact / 作業報告コメント末尾 / stdout のいずれにも残っていなければ判定されない。
 interactive terminal runner では `verdict.yaml` の出現が次 step への完了トリガになるため、agent は Issue comment 投稿などの外部副作用を完了してから、最後に `verdict.yaml` を保存する。
 
 `verdict.yaml` の例（pure YAML）:

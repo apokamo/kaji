@@ -188,8 +188,9 @@ exec-step の規約:
 - **context env**: `exec_script` skill と同じ `KAJI_*` 環境変数（`KAJI_ISSUE_ID` /
   `KAJI_STEP_ID` / `KAJI_WORKTREE_DIR` / `KAJI_VERDICT_PATH` 等）を注入する。script は
   `KAJI_VERDICT_PATH` に `verdict.yaml` を書く artifact-primary 経路で完了判定できる。
-- **verdict 解決**: artifact → comment → stdout の順。決定論 step のため **AI formatter
-  fallback を呼ばない**（fabrication 防止）。
+- **verdict 解決**: artifact → stdout の順（Issue #449 以降、exec step は **comment fallback
+  を行わない**。Issue コメントにだけ verdict を残しても採用されない）。決定論 step のため
+  **AI formatter fallback を呼ばない**（fabrication 防止）。
 - **fail-loud**: subprocess の exit code != 0 は `ScriptExecutionError`、timeout 超過は
   `StepTimeoutError`。runner が ABORT verdict を attempt に記録して元例外を re-raise する
   （stdout の verdict 有無を問わない）。

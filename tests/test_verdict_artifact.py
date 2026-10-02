@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -24,6 +25,7 @@ from kaji_harness.verdict import (
 )
 
 VALID = {"PASS", "RETRY", "BACK", "ABORT"}
+STEP_ID = "review-code"
 
 
 @dataclass(frozen=True)
@@ -207,6 +209,7 @@ class TestResolveVerdict:
             + _block(status="ABORT", suggestion="x"),
             valid_statuses=VALID,
             attempt_started_at=self._started(),
+            step_id=STEP_ID,
             comment_loader=loader,
         )
         assert source == "artifact"
@@ -223,6 +226,7 @@ class TestResolveVerdict:
             full_output="",
             valid_statuses=VALID,
             attempt_started_at=started,
+            step_id=STEP_ID,
             comment_loader=lambda: [comment],
         )
         assert source == "comment"
@@ -240,6 +244,7 @@ class TestResolveVerdict:
             full_output="",
             valid_statuses=VALID,
             attempt_started_at=started,
+            step_id=STEP_ID,
             comment_loader=lambda: [comment],
         )
         assert source == "comment"
@@ -256,6 +261,7 @@ class TestResolveVerdict:
                 full_output="",
                 valid_statuses=VALID,
                 attempt_started_at=started,
+                step_id=STEP_ID,
                 comment_loader=lambda: [comment],
             )
 
@@ -269,6 +275,7 @@ class TestResolveVerdict:
             full_output="報告\n\n" + _block(status="PASS"),
             valid_statuses=VALID,
             attempt_started_at=started,
+            step_id=STEP_ID,
             comment_loader=lambda: [comment],
         )
         assert source == "stdout"
@@ -281,6 +288,7 @@ class TestResolveVerdict:
             full_output="報告\n\n" + _block(status="RETRY"),
             valid_statuses=VALID,
             attempt_started_at=self._started(),
+            step_id=STEP_ID,
             comment_loader=lambda: [],
         )
         assert source == "stdout"
@@ -294,6 +302,7 @@ class TestResolveVerdict:
                 full_output="verdict 無し",
                 valid_statuses=VALID,
                 attempt_started_at=self._started(),
+                step_id=STEP_ID,
                 comment_loader=lambda: [],
             )
 
@@ -314,6 +323,7 @@ class TestResolveVerdict:
                 full_output="報告\n\n" + _block(status="PASS"),
                 valid_statuses=VALID,
                 attempt_started_at=self._started(),
+                step_id=STEP_ID,
                 comment_loader=loader,
             )
         assert called is False, "壊れた artifact は fail-loud。comment/stdout に落ちない"
@@ -327,6 +337,7 @@ class TestResolveVerdict:
             full_output="報告\n\n" + _block(status="PASS"),
             valid_statuses=VALID,
             attempt_started_at=self._started(),
+            step_id=STEP_ID,
             comment_loader=loader,
         )
         assert source == "stdout"
@@ -342,8 +353,98 @@ class TestResolveVerdict:
                 full_output="",
                 valid_statuses=VALID,
                 attempt_started_at=self._started(),
+                step_id=STEP_ID,
                 comment_loader=lambda: [comment],
             )
+
+
+# ============================================================
+# Issue #449: comment 候補の step scoping（1 行目 kaji-verdict marker）
+# ============================================================
+
+
+@pytest.mark.small
+class TestResolveVerdictStepScoping:
+    """artifact 不在・同一秒の comment を前提に、marker の step で候補を絞る。
+
+    artifact 不在は ``Path.exists`` を False 固定にして表現し、ファイルシステムを参照しない。
+    """
+
+    ATTEMPT_DIR = Path("/fake/attempt-001")
+    STARTED = datetime(2026, 6, 4, 12, 0, 0, 500_000, tzinfo=UTC)
+    SAME_SECOND = "2026-06-04T12:00:00Z"
+    LATER = "2026-06-04T12:00:30Z"
+
+    def _resolve(
+        self, comments: list[_FakeComment], *, full_output: str = "", step_id: str = "review-poll"
+    ) -> tuple[Verdict, str, list[ControlCharFinding]]:
+        with patch.object(Path, "exists", return_value=False) as mock_exists:
+            result = resolve_verdict(
+                attempt_dir=self.ATTEMPT_DIR,
+                full_output=full_output,
+                valid_statuses=VALID,
+                attempt_started_at=self.STARTED,
+                step_id=step_id,
+                comment_loader=lambda: comments,
+            )
+        mock_exists.assert_called()
+        return result
+
+    @staticmethod
+    def _marked(step: str, status: str, created_at: str) -> _FakeComment:
+        marker = f"<!-- kaji-verdict: step={step} status={status} -->"
+        return _FakeComment(
+            body=f"{marker}\n\n作業報告\n\n{_block(status=status)}", created_at=created_at
+        )
+
+    def test_other_step_marker_comment_excluded_falls_to_stdout(self) -> None:
+        comment = self._marked("pr", "PASS", self.SAME_SECOND)
+        verdict, source, _ = self._resolve([comment], full_output=_block(status="RETRY"))
+        assert source == "stdout"
+        assert verdict.status == "RETRY"
+
+    def test_other_step_marker_only_without_stdout_raises_not_found(self) -> None:
+        comment = self._marked("pr", "PASS", self.SAME_SECOND)
+        with pytest.raises(VerdictNotFound):
+            self._resolve([comment])
+
+    def test_own_step_marker_comment_adopted(self) -> None:
+        comment = self._marked("review-code", "RETRY", self.SAME_SECOND)
+        verdict, source, _ = self._resolve([comment], step_id="review-code")
+        assert source == "comment"
+        assert verdict.status == "RETRY"
+
+    def test_unmarked_comment_adopted_for_backward_compatibility(self) -> None:
+        comment = _FakeComment(body="作業報告\n\n" + _block(status="PASS"), created_at=self.LATER)
+        verdict, source, _ = self._resolve([comment])
+        assert source == "comment"
+        assert verdict.status == "PASS"
+
+    def test_malformed_marker_comment_excluded(self) -> None:
+        marker = "<!-- kaji-verdict: step=Bad status=PASS -->"
+        comment = _FakeComment(
+            body=f"{marker}\n\n{_block(status='PASS')}", created_at=self.SAME_SECOND
+        )
+        verdict, source, _ = self._resolve([comment], full_output=_block(status="RETRY"))
+        assert source == "stdout"
+        assert verdict.status == "RETRY"
+
+    def test_filter_applies_before_newest_first_scan(self) -> None:
+        older_own = self._marked("review-poll", "RETRY", self.SAME_SECOND)
+        newer_other = self._marked("pr", "PASS", self.LATER)
+        verdict, source, _ = self._resolve([older_own, newer_other])
+        assert source == "comment"
+        assert verdict.status == "RETRY"
+
+    def test_marker_quoted_on_later_line_is_ignored(self) -> None:
+        quoted = "<!-- kaji-verdict: step=pr status=PASS -->"
+        comment = _FakeComment(
+            body=f"通常の本文\n\n引用: {quoted}\n\n{_block(status='RETRY')}",
+            created_at=self.SAME_SECOND,
+        )
+        verdict, source, _ = self._resolve([comment])
+        assert source == "comment"
+        assert verdict.status == "RETRY"
 
 
 # ============================================================
@@ -366,6 +467,7 @@ class TestResolveVerdictControlCharFindings:
             full_output="",
             valid_statuses=VALID,
             attempt_started_at=self._started(),
+            step_id=STEP_ID,
             comment_loader=None,
         )
         assert source == "artifact"
@@ -383,6 +485,7 @@ class TestResolveVerdictControlCharFindings:
             full_output="",
             valid_statuses=VALID,
             attempt_started_at=self._started(),
+            step_id=STEP_ID,
             comment_loader=lambda: [comment],
         )
         assert source == "comment"
@@ -396,6 +499,7 @@ class TestResolveVerdictControlCharFindings:
             full_output="報告\n\n" + _block(status="PASS", evidence="done\x1bhere"),
             valid_statuses=VALID,
             attempt_started_at=self._started(),
+            step_id=STEP_ID,
             comment_loader=lambda: [],
         )
         assert source == "stdout"

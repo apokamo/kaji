@@ -281,13 +281,14 @@ classifier / sensitive gate が読まない `pane-metadata.json` の `terminal_d
 Issue #220 以降、runner は各 step dispatch ごとに verdict を以下の順で解決する（`resolve_verdict()`）。
 
 ```
-resolve_verdict(attempt_dir, full_output, valid_statuses, attempt_started_at, comment_loader, ai_formatter)
+resolve_verdict(attempt_dir, full_output, valid_statuses, attempt_started_at, step_id, comment_loader, ai_formatter)
   │
   ├─ 1. artifact: attempt_dir/verdict.yaml が存在 → load_verdict_yaml（pure YAML）
   │       存在するが壊れている → fail-loud（comment / stdout へ落ちない）。source="artifact"
   │
   ├─ 2. comment: artifact 不在時のみ comment_loader() を遅延呼び出し
-  │       created_at >= attempt_started_at の作業報告コメントのみを newest-first で走査し、
+  │       created_at >= attempt_started_at かつ 1 行目 marker が別 step を指さない
+  │       作業報告コメントのみを newest-first で走査し、
   │       末尾の ---VERDICT--- block を採用。source="comment"
   │       provider 取得失敗は WARN して stdout へ fallthrough
   │
@@ -296,6 +297,8 @@ resolve_verdict(attempt_dir, full_output, valid_statuses, attempt_started_at, co
 
 - **artifact primary**: 解決対象は常に「今 dispatch した attempt の dir」であり、`verdict.yaml` が存在すれば comment / stdout は **見ない**。stale comment が fresh artifact を上書きしない核心の不変条件。
 - **comment fallback の attempt scoping**: `attempt_started_at`（dispatch 直前に harness が記録するローカル時刻）を下限に、`created_at >= attempt_started_at` のコメントのみ対象にする。retry / resume で当該 attempt が verdict を出さなかった場合に、前 attempt の作業報告コメントを誤採用しない。下限を満たすコメントが無ければ古いコメントを拾わず stdout / `VerdictNotFound` へ落とす（false verdict より解決失敗を優先する fail-safe）。
+- **comment fallback の step scoping（Issue #449）**: 時刻条件を満たすコメントのうち、body 1 行目の `<!-- kaji-verdict: step=... -->` marker が別 step を指すもの、および marker 風だが文法外のものは候補から除外する（フィルタは newest-first 走査の前に適用）。marker 無しのコメントは後方互換で候補に残す。秒精度の `created_at` では同一秒の前 step コメントと自 step コメントを時刻だけでは区別できないため、この step scoping で補う。
+- **exec / exec_script step は comment fallback を行わない（Issue #449）**: runner は script-like step に `comment_loader=None` を渡す。verdict の正本は stdout と `KAJI_VERDICT_PATH`（artifact）のみで、他 step の作業報告コメントが採用されることはない。
 - **source != "artifact" の正規化保存**: comment / stdout で解決した場合、harness は同じ verdict を `attempt_dir/verdict.yaml` へ正規化保存する。未移行スキルが stdout しか出さなくても attempt 単位の `verdict.yaml` が必ず残る。解決経路は `run.log` の `verdict_source` イベントに記録される。
 - **agent 側の書き込み順**: 上記は harness の解決順であり、agent / script の書き込み順とは別概念。interactive terminal runner では `verdict.yaml` の出現が次 step への完了トリガになるため、作業報告 Issue comment など当該 step の外部副作用を完了してから最後に `verdict.yaml` を保存する。
 

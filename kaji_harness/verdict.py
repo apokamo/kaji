@@ -23,7 +23,7 @@ import yaml
 
 from .errors import InvalidVerdictValue, VerdictNotFound, VerdictParseError
 from .models import Verdict
-from .providers.markers import is_valid_verdict_status
+from .providers.markers import is_valid_verdict_status, parse_kaji_verdict_marker
 
 # Step 1: Strict delimiter pattern (original V7)
 STRICT_PATTERN = re.compile(
@@ -737,12 +737,30 @@ def _is_current_comment(comment: CommentLike, attempt_started_at: datetime) -> b
     return ts >= attempt_started_at.replace(microsecond=0)
 
 
+def _comment_step_scope_allows(comment: CommentLike, step_id: str) -> bool:
+    """comment が現在 step の verdict 候補になりうるかを 1 行目 marker で判定する。
+
+    body 1 行目の ``<!-- kaji-verdict: step=... -->`` marker が別 step を指す comment は
+    他 step の作業報告であり除外する。marker 無しは後方互換で候補に残す。marker 風だが
+    文法外（step 不明）の comment は他 step の verdict 採用を避けるため除外する。
+    """
+    lines = comment.body.splitlines()
+    first_line = lines[0] if lines else ""
+    if not first_line.startswith("<!-- kaji-verdict: "):
+        return True
+    marker = parse_kaji_verdict_marker(first_line)
+    if marker is None:
+        return False
+    return marker.step == step_id
+
+
 def resolve_verdict(
     *,
     attempt_dir: Path,
     full_output: str,
     valid_statuses: set[str],
     attempt_started_at: datetime,
+    step_id: str,
     comment_loader: Callable[[], Sequence[CommentLike]] | None,
     ai_formatter: Callable[[str], str] | None = None,
     max_retries: int = 2,
@@ -753,7 +771,9 @@ def resolve_verdict(
        fail-loud。comment / stdout へは落ちない）。``source="artifact"``。
     2. else ``comment_loader()`` を呼び、``created_at >= attempt_started_at`` の
        comment **のみ** を newest-first で走査し、最初に成立した末尾 block を採用。
-       ``source="comment"``。provider 取得失敗時は WARN して stdout へ。
+       1 行目の ``kaji-verdict`` marker が別 step（``step_id`` 以外）を指す comment は
+       候補から除外する（Issue #449）。``source="comment"``。provider 取得失敗時は
+       WARN して stdout へ。
     3. else stdout の ``parse_verdict``（既存 3 段 fallback まるごと）。
        ``source="stdout"``。
 
@@ -772,6 +792,7 @@ def resolve_verdict(
         valid_statuses: 当該 step の ``on:`` キー集合。
         attempt_started_at: dispatch 直前に記録した timezone-aware 時刻。
             comment fallback の lower bound。
+        step_id: 解決中の workflow step id。別 step を指す marker の comment 除外に使う。
         comment_loader: artifact 不在時のみ呼ぶ遅延 callable。comment 列を返す。
             ``None`` の場合 comment fallback を行わず stdout へ進む。
         ai_formatter: stdout 経路の Step 3（AI formatter）。exec_script では
@@ -799,7 +820,11 @@ def resolve_verdict(
         except Exception as exc:  # noqa: BLE001 — provider 取得失敗は stdout へ fallthrough
             logger.warning("comment fallback loader failed: %s; falling through to stdout", exc)
             comments = []
-        current = [c for c in comments if _is_current_comment(c, attempt_started_at)]
+        current = [
+            c
+            for c in comments
+            if _is_current_comment(c, attempt_started_at) and _comment_step_scope_allows(c, step_id)
+        ]
         for comment in reversed(current):  # newest-first
             comment_verdict = parse_verdict_block(
                 comment.body, valid_statuses, findings_sink=findings
