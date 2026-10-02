@@ -165,7 +165,7 @@ if resolved.source == "artifact" and resolved.status == "PASS":
 
 - **既存 verdict 契約を維持する**: 4 フィールドと status 語彙、`return 0`、catastrophic 失敗は raise する、という方針（Issue #204）を変えない。`dev.yaml` 系の遷移（`PASS: close` など）も変えない
 - **追加の外部依存なし**: `gh` CLI（≥2.50.0、`--slurp` 対応）と Pydantic（既存の依存）だけを使う
-- **API 呼び出し数**: 毎 poll の呼び出しが 2 本（reactions / reviews）から 4 本（+ pulls / comments）に増え、確定時に commits と pulls（2 回）が加わる。poll 間隔 10 秒、in-progress 上限 1800 秒の既存設定では最大でおよそ 720 回。GitHub REST の認証済み上限（5,000 回/時）に収まる
+- **API 呼び出し数**: 毎 poll の呼び出しが 2 本（reactions / reviews）から 4 本（+ pulls / comments）に増え、確定時に commits と pulls（2 回）が加わる。poll 間隔 10 秒、in-progress 上限 1800 秒の既存設定で、各リストが 1 ページに収まる場合の概算は 1 step あたり最大でおよそ 720 回である。これは**保証ではない**。pagination のページ数、API 失敗時の再試行、同じ token を使う他の run との共有で増える。rate limit に達した場合の `gh api` 失敗は、既存の連続失敗カウンタ（3 回で ABORT）で扱い、PASS にはしない（GitHub REST の認証済み primary limit は 5,000 回/時）
 - **summary comment の形式は第三者（bot）の仕様である**: 形式が変わると PASS が出なくなり、BACK_FALLBACK（`review` skill）へ縮退する。誤って PASS する方向には壊れない（fail-closed）
 - **PR commits API は最大 250 件**: これを超える PR では head が一覧に出ない可能性があり、その場合は「曖昧」として ABORT する（公式 docs の制約）
 - **Issue verdict marker を必須にしない**: review-poll は Issue コメントを投稿しない（既存どおり）。close の照合は artifact だけで完結する
@@ -189,7 +189,25 @@ if resolved.source == "artifact" and resolved.status == "PASS":
 
 - `review_poll_entry`（env → argv の shim）: `--evidence-path` を導出するだけ。PR / head の解決は既存のまま
 - `codex_review_poll`（polling の核）: 取得、分類、状態遷移、確定確認、証跡の生成、verdict の出力
-- `review_poll_evidence`（新規・純粋なデータ契約）: `ReviewPollEvidence` model と `save_evidence(path, evidence)`。producer（poller）がこの model で検証する。consumer（close skill）は同じ schema を jq で照合する
+- `review_poll_evidence`（新規・純粋なデータ契約）: `ReviewPollEvidence` model と `save_evidence(path, evidence)`。producer（poller）は書き込み前に、この model（`extra="forbid"` + `model_validator`）で下記「証跡の整合不変条件」をすべて検証する。consumer（close skill）は同じ不変条件を jq で検証する（方針 6 の 3）
+
+#### 証跡の整合不変条件（schema v1。producer と consumer の共通契約）
+
+producer と consumer の両方が、次の I1〜I9 をすべて検証する。1 つでも欠落・型違い・不一致があれば、producer は PASS を出さず ABORT（evidence unavailable）、consumer は merge せずに ABORT する。consumer は `installed kaji` しかない対象 repo でも動くよう、Python import ではなく jq で検証する（review-poll が `exec: [kaji, pr, review-poll]` で可搬性を確保しているのと同じ理由）。
+
+| ID | 不変条件 |
+|----|----------|
+| I1 | top-level のキー集合が `schema_version, kind, result, provider, repository, pull_request, reviewed_head, approval, checks, fetched_at, decided_at` と完全に一致する。`schema_version == 1`、`kind == "kaji.review-poll.approval"`、`result == "PASS"`、`provider == "github"`。未知の `schema_version` は不可 |
+| I2 | `repository.owner` / `repository.name` は空でない文字列。`pull_request.number` は正の整数で、`pull_request.url` は `https://github.com/` で始まり `/pull/<number>` で終わる（repo の改名後は API の URL が新しい名前を指すため、`repository` と URL の owner / name の一致は要求しない） |
+| I3 | `reviewed_head.sha` は `^[0-9a-f]{40}$`。`reviewed_head.committed_at` は解析可能な ISO 8601 UTC |
+| I4 | `approval.bot.id == 199175422`、`approval.bot.login` は `chatgpt-codex-connector` で始まる |
+| I5 | `approval.reaction.id` は正の整数、`content == "+1"`、`created_at` は解析可能、`api_path == "repos/<owner>/<name>/issues/<number>/reactions"` |
+| I6 | `approval.review_summary.comment_id` は正の整数、`url` は `#issuecomment-<comment_id>` で終わる。`status == "Completed"`、`commit_short_sha` は `^[0-9a-f]{7,40}$` で、`reviewed_head.sha` の前方一致。`completed_at` と `comment_updated_at` は解析可能 |
+| I7 | 時系列: `reaction.created_at >= floor(completed_at) + 1s`（方針 2 の時系列規則）、`reaction.created_at >= reviewed_head.committed_at`、`comment_updated_at >= floor(completed_at)` |
+| I8 | `checks.head_sha_at_start` / `head_sha_before_decision` / `head_sha_after_decision` はすべて `reviewed_head.sha` と一致する。`checks.short_sha_matching_pr_commits == 1`、`checks.current_head_bot_reviews == 0` |
+| I9 | `fetched_at` / `decided_at` は解析可能で、`reaction.created_at <= fetched_at <= decided_at` |
+
+各セクション（`repository` / `pull_request` / `reviewed_head` / `approval` 以下 / `checks`）のキー集合も、上の schema 例と完全に一致することを要求する（余分なキーも欠落も不可）。
 
 ### 2. 承認シグナルの解析（純粋関数）
 
@@ -203,11 +221,18 @@ if resolved.source == "artifact" and resolved.status == "PASS":
   2. trusted bot の review で `commit_id == head` だが 1 に当たらないもの → PASS を阻止する（`prev_state` を維持し、理由に `ambiguous bot review on head` を記録）
   3. PASS 候補になるのは次をすべて満たす場合
      - summary が解析でき、Code Review 行が `Completed`、`head_sha.startswith(commit_short_sha)`、完了時刻が解析可能
-     - trusted bot の `+1` で `created_at >= head_committed_at`（既存のガード）かつ `created_at >= floor_to_second(completed_at)`（「すべてのレビューが終わってから 👍」という bot の説明文に基づく）
+     - trusted bot の `+1` で、`created_at >= head_committed_at`（既存のガード）と **`created_at >= floor_to_second(completed_at) + 1 秒`** の両方を満たす（「完了秒より後の秒」。下記「時系列の判定規則」）
      - 条件を満たせば `done_pass`。`PollResult` に追加する optional フィールド `approval` に reaction と summary の詳細を持たせる
   4. trusted bot の `eyes` → `in_progress`（既存）
   5. それ以外 → `prev_state`（既存）
 - 時刻は `datetime.fromisoformat` で比較する（`Z` とマイクロ秒を正規化する）。解析できない時刻は PASS 候補から外す
+
+#### 時系列の判定規則（reaction が Completed の後であることの証明）
+
+- reaction の `created_at` は秒精度（例 `01:33:32Z`）、summary の完了時刻はマイクロ秒精度（例 `01:33:32.391219Z`）である。秒精度の値 `s` が表す実時刻は `[s, s+1)` のどこかなので、`s` と完了時刻 `c` が同じ秒に入る場合、reaction が `c` の前か後かは決められない
+- そこで **「reaction の秒 `s` が、完了時刻の秒 `floor(c)` より厳密に後」**、つまり `s >= floor(c) + 1s` のときだけ「Completed の後」とみなす。このとき実時刻は必ず `floor(c) + 1s > c` 以上になるため、順序が証明できる。reaction の値にもし小数秒が含まれていても、同じ式（秒に切り捨てずに比較）で保守側に判定される
+- 境界の例（c = `01:33:32.391219Z`）: reaction `01:33:31Z`（前）→ 不可 / `01:33:32Z`（同じ秒）→ **不可** / `01:33:33Z`（次の秒）→ 可 / 実測の `01:33:35Z` → 可
+- **制約**: bot が完了と同じ秒に 👍 を付けた場合は、正当な承認でも PASS にならない。その poll では非 terminal のままになり、in-progress / no-reaction の既存 timeout で BACK_FALLBACK（`review` skill）へ縮退する。順序が曖昧な証跡で PASS するより、この縮退を選ぶ（Issue 完了条件 6「SHA 対応が曖昧なケースを PASS にしない」の適用）
 
 ### 3. 毎 poll の head 照合
 
@@ -242,10 +267,37 @@ if resolved.source == "artifact" and resolved.status == "PASS":
    - それ以外の非 0（5 / 7 など）→ ABORT（fail-closed）
    - `[verdict_path]` がない手動起動 → 照合対象外（人間が承認者）
 2. **証跡の所在**: `dirname(.verdict_path)/review-poll-evidence.json`。ファイルがなければ旧形式の artifact とみなす。PR 状態から証跡を組み立てず（捏造しない）、ABORT する。suggestion は「`kaji run <workflow> [issue_id] --from review-poll` で再確認する」
-3. **schema の照合**（jq）: `schema_version == 1`、`kind == "kaji.review-poll.approval"`、`result == "PASS"`、`provider == "github"`、`reviewed_head.sha` が `^[0-9a-f]{40}$`、`pull_request.number` が整数。1 つでも満たさなければ ABORT（未知の schema_version も ABORT）
+3. **証跡の完全検証**（jq）: 方針 1 の不変条件 I1〜I9 を 1 本の jq プログラムで検証し、`jq -e` が真を返す場合だけ次へ進む。偽・null・jq エラー（JSON 破損を含む）はすべて ABORT とし、どの不変条件に違反したかを報告する。SKILL.md には次の形の jq プログラムを載せる（実装時に全 I を網羅する。下は骨格）
+
+   ```bash
+   jq -e '
+     def ts: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;        # 小数秒を切り捨てて epoch 秒
+     def keys_eq($k): (keys | sort) == ($k | sort);
+     . as $e
+     | keys_eq(["schema_version","kind","result","provider","repository","pull_request",
+                "reviewed_head","approval","checks","fetched_at","decided_at"])          # I1
+     and .schema_version == 1 and .kind == "kaji.review-poll.approval"
+     and .result == "PASS" and .provider == "github"
+     and (.reviewed_head.sha | type == "string" and test("^[0-9a-f]{40}$"))           # I3
+     and .approval.bot.id == 199175422                                                 # I4
+     and (.approval.bot.login | type == "string" and startswith("chatgpt-codex-connector"))
+     and .approval.reaction.content == "+1"                                            # I5
+     and .approval.review_summary.status == "Completed"                                # I6
+     and ($e.reviewed_head.sha | startswith($e.approval.review_summary.commit_short_sha))
+     and ((.approval.reaction.created_at | ts)
+          >= ((.approval.review_summary.completed_at | ts) + 1))                       # I7
+     and ([.checks.head_sha_at_start, .checks.head_sha_before_decision,
+           .checks.head_sha_after_decision] | all(. == $e.reviewed_head.sha))         # I8
+     and .checks.short_sha_matching_pr_commits == 1 and .checks.current_head_bot_reviews == 0
+     # … I2 / I5 の id・api_path / I6 の url・時刻 / I7 残り / I9 / 各セクションの keys_eq
+   ' "$EVIDENCE"
+   ```
+
+   `ts` は I7 の `floor(completed_at)` を実現する（`fromdateiso8601` は小数秒を受け付けないため、切り捨ててから epoch 秒に変換する）
 4. **現在の PR との照合**: `kaji pr view [branch_name] --json number,headRefOid,url,state` の結果が、`number == pull_request.number`、`url == pull_request.url`（owner / repo / 番号の照合を兼ねる）、`headRefOid == reviewed_head.sha`、`state == "OPEN"` をすべて満たすこと。違えば ABORT
 5. **merge**: 照合対象なら Step 3 を `kaji pr merge [branch_name] --match-head-commit <reviewed_head.sha>` で実行する。照合と merge の間に head が動いても GitHub が merge を拒否する。拒否されたら ABORT
 6. Issue verdict marker の有無は、どの段階でも判定に使わない（明記する）
+7. 2〜5 のいずれかで停止した場合、承認証跡を推測で補ったり、PR の現状から作り直したりしない（不足・矛盾時の停止条件。完了条件 8）
 
 ## 重要判断 provenance
 
@@ -254,10 +306,11 @@ if resolved.source == "artifact" and resolved.status == "PASS":
 | 既存 verdict 形式と consumer の互換性 | 4 フィールドと status 語彙、遷移を維持する。文言だけを変える | Issue 本文「完了条件」2 項目目（人間決定） | PASS の reason / evidence の文言を変える。機械照合の正本を別ファイルに分離する |
 | SHA を含まない reaction を SHA 承認として扱わない | `+1` 単独では PASS にしない。SHA を持つ bot の summary comment と組み合わせる | Issue 本文「設計で決定する事項」2 項目目（人間決定）。SHA を持つシグナルが summary comment だけであることは依頼元 PR の一次観測による | 案 D を採用する（代替案表）。短縮 SHA の一意性は PR commits で確認する |
 | summary comment の形式解析（marker、`Code Review` 行、`Completed`、datetime 属性、backtick の短縮 SHA） | 上記の形式だけを PASS 候補として受け入れ、それ以外は fail-closed | **AI の仮定**。根拠: 依頼元 PR #163 の実 comment 1 件と、同 comment 内の bot 自身の説明文。検査先: review-design（形式の妥当性）、実装の Small テスト、ワークフロー完了後の確認項目（実 PR での確認） | 解析不能なら非 terminal → BACK_FALLBACK へ縮退する |
-| `+1` は Completed の後に付く | `+1.created_at >= floor_to_second(completed_at)` を PASS の必要条件にする | **AI の仮定**。根拠: bot の説明文 "reacts with 👍 once all reviews finish with no findings" と実測（Completed 01:33:32.39Z → 👍 01:33:35Z）。検査先: review-design、実 PR での事後確認 | 古い `+1` が残ったまま、新 head のレビューが指摘付きで完了するまでの競合窓を閉じる。新 head でも正当な無指摘承認の 👍 が付け直されない場合は BACK_FALLBACK へ縮退する（安全側） |
+| `+1` は Completed の後に付く | `+1.created_at >= floor_to_second(completed_at) + 1 秒`（完了秒より後の秒）を PASS の必要条件にする。同じ秒は順序不明として PASS にしない | **AI の仮定**。根拠: bot の説明文 "reacts with 👍 once all reviews finish with no findings" と実測（Completed 01:33:32.39Z → 👍 01:33:35Z）。検査先: review-design、実 PR での事後確認 | 古い `+1` が残ったまま、新 head のレビューが指摘付きで完了するまでの競合窓を閉じる。新 head でも正当な無指摘承認の 👍 が付け直されない場合や、👍 が完了と同じ秒に付いた場合は BACK_FALLBACK へ縮退する（安全側。review-design 指摘 M1 を反映） |
 | polling 中や判定前後の head 変化 | 再評価せず ABORT で停止する | Issue「設計で決定する事項」3 項目目は「再評価または停止」の選択を設計に委ねている（人間決定の範囲内）。停止を選んだのは **AI の判断**。根拠: 評価対象の暗黙の入れ替えを避けられ、`--from review-poll` で安く再実行できる。検査先: review-design | 毎 poll の head 照合と、確定確認の直前・直後の再取得 |
 | 証跡の保存場所と書き込み順序 | `dirname(KAJI_VERDICT_PATH)/review-poll-evidence.json`。証跡を atomic write してから verdict を stdout へ出す | Issue「設計で決定する事項」1 項目目が設計に委ねている。具体値は **AI の仮定**。根拠: attempt ごとに新しく作られる dir なので古い証跡が残らない。consumer は既存の `kaji issue resolve-verdict` の `verdict_path` から辿れる（Issue #426 の契約）。検査先: review-design / review-code | baseline のように worktree 直下には置かない（attempt に紐づかないため） |
 | `KAJI_VERDICT_PATH` がない手動実行での PASS | ABORT にする | Issue 完了条件 6 項目目「必要証跡の欠落を PASS にしない」（人間決定）の適用 | workflow 外で `kaji pr review-poll` を手動実行するのは想定外の経路であり、明示的に停止させる |
+| close が証跡を完全に検証する | 不変条件 I1〜I9 を producer（Pydantic）と consumer（jq）の共通契約とし、consumer は jq で全項目を検証する。違反は停止 | Issue 完了条件 8 項目目「証跡の不足・矛盾時の停止条件」と目的「どの bot シグナルで承認されたかを機械照合する」（人間決定）。jq を選んだのは **AI の詳細化**（根拠: 対象 repo では installed `kaji` CLI だけが保証され、kaji の Python package を import できる保証がない）。検査先: review-code と変更固有検証 | review-design 指摘 M2 を反映。旧手順の schema 6 項目だけの照合を置き換えた |
 | close の照合を適用する範囲 | review-poll の最新 attempt が PASS の場合だけ照合する。`review` / `pr-verify` 経路と手動 close は既存手順のまま | Issue「対象外」（close の recovery policy 変更、すべての PR への fallback review / pr-verify の強制は対象外）と完了条件 8 項目目（人間決定）。経路判定に resolve-verdict を使うのは **AI の詳細化**。検査先: review-design | 人間が `--from close` で新しい run を起こした場合は exit 4 で照合対象外になる。これは人間による再開判断を承認とみなす既存運用の範囲であり、recovery 自動再開では `recovery-chain.json` を辿るので照合される |
 | 旧 artifact（証跡なし）の扱い | 証跡を捏造せず ABORT し、`--from review-poll` での再確認を案内する | Issue 完了条件 8 項目目「証跡を捏造せず再確認または停止へ進む」（人間決定） | close 内で review-poll を再実行する案は採らない（close の attempt dir に別 step の証跡が混ざるため） |
 | merge の原子性 | `--match-head-commit` を付ける | **AI の詳細化**。根拠: gh の公式マニュアル。`kaji pr merge` は method flag 以外をそのまま渡すため CLI 変更は不要。検査先: review-code | 公開 CLI は追加・変更しない |
@@ -282,10 +335,12 @@ one-way door の未決: なし。公開 CLI の引数と終了コード、verdic
   - 古い `+1` が残り、新 head の commit 時刻がそれより古い（つまり `+1.created_at >= head_committed_at` は成り立つ）。summary は旧 head の短縮 SHA で Completed → PASS にならないこと（完了条件 4）
   - 同じ条件で summary が新 head に対して未完了 → PASS にならないこと
   - summary は新 head で Completed だが `+1` が完了より前 → PASS にならないこと
+  - **同じ秒の境界**（完了時刻 `01:33:32.391219Z`）: `+1` が `01:33:31Z`（前の秒）→ PASS 不可、`01:33:32Z`（同じ秒）→ **PASS 不可**、`01:33:33Z`（次の秒）→ PASS。完了時刻が `01:33:32.000000Z` ちょうどで `+1` も `01:33:32Z` の場合 → PASS 不可（完了条件 4・6。review-design 指摘 M1）
+  - 同じ秒の `+1` しかない状態で polling を続けると、既存の timeout で BACK_FALLBACK に縮退し、PASS が出ないこと（Medium の `run_polling` で確認）
   - 信頼外 user の `+1` だけ → PASS にならないこと（完了条件 6）
   - current-head の bot COMMENTED review がある → `done_retry` が PASS より優先されること。marker なしの bot review が head にある → PASS にならないこと（完了条件 6「未解決の current-head 指摘」）
 - **時刻比較**: `Z` / マイクロ秒付き / 秒精度が混在しても正しく比較できること
-- **証跡 model**: 全必須フィールドが揃うと検証が通ること。SHA 39 桁・大文字・非 hex、`schema_version` 不正、余分なフィールドは `ValidationError` になること
+- **証跡 model**: 全必須フィールドが揃うと検証が通ること。SHA 39 桁・大文字・非 hex、`schema_version` 不正、余分なフィールドは `ValidationError` になること。さらに不変条件 I1〜I9 について、違反ごとに 1 ケース以上用意して `ValidationError` になることを確認する（bot id 不一致、reaction content が `+1` 以外、summary の短縮 SHA が head に前方一致しない、status が Completed 以外、checks の head SHA 不一致、`short_sha_matching_pr_commits != 1`、同じ秒の reaction、時刻の欠落・解析不能、`fetched_at > decided_at`、url と comment_id の不一致、section の余分なキー・欠落キー）
 - **verdict の互換性**: 各 status で `parse_verdict_block` が 4 フィールドを解釈できること（既存テストを維持）。PASS の evidence に PR、full SHA、evidence_path が含まれること
 - **head SHA の事前検証**: `main` に 40 桁でない `--head-sha` を渡すと ABORT verdict になること
 
@@ -317,7 +372,15 @@ one-way door の未決: なし。公開 CLI の引数と終了コード、verdic
 
 skill 手順は LLM 向けの文書なので、実行時コードの恒久テストは追加しない。代わりに次を行う。
 
-- 実装時に、手順に書く jq / `kaji` コマンドを、fixture の証跡 JSON と resolve-verdict の出力例に対して実際に実行し、照合が成功・失敗の両方で期待どおりに分岐することを確認し、証跡を残す（変更固有の検証）
+- 実装時に、SKILL.md に載せる jq プログラムと `kaji` コマンドを、次の fixture と resolve-verdict の出力例に対して実際に実行する。各 fixture で期待どおりの結果（成功は exit 0、それ以外は非 0 で停止）になることを確認し、実行ログを implement の証跡として残す（変更固有の検証。review-design 指摘 M2）
+  - 正常: producer（`ReviewPollEvidence`）が生成した証跡 → 成功。producer と consumer の契約が一致していることもこれで確かめる
+  - `approval` 欠落 / `repository` 欠落 / `checks` 欠落 / `fetched_at` 欠落（I1 違反）
+  - bot id 不一致・login 不一致（I4）、reaction content が `+1` 以外（I5）
+  - summary の短縮 SHA が `reviewed_head.sha` に前方一致しない、status が Completed 以外（I6）
+  - reaction が完了と同じ秒、または承認時刻の欠落（I7）
+  - checks のいずれかの head SHA が `reviewed_head.sha` と違う、`short_sha_matching_pr_commits == 2`（I8）
+  - `fetched_at > decided_at`（I9）、未知のキーの追加、`schema_version == 2`、JSON 破損
+  - 現在の PR の `headRefOid` / `number` / `url` / `state` が証跡と食い違う（方針 6 の 4）
 - 既存の `make verify-docs`（リンク検査）と `tests/test_skill_metadata.py`（frontmatter）が pass すること
 
 ## 影響ドキュメント
