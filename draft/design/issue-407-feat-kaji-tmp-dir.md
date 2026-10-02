@@ -134,7 +134,8 @@ tmp_env = build_tmp_env(tmp_dir)
 |------|------|
 | `tmp/` / `tmp/kaji/` / attempt dir の作成で `OSError`（権限不足、`tmp` が通常ファイル等） | `TmpDirPreparationError`（原因 `OSError` を chain）。dispatch しない。`WorkdirNotFoundError` と同じく dispatch 前の失敗として伝播し、`kaji run` は runtime error で終了 |
 | attempt tmp dir が既に存在（stale な残骸で run_id が再利用された等） | `TmpDirPreparationError`。別 attempt と同じ dir を共有しない（衝突しない保証を機械的に担保） |
-| 組み立てた path が `<resolved project_root>/tmp/` 配下にない（component に `/` や `..` が混入した等の防御的検査） | `TmpDirPreparationError` |
+| `issue_id` / `run_id` / `step_id` / `attempt_name` が単一の有効な path component でない（空、`.`、`..`、`/` や NUL を含む、絶対パス、非正規表記。例: `a/../design`、`../other`） | ディレクトリを一切作成せずに `TmpDirPreparationError`（§ 方針 1 手順 1）。`step_id` は `workflow.py` で非空文字列としか検査されないため、ここで拒否する |
+| 組み立てた path が不変条件（base 直下 4 階層・正規化済み）を満たさない | `TmpDirPreparationError`（防御的検査） |
 | `tmp/kaji/.gitignore` が既に存在 | 内容を変更しない（利用者の編集を尊重） |
 
 ## 制約・前提条件
@@ -191,14 +192,26 @@ tmp_env = build_tmp_env(tmp_dir)
    - `_StepExecutor.execute()` で `allocate_attempt_dir` の直後、step start ログより前に
      `prepare_attempt_tmp_dir` を呼ぶ。
    - `prepare_attempt_tmp_dir` の手順:
-     1. `base = project_root.resolve() / "tmp" / "kaji"`、`target = base / issue_id / run_id / step_id / attempt_name`
-     2. 何も作成する前に、`target` が `base` 配下に字句的に含まれることを検査
-        （`os.path.normpath` 後の `is_relative_to`。component の `..` / 絶対パス混入を排除）
-     3. `base` を `mkdir(parents=True, exist_ok=True)`
-     4. `base / ".gitignore"` を排他作成（`"x"` mode）で `*\n` を書く。`FileExistsError` は無視
-     5. `target` の親を `mkdir(parents=True, exist_ok=True)`、`target` を `mkdir(exist_ok=False)`
-     6. `target` を返す（`resolve()` 済み base からの字句連結なので正規化済み絶対パス）
-     - `OSError` / 既存 / 境界外は `TmpDirPreparationError` に wrap して raise
+     1. **component 検査（副作用前）**: `issue_id` / `run_id` / `step_id` / `attempt_name` の各値が
+        「単一の有効な path component」であることを検査し、違反は `TmpDirPreparationError` で拒否する。
+        規則（いずれかに該当すれば拒否）:
+        - 空文字列
+        - `.` または `..`
+        - `/` を含む（POSIX separator。`os.sep` と `os.altsep` が非 `None` ならそれも含む）
+        - NUL（`\x00`）を含む
+        - 絶対パスとして解釈される（`os.path.isabs(value)`。`/` 拒否で実質包含されるが明示する）
+        - `os.path.normpath(value) != value`（上記で拾えない非正規表記を保険として拒否）
+        これにより `step_id="a/../design"`（base 内の別表記 alias）や `"../other"`（traversal）も
+        境界の内外を問わず拒否する。包含検査だけに頼らない。
+     2. `base = project_root.resolve() / "tmp" / "kaji"`、`target = base / issue_id / run_id / step_id / attempt_name`
+        （検査済み component の連結なので `..` / `.` / 重複 separator を含まない正規化済み絶対パス）
+     3. 防御的不変条件として `target.parent.parent.parent.parent == base` かつ
+        `os.path.normpath(target) == str(target)` を assert 相当で検査（違反は `TmpDirPreparationError`）
+     4. `base` を `mkdir(parents=True, exist_ok=True)`
+     5. `base / ".gitignore"` を排他作成（`"x"` mode）で `*\n` を書く。`FileExistsError` は無視
+     6. `target` の親を `mkdir(parents=True, exist_ok=True)`、`target` を `mkdir(exist_ok=False)`
+     7. 手順 2 で組み立て手順 3 で検査した**同一の** `target` を返す（作成するパスと返却するパスは常に一致）
+     - component 違反 / `OSError` / 既存 / 不変条件違反は `TmpDirPreparationError` に wrap して raise
 2. **env の配線（runner → 各 dispatch）**
    - `tmp_env = build_tmp_env(tmp_dir)`。
    - `exec` / `exec_script`: `{**context_env, **tmp_env}` を `execute_exec` / `execute_script` に渡す。
@@ -252,7 +265,8 @@ WorkflowRunner.run()
 | 対象 dispatch 経路 | headless / interactive terminal / exec / exec_script の全経路 | Issue 本文「概要」・完了条件 5 項目目（人間決定） | interactive は tmux / Herdr の両 backend を含むと解釈（`interactive_terminal_backend` の両値） |
 | ディレクトリ layout の詳細 | artifacts の識別子を compact にミラー（`runs/` `steps/` は省略） | AI の仮定。根拠: artifacts と 1:1 対応で調査容易、AF_UNIX `sun_path` 108 byte 上限への配慮。two-way door（内部 layout、後から変更可）。検査先: review-design | — |
 | 既存 dir 衝突時の挙動 | `exist_ok=False` で fail loud（`TmpDirPreparationError`） | AI の仮定。根拠: 完了条件「run / step / attempt 間で衝突しない」を機械的に担保。run_id は排他採番なので通常発生しない。検査先: review-design / review-code | — |
-| interactive への env 伝達方式 | wrapper command に `env K=V` を前置（wrapper.sh 不変） | AI の仮定。根拠: tmux pane は server env を継承するため明示伝達が必須。両 backend 共通の 1 箇所で済む。検査先: review-design、Large テスト | — |
+| interactive への env 伝達方式 | wrapper command に `env K=V` を前置（wrapper.sh 不変） | AI の仮定。根拠: tmux pane は server env を継承するため明示伝達が必須。両 backend 共通の 1 箇所で済む。検査先: review-design、隔離 tmux server の Large テスト、Herdr launcher 実行テスト | — |
+| path component の検査規則 | 4 識別子を単一の有効な component として検査し、traversal と alias を作成前に拒否 | AI の仮定（review-design の指摘 MF1 を受けて具体化）。根拠: `workflow.py` は step ID を非空文字列としか検査しない。完了条件の「正規化済み絶対パス」「run / step / attempt 間で衝突しない」を字句上で担保する。two-way door。検査先: verify-design / review-code | — |
 | agent 経路へ渡す env の範囲 | 4 変数のみ。他の `KAJI_*` は渡さない | AI の仮定。根拠: Issue は 4 変数のみ要求。agent への `KAJI_*` 追加は skill-authoring.md の env 契約変更となりスコープ外。検査先: review-design | — |
 | `tmp/kaji/.gitignore` の自動作成 | 初回に `*` を書く。既存なら触らない | AI の仮定。根拠: kaji 導入先リポジトリで `tmp/` が未 ignore だと `issue-close` の安全ガードや `git add -A` に影響。two-way door。検査先: review-design | — |
 | 18 件の test の hermetic 化 | project 外を保証する fixture へ切り替え | AI の仮定。根拠: § 制約の実測。本機能導入で `make check` が壊れるため本 Issue の範囲（無関係な修正ではない）。test コードのみで可逆。検査先: review-design / review-code | 対象は実測で失敗した 18 件に限定 |
@@ -292,8 +306,12 @@ one-way door の未決は検出しなかった。公開 CLI 引数・終了コ�
     ディレクトリが存在（観点 1）
   - `tmp/kaji/.gitignore` が `*` で作成され、既存内容は上書きされない
   - 既存 target で `TmpDirPreparationError`、`tmp` が通常ファイルのとき `TmpDirPreparationError`（観点 5）
-  - `step_id` 等に `..` / 絶対パスを含む入力で `TmpDirPreparationError` となり、`tmp/` 配下に
-    何も作成されない（観点 1, 5）
+  - 不正 component 入力を 4 つの引数それぞれについて parametrize し、`TmpDirPreparationError` となり
+    `tmp/` 配下に何も作成されない（`tmp/` 自体も作られない）ことを確認（観点 1, 5）。入力には次を含める:
+    - base 外への traversal: `"../other"`、`"../../x"`、`"/abs"`
+    - **base 内に戻る traversal / alias**: `"a/../design"`、`"./design"`、`"design/."`、`"design//x"`
+    - `""`、`"."`、`".."`、`"a/b"`、NUL 含み
+  - 正常入力の返却パスが `os.path.normpath` で不変、かつ `..` / `.` component を含まないこと（観点 1）
   - 異なる run / step / attempt で異なるパス（観点 3）
 - runner 結合（既存 `tests/test_runner_exec_script_dispatch.py` / `test_runner_interactive_dispatch.py` /
   `test_exec_step_dispatch.py` の mock パターン）:
@@ -314,13 +332,46 @@ one-way door の未決は検出しなかった。公開 CLI 引数・終了コ�
   `tmp/kaji/<id>/<run_id>/<step>/attempt-001` と `.gitignore` の存在を確認（観点 1, 2, 4）
 - 実 `kaji run` + PATH 上の fake `claude`（既存 `tests/test_verdict_artifact_e2e_large_local.py` パターン）で
   headless agent 経路を通し、fake CLI プロセス内の `tempfile.gettempdir()` を検査（観点 4）
-- interactive 経路: `_build_wrapper_command(env=...)` が生成する command 文字列を、実 `wrapper.sh` と
-  PATH 上の fake `claude` で `sh -c` 実行し、agent プロセスで 4 変数と `tempfile.gettempdir()` を検査。
-  Herdr は `_materialize_herdr_launcher` で生成した実 launcher を同様に実行して検査（観点 4）
-  - tmux `split-window` / Herdr `pane run` 自体の起動は対象外: CI に tmux / Herdr セッションが無く
-    物理的に作成できない（`testing-convention.md`「物理的に作成不可」）。kaji は生成した command 文字列を
-    無加工で backend に渡すだけで、その文字列は上記で実行検証される。backend 起動の配線は既存 Medium
-    （mock）で argv 末尾が command 文字列であることを検証済み
+- **interactive（tmux）: 隔離した実 tmux server での E2E**（観点 2, 4）
+  - 目的: 「tmux pane は kaji プロセスではなく server の environment を継承する」という設計上の分岐を、
+    実 backend で検証する。
+  - 隔離: 利用者の既存 tmux server / session は一切使わない。test 専用 server を
+    `tmux -L kaji-test-<uuid> -f /dev/null new-session -d -s <name> -x 200 -y 50 'sleep 600'` で起動する
+    （`-f /dev/null` で利用者の設定を読まない。`-L` を使うのは、socket を長い `tmp_path` 配下に置くと
+    AF_UNIX の `sun_path` 108 byte 上限を超えうるため）。`display-message -p '#{socket_path}'` と
+    `'#{pane_id}'` から `TMUX`（`<socket>,<server pid>,<session idx>`）と `TMUX_PANE` を組み立て、
+    `monkeypatch.setenv` する。`execute_interactive_terminal` は `$TMUX` 経由でこの専用 server に接続する。
+  - 前提値の食い違いを作る: 専用 server に `set-environment -g TMPDIR/TMP/TEMP <server_dir>`、
+    test プロセスの `os.environ` に `TMPDIR/TMP/TEMP=<parent_dir>` を設定する（両者とも attempt 値と異なる）。
+    PATH の先頭に fake `claude` を置く。
+  - 実行: `execute_interactive_terminal(step=<claude agent step>, ..., env=build_tmp_env(<attempt dir>),
+    backend="tmux", timeout=<短め>)`。実 `split-window` → 実 `wrapper.sh` → fake `claude` が、自身の
+    4 変数・`tempfile.gettempdir()`・`NamedTemporaryFile` の作成先を JSON に記録してから verdict を書く。
+  - 検証: 4 変数がすべて attempt 値（`<server_dir>` / `<parent_dir>` ではない）であること、temp API の
+    作成先が attempt dir 配下であること、`execute_interactive_terminal` が verdict を観測して正常に戻ること。
+  - 後始末: fixture の finalizer で `tmux -L kaji-test-<uuid> kill-server` を必ず実行する（失敗時も
+    finalizer で実行し、専用 server を残さない）。
+  - 前提環境: tmux ≥ 3.1（interactive runner の既存最小要件）。tmux 不在は環境不備として扱い、skip しない
+    （`testing-convention.md`「環境不備は修正対象」）。本リポジトリの GitHub Actions は現状 test job を
+    持たない（`.github/workflows/` は `labels-sync.yml` / `publish-pypi.yml` のみ）ため、品質ゲートは各開発環境の
+    `make check` で実行され、tmux はその前提に加わる。CI test job を新設する場合は tmux を install する
+    （新設自体は本 Issue のスコープ外）。
+- **interactive（Herdr）: launcher 実行による代替検証**（観点 4）
+  - `_materialize_herdr_launcher` で生成した実 launcher を `sh` で実行し、実 `wrapper.sh` → fake `claude`
+    の経路で 4 変数と temp API が attempt 値になることを検証する（launcher の `exec env PATH=... env K=V ...`
+    連結の実行検証）。親 `os.environ` の `TMPDIR` を別値にして上書きも確認する。
+  - 実 Herdr `pane split` / `pane run` の起動は恒久テストに含めない。tmux とは理由が異なる:
+    Herdr は kaji の必須依存ではない任意 backend であり、`herdr --help`（0.8.2）で確認できる起動手段は
+    `herdr` / `herdr --session <name>`（TTY client で attach する対話起動）で、test から隔離 server を
+    headless に起動し後始末する手段を確認できなかった。tmux で実証した「server 環境と pane 環境の分離」が
+    Herdr でも成り立つとは**仮定しない**。Herdr の pane 環境は launcher の `exec env ...` が明示的に
+    上書きするため、server 側の環境の値に関係なく attempt 値になる構造。それを launcher 実行テストで確認する。
+  - 代替証跡: Herdr 実 backend の確認は、実装工程の変更固有検証として、Herdr が利用可能な環境で
+    `interactive_terminal_backend = "herdr"` の 1 step（fake ではない agent でも可）を手動実行し、
+    agent プロセス内の `echo $KAJI_TMP_DIR $TMPDIR $TMP $TEMP` 結果を実装報告に記録する。
+    利用できない環境なら、その旨を記録する。
+  - 既存 Medium（mock）で、Herdr launcher に渡す command と tmux `split-window` argv の末尾が
+    `_build_wrapper_command` の出力であることを引き続き検証する
 - `make check` のリポジトリ内 TMPDIR 実行（観点 7）: hermetic 化後、実装工程の変更固有検証として
   `TMPDIR=TMP=TEMP=<worktree>/tmp/<dir> make check` を実行し全件 pass を確認する。恒久的な回帰検出は、
   本機能導入後に全 workflow の agent が `KAJI_TMP_DIR` 下で `make check` を走らせること自体が担う
@@ -350,7 +401,8 @@ one-way door の未決は検出しなかった。公開 CLI 引数・終了コ�
 | POSIX Base Definitions, Environment Variables | https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap08.html | `TMPDIR`: 「一時ファイルを作るプログラムのために用意されたディレクトリのパス名を表す」 |
 | Python `tempfile.gettempdir` | https://docs.python.org/3/library/tempfile.html#tempfile.gettempdir | 探索順は `TMPDIR` → `TEMP` → `TMP` → platform 既定（POSIX は `/tmp` 等）。4 変数同値なら順序に依らず同じ dir |
 | Node.js `os.tmpdir()` | https://nodejs.org/api/os.html#ostmpdir | POSIX では `TMPDIR` / `TMP` / `TEMP` を参照（Claude Code / Codex 周辺の Node 系ツールへの波及根拠） |
-| GNU coreutils `mktemp` | https://www.gnu.org/software/coreutils/manual/html_node/mktemp-invocation.html | テンプレート未指定時・`-t` 時は `$TMPDIR` を使う |
+| GNU coreutils `mktemp` | https://www.gnu.org/software/coreutils/manual/html_node/mktemp-invocation.html （取得できない環境向けの代替: ローカルの `mktemp --help`、coreutils 9.x） | `mktemp --help` から引用（日本語ロケール）:「TEMPLATE が指定されない場合、tmp.XXXXXXXXXX が使用され、--tmpdir が暗黙のうちに指定されます」「-p DIR, --tmpdir[=DIR] … DIR が指定されていない場合、$TMPDIR が設定されていれば $TMPDIR が使用され、設定されていなければ /tmp が使用される」 |
+| tmux socket 選択 | https://man7.org/linux/man-pages/man1/tmux.1.html | `-L socket-name` は既定 socket ディレクトリ内の別名 socket を使う。`-f file` は代替設定ファイル。`$TMUX` は client が接続する server の socket を示す → 隔離 server を使った Large テストの根拠 |
 | tmux(1) | https://man7.org/linux/man-pages/man1/tmux.1.html | GLOBAL AND SESSION ENVIRONMENT: 新しい window / pane のプロセスは server の global / session environment から作られる → kaji プロセスの env は継承されないため command 前置で明示伝達する |
 | env(1) | https://man7.org/linux/man-pages/man1/env.1.html | `env NAME=VALUE... COMMAND` で変更した環境で COMMAND を実行 |
 | unix(7) | https://man7.org/linux/man-pages/man7/unix.7.html | `sun_path` は 108 byte。長い一時ディレクトリでの socket 作成失敗リスクの根拠 |
