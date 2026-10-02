@@ -439,6 +439,56 @@ def test_measure_refuses_dirty_worktree_without_writing_baseline(
     assert not (project / ".kaji-artifacts" / "baseline" / "baseline.json").exists()
 
 
+def _commit_design_dir_config(project: Path, design_dir: str) -> None:
+    """Commit a tracked config with ``design_dir`` and rebase ``main`` onto it."""
+    (project / ".kaji").mkdir()
+    (project / ".kaji" / "config.toml").write_text(
+        '[paths]\nartifacts_dir = ".kaji-artifacts"\nskill_dir = ".claude/skills"\n'
+        f'design_dir = "{design_dir}"\n\n'
+        "[execution]\ndefault_timeout = 1800\n\n"
+        '[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/repo"\n',
+        encoding="utf-8",
+    )
+    _git_run(project, "add", ".kaji")
+    _git_run(project, "commit", "-m", "chore: add kaji config")
+    # the config commit itself is a non-design commit; keep it out of main..HEAD
+    _git_run(project, "branch", "-f", "main", "HEAD")
+
+
+def _commit_design_doc(project: Path, design_dir: str) -> None:
+    doc = project / design_dir / "issue-397-x.md"
+    doc.parent.mkdir(parents=True)
+    doc.write_text("# design\n", encoding="utf-8")
+    _git_run(project, "add", design_dir)
+    _git_run(project, "commit", "-m", "docs: add design")
+
+
+@pytest.mark.medium
+@pytest.mark.parametrize(
+    ("configured", "design_dir"),
+    [(None, "draft/design"), ("designs/issues", "designs/issues")],
+)
+def test_design_only_commit_is_not_implementation_commit(
+    tmp_path: Path, configured: str | None, design_dir: str
+) -> None:
+    """設計書のみの commit は effective design_dir 配下なら実装 commit と見なさない（#397）。"""
+    project = _init_baseline_repo(tmp_path)
+    if configured is not None:
+        _commit_design_dir_config(project, configured)
+    _commit_design_doc(project, design_dir)
+    assert baseline_precheck._has_implementation_commit(project, "main") is False
+
+
+@pytest.mark.medium
+def test_legacy_design_commit_is_implementation_commit_when_design_dir_configured(
+    tmp_path: Path,
+) -> None:
+    project = _init_baseline_repo(tmp_path)
+    _commit_design_dir_config(project, "designs/issues")
+    _commit_design_doc(project, "draft/design")
+    assert baseline_precheck._has_implementation_commit(project, "main") is True
+
+
 @pytest.mark.medium
 def test_non_clean_local_comment_is_committed_to_provider_main(
     tmp_path: Path,
