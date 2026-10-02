@@ -38,6 +38,7 @@ PR マージ、worktree 削除、ブランチ削除、Issue クローズを一�
 | `default_branch` | str | ベースブランチ名（`main` 等）。local 経路で merge / push の引数に使用 |
 | `branch_name` | str | フィーチャーブランチ名（`feat/<id>` 等） |
 | `worktree_dir` | str | worktree 絶対パス |
+| `verdict_path` | str | harness 経由でのみ注入される、この step の `verdict.yaml` 絶対パス。Step 2.5（review-poll 承認証跡の照合）の適用判定に使う |
 
 ### 手動実行（スラッシュコマンド）
 
@@ -236,7 +237,188 @@ worktree 内にいる場合は main repo に移動:
 cd "$MAIN_REPO"
 ```
 
+### Step 2.5: review-poll 承認証跡の照合
+
+review-poll が PASS を返した run では、merge の前に「どの PR のどの full SHA が承認されたか」を
+構造化証跡と照合する。**Issue の verdict marker の有無は、この Step のどの段階でも判定に使わない**
+（review-poll は Issue コメントを投稿しない）。
+
+#### 2.5.1 適用判定
+
+プロンプトに `[verdict_path]` がある場合に限り、次を実行する。`[verdict_path]` がない手動起動は
+照合対象外（人間が承認者）で、Step 3 へ進む。
+
+```bash
+RESOLVED=$(kaji issue resolve-verdict [issue_id] --step review-poll --current-verdict-path [verdict_path])
+RESOLVE_EXIT=$?
+```
+
+| 結果 | 扱い |
+|------|------|
+| exit 0 かつ `.source == "artifact"` かつ `.status == "PASS"` | **照合対象**。2.5.2 へ |
+| exit 0 で `.source == "artifact"` かつ `.status` が PASS 以外 | 照合対象外。承認は `review` / `pr-verify` 経路。Step 3 へ |
+| exit 4（現在の run と recovery 復旧元に review-poll の attempt がない） | 照合対象外。Step 3 へ |
+| exit 0 で `source` key がない（marker で解決された） | 矛盾。**ABORT** |
+| 上記以外の非 0（5 / 7 など） | **ABORT**（fail-closed） |
+
+exit code で分岐し、exit 0 の出力だけを `jq` で分類する（`marker` は review-poll が marker を投稿しない前提と
+矛盾するので ABORT、`skip` は Step 3 へ、`verify` だけが照合対象）。
+
+```bash
+REVIEW_POLL_VERDICT_PATH=""
+case "$RESOLVE_EXIT" in
+  0)
+    MODE=$(printf '%s' "$RESOLVED" | jq -r '
+      if has("source") | not then "marker"
+      elif .source == "artifact" and .status == "PASS" then "verify"
+      else "skip" end') || { echo "ABORT: cannot classify resolve-verdict output"; exit 1; }
+    REVIEW_POLL_VERDICT_PATH=$(printf '%s' "$RESOLVED" | jq -r '.verdict_path // empty')
+    ;;
+  4) MODE=skip ;;   # review-poll の attempt なし（人間の再開判断などは既存運用の範囲）
+  *) echo "ABORT: kaji issue resolve-verdict failed (exit $RESOLVE_EXIT)"; exit 1 ;;
+esac
+```
+
+`MODE` に応じた分岐（bash の `case` で明示する）:
+
+```bash
+case "$MODE" in
+  marker) echo "ABORT: review-poll verdict resolved from an Issue marker (unexpected)"; exit 1 ;;
+  skip)   : ;;   # 照合対象外。2.5.2〜2.5.5 を実行せず Step 3 へ進む
+  verify) : ;;   # 2.5.2 以降を実行する
+  *)      echo "ABORT: unexpected resolve-verdict classification: $MODE"; exit 1 ;;
+esac
+```
+
+以降の 2.5.2〜2.5.5 は **`MODE=verify` のときだけ** 実行する。`skip` のときは何もせず Step 3 へ進む。
+
+#### 2.5.2 証跡の所在（`MODE=verify` のみ）
+
+```bash
+EVIDENCE="$(dirname "$REVIEW_POLL_VERDICT_PATH")/review-poll-evidence.json"
+test -f "$EVIDENCE" || { echo "ABORT: review-poll evidence not found: $EVIDENCE"; exit 1; }
+```
+
+ファイルがなければ旧形式の artifact とみなして **ABORT** する。PR の現状から証跡を組み立てない（捏造しない）。
+suggestion は「`kaji run <workflow> [issue_id] --from review-poll` で再確認する」。
+
+#### 2.5.3 証跡の完全検証（`MODE=verify` のみ）
+
+不変条件 I1〜I9（正本: `docs/ARCHITECTURE.md` の「review-poll の承認証跡」節、
+producer は `kaji_harness/review_poll_evidence.py`）を 1 本の jq プログラムで検証する。
+出力は、すべて満たせば `OK` の 1 語、違反があれば違反した不変条件 ID のカンマ区切りになる。
+`OK` 以外（jq エラーや JSON 破損を含む）はすべて **ABORT** とし、違反した ID を報告する。
+
+```bash
+VERIFIED=$(jq -r '
+  def whole: sub("\\.[0-9]+Z$"; "Z");
+  def ists: type == "string"
+    and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$")
+    and (whole as $w | ($w | fromdateiso8601 | todateiso8601) == $w);
+  def ts: (whole | fromdateiso8601) * 1000000
+    + ((capture("\\.(?<f>[0-9]+)Z$") // {f: "0"}) | .f + "000000" | .[0:6] | tonumber);
+  def sec: (. / 1000000 | floor) * 1000000;
+  def keys_eq($k): type == "object" and ((keys | sort) == ($k | sort));
+  def posint: type == "number" and . == floor and . > 0;
+  def str1: type == "string" and length > 0;
+  def chk($id; f): if (try f catch false) == true then empty else $id end;
+  . as $e
+  | [
+      chk("I1"; keys_eq(["schema_version","kind","result","provider","repository","pull_request","reviewed_head","approval","checks","fetched_at","decided_at"])
+        and .schema_version == 1 and .kind == "kaji.review-poll.approval"
+        and .result == "PASS" and .provider == "github"),
+      chk("I1.sections";
+        (.repository | keys_eq(["owner","name"]))
+        and (.pull_request | keys_eq(["number","url"]))
+        and (.reviewed_head | keys_eq(["sha","committed_at"]))
+        and (.approval | keys_eq(["bot","reaction","review_summary"]))
+        and (.approval.bot | keys_eq(["id","login"]))
+        and (.approval.reaction | keys_eq(["id","content","created_at","api_path"]))
+        and (.approval.review_summary | keys_eq(["comment_id","url","commit_short_sha","status","completed_at","comment_updated_at"]))
+        and (.checks | keys_eq(["head_sha_at_start","head_sha_before_decision","head_sha_after_decision","short_sha_matching_pr_commits","current_head_bot_reviews"]))),
+      chk("I2";
+        (.repository.owner | str1) and (.repository.name | str1)
+        and (.pull_request.number | posint)
+        and (.pull_request.url | type == "string"
+             and startswith("https://github.com/")
+             and endswith("/pull/\($e.pull_request.number)"))),
+      chk("I3";
+        (.reviewed_head.sha | type == "string" and test("^[0-9a-f]{40}$"))
+        and (.reviewed_head.committed_at | ists) and (.reviewed_head.committed_at | ts | . > 0)),
+      chk("I4";
+        .approval.bot.id == 199175422
+        and (.approval.bot.login | type == "string" and startswith("chatgpt-codex-connector"))),
+      chk("I5";
+        (.approval.reaction.id | posint) and .approval.reaction.content == "+1"
+        and (.approval.reaction.created_at | ists) and (.approval.reaction.created_at | ts | . > 0)
+        and .approval.reaction.api_path
+            == "repos/\($e.repository.owner)/\($e.repository.name)/issues/\($e.pull_request.number)/reactions"),
+      chk("I6";
+        (.approval.review_summary.comment_id | posint)
+        and (.approval.review_summary.url | type == "string"
+             and endswith("#issuecomment-\($e.approval.review_summary.comment_id)"))
+        and .approval.review_summary.status == "Completed"
+        and (.approval.review_summary.commit_short_sha | type == "string" and test("^[0-9a-f]{7,40}$"))
+        and ($e.reviewed_head.sha | startswith($e.approval.review_summary.commit_short_sha))
+        and (.approval.review_summary.completed_at | ists) and (.approval.review_summary.completed_at | ts | . > 0)
+        and (.approval.review_summary.comment_updated_at | ists) and (.approval.review_summary.comment_updated_at | ts | . > 0)),
+      chk("I7";
+        (.approval.reaction.created_at | ts) >= ((.approval.review_summary.completed_at | ts | sec) + 1000000)
+        and (.approval.reaction.created_at | ts) >= (.reviewed_head.committed_at | ts)
+        and (.approval.review_summary.comment_updated_at | ts) >= (.approval.review_summary.completed_at | ts | sec)),
+      chk("I8";
+        ([.checks.head_sha_at_start, .checks.head_sha_before_decision, .checks.head_sha_after_decision]
+          | all(. == $e.reviewed_head.sha))
+        and .checks.short_sha_matching_pr_commits == 1 and .checks.current_head_bot_reviews == 0),
+      chk("I9";
+        (.fetched_at | ists) and (.decided_at | ists)
+        and (.approval.reaction.created_at | ts) <= (.fetched_at | ts)
+        and (.fetched_at | ts) <= (.decided_at | ts))
+    ]
+  | if length == 0 then "OK" else join(",") end
+' "$EVIDENCE") || { echo "ABORT: review-poll evidence is unreadable or not valid JSON"; exit 1; }
+[ "$VERIFIED" = "OK" ] || { echo "ABORT: review-poll evidence violates invariant(s): $VERIFIED"; exit 1; }
+```
+
+`ts` は小数秒を保持した epoch マイクロ秒を返す（`fromdateiso8601` は小数秒を受け付けないため、整数秒と小数部を別々に変換して合成する）。
+`sec` は `floor(秒)` で、producer の `next_second_after` / `replace(microsecond=0)` に対応する。floor を使うのは
+`completed_at` に対する比較（I7 の reaction・`comment_updated_at`）だけで、他の時刻比較（I7 の `committed_at`、I9）は小数秒まで比較する。
+I7 は「reaction の秒が完了秒より厳密に後」であることを要求する。
+`ists` は形式に加えて暦日・時分秒の実在を検証する（`fromdateiso8601 | todateiso8601` が元の秒部分に往復一致しなければ不正。`2026-02-30` 等を拒否する）。
+
+#### 2.5.4 現在の PR との照合（`MODE=verify` のみ）
+
+```bash
+PR_NOW=$(kaji pr view [branch_name] --json number,headRefOid,url,state) \
+  || { echo "ABORT: kaji pr view failed"; exit 1; }
+jq -e -n --argjson pr "$PR_NOW" --slurpfile ev "$EVIDENCE" '
+  $ev[0] as $e
+  | $pr.number == $e.pull_request.number
+    and $pr.url == $e.pull_request.url
+    and $pr.headRefOid == $e.reviewed_head.sha
+    and $pr.state == "OPEN"' >/dev/null \
+  || { echo "ABORT: current PR does not match the approved evidence (number/url/head/state)"; exit 1; }
+REVIEWED_SHA=$(jq -r '.reviewed_head.sha' "$EVIDENCE")
+```
+
+`url` の一致で owner / repo / 番号の照合を兼ねる。食い違えば **ABORT**。
+
+#### 2.5.5 停止条件
+
+2.5.1〜2.5.4 のいずれかで停止した場合、承認証跡を推測で補ったり、PR の現状から作り直したりしない。
+`$REVIEWED_SHA` が設定された場合だけ、Step 3 は `--match-head-commit` 付きで実行する。
+
 ### Step 3: PRのマージ
+
+Step 2.5 で照合対象になった場合（`$REVIEWED_SHA` が設定されている場合）:
+
+```bash
+kaji pr merge [branch_name] --match-head-commit "$REVIEWED_SHA"
+```
+
+照合の後に head が動いても GitHub が merge を拒否する。拒否された場合は **ABORT**（merge を再試行しない）。
+
+照合対象外の場合（`review` / `pr-verify` 経路、`[verdict_path]` なしの手動起動）:
 
 ```bash
 kaji pr merge [branch_name]
@@ -550,4 +732,4 @@ suggestion: |
 | status | 条件 |
 |--------|------|
 | PASS | クローズ完了 |
-| ABORT | follow-up 作成・再利用・親マーカー追記の失敗（マーカー参照先が close 済みの場合を含む）、またはクローズ失敗（`kaji issue close` 失敗を含む / local merge 衝突） |
+| ABORT | review-poll 承認証跡の欠落・不変条件違反・現在の PR との不一致・`--match-head-commit` による merge 拒否、follow-up 作成・再利用・親マーカー追記の失敗（マーカー参照先が close 済みの場合を含む）、またはクローズ失敗（`kaji issue close` 失敗を含む / local merge 衝突） |

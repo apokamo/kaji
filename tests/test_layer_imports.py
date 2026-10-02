@@ -40,6 +40,7 @@ MODULE_LAYERS: dict[str, str] = {
     "kaji_harness.pytest_baseline_plugin": "application",
     "kaji_harness.recovery": "application",
     "kaji_harness.result": "application",
+    "kaji_harness.review_poll_evidence": "application",
     "kaji_harness.runner": "application",
     "kaji_harness.script_exec": "application",
     "kaji_harness.series": "application",

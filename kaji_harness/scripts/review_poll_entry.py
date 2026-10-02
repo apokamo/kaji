@@ -1,8 +1,9 @@
 """Entry module for the `review-poll` skill (exec_script dispatch).
 
 env から argv 変換と PR / head 解決を担当し、polling 本体である
-``codex_review_poll.main()`` に委譲する薄い shim。``codex_review_poll`` の
-polling ロジック / argparse 契約には一切手を入れない（Issue #204 スコープ境界）。
+``codex_review_poll.main()`` に委譲する薄い shim。polling ロジックには手を入れず、
+``KAJI_VERDICT_PATH`` から承認証跡の保存先 ``--evidence-path`` を導出して渡すだけ
+（Issue #204 スコープ境界、Issue #429）。
 
 ABORT verdict は **stdout に emit して return 0**。``gh`` CLI 不在のような
 catastrophic 失敗は raise させ harness 側で ``ScriptExecutionError`` として
@@ -18,6 +19,8 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+from kaji_harness.review_poll_evidence import EVIDENCE_FILENAME
 
 from . import codex_review_poll
 
@@ -222,6 +225,11 @@ def main(argv: list[str] | None = None) -> int:
         "--head-committed-at",
         head_committed_at,
     ]
+    # Issue #429: PASS 時の承認証跡は step attempt dir（verdict.yaml の隣）に保存する。
+    # KAJI_VERDICT_PATH がない手動実行では渡さず、poller 側が PASS を ABORT に変える。
+    verdict_path = os.environ.get("KAJI_VERDICT_PATH", "").strip()
+    if verdict_path:
+        poll_argv += ["--evidence-path", str(Path(verdict_path).parent / EVIDENCE_FILENAME)]
     return codex_review_poll.main(poll_argv)
 
 

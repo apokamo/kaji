@@ -546,6 +546,40 @@ chain をまたいだ retry storm が構造的に起きない。
   ended_at}`。`ended_at` は `result.json` の記録値（tz 付き ISO 8601）で、取得できなければ `null`
   （mtime や現在時刻で補完しない）。`--require-meta` 指定時は meta を推測せず exit 6
 
+#### review-poll の承認証跡（`review-poll-evidence.json`, Issue #429）
+
+`review-poll`（`exec: [kaji, pr, review-poll]` → `review_poll_entry` → `codex_review_poll`）が `PASS` を返すとき、
+承認した PR・完全な head SHA・承認シグナルを `schema_version: 1` の JSON として
+`steps/review-poll/attempt-NNN/review-poll-evidence.json`（`verdict.yaml` の隣）に保存する。
+実装は `kaji_harness/review_poll_evidence.py`（`ReviewPollEvidence`, `extra="forbid"` + 不変条件の検証）。
+
+- **承認の根拠**: `+1` reaction は commit SHA を持たないため単独では承認にしない。bot の review summary comment
+  （`<!-- codex-pull-request-review-summary -->` で始まり、`Code Review` 行に状態・完了時刻・短縮 SHA を持つ）が
+  現在 head で `Completed` であり、かつ `+1` がその完了より後の秒に付いている場合だけ `PASS` 候補にする
+- **確定確認**: PASS 候補の確定時に `pulls/{n}` を再取得して head を確認し（判定の直前・直後）、PR commits で
+  短縮 SHA がちょうど 1 件・かつ head に一致することを確認する。head が動いた / 曖昧な場合は `ABORT`（fail-closed）
+- **書き込み順序**: 証跡の atomic write → stdout へ `PASS` verdict → runner が `verdict.yaml` を書く。
+  `verdict.yaml` が PASS なら同じ attempt に証跡が必ず存在する。`PASS` 以外では証跡を書かない
+- **consumer**: `issue-close`（GitHub 経路）が `kaji issue resolve-verdict --step review-poll --current-verdict-path ...`
+  で得た `verdict_path` から証跡を辿り、整合不変条件（I1〜I9）を jq で検証したうえで現在の PR（番号・URL・
+  `headRefOid`・`OPEN`）と照合し、`kaji pr merge --match-head-commit <reviewed_head.sha>` を実行する。
+  証跡の欠落・不一致は PR の現状から補わず停止する。Issue verdict marker の有無は判定に使わない
+
+**整合不変条件（schema v1。producer の Pydantic と consumer の jq の共通契約）**: 1 つでも欠落・型違い・不一致があれば、
+producer は PASS を出さず `ABORT`（`evidence unavailable`）、consumer は merge せず停止する。
+
+| ID | 不変条件 |
+|----|----------|
+| I1 | top-level と各 section（`repository` / `pull_request` / `reviewed_head` / `approval` 以下 / `checks`）のキー集合が完全一致（余分も欠落も不可）。`schema_version == 1`、`kind == "kaji.review-poll.approval"`、`result == "PASS"`、`provider == "github"` |
+| I2 | `repository.owner` / `name` は空でない文字列。`pull_request.number` は正の整数、`url` は `https://github.com/` で始まり `/pull/<number>` で終わる |
+| I3 | `reviewed_head.sha` は `^[0-9a-f]{40}$`、`committed_at` は解析可能な ISO 8601 UTC |
+| I4 | `approval.bot.id == 199175422`、`login` は `chatgpt-codex-connector` で始まる |
+| I5 | `approval.reaction`: `id` は正の整数、`content == "+1"`、`created_at` は解析可能、`api_path == "repos/<owner>/<name>/issues/<number>/reactions"` |
+| I6 | `approval.review_summary`: `comment_id` は正の整数、`url` は `#issuecomment-<comment_id>` で終わる、`status == "Completed"`、`commit_short_sha` は 7〜40 桁の小文字 hex で `reviewed_head.sha` の前方一致、`completed_at` / `comment_updated_at` は解析可能 |
+| I7 | `reaction.created_at >= floor(completed_at) + 1s`（完了秒より後の秒）、`reaction.created_at >= reviewed_head.committed_at`、`comment_updated_at >= floor(completed_at)` |
+| I8 | `checks.head_sha_at_start` / `head_sha_before_decision` / `head_sha_after_decision` がすべて `reviewed_head.sha` と一致、`short_sha_matching_pr_commits == 1`、`current_head_bot_reviews == 0` |
+| I9 | `fetched_at` / `decided_at` は解析可能で `reaction.created_at <= fetched_at <= decided_at` |
+
 ---
 
 ## CLI 対応マトリクス

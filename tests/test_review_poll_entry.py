@@ -21,6 +21,7 @@ def base_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("KAJI_WORKTREE_DIR", str(tmp_path))
     monkeypatch.setenv("KAJI_GIT_REMOTE", "origin")
     monkeypatch.delenv("KAJI_PR_ID", raising=False)
+    monkeypatch.delenv("KAJI_VERDICT_PATH", raising=False)
 
 
 @pytest.mark.small
@@ -271,6 +272,64 @@ class TestArgvDelegation:
             "--head-committed-at",
             "2026-05-28T00:00:00Z",
         ]
+
+    def test_verdict_path_adds_evidence_path_at_end(
+        self, base_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        attempt_dir = tmp_path / "steps" / "review-poll" / "attempt-001"
+        monkeypatch.setenv("KAJI_VERDICT_PATH", str(attempt_dir / "verdict.yaml"))
+        with (
+            patch(
+                "kaji_harness.scripts.review_poll_entry.subprocess.run",
+                side_effect=_fake_subprocess_run_factory(
+                    pr_list_stdout='{"number": 42, "headRefOid": "deadbeef"}',
+                    committed_date_stdout="2026-05-28T00:00:00Z\n",
+                ),
+            ),
+            patch(
+                "kaji_harness.scripts.review_poll_entry.codex_review_poll.main",
+                return_value=0,
+            ) as mock_main,
+        ):
+            rc = review_poll_entry.main()
+        assert rc == 0
+        call_argv = mock_main.call_args[0][0]
+        assert call_argv[-2:] == [
+            "--evidence-path",
+            str(attempt_dir / "review-poll-evidence.json"),
+        ]
+        # 既存の argv は先頭側でそのまま維持される
+        assert call_argv[:-2] == [
+            "--pr",
+            "42",
+            "--owner",
+            "owner",
+            "--repo",
+            "repo",
+            "--head-sha",
+            "deadbeef",
+            "--head-committed-at",
+            "2026-05-28T00:00:00Z",
+        ]
+
+    def test_blank_verdict_path_keeps_argv_unchanged(
+        self, base_env: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("KAJI_VERDICT_PATH", "  ")
+        with (
+            patch(
+                "kaji_harness.scripts.review_poll_entry.subprocess.run",
+                side_effect=_fake_subprocess_run_factory(
+                    pr_list_stdout='{"number": 42, "headRefOid": "deadbeef"}',
+                ),
+            ),
+            patch(
+                "kaji_harness.scripts.review_poll_entry.codex_review_poll.main",
+                return_value=0,
+            ) as mock_main,
+        ):
+            review_poll_entry.main()
+        assert "--evidence-path" not in mock_main.call_args[0][0]
 
     def test_gh_called_process_error_propagates(self, base_env: None) -> None:
         def _fake(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
