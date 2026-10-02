@@ -64,12 +64,32 @@ repository 側 adapter（legacy path resolver）で変換して運用してい�
 | V4 | 空 segment を含まないこと | `designs//issues`, `designs/issues/`, `/designs` | 正規形を 1 つに固定し、`design_path` 比較を文字列一致で行えるようにする |
 | V5 | `.` / `..` segment を含まないこと | `../designs`, `designs/../..`, `./designs`, `.` | traversal と非正規形の排除。repository root 自体（`.`）も設計書 directory として認めない |
 | V6 | `.git` segment を含まないこと（大文字小文字無視） | `.git/designs`, `x/.GIT` | git 管理領域への書込み防止 |
-| V7 | `repo_root / design_dir` を `Path.resolve()` した結果が `repo_root.resolve()` 配下であること | repo 内 symlink `designs -> /tmp/outside` を経由する `designs/issues` | lexical 検査を通過する symlink 経由の repository 外 escape |
+| V7 | `design_dir` の既存 prefix を symlink 解決した実体が `repo_root.resolve()` 配下であり、かつ解決自体が成功すること | repo 内 symlink `designs -> /tmp/outside` を経由する `designs/issues`、symlink loop `designs -> designs` | lexical 検査を通過する symlink 経由の repository 外 escape、および解決不能な path |
 
-V1〜V6 は純粋関数 `validate_design_dir(value: str) -> None`（違反は `ValueError`）として実装し、
-loader は `ValueError` を `ConfigLoadError(path, "paths.design_dir ...")` に包む。V7 は filesystem を参照するため
-loader（`KajiConfig._load`）でのみ行う（存在しない component は `resolve(strict=False)` で lexical に連結されるため、
-未作成 directory でも検査可能）。
+**入力境界（Pydantic）**: AGENTS.md「外部入力は Pydantic で検証する」と同ファイルの既存パターン
+（`_IncidentSection` → `IncidentConfig` の詰め替え、`ValidationError` → `ConfigLoadError` 変換。`config.py` L117-166 / L269-292）に合わせ、
+`design_dir` の生値は strict な Pydantic 入力モデル `_DesignDirInput`
+（`model_config = ConfigDict(extra="forbid", frozen=True, strict=True)`、field `design_dir: str = ""`）で検証する。
+
+- `[paths]` に `design_dir` キーが無い → モデルを通さず `""`（未設定 = legacy fallback）
+- `design_dir = ""`（明示空文字）→ 未設定と同じ扱い（`""`、legacy fallback）。`worktree_prefix` の空文字 = 未設定と同じ規則
+- `design_dir = 1` / `true` / `["a"]` / `{ a = 1 }` → strict mode により型エラー（int / bool / list / table の暗黙変換をしない）
+- 非空文字列 → `field_validator` が純粋関数 `validate_design_dir(value)`（V2〜V6、違反は `ValueError`）を呼ぶ
+- `ValidationError` は `_parse_incident` と同形式で `ConfigLoadError(path, "paths.design_dir: <msg>")` に変換する
+- 既存 `artifacts_dir` / `skill_dir` / `worktree_prefix` の手動検査は本 Issue では刷新しない（範囲外。`design_dir` の新規入力のみ Pydantic 境界に載せる）
+
+**V7（filesystem 検査）** は filesystem を参照するため Pydantic モデルには入れず、loader（`KajiConfig._load`）で
+Pydantic 検証の後に行う。Python のバージョン差（3.13 未満は `resolve(strict=False)` でも symlink loop で
+`RuntimeError`、3.13 以降は loop を非存在扱いで黙って通す）に依存しないよう、次の決定的手順をとる:
+
+1. `design_dir` の segment を先頭から順に `repo_root` に連結し、`os.path.lexists()` が偽になった最初の component で打ち切る
+   （以降は未作成 directory。lexical 検査 V2〜V6 済みのため連結のみで安全）
+2. 最後に存在した prefix を `Path.resolve(strict=True)` で解決する。`RuntimeError`（3.13 未満の loop）・`OSError`
+   （3.13 以降の `ELOOP`、権限不足、壊れた symlink の `FileNotFoundError` を含む）は
+   `ConfigLoadError(path, "paths.design_dir: cannot resolve '<prefix>': <exc>")` に変換する
+3. 解決結果が `repo_root.resolve()` の配下（`Path.is_relative_to`）でなければ
+   `ConfigLoadError(path, "paths.design_dir must stay inside the repository (resolves to <resolved>)")`
+4. prefix が 1 つも存在しない（未作成 directory）場合は V7 を通過する
 
 #### `build_design_path()` の引数
 
@@ -80,7 +100,20 @@ def build_design_path(issue_id: str, slug: str, design_dir: str = "") -> str: ..
 | 引数 | 型 | 内容 |
 |------|----|------|
 | `issue_id` | `str` | 正規化済み Issue ID（`"42"` / `"local-pc1-3"`） |
-| `slug` | `str` | sanitized slug。`validate_slug()` で検証（違反は `ValueError`） |
+| `slug` | `str` | sanitized slug。`validate_slug()` で**全体一致**検証（違反は `ValueError`。§ slug 検証の厳密化） |
+
+#### slug 検証の厳密化
+
+現行 `validate_slug` は `_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")` を `.match()` で評価しており、
+`$` が末尾改行の直前にも一致するため `validate_slug("example\n")` が成功する（review-design で Python 3.12.3 実測）。
+このまま `build_design_path` に流すと改行入りの `design_path` が生成され、「不正 slug を validation error にする」要件を満たさない。
+
+- `validate_slug` を `_SLUG_RE.fullmatch(slug)`（正規表現から `^` / `$` を除いた `[a-z0-9][a-z0-9-]{0,39}`）に変更し、
+  文字列全体の一致を要求する。末尾 LF・CRLF・その他の制御文字・空白はすべて拒否される
+- `validate_slug` は Local provider の frontmatter 検証（`providers/_local_common.py:117`、`providers/local.py:136`）とも共有する。
+  変更は拒否側への厳密化のみで、従来も意図上不正だった値（末尾改行付き slug）を拒否するだけなので、
+  正規の slug（`derive_slug_from_title` の出力・`kaji issue create` が生成する slug）の挙動は変わらない
+- 同じ理由で `validate_design_dir` の segment 判定も `fullmatch` を用いる（疑似コードどおり）
 | `design_dir` | `str` | `[paths].design_dir`。`""` は legacy default `draft/design` に解決。非空なら `validate_design_dir()` で再検証 |
 
 ### 出力
@@ -97,8 +130,8 @@ def build_design_path(issue_id: str, slug: str, design_dir: str = "") -> str: ..
 
 | 状況 | 挙動 |
 |------|------|
-| `design_dir` が V1〜V7 に違反 | `KajiConfig._load` が `ConfigLoadError` を送出。`kaji run` / `kaji issue` / `kaji config *` は既存経路どおり exit 2 + stderr にキー名と違反値を表示 |
-| `build_design_path` に不正 slug（例: `"Bad_Slug"`, `"../x"`, `""`） | `ValueError`（`validate_slug` のメッセージ）。GitHub は title から導出した slug、Local は frontmatter strict 検証済み slug を渡すため通常経路では到達しない（defense in depth） |
+| `design_dir` が V1〜V7 に違反（型違反・symlink loop 等の解決失敗を含む） | `KajiConfig._load` が `ConfigLoadError` を送出（`ValidationError` / `RuntimeError` / `OSError` は送出前に変換し、生の例外を漏らさない）。`kaji run` / `kaji issue` / `kaji config *` は既存経路どおり exit 2 + stderr にキー名と違反値を表示 |
+| `build_design_path` に不正 slug（例: `"Bad_Slug"`, `"../x"`, `""`, `"example\n"`, `"example\r\n"`） | `ValueError`（`validate_slug` のメッセージ）。GitHub は title から導出した slug、Local は frontmatter strict 検証済み slug を渡すため通常経路では到達しない（defense in depth） |
 | `build_design_path` に不正 `design_dir`（provider を直接構築した場合） | `ValueError`（`validate_design_dir` のメッセージ） |
 
 ### 使用例
@@ -148,7 +181,8 @@ designs/issues
 
 | ファイル | 変更内容 |
 |----------|----------|
-| `kaji_harness/config.py` | `LEGACY_DESIGN_DIR` 定数、`validate_design_dir()`、`PathsConfig.design_dir: str = ""`、`_load` での型検査・V1〜V7 検証 |
+| `kaji_harness/config.py` | `LEGACY_DESIGN_DIR` 定数、`validate_design_dir()`、`PathsConfig.design_dir: str = ""`、入力モデル `_DesignDirInput`（strict Pydantic）、`_load` での V1〜V7 検証と例外変換 |
+| `kaji_harness/providers/context.py`（slug） | `validate_slug` を `fullmatch` に変更（末尾改行等の拒否） |
 | `kaji_harness/providers/context.py` | `build_design_path(issue_id, slug, design_dir="")`：legacy fallback・slug / design_dir 検証。module docstring / 関数 docstring の固定 path 表現を除去 |
 | `kaji_harness/providers/github.py` / `local.py` | dataclass field `design_dir: str = ""` を追加し `build_design_path` に渡す。docstring に由来を記載 |
 | `kaji_harness/providers/__init__.py` | `get_provider()` で両 provider に `design_dir=config.paths.design_dir` を渡す |
@@ -175,7 +209,7 @@ designs/issues
 
 ```
 .kaji/config.toml [paths].design_dir
-  └─ KajiConfig._load: 型検査 → validate_design_dir (V1-V6) → symlink 検査 (V7) → PathsConfig.design_dir
+  └─ KajiConfig._load: _DesignDirInput (strict Pydantic; V1 + validate_design_dir V2-V6) → symlink 検査 (V7, 例外は ConfigLoadError 化) → PathsConfig.design_dir
        └─ get_provider(config): GitHubProvider(design_dir=...) / LocalProvider(design_dir=...)
             └─ resolve_issue_context(): build_design_path(id, slug, self.design_dir)
                  └─ IssueContext.design_path ──→ prompt.py の design_path / `kaji issue context` JSON
@@ -188,7 +222,8 @@ KajiConfig ──→ `kaji config design-dir`: config.paths.design_dir or LEGACY
 |----------|------|
 | `config.LEGACY_DESIGN_DIR = "draft/design"` | legacy default の単一情報源。`build_design_path` と `kaji config design-dir` が参照 |
 | `config.validate_design_dir(value: str) -> None` | V1 以外の lexical 規則（V2〜V6）を判定する純粋関数。違反は `ValueError` |
-| `KajiConfig._validate_design_dir(config_path, design_dir, repo_root)` | `ValueError` を `ConfigLoadError` に変換し、V7（symlink escape）を検査 |
+| `_DesignDirInput`（Pydantic, strict） | `design_dir` 生値の入力境界。型検査（V1）と `validate_design_dir` 呼び出し（V2〜V6） |
+| `KajiConfig._parse_design_dir(config_path, paths_data, repo_root) -> str` | キー有無・空文字の扱い、`_DesignDirInput` 検証、`ValidationError` → `ConfigLoadError` 変換、V7 検査（`RuntimeError` / `OSError` → `ConfigLoadError`） |
 | `PathsConfig.design_dir` | loader が採用した生値（未設定 `""`）。`worktree_prefix` と同じ「config default と実効 fallback の分離」パターン |
 | `build_design_path(issue_id, slug, design_dir="")` | slug 検証 → design_dir 検証 → fallback 解決 → 連結 |
 | `cmd_config_design_dir(args)` | `kaji config artifacts-dir` と同一の `--workdir` / exit code 契約で実効値を出力 |
@@ -211,7 +246,7 @@ def validate_design_dir(value: str) -> None:
         if not _DESIGN_DIR_SEGMENT_RE.fullmatch(seg): raise ValueError(...)  # V3
 
 def build_design_path(issue_id: str, slug: str, design_dir: str = "") -> str:
-    validate_slug(slug)
+    validate_slug(slug)          # fullmatch: "example\n" も拒否
     if design_dir:
         validate_design_dir(design_dir)
     return f"{design_dir or LEGACY_DESIGN_DIR}/issue-{issue_id}-{slug}.md"
@@ -225,6 +260,9 @@ def build_design_path(issue_id: str, slug: str, design_dir: str = "") -> str:
 | 未設定時の挙動 | legacy default `draft/design` を維持し、legacy であることを文書化 | Issue 本文「提案」4・「範囲外」（default 切替は別 Issue）（人間決定） | loader default `""` + builder fallback（`worktree_prefix` と同型）。定数 `LEGACY_DESIGN_DIR` を単一情報源化 |
 | path の組み立て規則 | `<design_dir>/issue-<id>-<slug>.md`（directory のみ可変） | Issue 本文「提案」2（人間決定） | ファイル名部分は現行規約を据え置き |
 | 拒否対象 | 絶対 path / `..` / repository 外 escape / 不正 slug | Issue 本文「提案」3・「完了条件」4（人間決定） | V1〜V7 に分解。V3（segment 文字種）・V4（空 segment）・V6（`.git`）・V7（symlink escape）は「repository 外 escape 拒否」と shell 展開安全性の実装上の詳細化。**V3/V4/V6 の厳しさは AI の仮定**（根拠: `design_path` は skill 内 shell command に未 quote で展開されうる。緩和は後方互換に追加できる two-way door）。検査先: review-design / review-code |
+| `design_dir` の入力検証境界 | strict Pydantic 入力モデル `_DesignDirInput` で検証し `ConfigLoadError` に変換 | `AGENTS.md`「外部入力は Pydantic で検証する」（人間が定めた repository 規約）+ 既存 `_IncidentSection` パターン（既存契約） | 新規キーのみ対象（既存 `[paths]` キーの刷新は範囲外）。キー無し / 空文字は legacy fallback、非 str は strict で拒否 |
+| 不正 slug の判定方法 | `validate_slug` を `fullmatch` に厳密化（末尾改行・制御文字を拒否） | Issue 本文「完了条件」4「不正 slug が validation error になる」（人間決定） | 共有先（Local frontmatter 検証）への影響は拒否側の厳密化のみ。review-design の実測（`"example\n"` が通る）に基づく |
+| V7 の解決失敗時の挙動 | symlink loop・壊れた symlink・権限不足を `ConfigLoadError`（CLI では exit 2）に収束 | Issue 本文「提案」3「repository 外 escape を拒否」（人間決定）+ 既存 CLI の exit 2 契約 | Python バージョン差を避けるため既存 prefix に `resolve(strict=True)` を使う決定的手順。**手順の具体形は AI の詳細化**。検査先: review-code |
 | 両 provider への供給経路 | `get_provider()` から同一値を両 provider に渡す | Issue 本文「提案」6・「完了条件」3（人間決定） | dataclass field `design_dir` を追加。provider 構築箇所が `get_provider()` のみであることを grep で確認 |
 | config inspection の具体形 | 既存 `kaji config`（parser の help: "Read-only config inspection commands"）に `design-dir` subcommand を追加し、`kaji issue context` の `design_path` も自動追随 | Issue 本文「スコープ/範囲内」の「config inspection … の更新」と「完了条件」5（人間決定: config inspection に反映する）。**具体形（新 subcommand を足すこと）は AI の仮定**（根拠: 既存 `provider-type` / `artifacts-dir` と同型の read-only 追加で、release 前なら削除・改名が安価な two-way door）。検査先: review-design |
 | starter / config example の扱い | kaji 側 config 例（configuration reference・CLI guides）に `designs/issues` の選択例をコメントで載せる。外部 starter repository は Release 後の starter sync で追随 | Issue 本文「提案」5・「範囲内」（人間決定: example で選択可能にする）。**外部 repository を本 workflow で直接変更しない判断は AI の仮定**（根拠: starter は別 repository で、`/update-starter` → `/release-starter` の管理手順が存在する）。検査先: review-design / i-dev-final-check |
@@ -248,6 +286,9 @@ one-way door の未決: なし。公開 config キー名・default・拒否対�
 - `build_design_path`: `design_dir` 省略 / `""` で legacy（`draft/design/issue-153-auth.md`。既存テスト維持）、
   `"designs/issues"` で `designs/issues/issue-42-example.md`、不正 slug（`"Bad_Slug"`, `"../x"`, `""`）と
   不正 `design_dir` で `ValueError`。
+- `validate_slug` の全体一致: `"example\n"`, `"example\r\n"`, `"exa\nmple"`, `"example "`, `"ex\tample"` が `ValueError`、
+  正規 slug（`"example"`, `"a"`, 40 文字境界）は従来どおり通過、41 文字は拒否。
+- `_DesignDirInput`: strict で int / bool / list を拒否、`""` を受理、非空の不正値で `validate_design_dir` 由来のエラー。
 - `PathsConfig()` の `design_dir` default が `""`。
 - `prompt.build_prompt` が `IssueContext.design_path` を加工せず注入すること（既存テストで担保済みのため、
   `designs/issues/...` 値での 1 ケースのみ追加）。
@@ -256,6 +297,13 @@ one-way door の未決: なし。公開 config キー名・default・拒否対�
 
 - **config 読込**: `design_dir = "designs/issues"` → `paths.design_dir == "designs/issues"`；未設定 → `""`；
   非文字列・V2〜V6 違反 → `ConfigLoadError`（メッセージに `paths.design_dir`）；overlay の `[paths] design_dir` は無視される。
+- **入力境界（Pydantic）**: `design_dir` に int / bool / 配列 / inline table → `ConfigLoadError`（メッセージに `paths.design_dir`）。
+  キー無しと `design_dir = ""` はどちらも `paths.design_dir == ""` で legacy fallback になる。
+  `design_dir = "designs/issues\n"`（TOML の `"\n"` エスケープ）→ `ConfigLoadError`。
+- **symlink loop（V7 解決失敗）**: tmp repo に `designs -> designs` を作り `design_dir = "designs/issues"` で
+  `ConfigLoadError`（生の `RuntimeError` / `OSError` が漏れないこと。Python 3.11〜3.13+ のどれでも同結果になることを
+  決定的手順の `strict=True` で保証）。壊れた symlink（`designs -> missing`）も同様に `ConfigLoadError`。
+  同 config で `kaji config design-dir` の CLI handler が exit 2 + stderr に `paths.design_dir` を出す。
 - **symlink escape（V7）**: tmp repo 内に `designs -> <tmp外 directory>` を作り `design_dir = "designs/issues"` で
   `ConfigLoadError`。repo 内を指す symlink は許容。
 - **adapter 不要の end-to-end（完了条件 1・6）**: `[paths] design_dir = "designs/issues"` を持つ tmp_path の
@@ -274,7 +322,8 @@ one-way door の未決: なし。公開 config キー名・default・拒否対�
 
 ### Large テスト（`large_local`、ネットワークなし subprocess）
 
-- 実 subprocess の `kaji config design-dir --workdir <tmp repo>` が設定値を出力し、不正値で exit 2 になること
+- 実 subprocess の `kaji config design-dir --workdir <tmp repo>` が設定値を出力し、不正値（`../x`、symlink loop `designs -> designs`）で
+  exit 2 + traceback なしの stderr 診断になること
   （CLI 登録・dispatch・exit code の結線確認）。
 - local provider の tmp repo で `kaji issue create` → `kaji issue context <id>` を実 subprocess で実行し、
   JSON の `design_path` が `designs/issues/issue-<id>-<slug>.md` であること（config → provider → CLI 出力の E2E）。
@@ -313,5 +362,8 @@ one-way door の未決: なし。公開 config キー名・default・拒否対�
 | config 仕様の正本 | `docs/reference/configuration.md` § `[paths]` / § Overlay merge rule | `[paths]` は overlay 非対象。`worktree_prefix` の「config default vs effective fallback」記述パターン |
 | テスト規約 | `docs/dev/testing-convention.md` § テストサイズ定義 / § `subprocess.run` patch スコープ | GitHub passthrough の stub 許可条件、worktree 解決に届く経路は実 git fixture |
 | 利用側ユースケース | https://github.com/apokamo/fullstack-agent-template/issues/42 | 「実装設計」節: 正本 `designs/issues/issue-42-kaji-skill-worktree-bootstrap.md`。Kaji 0.18.0 の注入値を repository adapter で変換している |
-| Python `pathlib` | https://docs.python.org/3/library/pathlib.html | `PurePosixPath.is_absolute()` / `PureWindowsPath.drive` による OS 非依存の lexical 判定、`Path.resolve(strict=False)` は存在しない component を含んでも解決でき symlink を辿る |
+| Python `pathlib` | https://docs.python.org/3/library/pathlib.html#pathlib.Path.resolve | `PurePosixPath.is_absolute()` / `PureWindowsPath.drive` による OS 非依存の lexical 判定。`resolve()` は「If a path resolution loop is encountered, RuntimeError is raised」（3.13 で変更: strict=False では loop を非存在扱い、strict=True では OSError）→ V7 は既存 prefix に `strict=True` を使い両例外を変換 |
+| Python `re` | https://docs.python.org/3/library/re.html#re.fullmatch | `$` は「the end of the string or just before the newline at the end of the string」に一致。`fullmatch` は文字列全体の一致を要求 → slug / segment 判定は `fullmatch` |
+| Pydantic strict mode | https://docs.pydantic.dev/latest/concepts/strict_mode/ | strict では型の暗黙変換を行わない（int → str 等を拒否）。既存 `_IncidentSection` と同じ `ConfigDict(strict=True)` を採用 |
+| 外部入力の検証規約 | `AGENTS.md` Always-Apply Rules | 「外部入力は Pydantic で検証する」 |
 | starter sync 手順 | `docs/operations/release/starter-sync-runbook.md` | 外部 starter repository は Release 後に追随する管理手順 |
