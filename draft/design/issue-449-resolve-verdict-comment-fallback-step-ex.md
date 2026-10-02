@@ -304,9 +304,10 @@ Issue 完了条件 必須 1 で決定済み。
 - provider: `view_issue` が固定コメント列を返す fake。呼び出し回数を記録する
 - `RunLogger`: `MagicMock`。`log_verdict_source` の呼び出し引数を検査する（run.log には書かない）
 - 書き戻し: `kaji_harness.runner.write_verdict_yaml` を `patch` する。保存に渡された `Verdict` を検査する（ファイルは作らない）
-- artifact 不在: `attempt_dir` / `verdict_path` には、作成しない固定の存在しないパス（例 `Path("/nonexistent/attempt-001")`）を渡す。
-  `resolve_verdict` の `exists()` 判定が False になるだけで、ファイルの作成・読み込みは起きない。
-  `tmp_path` は使わない
+- artifact 不在: `patch.object(Path, "exists", return_value=False)` で存在確認を False 固定の mock にし、ファイルシステムを
+  参照しない。`attempt_dir` / `verdict_path` は任意の固定パス（例 `Path("/fake/attempt-001")`）で、作成も参照もしない。
+  mock が呼ばれたことを assert し、artifact 判定の境界を通過したことを確認する。`tmp_path` は使わない。
+  実 `resolve_verdict` / `_is_current_comment` / `parse_verdict_block` / `parse_verdict` の判断ロジックは mock せずに駆動する
 
 - **再現テスト（Red → Green）**: `kind ∈ {"exec", "exec_script"}`（parametrize）、`is_script_like=True`。
   Issue に前 step の作業報告コメントを置く（`status: PASS` block、marker 無し、`created_at=2026-06-04T12:00:00Z`）。
@@ -323,8 +324,9 @@ Issue 完了条件 必須 1 で決定済み。
 
 `tests/test_verdict_artifact.py`（既存、`@pytest.mark.small`）— `resolve_verdict` の step scoping。
 
-- 本 Issue で追加する scoping テストは `tmp_path` を使わない。artifact 不在は、作成しない存在しないパスを
-  `attempt_dir` に渡して表現し、モック完結の Small とする（既存テストの再分類は本 Issue の範囲外）
+- 本 Issue で追加する scoping テストは `tmp_path` を使わない。artifact 不在は
+  `patch.object(Path, "exists", return_value=False)`（False 固定の mock）で表現し、ファイルシステムを参照しない
+  モック完結の Small とする（既存テストの再分類は本 Issue の範囲外）
 - 既存の全 `resolve_verdict` 呼び出しに `step_id` を追加し、既存観点（artifact primary / 同一秒採用 /
   古いコメント除外 / loader 失敗 fallthrough / parse 不能 `created_at` 除外 / control char findings）を回帰させない
   （`test_same_second_comment_adopted` は必須 5 の回帰ガード）
