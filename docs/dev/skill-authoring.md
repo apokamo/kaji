@@ -124,6 +124,15 @@ exec_script: kaji_harness.scripts.review_poll_entry
 | `KAJI_DEFAULT_BRANCH` | default branch 名 |
 | `KAJI_PR_ID` | PR 解決済みなら数値文字列、未解決なら未注入 |
 | `KAJI_PR_REF` | `#<n>` 形式の PR 参照 |
+| `KAJI_TMP_DIR` | attempt 固有の一時作業ディレクトリ（正規化済み絶対パス。Issue #407） |
+| `TMPDIR` / `TMP` / `TEMP` | `KAJI_TMP_DIR` と同値。標準的な一時ファイル API を同ディレクトリへ誘導する |
+
+`KAJI_TMP_DIR` / `TMPDIR` / `TMP` / `TEMP` は `exec_script` に限らず **agent step を含む全 dispatch 経路**
+（headless / interactive terminal / `exec` / `exec_script`）のプロセス環境に入る（agent 経路へはこの 4 変数のみ。
+他の `KAJI_*` は script-like 専用）。実体は project root 直下の `tmp/kaji/<issue_id>/<run_id>/<step_id>/attempt-NNN/`
+で、親環境の同名変数は上書きされる。kaji 固有の処理は `$KAJI_TMP_DIR` を明示参照してよい
+（例: `git diff > "$KAJI_TMP_DIR/diff.txt"`）。明示的な `/tmp` 書き込みは禁止しない（環境変数を尊重する処理だけを
+誘導する）。作成した dir は自動削除されない。詳細は [ARCHITECTURE.md](../ARCHITECTURE.md) § 実行アーティファクトの layout。
 
 **出力契約**:
 - verdict ブロックを stdout に出力する責務は script 側にある（既存 `kaji_harness.scripts.codex_review_poll.emit_verdict()` 同型）。

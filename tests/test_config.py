@@ -314,9 +314,9 @@ class TestKajiConfigDiscover:
 
         assert config.repo_root == tmp_path
 
-    def test_discover_not_found_raises(self, tmp_path: Path) -> None:
+    def test_discover_not_found_raises(self, outside_project_tmp_path: Path) -> None:
         """Raises ConfigNotFoundError when no config exists."""
-        empty_dir = tmp_path / "empty"
+        empty_dir = outside_project_tmp_path / "empty"
         empty_dir.mkdir()
 
         with pytest.raises(ConfigNotFoundError) as exc_info:
@@ -650,13 +650,13 @@ class TestCLIConfigIntegration:
         assert call_kwargs["artifacts_dir"] == tmp_path / ".kaji/artifacts"
 
     def test_cmd_run_config_not_found_exits_2(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, outside_project_tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         from kaji_harness.commands.parser import create_parser
         from kaji_harness.commands.run import cmd_run
 
         # No .kaji/config.toml exists
-        wf = tmp_path / "workflow.yaml"
+        wf = outside_project_tmp_path / "workflow.yaml"
         wf.write_text(
             "name: test\ndescription: test\nexecution_policy: auto\n"
             "steps:\n  - id: s1\n    skill: test-skill\n"
@@ -664,33 +664,35 @@ class TestCLIConfigIntegration:
         )
 
         parser = create_parser()
-        args = parser.parse_args(["run", str(wf), "1", "--workdir", str(tmp_path)])
+        args = parser.parse_args(["run", str(wf), "1", "--workdir", str(outside_project_tmp_path)])
         exit_code = cmd_run(args)
 
         assert exit_code == 2
         captured = capsys.readouterr()
         assert ".kaji/config.toml" in captured.err
 
-    def test_validate_without_config_fails(self, tmp_path: Path) -> None:
+    def test_validate_without_config_fails(self, outside_project_tmp_path: Path) -> None:
         """kaji validate fails without .kaji/config.toml (config is required)."""
         from kaji_harness.commands.parser import create_parser
         from kaji_harness.commands.validate import cmd_validate
 
         # Create a valid workflow with matching skill but NO config
-        wf = tmp_path / "workflow.yaml"
+        wf = outside_project_tmp_path / "workflow.yaml"
         wf.write_text(
             "name: test\ndescription: test\nexecution_policy: auto\n"
             "steps:\n  - id: s1\n    skill: test-skill\n"
             "    agent: claude\n    on:\n      PASS: end\n"
         )
 
-        (tmp_path / "pyproject.toml").write_text("")
-        skill_dir = tmp_path / ".claude" / "skills" / "test-skill"
+        (outside_project_tmp_path / "pyproject.toml").write_text("")
+        skill_dir = outside_project_tmp_path / ".claude" / "skills" / "test-skill"
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("# Test\n")
 
         parser = create_parser()
-        args = parser.parse_args(["validate", str(wf), "--project-root", str(tmp_path)])
+        args = parser.parse_args(
+            ["validate", str(wf), "--project-root", str(outside_project_tmp_path)]
+        )
         exit_code = cmd_validate(args)
 
         assert exit_code == 1
@@ -924,9 +926,9 @@ class TestConfigE2E:
         assert result.returncode == 3
         assert "not found" in result.stderr.lower()
 
-    def test_kaji_run_without_config_exits_2(self, tmp_path: Path) -> None:
+    def test_kaji_run_without_config_exits_2(self, outside_project_tmp_path: Path) -> None:
         """kaji run without .kaji/config.toml exits with code 2."""
-        wf = tmp_path / "workflow.yaml"
+        wf = outside_project_tmp_path / "workflow.yaml"
         wf.write_text(
             "name: test\ndescription: test\nexecution_policy: auto\n"
             "steps:\n  - id: s1\n    skill: test-skill\n"
@@ -942,7 +944,7 @@ class TestConfigE2E:
                 str(wf),
                 "1",
                 "--workdir",
-                str(tmp_path),
+                str(outside_project_tmp_path),
             ],
             capture_output=True,
             text=True,
@@ -1245,16 +1247,16 @@ class TestConfigE2E:
             "Artifacts must not be created under repo root"
         )
 
-    def test_kaji_validate_without_config_fails(self, tmp_path: Path) -> None:
+    def test_kaji_validate_without_config_fails(self, outside_project_tmp_path: Path) -> None:
         """kaji validate fails without .kaji/config.toml (config is required)."""
-        (tmp_path / "pyproject.toml").write_text("")
-        wf = tmp_path / "workflow.yaml"
+        (outside_project_tmp_path / "pyproject.toml").write_text("")
+        wf = outside_project_tmp_path / "workflow.yaml"
         wf.write_text(
             "name: test\ndescription: test\nexecution_policy: auto\n"
             "steps:\n  - id: s1\n    skill: test-skill\n"
             "    agent: claude\n    on:\n      PASS: end\n"
         )
-        skill_dir = tmp_path / ".claude" / "skills" / "test-skill"
+        skill_dir = outside_project_tmp_path / ".claude" / "skills" / "test-skill"
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("# Test\n")
 
@@ -1266,7 +1268,7 @@ class TestConfigE2E:
                 "validate",
                 str(wf),
                 "--project-root",
-                str(tmp_path),
+                str(outside_project_tmp_path),
             ],
             capture_output=True,
             text=True,

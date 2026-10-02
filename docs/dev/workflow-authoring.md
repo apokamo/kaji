@@ -188,6 +188,9 @@ exec-step の規約:
 - **context env**: `exec_script` skill と同じ `KAJI_*` 環境変数（`KAJI_ISSUE_ID` /
   `KAJI_STEP_ID` / `KAJI_WORKTREE_DIR` / `KAJI_VERDICT_PATH` 等）を注入する。script は
   `KAJI_VERDICT_PATH` に `verdict.yaml` を書く artifact-primary 経路で完了判定できる。
+  あわせて attempt 固有の一時作業ディレクトリを `KAJI_TMP_DIR` / `TMPDIR` / `TMP` / `TEMP`（同値、Issue #407）として
+  注入する。agent step にもこの 4 変数だけが注入される。詳細は
+  [skill-authoring.md](./skill-authoring.md) の exec_script 入力表を参照。
 - **verdict 解決**: artifact → stdout の順（Issue #449 以降、exec step は **comment fallback
   を行わない**。Issue コメントにだけ verdict を残しても採用されない）。決定論 step のため
   **AI formatter fallback を呼ばない**（fabrication 防止）。

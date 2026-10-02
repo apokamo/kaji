@@ -608,9 +608,11 @@ def test_cli_rejects_traversal_before_config_or_artifact_scan(
 
 @pytest.mark.medium
 def test_cli_reports_missing_config_as_exit_2(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    outside_project_tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.chdir(outside_project_tmp_path)
 
     exit_code = wf.main(["325"])
 

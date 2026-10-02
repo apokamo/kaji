@@ -38,6 +38,7 @@ import shutil
 import subprocess
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -236,6 +237,7 @@ def _build_wrapper_command(
     model: str,
     effort: str,
     execution_policy: str = "auto",
+    env: Mapping[str, str] | None = None,
 ) -> str:
     """Build the single shell command tmux runs in the new pane.
 
@@ -243,9 +245,16 @@ def _build_wrapper_command(
     shell-quoted with ``shlex.join``. The 9 wrapper arguments follow the
     Wrapper 契約 order exactly: ``agent prompt_path verdict_path workdir
     resume_session_id launch_session_id model effort execution_policy``.
+
+    A tmux pane inherits the tmux server's environment, not kaji's, so ``env``
+    (Issue #407) is delivered by prefixing ``env K=V ...`` to the command. The
+    ``env(1)`` form (rather than shell ``K=V cmd``) keeps values containing
+    spaces intact after quoting. The wrapper's own argv is unchanged.
     """
+    env_prefix = ["env", *(f"{key}={value}" for key, value in env.items())] if env else []
     return shlex.join(
         [
+            *env_prefix,
             str(wrapper),
             agent,
             str(prompt_path),
@@ -275,6 +284,7 @@ def _build_tmux_split_argv(
     model: str,
     effort: str,
     execution_policy: str = "auto",
+    env: Mapping[str, str] | None = None,
 ) -> list[str]:
     """Assemble the ``tmux split-window`` argv.
 
@@ -316,6 +326,7 @@ def _build_tmux_split_argv(
             model=model,
             effort=effort,
             execution_policy=execution_policy,
+            env=env,
         ),
     ]
 
@@ -331,6 +342,7 @@ def execute_interactive_terminal(
     backend: Literal["tmux", "herdr"] = "tmux",
     close_on_verdict: bool = True,
     execution_policy: str = "auto",
+    env: Mapping[str, str] | None = None,
 ) -> CLIResult:
     """Start a real interactive CLI in a tmux pane and wait for ``verdict.yaml``.
 
@@ -348,6 +360,9 @@ def execute_interactive_terminal(
             (best-effort cleanup). When ``False`` the pane is left with
             ``remain-on-exit on`` so it survives the agent's natural exit.
         execution_policy: Workflow policy passed to the agent wrapper.
+        env: Variables set for the agent process (Issue #407). Delivered by an
+            ``env K=V ...`` command prefix because the pane does not inherit
+            kaji's environment. ``None`` adds nothing.
 
     Returns:
         ``CLIResult(full_output="", session_id=<resolved id or None>)``.
@@ -374,6 +389,7 @@ def execute_interactive_terminal(
             session_id=session_id,
             close_on_verdict=close_on_verdict,
             execution_policy=execution_policy,
+            env=env,
         )
     if step.agent is None:
         raise ValueError(f"interactive terminal runner requires step.agent (step={step.id})")
@@ -410,6 +426,7 @@ def execute_interactive_terminal(
         model=step.model or "",
         effort=step.effort or "",
         execution_policy=execution_policy,
+        env=env,
     )
     pane_id = launch.pane_id
     # Issue #235: pane 起動成功直後に起動コンソールへ progress を出す。
@@ -597,6 +614,7 @@ def _launch_pane(
     model: str,
     effort: str,
     execution_policy: str,
+    env: Mapping[str, str] | None = None,
 ) -> _PaneLaunch:
     """Place and launch one agent pane, returning its id and placement metadata.
 
@@ -635,6 +653,7 @@ def _launch_pane(
         model=model,
         effort=effort,
         execution_policy=execution_policy,
+        env=env,
     )
     proc = subprocess.run(argv, text=True, capture_output=True, check=False, cwd=workdir)
     if proc.returncode != 0:

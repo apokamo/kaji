@@ -582,9 +582,9 @@ def test_run_config_resolves_main_worktree_overlay_from_feature_worktree(
 
 @pytest.mark.medium
 def test_run_config_falls_back_to_worktree_when_main_is_unresolvable(
-    tmp_path: Path,
+    outside_project_tmp_path: Path,
 ) -> None:
-    standalone = tmp_path / "standalone"
+    standalone = outside_project_tmp_path / "standalone"
     (standalone / ".kaji").mkdir(parents=True)
     (standalone / ".kaji" / "config.toml").write_text(
         '[paths]\nartifacts_dir = ".kaji-artifacts"\nskill_dir = ".claude/skills"\n\n'

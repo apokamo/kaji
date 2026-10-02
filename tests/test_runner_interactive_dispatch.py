@@ -9,6 +9,7 @@ the same ``effective_workdir`` (Issue #230 MF3 regression guard).
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -252,6 +253,9 @@ class TestRunnerBackendDispatch:
             it_runner.run()
 
         # headless branch (same project_root → same effective_workdir).
+        # 2 つの runner は artifacts dir だけが別で run_id（秒精度）を共有しうるため、
+        # Issue #407 の attempt tmp dir 衝突検出に当たらないよう先行 run の tmp を片付ける。
+        shutil.rmtree(tmp_path / "tmp")
         hl_config = _make_config(tmp_path)  # default agent_runner = headless
         hl_runner = _make_runner(hl_config, tmp_path, artifacts_dir=tmp_path / "art-hl")
         hl_captured: dict[str, Any] = {}
