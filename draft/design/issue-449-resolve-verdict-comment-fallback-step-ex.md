@@ -33,9 +33,11 @@ exec 系 step（`exec` / `exec_script`）では comment fallback を行わず、
 - exec 系 step の verdict の正本は stdout と `KAJI_VERDICT_PATH`。根拠:
   `docs/dev/skill-authoring.md` § exec_script **出力契約**「verdict ブロックを stdout に出力する責務は
   script 側にある」、`docs/dev/workflow-authoring.md` § exec-step「script は `KAJI_VERDICT_PATH` に
-  `verdict.yaml` を書く artifact-primary 経路で完了判定できる」。exec 系 step は Issue コメントを
-  投稿しない（`kaji_harness/scripts/review_poll_entry.py` は stdout へ verdict を emit、
-  `baseline_precheck.py` は `KAJI_VERDICT_PATH` を参照）
+  `verdict.yaml` を書く artifact-primary 経路で完了判定できる」。exec 系 step の
+  verdict の正本は stdout / artifact である（`kaji_harness/scripts/review_poll_entry.py` は stdout へ verdict を emit、
+  `baseline_precheck.py` は `_emit_verdict` で stdout / `KAJI_VERDICT_PATH` へ出す）。なお baseline-precheck は
+  `_post_comment` で証跡コメントを投稿するが、`_format_comment` の本文に verdict block は含まれない。
+  dispatch 自体は custom exec script のコメント投稿を禁止していない
 - 上記シナリオでは `review-poll` の verdict は `RETRY`（→ `pr-fix`）となり、書き戻される
   `verdict.yaml` も `RETRY` であること（Issue 完了条件 必須 1〜3）
 
@@ -66,8 +68,11 @@ Small テストでは `attempt_started_at` と comment `created_at` を固定値
    「同一秒の前 step コメント」を時刻だけでは原理的に区別できない
 3. **exec 系 step にも comment fallback を適用**: `runner.py` `_resolve_step_verdict` は dispatch 種別
    （`settings.is_script_like`）を formatter の有無にだけ使い、`comment_loader` は常に
-   `lambda: self.provider.view_issue(...).comments` を渡している。exec 系 step は Issue コメントを
-   投稿しないため、comment 候補は **定義上すべて他 step 由来** であり、しかも stdout より優先される
+   `lambda: self.provider.view_issue(...).comments` を渡している。exec 系 step の
+   verdict 契約は stdout / `KAJI_VERDICT_PATH` であり（コメントを投稿する script でも、そのコメントは
+   verdict の正本ではない。例: baseline-precheck の証跡コメントは verdict block を含まない）、comment 経路は
+   exec 系 step の verdict 解決に寄与しない。それにもかかわらず comment が stdout より優先され、他 step の
+   作業報告コメントが採用される
 
 **いつから**: comment fallback と全 dispatch 共通の `comment_loader` は #220（`f011d19` / `af42840`、
 v0.12.0）で導入。exec step（#205）はその後に追加され同じ経路を継承した。v0.21.0（`a03c53b`）および
@@ -290,27 +295,36 @@ Issue 完了条件 必須 1 で決定済み。
 
 #### Small テスト
 
-`tests/test_verdict_step_scoping.py`（新規、`@pytest.mark.small`）— runner の判断層を直接駆動する回帰テスト。
+`tests/test_verdict_step_scoping.py`（新規、`@pytest.mark.small`）— runner の判断層を直接駆動する回帰テスト（Issue 必須 2）。
+ファイル I/O を持たない、モックで完結する構成にする（`docs/dev/testing-convention.md` § 判定基準）。
 
 `_StepExecutor._resolve_step_verdict(step, settings, result, attempt_dir, verdict_path, attempt_started_at)` は
-`attempt_started_at` を引数で受けるため、同一秒条件を固定値で決定的に作れる。provider は
-`view_issue` が固定コメント列を返す fake（呼び出し回数を記録）、`RunLogger` は `tmp_path` 配下の実体。
+`attempt_started_at` を引数で受けるため、同一秒の条件を固定値で決定的に作れる。I/O 境界は次のように置き換える。
+
+- provider: `view_issue` が固定コメント列を返す fake。呼び出し回数を記録する
+- `RunLogger`: `MagicMock`。`log_verdict_source` の呼び出し引数を検査する（run.log には書かない）
+- 書き戻し: `kaji_harness.runner.write_verdict_yaml` を `patch` する。保存に渡された `Verdict` を検査する（ファイルは作らない）
+- artifact 不在: `attempt_dir` / `verdict_path` には、作成しない固定の存在しないパス（例 `Path("/nonexistent/attempt-001")`）を渡す。
+  `resolve_verdict` の `exists()` 判定が False になるだけで、ファイルの作成・読み込みは起きない。
+  `tmp_path` は使わない
 
 - **再現テスト（Red → Green）**: `kind ∈ {"exec", "exec_script"}`（parametrize）、`is_script_like=True`。
-  Issue に前 step 作業報告コメント（`status: PASS` block、marker 無し、`created_at=2026-06-04T12:00:00Z`）、
+  Issue に前 step の作業報告コメントを置く（`status: PASS` block、marker 無し、`created_at=2026-06-04T12:00:00Z`）。
   `attempt_started_at=2026-06-04T12:00:00.500000+00:00`、`result.full_output` は `status: RETRY` block。
   検証観点:
-  - 返り値 `verdict.status == "RETRY"`
-  - run.log の `verdict_source` が `comment` ではない（`stdout`）
-  - `attempt_dir/verdict.yaml` を `load_verdict_yaml` で読むと `RETRY`（前 step の PASS が永続化されない、必須 3）
-  - fake provider の `view_issue` が呼ばれない（exec 系は comment を見ない）
-  - 修正前コードでは `PASS` / `source=comment` となり FAIL することを implement 時に確認・記録する（必須 2）
-- **agent step は comment fallback を維持**: `kind="agent"` で自 step marker 付きコメント（現 attempt 内）があり
-  stdout に verdict が無い場合、`source=comment` で採用される（過剰に無効化していないことの保護）。
-  formatter 生成は patch で無害化する
+  - 返り値が `verdict.status == "RETRY"` であること
+  - `logger.log_verdict_source` が `source="stdout"` で呼ばれる（`comment` ではない）こと
+  - patch した `write_verdict_yaml` に渡る `Verdict.status` が `RETRY` であること（前 step の PASS を保存しようとしない）
+  - fake provider の `view_issue` が呼ばれないこと（exec 系は comment を見ない）
+  - 修正前のコードでは `PASS` / `source=comment` / 保存対象 PASS となって FAIL することを、implement 時に確認・記録する（必須 2）
+- **agent step は comment fallback を維持**: `kind="agent"` で、自 step marker 付きのコメント（現 attempt 内）があり、
+  stdout に verdict が無い場合は `source=comment` で採用されること（過剰に無効化していないことの保護）。
+  `create_verdict_formatter` は patch で無害化する
 
 `tests/test_verdict_artifact.py`（既存、`@pytest.mark.small`）— `resolve_verdict` の step scoping。
 
+- 本 Issue で追加する scoping テストは `tmp_path` を使わない。artifact 不在は、作成しない存在しないパスを
+  `attempt_dir` に渡して表現し、モック完結の Small とする（既存テストの再分類は本 Issue の範囲外）
 - 既存の全 `resolve_verdict` 呼び出しに `step_id` を追加し、既存観点（artifact primary / 同一秒採用 /
   古いコメント除外 / loader 失敗 fallthrough / parse 不能 `created_at` 除外 / control char findings）を回帰させない
   （`test_same_second_comment_adopted` は必須 5 の回帰ガード）
@@ -326,6 +340,15 @@ Issue 完了条件 必須 1 で決定済み。
   したコメントは marker 無し扱いで候補に残る
 
 #### Medium テスト
+
+実ファイルへの保存（`verdict.yaml`）と run.log を確認する観点は Medium に置く（Issue 必須 3）。
+
+- **判断層 + 実 I/O**（`tests/test_verdict_step_scoping.py` 内の `@pytest.mark.medium` クラス）: Small の再現テストと
+  同じ固定入力（同一秒の前 step marker 無し PASS コメント、stdout RETRY、exec / exec_script を parametrize）で、
+  `RunLogger` は `tmp_path` 配下の実体、`attempt_dir` / `verdict_path` は `tmp_path` 配下の実パス、`write_verdict_yaml` は
+  patch しない構成で `_resolve_step_verdict` を駆動する
+  - `attempt_dir/verdict.yaml` を `load_verdict_yaml` で読むと `RETRY` であること（前 step の PASS が永続化されない）
+  - run.log の `verdict_source` event が `source="stdout"` であること
 
 `tests/test_exec_step_dispatch.py` `TestRunnerExecDispatch`（既存クラス、`@pytest.mark.medium`）に追加。
 `WorkflowRunner.run()` → `_StepExecutor` → `resolve_verdict` → `verdict.yaml` 書き戻し → 遷移までの結合を
@@ -384,6 +407,6 @@ Issue 完了条件 必須 1 で決定済み。
 | exec_script 出力契約 | `docs/dev/skill-authoring.md` § exec_script「出力契約」 | 「verdict ブロックを stdout に出力する責務は script 側にある」「AI formatter fallback は呼ばれない」 |
 | exec-step 仕様 | `docs/dev/workflow-authoring.md` § exec-step | `KAJI_VERDICT_PATH` を注入し artifact-primary 経路で完了判定。現行記述「verdict 解決: artifact → comment → stdout」が本修正で変わる |
 | #220 同一秒テスト | `tests/test_verdict_artifact.py::TestResolveVerdict::test_same_second_comment_adopted` | dispatch `12:00:00.5` / comment `12:00:00Z` の同一秒コメントを採用する既存回帰テスト（必須 5 のガード） |
-| exec 系 script の出力実体 | `kaji_harness/scripts/review_poll_entry.py`、`kaji_harness/scripts/baseline_precheck.py` | review-poll は stdout に `---VERDICT---` を emit、baseline-precheck は `KAJI_VERDICT_PATH` を参照。いずれも Issue コメントへ verdict を投稿しない |
+| exec 系 script の出力実体 | `kaji_harness/scripts/review_poll_entry.py`、`kaji_harness/scripts/baseline_precheck.py` | review-poll は stdout に `---VERDICT---` を emit、baseline-precheck は `_emit_verdict` で stdout / `KAJI_VERDICT_PATH` へ出す。baseline-precheck は `_post_comment` で証跡コメントを投稿するが、`_format_comment` の本文に verdict block は無い |
 | verdict_source event | `docs/reference/python/logging.md` § `verdict_source` | 解決経路 `artifact` / `comment` / `stdout` を attempt 単位で run.log に記録済み（検討候補 1 見送りの根拠） |
 | テスト規約 | `docs/dev/testing-convention.md` | S/M/L 判定基準、bug の再現テスト要件、Large 省略の正当化要件 |
