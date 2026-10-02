@@ -166,7 +166,7 @@ tmp_env = build_tmp_env(tmp_dir)
     `tests/test_resolve_main_worktree.py::TestResolveMainWorktree::test_non_git_dir_raises`、
     `tests/test_local_cli_large_local.py::test_failfast_issue_view_no_config_toml` 等）
   - 同じ失敗 test 群を env 未設定で実行 → **141 passed**
-  
+
   本機能の導入後、workflow の implement / final-check 等の agent が実行する `make check` は
   `KAJI_TMP_DIR` 配下の `tmp_path` で走るため、この 18 件を hermetic にしないと以降の全 workflow の
   品質ゲートが壊れる。よって本 Issue の範囲で対処する（§ 方針 4）。
