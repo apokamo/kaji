@@ -338,6 +338,38 @@ class TestRunnerDispatchWiring:
 
         mock_exec.assert_not_called()
 
+    @pytest.mark.parametrize("bad_id", ["../outside", "a/../design", "sub/step"])
+    def test_invalid_step_id_rejected_before_any_directory_is_created(
+        self, tmp_path: Path, bad_id: str
+    ) -> None:
+        step = Step(id=bad_id, exec=["true"], on={"PASS": "end"})
+        runner = _make_runner(_make_config(tmp_path), tmp_path, step)
+        artifacts_dir = tmp_path / ".kaji-artifacts"
+
+        with patch("kaji_harness.runner.execute_exec") as mock_exec:
+            with pytest.raises(TmpDirPreparationError):
+                runner.run()
+
+        mock_exec.assert_not_called()
+        assert not (tmp_path / "tmp").exists()
+        assert not list(artifacts_dir.rglob("steps/*")), "attempt dir must not be allocated"
+        assert not list(artifacts_dir.rglob(Path(bad_id).name)), "no component may be created"
+
+    def test_absolute_step_id_does_not_create_directories_outside_artifacts(
+        self, tmp_path: Path
+    ) -> None:
+        outside = tmp_path / "abs-outside"
+        step = Step(id=str(outside), exec=["true"], on={"PASS": "end"})
+        runner = _make_runner(_make_config(tmp_path), tmp_path, step)
+
+        with patch("kaji_harness.runner.execute_exec") as mock_exec:
+            with pytest.raises(TmpDirPreparationError):
+                runner.run()
+
+        mock_exec.assert_not_called()
+        assert not outside.exists()
+        assert not (tmp_path / "tmp").exists()
+
     def test_each_attempt_gets_distinct_directory(self, tmp_path: Path) -> None:
         step = Step(id="collect", exec=["true"], on={"RETRY": "collect", "PASS": "end"})
         runner = _make_runner(_make_config(tmp_path), tmp_path, step)

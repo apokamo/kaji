@@ -362,6 +362,9 @@ class _StepExecutor:
         if step.resume and session_id is None:
             raise MissingResumeSessionError(step.id, step.resume)
 
+        # step.id は workflow.py で非空文字列としか検査されない。artifacts 配下に
+        # dir を作る前に拒否し、不正 ID で project 外へ副作用を残さない（#407）。
+        _validate_path_component("step_id", step.id, self.project_root.resolve() / "tmp")
         attempt_dir = allocate_attempt_dir(self.run_dir, step.id)
         attempt_no = _attempt_number(attempt_dir)
         tmp_dir = prepare_attempt_tmp_dir(
