@@ -8,6 +8,11 @@ Issue: #397
 GitHub / Local 両 provider が `IssueContext.design_path = <design_dir>/issue-<id>-<slug>.md` を同一規約で注入する。
 未設定時は legacy default `draft/design` を維持する。
 
+> 実装時の配置調整（f99c7d9、コードレビューで承認済み）: `LEGACY_DESIGN_DIR` と
+> `validate_design_dir` は、以下の計画で記載した `config.py` ではなく foundation 層の
+> `kaji_harness/design_dir.py` に配置した。provider 層から application 層への逆向き依存を避けるため。
+> 公開 IF・V1〜V7・データフローの契約は維持し、`docs/ARCHITECTURE.md` と層分類テストも更新済み。
+
 ## 背景・目的
 
 ### 現状

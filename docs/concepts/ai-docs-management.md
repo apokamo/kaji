@@ -62,5 +62,5 @@ Documentation consistency is protected by three lines of defense:
 | Phase | Location | Description |
 |-------|----------|-------------|
 | In progress | `<design_dir>/issue-XXX-*.md` (default `draft/design`; set via `[paths].design_dir`) | In the worktree; committed |
-| At final-check | Archived in the issue body | Appended to the body under a collapsible `<details>` tag (responsibility of the `/i-dev-final-check` skill) |
+| At final-check | Archived in the issue body | Inserted directly below the NOTE block under a collapsible `<details>` tag (responsibility of the `/i-dev-final-check` skill) |
 | Permanent | `docs/adr/` or `docs/dev/` | Promoted as an ADR / general guide only when applicable (procedure: `.claude/skills/_shared/promote-design.md`) |
