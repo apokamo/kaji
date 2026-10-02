@@ -76,6 +76,7 @@ CI / 無人スクリプトでは `GH_TOKEN` 環境変数で PAT を渡す。PAT 
 artifacts_dir = ".kaji-artifacts"
 skill_dir = ".claude/skills"
 # worktree_prefix = "kaji"          # 任意。既定値・実効挙動は設定リファレンス参照
+# design_dir = "designs/issues"     # 任意。設計書 directory（未設定 = "draft/design"）。設定リファレンス参照
 
 [execution]
 default_timeout = 1800

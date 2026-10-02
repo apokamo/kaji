@@ -48,6 +48,7 @@ Minimal template:
 artifacts_dir = ".kaji-artifacts"
 skill_dir = ".claude/skills"
 # worktree_prefix = "kaji"          # Optional. See the configuration reference for defaults and effective behavior.
+# design_dir = "designs/issues"     # Optional. Design document directory (unset = "draft/design"). See the configuration reference.
 
 [execution]
 default_timeout = 1800

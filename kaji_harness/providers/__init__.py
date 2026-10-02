@@ -110,6 +110,7 @@ def get_provider(config: KajiConfig) -> IssueProvider:
             default_branch=config.provider.github.default_branch,
             git_remote=config.provider.github.git_remote,
             worktree_prefix=config.paths.worktree_prefix,
+            design_dir=config.paths.design_dir,
         )
     if config.provider.type == "local":
         local_cfg = config.provider.local
@@ -133,6 +134,7 @@ def get_provider(config: KajiConfig) -> IssueProvider:
             default_branch=local_cfg.default_branch,
             git_remote=local_cfg.git_remote,
             worktree_prefix=config.paths.worktree_prefix,
+            design_dir=config.paths.design_dir,
         )
     raise ValueError(f"unknown provider.type: {config.provider.type!r}")
 

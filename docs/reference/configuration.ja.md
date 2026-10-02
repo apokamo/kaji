@@ -59,7 +59,7 @@ overlay（`.kaji/config.local.toml`）が tracked を上書きできるのは **
 - tracked と overlay の双方に `[provider]` が無い場合のみ、loader は provider を `None` として返す。
 - `[incident]` も overlay 対象外。tracked `.kaji/config.toml` のみから読み、overlay に書かれた
   `[incident]` は無視される（ラベル名はリポジトリ単位の規約のため）。
-- `[paths]`（`artifacts_dir` / `skill_dir` / `worktree_prefix`）は overlay 対象外。`PathsConfig` は
+- `[paths]`（`artifacts_dir` / `skill_dir` / `worktree_prefix` / `design_dir`）は overlay 対象外。`PathsConfig` は
   tracked `.kaji/config.toml` のみから組み立てられ、overlay は `[execution]` / `[provider]` の解析に
   しか渡されない（`config.py:141-154`）。overlay に `[paths]` を書いても無視される。
 
@@ -72,7 +72,7 @@ overlay（`.kaji/config.local.toml`）が tracked を上書きできるのは **
 ## section / key 仕様
 
 各 key の「既定」は config loader 層が parse 時に採用する値である。loader の既定値と、provider 層が
-path 算出時に適用する**実効 fallback** が異なる key（`worktree_prefix`）は、両者を分けて記載する。
+path 算出時に適用する**実効 fallback** が異なる key（`worktree_prefix` / `design_dir`）は、両者を分けて記載する。
 
 ### `[paths]`
 
@@ -81,6 +81,7 @@ path 算出時に適用する**実効 fallback** が異なる key（`worktree_pr
 | `artifacts_dir` | 必須 | str | —（未設定はエラー） | 相対パスは `..` 不可（repo root 脱出防止）。絶対パス / `~` 展開は許可 | `config.py:118-125`, `397-417` |
 | `skill_dir` | 必須 | str | —（未設定はエラー） | 相対パスのみ。絶対パス不可・`..` 不可 | `config.py:126-133`, `419-434` |
 | `worktree_prefix` | 任意 | str | `""`（未設定） | 非空時は単一の安全な segment（`[A-Za-z0-9._-]+`、separator / 空白 / `..` / 絶対 不可） | `config.py:134-140`, `436-452` |
+| `design_dir` | 任意 | str | `""`（未設定） | repository 相対の POSIX directory。規則 V1〜V7 は下の `design_dir` 節を参照 | `design_dir.py` `validate_design_dir` / `config.py` `_DesignDirInput` / `KajiConfig._parse_design_dir` |
 
 > **`worktree_prefix` の「設定 default」と「実効 fallback」**:
 >
@@ -92,6 +93,42 @@ path 算出時に適用する**実効 fallback** が異なる key（`worktree_pr
 > - 結果として worktree dir 名は `kaji-<branch_prefix>-<id>` 形式になる。`.kaji/config.toml` で
 >   `worktree_prefix = "kaji"` を明示しても、未設定のままでも、**生成される worktree path は同一**。
 >   field 値（`config.paths.worktree_prefix`）だけが `"" → "kaji"` に変わる。
+
+#### `design_dir`: 設計書 directory
+
+`[paths] design_dir` で設計書の置き場所を設定する。Kaji は
+`design_path = <design_dir>/issue-<id>-<slug>.md`（`design_path` コンテキスト変数、および
+`kaji issue context <id>` の `design_path`）を GitHub / Local 両 provider で同一規約で注入する。
+Kaji が行うのは path 値の算出・検証・注入までで、設計書の作成・commit は skill の責務。
+
+- **設定 default（loader 層）**: 未設定（または `design_dir = ""`）のとき `config.paths.design_dir` は空文字 `""`。
+- **実効 fallback**: `build_design_path` が `design_dir or "draft/design"`（`LEGACY_DESIGN_DIR`）で解決する。
+  未設定なら従来どおり `draft/design/issue-<id>-<slug>.md`。`kaji config design-dir` が実効 directory
+  （`draft/design` または設定値）を出力する（config 不在・不正は stderr 診断 + exit 2）。
+- 可変なのは directory のみ。`issue-<id>-<slug>.md` のファイル名規約は固定。
+- `[paths]` の他 key と同様、tracked `.kaji/config.toml` のみから読む（overlay 対象外）。
+
+**security boundary**（違反は config 読込時に `ConfigLoadError`、CLI では exit 2）。`design_path` は
+skill 内の shell command（`git add [design_path]` 等）へ quote なしで展開されうるため、構文的に制限する:
+
+| # | 規則 | 拒否例 |
+|---|------|--------|
+| V1 | 文字列であること（strict。int / bool / list / table の暗黙変換なし） | `design_dir = 1` |
+| V2 | 絶対 path でない（先頭 `/`、Windows drive / UNC） | `/srv/designs`, `C:/designs`, `//host/share` |
+| V3 | 各 segment が `[A-Za-z0-9._][A-Za-z0-9._-]*`（空白 / shell metachar / 先頭 `-` / `~` 不可） | `~/designs`, `my designs`, `-x/designs`, `designs/$(id)` |
+| V4 | 空 segment なし（正規形） | `designs//issues`, `designs/issues/` |
+| V5 | `.` / `..` segment なし | `../designs`, `./designs`, `.` |
+| V6 | `.git` segment なし（大文字小文字無視） | `.git/designs` |
+| V7 | 既存 prefix を symlink 解決した実体が repository 配下で、解決自体が成功する | `designs -> /tmp/outside`、symlink loop、壊れた symlink |
+
+**migration**（既存 repository で既定外 directory を採用する場合）:
+
+1. `.kaji/config.toml` に `design_dir = "designs/issues"` を追加する。
+2. 既存 `draft/design/issue-*.md` を `git mv` するかを判断する（Kaji は移動しない）。
+3. 進行中 Issue: 旧 directory に書いた設計書は新しい `design_path` では見つからない。移動するか、
+   旧設定のまま完了させてから切り替える。
+4. 固定値 `draft/design/...` を変換していた repository 側 adapter（legacy path resolver）を撤去する。
+5. skill は `draft/design` を直書きせず `[design_path]`（または `kaji config design-dir`）を参照する。
 
 `artifacts_dir` の相対パスは main worktree（`provider.<type>.default_branch` を checkout している
 worktree）基準で解決される（Issue #177、[ワークフロー作成](../dev/workflow-authoring.md) § 前提条件 参照）。
@@ -236,6 +273,7 @@ GitHub 標準運用（`type = "github"` / headless）の最小設定。挙動に
 artifacts_dir = ".kaji-artifacts"
 skill_dir = ".claude/skills"
 worktree_prefix = "kaji"            # worktree dir 名の先頭 segment（<prefix>-<branch_prefix>-<id>）
+# design_dir = "designs/issues"     # 任意: 設計書 directory（未設定 = legacy default "draft/design"）
 
 [execution]
 default_timeout = 2400

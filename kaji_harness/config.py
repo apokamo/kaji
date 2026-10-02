@@ -6,6 +6,7 @@ The directory containing .kaji/ is the repo root.
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 import tomllib
@@ -15,6 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
+from .design_dir import validate_design_dir
 from .errors import ConfigLoadError, ConfigNotFoundError
 
 LOCAL_PROVIDER_DEPRECATION_WARNING = (
@@ -40,6 +42,21 @@ def warn_local_provider_deprecated() -> None:
     print(LOCAL_PROVIDER_DEPRECATION_WARNING, file=sys.stderr)
 
 
+class _DesignDirInput(BaseModel):
+    """``[paths].design_dir`` の入力境界モデル（strict）。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    design_dir: str = ""
+
+    @field_validator("design_dir")
+    @classmethod
+    def _validate_design_dir(cls, value: str) -> str:
+        if value:
+            validate_design_dir(value)
+        return value
+
+
 @dataclass(frozen=True)
 class PathsConfig:
     """Path-related configuration."""
@@ -47,6 +64,7 @@ class PathsConfig:
     artifacts_dir: str = ""  # Required. Empty string = not set.
     skill_dir: str = ""  # Required. Empty string = not set.
     worktree_prefix: str = ""  # Optional. Empty string = not set (→ "kaji" fallback).
+    design_dir: str = ""  # Optional. Empty string = not set (→ LEGACY_DESIGN_DIR fallback).
 
 
 @dataclass(frozen=True)
@@ -239,8 +257,13 @@ class KajiConfig:
                 f"paths.worktree_prefix must be a string, got {type(wt_prefix_raw).__name__}",
             )
         cls._validate_worktree_prefix(path, wt_prefix_raw)
+        repo_root = path.parent.parent
+        design_dir = cls._parse_design_dir(path, paths_data, repo_root)
         paths = PathsConfig(
-            **{k: v for k, v in paths_data.items() if k in PathsConfig.__dataclass_fields__}
+            **{
+                **{k: v for k, v in paths_data.items() if k in PathsConfig.__dataclass_fields__},
+                "design_dir": design_dir,
+            }
         )
 
         # Read the gitignored ``config.local.toml`` overlay once and share it
@@ -251,7 +274,6 @@ class KajiConfig:
 
         execution = cls._parse_execution(path, data, overlay_data, local_overlay_path)
 
-        repo_root = path.parent.parent
         provider = cls._parse_provider(path, data, overlay_data, local_overlay_path, repo_root)
 
         incident = cls._parse_incident(path, data)
@@ -264,6 +286,50 @@ class KajiConfig:
             provider_overlay_present=overlay_present,
             incident=incident,
         )
+
+    @staticmethod
+    def _parse_design_dir(path: Path, paths_data: dict[str, object], repo_root: Path) -> str:
+        """Parse the optional ``[paths].design_dir`` (tracked config only).
+
+        キー無し / 空文字は未設定（``""``、実効値は ``LEGACY_DESIGN_DIR``）。非空値は
+        strict Pydantic モデルで検証し（V1〜V6）、``ValidationError`` は
+        ``ConfigLoadError`` に変換する。続いて symlink 経由の repository 外 escape と
+        解決不能 path（V7）を検査する。
+        """
+        if "design_dir" not in paths_data:
+            return ""
+        try:
+            model = _DesignDirInput.model_validate({"design_dir": paths_data["design_dir"]})
+        except ValidationError as exc:
+            details = "; ".join(f"paths.design_dir: {err['msg']}" for err in exc.errors())
+            raise ConfigLoadError(path, details) from exc
+        design_dir = model.design_dir
+        if not design_dir:
+            return ""
+
+        # V7: 存在する最長 prefix を strict 解決する。3.13 未満は loop が RuntimeError、
+        # 3.13 以降は OSError(ELOOP) になるため両方を ConfigLoadError に収束させる。
+        prefix = repo_root
+        for segment in design_dir.split("/"):
+            candidate = prefix / segment
+            if not os.path.lexists(candidate):
+                break
+            prefix = candidate
+        if prefix == repo_root:
+            return design_dir
+        try:
+            resolved = prefix.resolve(strict=True)
+            root_resolved = repo_root.resolve(strict=True)
+        except (RuntimeError, OSError) as exc:
+            raise ConfigLoadError(
+                path, f"paths.design_dir: cannot resolve '{prefix}': {exc}"
+            ) from exc
+        if not resolved.is_relative_to(root_resolved):
+            raise ConfigLoadError(
+                path,
+                f"paths.design_dir must stay inside the repository (resolves to {resolved})",
+            )
+        return design_dir
 
     @staticmethod
     def _parse_incident(path: Path, data: dict[str, object]) -> IncidentConfig:

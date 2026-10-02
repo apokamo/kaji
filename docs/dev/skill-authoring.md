@@ -215,10 +215,13 @@ suggestion: |
 | `issue_id` | str | 正規化済み Issue ID（GitHub 数値または local ID。例: `"153"` / `"local-pc1-1"`） |
 | `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID。例: `"#153"` / `"local-pc1-1"`） |
 | `step_id` | str | 現在のステップ ID |
+| `design_path` | str | 設計書の repository 相対パス。`[paths].design_dir`（未設定時は legacy default `draft/design`）配下の `issue-<id>-<slug>.md`（Issue #397） |
 | `verdict_path` | str | 当該 attempt の `verdict.yaml` 絶対パス（Issue #220）。スキルはここへ pure YAML の verdict を保存する。exec_script 経路では env `KAJI_VERDICT_PATH` として注入される |
 | `previous_verdict` | str | 前ステップの verdict 要約（resume ステップ等） |
 | `cycle_count` | int | 現在のサイクルイテレーション（サイクル内ステップのみ） |
 | `max_iterations` | int | サイクルの上限回数（サイクル内ステップのみ） |
+
+スキルは設計書の置き場所を固定 path として直書きせず、注入された `[design_path]` を参照する（`kaji config design-dir` で directory のみ取得することもできる）。
 
 `previous_verdict` は `resume` 指定ステップに注入される。`review-code` のように独立評価が必要なステップには注入されない。修正系スキルでは、詳細なレビュー内容は Issue コメントを正とし、`previous_verdict` は補助的な要約として扱う。
 

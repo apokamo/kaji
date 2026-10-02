@@ -64,13 +64,19 @@ _COMMENT_FILENAME_RE = _local_comments._COMMENT_FILENAME_RE
 
 @dataclass
 class LocalProvider:
-    """Use ``.kaji/issues`` as the mutable Issue source of truth."""
+    """Use ``.kaji/issues`` as the mutable Issue source of truth.
+
+    ``design_dir`` は ``[paths].design_dir`` config 由来で、``IssueContext.design_path`` の
+    directory。空文字（無設定）なら legacy default ``draft/design`` にフォールバックする
+    （Issue #397）。
+    """
 
     repo_root: Path
     machine_id: str
     default_branch: str = "main"
     git_remote: str = "origin"
     worktree_prefix: str = ""
+    design_dir: str = ""
     _comments: LocalCommentStore = field(init=False, repr=False)
     _store: LocalIssueStore = field(init=False, repr=False)
     _cache: GitHubCacheReader = field(init=False, repr=False)
@@ -289,7 +295,7 @@ class LocalProvider:
                 self.repo_root,
                 self.worktree_prefix,
             ),
-            design_path=build_design_path(issue_id, slug),
+            design_path=build_design_path(issue_id, slug, self.design_dir),
             provider_type="local",
             branch_prefix_fallback=fallback,
             default_branch=self.default_branch,

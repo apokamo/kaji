@@ -128,6 +128,18 @@ def _register_config(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         default=Path.cwd(),
         help="Starting directory for config discovery (default: current directory)",
     )
+    # Issue #397: `[paths].design_dir`（未設定時は legacy default `draft/design`）の実効値を
+    # 副作用なく取得するための read-only エントリ。
+    dd = config_subs.add_parser(
+        "design-dir",
+        help="Print effective design directory ([paths].design_dir or 'draft/design')",
+    )
+    dd.add_argument(
+        "--workdir",
+        type=Path,
+        default=Path.cwd(),
+        help="Starting directory for config discovery (default: current directory)",
+    )
 
 
 def _register_run(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:

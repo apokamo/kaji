@@ -6,6 +6,7 @@
 artifacts_dir = ".kaji-artifacts"
 skill_dir = ".claude/skills"
 worktree_prefix = "kaji"            # worktree dir 名の先頭 segment（<prefix>-<branch_prefix>-<id>）。未設定でも実効 fallback は "kaji"
+# design_dir = "designs/issues"     # 設計書 directory。未設定 = legacy default "draft/design"（kaji 自身は未設定で運用）
 
 [execution]
 default_timeout = 2400
