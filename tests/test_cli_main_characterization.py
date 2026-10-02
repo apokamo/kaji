@@ -204,18 +204,23 @@ class TestResolveProjectRootForValidate:
         assert _resolve_project_root_for_validate(explicit, yaml_path) == explicit.resolve()
 
     @pytest.mark.medium
-    def test_walks_up_to_pyproject(self, tmp_path: Path) -> None:
-        (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
-        nested = tmp_path / "a" / "b"
+    def test_walks_up_to_pyproject(self, outside_project_tmp_path: Path) -> None:
+        (outside_project_tmp_path / "pyproject.toml").write_text(
+            "[project]\nname='x'\n", encoding="utf-8"
+        )
+        nested = outside_project_tmp_path / "a" / "b"
         nested.mkdir(parents=True)
         yaml_path = nested / "wf.yaml"
         yaml_path.write_text("name: x\n", encoding="utf-8")
-        assert _resolve_project_root_for_validate(None, yaml_path) == tmp_path.resolve()
+        assert (
+            _resolve_project_root_for_validate(None, yaml_path)
+            == outside_project_tmp_path.resolve()
+        )
 
     @pytest.mark.medium
-    def test_falls_back_to_yaml_parent(self, tmp_path: Path) -> None:
+    def test_falls_back_to_yaml_parent(self, outside_project_tmp_path: Path) -> None:
         # .kaji/config.toml も pyproject.toml も無い場合、YAML の親 dir を返す。
-        yaml_dir = tmp_path / "only"
+        yaml_dir = outside_project_tmp_path / "only"
         yaml_dir.mkdir()
         yaml_path = yaml_dir / "wf.yaml"
         yaml_path.write_text("name: x\n", encoding="utf-8")

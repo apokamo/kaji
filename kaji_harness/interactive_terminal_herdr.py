@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, cast
@@ -115,6 +116,7 @@ def execute_interactive_terminal_herdr(
     session_id: str | None = None,
     close_on_verdict: bool = True,
     execution_policy: str = "auto",
+    env: Mapping[str, str] | None = None,
 ) -> CLIResult:
     """Start an interactive agent in a Herdr pane and wait for ``verdict.yaml``.
 
@@ -127,6 +129,8 @@ def execute_interactive_terminal_herdr(
         session_id: Previous provider session ID to resume.
         close_on_verdict: Close the owned pane after a verdict when true.
         execution_policy: Workflow execution policy passed to the wrapper.
+        env: Variables set for the agent process (Issue #407), delivered through the
+            ``env K=V ...`` prefix of the wrapper command. ``None`` adds nothing.
 
     Returns:
         Empty-output CLI result with the resolved provider session ID.
@@ -184,6 +188,7 @@ def execute_interactive_terminal_herdr(
         model=step.model or "",
         effort=step.effort or "",
         execution_policy=execution_policy,
+        env=env,
     )
     try:
         launcher_path = prompt_path.parent / "herdr-launcher.sh"

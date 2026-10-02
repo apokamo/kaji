@@ -486,6 +486,31 @@ member ごとの workflow / child PID / run ID / exit code / 成功ゲートを�
 - `latest` symlink は人間 / 外部ツール向けの利便性。harness の verdict 解決は in-memory で保持した attempt path を使い `latest` に依存しない（symlink 非対応 FS でも壊れない）。
 - 新規 run は新 layout を正とする。旧 `runs/<run_id>/<step_id>/`（attempt なしの flat 構造）が残っていても新 run はそれを温存したまま新 layout で完了する（migration は必須としない）。
 
+#### attempt 固有の一時作業ディレクトリ（Issue #407）
+
+runner は各 attempt の dispatch 前に、project root（`kaji run` では `config.repo_root`。issue worktree ではない）直下の
+`tmp/` 配下へ attempt 固有の一時作業ディレクトリを作成し、その正規化済み絶対パスを 4 つの環境変数
+`KAJI_TMP_DIR` / `TMPDIR` / `TMP` / `TEMP`（常に同一値）として起動プロセスへ渡す。
+
+```text
+<project_root>/tmp/kaji/
+  .gitignore                                   # 内容 "*"。tmp/kaji 配下全体を git から隠す（初回のみ作成）
+  <issue_id>/<run_id>/<step_id>/attempt-NNN/   # = KAJI_TMP_DIR（attempt-NNN は artifacts と同番号）
+```
+
+- 注入経路: `exec` / `exec_script` は context env に merge（`script_exec._run_argv` が親 env を上書き）、
+  headless agent は `execute_cli(env=...)`（`Popen(env={**os.environ, **env})`）、interactive terminal は
+  wrapper command に `env K=V ... <wrapper> <9 args>` を前置する（tmux pane は kaji ではなく tmux server の
+  environment を継承するため。Herdr も同じ command を launcher の `exec env PATH=... <command>` に埋める）。
+  親環境から継承した同名変数は attempt 固有値で上書きされる。agent 経路へ渡すのはこの 4 変数のみ。
+- 作成に失敗した場合（`OSError`・既存 dir との衝突・不正な path component）は `TmpDirPreparationError` で
+  dispatch せずに失敗する。作成した dir は自動削除しない。
+- 強制力はない。標準 temp API（`tempfile` / `mktemp` / Node `os.tmpdir()` 等）を誘導するだけで、明示的な
+  `/tmp` 書き込みや環境変数を参照しないツールは対象外。
+- 注意: 一時ディレクトリがリポジトリ内になるため、そこを起点に親方向を探索する処理（`.kaji/config.toml` /
+  `.git` の探索）は実リポジトリを見つける。また AF_UNIX socket の `sun_path` は 108 byte 上限で、深い project
+  root では socket を作るツールが長い `TMPDIR` で失敗しうる。
+
 #### `result.json`（attempt 終了情報, Issue #222）
 
 各 attempt の終了情報を構造化保存する pure JSON（`kaji_harness/result.py` の `AttemptResult`）。dispatch を伴う step で正常終了・異常終了の両方に書かれる。143 / SIGTERM / timeout / interruption のような異常終了でも best-effort で `status` / `exit_code` / `signal` / `error` を残す（書き出し失敗は元例外を握り潰さない）。

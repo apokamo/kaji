@@ -10,7 +10,9 @@ Phase 3-e: 既存 runner E2E テスト群が ``provider=local`` 経由で動く�
 from __future__ import annotations
 
 import logging
+import shutil
 import subprocess
+import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
@@ -316,3 +318,41 @@ def _reset_local_provider_deprecation_flag(monkeypatch: pytest.MonkeyPatch) -> N
     from kaji_harness import config as _config
 
     monkeypatch.setattr(_config, "_LOCAL_PROVIDER_DEPRECATION_EMITTED", False)
+
+
+def _has_project_marker_ancestor(path: Path) -> bool:
+    """``path`` 自身または祖先に ``.kaji/config.toml`` か ``.git`` があれば True。"""
+    return any(
+        (candidate / ".kaji" / "config.toml").exists() or (candidate / ".git").exists()
+        for candidate in (path, *path.parents)
+    )
+
+
+@pytest.fixture()
+def outside_project_tmp_path() -> Iterator[Path]:
+    """kaji project / git repo のどちらの配下でもない一意な一時ディレクトリを返す。
+
+    Issue #407: workflow 内の ``tmp_path`` は ``TMPDIR``（= ``KAJI_TMP_DIR``）に従い
+    リポジトリ内になる。そのため「project 外 / git 外」を前提とする test
+    （``KajiConfig.discover`` の not-found、``git rev-parse`` の失敗など）は上位探索で実リポジトリを
+    見つけてしまう。この fixture は ``TMPDIR`` / ``TMP`` / ``TEMP`` を参照しない platform 既定
+    候補（POSIX は ``/tmp``）配下に作り、作成後に祖先検査を行って満たせなければ fail loud する。
+    """
+    candidates = [Path(tempfile.gettempdir())]
+    candidates += [Path(p) for p in ("/tmp", "/var/tmp", "/usr/tmp")]
+    base = next(
+        (c for c in candidates if c.is_dir() and not _has_project_marker_ancestor(c)),
+        None,
+    )
+    if base is None:
+        pytest.fail(
+            "outside_project_tmp_path: no temp base outside any kaji project / git repo "
+            f"(tried: {[str(c) for c in candidates]})"
+        )
+    path = Path(tempfile.mkdtemp(prefix="kaji-outside-", dir=base)).resolve()
+    try:
+        if _has_project_marker_ancestor(path):
+            pytest.fail(f"outside_project_tmp_path: {path} is inside a kaji project or git repo")
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)

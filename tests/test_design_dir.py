@@ -411,8 +411,10 @@ class TestConfigDesignDirCommand:
         assert rc == 0, stderr
         assert stdout == "designs/issues\n"
 
-    def test_missing_config_exits_2(self, tmp_path: Path) -> None:
-        rc, stdout, stderr = _run_cli(["config", "design-dir", "--workdir", str(tmp_path)])
+    def test_missing_config_exits_2(self, outside_project_tmp_path: Path) -> None:
+        rc, stdout, stderr = _run_cli(
+            ["config", "design-dir", "--workdir", str(outside_project_tmp_path)]
+        )
         assert rc == 2
         assert stdout == ""
         assert "Error:" in stderr

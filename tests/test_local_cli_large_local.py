@@ -189,8 +189,8 @@ def test_failfast_run_no_provider_section_exits_2(fresh_repo: Path, tmp_path: Pa
     assert "[provider]" in result.stderr
 
 
-def test_failfast_issue_view_no_config_toml(tmp_path: Path) -> None:
-    bare = tmp_path / "bare"
+def test_failfast_issue_view_no_config_toml(outside_project_tmp_path: Path) -> None:
+    bare = outside_project_tmp_path / "bare"
     bare.mkdir()
     result = subprocess.run(
         [*_KAJI_CMD, "issue", "view", "1"],
@@ -211,13 +211,13 @@ def test_failfast_issue_view_no_config_toml(tmp_path: Path) -> None:
 
 
 def test_local_init_alone_does_not_unblock_kaji_issue_when_base_config_missing(
-    tmp_path: Path,
+    outside_project_tmp_path: Path,
 ) -> None:
     """`kaji local init` は overlay しか作らないため、tracked `.kaji/config.toml`
     が無い bare directory では init 後も `kaji issue` が同じ fail-fast を返す。
     エラーメッセージの local-first 導線（base config 作成）が誤誘導しない
     ことを構造で担保するためのリグレッションガード。"""
-    bare = tmp_path / "bare"
+    bare = outside_project_tmp_path / "bare"
     bare.mkdir()
     rc = subprocess.run(
         [*_KAJI_CMD, "local", "init", "--machine-id", "pc1", "--non-interactive"],

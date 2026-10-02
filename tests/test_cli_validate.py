@@ -492,13 +492,15 @@ class TestCmdValidateSmall:
         assert "skill_dir" in captured.err.lower() or "paths" in captured.err.lower()
 
     @pytest.mark.small
-    def test_missing_config_fails(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_missing_config_fails(
+        self, outside_project_tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """validate must fail when no .kaji/config.toml exists."""
-        f = tmp_path / "workflow.yaml"
+        f = outside_project_tmp_path / "workflow.yaml"
         f.write_text(VALID_WORKFLOW_YAML)
-        _create_skill(tmp_path, "test-skill")
+        _create_skill(outside_project_tmp_path, "test-skill")
         # No config at all
-        exit_code = _cmd_validate_with_args(str(f), "--project-root", str(tmp_path))
+        exit_code = _cmd_validate_with_args(str(f), "--project-root", str(outside_project_tmp_path))
         assert exit_code == 1
         captured = capsys.readouterr()
         assert "✗" in captured.err

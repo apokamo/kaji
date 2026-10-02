@@ -264,8 +264,8 @@ class TestLogsSurviveWorktreeRemoval:
 class TestFallbackPaths:
     """再現テスト2-C / 2-D: fallback 経路 (非 git / provider=None) の検証。"""
 
-    def test_non_git_dir_falls_back_to_repo_root(self, tmp_path: Path) -> None:
-        repo_root = tmp_path / "plain"
+    def test_non_git_dir_falls_back_to_repo_root(self, outside_project_tmp_path: Path) -> None:
+        repo_root = outside_project_tmp_path / "plain"
         repo_root.mkdir()
         cfg = _make_config(repo_root=repo_root, provider=_local_provider())
         result = resolve_artifacts_dir(cfg)
@@ -341,8 +341,10 @@ class TestConfigArtifactsDirCommand:
         assert rc == 0, stderr
         assert stdout == f"{abs_dir}\n"
 
-    def test_missing_config_exits_2(self, tmp_path: Path) -> None:
-        rc, stdout, stderr = _run_cli(["config", "artifacts-dir", "--workdir", str(tmp_path)])
+    def test_missing_config_exits_2(self, outside_project_tmp_path: Path) -> None:
+        rc, stdout, stderr = _run_cli(
+            ["config", "artifacts-dir", "--workdir", str(outside_project_tmp_path)]
+        )
         assert rc == 2
         assert stdout == ""
         assert "Error:" in stderr

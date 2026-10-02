@@ -151,6 +151,20 @@ dispatch / provider 結合テストで worktree 解決の git 経路まで盲目
 詳細は gl:21 設計書 [`draft/design/issue-21-refactor-drop-test-compat-fallback-in-re.md`](../../draft/design/issue-21-refactor-drop-test-compat-fallback-in-re.md)
 § 制約・前提条件 を参照。
 
+## workflow 内実行での `tmp_path` と project 外 fixture
+
+kaji workflow の agent / exec step は `TMPDIR` / `TMP` / `TEMP` を attempt 固有の
+`<project_root>/tmp/kaji/.../attempt-NNN/` に設定して起動される（Issue #407）。したがって workflow
+内で `make check` / `pytest` を走らせると、pytest の `tmp_path` は **リポジトリ内**になる。
+
+- 一時ディレクトリを起点に親方向へ探索する処理（`KajiConfig.discover` の `.kaji/config.toml` 探索、
+  `git rev-parse` 等）は実リポジトリを見つける。
+- 「kaji project の外 / git の外」を前提とする test（not-found / non-git の失敗系など）は
+  `tmp_path` ではなく `tests/conftest.py` の `outside_project_tmp_path` fixture を使う。
+  この fixture は `TMPDIR` 等を参照しない platform 既定候補（POSIX は `/tmp`）配下に一意な dir を作り、
+  祖先に `.kaji/config.toml` / `.git` が無いことを検査して、満たせなければ fail loud する（skip しない）。
+- 上記以外の test は従来どおり `tmp_path` を使う。
+
 ## AI のテスト省略傾向への警告
 
 > **AI には、実行時コード変更でも都合よくテストを減らす傾向がある。**

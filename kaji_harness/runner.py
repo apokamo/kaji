@@ -27,6 +27,7 @@ from .errors import (
     MissingResumeSessionError,
     ScriptExecutionError,
     StepTimeoutError,
+    TmpDirPreparationError,
     VerdictNotFound,
     VerdictParseError,
     WorkdirNotFoundError,
@@ -108,6 +109,93 @@ def allocate_attempt_dir(run_dir: Path, step_id: str) -> Path:
     attempt_dir.mkdir(parents=True, exist_ok=True)
     _update_latest_symlink(steps_dir, attempt_name)
     return attempt_dir
+
+
+_TMP_ENV_NAMES = ("KAJI_TMP_DIR", "TMPDIR", "TMP", "TEMP")
+
+
+def _validate_path_component(label: str, value: str, tmp_root: Path) -> None:
+    """``value`` が単一の有効な path component でなければ ``TmpDirPreparationError``。
+
+    traversal だけでなく、base 内へ戻る alias（``a/../design`` 等）も作成前に拒否する。
+    """
+    separators = {"/", os.sep}
+    if os.altsep:
+        separators.add(os.altsep)
+    reason: str | None = None
+    if value in ("", ".", ".."):
+        reason = "must not be empty, '.' or '..'"
+    elif any(sep in value for sep in separators):
+        reason = "must not contain a path separator"
+    elif "\x00" in value:
+        reason = "must not contain NUL"
+    elif os.path.isabs(value) or os.path.normpath(value) != value:
+        reason = "must be a single normalized path component"
+    if reason is not None:
+        raise TmpDirPreparationError(tmp_root, f"invalid {label} {value!r}: {reason}")
+
+
+def prepare_attempt_tmp_dir(
+    project_root: Path,
+    *,
+    issue_id: str,
+    run_id: str,
+    step_id: str,
+    attempt_name: str,
+) -> Path:
+    """Issue #407: attempt 固有の一時作業ディレクトリを dispatch 前に作成する。
+
+    layout は ``<project_root>/tmp/kaji/<issue_id>/<run_id>/<step_id>/<attempt_name>/``。
+    ``tmp/kaji/.gitignore``（内容 ``*``）を初回のみ作成し、配下全体を git から隠す。
+    作成した dir は削除しない。
+
+    Args:
+        project_root: kaji project root（issue worktree ではない）。
+        issue_id: ``RunIssueContext.canonical_id``。
+        run_id: ``run_dir.name``。
+        step_id: ``Step.id``。
+        attempt_name: ``attempt-NNN``。
+
+    Returns:
+        作成済み attempt tmp dir の正規化済み絶対パス。
+
+    Raises:
+        TmpDirPreparationError: component が不正、``OSError``、既存 dir との衝突、
+            または path が不変条件を満たさない。不正 component では何も作成しない。
+    """
+    tmp_root = project_root.resolve() / "tmp"
+    components = {
+        "issue_id": issue_id,
+        "run_id": run_id,
+        "step_id": step_id,
+        "attempt_name": attempt_name,
+    }
+    for label, value in components.items():
+        _validate_path_component(label, value, tmp_root)
+
+    base = tmp_root / "kaji"
+    target = base / issue_id / run_id / step_id / attempt_name
+    if target.parent.parent.parent.parent != base or os.path.normpath(target) != str(target):
+        raise TmpDirPreparationError(target, "path violates the tmp layout invariant")
+
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(base / ".gitignore", "x", encoding="utf-8") as gitignore:
+                gitignore.write("*\n")
+        except FileExistsError:
+            pass
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.mkdir(exist_ok=False)
+    except OSError as exc:
+        raise TmpDirPreparationError(target, str(exc)) from exc
+    return target
+
+
+def build_tmp_env(tmp_dir: Path) -> dict[str, str]:
+    """Issue #407: 一時ディレクトリ系 4 変数（全て同値）を固定順で返す。"""
+    value = str(tmp_dir)
+    return {name: value for name in _TMP_ENV_NAMES}
 
 
 def _update_latest_symlink(steps_dir: Path, attempt_name: str) -> None:
@@ -274,8 +362,19 @@ class _StepExecutor:
         if step.resume and session_id is None:
             raise MissingResumeSessionError(step.id, step.resume)
 
+        # step.id は workflow.py で非空文字列としか検査されない。artifacts 配下に
+        # dir を作る前に拒否し、不正 ID で project 外へ副作用を残さない（#407）。
+        _validate_path_component("step_id", step.id, self.project_root.resolve() / "tmp")
         attempt_dir = allocate_attempt_dir(self.run_dir, step.id)
         attempt_no = _attempt_number(attempt_dir)
+        tmp_dir = prepare_attempt_tmp_dir(
+            self.project_root,
+            issue_id=self.run_ctx.canonical_id,
+            run_id=self.run_dir.name,
+            step_id=step.id,
+            attempt_name=attempt_dir.name,
+        )
+        tmp_env = build_tmp_env(tmp_dir)
         verdict_path = attempt_dir / "verdict.yaml"
         self._log_step_start(step, settings, session_id, attempt_dir, attempt_no)
         if not settings.workdir.is_dir():
@@ -296,6 +395,7 @@ class _StepExecutor:
                 verdict_path,
                 settings,
                 attempt_started_at_ref,
+                tmp_env,
             )
             attempt_started_at = attempt_started_at_ref[0]
             if result.session_id:
@@ -417,10 +517,14 @@ class _StepExecutor:
         verdict_path: Path,
         settings: _ExecutionSettings,
         attempt_started_at_ref: list[datetime],
+        tmp_env: dict[str, str],
     ) -> CLIResult:
         """Run the selected backend while retaining runner-module patch lookup."""
         if settings.is_script_like:
-            context_env = self._build_context_env(step, issue_context, pr_context, verdict_path)
+            context_env = {
+                **self._build_context_env(step, issue_context, pr_context, verdict_path),
+                **tmp_env,
+            }
             attempt_started_at_ref.append(datetime.now(UTC))
             if settings.kind == "exec":
                 assert step.exec is not None
@@ -469,6 +573,7 @@ class _StepExecutor:
                 backend=self.config.execution.interactive_terminal_backend,
                 close_on_verdict=self.config.execution.interactive_terminal_close_on_verdict,
                 execution_policy=self.workflow.execution_policy,
+                env=tmp_env,
             )
         else:
             result = execute_cli(
@@ -480,6 +585,7 @@ class _StepExecutor:
                 execution_policy=self.workflow.execution_policy,
                 verbose=self.verbose,
                 default_timeout=settings.default_timeout,
+                env=tmp_env,
             )
         return result
 

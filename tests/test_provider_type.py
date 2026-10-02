@@ -116,8 +116,10 @@ def test_kaji_config_provider_type_missing_provider_section(tmp_path: Path) -> N
 
 
 @pytest.mark.medium
-def test_kaji_config_provider_type_missing_config(tmp_path: Path) -> None:
-    rc, stdout, stderr = _run_cli(["config", "provider-type", "--workdir", str(tmp_path)])
+def test_kaji_config_provider_type_missing_config(outside_project_tmp_path: Path) -> None:
+    rc, stdout, stderr = _run_cli(
+        ["config", "provider-type", "--workdir", str(outside_project_tmp_path)]
+    )
     assert rc == 2
     assert stdout == ""
     assert "Error:" in stderr

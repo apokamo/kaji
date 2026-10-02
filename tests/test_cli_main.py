@@ -470,10 +470,13 @@ class TestCmdRunMedium:
 
     @pytest.mark.medium
     def test_config_not_found_exit_2(
-        self, workflow_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self,
+        workflow_file: Path,
+        outside_project_tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """cmd_run exits 2 when .kaji/config.toml is missing."""
-        no_config_dir = tmp_path / "no-config"
+        no_config_dir = outside_project_tmp_path / "no-config"
         no_config_dir.mkdir()
         exit_code = cmd_run_with_args(
             str(workflow_file),

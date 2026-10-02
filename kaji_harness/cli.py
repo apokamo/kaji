@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import subprocess
 import threading
 import time
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -161,8 +163,13 @@ def execute_cli(
     verbose: bool = True,
     *,
     default_timeout: int,
+    env: Mapping[str, str] | None = None,
 ) -> CLIResult:
-    """CLI を実行し、結果を返す。一時的エラー時はバックオフ付きリトライする。"""
+    """CLI を実行し、結果を返す。一時的エラー時はバックオフ付きリトライする。
+
+    ``env`` を渡すと親プロセスの環境変数を土台に上書きして子へ渡す（Issue #407）。
+    リトライでも同じ ``env`` を再利用する。``None`` なら親の環境をそのまま継承する。
+    """
     for attempt in range(_MAX_RETRIES + 1):
         try:
             return _execute_cli_once(
@@ -174,6 +181,7 @@ def execute_cli(
                 execution_policy,
                 verbose,
                 default_timeout=default_timeout,
+                env=env,
             )
         except CLIExecutionError as e:
             if attempt == _MAX_RETRIES or not _is_transient(e):
@@ -202,6 +210,7 @@ def _execute_cli_once(
     verbose: bool,
     *,
     default_timeout: int,
+    env: Mapping[str, str] | None = None,
 ) -> CLIResult:
     """CLI を 1 回実行する（リトライなし）。"""
     # execute_cli は agent 必須 step 専用。exec_script 経路は execute_script を使う。
@@ -212,7 +221,12 @@ def _execute_cli_once(
 
     try:
         process = subprocess.Popen(
-            args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=workdir
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=workdir,
+            env=None if env is None else {**os.environ, **env},
         )
     except FileNotFoundError as e:
         raise CLINotFoundError(f"CLI '{args[0]}' not found. Is it installed?") from e

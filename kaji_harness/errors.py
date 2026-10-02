@@ -233,6 +233,19 @@ class WorkdirNotFoundError(HarnessError):
         super().__init__(f"Step '{step_id}' workdir does not exist: {workdir}")
 
 
+class TmpDirPreparationError(HarnessError):
+    """attempt 固有の一時作業ディレクトリ（``tmp/kaji/...``）を用意できない。
+
+    component 検査違反・``OSError``・既存 dir との衝突・境界不変条件違反を表す。
+    dispatch 前に送出され、dispatch は行われない。
+    """
+
+    def __init__(self, tmp_dir: Path, reason: str):
+        self.tmp_dir = tmp_dir
+        self.reason = reason
+        super().__init__(f"Cannot prepare attempt tmp dir {tmp_dir}: {reason}")
+
+
 class IssueContextResolutionError(HarnessError):
     """`provider.resolve_issue_context` が失敗した。
 

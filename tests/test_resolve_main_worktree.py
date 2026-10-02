@@ -96,14 +96,14 @@ class TestResolveMainWorktree:
         with pytest.raises(LocalProviderError, match="no worktree found for branch 'release'"):
             resolve_main_worktree(start_dir=main_wt, default_branch="release")
 
-    def test_non_git_dir_raises(self, tmp_path: Path) -> None:
+    def test_non_git_dir_raises(self, outside_project_tmp_path: Path) -> None:
         """非 git ディレクトリでは ``LocalProviderError`` を raise する。
 
         production の ``provider.type='local'`` は git repo + main worktree を
         前提とするため、非 git ディレクトリでの起動は actionable error として
         fail-fast させる（gl:21 で fallback を撤去）。
         """
-        plain = tmp_path / "plain"
+        plain = outside_project_tmp_path / "plain"
         plain.mkdir()
         with pytest.raises(LocalProviderError, match=r"git repository|not a git"):
             resolve_main_worktree(start_dir=plain, default_branch="main")
