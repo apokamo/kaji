@@ -311,8 +311,13 @@ producer は `kaji_harness/review_poll_evidence.py`）を 1 本の jq プログ�
 
 ```bash
 VERIFIED=$(jq -r '
-  def ts: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
-  def ists: type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$");
+  def whole: sub("\\.[0-9]+Z$"; "Z");
+  def ists: type == "string"
+    and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$")
+    and (whole as $w | ($w | fromdateiso8601 | todateiso8601) == $w);
+  def ts: (whole | fromdateiso8601) * 1000000
+    + ((capture("\\.(?<f>[0-9]+)Z$") // {f: "0"}) | .f + "000000" | .[0:6] | tonumber);
+  def sec: (. / 1000000 | floor) * 1000000;
   def keys_eq($k): type == "object" and ((keys | sort) == ($k | sort));
   def posint: type == "number" and . == floor and . > 0;
   def str1: type == "string" and length > 0;
@@ -358,9 +363,9 @@ VERIFIED=$(jq -r '
         and (.approval.review_summary.completed_at | ists) and (.approval.review_summary.completed_at | ts | . > 0)
         and (.approval.review_summary.comment_updated_at | ists) and (.approval.review_summary.comment_updated_at | ts | . > 0)),
       chk("I7";
-        (.approval.reaction.created_at | ts) >= ((.approval.review_summary.completed_at | ts) + 1)
+        (.approval.reaction.created_at | ts) >= ((.approval.review_summary.completed_at | ts | sec) + 1000000)
         and (.approval.reaction.created_at | ts) >= (.reviewed_head.committed_at | ts)
-        and (.approval.review_summary.comment_updated_at | ts) >= (.approval.review_summary.completed_at | ts)),
+        and (.approval.review_summary.comment_updated_at | ts) >= (.approval.review_summary.completed_at | ts | sec)),
       chk("I8";
         ([.checks.head_sha_at_start, .checks.head_sha_before_decision, .checks.head_sha_after_decision]
           | all(. == $e.reviewed_head.sha))
@@ -375,8 +380,11 @@ VERIFIED=$(jq -r '
 [ "$VERIFIED" = "OK" ] || { echo "ABORT: review-poll evidence violates invariant(s): $VERIFIED"; exit 1; }
 ```
 
-`ts` は `floor(completed_at)` を実現する（`fromdateiso8601` は小数秒を受け付けないため、切り捨ててから epoch 秒に変換する）。
+`ts` は小数秒を保持した epoch マイクロ秒を返す（`fromdateiso8601` は小数秒を受け付けないため、整数秒と小数部を別々に変換して合成する）。
+`sec` は `floor(秒)` で、producer の `next_second_after` / `replace(microsecond=0)` に対応する。floor を使うのは
+`completed_at` に対する比較（I7 の reaction・`comment_updated_at`）だけで、他の時刻比較（I7 の `committed_at`、I9）は小数秒まで比較する。
 I7 は「reaction の秒が完了秒より厳密に後」であることを要求する。
+`ists` は形式に加えて暦日・時分秒の実在を検証する（`fromdateiso8601 | todateiso8601` が元の秒部分に往復一致しなければ不正。`2026-02-30` 等を拒否する）。
 
 #### 2.5.4 現在の PR との照合（`MODE=verify` のみ）
 
