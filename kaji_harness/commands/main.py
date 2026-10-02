@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from .config import cmd_config_artifacts_dir, cmd_config_provider_type
+from .config import (
+    cmd_config_artifacts_dir,
+    cmd_config_design_dir,
+    cmd_config_provider_type,
+)
 from .exit_codes import EXIT_ABORT
 from .issue import _handle_issue
 from .parser import create_parser
@@ -39,6 +43,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_config_provider_type(args)
         if args.config_command == "artifacts-dir":
             return cmd_config_artifacts_dir(args)
+        if args.config_command == "design-dir":
+            return cmd_config_design_dir(args)
         parser.print_help()
         return EXIT_ABORT
     if args.command == "sync":

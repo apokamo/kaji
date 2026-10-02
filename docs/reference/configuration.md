@@ -58,7 +58,7 @@ The overlay (`.kaji/config.local.toml`) can override tracked values in **only th
 - Only when neither tracked nor overlay defines `[provider]` does the loader return the provider as `None`.
 - `[incident]` is **not** overlaid either: it is read from tracked `.kaji/config.toml` only, and an
   `[incident]` table in the overlay is ignored (label names are a per-repository convention).
-- `[paths]` (`artifacts_dir` / `skill_dir` / `worktree_prefix`) is **not** overlaid. `PathsConfig` is
+- `[paths]` (`artifacts_dir` / `skill_dir` / `worktree_prefix` / `design_dir`) is **not** overlaid. `PathsConfig` is
   built solely from tracked `.kaji/config.toml`; the overlay is passed only to `[execution]` /
   `[provider]` parsing (`config.py:141-154`). A `[paths]` table in the overlay is ignored.
 
@@ -72,7 +72,7 @@ type errors), the message uses `ConfigLoadError(path, ...)` and therefore points
 
 A key's "Default" column is the value the config loader adopts at parse time. For keys where the
 loader default differs from the **effective fallback** applied by the provider layer at path
-computation (`worktree_prefix`), both are described separately.
+computation (`worktree_prefix`, `design_dir`), both are described separately.
 
 ### `[paths]`
 
@@ -81,6 +81,7 @@ computation (`worktree_prefix`), both are described separately.
 | `artifacts_dir` | Required | str | — (unset is an error) | Relative paths must not contain `..` (prevents repo-root escape). Absolute paths / `~` expansion are allowed | `config.py:118-125`, `397-417` |
 | `skill_dir` | Required | str | — (unset is an error) | Relative only. No absolute paths, no `..` | `config.py:126-133`, `419-434` |
 | `worktree_prefix` | Optional | str | `""` (unset) | When non-empty, a single safe segment (`[A-Za-z0-9._-]+`; no separators / whitespace / `..` / absolute) | `config.py:134-140`, `436-452` |
+| `design_dir` | Optional | str | `""` (unset) | Repository-relative POSIX directory. See the `design_dir` subsection below for rules V1–V7 | `design_dir.py` `validate_design_dir` / `config.py` `_DesignDirInput` / `KajiConfig._parse_design_dir` |
 
 > **`worktree_prefix`: "config default" vs "effective fallback"**:
 >
@@ -93,6 +94,48 @@ computation (`worktree_prefix`), both are described separately.
 >   `worktree_prefix = "kaji"` explicitly in `.kaji/config.toml` or leave it unset, the **generated
 >   worktree path is identical**. Only the field value (`config.paths.worktree_prefix`) changes from
 >   `"" → "kaji"`.
+
+#### `design_dir`: design document directory
+
+`[paths] design_dir` sets the directory where design documents live. Kaji injects
+`design_path = <design_dir>/issue-<id>-<slug>.md` (the `design_path` context variable and the
+`design_path` field of `kaji issue context <id>`) identically for the GitHub and Local providers.
+Kaji only computes, validates and injects the path; creating and committing the design document is
+the skill's responsibility.
+
+- **Config default (loader layer)**: when unset (or `design_dir = ""`), `config.paths.design_dir`
+  is the empty string `""`.
+- **Effective fallback**: `build_design_path` resolves `design_dir or "draft/design"`
+  (`LEGACY_DESIGN_DIR`). Unset therefore keeps the legacy `draft/design/issue-<id>-<slug>.md`.
+  `kaji config design-dir` prints the effective directory (`draft/design` or the configured value;
+  exit 2 with a stderr diagnostic when the config is missing or invalid).
+- Only the directory is configurable; the `issue-<id>-<slug>.md` file name is fixed.
+- Like the rest of `[paths]`, it is read from tracked `.kaji/config.toml` only (not overlaid).
+
+**Security boundary** (violations raise `ConfigLoadError` at config load, exit 2 on the CLI).
+`design_path` is expanded unquoted into skill shell commands (e.g. `git add [design_path]`), so the
+value is restricted syntactically:
+
+| # | Rule | Rejected examples |
+|---|------|-------------------|
+| V1 | Must be a string (strict; no int / bool / list / table coercion) | `design_dir = 1` |
+| V2 | Not absolute (leading `/`, Windows drive / UNC) | `/srv/designs`, `C:/designs`, `//host/share` |
+| V3 | Each segment matches `[A-Za-z0-9._][A-Za-z0-9._-]*` (no whitespace / shell metacharacters / leading `-` / `~`) | `~/designs`, `my designs`, `-x/designs`, `designs/$(id)` |
+| V4 | No empty segments (canonical form) | `designs//issues`, `designs/issues/` |
+| V5 | No `.` / `..` segments | `../designs`, `./designs`, `.` |
+| V6 | No `.git` segment (case-insensitive) | `.git/designs` |
+| V7 | The existing prefix, symlinks resolved, stays inside the repository and resolution succeeds | `designs -> /tmp/outside`, symlink loop, broken symlink |
+
+**Migration** (adopting a non-default directory in an existing repository):
+
+1. Add `design_dir = "designs/issues"` to `.kaji/config.toml`.
+2. Decide whether to `git mv` existing `draft/design/issue-*.md` files; Kaji does not move them.
+3. In-flight Issues: a design document already written under the old directory is not found at the
+   new `design_path`; move it (or finish the Issue under the old setting) before continuing.
+4. Remove any repository-side adapter (legacy path resolver) that translated the fixed
+   `draft/design/...` value.
+5. Skills should reference `[design_path]` (or `kaji config design-dir`) instead of hard-coding
+   `draft/design`.
 
 A relative `artifacts_dir` is resolved against the main worktree (the worktree that has
 `provider.<type>.default_branch` checked out) — Issue #177, see
@@ -272,6 +315,7 @@ key's detailed spec, see the corresponding section above.
 artifacts_dir = ".kaji-artifacts"
 skill_dir = ".claude/skills"
 worktree_prefix = "kaji"            # leading segment of the worktree dir name (<prefix>-<branch_prefix>-<id>)
+# design_dir = "designs/issues"     # optional: design document directory (unset = legacy default "draft/design")
 
 [execution]
 default_timeout = 2400

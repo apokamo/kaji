@@ -25,6 +25,8 @@ from kaji_harness.baseline import (
     save_artifact,
 )
 from kaji_harness.config import KajiConfig
+from kaji_harness.design_dir import LEGACY_DESIGN_DIR
+from kaji_harness.errors import ConfigNotFoundError
 from kaji_harness.fsio import atomic_write
 from kaji_harness.providers import (
     LocalProvider,
@@ -49,8 +51,23 @@ def _git(worktree: Path, *args: str, check: bool = True) -> subprocess.Completed
     )
 
 
+def _effective_design_dir(worktree: Path) -> str:
+    """Return ``[paths].design_dir`` of the worktree's tracked config (legacy default if unset).
+
+    ``design_dir`` is read from the tracked ``.kaji/config.toml`` only, so discovering from
+    the feature worktree is correct. A worktree without any kaji config (non-kaji fixture)
+    falls back to the legacy default; an invalid config still fails loud.
+    """
+    try:
+        config = KajiConfig.discover(worktree)
+    except ConfigNotFoundError:
+        return LEGACY_DESIGN_DIR
+    return config.paths.design_dir or LEGACY_DESIGN_DIR
+
+
 def _has_implementation_commit(worktree: Path, default_branch: str) -> bool:
     """Return whether HEAD contains a non-design commit beyond the default branch."""
+    design_dir = _effective_design_dir(worktree)
     result = _git(
         worktree,
         "log",
@@ -58,7 +75,7 @@ def _has_implementation_commit(worktree: Path, default_branch: str) -> bool:
         f"{default_branch}..HEAD",
         "--",
         ".",
-        ":(exclude)draft/design/**",
+        f":(exclude){design_dir}/**",
     )
     return bool(result.stdout.strip())
 

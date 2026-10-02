@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ..artifacts import resolve_artifacts_dir
 from ..config import KajiConfig
+from ..design_dir import LEGACY_DESIGN_DIR
 from ..errors import ConfigLoadError, ConfigNotFoundError
 from ..providers import (
     actual_provider_type,
@@ -102,4 +103,31 @@ def cmd_config_artifacts_dir(args: argparse.Namespace) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return EXIT_INVALID_INPUT
     sys.stdout.write(f"{resolve_artifacts_dir(config)}\n")
+    return EXIT_OK
+
+
+def cmd_config_design_dir(args: argparse.Namespace) -> int:
+    """Print the effective design directory (``[paths].design_dir``) to stdout.
+
+    Issue #397 で導入。skill / 自動化スクリプトが ``IssueContext`` を経由せず設計書
+    directory を副作用なく取得するための read-only エントリ。未設定時は legacy
+    default ``draft/design`` を返す。
+
+    Exit codes:
+        0: 解決成功（stdout に repository 相対 directory + ``"\\n"``）
+        2: config 不在 or 不正（stderr に診断メッセージ）
+    """
+    start_dir = args.workdir.resolve()
+    if not start_dir.is_dir():
+        print(
+            f"Error: --workdir '{args.workdir}' is not a valid directory",
+            file=sys.stderr,
+        )
+        return EXIT_INVALID_INPUT
+    try:
+        config = KajiConfig.discover(start_dir=start_dir)
+    except (ConfigNotFoundError, ConfigLoadError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return EXIT_INVALID_INPUT
+    sys.stdout.write(f"{config.paths.design_dir or LEGACY_DESIGN_DIR}\n")
     return EXIT_OK

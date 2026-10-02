@@ -54,6 +54,6 @@ kaji における Docs-as-Code 運用ルール。ドキュメントはコード�
 
 | フェーズ | 場所 | 説明 |
 |---------|------|------|
-| 作業中 | `draft/design/issue-XXX-*.md` | worktree 内、コミット対象 |
-| final-check 時 | Issue 本文にアーカイブ | `<details>` タグで折りたたんで本文末尾に追記（`/i-dev-final-check` skill の責務） |
+| 作業中 | `<design_dir>/issue-XXX-*.md`（既定 `draft/design`。`[paths].design_dir` で設定） | worktree 内、コミット対象 |
+| final-check 時 | Issue 本文にアーカイブ | `<details>` タグで折りたたんで NOTE ブロック直下に挿入（`/i-dev-final-check` skill の責務） |
 | 恒久化 | `docs/adr/` または `docs/dev/` | ADR / 汎用ガイドとして昇格（該当する場合のみ。手順は `.claude/skills/_shared/promote-design.md`） |

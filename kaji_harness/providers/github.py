@@ -92,6 +92,9 @@ class GitHubProvider:
         worktree_prefix: ``[paths].worktree_prefix`` config 由来。worktree dir 名の
             先頭 segment。空文字（無設定）なら ``build_worktree_dir`` 側で ``"kaji"``
             にフォールバックする（Issue #215）。
+        design_dir: ``[paths].design_dir`` config 由来。``IssueContext.design_path`` の
+            directory。空文字（無設定）なら ``build_design_path`` 側で legacy default
+            ``draft/design`` にフォールバックする（Issue #397）。
     """
 
     repo: str
@@ -99,6 +102,7 @@ class GitHubProvider:
     default_branch: str = "main"
     git_remote: str = "origin"
     worktree_prefix: str = ""
+    design_dir: str = ""
 
     # gh version probe の memo（Issue #372）。dataclass の等価性・repr からは除外する。
     _gh_version: tuple[int, int, int] | None = field(
@@ -507,7 +511,7 @@ class GitHubProvider:
             branch_prefix=prefix,
             branch_name=build_branch_name(prefix, issue.id),
             worktree_dir=build_worktree_dir(prefix, issue.id, self.repo_root, self.worktree_prefix),
-            design_path=build_design_path(issue.id, slug),
+            design_path=build_design_path(issue.id, slug, self.design_dir),
             provider_type="github",
             branch_prefix_fallback=fallback,
             default_branch=self.default_branch,
