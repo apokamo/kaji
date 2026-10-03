@@ -30,6 +30,31 @@ skill_dir = ".claude/skills"   # 必須。カノニカルディレクトリ
 
 各スキルはディレクトリで、`SKILL.md` を含む。
 
+### codex step の skill 解決（`$<skill>` と `.agents/skills`）
+
+`agent: codex` の step では、harness は prompt の先頭行を `$<skill> を実行してください。` にして
+skill を明示的に呼び出す（claude / antigravity は従来の ``スキル `<skill>` を実行してください。``）。
+新規実行と resume の両方で同じ形式になる。interactive terminal で codex を起動する場合も、
+agent に渡す初期メッセージの先頭に同じ行が付く。
+
+Codex は `$<skill>` を `<workdir>/.agents/skills/<skill>/SKILL.md` から解決する。解決できない
+`$<skill>` はエラーにならず普通の文字列として扱われ、Codex が自力でファイルを探しに行く（fail-open）。
+これを防ぐため、preflight（`kaji run` / `kaji validate` / `kaji recover` / series loader 共通）は
+codex step ごとに次を検証し、欠けていれば Codex を起動する前にエラーで止める。
+
+- 検証対象は step の実効 workdir（`step.workdir` > workflow の `workdir` > project root）の
+  `.agents/skills/<skill>/SKILL.md` 1 箇所だけ。user / admin スコープの skill は合格扱いにしない
+- `..` を含む skill 名と、resolve 後に workdir の外へ出る symlink は拒否する
+- `exec_script` を宣言した skill は agent を起動しないため対象外
+- 存在とパスの安全性だけを保証する。SKILL.md の frontmatter `name` とディレクトリ名の一致は検査しない
+  （`$<ディレクトリ名>` で解決させるため、`name` はディレクトリ名と揃える）
+
+codex step で使う skill は、`.agents/skills/<skill>` を canonical への symlink として必ず用意する
+（例: `.agents/skills/review -> ../../.claude/skills/review`）。
+
+確認済みの Codex version は codex-cli 0.159.2（`codex exec` / `codex exec resume` で `$<skill>` が
+skill として注入されることを実機で確認）。最低 version は強制しない。
+
 ## 段階的開示と遅延読込
 
 `SKILL.md` は、その step の責務、必須不変条件、実行順、どの資料をいつ読むかに絞る。常時不要な長い手順・出力雛形は skill 配下へ分離し、利用直前に明示的に Read する。

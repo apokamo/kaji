@@ -51,9 +51,9 @@ class TestBuildWrapperCommandEnv:
         explicit_none = _build_wrapper_command(wrapper, env=None, **_WRAPPER_KWARGS)
         assert without == explicit_none
         assert shlex.split(without)[0] == "/pkg/wrapper.sh"
-        assert len(shlex.split(without)) == 10
+        assert len(shlex.split(without)) == 11  # wrapper + 10 positional args
 
-    def test_env_prefix_precedes_wrapper_and_nine_args(self) -> None:
+    def test_env_prefix_precedes_wrapper_and_its_args(self) -> None:
         env = build_tmp_env(Path("/p/tmp/kaji/1/r/s/attempt-001"))
         command = _build_wrapper_command(Path("/pkg/wrapper.sh"), env=env, **_WRAPPER_KWARGS)
         argv = shlex.split(command)
