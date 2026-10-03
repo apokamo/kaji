@@ -19,6 +19,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **Migration**: add `.agents/skills/<skill>` as a symlink to the canonical
     skill directory, e.g. `.agents/skills/review -> ../../.claude/skills/review`.
 
+### Changed
+
+- **`incident-*` skills now follow `[incident] kind_label`** (#457). The
+  precondition guard of `incident-investigate` and `incident-review` no longer
+  checks for a fixed `incident` label: it resolves `kind_label` from the tracked
+  `.kaji/config.toml` (default `kaji:incident`) and checks that label. If the
+  config cannot be read or `kind_label` is invalid, the skill aborts instead of
+  falling back to the default. This removes the 0.21.0 restriction that a
+  repository using the default names could not run the second-layer
+  investigation. kaji's own repository now runs with the default label names
+  (its `[incident]` override and the old-name `.github/labels.yml` entries are
+  gone).
+
 ### Fixed
 
 - Codex steps now invoke their skill explicitly with `$<skill>` instead of
@@ -28,6 +41,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `skill_invocation`). Claude and Antigravity prompts are unchanged (#408).
 - Added the missing `.agents/skills/review` symlink so the `review` step of
   kaji's own workflows is discoverable by Codex (#408).
+
+### Docs
+
+- Added a migration guide for moving existing `incident` labels to the `kaji:`
+  default names, with detection, in-place rename commands, ordering notes for
+  label-sync automation, and recovery steps (#457; see
+  `docs/dev/incident-labels.md` § 旧名からの移行手順).
 
 ## [0.21.0] - 2026-10-01
 

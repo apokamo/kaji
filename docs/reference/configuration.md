@@ -245,6 +245,9 @@ initial_status_label = "incident:investigating"
 transient_label = "incident:cause:transient"
 ```
 
+To migrate existing labels to the default names instead, see the
+[migration guide](../dev/incident-labels.md#旧名からの移行手順).
+
 See [incident label guide](../dev/incident-labels.md) for the meaning of each label.
 
 ### `[provider]`

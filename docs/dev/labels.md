@@ -44,19 +44,19 @@ Issue / PR の主分類。**1 Issue / PR に 1 ラベルのみ（single-select�
 ### incident (8) — 障害検知・集約層（第1層）の 2 軸
 
 failure triage の第1層（Issue #304）が扱うインシデントイシューのラベル群。status 軸と
-classification 軸の 2 軸からなり、`incident:cause:transient` のみ第1層が自動付与する（他は人間）。
+classification 軸の 2 軸からなり、`kaji:incident:cause:transient` のみ第1層が自動付与する（他は人間）。
 各ラベルの意味と遷移意図は [incident-labels.md](./incident-labels.md) を正本とする。
 
 | ラベル | 軸 | 付与者 |
 |--------|-----|--------|
-| `incident` | 種別（検索キー） | 第1層（起票時に必ず） |
-| `incident:investigating` | status | 第1層（起票時の初期値） |
-| `incident:mitigated` | status | 人間 |
-| `incident:resolved` | status | 人間 |
-| `incident:cause:internal` | classification | 人間 |
-| `incident:cause:upstream` | classification | 人間 |
-| `incident:cause:environment` | classification | 人間 |
-| `incident:cause:transient` | classification | 第1層（auto-resume 自己回復時） |
+| `kaji:incident` | 種別（検索キー） | 第1層（起票時に必ず） |
+| `kaji:incident:investigating` | status | 第1層（起票時の初期値） |
+| `kaji:incident:mitigated` | status | 人間 |
+| `kaji:incident:resolved` | status | 人間 |
+| `kaji:incident:cause:internal` | classification | 人間 |
+| `kaji:incident:cause:upstream` | classification | 人間 |
+| `kaji:incident:cause:environment` | classification | 人間 |
+| `kaji:incident:cause:transient` | classification | 第1層（auto-resume 自己回復時） |
 
 管理対象ラベル数: type:* (11) + meta (10) + incident (8) = 29。
 

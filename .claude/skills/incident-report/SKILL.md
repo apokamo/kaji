@@ -57,12 +57,15 @@ ART="$(kaji config artifacts-dir)"
 
 | conclusion | 推奨 status ラベル | 推奨 classification ラベル | 後続アクション（人間が実行） |
 |------------|--------------------|----------------------------|------------------------------|
-| `internal-bug` | `incident:mitigated` 等 | `incident:cause:internal` | バグイシュー化ドラフトを起票、緩和/恒久対策の判断 |
-| `upstream` | `incident:mitigated` 等 | `incident:cause:upstream` | 上流 issue への報告 / watch、回避策の適用 |
-| `environment` | `incident:mitigated` 等 | `incident:cause:environment` | 環境修正、運用手順の更新 |
-| `transient` | （第1層が自動付与済みの場合あり） | `incident:cause:transient` | 頻度を監視。頻発なら昇格判断 |
+| `internal-bug` | `kaji:incident:mitigated` 等 | `kaji:incident:cause:internal` | バグイシュー化ドラフトを起票、緩和/恒久対策の判断 |
+| `upstream` | `kaji:incident:mitigated` 等 | `kaji:incident:cause:upstream` | 上流 issue への報告 / watch、回避策の適用 |
+| `environment` | `kaji:incident:mitigated` 等 | `kaji:incident:cause:environment` | 環境修正、運用手順の更新 |
+| `transient` | （第1層が自動付与済みの場合あり） | `kaji:incident:cause:transient` | 頻度を監視。頻発なら昇格判断 |
 | `duplicate` | （統合先に集約） | 統合先に準ずる | 統合先への集約（実行は人間） |
-| `INCONCLUSIVE` | `incident:investigating` 維持 | 付与しない | 不足証拠の収集後に再調査 |
+| `INCONCLUSIVE` | `kaji:incident:investigating` 維持 | 付与しない | 不足証拠の収集後に再調査 |
+
+> 表のラベル名は既定名（推奨名）である。`[incident]` でラベル名を変えている場合は設定名を、設定 key のない
+> ラベルはリポジトリで採用している名前を使う（`docs/dev/incident-labels.md` 参照）。
 
 > `risk-accepted` は人間専用語彙であり、本コメントの出力語彙に含めない。
 

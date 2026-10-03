@@ -61,15 +61,58 @@ $ARGUMENTS = <incident_issue_id>
   artifact に引用する際はトークン・資格情報・秘匿 URL を既存 `sanitize_evidence` と同方針でマスクする。
 - **auto-close hazard 回避**: `docs/dev/shared_skill_rules.md` § auto close keyword 回避規約に従う。
 
+### `kind_label` の解決
+
+incident ラベルの名前は固定せず、`.kaji/config.toml` の `[incident] kind_label`（省略時の既定値は
+`kaji:incident`）を基準にする。前提ガードを持つ skill は、判定の前に次のブロックで解決する。
+ブロックは**解決処理だけ**を行い、成功時は `KIND_LABEL` にラベル値だけが入って終了コード 0 になる。
+失敗時（`.kaji/config.toml` が見つからない / 不正な TOML / `[incident]` が table でない /
+`kind_label` が空または文字列でない / `python3`（3.11 以上）がない）は理由を stderr に出して
+**非ゼロで終了**する。その場合はラベル照合へ進まず ABORT し、suggestion に stderr の原因を記載する
+（既定値へ黙って倒さない）。`[incident]` または `kind_label` キーがないときだけ既定値を使う。
+
+```bash
+# kind_label の解決（cwd から親方向に .kaji/config.toml を探す。KajiConfig.discover と同じ探索規則）
+if ! KIND_LABEL="$(python3 - <<'PY'
+import pathlib, sys, tomllib
+cwd = pathlib.Path.cwd().resolve()
+for d in (cwd, *cwd.parents):
+    cfg = d / ".kaji" / "config.toml"
+    if cfg.is_file():
+        break
+else:
+    sys.exit("kaji config not found: .kaji/config.toml")
+data = tomllib.loads(cfg.read_text(encoding="utf-8"))  # 不正 TOML は例外 → 非ゼロ終了
+section = data.get('incident', {})
+if not isinstance(section, dict):
+    sys.exit(f"{cfg}: [incident] must be a table")
+label = section.get("kind_label", "kaji:incident")
+if not isinstance(label, str) or not label.strip():
+    sys.exit(f"{cfg}: incident.kind_label must be a non-empty string")
+print(label)
+PY
+)"; then
+    echo "ABORT: kind_label を解決できない（理由は上の stderr）" >&2
+    exit 1
+fi
+```
+
+`[incident]` は tracked な `.kaji/config.toml` だけから読む（overlay の `config.local.toml` は
+無視する）。値の検証は `kaji run` 起動時に行われるため、この手順は値を読むだけである。
+ラベルの照合は `labels[].name` と `KIND_LABEL` を大文字小文字を区別せずに比較する。
+
 ## 実行手順
 
 ### Step 0: 前提ガード（violate → ABORT）
+
+共通ルールの「`kind_label` の解決」で `KIND_LABEL` を解決する。解決に失敗したら ABORT する。
+成功したら次を確認する。
 
 ```bash
 kaji issue view [issue_id] --json labels,body
 ```
 
-- 対象イシューに `incident` ラベルが付与されていること
+- 対象イシューの `labels[].name` に `KIND_LABEL` と一致するもの（大文字小文字を区別しない）があること
 - 本文 1 行目に identity marker（`<!-- kaji-incident: ... -->`）が存在すること
 
 いずれかを欠く場合は調査に入らず ABORT（suggestion に「対象がインシデントイシューか確認する手順」を記載）。
@@ -151,7 +194,7 @@ suggestion: |
 | status | 条件 |
 |--------|------|
 | PASS | 調査 artifact を作成し、受理基準（実証 or INCONCLUSIVE の記述充足）を満たす |
-| ABORT | 対象が非インシデント（`incident` ラベルなし / identity marker なし）等の前提崩壊 |
+| ABORT | 対象が非インシデント（`KIND_LABEL` のラベルなし / identity marker なし）、または `kind_label` を解決できない等の前提崩壊 |
 
 > `RETRY` は investigate では返さない（`incident.yaml` の `investigate.on` は `{PASS, ABORT}` のみ）。
 > 調査の不足は後段 review が RETRY を発行して fix へ回す。
