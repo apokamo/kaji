@@ -141,12 +141,22 @@ Step 2 で working tree が dirty だった場合は、結果が HEAD に対応�
 
 ### Step 5: 判定
 
+次の順に評価する。
+
+- **最初に**、blocking finding の有無に関係なく、`### ワークフロー完了後の確認項目` を除く完了条件を走査し、
+  軽量経路で満たせない項目（設計書の作成・設計書への準拠・設計レビューなど、dev-small にない工程の成果物を前提とする項目。
+  判定基準の正本: `docs/dev/workflow_guide.md` § dev-small の適用条件）があれば ABORT する。RETRY より優先する。
+  判定に迷う項目は ABORT 側に倒し、判定根拠を報告に書く。
+  - 報告には該当項目（本文の文言をそのまま引用）と前提とする dev-small にない工程、人間が決める事項
+    （該当項目を dev-small に合わせて本文から変更するか、標準 dev に切り替えるか）を記す。
+    同時に見つかった blocking finding は ABORT 理由とは別に併記する（RETRY にはしない）。
+  - Issue 本文の項目は書き換え・削除・チェックしない。
 - blocking finding がある → RETRY。指摘は `指摘 N` 形式で file:line・根拠・期待する修正を書く。好み・scope 外改善・
   将来の改善だけでは RETRY にしない（非 blocking 所見として記載可）。
 - 適用外（大きな設計判断・公開互換性・権限境界等が必要と判明）→ ABORT。
 - finding なし →
-  1. `### ワークフロー完了後の確認項目` を除く完了条件を HEAD に対して全件照合する。満たせない項目は RETRY、
-     軽量経路で満たせない項目は ABORT。
+  1. `### ワークフロー完了後の確認項目` を除く完了条件を HEAD に対して全件照合する。満たせる項目の未充足は RETRY
+     （軽量経路で満たせない項目は先頭の検査で ABORT 済み）。
   2. PR 前提: working tree clean、HEAD == 検証した SHA、`[default_branch]` より先行する commit が 1 件以上。
   3. Issue 本文を再取得し、確認済み項目だけ `[x]` に更新する。事後確認項目は `[ ]` のまま残す。失敗は ABORT。
 
@@ -174,6 +184,8 @@ review-change との差分だけを示す。Step 1 の入力報告は最新の `
   `git diff <全体レビュー済み SHA>..HEAD` の修正影響（回帰・scope・auto-close 規約）。解消済み指摘を再開しない。
   新たに RETRY にしてよいのは、修正差分起因の問題・HEAD での検証失敗・HEAD で未充足の完了条件・報告と実物の不一致・
   working tree の dirty に限る（レビューサイクル収束のため）。
+- ただし Step 5 先頭の「軽量経路で満たせない完了条件」の検査には、この確認範囲の限定を適用しない。
+  HEAD 時点の Issue 本文に対して毎回行い、検出すれば RETRY より優先して ABORT する。
 - 報告の全体レビュー済み範囲は、確認を終えた HEAD に更新する。
 
 ## 報告
@@ -229,5 +241,5 @@ suggestion: |
 | status | 条件（review-change / verify-change 共通） |
 |--------|------|
 | PASS | `[default_branch]...HEAD` の全体レビューが完了済み、finding なし、working tree clean、HEAD で自身の検証が成功、完了条件を全件確認し本文更新済み、PR 前提を満たす |
-| RETRY | 具体的な修正を要する blocking finding（未 commit 変更・SHA 不一致・検証失敗・検証による tracked file の変化・未充足の完了条件を含む） |
-| ABORT | 適用外、入力報告の欠落、baseline 停止基準、type ラベル不正、Issue 本文更新・コメント投稿の失敗 |
+| RETRY | 具体的な修正を要する blocking finding（未 commit 変更・SHA 不一致・検証失敗・検証による tracked file の変化・軽量経路で満たせる未充足の完了条件を含む） |
+| ABORT | 適用外、軽量経路で満たせない完了条件（blocking finding の有無に関係なく RETRY より優先）、入力報告の欠落、baseline 停止基準、type ラベル不正、Issue 本文更新・コメント投稿の失敗 |
