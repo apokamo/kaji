@@ -160,12 +160,46 @@ RETRY の意味は step ごとに異なる（`implement` は自己ループ、`r
 
 | backend | 変更 |
 |---------|------|
-| `execute_interactive_terminal`（tmux） | `deadline = deadline_monotonic if not None else time.monotonic() + timeout`。Herdr 委譲時にそのまま転送 |
-| `execute_interactive_terminal_herdr` | 同上 |
-| `execute_cli` / `_execute_cli_once`（headless） | timer 秒数を `max(0.0, deadline_monotonic - time.monotonic())` とする。transient retry は「backoff 待機後の残時間 > 0」の場合のみ行い、残時間がなければ元の `CLIExecutionError` を再送出する（retry しない） |
+| `execute_interactive_terminal`（tmux） | `deadline = deadline_monotonic if not None else time.monotonic() + timeout`。pane 起動前に期限切れなら起動しない（下記「deadline 監視外の待機」）。Herdr 委譲時にそのまま転送 |
+| `execute_interactive_terminal_herdr` | 同上。加えて launcher 開始待ちを attempt deadline で制限する（下記） |
+| `execute_cli` / `_execute_cli_once`（headless） | timer 秒数を `max(0.0, deadline_monotonic - time.monotonic())` とする。transient retry の backoff は下記の規則で attempt deadline 内に制限する |
 
 `timeout` 引数・`StepTimeoutError(step.id, timeout, ...)` の `timeout` 値（設定秒数）・console の
 `pane launched ... timeout=%ds` 表示は変えない。
+
+#### deadline 監視外の待機の扱い
+
+「起点の供給元を差し替える」だけでは、既存の deadline 判定ループの **外側** にある待機が attempt
+deadline を越えうる。該当する待機は次の 3 つで、いずれも `deadline_monotonic` が渡された場合のみ以下を
+適用する（`None` なら従来挙動のまま）。
+
+1. **headless の transient backoff**（`cli.py::execute_cli` の `time.sleep(delay)`。待機中は
+   `_execute_cli_once` の timer が解除済みで監視外）:
+   - **待機前**: `remaining = deadline_monotonic - time.monotonic()` を算出し、`remaining <= delay`
+     なら sleep せず、次の subprocess も起動せず、元の `CLIExecutionError` を再送出する
+   - **待機後・次の起動前**: 残時間を再確認し、0 以下なら起動せず元の `CLIExecutionError` を再送出する
+   - 起動する場合は `_execute_cli_once` の timer が残時間で kill する（既存の timeout 経路）
+   - エラー分類（transient 起因の `CLIExecutionError`）は変えない。retry 回数上限 `_MAX_RETRIES` も不変
+2. **Herdr の launcher 開始待ち**（`interactive_terminal_herdr.py::_wait_for_herdr_launcher_start`。
+   現行は `now + _HERDR_LAUNCHER_START_TIMEOUT_SECONDS`（10 秒）の独立 deadline）:
+   - 待機の上限を `min(now + _HERDR_LAUNCHER_START_TIMEOUT_SECONDS, deadline_monotonic)` にする
+   - marker 不在のまま **launcher 固有の上限** が先に来た場合は従来どおり launcher 失敗の
+     `CLIExecutionError`（exit 124）
+   - marker 不在のまま **attempt deadline** が先に来た場合は、launcher 失敗ではなく attempt の期限消費
+     として扱う。待機関数は内部の区別可能な結果（例: 専用の内部例外）を呼出し元へ返し、呼出し元は
+     verdict 待ちループの timeout 経路と同じ処理（snapshot 保存・metadata 書出し・kill 前の 1 回の
+     session 解決（#403、`pane_alive=True`）・所有 pane の cleanup）を経て
+     `StepTimeoutError(step.id, timeout, session_resolution=...)` を送出する
+   - marker 出現後は通常の verdict 待ちループへ進み、同じ `deadline_monotonic` で判定する
+3. **pane 起動前の期限切れ**（tmux / Herdr 共通）: preflight（tmux / Herdr 検出・version 検査）後、
+   pane 起動の直前に `time.monotonic() >= deadline_monotonic` なら pane を起動せず
+   `StepTimeoutError(step.id, timeout)` を送出する。pane も agent session も存在しないため
+   `session_resolution=None`（「解決を試みない経路」= `errors.py` の既存定義）とし、runner の既存
+   `_record_dispatch_failure()` が異常終了 artifact を記録する
+
+tmux の pane 起動（`split-window` / `pipe-pane` 等の tmux コマンド）は短時間の同期呼出しで、独立した
+待機ループを持たないため 3. の起動前判定で足りる。起動後は既存の verdict 待ちループが
+`deadline_monotonic` で判定する。
 
 ### 変更: `runner.py::_StepExecutor._dispatch()`（agent 分岐）
 
@@ -240,10 +274,14 @@ wall clock と monotonic の関係: hard deadline は従来どおり monotonic �
 - **対象**: nested full workflow（kaji run の入れ子実行）、外部 agent を含む dogfood、修正ごとに
   fresh 環境で繰り返す acceptance、その他 1 回の所要見積が対象 step timeout の 25% を超える検証
 - **要求**（対象がある場合、どちらか一方を必須）:
-  - (a) **bounded 根拠**: 実行回数の上限 × 1 回の所要見積（根拠: 過去 run の実測など）＋予備時間
-    ≤ 配置先 step の timeout であることを数値で示す。失敗→修正→再実行の回数上限を含める
-  - (b) **分離**: 独立 acceptance step、別 workflow、または別 Issue へ分離し、分離先を明記する
-- 分離に必要な workflow 変更が Issue のスコープ外になる場合は、設計 agent が選ばず
+  - (a) **bounded 根拠**: 配置先 step の **attempt 全体** が timeout 内に収まることを数値で示す。
+    式: 実装・失敗修正の見積 ＋ acceptance 以外の検証（pytest / `make check` / Pre-Handoff Review 等）の
+    見積 ＋ acceptance の実行回数上限 × 1 回の所要見積（根拠: 過去 run の実測など）＋ 報告・commit・
+    verdict 保存の時間 ＋ 予備時間 R（方針 C-3）≤ 配置先 step の timeout。失敗→修正→再実行の回数上限を含める
+  - (b) **分離**: 独立 acceptance step または別 workflow へ分離し、分離先と、元 Issue の完了条件として
+    その acceptance がどこで実行・証跡化されるかを明記する
+- 元 Issue の必須 acceptance を別 Issue へ移す、または省略して完了扱いにすることは完了条件の変更であり、
+  設計 agent は選ばない。分離に必要な workflow 変更が Issue のスコープ外になる場合も同様に、
   `critical-decision-checklist.md` の「スコープ変更」軸として `ABORT` し、人間に分離方式を確認する
 - 対象がない場合は「該当なし」と根拠を記載する（節の省略禁止）
 
@@ -256,29 +294,51 @@ wall clock と monotonic の関係: hard deadline は従来どおり monotonic �
 
 1. **開始時**: コンテキスト変数 `attempt_deadline_utc` / `step_timeout_seconds` を記録する。
    変数がない（手動実行等）場合は本規則を適用しない
-2. **前 attempt の checkpoint の引継ぎ**: body 1 行目に `<!-- kaji-verdict: step=implement status=RETRY -->`
-   を持つ直近コメント（checkpoint コメント）があり、それ以降に implement の PASS / BACK 等がなければ、
-   その「残作業」から再開する（implement の self-RETRY は `resume:` を持たず fresh session のため、
-   引継ぎ情報は Issue コメントと worktree が唯一の経路）
-3. **予備時間** R = max(300 秒, `step_timeout_seconds` の 10%)。commit・Issue コメント・verdict 保存に
-   充てる
+2. **前 attempt の checkpoint の引継ぎ**: 次の条件をすべて満たす直近コメントを checkpoint コメントとして
+   扱い、その「残作業」から再開する（implement の self-RETRY は `resume:` を持たず fresh session のため、
+   引継ぎ情報は Issue コメントと worktree が唯一の経路）。
+   - body 1 行目が `<!-- kaji-verdict: step=implement status=(RETRY|ABORT) -->`
+   - 2 行目以降に見出し `## 期限前 checkpoint（implement）` を持つ（手順 7 で付与。期限と無関係な
+     ABORT コメントを引継ぎ元と誤認しないための識別子）
+   - それより後に `step=implement` の `PASS` / `BACK` marker コメントがない
+
+   ABORT で終わった checkpoint を人間が `kaji run … --from implement` で再開した場合も、同じ規則で
+   引き継がれる
+3. **予備時間** R（commit・Issue コメント・verdict 保存に充てる）:
+   `R = min(max(300 秒, 0.1 × T), 0.25 × T)`（T = `step_timeout_seconds`）。
+   R は常に T の 25% 以下で、短い timeout でも作業時間を残す。
+   例: T=120 → R=30 秒、T=300 → R=75 秒、T=1800 → R=300 秒、T=3600 → R=360 秒、T=6000 → R=600 秒
 4. **確認点**: (i) 全 pytest / `make check` / nested workflow / 外部 agent 呼出しなど長時間処理の開始前、
    (ii) Step 3〜8.5 の各境界。`date -u` で残時間を算出し、「見積所要時間 + R > 残時間」なら新たな
-   長時間処理を開始せず checkpoint へ移る。見積は同 session / Issue コメント上の実測を優先し、
-   なければ保守的に見積もる
-5. **設計との関係**: 設計書が長時間 acceptance を implement に置きながら bounded 根拠を持たない場合、
-   それは設計起因として `BACK` を返す（`implement` の `BACK: design` は全 workflow に存在）
-6. **checkpoint 手順**（verdict-last を維持）:
+   長時間処理を開始せず checkpoint（手順 7）へ移る。見積は同 session / Issue コメント上の実測を優先し、
+   なければ保守的に見積もる。境界で既に残時間 < R の場合は、新たな commit・検証を行わず直ちに
+   最小内容の checkpoint へ移る
+5. **完了不能・無進捗の停止**（同じ checkpoint の繰り返しで cycle を消費しない）:
+   - 必須処理 1 件の見積 + R が **T 全体** を超える（どの attempt でも収まらない）場合、checkpoint を
+     繰り返さず、手順 6 の status 決定で RETRY を選ばない。設計起因なら BACK、そうでなければ ABORT
+     とし、suggestion に「step timeout の見直し、または acceptance の分離」を人間判断事項として記載する
+   - 引継いだ checkpoint（手順 2）から本 attempt で進捗（新規 commit、完了した検証、残作業の減少の
+     いずれか）がないまま再び checkpoint に至る場合も、RETRY を選ばず ABORT とする（同上の suggestion）
+   - 設計書が長時間 acceptance を implement に置きながら bounded 根拠を持たない場合は設計起因として BACK
+6. **status の決定（コメント投稿前）**: 状況から希望 status を決め、prompt の status 候補
+   （`step.on` のキー）に含まれるかを確認して **実際の status S** を確定する。
+   - 期限前 checkpoint（進捗あり）: RETRY が候補にあれば `S = RETRY`、なければ `S = ABORT`
+   - 手順 5 の完了不能・無進捗: `S = ABORT`
+   - 設計起因: BACK が候補にあれば `S = BACK`、なければ `S = ABORT`
+   - ABORT も候補にない場合は checkpoint を行わず作業を継続する（存在しない status は出力しない。
+     現行 workflow の implement はすべて RETRY / BACK / ABORT を持つ）
+7. **checkpoint 手順**（verdict-last を維持。S を 4 箇所で一致させる）:
    - `make check` が通る単位の変更は通常どおり commit する。通らない WIP は commit せず worktree に
      残す（AGENTS.md の「コード変更 commit 前に `make check` 必須」を破らない）
-   - checkpoint コメントを `kaji issue comment [issue_id] --verdict-step implement --verdict-status RETRY`
-     で投稿する。内容: 完了済み作業（commit SHA）、未 commit 差分の概要、実行中だった検証と結果、
-     残作業と次 attempt の開始手順、確認時の残時間
-   - その後に verdict（`status: RETRY`、`reason` に期限前 checkpoint である旨）を stdout と
-     `verdict_path` へ保存する
-7. **status 制約**: `RETRY` は prompt の status 候補に含まれる場合のみ使う。含まれない場合は checkpoint
-   コメントを投稿した上で `ABORT`（suggestion に `kaji run … --from implement` での再開を記載）とし、
-   存在しない status は出力しない
+   - checkpoint コメントを `kaji issue comment [issue_id] --verdict-step implement --verdict-status S`
+     で投稿する。本文は見出し `## 期限前 checkpoint（implement）` で始め、完了済み作業（commit SHA）、
+     未 commit 差分の概要、実行中だった検証と結果、残作業と次 attempt の開始手順、確認時の残時間を
+     記載し、末尾に `status: S` の `---VERDICT---` block を付ける
+   - その後に同じ `status: S` の verdict を stdout と `verdict_path` へ保存する（marker / comment 末尾
+     block / stdout / artifact の S は同一。artifact 保存前に停止して comment fallback が読まれても、
+     許可 status S が解決される）
+   - `S = ABORT` の場合、suggestion に `kaji run <workflow> [issue_id] --from implement` での再開
+     （必要なら `--reset-cycle`）と手順 5 の人間判断事項を記載する
 8. **cycle 上限**: checkpoint の `RETRY` も `implementation` cycle のカウント対象であり、上限到達時は
    runner が `on_exhaust: ABORT` で停止する。上限回避のために `PASS` 等へ status を偽らない。
    `cycle_count` == `max_iterations` の attempt でも同手順で `RETRY` を返す（再開は人間が
@@ -298,11 +358,12 @@ wall clock と monotonic の関係: hard deadline は従来どおり monotonic �
 | 公開 workflow schema | 新 YAML field を追加せず `Step.timeout` 解決値から内部変数を導出 | Issue 本文「重要判断」表（AI の仮定）。review-design で再検査 | 変数源を `_ExecutionSettings.timeout`（step → workflow → config の解決済み値）に固定 |
 | 単一計算元 | `AttemptDeadline.start()` を `_dispatch()` で 1 回呼び、prompt・hard deadline・`result.json.started_at` に配る | 完了条件 1・3 と EB 3 が要求。実装位置は AI の詳細化。review-design / review-code で検査 | 葉モジュール化、`deadline_monotonic=None` fallback、表示は秒未満切り捨て |
 | interactive deadline 起点の前倒し | pane / launcher 起動後 → attempt 開始へ（数秒〜数十秒短くなる） | AI の仮定。EB 3「同じ attempt 開始時刻を基準」を満たすには起点統一が必須で、timeout 値自体は不変。可逆。review-design で検査 | console の `timeout=%ds` 表示と例外の timeout 値は設定秒数のまま |
-| headless transient retry の上限 | retry は attempt deadline の残時間内に限る | AI の仮定。従来は retry ごとに full timeout で、表示 deadline と実 deadline が乖離し「無制限ではないが timeout の最大 4 倍超」になる。EB 3・6 との整合を優先。内部挙動で可逆。review-design で検査 | 残時間 0 なら元の `CLIExecutionError` を再送出し、エラー分類を変えない |
+| headless transient retry の上限 | retry は attempt deadline の残時間内に限る | AI の仮定。従来は retry ごとに full timeout で、表示 deadline と実 deadline が乖離し「無制限ではないが timeout の最大 4 倍超」になる。EB 3・6 との整合を優先。内部挙動で可逆。review-design で検査 | backoff 待機前に残時間 <= delay なら待機も起動もせず、待機後も起動前に再確認。元の `CLIExecutionError` を再送出しエラー分類を変えない |
+| deadline 監視外の待機 | Herdr launcher 開始待ちを `min(launcher 上限, attempt deadline)` で制限し、attempt deadline 到達は timeout 経路（#403 の session 解決・cleanup）へ。pane 起動前の期限切れは起動しない | AI の仮定。EB 3（表示 deadline と hard deadline の一致）を監視外待機でも成立させるために必要。launcher 固有失敗の分類は維持。内部挙動で可逆。review-design / review-code で検査 | 待機関数は区別可能な内部結果を返し、呼出し元が既存 timeout 処理を再利用する |
 | prompt 変数名・形式 | `step_timeout_seconds` / `attempt_started_at_utc` / `attempt_deadline_utc`、ISO 8601 UTC `Z`、秒切捨て | AI の仮定。内部 prompt 契約で skill 文言と同時に変更可能（two-way door）。review-design で検査 | 既存変数の snake_case 慣習に合わせる |
 | acceptance 分離規則 | 対象検証は bounded 根拠 (a) か分離 (b) を必須。スコープ外 workflow 変更は ABORT で人間確認 | Issue 本文「重要判断」表（AI の仮定）＋ #393 調査の恒久対策候補 1 ＋ EB 1。review-design で検査 | 対象の定義（25% 閾値を含む）、(a) の数値要件、review-design の RETRY 条件 |
 | checkpoint の適用範囲 | `issue-implement` と共通 prompt。他 skill への個別規則追加はしない | Issue 本文「重要判断」表（AI の仮定）。review-code で検査 | 共通 prompt は RETRY の意味づけをせず skill に委ねる |
-| checkpoint の手順・予備時間 | R = max(300s, 10%)、WIP は make check 不通過なら commit しない、RETRY 不可時は ABORT | AI の仮定。AGENTS.md の commit 前 `make check` 契約と ADR 005 verdict-last を破らない範囲で具体化。skill 文言で可逆。review-design / review-code で検査 | checkpoint コメントの記載項目、次 attempt の引継ぎ検出（verdict marker） |
+| checkpoint の手順・予備時間 | R = min(max(300s, 0.1T), 0.25T)、WIP は make check 不通過なら commit しない、status はコメント投稿前に候補から確定し 4 箇所で一致、RETRY 不可・完了不能・無進捗時は ABORT | AI の仮定。AGENTS.md の commit 前 `make check` 契約と ADR 005 verdict-last を破らない範囲で具体化。skill 文言で可逆。review-design / review-code で検査 | checkpoint コメントの記載項目と識別見出し、次 attempt の引継ぎ検出（marker RETRY/ABORT + 見出し）、無進捗 checkpoint の停止条件 |
 | source of truth | #393 実障害調査、現行 main の runner / prompt 実装、ADR 005・workflow-authoring の既存契約 | Issue 本文「重要判断」表。相互矛盾なしを本設計の調査でも確認 | — |
 
 one-way door の未決: なし。公開 CLI / workflow YAML schema / 永続化形式は変更せず、prompt 変数と skill
@@ -345,11 +406,24 @@ one-way door の未決: なし。公開 CLI / workflow YAML schema / 永続化�
   （headless は `execute_cli` mock の kwargs で確認）。timeout は step.timeout 指定時と
   workflow / config fallback 時の両方で解決値が使われること
 - **backend が渡された deadline を使う**:
-  - tmux / Herdr: `deadline_monotonic` を過去値で渡すと polling せず `StepTimeoutError` になり、
-    #403 の `session_resolution`（timeout 経路）が従来どおり付与される
+  - tmux / Herdr（pane 起動前の期限切れ）: `deadline_monotonic` を過去値で渡すと pane を起動せず
+    （`_launch_pane` / `_launch_herdr_pane` の呼出し 0 回）`StepTimeoutError(session_resolution=None)` になる
+  - tmux / Herdr（起動後の期限到達）: fake clock で pane 起動後に deadline を越えさせると verdict 待ち
+    ループが `StepTimeoutError` を送出し、#403 の `session_resolution`（timeout 経路、kill 前に 1 回）と
+    pane metadata が従来どおり付与される
+  - Herdr launcher 開始待ち（fake clock、marker 不在）:
+    (1) attempt deadline が launcher 上限（10 秒）より先 → 待機は attempt deadline で打ち切られ（sleep
+    累計が残時間を超えない）、`CLIExecutionError` ではなく `StepTimeoutError` になる。snapshot 保存・
+    所有 pane cleanup・session 解決が timeout 経路と同じく行われる
+    (2) launcher 上限が先 → 従来どおり `CLIExecutionError`（exit 124）
+    (3) `deadline_monotonic=None` → 従来どおり 10 秒の独立待機
   - `deadline_monotonic=None` で既存テスト（`time.monotonic` side_effect 固定）が無変更で通る
-- **headless retry**（`tests/test_cli_streaming_integration.py`）: transient error 後、残時間が backoff
-  以下なら retry せず元の `CLIExecutionError` を送出する。残時間が十分なら従来どおり retry し成功する。
+- **headless retry**（`tests/test_cli_streaming_integration.py`、`_execute_cli_once` と `time.sleep` /
+  `time.monotonic` を差し替えた fake clock + sleep spy）:
+  - transient error 後、残時間 <= backoff なら `time.sleep` の呼出し 0 回・次の `_execute_cli_once`
+    起動 0 回で元の `CLIExecutionError` を送出する
+  - 待機中に予算を消費した（sleep 後の残時間 <= 0）場合は次の起動 0 回で元の `CLIExecutionError`
+  - 残時間が十分なら従来どおり retry し成功する。`deadline_monotonic=None` では従来の backoff 挙動
   `deadline_monotonic` 指定時に timer が残時間で kill し `StepTimeoutError(timeout=設定秒数)` になる
 - **#403 非退行**: 既存の timeout session ID / `result.json` 異常終了記録テスト
   （`test_runner_interactive_dispatch.py` の resolution 系、`test_interactive_terminal*.py` の timeout 系、
@@ -371,9 +445,9 @@ one-way door の未決: なし。公開 CLI / workflow YAML schema / 永続化�
   加算せずにその時刻で `StepTimeoutError` になること
 
 Herdr の実起動は含めない。理由は #407 と同じく、実 Herdr pane 内からの起動を要し CI / 本 test 環境では
-物理的に作成できないため（testing-convention「物理的に作成不可」）。Herdr 側の差分は deadline の供給元
-だけで、Medium で `deadline_monotonic` の転送（tmux 入口 → Herdr）と過去 deadline での即時
-`StepTimeoutError` を検証する。
+物理的に作成できないため（testing-convention「物理的に作成不可」）。Herdr 側の差分（deadline の供給元、
+launcher 開始待ちの上限、起動前判定）は、Medium で `deadline_monotonic` の転送（tmux 入口 → Herdr）、
+過去 deadline での起動前 `StepTimeoutError`、launcher 待ち中の attempt deadline 到達を fake clock で検証する。
 
 ### instruction-only（skill / docs）
 
@@ -381,8 +455,12 @@ Herdr の実起動は含めない。理由は #407 と同じく、実 Herdr pane
 
 - `make verify-docs`（リンク・参照整合）
 - skill 文言の検査: `issue-implement` に (i) 確認点、(ii) 予備時間、(iii) checkpoint 手順、
-  (iv) RETRY 不可時の扱い、(v) cycle 上限の非迂回が記載され、`issue-design` テンプレートと
+  (iv) RETRY 不可時の扱い（コメント投稿前の status 決定と 4 箇所の一致）、(v) cycle 上限の非迂回、
+  (vi) 完了不能・無進捗時の停止が記載され、`issue-design` テンプレートと
   `issue-review-design` 基準 4 に長時間 acceptance 観点があることを review-code で目視確認する
+- 予備時間式の数値例を review-code で手計算照合する: T=120 → R=30 秒（作業可能時間 90 秒）、
+  T=300 → R=75 秒、T=1800 → R=300 秒、T=6000 → R=600 秒。いずれも R ≤ 0.25T で、短い timeout でも
+  pytest 等の短い検証を開始できること
 - 既存の skill 構造テスト（`tests/test_skill_migration.py` 等、`make check` に含まれる）が green
 
 #### 恒久テストを追加しない理由（skill 文言部分）
