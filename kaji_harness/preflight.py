@@ -136,9 +136,14 @@ def _codex_discovery_error(
         skill_exists_validator: Skill path validator (traversal / escape / existence).
 
     Returns:
-        A one-line error message, or None when the skill is discoverable.
+        A one-line error message, or None when the skill is discoverable or the
+        effective workdir is not a string (reported separately by L1 validation).
     """
     assert step.skill is not None
+    raw_workdir: object = step.workdir or workflow.workdir
+    if raw_workdir is not None and not isinstance(raw_workdir, str):
+        # validate_workflow() already reported the schema error for hand-built workflows.
+        return None
     codex_root = resolve_step_workdir(step, workflow, project_root)
     try:
         skill_exists_validator(step.skill, codex_root, CODEX_SKILL_DIR)

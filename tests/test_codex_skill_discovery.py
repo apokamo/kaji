@@ -114,6 +114,21 @@ class TestCodexSkillPreflight:
 
         assert _preflight(_workflow(), tmp_path) == []
 
+    @pytest.mark.parametrize("target", ["step", "workflow"])
+    def test_non_string_workdir_returns_structured_error(self, tmp_path: Path, target: str) -> None:
+        """手組みの Workflow で workdir が非文字列でも TypeError にせず schema error を返す。"""
+        _write_canonical_skill(tmp_path, "review")
+        workflow = _workflow()
+        if target == "step":
+            workflow.steps[0].workdir = 123  # type: ignore[assignment]
+        else:
+            workflow.workdir = 123  # type: ignore[assignment]
+
+        errors = _preflight(workflow, tmp_path)
+
+        assert any("'workdir' must be a" in e for e in errors)
+        assert not any("not discoverable by Codex" in e for e in errors)
+
     @pytest.mark.parametrize("agent", ["claude", "antigravity"])
     def test_other_agents_do_not_require_agents_skills(self, tmp_path: Path, agent: str) -> None:
         _write_canonical_skill(tmp_path, "review")
