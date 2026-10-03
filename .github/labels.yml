@@ -106,38 +106,38 @@ labels:
   # 意味と遷移意図の正本: docs/dev/incident-labels.md
   # ============================================================
 
-  - name: "incident"
+  - name: "kaji:incident"
     color: "eba0ac"
     description: "検知・集約層が起票した障害インシデント（種別キー / 検索キー）"
 
   # -- status 軸（第1層は起票時に investigating のみ自動付与。以降の遷移は人間）--
 
-  - name: "incident:investigating"
+  - name: "kaji:incident:investigating"
     color: "f9e2af"
     description: "status 軸: 調査中（第1層が起票時に自動付与する初期値）"
 
-  - name: "incident:mitigated"
+  - name: "kaji:incident:mitigated"
     color: "fab387"
     description: "status 軸: 暫定緩和済み（人間が付与）"
 
-  - name: "incident:resolved"
+  - name: "kaji:incident:resolved"
     color: "a6e3a1"
     description: "status 軸: 恒久解決済み（人間が付与）"
 
   # -- classification 軸（cause:transient のみ第1層が自動付与。他は人間）--
 
-  - name: "incident:cause:internal"
+  - name: "kaji:incident:cause:internal"
     color: "89b4fa"
     description: "classification 軸: kaji 内部起因（人間が第2層の調査結論を受けて付与）"
 
-  - name: "incident:cause:upstream"
+  - name: "kaji:incident:cause:upstream"
     color: "cba6f7"
     description: "classification 軸: 上流（外部 CLI / API）起因（人間が付与）"
 
-  - name: "incident:cause:environment"
+  - name: "kaji:incident:cause:environment"
     color: "94e2d5"
     description: "classification 軸: 実行環境起因（人間が付与）"
 
-  - name: "incident:cause:transient"
+  - name: "kaji:incident:cause:transient"
     color: "9399b2"
     description: "classification 軸: 一過性（auto-resume 自己回復。第1層が自動付与＋即クローズ）"

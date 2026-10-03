@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **`incident-*` skills now follow `[incident] kind_label`** (#457). The
+  precondition guard of `incident-investigate` and `incident-review` no longer
+  checks for a fixed `incident` label: it resolves `kind_label` from the tracked
+  `.kaji/config.toml` (default `kaji:incident`) and checks that label. If the
+  config cannot be read or `kind_label` is invalid, the skill aborts instead of
+  falling back to the default. This removes the 0.21.0 restriction that a
+  repository using the default names could not run the second-layer
+  investigation. kaji's own repository now runs with the default label names
+  (its `[incident]` override and the old-name `.github/labels.yml` entries are
+  gone).
+
+### Docs
+
+- Added a migration guide for moving existing `incident` labels to the `kaji:`
+  default names, with detection, in-place rename commands, ordering notes for
+  label-sync automation, and recovery steps (#457; see
+  `docs/dev/incident-labels.md` § 旧名からの移行手順).
+
 ## [0.21.0] - 2026-10-01
 
 This release makes the incident label names configurable (with new `kaji:`

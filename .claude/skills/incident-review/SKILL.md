@@ -50,9 +50,16 @@ artifact root を解決する（共通ルール参照。以降のパスはこの
 ART="$(kaji config artifacts-dir)"
 ```
 
+共通ルールの「`kind_label` の解決」で `KIND_LABEL` を解決する。解決に失敗したら ABORT する。
+成功したら、インシデントイシューのラベルを取得する。
+
+```bash
+kaji issue view [issue_id] --json labels,body
+```
+
 調査 artifact（`$ART/[issue_id]/investigation/report.md`）と直近の調査報告コメントが
-存在することを確認する。対象が非インシデント（`incident` ラベルなし / identity marker なし）と判明した
-場合は ABORT。
+存在することを確認する。対象が非インシデント（`labels[].name` に `KIND_LABEL` と一致するものがない
+（大文字小文字を区別しない）/ identity marker なし）と判明した場合は ABORT。
 
 ### Step 1: 入力の収集
 

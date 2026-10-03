@@ -206,6 +206,9 @@ initial_status_label = "incident:investigating"
 transient_label = "incident:cause:transient"
 ```
 
+既存のラベルを既定名へ移行する手順は
+[旧名からの移行手順](../dev/incident-labels.md#旧名からの移行手順) を参照。
+
 各ラベルの意味は [incident ラベル運用ガイド](../dev/incident-labels.md) を参照。
 
 ### `[provider]`
