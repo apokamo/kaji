@@ -95,6 +95,15 @@ kaji issue view [issue_id] --json comments \
 - 影響範囲を説明できる
 - 既存検証または局所的な回帰テストで確認できる
 - 通常の revert で戻せる
+- `### ワークフロー完了後の確認項目` を除く完了条件に、dev-small で満たせない項目がない
+  （設計書の作成・設計書への準拠・設計レビューなど、dev-small にない工程の成果物を前提とする項目。
+  例: issue-create テンプレート由来の「設計書作成」「設計書のテスト戦略に従い S/M/L を網羅」。
+  判定基準の正本: `docs/dev/workflow_guide.md` § dev-small の適用条件）
+
+完了条件に dev-small で満たせない項目がある場合は、**実装前に**（Step 3 以降に進まず）適用外として ABORT する。
+判定に迷う項目は ABORT 側に倒し、報告に理由を書く。Issue 本文の該当項目は書き換え・削除・チェックしない。
+報告には該当した項目（本文の文言をそのまま引用）と前提とする dev-small にない工程を記し、人間が決める事項として
+「該当項目を dev-small に合わせて本文から変更するか、標準 dev に切り替えるか」を明記する。
 
 ### Step 3: 短い方針（編集前に確定。承認待ちにしない）
 
@@ -215,7 +224,8 @@ EOF
 - 検証: コマンド・終了状態・pytest 集計・`--evaluate` / `--compare` JSON の要点。成功時はログ全文を貼らず、失敗時は関連部分を引用
 - docs 更新、未解決事項
 - 引き継ぎ状態: 報告時の HEAD full SHA と working tree（clean、または dirty path ごとの原因）
-- ABORT 時: 停止理由（該当条件と根拠）、人間が決める必要のある事項、完了済み / 未完了の作業、branch・worktree path・
+- ABORT 時: 停止理由（該当条件と根拠。完了条件と dev-small の不整合なら該当項目の引用と前提とする工程）、
+  人間が決める必要のある事項（不整合なら本文変更 / 標準 dev 切替の選択）、完了済み / 未完了の作業、branch・worktree path・
   HEAD full SHA・`git status --porcelain` の要約、関連報告の参照、「再実行は初めから」の案内
 
 同じ説明を他工程・PR へ全文複製しない。Issue コメント投稿に失敗した場合は ABORT とし、verdict を stdout と `verdict_path` に残す。
@@ -245,6 +255,6 @@ suggestion: |
 |------|--------|------|
 | change | PASS | 実装・必須検証・commit・報告が完了し、working tree が clean |
 | change | RETRY | 新しい session で解消できる実装・検証・報告の失敗が残る（dirty path は原因付きで報告） |
-| change | ABORT | 適用外、type ラベル不正、baseline 前提違反・停止、引き継ぎ条件を満たさない dirty tree・HEAD 不一致、provider 障害 |
+| change | ABORT | 適用外（完了条件と dev-small の不整合を含む）、type ラベル不正、baseline 前提違反・停止、引き継ぎ条件を満たさない dirty tree・HEAD 不一致、provider 障害 |
 | fix-change | PASS | 全指摘に対応（修正または反論）し、必須検証・報告が完了し（差分があれば commit 済み）、working tree が clean |
 | fix-change | ABORT | 適用外、検証失敗を解消できない、入力の RETRY 報告を特定できない、引き継ぎ条件を満たさない dirty tree・HEAD 不一致、scope 外・意図不明の未 commit 変更、provider 障害 |

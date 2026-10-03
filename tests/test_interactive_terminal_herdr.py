@@ -1148,6 +1148,65 @@ class TestExecuteHerdr:
         with patch("kaji_harness.interactive_terminal_herdr._wait_for_herdr_launcher_start"):
             yield
 
+    @pytest.mark.parametrize(
+        ("agent", "expected"),
+        [("codex", "'$design を実行してください。'"), ("claude", "''")],
+    )
+    def test_wrapper_command_carries_skill_invocation_for_codex_only(
+        self, tmp_path: Path, agent: str, expected: str
+    ) -> None:
+        """Issue #408: wrapper 第 10 引数は codex のときだけ ``$<skill>`` 行になる。"""
+        prompt_path = tmp_path / "prompt.txt"
+        verdict_path = tmp_path / "verdict.yaml"
+        prompt_path.write_text("do work", encoding="utf-8")
+        step = Step(id="design", skill="design", agent=agent)
+
+        def run_command(*args: object, **kwargs: object) -> None:
+            verdict_path.write_text("status: PASS\nreason: ok\nevidence: ok\n", encoding="utf-8")
+
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._preflight_herdr",
+                return_value=("/usr/bin/herdr", "w1:p1", "herdr 0.8.2"),
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._launch_herdr_pane",
+                return_value=HerdrPaneLaunch(
+                    pane_id="w1:p2",
+                    split_target_pane="w1:p1",
+                    direction="right",
+                    panes_before=[],
+                    panes_pruned=[],
+                ),
+            ),
+            patch("kaji_harness.interactive_terminal_herdr._mark_herdr_pane"),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._run_herdr_pane_command",
+                side_effect=run_command,
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._read_herdr_pane",
+                return_value=HerdrPaneRead(text="screen\n", truncated=False, revision=1),
+            ),
+            patch("kaji_harness.interactive_terminal_herdr._get_herdr_process_info"),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
+                return_value=True,
+            ),
+        ):
+            execute_interactive_terminal_herdr(
+                step=step,
+                prompt_path=prompt_path,
+                verdict_path=verdict_path,
+                workdir=tmp_path,
+                timeout=30,
+            )
+
+        launcher = (tmp_path / "herdr-launcher.sh").read_text(encoding="utf-8")
+        assert launcher.count(expected) >= 1
+        if agent == "claude":
+            assert "を実行してください。" not in launcher
+
     def test_verdict_snapshot_and_owned_cleanup(self, tmp_path: Path) -> None:
         prompt_path = tmp_path / "prompt.txt"
         verdict_path = tmp_path / "verdict.yaml"

@@ -119,6 +119,16 @@ argument. The Antigravity case maps it as follows:
 Sandbox and permission are separate AGY controls. The `sandbox` mapping never
 adds the permission bypass flag.
 
+### Codex skill invocation
+
+The runner passes a tenth wrapper argument, `skill_invocation`. For Codex it is
+the `$<skill> を実行してください。` line (the same line `build_prompt` puts at the top
+of `prompt.txt`); for Claude and Antigravity it is an empty string. When it is
+non-empty, the wrapper prepends it, followed by a blank line, to the initial
+message it hands to the agent, because Codex resolves a `$<skill>` mention only
+in the user's input and not inside `prompt.txt`. An empty value keeps the
+original initial message unchanged.
+
 ### Overlay
 
 `[execution]` in `.kaji/config.local.toml` overrides the same key in

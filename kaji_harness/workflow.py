@@ -15,6 +15,24 @@ from .errors import WorkflowValidationError
 from .models import CycleDefinition, Step, Workflow
 
 
+def resolve_step_workdir(step: Step, workflow: Workflow, project_root: Path) -> Path:
+    """step を実行するときの cwd を返す。
+
+    ``step.workdir`` > ``workflow.workdir`` > ``project_root`` の優先順位で解決する。
+    runner の起動 cwd と preflight の検証 root が同じ結果を使うための単一の定義。
+
+    Args:
+        step: 対象ステップ。
+        workflow: ステップが属するワークフロー。
+        project_root: workdir 未指定のときに使うプロジェクトルート。
+
+    Returns:
+        実効 workdir。
+    """
+    raw_workdir = step.workdir or workflow.workdir
+    return Path(raw_workdir) if raw_workdir else project_root
+
+
 def load_workflow(path: Path) -> Workflow:
     """YAML ファイルからワークフロー定義をロードする。
 

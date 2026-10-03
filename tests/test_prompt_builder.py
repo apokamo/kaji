@@ -13,9 +13,10 @@ from unittest.mock import patch
 
 import pytest
 
+from kaji_harness.cli import build_cli_args
 from kaji_harness.deadline import AttemptDeadline
 from kaji_harness.models import CycleDefinition, Step, Verdict, Workflow
-from kaji_harness.prompt import build_prompt
+from kaji_harness.prompt import build_prompt, skill_invocation_line
 from kaji_harness.providers import PRContext
 from kaji_harness.state import SessionState
 
@@ -594,3 +595,63 @@ class TestAttemptDeadlineInjection:
 
         assert "RETRY" not in prompt
         assert "status: PASS | ABORT" in prompt
+
+
+# ============================================================
+# Issue #408: skill invocation line is backend-specific
+# ============================================================
+
+
+def _build(step: Step) -> str:
+    return build_prompt(
+        step,
+        issue="42",
+        state=_make_state(),
+        workflow=_make_workflow(steps=[step]),
+        issue_context=make_issue_context(issue_id="42"),
+    )
+
+
+@pytest.mark.small
+class TestSkillInvocationLine:
+    """Codex は ``$<skill>`` mention、それ以外は従来のバッククォート形式。"""
+
+    def test_codex_uses_dollar_mention(self) -> None:
+        step = _make_step(skill="review", agent="codex")
+
+        assert skill_invocation_line(step) == "$review を実行してください。"
+
+    @pytest.mark.parametrize("agent", ["claude", "antigravity"])
+    def test_other_agents_keep_backtick_form(self, agent: str) -> None:
+        step = _make_step(skill="review", agent=agent)
+
+        assert skill_invocation_line(step) == "スキル `review` を実行してください。"
+
+    def test_codex_prompt_first_line_is_dollar_mention(self) -> None:
+        """再現テスト: 修正前は先頭行がバッククォート形式で FAIL する。"""
+        prompt = _build(_make_step(skill="review", agent="codex"))
+
+        assert prompt.splitlines()[0] == "$review を実行してください。"
+        assert "スキル `review`" not in prompt
+
+    @pytest.mark.parametrize("agent", ["claude", "antigravity"])
+    def test_non_codex_prompt_first_line_unchanged(self, agent: str) -> None:
+        prompt = _build(_make_step(skill="review", agent=agent))
+
+        assert prompt.splitlines()[0] == "スキル `review` を実行してください。"
+
+    def test_body_after_first_line_is_backend_independent(self) -> None:
+        codex_body = _build(_make_step(agent="codex")).splitlines()[1:]
+        claude_body = _build(_make_step(agent="claude")).splitlines()[1:]
+
+        assert codex_body == claude_body
+
+    @pytest.mark.parametrize("session_id", [None, "thread-1"])
+    def test_codex_cli_positional_prompt_starts_with_mention(self, session_id: str | None) -> None:
+        """新規・resume とも build_prompt 出力経由で最終位置引数が ``$<skill> `` で始まる。"""
+        step = _make_step(skill="review", agent="codex")
+        prompt = _build(step)
+
+        args = build_cli_args(step, prompt, Path("/work"), session_id, "auto")
+
+        assert args[-1].startswith("$review ")
