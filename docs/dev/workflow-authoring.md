@@ -388,7 +388,9 @@ agent step の timeout は **attempt 開始時刻を起点とする hard deadlin
   [ADR 005](../adr/005-artifact-primary-verdict.md)）も変わらない
 - **wall clock 推定の限界**: hard deadline は monotonic clock で判定するが、agent が `date -u` で見る残時間は
   wall clock 基準の推定値になる。実行中に wall clock が monotonic より速く進むと（Incident #393 では約 10%）
-  実残時間より長く見えるため、skill 側は予備時間（`issue-implement` の予備時間 R）を取って早めに切り上げる
+  実残時間より短く見える（保守側）。逆に遅く進むと実残時間より長く見えるため、skill 側は予備時間
+  （`issue-implement` の予備時間 R）を取って早めに切り上げる。R が吸収するのはその範囲内の誤差であり、
+  任意の時計補正までは保証しない
 - **期限前 checkpoint**: deadline 内に完了できない場合の手順（status は `step.on` のキー内のみ）は skill が
   定める。`issue-implement` は既存の `RETRY`（`implementation` cycle のカウント対象）で次 attempt に引き継ぐ。
   規則の書き方は [skill-authoring.md](skill-authoring.md) § 実行期限と期限前 checkpoint

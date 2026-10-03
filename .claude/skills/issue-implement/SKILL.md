@@ -89,7 +89,8 @@ agent step の hard deadline は延長されず、到達時点で `verdict_path`
    算出し、「見積所要時間 + R > 残時間」なら新たな長時間処理を開始せず手順 7 の checkpoint へ移る。
    見積は同 session / Issue コメント上の実測を優先し、なければ保守的に見積もる。境界で既に残時間 < R の場合は、
    新たな commit・検証を行わず直ちに最小内容の checkpoint へ移る。表示 deadline は開始時の wall clock
-   基準の推定値で、実行中に wall clock が monotonic から速くずれると実残時間より長く見える。
+   基準の推定値で、実行中に wall clock が monotonic より速く進むと実残時間より短く見え（保守側）、
+   遅く進むと長く見える。遅れ側の誤差は R で吸収する想定だが、任意の時計補正までは保証しない。
    そのため R を食い込む前に切り上げる。
 5. **完了不能・無進捗の停止**（同じ checkpoint の繰り返しで cycle を消費しない）:
    - 必須処理 1 件の見積 + R が **T 全体** を超える（どの attempt でも収まらない）場合、checkpoint を繰り返さず、
