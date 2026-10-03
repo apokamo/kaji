@@ -47,6 +47,7 @@ from .script_exec import execute_exec, execute_script
 from .skill import SkillMetadata, load_skill_metadata, validate_skill_exists
 from .state import SessionState
 from .verdict import CommentLike, create_verdict_formatter, resolve_verdict, write_verdict_yaml
+from .workflow import resolve_step_workdir
 from .worktree_discovery import AmbiguousWorktreeError, discover_existing_worktree
 
 # module-level stdlib logger. ``run()`` 内のローカル ``logger`` (RunLogger) と
@@ -466,8 +467,7 @@ class _StepExecutor:
             else self.config.execution.default_timeout
         )
         timeout = step.timeout if step.timeout is not None else default_timeout
-        raw_workdir = step.workdir or self.workflow.workdir
-        workdir = Path(raw_workdir) if raw_workdir else self.project_root
+        workdir = resolve_step_workdir(step, self.workflow, self.project_root)
         return _ExecutionSettings(
             kind, kind in ("exec", "exec_script"), default_timeout, timeout, workdir
         )

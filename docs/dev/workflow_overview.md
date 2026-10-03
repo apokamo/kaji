@@ -52,7 +52,7 @@ dev workflow は単一のフロー図で表現されるが、Issue の `type:` �
 - 詳細ルールは skill 本文ではなく `docs/dev/` を正本とする
 - 各スキルは必要な docs だけを読む
 - workflow 内完了条件は各フェーズで段階的に確認し、final-check が事後確認を除く全体を確定する
-- `.claude/skills/` を実体とし、`.agents/skills/` は必要に応じて symlink で追随する
+- `.claude/skills/` を実体とし、`.agents/skills/` は symlink で追随する（codex step で使う skill では必須。preflight が検証する）
 
 ## 共有スキル
 

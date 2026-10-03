@@ -10,6 +10,26 @@ from .providers import IssueContext, PRContext
 from .state import SessionState
 
 
+def skill_invocation_line(step: Step) -> str:
+    """step の skill を起動する指示行を返す。
+
+    Codex は ``$<skill>`` の mention を明示的な skill invocation として扱う。
+    バッククォートで名前を書いても invocation にならず、Codex はファイル探索に
+    頼ることになる。そのため codex だけ ``$`` 形式にし、それ以外の backend は
+    従来の文面を維持する。
+
+    Args:
+        step: 実行するステップ。``skill`` を持つこと。
+
+    Returns:
+        プロンプト先頭行（および wrapper の初期メッセージ先頭）に置く 1 行。
+    """
+    assert step.skill is not None
+    if step.agent == "codex":
+        return f"${step.skill} を実行してください。"
+    return f"スキル `{step.skill}` を実行してください。"
+
+
 def build_prompt(
     step: Step,
     issue: str,
@@ -84,7 +104,7 @@ def build_prompt(
     status_choices = " | ".join(valid_statuses)
     verdict_target = verdict_path if verdict_path is not None else "[verdict_path]"
 
-    return f"""スキル `{step.skill}` を実行してください。
+    return f"""{skill_invocation_line(step)}
 
 ## セッション開始プロトコル
 1. Issue {issue_context.issue_ref} を読み、現在の進捗を把握する

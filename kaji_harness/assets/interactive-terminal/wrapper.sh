@@ -10,6 +10,7 @@ launch_session_id="${6:-}"
 model="${7:-}"
 effort="${8:-}"
 execution_policy="${9:-}"
+skill_invocation="${10:-}"
 
 cd "$workdir"
 
@@ -48,6 +49,13 @@ When the step is complete, write only a pure YAML verdict file to this exact pat
 $verdict_path
 
 Do not wrap the YAML in Markdown. Use the valid status values described in the prompt."
+
+# Codex resolves a `$<skill>` mention only in the user's input, not in prompt.txt.
+if [[ -n "$skill_invocation" ]]; then
+  initial_prompt="$skill_invocation
+
+$initial_prompt"
+fi
 
 # The runner records the pane transcript via `tmux pipe-pane`, so the wrapper
 # launches the agent directly (no util-linux script(1) dependency / OS branch).

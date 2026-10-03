@@ -56,7 +56,7 @@ PR 作成後は `review-poll` が codex auto-review を監視し、指摘があ�
 
 ### Layer 3: スキル本体
 
-`.kaji/config.toml` の `paths.skill_dir` で設定されたカノニカルディレクトリ配下の `<name>/SKILL.md`。CLI が `cwd=workdir` で実行する際にネイティブにロードされる。他エージェント用ディレクトリ（例: `.agents/skills/`）はカノニカルディレクトリへのシンボリックリンクとして構成する。
+`.kaji/config.toml` の `paths.skill_dir` で設定されたカノニカルディレクトリ配下の `<name>/SKILL.md`。CLI が `cwd=workdir` で実行する際にネイティブにロードされる。他エージェント用ディレクトリ（例: `.agents/skills/`）はカノニカルディレクトリへのシンボリックリンクとして構成する。codex step では `<workdir>/.agents/skills/<skill>/SKILL.md` の存在を preflight が必須検証し、欠けていれば Codex を起動する前にエラーで止める（#408）。
 
 kaji 標準スキルセット（`.claude/skills/` 実体、計 23 種）はライフサイクル順に次の category に整理される。
 
@@ -500,7 +500,7 @@ runner は各 attempt の dispatch 前に、project root（`kaji run` では `co
 
 - 注入経路: `exec` / `exec_script` は context env に merge（`script_exec._run_argv` が親 env を上書き）、
   headless agent は `execute_cli(env=...)`（`Popen(env={**os.environ, **env})`）、interactive terminal は
-  wrapper command に `env K=V ... <wrapper> <9 args>` を前置する（tmux pane は kaji ではなく tmux server の
+  wrapper command に `env K=V ... <wrapper> <10 args>` を前置する（tmux pane は kaji ではなく tmux server の
   environment を継承するため。Herdr も同じ command を launcher の `exec env PATH=... <command>` に埋める）。
   親環境から継承した同名変数は attempt 固有値で上書きされる。agent 経路へ渡すのはこの 4 変数のみ。
 - 作成に失敗した場合（`OSError`・既存 dir との衝突・不正な path component）は `TmpDirPreparationError` で

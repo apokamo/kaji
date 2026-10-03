@@ -6,6 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### BREAKING CHANGE
+
+- **A codex step now requires `<workdir>/.agents/skills/<skill>/SKILL.md`**
+  (#408). Preflight (`kaji run`, `kaji validate`, `kaji recover`, series
+  loader) checks this path in addition to the canonical `paths.skill_dir`, and
+  stops before launching Codex when it is missing, escapes the workdir, or the
+  skill name contains `..`. `exec_script` skills are exempt.
+  - **Broken contract**: a repository that ran codex steps without
+    `.agents/skills` (Codex found the skill by searching files) now fails
+    preflight.
+  - **Migration**: add `.agents/skills/<skill>` as a symlink to the canonical
+    skill directory, e.g. `.agents/skills/review -> ../../.claude/skills/review`.
+
+### Fixed
+
+- Codex steps now invoke their skill explicitly with `$<skill>` instead of
+  naming it in backticks, so Codex injects the skill rather than searching the
+  filesystem for it. This applies to `codex exec`, `codex exec resume`, and the
+  initial message of the interactive terminal runner (wrapper argument 10,
+  `skill_invocation`). Claude and Antigravity prompts are unchanged (#408).
+- Added the missing `.agents/skills/review` symlink so the `review` step of
+  kaji's own workflows is discoverable by Codex (#408).
+
 ## [0.21.0] - 2026-10-01
 
 This release makes the incident label names configurable (with new `kaji:`
