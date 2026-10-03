@@ -228,16 +228,28 @@ kaji issue view [issue_id] --json labels,body
 
 ```bash
 # ラベル L が付いた Issue / PR の番号集合（closed を含む）
+# Issue / PR のどちらの列挙が失敗しても、何も出力せず非ゼロで終了する（空の成功にしない）
 labeled() {
-  { gh issue list --state all --label "$1" --limit 1000 --json number --jq '.[].number'
-    gh pr list --state all --label "$1" --limit 1000 --json number --jq '.[].number'; } | sort -n
+  local issues prs
+  issues=$(gh issue list --state all --label "$1" --limit 1000 --json number --jq '.[].number') || return 1
+  prs=$(gh pr list --state all --label "$1" --limit 1000 --json number --jq '.[].number') || return 1
+  printf '%s\n%s\n' "$issues" "$prs" | sed '/^$/d' | sort -n
 }
 ```
 
+`labeled` は取得に失敗すると非ゼロで終了し、何も出力しない。**空の出力は「付与なし」を意味するが、非ゼロ終了は
+「不明」を意味する**。非ゼロ終了のときは結果を採用せず、保存・判定・削除を止めて原因（認証・ネットワーク）を
+解消してから、失敗した手順をやり直す。そのため、次の書き方を守る。
+
+- 結果は一度変数へ受けて終了コードを確認する: `nums=$(labeled "<名前>") || { echo "列挙に失敗" >&2; exit 1; }`。
+  `[ -z "$(labeled ...)" ]` やパイプ（`labeled ... | ...`）は終了コードが隠れるため使わない。
+- ファイルへの保存は、成功したときだけ置き換える: `labeled "<旧名>" > "before-<旧名>.tmp" && mv "before-<旧名>.tmp" "before-<旧名>.txt"`
+  （`> before-<旧名>.txt` へ直接リダイレクトすると、失敗時に空のファイルが残り、後で「付与なし」と誤読される）。
+
 1. **事前確認**: 実行中の `kaji run` がないことを確認し、手順 6 が終わるまで新しい run を起動しない。
    週次 cron（月曜 00:00 UTC = 09:00 JST）をまたがない時間帯を選ぶ。
-2. **付与の保存**: 対応表の 8 組それぞれについて、旧名の付与集合を `labeled <旧名> > before-<旧名>.txt`
-   で保存する（`incident` は改名時点で 14 件の見込み）。手順 6 で番号集合として照合する。
+2. **付与の保存**: 対応表の 8 組それぞれについて、旧名の付与集合を 上記の保存方法（`.tmp` 経由）で
+   `before-<旧名>.txt` に保存する（`incident` は改名時点で 14 件の見込み）。手順 6 で番号集合として照合する。
 3. **組ごとの状態判定と処理**: `gh label list --search incident --limit 100 --json name` で、
    8 組それぞれの旧名・新名の有無を見て、次の表に従い**組ごとに**処理する。全組を無条件に改名せず、
    移行済みの組は飛ばす。途中で失敗して再開するときも、この手順 3 を最初からやり直せばよい
