@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .cli import execute_cli
 from .config import KajiConfig
+from .deadline import AttemptDeadline
 from .errors import (
     CLIExecutionError,
     CLINotFoundError,
@@ -551,6 +552,9 @@ class _StepExecutor:
                 )
             return result
 
+        # Issue #421: attempt の時間予算は 1 回だけ起算し、prompt 表示・hard deadline・
+        # result.json の started_at へ同じ値を配る（単一計算元）。
+        deadline = AttemptDeadline.start(settings.timeout)
         prompt = build_prompt(
             step,
             self.run_ctx.canonical_id,
@@ -559,9 +563,10 @@ class _StepExecutor:
             issue_context=issue_context,
             pr_context=pr_context,
             verdict_path=str(verdict_path),
+            attempt_deadline=deadline,
         )
         (attempt_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
-        attempt_started_at_ref.append(datetime.now(UTC))
+        attempt_started_at_ref.append(deadline.started_at)
         if self.config.execution.agent_runner == "interactive_terminal":
             result = execute_interactive_terminal(
                 step=step,
@@ -574,6 +579,7 @@ class _StepExecutor:
                 close_on_verdict=self.config.execution.interactive_terminal_close_on_verdict,
                 execution_policy=self.workflow.execution_policy,
                 env=tmp_env,
+                deadline_monotonic=deadline.deadline_monotonic,
             )
         else:
             result = execute_cli(
@@ -586,6 +592,7 @@ class _StepExecutor:
                 verbose=self.verbose,
                 default_timeout=settings.default_timeout,
                 env=tmp_env,
+                deadline_monotonic=deadline.deadline_monotonic,
             )
         return result
 

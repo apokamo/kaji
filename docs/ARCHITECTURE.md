@@ -83,6 +83,7 @@ kaji_harness/
   fsio.py         # atomic write helper (atomic_write / atomic_write_new) — foundation
   design_dir.py   # [paths].design_dir の規約 (LEGACY_DESIGN_DIR) と lexical 検証 — foundation (#397)
   agents.py       # agent capability registry — foundation
+  deadline.py     # attempt の hard deadline (AttemptDeadline)。prompt 表示と runner backend の単一計算元 — foundation (#421)
   baseline.py     # pytest baseline artifact schema・分類・3タプル比較・scope 評価
   pytest_baseline_plugin.py  # lossless pytest report を生成する内部 plugin
   config.py       # .kaji/config.toml 探索・パース (KajiConfig, PathsConfig, ExecutionConfig)
@@ -132,7 +133,7 @@ kaji_harness/
 依存は下位層から上位層へ向かってはならない。
 
 ```
-[foundation]  errors.py / fsio.py / design_dir.py ← kaji_harness 内部依存ゼロ
+[foundation]  errors.py / fsio.py / design_dir.py / deadline.py ← kaji_harness 内部依存ゼロ
       ▲
 [provider]    providers/                     ← foundation のみに依存
       ▲

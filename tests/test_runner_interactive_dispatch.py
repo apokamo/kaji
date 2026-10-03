@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -365,3 +366,88 @@ class TestAbnormalExitSessionRecording:
         result = self._run_until_review_failure(tmp_path, tmp_path / "art-d", failure)
 
         assert result["session_id"] is None
+
+
+# ============================================================
+# Issue #421: attempt deadline is computed once and shared
+# ============================================================
+
+_FIXED_NOW = datetime(2026, 10, 3, 4, 27, 28, 500000, tzinfo=UTC)
+_FIXED_MONOTONIC = 5000.0
+
+
+class _FixedDatetime(datetime):
+    @classmethod
+    def now(cls, tz: Any = None) -> _FixedDatetime:  # type: ignore[override]
+        return cls.fromtimestamp(_FIXED_NOW.timestamp(), tz)
+
+
+def _attempt_files(tmp_path: Path, name: str) -> list[Path]:
+    return sorted((tmp_path / ".kaji-artifacts").glob(f"**/steps/design/attempt-001/{name}"))
+
+
+@pytest.mark.medium
+class TestAttemptDeadlineSingleClock:
+    """prompt 表示・hard deadline・result.json started_at が同じ起点を共有する。"""
+
+    @pytest.mark.parametrize(
+        ("execution_extra", "target"),
+        [
+            ('agent_runner = "interactive_terminal"', "execute_interactive_terminal"),
+            (
+                'agent_runner = "interactive_terminal"\ninteractive_terminal_backend = "herdr"',
+                "execute_interactive_terminal",
+            ),
+            ("", "execute_cli"),
+        ],
+        ids=["tmux", "herdr", "headless"],
+    )
+    @pytest.mark.parametrize("step_timeout", [None, 123], ids=["fallback", "step"])
+    def test_backend_prompt_and_result_share_one_start(
+        self,
+        tmp_path: Path,
+        execution_extra: str,
+        target: str,
+        step_timeout: int | None,
+    ) -> None:
+        config = _make_config(tmp_path, execution_extra=execution_extra)
+        runner = _make_runner(config, tmp_path)
+        runner.workflow.steps[0].timeout = step_timeout
+        expected_timeout = step_timeout if step_timeout is not None else 60
+        captured: dict[str, Any] = {}
+
+        def fake_backend(**kwargs: Any) -> CLIResult:
+            captured.update(kwargs)
+            verdict_path = kwargs.get("verdict_path")
+            if verdict_path is None:
+                verdict_path = _attempt_files(tmp_path, "prompt.txt")[0].parent / "verdict.yaml"
+            verdict_path.write_text(_PASS_YAML, encoding="utf-8")
+            return CLIResult(full_output="", session_id="s")
+
+        plain_meta = SkillMetadata(name="plain", description="", exec_script=None)
+        with (
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.runner.load_skill_metadata", return_value=plain_meta),
+            patch("kaji_harness.deadline.time.monotonic", return_value=_FIXED_MONOTONIC),
+            patch("kaji_harness.deadline.datetime", _FixedDatetime),
+            patch(f"kaji_harness.runner.{target}", side_effect=fake_backend),
+            patch(
+                "kaji_harness.runner.execute_cli"
+                if target != "execute_cli"
+                else "kaji_harness.runner.execute_interactive_terminal"
+            ),
+        ):
+            runner.run()
+
+        # (1) backend へ渡る hard deadline
+        assert captured["deadline_monotonic"] == _FIXED_MONOTONIC + expected_timeout
+        # (2) prompt に表示される deadline
+        prompt = _attempt_files(tmp_path, "prompt.txt")[0].read_text(encoding="utf-8")
+        assert f"- step_timeout_seconds: {expected_timeout}" in prompt
+        expected_deadline = (_FIXED_NOW + timedelta(seconds=expected_timeout)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        assert f"- attempt_deadline_utc: {expected_deadline}" in prompt
+        # (3) result.json の started_at
+        result = json.loads(_attempt_files(tmp_path, "result.json")[0].read_text(encoding="utf-8"))
+        assert datetime.fromisoformat(result["started_at"]) == _FIXED_NOW

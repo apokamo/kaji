@@ -224,6 +224,8 @@ backend固有差分だけを後段に示す。
 6. `interactive_terminal_close_on_verdict = true` なら、verdict 検知後に `tmux kill-pane` で pane を
    **best-effort cleanup** する。これは cleanup であり「poll≤Ns で kill」のようなレイテンシ契約は持たない
    （次 step 開始後の kill も許容）。timeout 経路でも best-effort `kill-pane` してから fail-loud する。
+   timeout の起点は attempt 開始（prompt 生成直前、Issue #421）で、pane / launcher の起動所要時間も含む。
+   deadline までに pane を起動できなかった場合は pane を起動せず timeout とする。
    ただし **利用者の Ctrl-C（`KeyboardInterrupt`）では pane を kill しない**（Issue #403）。
    中断直前の agent 状態を目視・回収できるよう pane を残し、`pane-metadata.json` に
    `pane_id` を記録して `KeyboardInterrupt` を再送出する。孤児 pane は手動で
@@ -364,7 +366,7 @@ Codex の `reasoning.effort = minimal` は現 tool 構成（`image_gen` / `web_s
 | `must run inside Herdr` で即終了 | Herdr pane内で再実行する。外側からfocused sessionは操作しない |
 | `HERDR_PANE_ID is not set` | caller identityを得られる通常のHerdr pane内で再起動する |
 | Herdr `terminal.log`の過去行が足りない | raw transcriptではなくrendered snapshot。Herdr 0.8.2で`transcript_truncated=null`ならplain-text CLIが省略有無を公開していない。revisionはsnapshot識別に使い、完全性の証明にはしない |
-| step が timeout する | agent が `verdict.yaml` を書いていない。prompt の verdict 書き出し指示と path を確認 |
+| step が timeout する | agent が `verdict.yaml` を書いていない。prompt の verdict 書き出し指示と path を確認する。timeout は attempt 開始（pane / launcher 起動前）を起点とする hard deadline で、`prompt.txt` の `attempt_deadline_utc` が実際の期限と同じ起点を共有する。`result.json` の `started_at` と `prompt.txt` の `step_timeout_seconds` / `attempt_deadline_utc` を突き合わせ、agent が期限前に残時間を確認していたかを調べる |
 | pane が verdict 前に消える / `tmux pane exited before writing verdict.yaml` | agent が起動失敗。`terminal.log` の tail（エラー文面に添付）を確認 |
 | 色が出ない | wrapper は `NO_COLOR` unset / `COLORTERM=truecolor` を設定する。端末側の color support と agent 側設定も確認 |
 | Codex resume が効かない | `terminal.log` に resume 行が出ず、session store fallback も marker 不一致。`CODEX_HOME` を確認 |

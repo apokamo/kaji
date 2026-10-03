@@ -482,6 +482,31 @@ Issue: [issue_ref]
 #### 恒久テストを追加しない理由
 - (`docs/dev/testing-convention.md` の 4 条件に沿って記載)
 
+### 長時間 acceptance の配置
+
+> **CRITICAL**: 受入処理が 1 つの step attempt の timeout 内に決定論的に収まらない設計を作らない。
+> agent step の hard deadline は延長されない（正本: [workflow-authoring.md](../../../docs/dev/workflow-authoring.md) § timeout と attempt deadline）。
+> 本小節は省略しない。対象がない場合も「該当なし」と根拠を記載する。
+
+**対象**: nested full workflow（`kaji run` の入れ子実行）、外部 agent を含む dogfood、修正ごとに
+fresh 環境で繰り返す acceptance、その他 1 回の所要見積が配置先 step の timeout の 25% を超える検証。
+
+対象がある場合、次のどちらか一方を必須とする:
+
+- **(a) bounded 根拠**: 配置先 step の **attempt 全体** が timeout 内に収まることを数値で示す。
+  実装・失敗修正の見積 ＋ acceptance 以外の検証（pytest / `make check` / Pre-Handoff Review 等）の見積
+  ＋ acceptance の実行回数上限 × 1 回の所要見積（過去 run の実測等を根拠にする）＋ 報告・commit・
+  verdict 保存の時間 ＋ 予備時間 R ≤ 配置先 step の timeout。失敗→修正→再実行の回数上限を含める。
+  R = `min(max(300 秒, 0.1 × T), 0.25 × T)`（T = 配置先 step の timeout 秒数）
+- **(b) 分離**: 独立 acceptance step または別 workflow へ分離し、分離先と、元 Issue の完了条件として
+  その acceptance がどこで実行・証跡化されるかを明記する
+
+元 Issue の必須 acceptance を別 Issue へ移す、または省略して完了扱いにすることは完了条件の変更であり、
+設計 agent は選ばない。分離に必要な workflow 変更が Issue のスコープ外になる場合も同様に、
+Step 1.55 の「スコープ変更」軸として `ABORT` し、人間に分離方式を確認する。
+
+- (対象の有無、対象がある場合は (a) の数値式または (b) の分離先。対象がなければ「該当なし」と根拠)
+
 ## 影響ドキュメント
 
 この変更により更新が必要になる可能性のあるドキュメントを列挙する。

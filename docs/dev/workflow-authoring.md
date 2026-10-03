@@ -260,7 +260,7 @@ config 非依存のため）。
 | `model` | str | — | モデル名（省略時は agent デフォルト）。exec-step では指定不可 |
 | `effort` | str | — | エージェント別の許容値で書く。後述「effort 値」参照。exec-step では指定不可 |
 | `max_budget_usd` | float | — | コスト上限（USD）。exec-step では指定不可 |
-| `timeout` | int | — | タイムアウト（秒）。フォールバック: step.timeout → workflow.default_timeout → config.execution.default_timeout |
+| `timeout` | int | — | タイムアウト（秒）。フォールバック: step.timeout → workflow.default_timeout → config.execution.default_timeout。agent step では attempt 開始を起点とする hard deadline（後述「timeout と attempt deadline」） |
 | `workdir` | str | — | 作業ディレクトリ（絶対パス）。フォールバック: step.workdir → workflow.workdir → project_root |
 | `resume` | str | — | resume するステップ ID（同一 agent のセッション継続）。exec-step では指定不可 |
 
@@ -364,6 +364,41 @@ cycle が即座に再度 exhaust する。人間が Issue 本文や設計書を�
 `kaji run <wf> <issue> --from <cycle 内 step> --reset-cycle` を指定すると、対象
 cycle の `cycle_counts` だけを `0` に戻してから再開できる（詳細は「実行コマンド」
 節の `--reset-cycle` を参照）。
+
+## timeout と attempt deadline
+
+agent step の timeout は **attempt 開始時刻を起点とする hard deadline** で、延長されない（Issue #421）。
+
+- **解決順**: `step.timeout` → `workflow.default_timeout` → `config.execution.default_timeout`（変更なし）。
+  解決済みの値が `AttemptDeadline`（`kaji_harness/deadline.py`）の `timeout_seconds` になる
+- **起点は 1 回だけ**: runner が attempt 開始時（prompt 生成直前）に `AttemptDeadline.start()` で
+  UTC wall clock と `time.monotonic()` を同時に取得する。この 1 回の値が (1) prompt のコンテキスト変数
+  `step_timeout_seconds` / `attempt_started_at_utc` / `attempt_deadline_utc`、(2) headless / tmux / Herdr
+  各 backend の hard deadline、(3) `result.json` の `started_at` に配られる。表示される deadline と実際の
+  deadline は同じ起点を共有する
+- **起点の位置**: interactive terminal（tmux / Herdr）では pane / launcher の起動所要時間も timeout に含まれる
+  （従来は起動後から計測していた。差は通常数秒）。deadline 到達前に pane 起動へ進めない場合は pane を起動せず
+  `StepTimeoutError` にする。Herdr の launcher 開始待ちは `min(launcher 上限 10 秒, attempt deadline)` で、
+  attempt deadline が先に来た場合は launcher 失敗ではなく通常の timeout 経路（session 解決・pane cleanup）になる
+- **headless の transient retry**: retry は attempt deadline の残時間内に限る。backoff の待機時間が残時間以上
+  なら待機も再起動もせず元のエラーを返す（従来は retry ごとに full timeout で再始動していた）。retry 回数上限
+  （3 回）は不変
+- **延長なし**: timeout の自動延長・無制限 retry はない。cycle の `max_iterations`・各 workflow YAML の
+  `timeout` 値・verdict-last（外部副作用の完了後に最後に `verdict.yaml` を保存する。
+  [ADR 005](../adr/005-artifact-primary-verdict.md)）も変わらない
+- **wall clock 推定の限界**: hard deadline は monotonic clock で判定するが、agent が `date -u` で見る残時間は
+  wall clock 基準の推定値になる。実行中に wall clock が monotonic より速く進むと（Incident #393 では約 10%）
+  実残時間より長く見えるため、skill 側は予備時間（`issue-implement` の予備時間 R）を取って早めに切り上げる
+- **期限前 checkpoint**: deadline 内に完了できない場合の手順（status は `step.on` のキー内のみ）は skill が
+  定める。`issue-implement` は既存の `RETRY`（`implementation` cycle のカウント対象）で次 attempt に引き継ぐ。
+  規則の書き方は [skill-authoring.md](skill-authoring.md) § 実行期限と期限前 checkpoint
+
+### 長時間 acceptance の配置
+
+nested full workflow・外部 agent を含む dogfood・fresh 環境での反復 acceptance など、1 attempt の timeout 内に
+決定論的に収まらない受入処理は、単一 step attempt に置かない。設計段階（`issue-design` /
+`issue-review-design`）で、配置先 step の attempt 全体が timeout 内に収まる数値根拠（bounded 根拠）を示すか、
+独立 acceptance step または別 workflow へ分離する。timeout の延長で対処しない。
 
 ## execution_policy
 

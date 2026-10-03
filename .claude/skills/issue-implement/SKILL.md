@@ -63,6 +63,63 @@ $ARGUMENTS = <issue_id>
 
 [_shared/worktree-resolve.md](../_shared/worktree-resolve.md) に従って絶対パスを解決し、以降はそのパスを使う。
 
+### Step 1.5: 実行期限の確認
+
+agent step の hard deadline は延長されず、到達時点で `verdict_path` が未保存なら harness が session を
+強制終了する（正本: [workflow-authoring.md](../../../docs/dev/workflow-authoring.md) § timeout と attempt deadline）。
+正常に前進していても期限切れで進捗が失われないよう、次の規則で残時間を管理する。
+
+1. **開始時**: コンテキスト変数 `attempt_deadline_utc` / `step_timeout_seconds` を記録する。
+   変数がない（手動実行等）場合は本 Step の規則を適用しない。
+2. **前 attempt の checkpoint の引継ぎ**: 次の条件をすべて満たす直近コメントを checkpoint コメントとして扱い、
+   その「残作業」から再開する（implement の self-RETRY は `resume:` を持たず fresh session のため、引継ぎ情報は
+   Issue コメントと worktree が唯一の経路）。
+   - body 1 行目が `<!-- kaji-verdict: step=implement status=(RETRY|ABORT) -->`
+   - 2 行目以降に見出し `## 期限前 checkpoint（implement）` を持つ（手順 7 で付与。期限と無関係な ABORT
+     コメントを引継ぎ元と誤認しないための識別子）
+   - それより後に `step=implement` の `PASS` / `BACK` marker コメントがない
+
+   ABORT で終わった checkpoint を人間が `kaji run … --from implement` で再開した場合も、同じ規則で引き継がれる。
+3. **予備時間 R**（commit・Issue コメント・verdict 保存に充てる）:
+   `R = min(max(300 秒, 0.1 × T), 0.25 × T)`（T = `step_timeout_seconds`）。R は常に T の 25% 以下で、
+   短い timeout でも作業時間が残る。例: T=120 → R=30 秒、T=300 → R=75 秒、T=1800 → R=300 秒、
+   T=3600 → R=360 秒、T=6000 → R=600 秒。
+4. **確認点**: (i) 全 pytest / `make check` / nested workflow / 外部 agent 呼出しなど長時間処理の開始前、
+   (ii) Step 3〜8.5 の各境界。`date -u +%Y-%m-%dT%H:%M:%SZ` で残時間（`attempt_deadline_utc` − 現在時刻）を
+   算出し、「見積所要時間 + R > 残時間」なら新たな長時間処理を開始せず手順 7 の checkpoint へ移る。
+   見積は同 session / Issue コメント上の実測を優先し、なければ保守的に見積もる。境界で既に残時間 < R の場合は、
+   新たな commit・検証を行わず直ちに最小内容の checkpoint へ移る。表示 deadline は開始時の wall clock
+   基準の推定値で、実行中に wall clock が monotonic から速くずれると実残時間より長く見える。
+   そのため R を食い込む前に切り上げる。
+5. **完了不能・無進捗の停止**（同じ checkpoint の繰り返しで cycle を消費しない）:
+   - 必須処理 1 件の見積 + R が **T 全体** を超える（どの attempt でも収まらない）場合、checkpoint を繰り返さず、
+     手順 6 の status 決定で RETRY を選ばない。設計起因なら BACK、そうでなければ ABORT とし、suggestion に
+     「step timeout の見直し、または acceptance の分離」を人間判断事項として記載する。
+   - 引継いだ checkpoint（手順 2）から本 attempt で進捗（新規 commit、完了した検証、残作業の減少のいずれか）が
+     ないまま再び checkpoint に至る場合も、RETRY を選ばず ABORT とする（同上の suggestion）。
+   - 設計書が長時間 acceptance を implement に置きながら bounded 根拠を持たない場合は設計起因として BACK。
+6. **status の決定（コメント投稿前）**: 状況から希望 status を決め、prompt の status 候補（`step.on` のキー）に
+   含まれるかを確認して **実際の status S** を確定する。
+   - 期限前 checkpoint（進捗あり）: RETRY が候補にあれば `S = RETRY`、なければ `S = ABORT`
+   - 手順 5 の完了不能・無進捗: `S = ABORT`
+   - 設計起因: BACK が候補にあれば `S = BACK`、なければ `S = ABORT`
+   - ABORT も候補にない場合は checkpoint を行わず作業を継続する（存在しない status は出力しない）
+7. **checkpoint 手順**（verdict-last を維持する。S を marker・コメント末尾 block・stdout・`verdict_path` の
+   4 箇所で一致させる）:
+   - `make check` が通る単位の変更は通常どおり commit する。通らない WIP は commit せず worktree に残す
+     （AGENTS.md の「コード変更 commit 前に `make check` 必須」を破らない）。
+   - checkpoint コメントを `kaji issue comment [issue_id] --commit --verdict-step implement --verdict-status S`
+     で投稿する。本文は見出し `## 期限前 checkpoint（implement）` で始め、完了済み作業（commit SHA）、
+     未 commit 差分の概要、実行中だった検証と結果、残作業と次 attempt の開始手順、確認時の残時間を記載し、
+     末尾に `status: S` の `---VERDICT---` block を付ける。
+   - その後に同じ `status: S` の verdict を stdout と `verdict_path` へ保存する（artifact 保存前に停止して
+     comment fallback が読まれても許可 status S が解決される）。
+   - `S = ABORT` の場合、suggestion に `kaji run <workflow> [issue_id] --from implement` での再開（必要なら
+     `--reset-cycle`）と手順 5 の人間判断事項を記載する。
+8. **cycle 上限**: checkpoint の `RETRY` も `implementation` cycle のカウント対象であり、上限到達時は runner が
+   `on_exhaust: ABORT` で停止する。上限回避のために `PASS` 等へ status を偽らない。`cycle_count` ==
+   `max_iterations` の attempt でも同手順で `RETRY` を返す（再開は人間が `--reset-cycle` で判断する）。
+
 ### Step 2: 設計書を解決して1回だけ読む
 
 1. コンテキストに `design_path` があれば `[worktree_dir]/[design_path]` を採用する。
@@ -113,6 +170,8 @@ quickref の「状況 → 正本」表に従い、まず必要なセクション
 - workflow 全体や戻り先が不明な場合だけ: `docs/dev/development_workflow.md` の該当節
 
 ### Step 3: テスト実装（Red）
+
+> Step 3〜8.5 の各境界で Step 1.5 の残時間確認を行う（`attempt_deadline_utc` がある場合）。
 
 設計書「テスト戦略」と type 別ガイドに従う。
 
@@ -217,6 +276,6 @@ suggestion: |
 | status | 条件 |
 |--------|------|
 | PASS | 実装・テスト・品質チェック全パス |
-| RETRY | テスト失敗等 |
+| RETRY | テスト失敗等、または期限前 checkpoint（Step 1.5。`RETRY` が status 候補にあり、進捗がある場合のみ） |
 | BACK | 設計に問題 |
 | ABORT | type ラベル不正、`type:docs` 等の重大な前提違反 |

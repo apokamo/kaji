@@ -164,11 +164,17 @@ def execute_cli(
     *,
     default_timeout: int,
     env: Mapping[str, str] | None = None,
+    deadline_monotonic: float | None = None,
 ) -> CLIResult:
     """CLI を実行し、結果を返す。一時的エラー時はバックオフ付きリトライする。
 
     ``env`` を渡すと親プロセスの環境変数を土台に上書きして子へ渡す（Issue #407）。
     リトライでも同じ ``env`` を再利用する。``None`` なら親の環境をそのまま継承する。
+
+    ``deadline_monotonic`` は attempt 全体の hard deadline（``time.monotonic()`` 基準の
+    絶対値、Issue #421）。渡された場合、timer は残時間で kill し、transient retry の
+    backoff も残時間内に限る（待機・再起動が deadline を越えるなら元の
+    ``CLIExecutionError`` を再送出する）。``None`` なら従来どおり起動ごとに full timeout。
     """
     for attempt in range(_MAX_RETRIES + 1):
         try:
@@ -182,11 +188,16 @@ def execute_cli(
                 verbose,
                 default_timeout=default_timeout,
                 env=env,
+                deadline_monotonic=deadline_monotonic,
             )
         except CLIExecutionError as e:
             if attempt == _MAX_RETRIES or not _is_transient(e):
                 raise
             delay = _BASE_DELAY * (2**attempt)
+            if deadline_monotonic is not None and deadline_monotonic - time.monotonic() <= delay:
+                # backoff 待機中は timer が解除されており監視外。待機しても再起動できない
+                # 残時間なら、待たずに元のエラーを返す。
+                raise
             logger.warning(
                 "Step '%s' transient error (attempt %d/%d): %s. Retrying in %.0fs...",
                 step.id,
@@ -196,6 +207,8 @@ def execute_cli(
                 delay,
             )
             time.sleep(delay)
+            if deadline_monotonic is not None and deadline_monotonic - time.monotonic() <= 0:
+                raise
     # unreachable, satisfies type checker
     raise RuntimeError("unreachable")  # pragma: no cover
 
@@ -211,6 +224,7 @@ def _execute_cli_once(
     *,
     default_timeout: int,
     env: Mapping[str, str] | None = None,
+    deadline_monotonic: float | None = None,
 ) -> CLIResult:
     """CLI を 1 回実行する（リトライなし）。"""
     # execute_cli は agent 必須 step 専用。exec_script 経路は execute_script を使う。
@@ -232,7 +246,10 @@ def _execute_cli_once(
         raise CLINotFoundError(f"CLI '{args[0]}' not found. Is it installed?") from e
 
     timed_out = threading.Event()
-    timer = threading.Timer(timeout, _kill_process, args=[process, timed_out])
+    timer_seconds = (
+        timeout if deadline_monotonic is None else max(0.0, deadline_monotonic - time.monotonic())
+    )
+    timer = threading.Timer(timer_seconds, _kill_process, args=[process, timed_out])
     timer.start()
     # terminal event 観測後にプロセスが自発 exit せず、kaji が後始末で terminate した
     # かを記録する。その場合の returncode は kaji 由来の SIGTERM であって attempt の
