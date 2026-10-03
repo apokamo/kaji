@@ -265,6 +265,7 @@ if step.agent == "codex" and metadata.exec_script is None:
 | A4: Codex の最低 version | 強制しない。docs に 0.159.2 を記録する | AI の仮定（Issue 本文 A4） | `docs/dev/skill-authoring.md` に「確認済み version」として記載する |
 | A5: 統合テスト | `large` marker を付ける。`codex` がない・未認証なら skip する | AI の仮定（Issue 本文 A5） | skip 判定は `shutil.which("codex")` と `codex login status` の exit code にする（0.159.2 で存在を確認済み）。実行は project / git の外の一時 dir で行う |
 | A6: 運用契約の記載先 | `docs/dev/skill-authoring.md` | AI の仮定（Issue 本文 A6） | 「ファイル配置」節に、codex step での `.agents/skills/<skill>/SKILL.md` 必須化、`$<skill>` 形式、確認済み version を追記する |
+| Large テストの argv と sandbox 指定 | production の `build_cli_args` を `execution_policy="interactive"` で使う。新規・resume とも sandbox 引数は付けない。sandbox resume の不具合は #458 に分離する | AI の判断。根拠: codex-cli 0.159.2 の `codex exec resume` は `-s` を受け付けない（設計レビュー M1 の実測と `codex exec resume --help`）。`_build_codex_args` の修正は本 Issue の完了条件の外にある。検査先: verify-design / review-code | 新規・resume の具体的 argv を設計に固定した |
 | frontmatter `name` とディレクトリ名の一致を検証するか | 今回は検証しない（スコープ外） | AI の判断。根拠: D2 が承認した非互換は「探索パスの存在」だけである。name の不一致まで検査すると承認範囲を超えて非互換が広がる。kaji repo では全件一致を確認済み。検査先: review-design | 残存リスクとして記録し、必要なら別 Issue で扱う |
 
 one-way door の未決はない。D1・D2 は人間決定済みである。上の AI 仮定は、いずれも誤っていても
@@ -313,29 +314,47 @@ review / PR で安く直せる範囲（内部 helper、wrapper の内部引数�
 - 既存の `tests/test_cli_validate.py::test_official_workflows_all_validate` と
   `make validate-workflows` が、`.agents/skills/review` の追加後に通る。D2 だけを入れて symlink を
   入れない状態では落ちる。これが同根の壊れ箇所 1 の回帰検出になる
-- interactive wrapper（既存の fake agent で argv を記録するテストパターンを流用）:
+- `_build_wrapper_command`（tmux / herdr 共通）の argv の第 10 要素が、codex なら invocation 行、
+  それ以外なら空文字になる（文字列構築のみ。Small に分類する）
+- interactive wrapper を実 subprocess（bash + fake agent）で起動するテストは、規約に合わせて
+  `large` + `large_local` に分類する（既存の fake agent で argv を記録するパターンを流用）:
   - codex で第 10 引数を与えると、初期メッセージが `$<skill> を実行してください。` で始まり、
     その後ろに従来の `Read the full task prompt from:` が続く。新規と resume の両方を確認する
   - claude / antigravity（第 10 引数は空）の初期メッセージは `Read the full task prompt from:` で
     始まる（従来どおり）
-  - `_build_wrapper_command`（tmux / herdr 共通）の argv の第 10 要素が、codex なら invocation 行、
-    それ以外なら空文字になる
 
 #### Large テスト
 
 - `tests/test_codex_skill_invocation_large.py`（`@pytest.mark.large`）
-  - skip 条件: `shutil.which("codex") is None`、または `codex login status` が非 0 で終わる（A5）
-  - 準備: `outside_project_tmp_path` に `git init` した repo を作る。
-    `.agents/skills/kaji-fixture-token/SKILL.md`（固定トークンを返す指示）と
-    `agents/openai.yaml`（`policy: allow_implicit_invocation: false`）を置く。project / git の外に
-    置くので、kaji repo 自身の `.agents/skills` は探索範囲に入らない
-  - 実行: production の `skill_invocation_line` で作った invocation 行と短い指示を prompt にする。
-    `build_cli_args(step, prompt, workdir, None, "sandbox")` の argv を `stdin=DEVNULL` で実行する。
-    続けて、返った thread id で resume の argv（`build_cli_args(..., session_id=<id>, ...)`）も実行する
-  - 検証: 新規・resume とも、最終 agent message に固定トークンが含まれる。新規では
+  - skip 条件: `shutil.which("codex") is None`、または `codex login status` が非 0 で終わる（A5）。
+    引数エラー（exit 2）などの CLI 失敗は skip にせず FAIL とする
+  - 準備: `outside_project_tmp_path` に `git init` した repo を作る。次の 2 ファイルを置く。
+    project / git の外に置くので、kaji repo 自身の `.agents/skills` は探索範囲に入らない
+    - `.agents/skills/kaji-fixture-token/SKILL.md`: frontmatter に `name: kaji-fixture-token` と
+      `description` を持ち、本文は固定トークンを返す指示
+    - `.agents/skills/kaji-fixture-token/agents/openai.yaml`: `policy: allow_implicit_invocation: false`
+  - prompt: production の `skill_invocation_line(step)`（`$kaji-fixture-token を実行してください。`）の
+    後ろに短い指示を続ける。step は `agent="codex"`、`skill="kaji-fixture-token"`、model / effort は未指定
+  - argv: production の `build_cli_args` を `execution_policy="interactive"` で呼ぶ。
+    `_build_codex_args` は interactive では sandbox / approval の引数を付けないので、新規・resume
+    ともに codex-cli 0.159.2 が受け付ける引数だけになる
+    - 新規: `build_cli_args(step, prompt, workdir, None, "interactive")`
+      → `["codex", "exec", "--json", "-C", <workdir>, <prompt>]`
+    - resume: `build_cli_args(step, prompt2, workdir, <新規の thread.started の thread_id>, "interactive")`
+      → `["codex", "exec", "resume", <thread_id>, "--json", <prompt2>]`
+      （`codex exec resume --help` の Usage `[OPTIONS] [SESSION_ID] [PROMPT]` と `--json` に合致）
+  - 実行: 両方とも `subprocess.run(argv, cwd=workdir, stdin=DEVNULL, capture_output=True, timeout=180)`。
+    sandbox は CLI 引数で指定せず、codex の既定 sandbox に任せる。fixture repo は使い捨てで、
+    prompt はトークンの応答だけを求める
+  - 検証: 新規・resume とも exit code 0、最終 agent message に固定トークンが含まれる。新規では
     `command_execution` item が出ないことも確認する。これは、ファイル探索ではなく skill が
     注入されたことの証跡になる（事前調査 #1 と #2 を分ける観測点）
-  - timeout は 1 回 180 秒にする
+  - `sandbox` policy を使わない理由: 現行の `_build_codex_args` は resume でも `-s workspace-write`
+    を付ける。codex-cli 0.159.2 の `codex exec resume` は `-s` を受け付けない（exit 2、
+    `unexpected argument '-s' found`。設計レビューで実測）。これは本 Issue の対象（prompt の invocation
+    形式と preflight）とは別の、既存の production 不具合である。そこで #458 として起票し、本 Issue
+    では `_build_codex_args` を変えない。Large テストは production builder を通したまま、両経路で
+    有効な policy を選ぶ。#458 の修正時に sandbox 経路の引数テストを追加する
 
 ### 恒久テストとして残す理由
 
@@ -349,7 +368,7 @@ Large は Codex の挙動変化（`$` mention の仕様変更）を検出する�
 |-------------|-----------|------|
 | docs/adr/ | なし | 新しい技術選定はない。既存の skill 配置規約の強化にとどまる |
 | docs/ARCHITECTURE.md | あり | `:59` の「`.agents/skills/` はシンボリックリンクとして構成する」に、codex step では preflight で必須検証されることを 1 文追記する |
-| docs/dev/skill-authoring.md | あり | 運用契約の正本（A6）。codex step の `$<skill>` 形式、`.agents/skills/<skill>/SKILL.md` の必須化と preflight エラー、確認済み codex-cli version（0.159.2）を「ファイル配置」節に追記する |
+| docs/dev/skill-authoring.md | あり | 運用契約の正本（A6）。codex step の `$<skill>` 形式、`.agents/skills/<skill>/SKILL.md` の必須化と preflight エラー、確認済み codex-cli version（0.159.2）を「ファイル配置」節に追記する。存在検査で保証する範囲（`.agents/skills/<skill>/SKILL.md` の存在と traversal 防御のみ。frontmatter `name` の不一致は検査しない）も短く書く |
 | docs/dev/shared_skill_rules.md | あり | `:127` の「必要なら `.agents/skills/` に symlink を追加する」を、codex step で使う skill では必須、に改める |
 | docs/dev/workflow_overview.md | あり | `:55` の「必要に応じて symlink で追随する」を同じ趣旨に改める |
 | docs/reference/ | なし | 設定キーと公開 API は変えない |
@@ -365,6 +384,8 @@ Large は Codex の挙動変化（`$` mention の仕様変更）を検出する�
   推奨する
 - skill の frontmatter `name` とディレクトリ名が一致しない利用 repo では、`$<dir名>` が解決されず
   fail-open が残る（今回のスコープ外）
+- `execution_policy: sandbox` の codex resume は、本 Issue の変更と無関係に引数エラーになる（#458）。
+  Large テストはこの経路を使わない
 - Large テストはモデル出力に依存する。`command_execution` が出ないことの assert が不安定になった
   場合は、トークン一致を主判定に残し、tool 呼び出しの assert を緩めることを review で検討する
 
