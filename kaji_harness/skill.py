@@ -11,6 +11,10 @@ import yaml
 
 from .errors import SecurityError, SkillFrontmatterError, SkillNotFound
 
+# Codex が repo スコープの skill を探索するディレクトリ（workdir からの相対パス）。
+# kaji の canonical な ``paths.skill_dir`` とは別に、codex step ではここも検証する。
+CODEX_SKILL_DIR = ".agents/skills"
+
 # Python identifier dotted path (`foo.bar.baz`). Used to gate `exec_script`
 # values against shell injection / path traversal at the syntax level.
 _EXEC_SCRIPT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")

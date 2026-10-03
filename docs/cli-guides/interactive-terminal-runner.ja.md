@@ -97,6 +97,14 @@ runner は workflow の `execution_policy` を wrapper 第9引数へ渡し、Ant
 
 AGY では sandbox と permission は別軸であり、`sandbox` に permission bypass を加えない。
 
+### Codex の skill invocation
+
+runner は wrapper 第10引数 `skill_invocation` も渡す。Codex では `$<skill> を実行してください。`
+（`build_prompt` が `prompt.txt` の先頭に置く行と同じ）、Claude / Antigravity では空文字である。
+空でない場合、wrapper は agent に渡す初期メッセージの先頭に、この行と空行を付ける。Codex が
+`$<skill>` mention を解決するのは user 入力だけで、`prompt.txt` の中身は対象外だからである。
+空文字なら従来の初期メッセージのまま変わらない。
+
 `agent_runner` が許可値以外なら **config load 時点で `ConfigLoadError`**（fail-fast）。
 `[execution]` 各 key の網羅的な仕様（型 / 既定 / 検証）の正本は
 [設定リファレンス](../reference/configuration.md#execution) を参照。

@@ -30,12 +30,14 @@ from kaji_harness.errors import (
 from kaji_harness.interactive_terminal import (
     KajiAgentPane,
     _build_tmux_split_argv,
+    _build_wrapper_command,
     _list_kaji_agent_panes,
     _pane_dead,
     _parse_kaji_pane_marker,
     _prune_kaji_agent_panes,
     _resolve_abnormal_exit_session,
     _terminal_exit_detail,
+    _wrapper_skill_invocation,
     execute_interactive_terminal,
     extract_terminal_diagnostic,
     read_terminal_diagnostic,
@@ -193,7 +195,7 @@ class TestBuildTmuxSplitArgv:
             self._argv(tmp_path, split_target_pane="%7", split_flag="-x")
 
     def test_execution_policy_is_ninth_wrapper_argument(self, tmp_path: Path) -> None:
-        """runner policy を wrapper の第 9 位置引数へ渡す。"""
+        """runner policy を wrapper の第 9 位置引数へ渡す（第 10 引数 skill_invocation は空）。"""
         argv = _build_tmux_split_argv(
             "/usr/bin/tmux",
             WRAPPER,
@@ -210,7 +212,7 @@ class TestBuildTmuxSplitArgv:
             execution_policy="sandbox",
         )
 
-        assert argv[-1].endswith("gemini-3-pro high sandbox")
+        assert argv[-1].endswith("gemini-3-pro high sandbox ''")
 
 
 @pytest.mark.small
@@ -448,7 +450,7 @@ class TestSessionIdLaunch:
         )
 
         assert result.session_id is None
-        assert self._split_command(calls).endswith("gemini-3-pro high sandbox")
+        assert self._split_command(calls).endswith("gemini-3-pro high sandbox ''")
 
     def test_codex_fresh_does_not_generate_launch_uuid(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1203,9 +1205,48 @@ class TestInteractiveTerminalInterrupt:
             )
 
 
+@pytest.mark.small
+class TestWrapperSkillInvocationArgument:
+    """Issue #408: wrapper の第 10 位置引数 ``skill_invocation``（codex のときだけ非空）。"""
+
+    def _command_argv(self, **overrides: str) -> list[str]:
+        import shlex
+
+        kwargs = {
+            "agent": "codex",
+            "prompt_path": Path("/p/prompt.txt"),
+            "verdict_path": Path("/p/verdict.yaml"),
+            "workdir": Path("/w"),
+            "resume_session_id": "",
+            "launch_session_id": "",
+            "model": "m",
+            "effort": "e",
+            "execution_policy": "auto",
+        }
+        kwargs.update(overrides)
+        return shlex.split(_build_wrapper_command(Path("/pkg/wrapper.sh"), **kwargs))  # type: ignore[arg-type]
+
+    def test_tenth_argument_is_invocation_line_for_codex(self) -> None:
+        argv = self._command_argv(skill_invocation="$review を実行してください。")
+
+        assert len(argv) == 11
+        assert argv[10] == "$review を実行してください。"
+
+    def test_tenth_argument_defaults_to_empty_string(self) -> None:
+        argv = self._command_argv(agent="claude")
+
+        assert len(argv) == 11
+        assert argv[10] == ""
+
+    def test_wrapper_skill_invocation_is_codex_only(self) -> None:
+        assert _wrapper_skill_invocation(_step("codex")) == "$issue-design を実行してください。"
+        assert _wrapper_skill_invocation(_step("claude")) == ""
+        assert _wrapper_skill_invocation(_step("antigravity")) == ""
+
+
 @pytest.mark.medium
 class TestInteractiveTerminalWrapper:
-    """Wrapper shell contract: cwd, arg order, and agent command lines (9 positions)."""
+    """Wrapper shell contract: cwd, arg order, and agent command lines (10 positions)."""
 
     def test_wrapper_syntax_is_valid(self) -> None:
         result = subprocess.run(

@@ -36,6 +36,7 @@ from .interactive_terminal import (
     _resolve_abnormal_exit_session,
     _terminal_exit_detail,
     _wrapper_path,
+    _wrapper_skill_invocation,
     read_terminal_diagnostic,
 )
 from .models import CLIResult, Step
@@ -189,6 +190,7 @@ def execute_interactive_terminal_herdr(
         effort=step.effort or "",
         execution_policy=execution_policy,
         env=env,
+        skill_invocation=_wrapper_skill_invocation(step),
     )
     try:
         launcher_path = prompt_path.parent / "herdr-launcher.sh"

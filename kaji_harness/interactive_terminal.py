@@ -53,6 +53,7 @@ from .errors import (
     TmuxSessionRequiredError,
 )
 from .models import CLIResult, Step
+from .prompt import skill_invocation_line
 
 # Issue #235: 起動コンソール向け progress logger（kaji.* 名前空間）。
 _console = logging.getLogger("kaji.interactive_terminal")
@@ -225,6 +226,15 @@ def _wrapper_path() -> Path:
     return Path(__file__).resolve().parent / "assets" / "interactive-terminal" / "wrapper.sh"
 
 
+def _wrapper_skill_invocation(step: Step) -> str:
+    """Return the wrapper's ``skill_invocation`` argument for ``step`` (Issue #408).
+
+    Only Codex resolves a ``$<skill>`` mention in the user's input, so only codex
+    gets a non-empty line. Other agents keep the legacy initial message.
+    """
+    return skill_invocation_line(step) if step.agent == "codex" else ""
+
+
 def _build_wrapper_command(
     wrapper: Path,
     *,
@@ -238,13 +248,16 @@ def _build_wrapper_command(
     effort: str,
     execution_policy: str = "auto",
     env: Mapping[str, str] | None = None,
+    skill_invocation: str = "",
 ) -> str:
     """Build the single shell command tmux runs in the new pane.
 
     ``split-window`` takes one command argument, so the wrapper argv is
-    shell-quoted with ``shlex.join``. The 9 wrapper arguments follow the
+    shell-quoted with ``shlex.join``. The 10 wrapper arguments follow the
     Wrapper 契約 order exactly: ``agent prompt_path verdict_path workdir
-    resume_session_id launch_session_id model effort execution_policy``.
+    resume_session_id launch_session_id model effort execution_policy
+    skill_invocation``. ``skill_invocation`` (Issue #408) is the codex ``$<skill>``
+    line prepended to the agent's initial message; it is empty for other agents.
 
     A tmux pane inherits the tmux server's environment, not kaji's, so ``env``
     (Issue #407) is delivered by prefixing ``env K=V ...`` to the command. The
@@ -265,6 +278,7 @@ def _build_wrapper_command(
             model,
             effort,
             execution_policy,
+            skill_invocation,
         ]
     )
 
@@ -285,6 +299,7 @@ def _build_tmux_split_argv(
     effort: str,
     execution_policy: str = "auto",
     env: Mapping[str, str] | None = None,
+    skill_invocation: str = "",
 ) -> list[str]:
     """Assemble the ``tmux split-window`` argv.
 
@@ -327,6 +342,7 @@ def _build_tmux_split_argv(
             effort=effort,
             execution_policy=execution_policy,
             env=env,
+            skill_invocation=skill_invocation,
         ),
     ]
 
@@ -427,6 +443,7 @@ def execute_interactive_terminal(
         effort=step.effort or "",
         execution_policy=execution_policy,
         env=env,
+        skill_invocation=_wrapper_skill_invocation(step),
     )
     pane_id = launch.pane_id
     # Issue #235: pane 起動成功直後に起動コンソールへ progress を出す。
@@ -615,6 +632,7 @@ def _launch_pane(
     effort: str,
     execution_policy: str,
     env: Mapping[str, str] | None = None,
+    skill_invocation: str = "",
 ) -> _PaneLaunch:
     """Place and launch one agent pane, returning its id and placement metadata.
 
@@ -654,6 +672,7 @@ def _launch_pane(
         effort=effort,
         execution_policy=execution_policy,
         env=env,
+        skill_invocation=skill_invocation,
     )
     proc = subprocess.run(argv, text=True, capture_output=True, check=False, cwd=workdir)
     if proc.returncode != 0:

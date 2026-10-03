@@ -12,9 +12,9 @@ from .errors import (
     SkillNotFound,
     WorkflowValidationError,
 )
-from .models import Workflow
-from .skill import SkillMetadata, load_skill_metadata, validate_skill_exists
-from .workflow import load_workflow, validate_workflow
+from .models import Step, Workflow
+from .skill import CODEX_SKILL_DIR, SkillMetadata, load_skill_metadata, validate_skill_exists
+from .workflow import load_workflow, resolve_step_workdir, validate_workflow
 
 SkillExistsValidator = Callable[[str, Path, str], Path]
 SkillMetadataLoader = Callable[[str, Path, str], SkillMetadata]
@@ -93,6 +93,12 @@ def preflight_workflow(
                 "not declare 'exec_script' in its frontmatter; either set "
                 "'agent' on the step or add 'exec_script' to the skill"
             )
+        if step.agent == "codex" and metadata.exec_script is None:
+            codex_error = _codex_discovery_error(
+                step, workflow, project_root, skill_exists_validator=validate_exists
+            )
+            if codex_error is not None:
+                errors.append(codex_error)
         if metadata.exec_script is not None and (
             step.agent is not None or step.model is not None or step.effort is not None
         ):
@@ -107,6 +113,48 @@ def preflight_workflow(
         errors=errors,
         warnings=warnings,
     )
+
+
+def _codex_discovery_error(
+    step: Step,
+    workflow: Workflow,
+    project_root: Path,
+    *,
+    skill_exists_validator: SkillExistsValidator,
+) -> str | None:
+    """Return an error when Codex cannot resolve the step's ``$<skill>`` mention.
+
+    Codex resolves a mention from ``<workdir>/.agents/skills``. A missing skill
+    there is silently treated as plain text (fail-open), so kaji checks it
+    before launching Codex. The root is the step's effective workdir, the same
+    directory Codex is started in.
+
+    Args:
+        step: Codex step whose skill already passed the canonical check.
+        workflow: Workflow the step belongs to.
+        project_root: Fallback workdir root.
+        skill_exists_validator: Skill path validator (traversal / escape / existence).
+
+    Returns:
+        A one-line error message, or None when the skill is discoverable or the
+        effective workdir is not a string (reported separately by L1 validation).
+    """
+    assert step.skill is not None
+    raw_workdir: object = step.workdir or workflow.workdir
+    if raw_workdir is not None and not isinstance(raw_workdir, str):
+        # validate_workflow() already reported the schema error for hand-built workflows.
+        return None
+    codex_root = resolve_step_workdir(step, workflow, project_root)
+    try:
+        skill_exists_validator(step.skill, codex_root, CODEX_SKILL_DIR)
+    except (SkillNotFound, SecurityError) as exc:
+        return (
+            f"Step '{step.id}' uses agent 'codex' but skill '{step.skill}' is not "
+            f"discoverable by Codex: {exc}. Codex resolves `${step.skill}` from "
+            f"<workdir>/{CODEX_SKILL_DIR}; add {CODEX_SKILL_DIR}/{step.skill} "
+            f"(e.g. a symlink to the canonical skill directory)."
+        )
+    return None
 
 
 def preflight_workflow_path(
