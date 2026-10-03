@@ -1190,3 +1190,31 @@ class TestExecuteCLIAttemptDeadline:
 
         assert time.monotonic() - started < 20
         assert exc_info.value.timeout == 1800
+
+    def test_elapsed_deadline_raises_without_spawning(self, tmp_path: Path) -> None:
+        """期限切れ後は subprocess を起動せず StepTimeoutError を送出する。"""
+        import time
+
+        step = Step(
+            id="late-step", skill="test-skill", agent="claude", timeout=1800, on={"PASS": "end"}
+        )
+
+        with (
+            patch("kaji_harness.cli.build_cli_args", return_value=["true"]),
+            patch("kaji_harness.cli.subprocess.Popen") as popen,
+            pytest.raises(StepTimeoutError) as exc_info,
+        ):
+            execute_cli(
+                step=step,
+                prompt="p",
+                workdir=tmp_path,
+                session_id=None,
+                log_dir=tmp_path / "logs",
+                execution_policy="auto",
+                verbose=False,
+                default_timeout=1800,
+                deadline_monotonic=time.monotonic() - 0.1,
+            )
+
+        popen.assert_not_called()
+        assert exc_info.value.timeout == 1800

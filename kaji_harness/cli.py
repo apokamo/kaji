@@ -233,6 +233,11 @@ def _execute_cli_once(
     adapter = ADAPTERS[step.agent]
     timeout = step.timeout if step.timeout is not None else default_timeout
 
+    if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+        # Issue #421: prompt 生成などで attempt の期限を使い切った場合は CLI を起動しない。
+        # 起動後に 0 秒 timer で kill しても、期限後に副作用が走りうるため。
+        raise StepTimeoutError(step.id, timeout)
+
     try:
         process = subprocess.Popen(
             args,
