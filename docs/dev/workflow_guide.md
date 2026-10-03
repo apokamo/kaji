@@ -393,6 +393,14 @@ review-ready → start → baseline（script step）→ change → review-change
 - 影響範囲を説明できる
 - 既存検証または局所的な回帰テストで確認できる
 - 通常の revert で戻せる
+- `### ワークフロー完了後の確認項目` を除く完了条件に、dev-small で満たせない項目がない
+
+「dev-small で満たせない項目」は、充足の証拠または充足範囲の定義が、dev-small にない工程の成果物
+（設計書・設計レビュー結果・Pre-Handoff Review 報告・final-check 報告）を前提とする完了条件を指す。
+issue-create テンプレート（`issue-feat.md`）由来の「設計書作成」「テスト作成（設計書のテスト戦略に従い S/M/L を網羅）」や、
+「影響ドキュメントの更新（設計書『影響ドキュメント』セクション参照）」のように範囲を設計書で定める項目が該当する。
+「`make check` 通過」「〜のテストを追加」「特定 docs の同期」など、実 diff・dev-small 自身の検証で照合できる項目は該当しない。
+判定に迷う項目は ABORT 側に倒す。
 
 | 区分 | 具体例 |
 |------|--------|
@@ -433,6 +441,14 @@ kaji run .kaji/wf/custom/dev/dev-small.yaml 431 --from review-change
 kaji run .kaji/wf/official/dev.yaml 431              # 標準 dev で初めから
 kaji run .kaji/wf/custom/dev/dev-small.yaml 431      # 原因を解消して dev-small で初めから
 ```
+
+完了条件に dev-small で満たせない項目が残っている不整合（§ dev-small の適用条件）は、次のとおり検出して ABORT する。
+
+- `change` は実装前の適用判定（Step 2）で検出し、方針・編集・commit に進まず ABORT する
+- `review-change` / `verify-change` は、他の blocking finding の有無に関係なく RETRY より優先して ABORT する
+  （同時に見つかった finding は ABORT 報告に併記する）。`verify-change` の確認範囲の限定はこの検査に適用しない
+- いずれも Issue 本文の項目を書き換え・削除・チェックしない。人間が、該当項目を dev-small に合わせて本文から変更するか、
+  標準 dev に切り替えるかを決める
 
 `session-state.json` の cycle 消費回数は Issue 単位で持ち越される。dev-small の cycle 名（`small-*`）は `official/dev.yaml` と
 重ならないため、標準 dev でのやり直しには影響しない。dev-small 自体を再実行した場合は exhaust 済み cycle が入口で再び停止する。
