@@ -253,6 +253,9 @@ suggestion: |
 | `step_id` | str | 現在のステップ ID |
 | `design_path` | str | 設計書の repository 相対パス。`[paths].design_dir`（未設定時は legacy default `draft/design`）配下の `issue-<id>-<slug>.md`（Issue #397） |
 | `verdict_path` | str | 当該 attempt の `verdict.yaml` 絶対パス（Issue #220）。スキルはここへ pure YAML の verdict を保存する。exec_script 経路では env `KAJI_VERDICT_PATH` として注入される |
+| `step_timeout_seconds` | int | この attempt に適用される step timeout（秒）。解決済みの値（step → workflow → config）（Issue #421。agent step のみ） |
+| `attempt_started_at_utc` | str | attempt 開始時刻。ISO 8601 UTC（`2026-10-03T04:27:28Z`）、秒未満切り捨て（Issue #421） |
+| `attempt_deadline_utc` | str | この attempt の hard deadline。同形式・秒未満切り捨て（実 deadline 以前の保守側）。延長されない（Issue #421） |
 | `previous_verdict` | str | 前ステップの verdict 要約（resume ステップ等） |
 | `cycle_count` | int | 現在のサイクルイテレーション（サイクル内ステップのみ） |
 | `max_iterations` | int | サイクルの上限回数（サイクル内ステップのみ） |
@@ -260,6 +263,23 @@ suggestion: |
 スキルは設計書の置き場所を固定 path として直書きせず、注入された `[design_path]` を参照する（`kaji config design-dir` で directory のみ取得することもできる）。
 
 `previous_verdict` は `resume` 指定ステップに注入される。`review-code` のように独立評価が必要なステップには注入されない。修正系スキルでは、詳細なレビュー内容は Issue コメントを正とし、`previous_verdict` は補助的な要約として扱う。
+
+## 実行期限と期限前 checkpoint
+
+agent step の prompt には `## 実行期限` 節と上記 3 変数が入る（Issue #421）。hard deadline は延長されず、
+到達時点で `verdict_path` が未保存なら harness が session を終了する（[workflow-authoring.md](workflow-authoring.md)
+§ timeout と attempt deadline）。長時間処理を行う skill は次を守る。
+
+- 長時間処理の開始前と主要フェーズの境界で `date -u +%Y-%m-%dT%H:%M:%SZ` により残時間を確認し、
+  commit・コメント・verdict 保存に充てる予備時間 R を残して切り上げる。変数がない（手動実行）場合は適用しない
+- 期限前 checkpoint でも verdict-last を守る: 外部副作用（commit・Issue コメント）を完了してから最後に
+  `verdict_path` を保存する。status は prompt の status 候補（`step.on` のキー）に含まれるものだけを使い、
+  候補にない status を出力しない。checkpoint 手順の中で RETRY の意味づけをするのは skill 側で、共通 prompt は
+  RETRY の意味づけをしない（RETRY の遷移先は step ごとに異なる）
+- self-RETRY で次 attempt に引き継ぐ場合、cycle 上限（`max_iterations`）を迂回しない。上限回避のために
+  status を偽らない。進捗のない checkpoint の繰り返しや、どの attempt でも収まらない処理は RETRY にせず
+  人間判断（ABORT / 設計起因なら BACK）に回す
+- 具体例: `.claude/skills/issue-implement/SKILL.md` Step 1.5
 
 ## GitHub Issue の活用
 

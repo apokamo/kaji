@@ -7,12 +7,14 @@ injection, and previous_verdict handling.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from kaji_harness.cli import build_cli_args
+from kaji_harness.deadline import AttemptDeadline
 from kaji_harness.models import CycleDefinition, Step, Verdict, Workflow
 from kaji_harness.prompt import build_prompt, skill_invocation_line
 from kaji_harness.providers import PRContext
@@ -507,6 +509,92 @@ class TestVerdictPathInjection:
         assert "- verdict_path:" not in prompt
         # placeholder で契約はレンダリングされる
         assert "[verdict_path]" in prompt
+
+
+# ============================================================
+# Attempt deadline (Issue #421)
+# ============================================================
+
+
+def _deadline(timeout: int, started_at: datetime) -> AttemptDeadline:
+    return AttemptDeadline(timeout_seconds=timeout, started_at=started_at, started_monotonic=1000.0)
+
+
+def _prompt_with_deadline(step: Step, deadline: AttemptDeadline | None) -> str:
+    return build_prompt(
+        step,
+        issue="42",
+        state=_make_state(issue="42"),
+        workflow=_make_workflow(steps=[step]),
+        issue_context=make_issue_context(issue_id="42"),
+        verdict_path="/tmp/v.yaml",
+        attempt_deadline=deadline,
+    )
+
+
+@pytest.mark.small
+class TestAttemptDeadlineInjection:
+    """prompt が attempt の timeout 秒数と UTC 絶対 deadline を表示する（Issue #421）。"""
+
+    def test_reproduces_incident_393_timeout_visible_in_prompt(self) -> None:
+        """OB: timeout=6000 の implement prompt に timeout / deadline が出なかった。"""
+        step = Step(
+            id="implement",
+            skill="issue-implement",
+            agent="codex",
+            timeout=6000,
+            on={"PASS": "end", "RETRY": "implement", "ABORT": "end"},
+        )
+        started = datetime(2026, 10, 3, 4, 27, 28, 987654, tzinfo=UTC)
+
+        prompt = _prompt_with_deadline(step, _deadline(6000, started))
+
+        assert "- step_timeout_seconds: 6000" in prompt
+        assert "- attempt_started_at_utc: 2026-10-03T04:27:28Z" in prompt
+        assert "- attempt_deadline_utc: 2026-10-03T06:07:28Z" in prompt
+
+    def test_subsecond_is_truncated_toward_earlier_deadline(self) -> None:
+        started = datetime(2026, 10, 3, 4, 27, 28, 999999, tzinfo=UTC)
+
+        prompt = _prompt_with_deadline(_make_step(), _deadline(60, started))
+
+        assert "- attempt_deadline_utc: 2026-10-03T04:28:28Z" in prompt
+
+    def test_deadline_section_present_before_output_requirements(self) -> None:
+        started = datetime(2026, 10, 3, 4, 27, 28, tzinfo=UTC)
+
+        prompt = _prompt_with_deadline(_make_step(), _deadline(6000, started))
+
+        assert "## 実行期限" in prompt
+        assert "2026-10-03T06:07:28Z" in prompt.split("## 実行期限")[1].split("## 出力要件")[0]
+        assert prompt.index("## 実行期限") < prompt.index("## 出力要件")
+        assert "date -u +%Y-%m-%dT%H:%M:%SZ" in prompt
+
+    def test_none_omits_variables_and_section(self) -> None:
+        prompt = _prompt_with_deadline(_make_step(), None)
+
+        assert "step_timeout_seconds" not in prompt
+        assert "attempt_started_at_utc" not in prompt
+        assert "attempt_deadline_utc" not in prompt
+        assert "## 実行期限" not in prompt
+
+    def test_tiny_timeout_is_rendered(self) -> None:
+        started = datetime(2026, 10, 3, 23, 59, 59, tzinfo=UTC)
+
+        prompt = _prompt_with_deadline(_make_step(), _deadline(1, started))
+
+        assert "- step_timeout_seconds: 1" in prompt
+        assert "- attempt_deadline_utc: 2026-10-04T00:00:00Z" in prompt
+
+    def test_section_does_not_recommend_status_outside_candidates(self) -> None:
+        """on に RETRY がない step の prompt に RETRY が現れない。"""
+        step = _make_step(on={"PASS": "end", "ABORT": "end"})
+        started = datetime(2026, 10, 3, 4, 27, 28, tzinfo=UTC)
+
+        prompt = _prompt_with_deadline(step, _deadline(6000, started))
+
+        assert "RETRY" not in prompt
+        assert "status: PASS | ABORT" in prompt
 
 
 # ============================================================

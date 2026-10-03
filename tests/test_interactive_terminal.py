@@ -2276,3 +2276,113 @@ class TestInteractiveTerminalEndToEnd:
             subprocess.run(
                 [tmux, "-L", socket, "kill-server"], capture_output=True, text=True, check=False
             )
+
+
+@pytest.mark.medium
+class TestTmuxAttemptDeadline:
+    """runner から渡された deadline_monotonic を tmux backend が使う（Issue #421）。"""
+
+    class _Clock:
+        def __init__(self, start: float) -> None:
+            self.now = start
+
+        def monotonic(self) -> float:
+            return self.now
+
+        def sleep(self, seconds: float) -> None:
+            self.now += seconds
+
+    def _env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%7")
+
+    def test_expired_deadline_does_not_launch_pane(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        prompt = tmp_path / "prompt.txt"
+        prompt.write_text("prompt", encoding="utf-8")
+        self._env(monkeypatch)
+        calls: list[list[str]] = []
+        clock = self._Clock(500.0)
+
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=_make_fake_tmux(calls=calls)),
+            patch("kaji_harness.interactive_terminal.time.monotonic", clock.monotonic),
+            pytest.raises(StepTimeoutError) as excinfo,
+        ):
+            execute_interactive_terminal(
+                step=_step("claude"),
+                prompt_path=prompt,
+                verdict_path=tmp_path / "verdict.yaml",
+                workdir=tmp_path,
+                timeout=600,
+                deadline_monotonic=499.0,
+            )
+
+        assert not any(call[:2] == ["/usr/bin/tmux", "split-window"] for call in calls)
+        assert excinfo.value.session_resolution is None
+        assert excinfo.value.timeout == 600
+
+    def test_deadline_reached_after_launch_times_out_with_session_resolution(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        prompt = tmp_path / "prompt.txt"
+        prompt.write_text("prompt", encoding="utf-8")
+        self._env(monkeypatch)
+        calls: list[list[str]] = []
+        clock = self._Clock(100.0)
+
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=_make_fake_tmux(calls=calls)),
+            patch("kaji_harness.interactive_terminal.time.monotonic", clock.monotonic),
+            patch("kaji_harness.interactive_terminal.time.sleep", clock.sleep),
+            patch(
+                "kaji_harness.interactive_terminal.uuid.uuid4",
+                return_value=uuid.UUID("11111111-1111-4111-8111-111111111111"),
+            ),
+            pytest.raises(StepTimeoutError) as excinfo,
+        ):
+            execute_interactive_terminal(
+                step=_step("claude"),
+                prompt_path=prompt,
+                verdict_path=tmp_path / "verdict.yaml",
+                workdir=tmp_path,
+                timeout=6000,
+                deadline_monotonic=103.0,
+            )
+
+        # attempt deadline（103）が timeout（6000）より優先され、期限で打ち切られる。
+        assert clock.now < 200.0
+        assert excinfo.value.timeout == 6000
+        assert excinfo.value.session_resolution == SessionResolution(
+            "11111111-1111-4111-8111-111111111111"
+        )
+        assert ["/usr/bin/tmux", "kill-pane", "-t", "%99"] in calls
+        assert (tmp_path / "pane-metadata.json").is_file()
+
+    def test_none_keeps_timeout_based_deadline(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        prompt = tmp_path / "prompt.txt"
+        prompt.write_text("prompt", encoding="utf-8")
+        self._env(monkeypatch)
+        clock = self._Clock(0.0)
+
+        with (
+            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch.object(subprocess, "run", side_effect=_make_fake_tmux()),
+            patch("kaji_harness.interactive_terminal.time.monotonic", clock.monotonic),
+            patch("kaji_harness.interactive_terminal.time.sleep", clock.sleep),
+            pytest.raises(StepTimeoutError),
+        ):
+            execute_interactive_terminal(
+                step=_step("claude"),
+                prompt_path=prompt,
+                verdict_path=tmp_path / "verdict.yaml",
+                workdir=tmp_path,
+                timeout=3,
+            )
+
+        assert clock.now >= 3.0

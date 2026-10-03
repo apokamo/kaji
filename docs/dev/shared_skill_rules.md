@@ -49,6 +49,14 @@ AI の仮定は provenance で区別する。記述を補えば直る不備は `
 固定する。後続 3 skill は無人 workflow 内でその決定を検査・伝播し、新たな人間判断を
 代行しない。
 
+## 実行期限と checkpoint（共通）
+
+agent step の hard deadline は延長されず、prompt のコンテキスト変数 `attempt_deadline_utc` /
+`step_timeout_seconds` で確認できる（Issue #421）。長時間処理を行う skill は残時間を確認し、期限内に
+完了できない場合は外部副作用を完了してから最後に verdict を保存する。status は prompt の status 候補内に限る。
+規則の書き方は [skill-authoring.md](skill-authoring.md) § 実行期限と期限前 checkpoint を参照する。
+設計段階の長時間 acceptance の配置規則は `issue-design` / `issue-review-design` が持つ。
+
 ## verdict 永続化（共通）
 
 すべての workflow スキルは作業完了時に verdict を **artifact `verdict.yaml`（primary）+ 作業報告 Issue comment 末尾の `---VERDICT---` block（fallback）+ stdout（互換）** の 3 経路で残す（Issue #220）。harness は `verdict_path`（exec_script では env `KAJI_VERDICT_PATH`）で保存先 attempt の絶対パスを注入し、解決順は artifact → comment → stdout（exec / exec_script step は comment を見ず artifact → stdout のみ。Issue #449）。verdict 専用コメントは新設せず、既存の作業報告コメント末尾に block を追記するだけでよい。詳細・YAML 例・stdout 段階廃止方針は [skill-authoring.md](skill-authoring.md) § verdict 出力規約 を参照。

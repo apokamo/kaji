@@ -5,9 +5,20 @@ Builds prompts with context variables for CLI execution.
 
 from __future__ import annotations
 
+from datetime import datetime
+
+from .deadline import AttemptDeadline
 from .models import Step, Workflow
 from .providers import IssueContext, PRContext
 from .state import SessionState
+
+
+def _format_utc(moment: datetime) -> str:
+    """UTC の時刻を秒未満切り捨ての ISO 8601 ``Z`` 表記にする。
+
+    切り捨てにより、表示される deadline は実際の hard deadline 以前（保守側）になる。
+    """
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def skill_invocation_line(step: Step) -> str:
@@ -39,6 +50,7 @@ def build_prompt(
     *,
     pr_context: PRContext | None = None,
     verdict_path: str | None = None,
+    attempt_deadline: AttemptDeadline | None = None,
 ) -> str:
     """ステップ実行用のプロンプトを構築する。
 
@@ -60,6 +72,10 @@ def build_prompt(
         verdict_path: Issue #220。当該 attempt の ``verdict.yaml`` 絶対パス。
             runner は常に渡す。``None`` の場合は ``[verdict_path]`` placeholder で
             出力要件をレンダリングする（直接呼び出し / legacy 互換）。
+        attempt_deadline: Issue #421。当該 attempt の hard deadline。runner は agent
+            step で常に渡し、hard deadline の計算元と同一の値を prompt に表示する。
+            ``None`` の場合は timeout / deadline のコンテキスト変数と ``## 実行期限`` 節を
+            出力しない（直接呼び出し / legacy 互換）。
 
     Returns:
         CLI に渡すプロンプト文字列
@@ -86,6 +102,11 @@ def build_prompt(
     if verdict_path is not None:
         variables["verdict_path"] = verdict_path
 
+    if attempt_deadline is not None:
+        variables["step_timeout_seconds"] = attempt_deadline.timeout_seconds
+        variables["attempt_started_at_utc"] = _format_utc(attempt_deadline.started_at)
+        variables["attempt_deadline_utc"] = _format_utc(attempt_deadline.deadline_at)
+
     # サイクル変数（サイクル内ステップのみ）
     cycle = workflow.find_cycle_for_step(step.id)
     if cycle:
@@ -103,6 +124,16 @@ def build_prompt(
     header = "\n".join(f"- {k}: {v}" for k, v in variables.items())
     status_choices = " | ".join(valid_statuses)
     verdict_target = verdict_path if verdict_path is not None else "[verdict_path]"
+    deadline_section = ""
+    if attempt_deadline is not None:
+        deadline_section = f"""## 実行期限
+この attempt の hard deadline は {variables["attempt_deadline_utc"]}（UTC）です（timeout {attempt_deadline.timeout_seconds} 秒）。延長されません。到達時点で `{verdict_target}` が未保存なら、harness が session を終了し `StepTimeoutError` として記録します。
+
+- 長時間処理の開始前と主要フェーズの境界で `date -u +%Y-%m-%dT%H:%M:%SZ` を実行し、残時間を確認する
+- 処理・外部副作用・verdict 保存まで deadline 内に完了できない処理を開始しない
+- 期限内に完了できない場合の手順と status は skill の規則に従い、下記の status 候補以外を出力しない: {status_choices}
+
+"""
 
     return f"""{skill_invocation_line(step)}
 
@@ -115,7 +146,7 @@ def build_prompt(
 ## コンテキスト変数
 {header}
 
-## 出力要件
+{deadline_section}## 出力要件
 作業完了後、以下を必ず実施してください。
 `{verdict_target}` は harness の完了トリガです。Issue comment 投稿など、この step の外部副作用がすべて完了するまで保存してはいけません。
 

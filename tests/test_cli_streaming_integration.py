@@ -1045,3 +1045,176 @@ class TestTerminalEventBreak:
                     verbose=False,
                     default_timeout=1800,
                 )
+
+
+_TRANSIENT_STDERR = "service is at capacity; try again"
+
+
+class _RetryClock:
+    """Fake monotonic clock + sleep spy for the transient retry budget."""
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = start
+        self.slept: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+@pytest.mark.medium
+class TestExecuteCLIAttemptDeadline:
+    """headless の transient retry は attempt deadline の残時間内に限る（Issue #421）。"""
+
+    def _call(self, tmp_path: Path, deadline_monotonic: float | None) -> object:
+        step = Step(id="test", skill="test-skill", agent="claude", on={"PASS": "end"})
+        return execute_cli(
+            step=step,
+            prompt="p",
+            workdir=tmp_path,
+            session_id=None,
+            log_dir=tmp_path / "logs",
+            execution_policy="auto",
+            verbose=False,
+            default_timeout=6000,
+            deadline_monotonic=deadline_monotonic,
+        )
+
+    def test_remaining_not_greater_than_backoff_skips_sleep_and_restart(
+        self, tmp_path: Path
+    ) -> None:
+        clock = _RetryClock()
+        error = CLIExecutionError("test", 1, _TRANSIENT_STDERR)
+
+        with (
+            patch("kaji_harness.cli._execute_cli_once", side_effect=error) as once,
+            patch("kaji_harness.cli.time.monotonic", clock.monotonic),
+            patch("kaji_harness.cli.time.sleep", clock.sleep),
+            pytest.raises(CLIExecutionError) as exc_info,
+        ):
+            # 残り 30 秒 = 最初の backoff（30 秒）と同じ → 待機しても再起動できない。
+            self._call(tmp_path, deadline_monotonic=clock.now + 30.0)
+
+        assert exc_info.value is error
+        assert clock.slept == []
+        assert once.call_count == 1
+
+    def test_budget_spent_during_backoff_skips_restart(self, tmp_path: Path) -> None:
+        clock = _RetryClock()
+        error = CLIExecutionError("test", 1, _TRANSIENT_STDERR)
+
+        def sleep_and_overrun(seconds: float) -> None:
+            clock.sleep(seconds)
+            clock.now += 100.0  # 待機中に予算を使い切る（wall clock のずれ等）
+
+        with (
+            patch("kaji_harness.cli._execute_cli_once", side_effect=error) as once,
+            patch("kaji_harness.cli.time.monotonic", clock.monotonic),
+            patch("kaji_harness.cli.time.sleep", sleep_and_overrun),
+            pytest.raises(CLIExecutionError) as exc_info,
+        ):
+            self._call(tmp_path, deadline_monotonic=clock.now + 31.0)
+
+        assert exc_info.value is error
+        assert clock.slept == [30.0]
+        assert once.call_count == 1
+
+    def test_enough_remaining_still_retries_and_succeeds(self, tmp_path: Path) -> None:
+        clock = _RetryClock()
+        sentinel = object()
+
+        with (
+            patch(
+                "kaji_harness.cli._execute_cli_once",
+                side_effect=[CLIExecutionError("test", 1, _TRANSIENT_STDERR), sentinel],
+            ) as once,
+            patch("kaji_harness.cli.time.monotonic", clock.monotonic),
+            patch("kaji_harness.cli.time.sleep", clock.sleep),
+        ):
+            result = self._call(tmp_path, deadline_monotonic=clock.now + 600.0)
+
+        assert result is sentinel
+        assert clock.slept == [30.0]
+        assert once.call_count == 2
+        assert once.call_args.kwargs["deadline_monotonic"] == 1600.0
+
+    def test_none_keeps_legacy_backoff_regardless_of_clock(self, tmp_path: Path) -> None:
+        clock = _RetryClock()
+        sentinel = object()
+
+        with (
+            patch(
+                "kaji_harness.cli._execute_cli_once",
+                side_effect=[CLIExecutionError("test", 1, _TRANSIENT_STDERR), sentinel],
+            ),
+            patch("kaji_harness.cli.time.monotonic", clock.monotonic),
+            patch("kaji_harness.cli.time.sleep", clock.sleep),
+        ):
+            result = self._call(tmp_path, deadline_monotonic=None)
+
+        assert result is sentinel
+        assert clock.slept == [30.0]
+
+    def test_timer_kills_at_remaining_time_and_reports_configured_timeout(
+        self, tmp_path: Path
+    ) -> None:
+        """timer 秒数は設定 timeout ではなく deadline までの残時間。"""
+        import time
+
+        script = tmp_path / "slow_cli.sh"
+        script.write_text("#!/bin/bash\nexec sleep 60\n")
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        step = Step(
+            id="slow-step", skill="test-skill", agent="claude", timeout=1800, on={"PASS": "end"}
+        )
+
+        started = time.monotonic()
+        with (
+            patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]),
+            pytest.raises(StepTimeoutError) as exc_info,
+        ):
+            execute_cli(
+                step=step,
+                prompt="p",
+                workdir=tmp_path,
+                session_id=None,
+                log_dir=tmp_path / "logs",
+                execution_policy="auto",
+                verbose=False,
+                default_timeout=1800,
+                deadline_monotonic=started + 1.0,
+            )
+
+        assert time.monotonic() - started < 20
+        assert exc_info.value.timeout == 1800
+
+    def test_elapsed_deadline_raises_without_spawning(self, tmp_path: Path) -> None:
+        """期限切れ後は subprocess を起動せず StepTimeoutError を送出する。"""
+        import time
+
+        step = Step(
+            id="late-step", skill="test-skill", agent="claude", timeout=1800, on={"PASS": "end"}
+        )
+
+        with (
+            patch("kaji_harness.cli.build_cli_args", return_value=["true"]),
+            patch("kaji_harness.cli.subprocess.Popen") as popen,
+            pytest.raises(StepTimeoutError) as exc_info,
+        ):
+            execute_cli(
+                step=step,
+                prompt="p",
+                workdir=tmp_path,
+                session_id=None,
+                log_dir=tmp_path / "logs",
+                execution_policy="auto",
+                verbose=False,
+                default_timeout=1800,
+                deadline_monotonic=time.monotonic() - 0.1,
+            )
+
+        popen.assert_not_called()
+        assert exc_info.value.timeout == 1800

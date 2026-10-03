@@ -359,6 +359,7 @@ def execute_interactive_terminal(
     close_on_verdict: bool = True,
     execution_policy: str = "auto",
     env: Mapping[str, str] | None = None,
+    deadline_monotonic: float | None = None,
 ) -> CLIResult:
     """Start a real interactive CLI in a tmux pane and wait for ``verdict.yaml``.
 
@@ -379,6 +380,10 @@ def execute_interactive_terminal(
         env: Variables set for the agent process (Issue #407). Delivered by an
             ``env K=V ...`` command prefix because the pane does not inherit
             kaji's environment. ``None`` adds nothing.
+        deadline_monotonic: Absolute ``time.monotonic()`` hard deadline of the
+            attempt (Issue #421). The runner computes it once at attempt start so
+            it matches the deadline shown in the prompt. ``None`` falls back to
+            ``time.monotonic() + timeout`` measured after the pane launch.
 
     Returns:
         ``CLIResult(full_output="", session_id=<resolved id or None>)``.
@@ -389,7 +394,8 @@ def execute_interactive_terminal(
         CLIExecutionError: ``split-window`` failed, ``list-panes`` failed, the
             kaji marker could not be set, or the pane died before writing
             ``verdict.yaml``.
-        StepTimeoutError: ``verdict.yaml`` did not appear before the deadline.
+        StepTimeoutError: ``verdict.yaml`` did not appear before the deadline, or
+            ``deadline_monotonic`` had already passed before the pane launch.
         ValueError: ``step.agent`` is missing or unsupported.
         FileNotFoundError: ``prompt.txt`` or the wrapper script is missing.
     """
@@ -406,6 +412,7 @@ def execute_interactive_terminal(
             close_on_verdict=close_on_verdict,
             execution_policy=execution_policy,
             env=env,
+            deadline_monotonic=deadline_monotonic,
         )
     if step.agent is None:
         raise ValueError(f"interactive terminal runner requires step.agent (step={step.id})")
@@ -428,6 +435,11 @@ def execute_interactive_terminal(
     # Claude fresh runs need a runner-generated UUID so resume can reuse it.
     # Resume runs and Codex (which mints its own id) pass an empty marker.
     launch_session_id = str(uuid.uuid4()) if step.agent == "claude" and session_id is None else ""
+
+    if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+        # Issue #421: attempt の期限を preflight で使い切った場合は pane を起動しない。
+        # pane も agent session も存在しないため session 解決は試みない。
+        raise StepTimeoutError(step.id, timeout, session_resolution=None)
 
     launch = _launch_pane(
         tmux,
@@ -474,7 +486,7 @@ def execute_interactive_terminal(
     if not close_on_verdict:
         _set_remain_on_exit(tmux, pane_id)
 
-    deadline = time.monotonic() + timeout
+    deadline = deadline_monotonic if deadline_monotonic is not None else time.monotonic() + timeout
     try:
         while time.monotonic() < deadline:
             if verdict_path.is_file():

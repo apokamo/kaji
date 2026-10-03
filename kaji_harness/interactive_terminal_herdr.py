@@ -19,7 +19,7 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, NoReturn, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -53,6 +53,15 @@ _HERDR_COMMAND_TIMEOUT_SECONDS = 10
 _HERDR_LAUNCHER_START_TIMEOUT_SECONDS = 10
 _HERDR_LAUNCHER_START_POLL_INTERVAL_SECONDS = 0.1
 _HERDR_LAUNCHER_STARTED_FILENAME = "herdr-launcher-started"
+
+
+class _AttemptDeadlineReachedError(Exception):
+    """The attempt deadline passed while waiting for the Herdr launcher to start.
+
+    Internal signal (Issue #421): distinguishes an attempt-budget exhaustion from a
+    launcher failure (``CLIExecutionError``, exit 124) so the caller can route it through
+    the regular timeout path.
+    """
 
 
 class _HerdrResultEnvelope(BaseModel):
@@ -118,6 +127,7 @@ def execute_interactive_terminal_herdr(
     close_on_verdict: bool = True,
     execution_policy: str = "auto",
     env: Mapping[str, str] | None = None,
+    deadline_monotonic: float | None = None,
 ) -> CLIResult:
     """Start an interactive agent in a Herdr pane and wait for ``verdict.yaml``.
 
@@ -132,6 +142,10 @@ def execute_interactive_terminal_herdr(
         execution_policy: Workflow execution policy passed to the wrapper.
         env: Variables set for the agent process (Issue #407), delivered through the
             ``env K=V ...`` prefix of the wrapper command. ``None`` adds nothing.
+        deadline_monotonic: Absolute ``time.monotonic()`` hard deadline of the attempt
+            (Issue #421), computed once by the runner so it matches the deadline shown in
+            the prompt. ``None`` falls back to ``time.monotonic() + timeout`` measured
+            after the launcher start confirmation.
 
     Returns:
         Empty-output CLI result with the resolved provider session ID.
@@ -140,7 +154,8 @@ def execute_interactive_terminal_herdr(
         CLINotFoundError: Herdr is missing or its version is unsupported.
         HerdrSessionRequiredError: Caller context is not an explicit Herdr pane.
         CLIExecutionError: A Herdr operation fails or the agent exits early.
-        StepTimeoutError: The verdict artifact does not appear before timeout.
+        StepTimeoutError: The verdict artifact does not appear before timeout, or the
+            attempt deadline was consumed before the pane launch / launcher start.
         ValueError: The step has no supported agent.
         FileNotFoundError: The prompt or packaged wrapper is missing.
     """
@@ -149,6 +164,11 @@ def execute_interactive_terminal_herdr(
     wrapper = _wrapper_path()
     if not wrapper.is_file():
         raise FileNotFoundError(f"interactive terminal wrapper not found: {wrapper}")
+
+    if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+        # Issue #421: attempt の期限を preflight で使い切った場合は pane を起動しない。
+        # pane も agent session も存在しないため session 解決は試みない。
+        raise StepTimeoutError(step.id, timeout, session_resolution=None)
 
     run_id = str(uuid.uuid4())
     launch_session_id = str(uuid.uuid4()) if step.agent == "claude" and session_id is None else ""
@@ -192,6 +212,7 @@ def execute_interactive_terminal_herdr(
         env=env,
         skill_invocation=_wrapper_skill_invocation(step),
     )
+    launcher_budget_exhausted = False
     try:
         launcher_path = prompt_path.parent / "herdr-launcher.sh"
         pane_command = _materialize_herdr_launcher(
@@ -203,7 +224,12 @@ def execute_interactive_terminal_herdr(
             herdr,
             pane_id,
             _herdr_launcher_started_path(launcher_path),
+            attempt_deadline=deadline_monotonic,
         )
+    except _AttemptDeadlineReachedError:
+        # launcher 固有の失敗ではなく attempt の期限消費。verdict 待ちループの timeout
+        # 経路と同じ後処理（snapshot / session 解決 / pane close / metadata）へ進む。
+        launcher_budget_exhausted = True
     except CLIExecutionError:
         pane_read = _capture_herdr_snapshot(herdr, pane_id, terminal_log)
         close_error = _close_owned_herdr_pane_best_effort(
@@ -227,6 +253,25 @@ def execute_interactive_terminal_herdr(
         )
         raise
 
+    if launcher_budget_exhausted:
+        _raise_step_timeout(
+            herdr,
+            step=step,
+            timeout=timeout,
+            pane_id=pane_id,
+            origin_pane=origin_pane,
+            run_id=run_id,
+            herdr_version=herdr_version,
+            metadata_path=metadata_path,
+            terminal_log=terminal_log,
+            prompt_path=prompt_path,
+            verdict_path=verdict_path,
+            session_id=session_id,
+            launch_session_id=launch_session_id,
+            close_on_verdict=close_on_verdict,
+            layout=launch,
+        )
+
     _console.info(
         "pane launched: step=%s agent=%s pane=%s timeout=%ds verdict=%s backend=herdr",
         step.id,
@@ -236,7 +281,7 @@ def execute_interactive_terminal_herdr(
         verdict_path,
     )
 
-    deadline = time.monotonic() + timeout
+    deadline = deadline_monotonic if deadline_monotonic is not None else time.monotonic() + timeout
     shell_only_observations = 0
     process_info: dict[str, object] | None = None
     try:
@@ -342,6 +387,52 @@ def execute_interactive_terminal_herdr(
             _console.warning("orphan pane metadata snapshot failed: %s", exc)
         raise
 
+    _raise_step_timeout(
+        herdr,
+        step=step,
+        timeout=timeout,
+        pane_id=pane_id,
+        origin_pane=origin_pane,
+        run_id=run_id,
+        herdr_version=herdr_version,
+        metadata_path=metadata_path,
+        terminal_log=terminal_log,
+        prompt_path=prompt_path,
+        verdict_path=verdict_path,
+        session_id=session_id,
+        launch_session_id=launch_session_id,
+        close_on_verdict=close_on_verdict,
+        layout=launch,
+    )
+
+
+def _raise_step_timeout(
+    herdr: str,
+    *,
+    step: Step,
+    timeout: int,
+    pane_id: str,
+    origin_pane: str,
+    run_id: str,
+    herdr_version: str,
+    metadata_path: Path,
+    terminal_log: Path,
+    prompt_path: Path,
+    verdict_path: Path,
+    session_id: str | None,
+    launch_session_id: str,
+    close_on_verdict: bool,
+    layout: HerdrPaneLaunch,
+) -> NoReturn:
+    """Run the timeout cleanup (snapshot, session resolution, pane close) and raise.
+
+    Shared by the verdict-wait loop and the launcher start wait so that an attempt
+    deadline reached in either place yields the same ``StepTimeoutError`` (Issue #403 /
+    #421). The session is resolved once, before the pane is closed.
+
+    Raises:
+        StepTimeoutError: Always.
+    """
     pane_read = _capture_herdr_snapshot(herdr, pane_id, terminal_log)
     resolved = _resolve_abnormal_exit_session(
         cast(str, step.agent),
@@ -368,7 +459,7 @@ def execute_interactive_terminal_herdr(
         pane_read=pane_read,
         terminal_log=terminal_log,
         close_error=close_error,
-        layout=launch,
+        layout=layout,
     )
     raise StepTimeoutError(step.id, timeout, session_resolution=resolved)
 
@@ -881,23 +972,42 @@ def _herdr_launcher_started_path(launcher_path: Path) -> Path:
     return launcher_path.with_name(_HERDR_LAUNCHER_STARTED_FILENAME)
 
 
-def _wait_for_herdr_launcher_start(herdr: str, pane_id: str, started_path: Path) -> None:
+def _wait_for_herdr_launcher_start(
+    herdr: str,
+    pane_id: str,
+    started_path: Path,
+    *,
+    attempt_deadline: float | None = None,
+) -> None:
     """Wait boundedly for proof that the dispatched launcher executed.
 
     Shell-only observations before the marker are startup state, not agent exit. Process
     information is sampled only to make timeout diagnostics actionable; the atomically
     published filesystem marker is the start authority.
 
+    The wait is capped by ``min(launcher limit, attempt_deadline)`` (Issue #421). When the
+    attempt deadline comes first the attempt budget is spent, which is not a launcher
+    failure, so ``_AttemptDeadlineReachedError`` is raised instead.
+
     Raises:
-        CLIExecutionError: The marker does not appear within the bounded wait.
+        CLIExecutionError: The marker does not appear within the launcher's own limit.
+        _AttemptDeadlineReachedError: The attempt deadline passed before the marker
+            appeared and before the launcher's own limit.
     """
-    deadline = time.monotonic() + _HERDR_LAUNCHER_START_TIMEOUT_SECONDS
+    launcher_deadline = time.monotonic() + _HERDR_LAUNCHER_START_TIMEOUT_SECONDS
+    attempt_first = attempt_deadline is not None and attempt_deadline <= launcher_deadline
+    limit = (
+        attempt_deadline if attempt_first and attempt_deadline is not None else launcher_deadline
+    )
     while True:
         if started_path.is_file():
             return
-        if time.monotonic() >= deadline:
+        now = time.monotonic()
+        if now >= limit:
             break
-        time.sleep(_HERDR_LAUNCHER_START_POLL_INTERVAL_SECONDS)
+        time.sleep(min(_HERDR_LAUNCHER_START_POLL_INTERVAL_SECONDS, limit - now))
+    if attempt_first:
+        raise _AttemptDeadlineReachedError
 
     last_process_state: str
     try:

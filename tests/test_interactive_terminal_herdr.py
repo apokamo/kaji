@@ -23,6 +23,7 @@ from kaji_harness.interactive_terminal_herdr import (
     HerdrManagedPane,
     HerdrPaneLaunch,
     HerdrPaneRead,
+    _AttemptDeadlineReachedError,
     _build_herdr_marker_argv,
     _build_herdr_split_argv,
     _capture_herdr_snapshot,
@@ -2028,3 +2029,273 @@ def test_stateful_fake_herdr_executable_lifecycle(
     assert metadata["marker_confirmed"] is True
     assert metadata["transcript_revision"] == 7
     assert metadata["transcript_truncated"] is None
+
+
+# ============================================================
+# Issue #421: attempt deadline
+# ============================================================
+
+_HERDR = "kaji_harness.interactive_terminal_herdr"
+
+
+class _FakeClock:
+    """Deterministic monotonic clock whose ``sleep`` advances time."""
+
+    def __init__(self, start: float = 0.0) -> None:
+        self.now = start
+        self.slept: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+_LAUNCH = HerdrPaneLaunch(
+    pane_id="w1:p2",
+    split_target_pane="w1:p1",
+    direction="right",
+    panes_before=[],
+    panes_pruned=[],
+)
+
+
+@pytest.mark.small
+class TestLauncherStartWaitAttemptDeadline:
+    """launcher 開始待ちは min(launcher 上限, attempt deadline) で打ち切られる。"""
+
+    def test_attempt_deadline_first_raises_internal_signal(self, tmp_path: Path) -> None:
+        clock = _FakeClock(100.0)
+        with (
+            patch(f"{_HERDR}.time.monotonic", clock.monotonic),
+            patch(f"{_HERDR}.time.sleep", clock.sleep),
+            patch(f"{_HERDR}._get_herdr_process_info") as process_info,
+            pytest.raises(_AttemptDeadlineReachedError),
+        ):
+            _wait_for_herdr_launcher_start(
+                "/usr/bin/herdr",
+                "w1:p2",
+                tmp_path / "herdr-launcher-started",
+                attempt_deadline=103.0,
+            )
+
+        assert sum(clock.slept) == pytest.approx(3.0)
+        assert clock.now == pytest.approx(103.0)
+        process_info.assert_not_called()
+
+    def test_launcher_limit_first_keeps_launcher_failure(self, tmp_path: Path) -> None:
+        clock = _FakeClock(100.0)
+        shell_only = {"shell_pid": 100, "foreground_processes": [{"pid": 100}]}
+        with (
+            patch(f"{_HERDR}.time.monotonic", clock.monotonic),
+            patch(f"{_HERDR}.time.sleep", clock.sleep),
+            patch(f"{_HERDR}._get_herdr_process_info", return_value=shell_only),
+            pytest.raises(CLIExecutionError, match="start confirmation timed out") as exc_info,
+        ):
+            _wait_for_herdr_launcher_start(
+                "/usr/bin/herdr",
+                "w1:p2",
+                tmp_path / "herdr-launcher-started",
+                attempt_deadline=100.0 + 1000.0,
+            )
+
+        assert exc_info.value.returncode == 124
+        assert sum(clock.slept) == pytest.approx(10.0)
+
+    def test_none_keeps_independent_ten_second_wait(self, tmp_path: Path) -> None:
+        clock = _FakeClock(0.0)
+        with (
+            patch(f"{_HERDR}.time.monotonic", clock.monotonic),
+            patch(f"{_HERDR}.time.sleep", clock.sleep),
+            patch(f"{_HERDR}._get_herdr_process_info", return_value={}),
+            pytest.raises(CLIExecutionError, match="start confirmation timed out"),
+        ):
+            _wait_for_herdr_launcher_start(
+                "/usr/bin/herdr", "w1:p2", tmp_path / "herdr-launcher-started"
+            )
+
+        assert sum(clock.slept) == pytest.approx(10.0)
+
+    def test_marker_before_attempt_deadline_returns(self, tmp_path: Path) -> None:
+        started_path = tmp_path / "herdr-launcher-started"
+        clock = _FakeClock(0.0)
+
+        def sleep_then_publish(seconds: float) -> None:
+            clock.sleep(seconds)
+            started_path.write_text("1\n", encoding="utf-8")
+
+        with (
+            patch(f"{_HERDR}.time.monotonic", clock.monotonic),
+            patch(f"{_HERDR}.time.sleep", sleep_then_publish),
+        ):
+            _wait_for_herdr_launcher_start(
+                "/usr/bin/herdr", "w1:p2", started_path, attempt_deadline=5.0
+            )
+
+
+@pytest.mark.medium
+class TestExecuteHerdrAttemptDeadline:
+    """runner から渡された deadline_monotonic を Herdr backend が使う。"""
+
+    def _run(
+        self,
+        tmp_path: Path,
+        *,
+        deadline_monotonic: float | None,
+        agent: str = "codex",
+        launcher_wait_side_effect: BaseException | None = None,
+        clock: _FakeClock | None = None,
+        timeout: int = 30,
+    ) -> dict[str, object]:
+        prompt_path = tmp_path / "prompt.txt"
+        prompt_path.write_text("do work", encoding="utf-8")
+        step = Step(id="design", skill="design", agent=agent)
+        clock = clock or _FakeClock(0.0)
+        recorded: dict[str, object] = {}
+        with (
+            patch(
+                f"{_HERDR}._preflight_herdr",
+                return_value=("/usr/bin/herdr", "w1:p1", "herdr 0.8.2"),
+            ),
+            patch(f"{_HERDR}._launch_herdr_pane", return_value=_LAUNCH) as launch,
+            patch(f"{_HERDR}._mark_herdr_pane"),
+            patch(f"{_HERDR}._run_herdr_pane_command"),
+            patch(
+                f"{_HERDR}._wait_for_herdr_launcher_start",
+                side_effect=launcher_wait_side_effect,
+            ) as wait,
+            patch(f"{_HERDR}._get_herdr_process_info", return_value={}),
+            patch(f"{_HERDR}._classify_herdr_process_liveness", return_value="running"),
+            patch(f"{_HERDR}._capture_herdr_snapshot", return_value=None) as capture,
+            patch(f"{_HERDR}._close_owned_herdr_pane", return_value=True) as close,
+            patch(f"{_HERDR}.time.monotonic", clock.monotonic),
+            patch(f"{_HERDR}.time.sleep", clock.sleep),
+            patch(f"{_HERDR}.uuid.uuid4", return_value="run-id"),
+        ):
+            try:
+                execute_interactive_terminal_herdr(
+                    step=step,
+                    prompt_path=prompt_path,
+                    verdict_path=tmp_path / "verdict.yaml",
+                    workdir=tmp_path,
+                    timeout=timeout,
+                    deadline_monotonic=deadline_monotonic,
+                )
+            except StepTimeoutError as exc:
+                recorded["error"] = exc
+            recorded.update(launch=launch, wait=wait, capture=capture, close=close, clock=clock)
+        return recorded
+
+    def test_expired_deadline_does_not_launch_pane(self, tmp_path: Path) -> None:
+        clock = _FakeClock(500.0)
+
+        recorded = self._run(tmp_path, deadline_monotonic=499.0, clock=clock)
+
+        recorded["launch"].assert_not_called()  # type: ignore[attr-defined]
+        error = recorded["error"]
+        assert isinstance(error, StepTimeoutError)
+        assert error.session_resolution is None
+        assert error.timeout == 30
+
+    def test_deadline_reached_after_launch_times_out_with_session_resolution(
+        self, tmp_path: Path
+    ) -> None:
+        clock = _FakeClock(0.0)
+
+        recorded = self._run(tmp_path, deadline_monotonic=2.0, clock=clock)
+
+        error = recorded["error"]
+        assert isinstance(error, StepTimeoutError)
+        assert error.session_resolution == SessionResolution(None)
+        # attempt deadline（2.0）が timeout(30) より優先される。
+        assert clock.now < 30
+        recorded["close"].assert_called_once()  # type: ignore[attr-defined]
+        assert (tmp_path / "pane-metadata.json").is_file()
+
+    def test_launcher_wait_receives_attempt_deadline(self, tmp_path: Path) -> None:
+        recorded = self._run(tmp_path, deadline_monotonic=2.0)
+
+        wait = recorded["wait"]
+        assert wait.call_args.kwargs["attempt_deadline"] == 2.0  # type: ignore[attr-defined]
+
+    def test_attempt_deadline_in_launcher_wait_takes_timeout_path(self, tmp_path: Path) -> None:
+        recorded = self._run(
+            tmp_path,
+            deadline_monotonic=5.0,
+            launcher_wait_side_effect=_AttemptDeadlineReachedError(),
+        )
+
+        error = recorded["error"]
+        assert isinstance(error, StepTimeoutError)
+        assert error.session_resolution == SessionResolution(None)
+        recorded["capture"].assert_called_once()  # type: ignore[attr-defined]
+        recorded["close"].assert_called_once()  # type: ignore[attr-defined]
+        metadata = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
+        assert metadata["marker_confirmed"] is True
+
+    def test_fresh_claude_launcher_budget_exhaustion_carries_launch_session(
+        self, tmp_path: Path
+    ) -> None:
+        prompt_path = tmp_path / "prompt.txt"
+        prompt_path.write_text("do work", encoding="utf-8")
+        step = Step(id="design", skill="design", agent="claude")
+        with (
+            patch(
+                f"{_HERDR}._preflight_herdr",
+                return_value=("/usr/bin/herdr", "w1:p1", "herdr 0.8.2"),
+            ),
+            patch(f"{_HERDR}._launch_herdr_pane", return_value=_LAUNCH),
+            patch(f"{_HERDR}._mark_herdr_pane"),
+            patch(f"{_HERDR}._run_herdr_pane_command"),
+            patch(
+                f"{_HERDR}._wait_for_herdr_launcher_start",
+                side_effect=_AttemptDeadlineReachedError(),
+            ),
+            patch(f"{_HERDR}._capture_herdr_snapshot", return_value=None),
+            patch(f"{_HERDR}._close_owned_herdr_pane", return_value=True),
+            patch(f"{_HERDR}.uuid.uuid4", side_effect=["run-id", "launch-session-id"]),
+            patch(f"{_HERDR}.time.monotonic", return_value=0.0),
+            pytest.raises(StepTimeoutError) as exc_info,
+        ):
+            execute_interactive_terminal_herdr(
+                step=step,
+                prompt_path=prompt_path,
+                verdict_path=tmp_path / "verdict.yaml",
+                workdir=tmp_path,
+                timeout=30,
+                deadline_monotonic=5.0,
+            )
+
+        assert exc_info.value.session_resolution == SessionResolution("launch-session-id")
+
+    def test_none_keeps_timeout_based_deadline(self, tmp_path: Path) -> None:
+        clock = _FakeClock(0.0)
+
+        recorded = self._run(tmp_path, deadline_monotonic=None, clock=clock, timeout=3)
+
+        assert isinstance(recorded["error"], StepTimeoutError)
+        assert clock.now >= 3
+
+
+@pytest.mark.small
+class TestTmuxEntryForwardsDeadlineToHerdr:
+    def test_deadline_monotonic_is_forwarded(self, tmp_path: Path) -> None:
+        from kaji_harness.interactive_terminal import execute_interactive_terminal
+
+        step = Step(id="design", skill="design", agent="codex")
+        with patch(
+            "kaji_harness.interactive_terminal_herdr.execute_interactive_terminal_herdr"
+        ) as herdr_entry:
+            execute_interactive_terminal(
+                step=step,
+                prompt_path=tmp_path / "prompt.txt",
+                verdict_path=tmp_path / "verdict.yaml",
+                workdir=tmp_path,
+                timeout=30,
+                backend="herdr",
+                deadline_monotonic=1234.5,
+            )
+
+        assert herdr_entry.call_args.kwargs["deadline_monotonic"] == 1234.5
