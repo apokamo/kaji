@@ -258,10 +258,17 @@ class TestHerdrCommandContract:
                 "kaji_harness.interactive_terminal_herdr.os.replace",
                 side_effect=OSError("publish failed"),
             ),
-            patch.object(Path, "unlink", side_effect=OSError("cleanup failed")),
-            pytest.raises(CLIExecutionError, match="publish failed"),
+            patch.object(Path, "unlink", side_effect=OSError("cleanup failed")) as unlink,
+            pytest.raises(CLIExecutionError, match="Herdr launcher creation failed") as exc_info,
         ):
             _materialize_herdr_launcher(launcher_path, "/wrapper codex")
+
+        # str(exc) is truncated to 200 chars, so inspect stderr / __cause__ instead of the message.
+        unlink.assert_called_once()
+        assert "publish failed" in exc_info.value.stderr
+        assert "cleanup failed" not in exc_info.value.stderr
+        assert isinstance(exc_info.value.__cause__, OSError)
+        assert str(exc_info.value.__cause__) == "publish failed"
 
     def test_launcher_start_wait_ignores_shell_only_until_marker(self, tmp_path: Path) -> None:
         started_path = tmp_path / "herdr-launcher-started"
