@@ -480,7 +480,11 @@ def _build_codex_args(
         case "auto":
             args.append("--dangerously-bypass-approvals-and-sandbox")
         case "sandbox":
-            args += ["-s", "workspace-write"]
+            # `codex exec resume` は -s/--sandbox を受け付けず、元 session の sandbox も引き継がない
+            if session_id:
+                args += ["-c", 'sandbox_mode="workspace-write"']
+            else:
+                args += ["-s", "workspace-write"]
     args.append(prompt)
     return args
 

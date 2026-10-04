@@ -616,7 +616,7 @@ producer は PASS を出さず `ABORT`（`evidence unavailable`）、consumer �
 | ストリーミング | `--output-format stream-json --verbose` | `--json` | plain stdout |
 | セッション resume | `--resume <session_id>` | `resume <thread_id>` | 非対応（validation で拒否） |
 | 承認バイパス (auto) | `--permission-mode bypassPermissions` | `--dangerously-bypass-approvals-and-sandbox` | `--dangerously-skip-permissions` |
-| sandbox | agent default | `-s workspace-write` | `--sandbox` |
+| sandbox | agent default | 新規: `-s workspace-write` / resume: `-c sandbox_mode="workspace-write"` | `--sandbox` |
 | モデル指定 | `--model` | `-m` | `--model` |
 | token / cost | 対応 | token 対応 | 非対応 |
 
