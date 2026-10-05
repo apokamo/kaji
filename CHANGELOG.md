@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-05
+
+This release adds configurable design document paths and attempt-local temporary
+directories, binds automated review approval to a PR's head commit, and fixes
+workflow execution and Codex resume issues.
+
 ### BREAKING CHANGE
 
 - **A codex step now requires `<workdir>/.agents/skills/<skill>/SKILL.md`**
@@ -16,8 +22,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **Broken contract**: a repository that ran codex steps without
     `.agents/skills` (Codex found the skill by searching files) now fails
     preflight.
-  - **Migration**: add `.agents/skills/<skill>` as a symlink to the canonical
-    skill directory, e.g. `.agents/skills/review -> ../../.claude/skills/review`.
+  - **How to check whether you are affected**: run `kaji validate
+    <workflow.yaml>` for each workflow with codex steps. A missing
+    `<workdir>/.agents/skills/<skill>/SKILL.md` preflight error identifies an
+    affected workflow.
+  - **Migration**: for an uncustomized skill layout, copy the current skill
+    links. Otherwise add `.agents/skills/<skill>` as a symlink to the canonical
+    skill directory for each codex step, e.g. `.agents/skills/review ->
+    ../../.claude/skills/review`. Check the effective workdir of each step;
+    see #408 / PR #462 and `docs/dev/skill-authoring.md`.
+
+### Added
+
+- Added `[paths].design_dir` to configure where design documents live, with
+  path validation, provider propagation, and `kaji config design-dir` for
+  inspection. The default remains `draft/design` (#397).
+- Added an attempt-specific directory under `tmp/kaji/` and injected
+  `KAJI_TMP_DIR`, `TMPDIR`, `TMP`, and `TEMP` into exec, script, headless, tmux,
+  and Herdr steps (#407).
+- Bound `review-poll` approval to the current PR head SHA and saved structured
+  PASS evidence for `issue-close` to verify. Head changes or ambiguous evidence
+  now prevent approval (#429).
 
 ### Changed
 
@@ -31,6 +56,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   investigation. kaji's own repository now runs with the default label names
   (its `[incident]` override and the old-name `.github/labels.yml` entries are
   gone).
+- The `dev-small` change step now aborts before implementation when the Issue's
+  completion criteria cannot be met by that workflow. Its review and verify
+  steps apply the same check (#444).
 
 ### Fixed
 
@@ -41,6 +69,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `skill_invocation`). Claude and Antigravity prompts are unchanged (#408).
 - Added the missing `.agents/skills/review` symlink so the `review` step of
   kaji's own workflows is discoverable by Codex (#408).
+- Scoped verdict comment fallback to the current agent step. `exec` and
+  `exec_script` steps no longer use comment fallback, so a prior step's comment
+  cannot supply their verdict (#449).
+- Applied one attempt deadline across prompts and headless, tmux, and Herdr
+  execution, including retries and launcher waits (#421).
+- Fixed Codex sandbox-policy resume to pass `-c sandbox_mode` because
+  `codex exec resume` does not accept `-s`; new sessions still use `-s` (#458).
 
 ### Docs
 
@@ -48,6 +83,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   default names, with detection, in-place rename commands, ordering notes for
   label-sync automation, and recovery steps (#457; see
   `docs/dev/incident-labels.md` § 旧名からの移行手順).
+
+### Internal
+
+- Made the Herdr launcher cleanup regression test reliable with long temporary
+  paths (#465).
 
 ## [0.21.0] - 2026-10-01
 

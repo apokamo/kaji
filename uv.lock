@@ -191,7 +191,7 @@ wheels = [
 
 [[package]]
 name = "kaji"
-version = "0.21.0"
+version = "0.22.0"
 source = { editable = "." }
 dependencies = [
     { name = "jq" },
