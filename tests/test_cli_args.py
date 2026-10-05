@@ -196,6 +196,27 @@ class TestCodexArgs:
         assert "-s" in args
         assert "workspace-write" in args
 
+    @pytest.mark.small
+    def test_execution_policy_sandbox_resume(self, workdir: Path) -> None:
+        """Sandbox resume uses -c sandbox_mode because codex exec resume rejects -s."""
+        step = _make_step("codex")
+        args = build_cli_args(
+            step, "do stuff", workdir, session_id="thread-456", execution_policy="sandbox"
+        )
+        assert "-s" not in args
+        assert "--sandbox" not in args
+        idx = args.index('sandbox_mode="workspace-write"')
+        assert args[idx - 1] == "-c"
+
+    @pytest.mark.small
+    def test_execution_policy_auto_resume(self, workdir: Path) -> None:
+        """Auto policy resume keeps dangerously-bypass flag."""
+        step = _make_step("codex")
+        args = build_cli_args(
+            step, "do stuff", workdir, session_id="thread-456", execution_policy="auto"
+        )
+        assert "--dangerously-bypass-approvals-and-sandbox" in args
+
 
 # ==========================================
 # Antigravity args
