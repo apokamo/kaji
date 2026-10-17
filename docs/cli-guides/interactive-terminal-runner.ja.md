@@ -66,12 +66,15 @@ config 値と CLI のどちらも `tmux` ではない場合（tracked の `"tmux
 WARNING: the tmux interactive terminal backend is deprecated and will be removed in a subsequent kaji release. tmux is selected by: interactive_terminal_backend = "tmux" in /path/repo/.kaji/config.toml. Migrate to Herdr (...) or to the headless runner (...). Remove or change the value in that file: ... See docs/cli-guides/interactive-terminal-runner.md#tmux-backend-deprecation
 ```
 
-workflow を実行せずに確認するには、両方の config ファイルとスクリプトを検索する。
+workflow を実行せずに影響候補を探すには、両方の config ファイルとスクリプトを検索する。
+検索は補助的な方法であり、引用符・空白・動的に組み立てた引数によって見逃すことがある。
+ヒットしないだけでは影響なしと断定できない。普段の設定と引数を使った `kaji run` が config 読み込みと
+CLI override 適用まで進んだ際の警告で、その実効設定への影響を確認する。
 
 ```bash
 grep -nE 'interactive_terminal_backend *= *"tmux"|agent_runner *= *"interactive_terminal"' \
   .kaji/config.toml .kaji/config.local.toml
-grep -rn -- '--interactive-terminal-backend tmux' <your-scripts>
+grep -rnE -- '--interactive-terminal-backend[ =]+tmux|--agent-runner[ =]+interactive-terminal' <your-scripts>
 ```
 
 ### 削除時に変わること

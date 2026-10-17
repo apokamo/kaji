@@ -155,9 +155,8 @@ WARNING: the tmux interactive terminal backend is deprecated and will be removed
   環境の自動検出、公開中の managed starter の更新
 - **依存**: 新規ライブラリなし。`kaji_harness/config.py`（`ExecutionConfig` / `_parse_execution`）と
   `kaji_harness/commands/run.py`（`cmd_run` / `_apply_execution_overrides`）に閉じる
-- **#474 との並行**: #474 は interactive terminal 内部（`interactive_terminal*.py`）の整理であり、本 Issue の変更ファイル
-  （`config.py` / `commands/run.py` / 該当テスト / docs）と重ならない。docs の interactive guide は双方が触れる可能性があるため、
-  後に merge する側が rebase で解消する
+- **#474 との関係**: #474 の interactive terminal 共用処理分離は、基点 `a2bf9a2` に含まれる `f05ccbb` で完了済み。
+  本 Issue は分離済みの構成を前提とし、`interactive_terminal*.py` の内部構成は変更しない
 
 ## 変更スコープ
 
@@ -301,8 +300,11 @@ Large テストは早期終了する `kaji run` の subprocess（1 回あたり�
     `WARNING: the tmux interactive terminal backend is deprecated` in the
     stderr of `kaji run`, or run
     `grep -nE 'interactive_terminal_backend *= *"tmux"|agent_runner *= *"interactive_terminal"' .kaji/config.toml .kaji/config.local.toml`
-    and check scripts for `--interactive-terminal-backend tmux`. No warning
-    and no hits means you are not affected.
+    and check scripts for `--interactive-terminal-backend tmux` and
+    `--agent-runner interactive-terminal`. These searches only identify
+    candidates: quoting, spacing, or dynamically built arguments may hide
+    matches. Use the warning from a representative `kaji run` that reaches
+    config loading and CLI override application to confirm its effective settings.
   - **How to migrate**: either switch to Herdr (install Herdr, set
     `interactive_terminal_backend = "herdr"`, and run `kaji run` inside a
     Herdr pane) or use the headless runner (`agent_runner = "headless"`). In

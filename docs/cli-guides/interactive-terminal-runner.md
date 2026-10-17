@@ -75,12 +75,16 @@ file a config error would name), the CLI option, or the built-in default.
 WARNING: the tmux interactive terminal backend is deprecated and will be removed in a subsequent kaji release. tmux is selected by: interactive_terminal_backend = "tmux" in /path/repo/.kaji/config.toml. Migrate to Herdr (...) or to the headless runner (...). Remove or change the value in that file: ... See docs/cli-guides/interactive-terminal-runner.md#tmux-backend-deprecation
 ```
 
-To check without running a workflow, search both config files and your scripts:
+To identify candidates without running a workflow, search both config files and your scripts.
+These searches are only a heuristic: quoting, spacing, or dynamically built arguments may hide
+matches. No hits alone does not establish that you are unaffected. Use the warning from a
+representative `kaji run` that reaches config loading and CLI override application to confirm
+its effective settings:
 
 ```bash
 grep -nE 'interactive_terminal_backend *= *"tmux"|agent_runner *= *"interactive_terminal"' \
   .kaji/config.toml .kaji/config.local.toml
-grep -rn -- '--interactive-terminal-backend tmux' <your-scripts>
+grep -rnE -- '--interactive-terminal-backend[ =]+tmux|--agent-runner[ =]+interactive-terminal' <your-scripts>
 ```
 
 ### What changes at removal
