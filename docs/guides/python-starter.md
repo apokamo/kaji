@@ -135,6 +135,14 @@ The default runner is `headless` and needs no tmux. If you switch
 session** with **tmux 3.1 or newer**. See the
 [Interactive Terminal Runner guide](../cli-guides/interactive-terminal-runner.md).
 
+> [!WARNING]
+> The tmux backend is deprecated and will be removed in a subsequent kaji release. Migrate to
+> Herdr (`interactive_terminal_backend = "herdr"`, run kaji inside a Herdr pane) or keep the
+> `headless` runner. Fix the `[execution]` table in **both** `.kaji/config.toml` and
+> `.kaji/config.local.toml`: remove `interactive_terminal_backend = "tmux"` from either file.
+> `kaji run` prints a deprecation warning to stderr while tmux is in use or explicitly configured.
+> See [tmux backend deprecation](../cli-guides/interactive-terminal-runner.md#tmux-backend-deprecation).
+
 ## 3. Development flow
 
 ### 3.1 One lap of the workflow
@@ -309,7 +317,7 @@ here.
 | Setup changes (config / rename / `uv.lock`) show up in your first feature PR | Initial setup was left uncommitted when the workflow ran, and skills self-repaired it inside the worktree | Rename → `uv sync` → `make check` → commit to `main` **before** the first run ([§ 1](#1-create-a-repository-from-the-starter) step 4) |
 | A step dies at agent launch, or the model is rejected | The agent CLI named in the YAML is not installed, or the model / effort does not match your environment | Install the CLI or convert with `uv run python scripts/set_agent.py <cli>` |
 | `review-poll` keeps polling and never progresses | You switched to the review-poll configuration but `chatgpt-codex-connector[bot]` is not installed on the repo | Install the Codex GitHub connector, or revert to the default `review` step (see § 5) |
-| Interactive terminal runner fails to start panes | Running outside a tmux session, or tmux is older than 3.1 | Start a tmux session first, upgrade tmux, or keep the default `headless` runner |
+| Interactive terminal runner fails to start panes | Running outside a tmux session, or tmux is older than 3.1 | Start a tmux session first, upgrade tmux, or keep the default `headless` runner. tmux is deprecated: prefer migrating to Herdr or headless ([tmux backend deprecation](../cli-guides/interactive-terminal-runner.md#tmux-backend-deprecation)) |
 | `issue-close` aborts, warning about untracked files | A stray log file sits in the repository root (e.g. a redirected `kaji run ... > run.log`) and trips the close safety guard | No redirect is needed — full logs are already in `.kaji/artifacts/<issue>/runs/<ts>/`. If you must keep stdout, write it outside the repo (or a gitignored `tmp/`) |
 
 ## Related documents

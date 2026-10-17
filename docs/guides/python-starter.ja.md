@@ -127,6 +127,14 @@ pane に表示）へ切り替える場合は、**tmux 3.1 以上**の **tmux セ
 kaji を実行する必要がある。詳細は
 [Interactive Terminal Runner ガイド](../cli-guides/interactive-terminal-runner.md)。
 
+> [!WARNING]
+> tmux backend は非推奨で、後続の kaji リリースで削除される。Herdr（`interactive_terminal_backend = "herdr"`、
+> Herdr pane 内で kaji を実行）へ移行するか、`headless` runner を使う。`.kaji/config.toml` と
+> `.kaji/config.local.toml` の**両方**の `[execution]` を確認し、どちらかにある
+> `interactive_terminal_backend = "tmux"` を削除する。tmux を使っている間、または明示設定している間は
+> `kaji run` が stderr に非推奨の警告を出す。詳細は
+> [tmux backend deprecation](../cli-guides/interactive-terminal-runner.ja.md#tmux-backend-deprecation)。
+
 ## 3. 開発の進め方
 
 ### 3.1 workflow の 1 周
@@ -294,7 +302,7 @@ starter template 側の追随は starter リポジトリで扱い、本ガイド
 | セットアップ変更（config / rename / `uv.lock`）が最初の feature PR に混入する | 初期セットアップを未 commit のまま workflow を回し、skill が worktree 内で自己修復した | rename → `uv sync` → `make check` → commit を初回実行**前**に済ませる（[§ 1](#1-starter-から-repository-を作る) 手順 4） |
 | step が agent 起動時に落ちる、model が拒否される | YAML が指定する agent CLI が未インストール、または model / effort が手元環境と不一致 | CLI をインストールするか `uv run python scripts/set_agent.py <cli>` で寄せ替える |
 | `review-poll` が polling し続けて進まない | review-poll 構成へ書き換えたが `chatgpt-codex-connector[bot]` が repo に未導入 | Codex GitHub connector を導入するか、既定の `review` step 構成へ戻す（§ 5 参照） |
-| interactive terminal runner の pane が起動しない | tmux セッション外で実行している、または tmux が 3.1 未満 | tmux セッションを先に開始する、tmux を更新する、または既定の `headless` runner を使う |
+| interactive terminal runner の pane が起動しない | tmux セッション外で実行している、または tmux が 3.1 未満 | tmux セッションを先に開始する、tmux を更新する、または既定の `headless` runner を使う。tmux は非推奨のため、Herdr か headless への移行を推奨（[tmux backend deprecation](../cli-guides/interactive-terminal-runner.ja.md#tmux-backend-deprecation)） |
 | `issue-close` が未追跡ファイルを警告して ABORT する | repo 直下に stray なログファイル（例: `kaji run ... > run.log` のリダイレクト）があり、close の安全ガードが検知した | リダイレクトは不要 — 完全ログは `.kaji/artifacts/<issue>/runs/<ts>/` に残っている。stdout を残すなら repo 外（または gitignored な `tmp/`）へ |
 
 ## 関連ドキュメント

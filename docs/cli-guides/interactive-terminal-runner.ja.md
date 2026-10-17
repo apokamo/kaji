@@ -8,7 +8,8 @@ Antigravity（`agy`）
 `verdict.yaml` を書いたら、kaji は artifact-primary 経路（[ADR 005](../adr/005-artifact-primary-verdict.md)）
 で verdict を読み、次 step へ進む。
 
-`interactive_terminal_backend = "tmux"`が既定。`"herdr"`を明示するとrelease-matched Herdr CLIと
+`interactive_terminal_backend = "tmux"`が既定だが、tmux backend は非推奨で後続リリースで削除される
+（[tmux backend deprecation](#tmux-backend-deprecation)）。`"herdr"`を明示するとrelease-matched Herdr CLIと
 明示pane IDを使う。どちらも選択したterminal session内で`kaji run`を起動し、runnerがpaneを
 追加して agent を起動するため、ディスプレイ無し環境（WSL2 / SSH / headless）でも `kaji run` の出力と
 agent を同一画面で並列に見られる。pane 配置は **初回のみ origin pane の右、2枚目以降は右列内の上下
@@ -33,11 +34,75 @@ agent を同一画面で並列に見られる。pane 配置は **初回のみ or
 `agent_runner` 未指定時は既存の `headless` runner が使われる。既存 workflow / CI の挙動は
 変わらない。
 
+## tmux backend deprecation
+
+tmux backend は**非推奨**で、後続の kaji リリースで削除される（Issue #475、親 Issue #466）。
+interactive terminal backend は Herdr だけになり、headless runner は残る。現行リリースでは tmux は
+従来どおり動作する。
+
+### 影響を受けるかの判定
+
+次のいずれかに当てはまると、`kaji run` は
+`WARNING: the tmux interactive terminal backend is deprecated` で始まる 1 行の警告を stderr に
+1 プロセス 1 回だけ出す。
+
+- CLI override 適用後の実効 runner が `interactive_terminal` で、実効 backend が `tmux`（明示指定でも
+  built-in default でも）。
+- `.kaji/config.toml` と `.kaji/config.local.toml` の per-key マージ後の `interactive_terminal_backend`
+  が `"tmux"` で、どちらかのファイルが明示的に定義している。runner や CLI override に関係なく警告する。
+  削除後はこの値が `--agent-runner headless` や `--interactive-terminal-backend herdr` を付けても
+  config 読み込みエラーになるため。
+- `--interactive-terminal-backend tmux` を指定した。
+
+backend をどこにも設定せずに headless で実行している場合や、実効 backend が `herdr` でマージ後の
+config 値と CLI のどちらも `tmux` ではない場合（tracked の `"tmux"` が `config.local.toml` の
+`"herdr"` で上書きされている場合を含む）は警告しない。stdout・終了コード・run artifact は変わらない。
+`kaji issue` / `kaji pr` / `kaji config` などの他コマンドは警告しない。
+
+警告には tmux の出所（マージ後の値を定義している config ファイル。config エラーが示すのと同じ
+ファイル）、CLI option、または built-in default が載る。
+
+```text
+WARNING: the tmux interactive terminal backend is deprecated and will be removed in a subsequent kaji release. tmux is selected by: interactive_terminal_backend = "tmux" in /path/repo/.kaji/config.toml. Migrate to Herdr (...) or to the headless runner (...). Remove or change the value in that file: ... See docs/cli-guides/interactive-terminal-runner.md#tmux-backend-deprecation
+```
+
+workflow を実行せずに確認するには、両方の config ファイルとスクリプトを検索する。
+
+```bash
+grep -nE 'interactive_terminal_backend *= *"tmux"|agent_runner *= *"interactive_terminal"' \
+  .kaji/config.toml .kaji/config.local.toml
+grep -rn -- '--interactive-terminal-backend tmux' <your-scripts>
+```
+
+### 削除時に変わること
+
+- `.kaji/config.toml` または `.kaji/config.local.toml` の（per-key マージ後の）
+  `interactive_terminal_backend = "tmux"` は、headless 実行でも定義元ファイルを示して config
+  読み込みエラーになる。`--agent-runner headless` / `--interactive-terminal-backend herdr` では
+  回避できない。
+- `--interactive-terminal-backend tmux` は拒否される。
+- `agent_runner = "interactive_terminal"` で backend を設定していない場合、既定が Herdr になるため、
+  `kaji run` を Herdr pane 内で実行する必要がある。
+
+### 移行方法
+
+- **Herdr**: Herdr を導入し（[前提 > Herdr](#herdr)）、`[execution]` に
+  `interactive_terminal_backend = "herdr"` を設定して、Herdr pane 内で `kaji run` を起動する。
+- **headless**: `agent_runner = "headless"` を設定する（または `agent_runner` を削除する）。
+  terminal multiplexer は不要。
+- どちらの場合も、`.kaji/config.toml` と `.kaji/config.local.toml` の**両方**から
+  `interactive_terminal_backend = "tmux"` を削除し（警告には現在マージで勝っているファイルが載る）、
+  スクリプトから `--interactive-terminal-backend tmux` を除く。
+
 ## 前提
 
 terminal backendは明示選択する。自動判定・暗黙fallbackは行わない。
 
 ### tmux
+
+> [!WARNING]
+> tmux backend は非推奨で、後続リリースで削除される。Herdr または headless への移行を計画する。
+> [tmux backend deprecation](#tmux-backend-deprecation) を参照。
 
 - **tmux session 内で `kaji run` していること**。runner は `$TMUX` を検査し、未設定なら step
   failure として **fail-fast** する（自動 fallback / 他 terminal 探索はしない）。tmux 外で使いたい
@@ -81,7 +146,7 @@ tracked な既定値は `.kaji/config.toml`、個人環境だけで切り替え�
 [execution]
 default_timeout = 2400
 agent_runner = "interactive_terminal"            # "headless"（既定） | "interactive_terminal"
-interactive_terminal_backend = "tmux"            # "tmux"（既定） | "herdr"
+interactive_terminal_backend = "herdr"           # "tmux"（既定・非推奨） | "herdr"
 interactive_terminal_close_on_verdict = true     # 既定 true
 ```
 
@@ -144,7 +209,8 @@ agent_runner = "interactive_terminal"
 2. `.kaji/config.local.toml` の `[execution]`
 3. `.kaji/config.toml` の `[execution]`
 4. built-in default（`agent_runner = "headless"`, `interactive_terminal_backend = "tmux"`,
-   `interactive_terminal_close_on_verdict = true`）
+   `interactive_terminal_close_on_verdict = true`）。`tmux` 既定は非推奨
+   （[tmux backend deprecation](#tmux-backend-deprecation)）
 
 ### 使用例
 
