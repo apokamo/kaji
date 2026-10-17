@@ -235,7 +235,7 @@ fetched_at, decided_at
 | deprecation 警告 | 旧経路が terminal を決めたとき stderr に 1 回 | AI の仮定（Issue「AI の仮定」4 行目、`inject_verdict` の前例）。検査先: review-code | 「判定に使われた」を「terminal を決めた」と定義。毎 poll では出さない（state を出す repo でも summary 出現前の poll は state absent になり、誤った警告になるため） |
 | state 経路 PASS の時刻根拠 | summary comment の `updated_at` より後の秒の `+1` | AI の仮定（Issue「AI の仮定」5 行目で設計に委任）。根拠: 方針 3。検査先: review-design | 表の `datetime` は使わない。stale `+1` で PASS しない不変条件（#429）を維持 |
 | head 以外の commit の `security_review` | 判定に影響させない（null と同じ） | AI の仮定。根拠: 人間決定は「現在の head に対する」と限定しており、`code_review` の「head と異なる state は head の完了として扱わない」と対称。検査先: review-design | I6(v2) で許容する組み合わせとして明記 |
-| state 経路での head 上の bot review | 1 件でもあれば PASS にしない（RETRY にもしない） | AI の仮定。根拠: #429 の「head 上の他の bot review は PASS を止める」と I8 を維持する保守側の選択。検査先: review-design | 例: 同じ head で再 review して指摘なしになった場合は PASS せず timeout で fallback する |
+| state 経路での head 上の bot review | 1 件でもあれば PASS にしない（RETRY にもしない） | AI の仮定。根拠: #429 の「head 上の他の bot review は PASS を止める」と I8 を維持する保守側の選択。検査先: review-design | 例: 同じ head で再 review して指摘なしになった場合も PASS しない。`eyes` 観測後は `IN_PROGRESS_TIMEOUT_SEC` で ABORT、未観測なら `NO_REACTION_TIMEOUT_SEC` で BACK_FALLBACK になる |
 | state 経路の RETRY で review 本文を併用するか | 併用しない（state が決める） | AI の仮定。根拠: 人間決定は「state がない場合に旧経路」。review 投稿から state 更新までの数秒（#1837: 17:50:56 → 17:51:00）は次の poll で拾える。検査先: review-design | 旧経路の撤去時に state 経路へ手を入れずに済む |
 | 「本文のどこかに含まれる」まで緩めるか | 緩めない（先頭の HTML コメントだけ読み飛ばす） | 人間決定（同「state がない場合」が「先頭の HTML コメントを読み飛ばしてから判定」と指定） | 閉じない `<!--` は不一致 |
 | `done_fallback` の verdict reason 文言 | timeout と state 解析不能の両方を表す文言に一般化 | AI の仮定。根拠: 固定文言が即時 fallback の原因と食い違う。検査先: review-code | 原因の詳細は `evidence`（`PollResult.reason`）に出す |
@@ -298,7 +298,7 @@ one-way door の未決はない。公開 CLI の引数・終了コード・stdou
 |-------------|-----------|------|
 | docs/adr/ | なし | 新しい技術選定はない（既存の review-poll 方式の入力変更） |
 | docs/ARCHITECTURE.md | あり | 「review-poll の承認証跡」節: 承認の根拠（state 経路と旧経路）、schema v2、不変条件 I1/I6/I7/I8 の v2 版、consumer の版分岐 |
-| docs/dev/ | なし | workflow 遷移と開発手順は変わらない（`grep -rn "review-poll" docs/dev/` で判定ロジックの記述がないことを確認） |
+| docs/dev/ | あり | `workflow_guide.md` の review-poll 前提にある PASS 条件を state / 旧経路で記述し、state 解析不能時の即時 BACK_FALLBACK を追記。workflow 遷移と開発手順は変わらない |
 | docs/reference/ | なし | Python 規約に変更なし |
 | docs/cli-guides/ | なし | `github-mode.md` は `review-poll` を名前で挙げるだけで判定ロジックを書いていない |
 | AGENTS.md / CLAUDE.md | なし | 規約変更なし |
