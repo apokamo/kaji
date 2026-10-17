@@ -25,10 +25,9 @@ kaji の pytest 回帰対象外。`make validate-workflows` の L1/L2/L3 静的�
 | ファイル | provider | 用途 |
 |----------|----------|------|
 | `.kaji/wf/custom/dev/dev-thorough.yaml` | github | 丁寧版 dev workflow（dev.yaml と同じ骨格でモデル / effort を厚めに） |
-| `.kaji/wf/custom/dev/dev-thorough-fable.yaml` | github | dev-thorough の fable モデル variant |
+| `.kaji/wf/custom/dev/dev-thorough-codex.yaml` | github | dev-thorough の役割反転 variant（生成/修正を Codex、レビュー/検証を Claude） |
 | `.kaji/wf/custom/dev/dev-small.yaml` | github | 設計判断済み小修正向けの軽量 dev workflow（試験導入。§ dev-small） |
 | `.kaji/wf/custom/docs/docs-codex.yaml` | github | docs workflow の codex variant |
-| `.kaji/wf/custom/docs/docs-fable.yaml` | github | docs workflow の fable variant |
 | `.kaji/wf/custom/docs/docs-thorough-codex.yaml` | github | 丁寧版 docs workflow の codex variant |
 | `.kaji/wf/custom/operations/starter-sync.yaml` | github | managed starter 同期（`update-starter` → `review-starter-update` → `release-starter`）。通常運用には含めない（手動起動） |
 
@@ -242,7 +241,8 @@ triage コメント投稿の**直後**に、同じ失敗を「識別署名」で
 - **起動**: `/incident-cycle <incident_issue_id>`（slash wrapper）または
   `kaji run .kaji/wf/official/incident.yaml <incident_issue_id>`。`requires_provider: github`。
 - **workflow**: `.kaji/wf/official/incident.yaml`。step 構成は investigate（調査・提案役 opus）→
-  review（実行型査読役 subagent。提案役と別モデル sonnet）→ cycle `incident-review`
+  review（実行型査読役。提案役と別モデルの codex gpt-6.1-sol。Codex では subagent を起動できないため
+  `incident-review` の経路 B（main-session self-review）で動く）→ cycle `incident-review`
   （`loop: [fix, verify]` / `max_iterations: 3` / `on_exhaust: ABORT`）→ report（最終提案）。
 - **調査結論とレビュー verdict は別軸**（#303 決定 D）: 調査結論は
   `internal-bug` / `upstream` / `environment` / `transient` / `duplicate` / `INCONCLUSIVE` の 6 値。
@@ -340,6 +340,7 @@ kaji run .kaji/wf/official/dev.yaml 247 --agent-runner headless
 コード変更を伴う Issue のワークフロー。設計 → 設計レビュー → deterministic baseline → 実装 → コードレビュー →
 最終チェック → PR → review-poll → close。`custom/dev/dev-thorough.yaml` は同じ骨格を
 モデル / effort を厚めにした、このリポジトリ固有の custom variant（kaji の pytest 回帰対象外）。
+各 step の割り当ては [§ モデル割り当てルール](#モデル割り当てルール) を参照。
 
 `official/dev.yaml` / `official/local/dev-local.yaml` と custom の dev-thorough 系は
 設計承認直後に共通の
@@ -465,6 +466,59 @@ kaji run .kaji/wf/custom/dev/dev-small.yaml 431      # 原因を解消して dev
 ドキュメント修正のみの Issue のワークフロー。コード・設定・テストは変更せず、現行実装との整合性を監査しながら docs を更新する。
 
 詳細: [docs_maintenance_workflow.md](docs_maintenance_workflow.md)
+
+## モデル割り当てルール
+
+official workflow（`official/dev.yaml` / `official/docs.yaml` / `official/incident.yaml`）の agent / model / effort の正本。
+`official/local/` は対象外（Issue #480）。custom は利用者が自由に作る場所なので、本節の原則と基準表は出発点として
+参照すればよく、従う義務はない。ただし § 割り当てを変えるとき は custom を含む全 workflow に適用する。
+
+### 原則
+
+1. **生成と検査で agent を分ける**: 成果物を作る・直す step は Claude、レビュー・確認は Codex に置き、
+   同じモデルが自分の出力を検査しないようにする。incident の提案役と査読役のモデル分離（#303 決定 B）もこれで満たす。
+2. **Claude の非定型 step は opus**: Opus 5.5 は公式に "For long-running agentic coding and knowledge work" と
+   位置づけられている。kaji では implement の失敗が review → fix → verify の周回に直結するため、
+   トークン単価ではなく完了 1 件あたりのコストで判断する（"Compare on cost per completed task, not per token"）。
+3. **Codex の検査は `gpt-6.1-sol`、定型 step（start / pr / close）は軽量モデル / medium**
+   （`codex / gpt-6-luna` または `claude / sonnet`）。
+4. **長い step は timeout を明示する**: `.kaji/config.toml` の `default_timeout`（2400 秒）では opus / high の
+   implement が収まらない run がある（実測で平均 21.8 分・最大 46.4 分）。implement / fix-code は 3600 秒とする。
+
+### 基準表（official/dev.yaml）
+
+dev-thorough（custom）は丁寧版の参考値として併記する。
+
+| step | 役割 | dev | dev-thorough（参考） |
+|------|------|-----|----------------------|
+| review-ready | Issue レビュー | codex / gpt-6.1-sol / high | 同左 |
+| fix-ready | Issue 修正 | claude / opus / high | 同左 |
+| start / pr / close | 定型 | codex / gpt-6-luna / medium | 同左 |
+| design | 生成 | claude / opus / high | claude / opus / xhigh |
+| review-design | レビュー | codex / gpt-6.1-sol / high | codex / gpt-6-astra / high |
+| fix-design | 修正 | claude / opus / medium | claude / opus / xhigh |
+| verify-design | 確認 | codex / gpt-6.1-sol / medium | codex / gpt-6-astra / medium |
+| implement | 生成 | claude / opus / high（3600s） | claude / opus / xhigh（6000s） |
+| review-code | レビュー | codex / gpt-6.1-sol / high | codex / gpt-6-astra / high |
+| fix-code | 修正 | claude / opus / high（3600s） | 同左 |
+| verify-code | 確認（実装の最終ゲート） | codex / gpt-6.1-sol / high | 同左 |
+| final-check | 確認 | codex / gpt-6.1-sol / medium | 同左 |
+| review | レビュー（review-poll の fallback） | codex / gpt-6.1-sol / high | 同左 |
+| pr-fix | 修正 | claude / opus / high | 同左 |
+| pr-verify | 確認 | codex / gpt-6.1-sol / medium | codex / gpt-6.1-sol / high |
+
+`official/docs.yaml` は doc-update / doc-review / doc-fix / doc-verify を design 系 4 step に対応させる。
+ただし doc-fix は成果物そのものを直す step なので high とする。定型 step は `claude / sonnet / medium`。
+`official/incident.yaml` は investigate / fix / report を Claude（opus）、review / verify を Codex（gpt-6.1-sol）に置く。
+
+### 割り当てを変えるとき
+
+- model / effort / timeout を変える commit は、本文に**変えた理由**を書く。AI agent に commit を依頼するときも
+  理由を伝える（Issue #480 の発端は、理由のない model 変更が `chore: update dev workflow agents` として
+  commit されたこと）。
+- official の値を本節と食い違う値にする場合は、同じ commit で本節も更新する。
+- model 名は `kaji validate` の検査対象外である（[workflow-authoring.md](workflow-authoring.md) § ステップフィールド）。
+  codex の model を変えたら `~/.codex/models_cache.json` の `slug` と一致することを確認する。
 
 ## step 種別（agent step / script step）
 

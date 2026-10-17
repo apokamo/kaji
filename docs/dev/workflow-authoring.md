@@ -41,10 +41,9 @@ workflow YAML は所有権で 2 系統に分かれる。本節が official / cus
     ├── dev/
     │   ├── dev-small.yaml             # 設計判断済み小修正向け（試験導入）
     │   ├── dev-thorough.yaml
-    │   └── dev-thorough-fable.yaml
+    │   └── dev-thorough-codex.yaml
     ├── docs/
     │   ├── docs-codex.yaml
-    │   ├── docs-fable.yaml
     │   └── docs-thorough-codex.yaml
     └── operations/
         └── starter-sync.yaml

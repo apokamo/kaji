@@ -27,8 +27,8 @@ steps:
 
   - id: review                   # 査読（実行型査読役 subagent を起動）
     skill: incident-review
-    agent: claude
-    model: sonnet                # 提案役 opus と分離（#303 決定 B）
+    agent: codex
+    model: gpt-6.1-sol           # 提案役 opus と分離（#303 決定 B）
     effort: high
     on:
       PASS: report
@@ -39,7 +39,7 @@ steps:
     skill: incident-fix
     agent: claude
     model: opus
-    effort: medium
+    effort: high
     resume: investigate
     on:
       PASS: verify
@@ -47,8 +47,8 @@ steps:
 
   - id: verify                   # 確認（新規指摘なし）
     skill: incident-verify
-    agent: claude
-    model: sonnet
+    agent: codex
+    model: gpt-6.1-sol
     effort: medium
     on:
       PASS: report
@@ -58,7 +58,7 @@ steps:
   - id: report                   # 最終提案コメントの投稿
     skill: incident-report
     agent: claude
-    model: sonnet
+    model: opus
     effort: medium
     on:
       PASS: end

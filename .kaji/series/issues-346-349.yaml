@@ -1,8 +1,0 @@
-id: issues-346-349
-strategy: sequential
-members:
-- issue: 346
-  workflow: .kaji/wf/custom/dev/dev-thorough-fable.yaml
-- issue: 349
-  workflow: .kaji/wf/official/dev.yaml
-on_failure: stop
