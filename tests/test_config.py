@@ -1455,6 +1455,50 @@ class TestExecutionOverlay:
         )
         assert config.execution.interactive_terminal_backend == "herdr"
 
+    def test_backend_source_tracked_only(self, tmp_path: Path) -> None:
+        # Issue #475: the file defining the merged backend is recorded for the warning.
+        config_file = _write_config(
+            tmp_path,
+            execution_body='default_timeout = 1800\ninteractive_terminal_backend = "tmux"',
+        )
+        config = KajiConfig._load(config_file)
+        assert config.execution.interactive_terminal_backend_source == config_file
+
+    def test_backend_source_overlay_only(self, tmp_path: Path) -> None:
+        config_file = _write_config(
+            tmp_path,
+            execution_body="default_timeout = 1800",
+            local_body='[execution]\ninteractive_terminal_backend = "tmux"\n',
+        )
+        config = KajiConfig._load(config_file)
+        assert config.execution.interactive_terminal_backend == "tmux"
+        assert config.execution.interactive_terminal_backend_source == (
+            tmp_path / ".kaji" / "config.local.toml"
+        )
+
+    def test_backend_source_overlay_wins_when_both_define(self, tmp_path: Path) -> None:
+        config_file = _write_config(
+            tmp_path,
+            execution_body='default_timeout = 1800\ninteractive_terminal_backend = "tmux"',
+            local_body='[execution]\ninteractive_terminal_backend = "herdr"\n',
+        )
+        config = KajiConfig._load(config_file)
+        assert config.execution.interactive_terminal_backend == "herdr"
+        assert config.execution.interactive_terminal_backend_source == (
+            tmp_path / ".kaji" / "config.local.toml"
+        )
+
+    def test_backend_source_none_when_undefined(self, tmp_path: Path) -> None:
+        config = KajiConfig._load(
+            _write_config(
+                tmp_path,
+                execution_body="default_timeout = 1800",
+                local_body='[execution]\nagent_runner = "interactive_terminal"\n',
+            )
+        )
+        assert config.execution.interactive_terminal_backend == "tmux"
+        assert config.execution.interactive_terminal_backend_source is None
+
     def test_overlay_invalid_value_reports_overlay_path(self, tmp_path: Path) -> None:
         # An invalid runner value coming from the overlay should point at the
         # overlay file in the error message.

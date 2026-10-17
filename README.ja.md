@@ -266,6 +266,11 @@ headless runnerではなく、通常のClaude Code、Codex、Antigravity CLI ses
 起動したい場合に使います。Antigravity step は単発実行のみで、workflow の `resume:` は
 validation 時に拒否されます。
 
+> [!WARNING]
+> tmux backend は非推奨で、後続リリースで削除されます。使用中は `kaji run` が stderr に警告を出します。
+> Herdr または headless runner へ移行してください。詳細は
+> [tmux backend deprecation](docs/cli-guides/interactive-terminal-runner.ja.md#tmux-backend-deprecation)。
+
 ```toml
 [execution]
 default_timeout = 2400

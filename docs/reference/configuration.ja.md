@@ -143,7 +143,7 @@ worktree）基準で解決される（Issue #177、[ワークフロー作成](..
 |-----|----------|----|------|----------|---------|
 | `default_timeout` | 必須 | int | —（未設定はエラー） | `> 0` の整数（bool 不可） | `config.py:227-239` |
 | `agent_runner` | 任意 | `"headless"` \| `"interactive_terminal"` | `"headless"` | 列挙外は `ConfigLoadError` | `config.py:241-252` |
-| `interactive_terminal_backend` | 任意 | `"tmux"` \| `"herdr"` | `"tmux"` | 列挙外は `ConfigLoadError` | `config.py:254-266` |
+| `interactive_terminal_backend` | 任意 | `"tmux"`（非推奨） \| `"herdr"` | `"tmux"` | 列挙外は `ConfigLoadError` | `config.py:472-484` |
 | `interactive_terminal_close_on_verdict` | 任意 | bool | `true` | bool 以外は `ConfigLoadError` | `config.py:268-275` |
 | `failure_triage` | 任意 | bool | `true` | bool 以外は `ConfigLoadError` | `config.py:276-291` |
 | `auto_recover` | 任意 | bool | `false` | bool 以外は `ConfigLoadError` | `config.py:276-291` |
@@ -155,6 +155,13 @@ worktree）基準で解決される（Issue #177、[ワークフロー作成](..
   [Interactive Terminal Runner ガイド](../cli-guides/interactive-terminal-runner.md) を参照。
   headless と interactive terminal は Claude / Codex / Antigravity に対応する。
   Antigravity は単発実行のみで、両 backend とも workflow の `resume:` を拒否する。
+- **`tmux` backend は非推奨**で、後続リリースで削除される。`"herdr"` または `agent_runner = "headless"`
+  へ移行する。`kaji run` は、interactive runner が tmux を使う場合（明示指定でも既定値でも）、この key の
+  マージ後の値が `.kaji/config.toml` か `.kaji/config.local.toml` で明示された `"tmux"` の場合（runner に
+  関係なく。削除後はこの値が headless 実行でも config 読み込みエラーになる）、
+  `--interactive-terminal-backend tmux` を指定した場合に、stderr へ警告を 1 プロセス 1 回出す。
+  両方のファイルから `interactive_terminal_backend = "tmux"` を削除する。詳細は
+  [tmux backend deprecation](../cli-guides/interactive-terminal-runner.ja.md#tmux-backend-deprecation)。
 - `interactive_terminal_close_on_verdict` は `agent_runner = "interactive_terminal"` のときのみ作用する
   （verdict 検知後に pane を閉じるか）。headless 運用では無効。
 
@@ -257,7 +264,7 @@ worktree_prefix = "kaji"            # worktree dir 名の先頭 segment（<prefi
 [execution]
 default_timeout = 2400
 agent_runner = "headless"           # "headless"（既定） | "interactive_terminal"
-# interactive_terminal_backend = "tmux"  # "tmux"（既定） | "herdr"
+# interactive_terminal_backend = "herdr"  # "tmux"（既定・非推奨） | "herdr"
 # interactive_terminal_close_on_verdict = true   # interactive_terminal のときのみ作用
 
 # [incident]                        # 任意: incident のラベル名 / ガイドパス（既定は `kaji:` 接頭辞付き）

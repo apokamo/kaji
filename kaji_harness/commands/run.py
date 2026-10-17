@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from ..artifacts import resolve_artifacts_dir
-from ..config import KajiConfig
+from ..config import ExecutionConfig, KajiConfig, tmux_backend_deprecation_warning
 from ..errors import (
     ConfigLoadError,
     ConfigNotFoundError,
@@ -34,6 +34,31 @@ from .exit_codes import (
     EXIT_OK,
     EXIT_RUNTIME_ERROR,
 )
+
+_TMUX_BACKEND_DEPRECATION_EMITTED = False
+
+
+def _emit_tmux_backend_deprecation_warning(
+    *,
+    configured: ExecutionConfig,
+    effective: ExecutionConfig,
+    cli_backend: str | None,
+) -> None:
+    """tmux backend の非推奨警告を stderr に 1 プロセス 1 回だけ出す（Issue #475）。
+
+    判定は ``tmux_backend_deprecation_warning`` に委ねる。stdout は skill が解析するため
+    使わず、exit code にも影響しない。条件不成立では flag を立てない。
+    """
+    global _TMUX_BACKEND_DEPRECATION_EMITTED
+    if _TMUX_BACKEND_DEPRECATION_EMITTED:
+        return
+    message = tmux_backend_deprecation_warning(
+        configured=configured, effective=effective, cli_backend=cli_backend
+    )
+    if message is None:
+        return
+    _TMUX_BACKEND_DEPRECATION_EMITTED = True
+    print(message, file=sys.stderr)
 
 
 def _apply_execution_overrides(config: KajiConfig, args: argparse.Namespace) -> KajiConfig:
@@ -146,7 +171,14 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     # Issue #224: CLI option override（agent_runner / close_on_verdict）を
     # config.local.toml / config.toml より優先して適用する（precedence 1）。
-    config = _apply_execution_overrides(config, args)
+    effective = _apply_execution_overrides(config, args)
+    # Issue #475: tmux backend 削除の予告。config 解決値（override 前）と実効値の両方で判定する。
+    _emit_tmux_backend_deprecation_warning(
+        configured=config.execution,
+        effective=effective.execution,
+        cli_backend=getattr(args, "interactive_terminal_backend", None),
+    )
+    config = effective
 
     # Phase 3-e § 1.5: provider config を runner 起動前に validate し、
     # `[provider]` 不在を `IssueContextResolutionError` 経由 exit 3 に落とさず

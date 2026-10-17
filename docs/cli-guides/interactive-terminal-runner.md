@@ -9,7 +9,9 @@ path (Issues 224, 230, and 396). When an agent writes
 artifact-primary path ([ADR 005](../adr/005-artifact-primary-verdict.md)) and
 advances to the next step.
 
-`interactive_terminal_backend = "tmux"` remains the default. Selecting `"herdr"` uses Herdr's
+`interactive_terminal_backend = "tmux"` remains the default, but the tmux backend is deprecated and
+will be removed in a subsequent release (see [tmux backend deprecation](#tmux-backend-deprecation)).
+Selecting `"herdr"` uses Herdr's
 release-matched CLI and explicit pane IDs. In either backend, kaji starts inside the selected
 terminal session and adds agent panes beside its origin pane. This lets you see
 `kaji run` output and the agent side by side even in displayless environments
@@ -42,11 +44,78 @@ Runner backend dispatch.
 When `agent_runner` is unset, the existing `headless` runner is used. Existing
 workflows and CI behavior do not change.
 
+## tmux backend deprecation
+
+The tmux backend is **deprecated** and will be removed in a subsequent kaji release (Issue 475,
+parent Issue 466). Herdr becomes the only interactive terminal backend; the headless runner stays.
+In the current release tmux still works unchanged.
+
+### Am I affected?
+
+`kaji run` prints a one-line warning to stderr, once per process, that starts with
+`WARNING: the tmux interactive terminal backend is deprecated`, when any of the following holds:
+
+- After CLI overrides, the effective runner is `interactive_terminal` and the effective backend is
+  `tmux`, whether `tmux` is set explicitly or comes from the built-in default.
+- After the per-key merge of `.kaji/config.toml` and `.kaji/config.local.toml`,
+  `interactive_terminal_backend` is `"tmux"` and one of those files sets it explicitly. This warns
+  regardless of the runner and CLI overrides, because after removal that value fails config loading
+  even with `--agent-runner headless` or `--interactive-terminal-backend herdr`.
+- `--interactive-terminal-backend tmux` is given.
+
+There is no warning when you run headless without setting a backend anywhere, or when the effective
+backend is `herdr` and neither the merged config value nor the CLI says `tmux` (for example, a
+tracked `"tmux"` overridden by `"herdr"` in `config.local.toml`). stdout, exit codes, and run
+artifacts are unchanged. Other commands (`kaji issue`, `kaji pr`, `kaji config`, ...) do not warn.
+
+The warning names where tmux comes from: the config file that defines the merged value (the same
+file a config error would name), the CLI option, or the built-in default.
+
+```text
+WARNING: the tmux interactive terminal backend is deprecated and will be removed in a subsequent kaji release. tmux is selected by: interactive_terminal_backend = "tmux" in /path/repo/.kaji/config.toml. Migrate to Herdr (...) or to the headless runner (...). Remove or change the value in that file: ... See docs/cli-guides/interactive-terminal-runner.md#tmux-backend-deprecation
+```
+
+To identify candidates without running a workflow, search both config files and your scripts.
+These searches are only a heuristic: quoting, spacing, or dynamically built arguments may hide
+matches. No hits alone does not establish that you are unaffected. Use the warning from a
+representative `kaji run` that reaches config loading and CLI override application to confirm
+its effective settings:
+
+```bash
+grep -nE 'interactive_terminal_backend *= *"tmux"|agent_runner *= *"interactive_terminal"' \
+  .kaji/config.toml .kaji/config.local.toml
+grep -rnE -- '--interactive-terminal-backend[ =]+tmux|--agent-runner[ =]+interactive-terminal' <your-scripts>
+```
+
+### What changes at removal
+
+- `interactive_terminal_backend = "tmux"` in `.kaji/config.toml` or `.kaji/config.local.toml`
+  (after the per-key merge) fails config loading and names the defining file, even for headless
+  runs. `--agent-runner headless` / `--interactive-terminal-backend herdr` cannot bypass it.
+- `--interactive-terminal-backend tmux` is rejected.
+- With `agent_runner = "interactive_terminal"` and no backend set, the default becomes Herdr, so
+  `kaji run` must run inside a Herdr pane.
+
+### How to migrate
+
+- **Herdr**: install Herdr (see [Prerequisites > Herdr](#herdr)), set
+  `interactive_terminal_backend = "herdr"` in `[execution]`, and start `kaji run` inside a Herdr
+  pane.
+- **Headless**: set `agent_runner = "headless"` (or remove `agent_runner`). No terminal
+  multiplexer is needed.
+- In both cases, remove `interactive_terminal_backend = "tmux"` from **both**
+  `.kaji/config.toml` and `.kaji/config.local.toml` (the warning names the file that currently
+  wins the merge), and drop `--interactive-terminal-backend tmux` from scripts.
+
 ## Prerequisites
 
 Choose one terminal backend explicitly; there is no auto-detection or fallback.
 
 ### tmux
+
+> [!WARNING]
+> The tmux backend is deprecated and will be removed in a subsequent release. Plan a move to
+> Herdr or headless; see [tmux backend deprecation](#tmux-backend-deprecation).
 
 - **Run `kaji run` inside a tmux session**. The runner checks `$TMUX` and fails
   fast as a step failure when it is unset. There is no automatic fallback or
@@ -96,7 +165,7 @@ switch, write the gitignored `.kaji/config.local.toml`.
 [execution]
 default_timeout = 2400
 agent_runner = "interactive_terminal"            # "headless" (default) | "interactive_terminal"
-interactive_terminal_backend = "tmux"            # "tmux" (default) | "herdr"
+interactive_terminal_backend = "herdr"           # "tmux" (default, deprecated) | "herdr"
 interactive_terminal_close_on_verdict = true     # default true
 ```
 
@@ -170,7 +239,8 @@ agent_runner = "interactive_terminal"
 2. `.kaji/config.local.toml` `[execution]`
 3. `.kaji/config.toml` `[execution]`
 4. Built-in default (`agent_runner = "headless"`, `interactive_terminal_backend = "tmux"`,
-   `interactive_terminal_close_on_verdict = true`)
+   `interactive_terminal_close_on_verdict = true`). The `tmux` default is deprecated; see
+   [tmux backend deprecation](#tmux-backend-deprecation).
 
 ### Examples
 

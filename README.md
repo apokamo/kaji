@@ -285,6 +285,11 @@ Use this when you want kaji to launch normal Claude Code, Codex, or Antigravity
 CLI sessions inside tmux panes instead of using the headless runner. Antigravity
 steps are single-run only; workflow `resume:` is rejected during validation.
 
+> [!WARNING]
+> The tmux backend is deprecated and will be removed in a subsequent release; `kaji run` warns on
+> stderr while it is in use. Migrate to Herdr or the headless runner — see
+> [tmux backend deprecation](docs/cli-guides/interactive-terminal-runner.md#tmux-backend-deprecation).
+
 ```toml
 [execution]
 default_timeout = 2400

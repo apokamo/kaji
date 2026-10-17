@@ -36,6 +36,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Deprecated
 
+- **The tmux backend of the interactive terminal runner** is deprecated and
+  will be removed in a subsequent release (#475, parent #466). Herdr becomes
+  the only interactive terminal backend; the headless runner stays. In this
+  release tmux still works unchanged. `kaji run` now prints a deprecation
+  warning to stderr once per process when tmux is used by the interactive
+  runner (explicitly or as the default), when the merged `[execution]` config
+  explicitly sets `interactive_terminal_backend = "tmux"`, or when
+  `--interactive-terminal-backend tmux` is given. stdout, exit codes, and run
+  artifacts are unchanged.
+  - **Broken contract**: after removal, `interactive_terminal_backend = "tmux"`
+    in `.kaji/config.toml` or `.kaji/config.local.toml` (after the per-key
+    overlay merge) fails config loading even for headless runs, and
+    `--agent-runner headless` / `--interactive-terminal-backend herdr` cannot
+    bypass it. `--interactive-terminal-backend tmux` is rejected. With
+    `agent_runner = "interactive_terminal"` and no backend set, the default
+    becomes Herdr, so `kaji run` must run inside a Herdr pane.
+  - **How to check whether you are affected**: look for
+    `WARNING: the tmux interactive terminal backend is deprecated` in the
+    stderr of `kaji run`, or run
+    `grep -nE 'interactive_terminal_backend *= *"tmux"|agent_runner *= *"interactive_terminal"' .kaji/config.toml .kaji/config.local.toml`
+    and check scripts for `--interactive-terminal-backend tmux` and
+    `--agent-runner interactive-terminal`. These searches only identify
+    candidates: quoting, spacing, or dynamically built arguments may hide
+    matches. Use the warning from a representative `kaji run` that reaches
+    config loading and CLI override application to confirm its effective settings.
+  - **How to migrate**: either switch to Herdr (install Herdr, set
+    `interactive_terminal_backend = "herdr"`, and run `kaji run` inside a
+    Herdr pane) or use the headless runner (`agent_runner = "headless"`). In
+    both cases remove `interactive_terminal_backend = "tmux"` from both
+    `.kaji/config.toml` and `.kaji/config.local.toml`. See
+    `docs/cli-guides/interactive-terminal-runner.md#tmux-backend-deprecation`.
 - **review-poll legacy codex review markup path** is deprecated and will be
   removed in the next release (apokamo/kaji#473, tracked in #478). When the
   bot's review summary comment carries no `<!-- codex-review-state:v1 {...} -->`,

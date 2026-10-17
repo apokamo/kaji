@@ -151,7 +151,7 @@ definition. `validate-series` and `run-series --dry-run` do not create the direc
 |-----|-------------------|------|---------|------------|--------|
 | `default_timeout` | Required | int | — (unset is an error) | Integer `> 0` (bool not allowed) | `config.py:227-239` |
 | `agent_runner` | Optional | `"headless"` \| `"interactive_terminal"` | `"headless"` | Out-of-enum is `ConfigLoadError` | `config.py:241-252` |
-| `interactive_terminal_backend` | Optional | `"tmux"` \| `"herdr"` | `"tmux"` | Out-of-enum is `ConfigLoadError` | `config.py:254-266` |
+| `interactive_terminal_backend` | Optional | `"tmux"` (deprecated) \| `"herdr"` | `"tmux"` | Out-of-enum is `ConfigLoadError` | `config.py:472-484` |
 | `interactive_terminal_close_on_verdict` | Optional | bool | `true` | Non-bool is `ConfigLoadError` | `config.py:268-275` |
 | `failure_triage` | Optional | bool | `true` | Non-bool is `ConfigLoadError` | `config.py:276-291` |
 | `auto_recover` | Optional | bool | `false` | Non-bool is `ConfigLoadError` | `config.py:276-291` |
@@ -163,6 +163,14 @@ definition. `validate-series` and `run-series --dry-run` do not create the direc
   [Interactive Terminal Runner guide](../cli-guides/interactive-terminal-runner.md).
   Headless and interactive terminal modes support Claude, Codex, and Antigravity. Antigravity is
   single-run only and rejects workflow `resume:` in both backends.
+- **The `tmux` backend is deprecated** and will be removed in a subsequent release; migrate to
+  `"herdr"` or to `agent_runner = "headless"`. `kaji run` warns on stderr (once per process) when
+  the interactive runner uses tmux (explicitly or as the default), when the merged value of this key
+  is an explicit `"tmux"` in `.kaji/config.toml` or `.kaji/config.local.toml` (regardless of the
+  runner; after removal that value fails config loading even for headless runs), or when
+  `--interactive-terminal-backend tmux` is given. Remove `interactive_terminal_backend = "tmux"`
+  from both files. See
+  [tmux backend deprecation](../cli-guides/interactive-terminal-runner.md#tmux-backend-deprecation).
 - `interactive_terminal_close_on_verdict` takes effect only when
   `agent_runner = "interactive_terminal"` (whether to close the pane after a verdict is detected). It
   is inert under headless operation.
@@ -297,7 +305,7 @@ worktree_prefix = "kaji"            # leading segment of the worktree dir name (
 [execution]
 default_timeout = 2400
 agent_runner = "headless"           # "headless" (default) | "interactive_terminal"
-# interactive_terminal_backend = "tmux"  # "tmux" (default) | "herdr"
+# interactive_terminal_backend = "herdr"  # "tmux" (default, deprecated) | "herdr"
 # interactive_terminal_close_on_verdict = true   # only takes effect under interactive_terminal
 # failure_triage = true             # classify failures and post a triage comment (default: true)
 # auto_recover = false              # opt-in: resume once per recovery chain after a 10-minute wait
