@@ -19,7 +19,7 @@ Issue: #474
   tmux 実装と同じ `kaji_harness/interactive_terminal.py` から import している
 - `execute_interactive_terminal`（`interactive_terminal.py:350`）が dispatch と tmux 本体を兼ね、#463 以降は
   `deadline_monotonic` を Herdr へ転送する役割（同 `:400-412`）も持つ
-- `tests/test_interactive_terminal.py`（104 tests / 22 class）に tmux 固有テストと共用処理の回帰テストが混在する
+- `tests/test_interactive_terminal.py`（104 tests / 23 class）に tmux 固有テストと共用処理の回帰テストが混在する
 - recovery / 環境変数 / large_local テストも共用 helper を tmux 実装のモジュールから import している
 
 **ユースケース**:
@@ -400,5 +400,5 @@ one-way door の未決: **該当なし**。公開契約は Issue で維持が決
 | layer fitness test | `tests/test_layer_imports.py:19-59`（`MODULE_LAYERS`） | 全モジュールの分類登録が必要 → 新設 2 モジュールの登録 |
 | テスト規約 | `docs/dev/testing-convention.md`（サイズ定義、テスト要否） | ファイル I/O は Medium、純粋ロジックは Small。新規 Large を追加しない判断の根拠 |
 | unittest.mock.patch の target 解決 | https://docs.python.org/3/library/unittest.mock.html#where-to-patch | 「patch はオブジェクトが *参照される* 名前空間で行う」。`_write_pane_metadata` など名前束縛先が変わる対象は付け替え必須。`shutil.which` 等は module object の属性差し替えのため経路名に依らず効果が同じ |
-| 既存テスト構成 | `tests/test_interactive_terminal.py`（22 class / 104 tests）、`tests/test_attempt_deadline_e2e_large_local.py:190-250`、`tests/test_tmp_dir_e2e_large_local.py:253-323`、`tests/test_runner_interactive_dispatch.py:135-165`、`tests/test_interactive_terminal_herdr.py:2289-2308` | § 方針 3 の振り分け表・class 化対象の根拠（AST で class ごとに tests 数と tmux 依存を集計） |
+| 既存テスト構成 | `tests/test_interactive_terminal.py`（23 class / 104 tests）、`tests/test_attempt_deadline_e2e_large_local.py:190-250`、`tests/test_tmp_dir_e2e_large_local.py:253-323`、`tests/test_runner_interactive_dispatch.py:135-165`、`tests/test_interactive_terminal_herdr.py:2289-2308` | § 方針 3 の振り分け表・class 化対象の根拠（AST で class ごとに tests 数と tmux 依存を集計） |
 | 着手前テスト収集件数 | worktree `chore/474`（main `1c76d20`）で `pytest --collect-only -q` → 3783 | 件数比較のベースライン |
