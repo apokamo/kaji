@@ -1226,3 +1226,453 @@ class TestMainPass:
         assert mod.main(_main_argv(HEAD, "--evidence-path", str(evidence_path))) == 0
         assert "status: RETRY" in capsys.readouterr().out
         assert not evidence_path.exists()
+
+
+# --- Issue #473: codex-review-state:v1 / receipt 付き review 本文 -----------------
+
+KAMO2_HEAD = "dc8eb9cb83b0a48ca51218d919288ae14297120f"
+KAMO2_PASS_HEAD = "af4b02c1891368cc369c3111464fbeb0b5996e3f"
+
+
+@pytest.mark.small
+class TestKamo2Reproduction:
+    def test_pr1837_receipt_review_with_state_is_retry(self) -> None:
+        # Issue #473 再現: 修正前は ambiguous bot review で in_progress のまま
+        result = classify(
+            [],
+            _load("kamo2_pr1837_reviews.json"),
+            KAMO2_HEAD,
+            "2026-10-16T17:40:00Z",
+            comments=_load("kamo2_pr1837_comments.json"),
+            prev_state="in_progress",
+        )
+        assert result.state == "done_retry"
+        assert result.signal == "state"
+
+    def test_pr1837_receipt_review_without_state_is_legacy_retry(self) -> None:
+        reviews = _load("kamo2_pr1837_reviews.json")
+        assert reviews[0]["body"].startswith("<!-- codex-review-receipt:v1 -->")
+        result = classify([], reviews, KAMO2_HEAD, "2026-10-16T17:40:00Z", prev_state="in_progress")
+        assert result.state == "done_retry"
+        assert result.signal == "legacy"
+
+    def test_pr1834_state_without_findings_and_later_plus_one_is_pass(self) -> None:
+        result = classify(
+            _load("kamo2_pr1834_reactions.json"),
+            [],
+            KAMO2_PASS_HEAD,
+            "2026-10-16T10:54:31Z",
+            comments=_load("kamo2_pr1834_comments.json"),
+        )
+        assert result.state == "done_pass"
+        assert result.signal == "state"
+        assert result.approval is not None and result.approval.review_state is not None
+        assert result.approval.reaction_id == 573522841
+
+
+STATE_UPDATED_AT = "2026-05-24T08:25:21Z"
+
+
+def _entry(
+    sha: str | None = HEAD, *, findings: bool | None = False, status: str | None = "completed"
+) -> dict[str, Any]:
+    return {
+        "commit_sha": sha,
+        "has_any_findings": findings,
+        "has_unresolved_findings": findings,
+        "status": status,
+    }
+
+
+_NULL_ENTRY: dict[str, Any] = _entry(None, findings=None, status=None)
+
+
+def _state_marker(
+    code: dict[str, Any] | None = None,
+    security: dict[str, Any] | None = None,
+    *,
+    version: str = "v1",
+    payload: str | None = None,
+) -> str:
+    if payload is None:
+        payload = json.dumps(
+            {
+                "code_review": code if code is not None else _entry(),
+                "security_review": security if security is not None else _NULL_ENTRY,
+            },
+            separators=(",", ":"),
+        )
+    return f"<!-- codex-review-state:{version} {payload} -->"
+
+
+def _state_comment(
+    marker: str | None = None,
+    *,
+    comment_id: int = 601,
+    updated_at: str = STATE_UPDATED_AT,
+    user_id: int = BOT_ID,
+) -> dict[str, Any]:
+    marker = marker if marker is not None else _state_marker()
+    comment = _summary_comment(comment_id=comment_id, updated_at=updated_at, user_id=user_id)
+    head, rest = comment["body"].split("\n", 1)
+    comment["body"] = f"{head}\n{marker}\n{rest}"
+    return comment
+
+
+def _bot_review(body: str, *, commit_id: str = HEAD, state: str = "COMMENTED") -> dict[str, Any]:
+    return {
+        "id": 77,
+        "user": {"id": BOT_ID, "login": "chatgpt-codex-connector[bot]"},
+        "state": state,
+        "commit_id": commit_id,
+        "body": body,
+    }
+
+
+_RECEIPT_BODY = "<!-- codex-review-receipt:v1 -->\n\n\n### 💡 Codex Review\n\nsuggestions"
+
+
+@pytest.mark.small
+class TestLegacyReviewBody:
+    @pytest.mark.parametrize(
+        "body",
+        [
+            _RECEIPT_BODY,
+            "\n### 💡 Codex Review\n\nold format",
+            "<!-- a -->\n<!-- b -->  \n### 💡 Codex Review",
+        ],
+        ids=["receipt", "no_comment", "multiple_comments"],
+    )
+    def test_codex_review_heading_after_leading_comments_is_retry(self, body: str) -> None:
+        result = classify([], [_bot_review(body)], HEAD, HEAD_AT)
+        assert result.state == "done_retry"
+        assert result.signal == "legacy"
+
+    @pytest.mark.parametrize(
+        "body",
+        ["<!-- unclosed\n### 💡 Codex Review", "intro\n\n### 💡 Codex Review"],
+        ids=["unclosed_comment", "marker_not_leading"],
+    )
+    def test_heading_not_at_start_is_ambiguous(self, body: str) -> None:
+        result = classify(
+            _load("reactions_plus_one.json"),
+            [_bot_review(body)],
+            HEAD,
+            HEAD_AT,
+            comments=[_summary_comment()],
+        )
+        assert result.state == "init"
+        assert "ambiguous" in result.reason
+
+    def test_receipt_review_on_other_head_is_not_retry(self) -> None:
+        result = classify([], [_bot_review(_RECEIPT_BODY, commit_id=OTHER_HEAD)], HEAD, HEAD_AT)
+        assert result.state == "init"
+
+    def test_legacy_pass_is_marked_legacy(self) -> None:
+        result = classify(
+            _load("reactions_plus_one.json"), [], HEAD, HEAD_AT, comments=[_summary_comment()]
+        )
+        assert result.state == "done_pass"
+        assert result.signal == "legacy"
+
+
+@pytest.mark.small
+class TestParseReviewState:
+    def test_valid_state_is_parsed(self) -> None:
+        state = mod.parse_review_state([_state_comment()], BOT_ID)
+        assert isinstance(state, mod.ReviewState)
+        assert state.comment_id == 601
+        assert state.updated_at == STATE_UPDATED_AT
+        assert state.code_review.commit_sha == HEAD
+        assert state.security_review.status is None
+
+    def test_absent_state_returns_none(self) -> None:
+        assert mod.parse_review_state([_summary_comment()], BOT_ID) is None
+
+    @pytest.mark.parametrize(
+        "marker",
+        [
+            _state_marker(version="v2"),
+            _state_marker() + "\n" + _state_marker(),
+            _state_marker(payload='{"code_review":'),
+            _state_marker(payload=json.dumps({"security_review": _NULL_ENTRY})),
+            _state_marker(_entry(None)),
+            _state_marker(_entry(findings=None)),
+            _state_marker(_entry("ABC")),
+            _state_marker(_entry(findings=1)),  # type: ignore[arg-type]
+            "<!-- codex-review-state:v1-->",
+        ],
+        ids=[
+            "unknown_version",
+            "two_markers",
+            "broken_json",
+            "code_review_missing",
+            "completed_without_sha",
+            "completed_without_findings",
+            "sha_not_hex",
+            "findings_not_bool",
+            "malformed_marker",
+        ],
+    )
+    def test_unusable_state_is_invalid(self, marker: str) -> None:
+        state = mod.parse_review_state([_state_comment(marker)], BOT_ID)
+        assert isinstance(state, mod.InvalidReviewState)
+
+    def test_unknown_extra_keys_are_ignored(self) -> None:
+        payload = json.dumps(
+            {"code_review": {**_entry(), "x": 1}, "security_review": _NULL_ENTRY, "y": {}}
+        )
+        state = mod.parse_review_state([_state_comment(_state_marker(payload=payload))], BOT_ID)
+        assert isinstance(state, mod.ReviewState)
+
+    def test_untrusted_comment_state_is_ignored(self) -> None:
+        assert mod.parse_review_state([_state_comment(user_id=1)], BOT_ID) is None
+
+    def test_tied_updated_at_with_state_is_invalid(self) -> None:
+        comments = [_state_comment(comment_id=1), _summary_comment(comment_id=2)]
+        comments[1]["updated_at"] = STATE_UPDATED_AT
+        assert isinstance(mod.parse_review_state(comments, BOT_ID), mod.InvalidReviewState)
+
+    def test_tied_updated_at_without_state_is_absent(self) -> None:
+        comments = [_summary_comment(comment_id=1), _summary_comment(comment_id=2)]
+        assert mod.parse_review_state(comments, BOT_ID) is None
+
+
+def _fresh_plus_one() -> list[dict[str, Any]]:
+    return [_plus_one("2026-05-24T08:25:22Z")]
+
+
+@pytest.mark.small
+class TestClassifyState:
+    def _classify(
+        self,
+        code: dict[str, Any] | None = None,
+        security: dict[str, Any] | None = None,
+        *,
+        reactions: list[dict[str, Any]] | None = None,
+        reviews: list[dict[str, Any]] | None = None,
+    ) -> PollResult:
+        return classify(
+            _fresh_plus_one() if reactions is None else reactions,
+            reviews or [],
+            HEAD,
+            HEAD_AT,
+            comments=[_state_comment(_state_marker(code, security))],
+        )
+
+    def test_findings_on_head_is_retry(self) -> None:
+        result = self._classify(_entry(findings=True), reactions=[])
+        assert (result.state, result.signal) == ("done_retry", "state")
+
+    def test_no_findings_with_later_plus_one_is_pass(self) -> None:
+        result = self._classify()
+        assert (result.state, result.signal) == ("done_pass", "state")
+        assert result.approval is not None and result.approval.summary is None
+
+    @pytest.mark.parametrize(
+        "reactions",
+        [
+            [],
+            [_plus_one(STATE_UPDATED_AT)],
+            [_plus_one("2026-05-24T08:25:20Z")],
+            [_plus_one("2026-05-24T08:05:06Z")],
+        ],
+        ids=["no_plus_one", "same_second", "before_update", "before_head_commit"],
+    )
+    def test_plus_one_not_after_state_is_not_pass(self, reactions: list[dict[str, Any]]) -> None:
+        assert self._classify(reactions=reactions).state == "init"
+
+    def test_plus_one_before_head_commit_is_not_pass(self) -> None:
+        result = classify(
+            [_plus_one("2026-05-24T08:25:22Z")],
+            [],
+            HEAD,
+            "2026-05-24T08:30:00Z",
+            comments=[_state_comment()],
+        )
+        assert result.state == "init"
+
+    @pytest.mark.parametrize("findings", [True, False])
+    def test_state_for_other_head_is_not_terminal(self, findings: bool) -> None:
+        assert self._classify(_entry(OTHER_HEAD, findings=findings)).state == "init"
+
+    @pytest.mark.parametrize("status", ["in_progress", "queued"])
+    def test_unobserved_status_is_not_terminal(self, status: str) -> None:
+        for findings in (True, False, None):
+            assert self._classify(_entry(findings=findings, status=status)).state == "init"
+
+    def test_security_review_pending_on_head_blocks_pass(self) -> None:
+        security = _entry(HEAD, findings=None, status="in_progress")
+        assert self._classify(security=security).state == "init"
+
+    def test_security_review_pending_without_sha_blocks_pass(self) -> None:
+        security = _entry(None, findings=None, status="in_progress")
+        assert self._classify(security=security).state == "init"
+
+    def test_security_review_findings_on_head_is_retry(self) -> None:
+        result = self._classify(security=_entry(findings=True), reactions=[])
+        assert (result.state, result.signal) == ("done_retry", "state")
+
+    def test_security_review_completed_without_findings_allows_pass(self) -> None:
+        assert self._classify(security=_entry()).state == "done_pass"
+
+    def test_security_review_on_other_head_is_ignored(self) -> None:
+        for findings in (True, False):
+            security = _entry(OTHER_HEAD, findings=findings)
+            assert self._classify(security=security).state == "done_pass"
+
+    def test_bot_review_on_head_blocks_state_pass(self) -> None:
+        reviews = [_bot_review(_RECEIPT_BODY)]
+        assert self._classify(reviews=reviews).state == "init"
+
+    def test_state_ignores_legacy_review_body(self) -> None:
+        # state が head 未完了なら、旧経路の review 本文では RETRY にしない
+        reviews = [_bot_review(_RECEIPT_BODY)]
+        result = self._classify(_entry(OTHER_HEAD), reviews=reviews, reactions=[])
+        assert result.state == "init"
+
+    def test_state_ignores_legacy_summary_table(self) -> None:
+        # 表は head・Completed を示すが、state が head を完了扱いしないので PASS しない
+        result = self._classify(_entry(OTHER_HEAD), reactions=_load("reactions_plus_one.json"))
+        assert result.state == "init"
+
+    def test_invalid_state_is_immediate_fallback(self) -> None:
+        result = classify(
+            _fresh_plus_one(),
+            [],
+            HEAD,
+            HEAD_AT,
+            comments=[_state_comment(_state_marker(version="v2"))],
+        )
+        assert (result.state, result.signal) == ("done_fallback", "state")
+        assert "codex-review-state" in result.reason
+
+    def test_eyes_keeps_in_progress_on_state_path(self) -> None:
+        result = self._classify(_entry(OTHER_HEAD), reactions=_load("reactions_eyes.json"))
+        assert result.state == "in_progress"
+
+
+@pytest.mark.small
+class TestVerdictReasons:
+    def test_fallback_reason_covers_state_parse_failure(self) -> None:
+        out = mod.emit_verdict(PollResult("done_fallback", "state broken", signal="state"), "x")
+        assert "status: BACK_FALLBACK" in out
+        assert "codex-review-state" in out and "NO_REACTION_TIMEOUT_SEC" in out
+
+    def test_signal_does_not_change_verdict_format(self) -> None:
+        plain = mod.emit_verdict(PollResult("done_retry", "r"), "s")
+        tagged = mod.emit_verdict(PollResult("done_retry", "r", signal="state"), "s")
+        assert plain == tagged
+
+
+def _state_pass_snap() -> dict[str, list[dict[str, Any]]]:
+    return _snap(_fresh_plus_one(), comments=[_state_comment()])
+
+
+@pytest.mark.medium
+class TestRunPollingStatePath:
+    def _polling(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        evidence_path: Path,
+        snapshots: list[dict[str, list[dict[str, Any]]]],
+        warnings: list[str],
+        heartbeats: list[str] | None = None,
+    ) -> tuple[PollResult, _FakeGh]:
+        fake = _install(monkeypatch, _FakeGh(snapshots))
+        result = _run(
+            evidence_path,
+            emit_warning=warnings.append,
+            emit_progress=(heartbeats if heartbeats is not None else []).append,
+        )
+        return result, fake
+
+    def test_state_pass_writes_v2_evidence_without_commits_lookup(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        warnings: list[str] = []
+        result, fake = self._polling(monkeypatch, evidence_path, [_state_pass_snap()], warnings)
+        assert result.state == "done_pass"
+        assert "commits" not in fake.calls
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        assert evidence["schema_version"] == 2
+        assert evidence["approval"]["review_state"] == {
+            "comment_id": 601,
+            "url": f"{PR_URL}#issuecomment-601",
+            "comment_updated_at": STATE_UPDATED_AT,
+            "state_version": "v1",
+            "code_review": {"commit_sha": HEAD, "status": "completed", "has_any_findings": False},
+            "security_review": {"commit_sha": None, "status": None, "has_any_findings": None},
+        }
+        assert "short_sha_matching_pr_commits" not in evidence["checks"]
+        assert load_evidence(evidence_path).schema_version == 2
+        assert warnings == []
+
+    def test_legacy_pass_keeps_v1_evidence_and_warns_once(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        warnings: list[str] = []
+        heartbeats: list[str] = []
+        eyes = _snap(_load("reactions_eyes.json"))
+        result, fake = self._polling(
+            monkeypatch, evidence_path, [eyes, _pass_snap()], warnings, heartbeats
+        )
+        assert result.state == "done_pass"
+        assert "commits" in fake.calls
+        assert load_evidence(evidence_path).schema_version == 1
+        assert warnings == [mod.LEGACY_DEPRECATION_WARNING]
+        assert heartbeats and all("deprecation" not in line for line in heartbeats)
+        assert "deprecation" not in result.reason
+
+    def test_legacy_retry_warns_and_state_retry_does_not(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        legacy: list[str] = []
+        snap = _snap(reviews=[_bot_review(_RECEIPT_BODY)])
+        assert self._polling(monkeypatch, evidence_path, [snap], legacy)[0].state == "done_retry"
+        assert legacy == [mod.LEGACY_DEPRECATION_WARNING]
+
+        state: list[str] = []
+        snap = _snap(comments=[_state_comment(_state_marker(_entry(findings=True)))])
+        assert self._polling(monkeypatch, evidence_path, [snap], state)[0].state == "done_retry"
+        assert state == []
+
+    def test_invalid_state_falls_back_on_first_poll(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        warnings: list[str] = []
+        heartbeats: list[str] = []
+        snap = _snap(comments=[_state_comment(_state_marker(version="v2"))])
+        result, fake = self._polling(monkeypatch, evidence_path, [snap], warnings, heartbeats)
+        assert result.state == "done_fallback"
+        assert fake.snapshot_idx == 0
+        assert heartbeats == []
+        assert not evidence_path.exists()
+
+    def test_pr1837_state_retry_after_eyes(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        warnings: list[str] = []
+        eyes = _snap(_load("reactions_eyes.json"))
+        review = _snap(
+            reviews=_load("kamo2_pr1837_reviews.json"),
+            comments=_load("kamo2_pr1837_comments.json"),
+        )
+        fake = _install(monkeypatch, _FakeGh([eyes, review], pull_heads=[KAMO2_HEAD]))
+        result = _run(evidence_path, head_sha=KAMO2_HEAD, emit_warning=warnings.append)
+        assert fake.snapshot_idx == 1
+        assert (result.state, result.signal) == ("done_retry", "state")
+        assert warnings == []
+
+
+@pytest.mark.medium
+class TestDefaultWarn:
+    def test_writes_to_stderr_not_stdout(self, capsys: pytest.CaptureFixture[str]) -> None:
+        mod._default_warn("warn line")
+        captured = capsys.readouterr()
+        assert captured.err == "warn line\n"
+        assert captured.out == ""
+
+    def test_os_error_is_swallowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(mod.sys, "stderr", _RecordingStream(fail=True))
+        mod._default_warn("x")

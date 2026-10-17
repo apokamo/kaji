@@ -1,4 +1,4 @@
-"""issue-close SKILL.md の jq 検証が producer model (I1〜I9) と同じ判定をすることを確認する。
+"""issue-close SKILL.md の jq 検証が producer model (v1 / v2 の I1〜I9) と同じ判定をすることを確認する。
 
 consumer（SKILL.md の jq）と producer（``ReviewPollEvidence``）は別実装のため、
 時刻不変条件（小数秒・暦日）の境界で判定が乖離しないことを差分で固定する。
@@ -16,8 +16,17 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from kaji_harness.review_poll_evidence import ReviewPollEvidence
-from tests.test_review_poll_evidence import _VIOLATIONS, _set, _valid_payload
+from kaji_harness.review_poll_evidence import ReviewPollEvidence, ReviewPollEvidenceV2
+from tests.test_review_poll_evidence import (
+    _SECURITY,
+    _STATE,
+    _VALID_SECURITY_V2,
+    _VIOLATIONS,
+    _VIOLATIONS_V2,
+    _set,
+    _valid_payload,
+    _valid_payload_v2,
+)
 
 _SKILL = Path(__file__).resolve().parent.parent / ".claude/skills/issue-close/SKILL.md"
 _JQ_RE = re.compile(r"VERIFIED=\$\(jq -r '\n(?P<program>.*?)\n' \"\$EVIDENCE\"\)", re.DOTALL)
@@ -72,6 +81,38 @@ _TIME_CASES: list[tuple[str, dict[str, Any]]] = [
 ]
 
 
+_V2_REACTION_AT = "2026-09-08T01:33:35Z"
+
+_TIME_CASES_V2: list[tuple[str, dict[str, Any]]] = [
+    (
+        "v2_reaction_next_second_after_fractional_update_ok",
+        _set(_valid_payload_v2(), (*_STATE, "comment_updated_at"), "2026-09-08T01:33:34.9Z"),
+    ),
+    (
+        "v2_reaction_same_second_as_fractional_update",
+        _set(_valid_payload_v2(), (*_STATE, "comment_updated_at"), "2026-09-08T01:33:35.1Z"),
+    ),
+    (
+        "v2_update_invalid_calendar_day",
+        _set(_valid_payload_v2(), (*_STATE, "comment_updated_at"), "2026-02-30T01:33:33Z"),
+    ),
+    (
+        "v2_reaction_before_commit_by_fraction",
+        _set(_valid_payload_v2(), ("reviewed_head", "committed_at"), "2026-09-08T01:33:35.5Z"),
+    ),
+]
+
+# producer と consumer の判定が一致すべき v2 の境界（受理・拒否の両方を含む）。
+_AGREEMENT_V2: list[tuple[str, dict[str, Any]]] = [
+    *_TIME_CASES_V2,
+    *[
+        (f"v2_security_{name}", _set(_valid_payload_v2(), _SECURITY, security))
+        for name, security in _VALID_SECURITY_V2
+    ],
+    *_VIOLATIONS_V2,
+]
+
+
 def _jq_program() -> str:
     match = _JQ_RE.search(_SKILL.read_text(encoding="utf-8"))
     assert match, "issue-close SKILL.md の jq プログラムを抽出できない"
@@ -99,6 +140,14 @@ def _producer_accepts(payload: dict[str, Any]) -> bool:
     return True
 
 
+def _producer_accepts_v2(payload: dict[str, Any]) -> bool:
+    try:
+        ReviewPollEvidenceV2.model_validate(payload)
+    except ValidationError:
+        return False
+    return True
+
+
 @pytest.mark.medium
 @pytest.mark.skipif(shutil.which("jq") is None, reason="jq is not installed")
 class TestIssueCloseJqMatchesModel:
@@ -121,3 +170,29 @@ class TestIssueCloseJqMatchesModel:
     ) -> None:
         consumer_ok = _consumer_verdict(payload, tmp_path) == "OK"
         assert consumer_ok == _producer_accepts(payload)
+
+
+@pytest.mark.medium
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is not installed")
+class TestIssueCloseJqMatchesModelV2:
+    def test_valid_payload_is_ok(self, tmp_path: Path) -> None:
+        assert _consumer_verdict(_valid_payload_v2(), tmp_path) == "OK"
+
+    @pytest.mark.parametrize(
+        "payload", [p for _, p in _VIOLATIONS_V2], ids=[name for name, _ in _VIOLATIONS_V2]
+    )
+    def test_model_violations_are_rejected_by_jq(
+        self, payload: dict[str, Any], tmp_path: Path
+    ) -> None:
+        assert _consumer_verdict(payload, tmp_path) != "OK"
+
+    @pytest.mark.parametrize(
+        "payload", [p for _, p in _AGREEMENT_V2], ids=[n for n, _ in _AGREEMENT_V2]
+    )
+    def test_boundaries_agree_with_model(self, payload: dict[str, Any], tmp_path: Path) -> None:
+        consumer_ok = _consumer_verdict(payload, tmp_path) == "OK"
+        assert consumer_ok == _producer_accepts_v2(payload)
+
+    def test_unknown_schema_version_is_i1(self, tmp_path: Path) -> None:
+        payload = _set(_valid_payload_v2(), ("schema_version",), 3)
+        assert _consumer_verdict(payload, tmp_path) == "I1"

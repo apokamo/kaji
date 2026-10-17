@@ -306,6 +306,10 @@ suggestion は「`kaji run <workflow> [issue_id] --from review-poll` で再確�
 
 不変条件 I1〜I9（正本: `docs/ARCHITECTURE.md` の「review-poll の承認証跡」節、
 producer は `kaji_harness/review_poll_evidence.py`）を 1 本の jq プログラムで検証する。
+`schema_version` で検査式を切り替える: `1` は summary comment の表で承認した旧経路の証跡、
+`2` は `codex-review-state:v1` で承認した経路の証跡（Issue #473）。I2〜I5・I9 は両版共通で、
+I1（キー集合）・I6（承認根拠）・I7（時刻順序）・I8（確定確認）は版ごとに異なる。`1` / `2` 以外は I1 違反。
+v1 の受け付けは review-poll の旧経路と一緒に撤去する予定（CHANGELOG `[Unreleased]` の Deprecated）。
 出力は、すべて満たせば `OK` の 1 語、違反があれば違反した不変条件 ID のカンマ区切りになる。
 `OK` 以外（jq エラーや JSON 破損を含む）はすべて **ABORT** とし、違反した ID を報告する。
 
@@ -321,21 +325,18 @@ VERIFIED=$(jq -r '
   def keys_eq($k): type == "object" and ((keys | sort) == ($k | sort));
   def posint: type == "number" and . == floor and . > 0;
   def str1: type == "string" and length > 0;
+  def sha40: type == "string" and test("^[0-9a-f]{40}$");
   def chk($id; f): if (try f catch false) == true then empty else $id end;
   . as $e
-  | [
-      chk("I1"; keys_eq(["schema_version","kind","result","provider","repository","pull_request","reviewed_head","approval","checks","fetched_at","decided_at"])
-        and .schema_version == 1 and .kind == "kaji.review-poll.approval"
-        and .result == "PASS" and .provider == "github"),
-      chk("I1.sections";
-        (.repository | keys_eq(["owner","name"]))
-        and (.pull_request | keys_eq(["number","url"]))
-        and (.reviewed_head | keys_eq(["sha","committed_at"]))
-        and (.approval | keys_eq(["bot","reaction","review_summary"]))
-        and (.approval.bot | keys_eq(["id","login"]))
-        and (.approval.reaction | keys_eq(["id","content","created_at","api_path"]))
-        and (.approval.review_summary | keys_eq(["comment_id","url","commit_short_sha","status","completed_at","comment_updated_at"]))
-        and (.checks | keys_eq(["head_sha_at_start","head_sha_before_decision","head_sha_after_decision","short_sha_matching_pr_commits","current_head_bot_reviews"]))),
+  | def top_keys: keys_eq(["schema_version","kind","result","provider","repository","pull_request","reviewed_head","approval","checks","fetched_at","decided_at"])
+      and .kind == "kaji.review-poll.approval" and .result == "PASS" and .provider == "github";
+    def common_sections:
+      (.repository | keys_eq(["owner","name"]))
+      and (.pull_request | keys_eq(["number","url"]))
+      and (.reviewed_head | keys_eq(["sha","committed_at"]))
+      and (.approval.bot | keys_eq(["id","login"]))
+      and (.approval.reaction | keys_eq(["id","content","created_at","api_path"]));
+    def common_checks: [
       chk("I2";
         (.repository.owner | str1) and (.repository.name | str1)
         and (.pull_request.number | posint)
@@ -343,7 +344,7 @@ VERIFIED=$(jq -r '
              and startswith("https://github.com/")
              and endswith("/pull/\($e.pull_request.number)"))),
       chk("I3";
-        (.reviewed_head.sha | type == "string" and test("^[0-9a-f]{40}$"))
+        (.reviewed_head.sha | sha40)
         and (.reviewed_head.committed_at | ists) and (.reviewed_head.committed_at | ts | . > 0)),
       chk("I4";
         .approval.bot.id == 199175422
@@ -353,6 +354,27 @@ VERIFIED=$(jq -r '
         and (.approval.reaction.created_at | ists) and (.approval.reaction.created_at | ts | . > 0)
         and .approval.reaction.api_path
             == "repos/\($e.repository.owner)/\($e.repository.name)/issues/\($e.pull_request.number)/reactions"),
+      chk("I9";
+        (.fetched_at | ists) and (.decided_at | ists)
+        and (.approval.reaction.created_at | ts) <= (.fetched_at | ts)
+        and (.fetched_at | ts) <= (.decided_at | ts))
+    ];
+    def head_checks:
+      [.checks.head_sha_at_start, .checks.head_sha_before_decision, .checks.head_sha_after_decision]
+        | all(. == $e.reviewed_head.sha);
+    def entry_ok: keys_eq(["commit_sha","status","has_any_findings"])
+      and (.commit_sha == null or (.commit_sha | sha40))
+      and (.status == null or (.status | str1))
+      and (.has_any_findings == null or (.has_any_findings | type == "boolean"));
+    (try .schema_version catch null) as $v
+  | if $v == 1 then [
+      chk("I1"; top_keys and .schema_version == 1),
+      chk("I1.sections";
+        common_sections
+        and (.approval | keys_eq(["bot","reaction","review_summary"]))
+        and (.approval.review_summary | keys_eq(["comment_id","url","commit_short_sha","status","completed_at","comment_updated_at"]))
+        and (.checks | keys_eq(["head_sha_at_start","head_sha_before_decision","head_sha_after_decision","short_sha_matching_pr_commits","current_head_bot_reviews"]))),
+      common_checks[],
       chk("I6";
         (.approval.review_summary.comment_id | posint)
         and (.approval.review_summary.url | type == "string"
@@ -367,14 +389,38 @@ VERIFIED=$(jq -r '
         and (.approval.reaction.created_at | ts) >= (.reviewed_head.committed_at | ts)
         and (.approval.review_summary.comment_updated_at | ts) >= (.approval.review_summary.completed_at | ts | sec)),
       chk("I8";
-        ([.checks.head_sha_at_start, .checks.head_sha_before_decision, .checks.head_sha_after_decision]
-          | all(. == $e.reviewed_head.sha))
-        and .checks.short_sha_matching_pr_commits == 1 and .checks.current_head_bot_reviews == 0),
-      chk("I9";
-        (.fetched_at | ists) and (.decided_at | ists)
-        and (.approval.reaction.created_at | ts) <= (.fetched_at | ts)
-        and (.fetched_at | ts) <= (.decided_at | ts))
+        head_checks
+        and .checks.short_sha_matching_pr_commits == 1 and .checks.current_head_bot_reviews == 0)
     ]
+    elif $v == 2 then [
+      chk("I1"; top_keys and .schema_version == 2),
+      chk("I1.sections";
+        common_sections
+        and (.approval | keys_eq(["bot","reaction","review_state"]))
+        and (.approval.review_state | keys_eq(["comment_id","url","comment_updated_at","state_version","code_review","security_review"]))
+        and (.approval.review_state.code_review | entry_ok)
+        and (.approval.review_state.security_review | entry_ok)
+        and (.checks | keys_eq(["head_sha_at_start","head_sha_before_decision","head_sha_after_decision","current_head_bot_reviews"]))),
+      common_checks[],
+      chk("I6";
+        (.approval.review_state.comment_id | posint)
+        and (.approval.review_state.url | type == "string"
+             and endswith("#issuecomment-\($e.approval.review_state.comment_id)"))
+        and .approval.review_state.state_version == "v1"
+        and (.approval.review_state.comment_updated_at | ists) and (.approval.review_state.comment_updated_at | ts | . > 0)
+        and (.approval.review_state.code_review
+             | .commit_sha == $e.reviewed_head.sha and .status == "completed" and .has_any_findings == false)
+        and (.approval.review_state.security_review
+             | .status == null
+               or (.commit_sha != null and .commit_sha != $e.reviewed_head.sha)
+               or (.status == "completed" and .has_any_findings == false
+                   and .commit_sha == $e.reviewed_head.sha))),
+      chk("I7";
+        (.approval.reaction.created_at | ts) >= ((.approval.review_state.comment_updated_at | ts | sec) + 1000000)
+        and (.approval.reaction.created_at | ts) >= (.reviewed_head.committed_at | ts)),
+      chk("I8"; head_checks and .checks.current_head_bot_reviews == 0)
+    ]
+    else ["I1"] end
   | if length == 0 then "OK" else join(",") end
 ' "$EVIDENCE") || { echo "ABORT: review-poll evidence is unreadable or not valid JSON"; exit 1; }
 [ "$VERIFIED" = "OK" ] || { echo "ABORT: review-poll evidence violates invariant(s): $VERIFIED"; exit 1; }
@@ -382,8 +428,9 @@ VERIFIED=$(jq -r '
 
 `ts` は小数秒を保持した epoch マイクロ秒を返す（`fromdateiso8601` は小数秒を受け付けないため、整数秒と小数部を別々に変換して合成する）。
 `sec` は `floor(秒)` で、producer の `next_second_after` / `replace(microsecond=0)` に対応する。floor を使うのは
-`completed_at` に対する比較（I7 の reaction・`comment_updated_at`）だけで、他の時刻比較（I7 の `committed_at`、I9）は小数秒まで比較する。
-I7 は「reaction の秒が完了秒より厳密に後」であることを要求する。
+v1 の `completed_at` に対する比較（I7 の reaction・`comment_updated_at`）と v2 の `review_state.comment_updated_at` に対する
+比較（I7 の reaction）だけで、他の時刻比較（I7 の `committed_at`、I9）は小数秒まで比較する。
+I7 は v1 では「reaction の秒が完了秒より厳密に後」、v2 では「reaction の秒が state を含む summary comment の更新秒より厳密に後」を要求する。
 `ists` は形式に加えて暦日・時分秒の実在を検証する（`fromdateiso8601 | todateiso8601` が元の秒部分に往復一致しなければ不正。`2026-02-30` 等を拒否する）。
 
 #### 2.5.4 現在の PR との照合（`MODE=verify` のみ）
