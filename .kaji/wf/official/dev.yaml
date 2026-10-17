@@ -49,7 +49,7 @@ steps:
     skill: issue-review-ready
     agent: codex
     model: gpt-6.1-sol
-    effort: medium
+    effort: high
     on:
       PASS: start
       RETRY: fix-ready
@@ -59,7 +59,7 @@ steps:
     skill: issue-fix-ready
     agent: claude
     model: opus
-    effort: medium
+    effort: high
     on:
       PASS: review-ready
       ABORT: end
@@ -67,7 +67,7 @@ steps:
   - id: start
     skill: issue-start
     agent: codex
-    model: gpt-5.6-luna
+    model: gpt-6-luna
     effort: medium
     on:
       PASS: design
@@ -86,7 +86,7 @@ steps:
     skill: issue-review-design
     agent: codex
     model: gpt-6.1-sol
-    effort: medium
+    effort: high
     on:
       PASS: baseline
       RETRY: fix-design
@@ -122,8 +122,9 @@ steps:
   - id: implement
     skill: issue-implement
     agent: claude
-    model: sonnet
+    model: opus
     effort: high
+    timeout: 3600
     on:
       PASS: review-code
       RETRY: implement
@@ -134,7 +135,7 @@ steps:
     skill: issue-review-code
     agent: codex
     model: gpt-6.1-sol
-    effort: medium
+    effort: high
     on:
       PASS: final-check
       RETRY: fix-code
@@ -145,8 +146,9 @@ steps:
   - id: fix-code
     skill: issue-fix-code
     agent: claude
-    model: sonnet
+    model: opus
     effort: high
+    timeout: 3600
     on:
       PASS: verify-code
       ABORT: end
@@ -155,7 +157,7 @@ steps:
     skill: issue-verify-code
     agent: codex
     model: gpt-6.1-sol
-    effort: medium
+    effort: high
     on:
       PASS: final-check
       RETRY: fix-code
@@ -176,7 +178,7 @@ steps:
   - id: pr
     skill: i-pr
     agent: codex
-    model: gpt-5.6-luna
+    model: gpt-6-luna
     effort: medium
     on:
       PASS: review-poll
@@ -195,7 +197,7 @@ steps:
     skill: review
     agent: codex
     model: gpt-6.1-sol
-    effort: medium
+    effort: high
     on:
       PASS: close
       RETRY: pr-fix
@@ -204,7 +206,7 @@ steps:
   - id: pr-fix
     skill: pr-fix
     agent: claude
-    model: sonnet
+    model: opus
     effort: high
     on:
       PASS: pr-verify
@@ -223,7 +225,7 @@ steps:
   - id: close
     skill: issue-close
     agent: codex
-    model: gpt-5.6-luna
+    model: gpt-6-luna
     effort: medium
     on:
       PASS: end

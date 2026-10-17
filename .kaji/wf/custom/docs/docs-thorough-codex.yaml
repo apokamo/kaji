@@ -38,8 +38,8 @@ steps:
   - id: review-ready
     skill: issue-review-ready
     agent: codex
-    model: gpt-6-astra
-    effort: medium
+    model: gpt-6.1-sol
+    effort: high
     on:
       PASS: start
       RETRY: fix-ready
@@ -48,8 +48,8 @@ steps:
   - id: fix-ready
     skill: issue-fix-ready
     agent: codex
-    model: gpt-6-astra
-    effort: medium
+    model: gpt-6.1-sol
+    effort: high
     on:
       PASS: review-ready
       ABORT: end
@@ -57,7 +57,7 @@ steps:
   - id: start
     skill: issue-start
     agent: codex
-    model: gpt-5.6-luna
+    model: gpt-6-luna
     effort: medium
     on:
       PASS: doc-update
@@ -86,7 +86,7 @@ steps:
     skill: i-doc-fix
     agent: codex
     model: gpt-6-astra
-    effort: medium
+    effort: high
     resume: doc-update
     on:
       PASS: doc-verify
@@ -106,7 +106,7 @@ steps:
   - id: final-check
     skill: i-doc-final-check
     agent: codex
-    model: gpt-6-astra
+    model: gpt-6.1-sol
     effort: medium
     on:
       PASS: pr
@@ -117,7 +117,7 @@ steps:
   - id: pr
     skill: i-pr
     agent: codex
-    model: gpt-5.6-luna
+    model: gpt-6-luna
     effort: medium
     on:
       PASS: review-poll
@@ -135,8 +135,8 @@ steps:
   - id: review
     skill: review
     agent: codex
-    model: gpt-6-astra
-    effort: medium
+    model: gpt-6.1-sol
+    effort: high
     on:
       PASS: close
       RETRY: pr-fix
@@ -145,8 +145,8 @@ steps:
   - id: pr-fix
     skill: pr-fix
     agent: codex
-    model: gpt-6-astra
-    effort: medium
+    model: gpt-6.1-sol
+    effort: high
     on:
       PASS: pr-verify
       ABORT: end
@@ -154,8 +154,8 @@ steps:
   - id: pr-verify
     skill: pr-verify
     agent: codex
-    model: gpt-6-astra
-    effort: medium
+    model: gpt-6.1-sol
+    effort: high
     on:
       PASS: close
       RETRY: pr-fix
@@ -164,7 +164,7 @@ steps:
   - id: close
     skill: issue-close
     agent: codex
-    model: gpt-5.6-luna
+    model: gpt-6-luna
     effort: medium
     on:
       PASS: end
