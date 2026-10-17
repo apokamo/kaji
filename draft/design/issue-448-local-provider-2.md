@@ -8,6 +8,10 @@ v0.21.0 で非推奨にした local provider（`provider.type = "local"`）を�
 local 専用 workflow・テスト・skill / docs の local 分岐・`.kaji/issues/` の local Issue 28 件ごと
 削除する。`provider.type = "local"` は設定読み込み時に移行先を示すエラー（終了コード 2）にする。
 
+> 実装時の確定事項: 削除済み provider の例外名は `ProviderTypeRemovedError` とする。
+> Issue 完了条件の残存参照検索（`LocalProvider` 0 件）と両立させるための改名で、
+> `ConfigLoadError` の継承・終了コード・表示内容は設計どおり。
+
 ## 背景・目的
 
 - 本リポジトリは local provider を使っていない（`.kaji/config.toml` / `.kaji/config.local.toml` は
@@ -117,7 +121,7 @@ except MainWorktreeResolutionError:
 
 | 失敗 | 例外 / 戻り値 | 終了コード |
 |------|--------------|-----------|
-| `provider.type = "local"` | `RemovedLocalProviderError(source_path, ...)`（`ConfigLoadError` のサブクラス） | 2（`kaji validate` を含む全 CLI） |
+| `provider.type = "local"` | `ProviderTypeRemovedError(source_path, ...)`（`ConfigLoadError` のサブクラス） | 2（`kaji validate` を含む全 CLI） |
 | `requires_provider: local` | `WorkflowValidationError` | `kaji validate` 1 / `kaji run` 2（既存の定義エラー経路） |
 | local 形式 Issue ID | `ValueError` → 各 CLI の既存ハンドリング | 既存契約どおり |
 | main worktree 解決失敗 | `MainWorktreeResolutionError`（`LocalProviderError` の置換） | 呼出側はすべて best-effort で握る（既存挙動維持） |
@@ -163,8 +167,8 @@ except MainWorktreeResolutionError:
 
 | モジュール | 変更 |
 |-----------|------|
-| `config.py` | 非推奨警告定数・helper を削除。`type == "local"` は `RemovedLocalProviderError` で raise する。`LocalProviderConfig` と `ProviderConfig.local` を削除し、`ProviderConfig.type` を `Literal["github"]` にする。`_parse_provider` は `type == "local"` を named `ConfigLoadError`（source path は overlay 優先）にし、その他の非 github 値は `'github'` のみを許容値として示す。overlay の deep-1 merge 対象キーは `{"github"}` のみ。`[provider.local]` の解決コードを削除 |
-| `errors.py` | `RemovedLocalProviderError(ConfigLoadError)` を追加する。サブクラスなので、既存の `except ConfigLoadError` 経路（exit 2）はそのまま捕捉する。`SyncError` を削除。`MainWorktreeResolutionError(RuntimeError)` を追加。`ConfigNotFoundError` の案内から local-first 行と `local-mode.md` 参照を削除し、テンプレート参照先を `docs/cli-guides/github-mode.md` § 1.3 に変更 |
+| `config.py` | 非推奨警告定数・helper を削除。`type == "local"` は `ProviderTypeRemovedError` で raise する。`LocalProviderConfig` と `ProviderConfig.local` を削除し、`ProviderConfig.type` を `Literal["github"]` にする。`_parse_provider` は `type == "local"` を named `ConfigLoadError`（source path は overlay 優先）にし、その他の非 github 値は `'github'` のみを許容値として示す。overlay の deep-1 merge 対象キーは `{"github"}` のみ。`[provider.local]` の解決コードを削除 |
+| `errors.py` | `ProviderTypeRemovedError(ConfigLoadError)` を追加する。サブクラスなので、既存の `except ConfigLoadError` 経路（exit 2）はそのまま捕捉する。`SyncError` を削除。`MainWorktreeResolutionError(RuntimeError)` を追加。`ConfigNotFoundError` の案内から local-first 行と `local-mode.md` 参照を削除し、テンプレート参照先を `docs/cli-guides/github-mode.md` § 1.3 に変更 |
 | `providers/__init__.py` | `LocalProvider` / `LocalProviderError` の import と `__all__` 登録、`get_provider` の local 分岐、`kaji local init` への案内を削除。`ResolvedId` / `ResolvedKind` を削除し、`normalize_id(raw: str) -> str` に単純化（`"<n>"` / `"gh:<n>"` → `"<n>"`、それ以外は `ValueError`）。`provider_overlay_divergence_warning` は `except MainWorktreeResolutionError` に変更し、WARN 文言から `kaji local init` を削除 |
 | `providers/_worktree.py` | 例外を `MainWorktreeResolutionError` に置換し、エラー文言から `provider.type='local'` 前提の記述を削除。module docstring を「main worktree 解決（artifacts / overlay divergence / baseline 用）」に更新 |
 | `providers/models.py` | `Comment.seq` / `Comment.machine_id`（local mode 固有と明記されたフィールド）を削除。docstring の local 例を削除 |
@@ -176,7 +180,7 @@ except MainWorktreeResolutionError:
 | `commands/issue.py` | `_handle_issue_local`、`_local_issue_*`、`_resolve_local_id`、`resolve-verdict` / `prepend-note` / `context` の LocalProvider 分岐、`SyncError` 捕捉を削除。`--commit` の受理と github 経路での無視は維持し、コメント・help を「no-op（既存 skill 呼び出しとの互換のため受理）」に更新 |
 | `commands/pr.py` | `LocalProvider` guard と `_PR_BARE_PROVIDER_ERROR` を削除 |
 | `commands/recover.py` | `LocalProviderError` の捕捉を削除 |
-| `commands/validate.py` | `cmd_validate` の per-file ループで `RemovedLocalProviderError` を捕捉したら、既存どおり `_print_error` で表示して `failed` を加算する。あわせて `removed_local_provider` フラグを立てる。ループ終了後、フラグが立っていれば `EXIT_CONFIG_NOT_FOUND`（2）、そうでなく `failed > 0` なら `EXIT_VALIDATION_ERROR`（1）を返す。`_resolve_project_root_for_validate` の `ConfigLoadError` 再送出は現状のままでよい（サブクラスも同じループで捕捉される） |
+| `commands/validate.py` | `cmd_validate` の per-file ループで `ProviderTypeRemovedError` を捕捉したら、既存どおり `_print_error` で表示して `failed` を加算する。あわせて `removed_local_provider` フラグを立てる。ループ終了後、フラグが立っていれば `EXIT_CONFIG_NOT_FOUND`（2）、そうでなく `failed > 0` なら `EXIT_VALIDATION_ERROR`（1）を返す。`_resolve_project_root_for_validate` の `ConfigLoadError` 再送出は現状のままでよい（サブクラスも同じループで捕捉される） |
 | `artifacts.py` | `except MainWorktreeResolutionError` に変更 |
 | `scripts/baseline_precheck.py` | `LocalProvider` 分岐（comment の local commit）を削除し、`except MainWorktreeResolutionError` に変更 |
 | `errors.py` 以外の残存 local 文言 | `kaji_harness/` 全体で `kaji local` / `local-mode.md` / `provider.local` を案内する文字列を残さない |
@@ -257,7 +261,7 @@ implement step の timeout（3600 秒）内で収まるよう、(1) コード削
 | 既存 local Issue 28 件 | 全件削除。移行なし | 人間決定: #438 provenance P4、[#448 移行結果コメント](https://github.com/apokamo/kaji/issues/448#issuecomment-6228378059)（28 件すべて移行しない） | `.kaji/issues/` を丸ごと削除 |
 | `provider.type = "local"` の扱い | 設定読み込み時のエラー、終了コード 2、移行先を示す | Issue #448 本文 重要判断・完了条件（終了コード 2 は完了条件に明記） | `_parse_provider` で named `ConfigLoadError`。source path は overlay 優先。既存の `ConfigLoadError` → exit 2 経路に乗せ、新定数は作らない。文言要素を 3 点に固定 |
 | エラー文言の細部 | 上記「出力」の例文 | AI の仮定（Issue 本文が「文言は設計で決める two-way door」と明記）。review-design / review-code で検査 | 必須要素のみ固定し、語句は実装で調整可 |
-| `kaji validate` の終了コード | local provider の設定エラーは `kaji validate` でも exit 2。複数ファイルでは他ファイルの失敗（1）より 2 を優先する | 人間決定: Issue #448 完了条件第 2 項（`provider.type = "local"`、overlay 由来を含む、で設定を読み込むと終了コード 2）。コマンドの除外はない。review-design RD-1 の指摘で、初版の exit 1 解釈を撤回した | 専用サブクラス `RemovedLocalProviderError` で local だけを判別する。local 以外の設定エラーと workflow 検証失敗の exit 1 契約は変えない（完了条件の対象外） |
+| `kaji validate` の終了コード | local provider の設定エラーは `kaji validate` でも exit 2。複数ファイルでは他ファイルの失敗（1）より 2 を優先する | 人間決定: Issue #448 完了条件第 2 項（`provider.type = "local"`、overlay 由来を含む、で設定を読み込むと終了コード 2）。コマンドの除外はない。review-design RD-1 の指摘で、初版の exit 1 解釈を撤回した | 専用サブクラス `ProviderTypeRemovedError` で local だけを判別する。local 以外の設定エラーと workflow 検証失敗の exit 1 契約は変えない（完了条件の対象外） |
 | `workflow.requires_provider` の `"local"` | 値を削除し、`requires_provider: local` は `WorkflowValidationError` | Issue #448 完了条件が「設計で決め、設計書に記録する」と委任。AI の仮定。根拠: ADR 008（互換レイヤなし・fail-fast）、`requires_provider: local` の workflow は local provider なしに実行できない。review-design で検査 | 許容値 `{"github", "any"}`。専用メッセージは置かず既存 enum 検証のメッセージを使う |
 | `[provider.local]` テーブル | schema から削除し、未知キーと同様に読み捨てる | AI の仮定。根拠: 既存 `_parse_provider` は `[provider]` 配下の未知キーを無視する。`type = "github"` と併存する `[provider.local]` は動作に影響しない残骸で、エラーにすると local を使っていない clone まで止まる。review-design で検査 | 専用の検出・警告コードを書かない |
 | `kaji local` / `kaji sync` 実行時 | argparse の未知サブコマンドエラー（exit 2） | Issue #448 完了条件「`kaji --help` に出ず、実行すると引数エラーになる」 | 削除済み専用メッセージは置かない（ADR 008） |
@@ -276,9 +280,9 @@ implement step の timeout（3600 秒）内で収まるよう、(1) コード削
 ### Small テスト
 
 - `KajiConfig` の provider 解析（`tests/test_config.py`）
-  - tracked `type = "local"` → `RemovedLocalProviderError`（`ConfigLoadError` のサブクラス）。`path` が tracked config、メッセージに「removed」相当と
+  - tracked `type = "local"` → `ProviderTypeRemovedError`（`ConfigLoadError` のサブクラス）。`path` が tracked config、メッセージに「removed」相当と
     `provider.type = "github"` を含む
-  - tracked `type = "github"` + overlay `type = "local"` → `RemovedLocalProviderError`。`path` が overlay
+  - tracked `type = "github"` + overlay `type = "local"` → `ProviderTypeRemovedError`。`path` が overlay
   - `type = "gitlab"` → `ConfigLoadError`。許容値表示が `'github'` のみ
   - `type = "github"` + `[provider.local]` テーブル → 読み込み成功、`ProviderConfig` に `local` 属性がない
   - 非推奨警告が stderr に出ない（`capsys`）
