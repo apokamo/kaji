@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-17
+
+This release removes the deprecated local provider, deprecates the tmux
+backend of the interactive terminal runner, and makes review-poll read Codex's
+machine-readable review state so it no longer misses reviews that start with an
+HTML comment.
+
 ### BREAKING CHANGE
 
 - **The local provider is removed** (#448), after its deprecation in v0.21.0.
@@ -95,6 +102,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `security_review` state, and `checks` drops `short_sha_matching_pr_commits`
   because the full SHA is matched directly. `issue-close` verifies v1 and v2
   with one jq program switched by `schema_version` (#473).
+- Official workflow model assignments are corrected (#480):
+  `.kaji/wf/official/dev.yaml` runs implement / fix-code / pr-fix on
+  `claude / opus / high` again (implement / fix-code with `timeout: 3600`),
+  routine steps (start / pr / close) use `gpt-6-luna`, and incident
+  review / verify use `codex / gpt-6.1-sol`. The assignment rules are
+  documented in `docs/dev/workflow_guide.md` § モデル割り当てルール.
 
 ### Fixed
 
@@ -109,6 +122,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is present but unparsable or of an unknown version returns `BACK_FALLBACK`
   immediately. Without the state, the legacy path now skips leading HTML
   comments before matching the review heading.
+
+### Internal
+
+- Split the interactive terminal runner into a dispatch module, shared helpers
+  (`interactive_terminal_common.py`), and the tmux implementation
+  (`interactive_terminal_tmux.py`), so the Herdr backend no longer imports the
+  tmux module (#474).
 
 ## [0.22.0] - 2026-10-05
 
