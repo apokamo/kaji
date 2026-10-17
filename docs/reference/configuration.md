@@ -98,7 +98,7 @@ computation (`worktree_prefix`, `design_dir`), both are described separately.
 
 `[paths] design_dir` sets the directory where design documents live. Kaji injects
 `design_path = <design_dir>/issue-<id>-<slug>.md` (the `design_path` context variable and the
-`design_path` field of `kaji issue context <id>`) identically for the GitHub and Local providers.
+`design_path` field of `kaji issue context <id>`) through the GitHub provider.
 Kaji only computes, validates and injects the path; creating and committing the design document is
 the skill's responsibility.
 

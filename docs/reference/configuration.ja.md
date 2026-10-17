@@ -97,7 +97,7 @@ path 算出時に適用する**実効 fallback** が異なる key（`worktree_pr
 
 `[paths] design_dir` で設計書の置き場所を設定する。Kaji は
 `design_path = <design_dir>/issue-<id>-<slug>.md`（`design_path` コンテキスト変数、および
-`kaji issue context <id>` の `design_path`）を GitHub / Local 両 provider で同一規約で注入する。
+`kaji issue context <id>` の `design_path`）を GitHub provider 経由で注入する。
 Kaji が行うのは path 値の算出・検証・注入までで、設計書の作成・commit は skill の責務。
 
 - **設定 default（loader 層）**: 未設定（または `design_dir = ""`）のとき `config.paths.design_dir` は空文字 `""`。

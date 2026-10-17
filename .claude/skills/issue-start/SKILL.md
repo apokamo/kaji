@@ -26,8 +26,8 @@ $ARGUMENTS = <issue_id>
 - `issue_id` (必須): Issue番号 (例: 247 / `gh:153`)
 
 第 2 引数は **廃止** されました。ブランチ prefix は
-`kaji issue context` が返す `branch_prefix`（frontmatter `branch_prefix` →
-`type:*` ラベル → `chore` fallback の優先順）から自動決定します。
+`kaji issue context` が返す `branch_prefix`（`type:*` ラベル → `chore` fallback の
+優先順）から自動決定します。
 
 ## 命名規則
 
@@ -43,7 +43,7 @@ $ARGUMENTS = <issue_id>
 
 `$ARGUMENTS` から `issue_id` を取得してください。第 2 引数（旧 `prefix`）が
 渡された場合は **ABORT** verdict を出して停止し、廃止アナウンスをユーザに返してください
-（label / frontmatter からの自動導出に一本化されているため）。
+（`type:*` ラベルからの自動導出に一本化されているため）。
 
 ### Step 1: context 正本の取得
 
