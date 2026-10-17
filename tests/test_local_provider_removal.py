@@ -120,6 +120,19 @@ def test_validate_multiple_files_prefers_exit_2(
     assert "Validation failed: 2 of 2 files had errors." in err
 
 
+@pytest.mark.parametrize("filename", ["missing.yaml", "malformed.yaml"])
+def test_validate_exits_2_when_workflow_fails_before_config_resolution(
+    filename: str, tracked_local_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """workflow が存在しない / YAML として読めない場合も local provider 診断と exit 2 を優先する。"""
+    (tracked_local_repo / "malformed.yaml").write_text("name: [unclosed\n")
+    wf = tracked_local_repo / filename
+    assert main(["validate", str(wf)]) == 2
+    err = capsys.readouterr().err
+    assert f"✗ {wf}" in err
+    assert _MIGRATION_HINT in err
+
+
 def test_validate_requires_provider_local_under_github_exits_1(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -60,29 +60,29 @@ def cmd_validate(args: argparse.Namespace) -> int:
     total = len(args.files)
 
     for path in args.files:
-        if not path.exists():
-            _print_error(path, ["File not found"])
-            failed += 1
-            continue
+        config_error: ConfigNotFoundError | ConfigLoadError | None = None
+        # Appended to every failure of this file so the removed-provider diagnostic
+        # survives even when the workflow itself is missing or fails to load.
+        removed_provider_errors: list[str] = []
         try:
-            workflow = load_workflow(path)
             try:
                 project_root = _resolve_project_root_for_validate(args.project_root, path)
                 config = KajiConfig.discover(start_dir=project_root)
             except (ConfigNotFoundError, ConfigLoadError) as e:
-                # L3 needs project config; without it still surface L2 diagnostics,
-                # which are more actionable than the config error itself.
+                config_error = e
                 if isinstance(e, ProviderTypeRemovedError):
                     removed_local_provider = True
-                    try:
-                        validate_workflow(workflow)
-                    except WorkflowValidationError as wf_error:
-                        _print_error(path, [*wf_error.errors, str(e)])
-                        failed += 1
-                        continue
-                else:
-                    validate_workflow(workflow)
-                _print_error(path, [str(e)])
+                    removed_provider_errors = [str(e)]
+            if not path.exists():
+                _print_error(path, ["File not found", *removed_provider_errors])
+                failed += 1
+                continue
+            workflow = load_workflow(path)
+            if config_error is not None:
+                # L3 needs project config; without it still surface L2 diagnostics,
+                # which are more actionable than the config error itself.
+                validate_workflow(workflow)
+                _print_error(path, [str(config_error)])
                 failed += 1
                 continue
             result = preflight_workflow(
@@ -97,10 +97,10 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 continue
             _print_success(path)
         except WorkflowValidationError as e:
-            _print_error(path, e.errors)
+            _print_error(path, [*e.errors, *removed_provider_errors])
             failed += 1
         except OSError as e:
-            _print_error(path, [str(e)])
+            _print_error(path, [str(e), *removed_provider_errors])
             failed += 1
 
     if failed > 0 and total > 1:
