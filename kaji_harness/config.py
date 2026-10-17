@@ -59,6 +59,70 @@ class ExecutionConfig:
     interactive_terminal_close_on_verdict: bool = True
     failure_triage: bool = True
     auto_recover: bool = False
+    # Issue #475: per-key マージ後の ``interactive_terminal_backend`` を定義したファイル。
+    # built-in default なら None。config 解決の記録であり CLI override では更新しない。
+    interactive_terminal_backend_source: Path | None = None
+
+
+TMUX_BACKEND_DEPRECATION_PREFIX = "WARNING: the tmux interactive terminal backend is deprecated"
+_TMUX_BACKEND_DEPRECATION_DOCS = (
+    "docs/cli-guides/interactive-terminal-runner.md#tmux-backend-deprecation"
+)
+
+
+def tmux_backend_deprecation_warning(
+    *,
+    configured: ExecutionConfig,
+    effective: ExecutionConfig,
+    cli_backend: str | None,
+) -> str | None:
+    """tmux backend の非推奨警告文を組み立てる（Issue #475）。
+
+    次のいずれかが成立すれば警告する: (a) 実効 runner が interactive terminal で実効 backend が
+    tmux、(b) per-key マージ後の config 値が明示的な ``"tmux"``（runner・CLI override に関係なく。
+    削除後はこの設定自体が config エラーになるため）、(c) CLI で ``tmux`` を指定。
+
+    Args:
+        configured: CLI override 適用前の config 解決値。
+        effective: CLI override 適用後の実効値。
+        cli_backend: ``--interactive-terminal-backend`` の値。未指定は None。
+
+    Returns:
+        警告文（1 行）。いずれの条件も成立しなければ None。
+    """
+    used_interactively = (
+        effective.agent_runner == "interactive_terminal"
+        and effective.interactive_terminal_backend == "tmux"
+    )
+    config_source = configured.interactive_terminal_backend_source
+    explicit_in_config = (
+        config_source is not None and configured.interactive_terminal_backend == "tmux"
+    )
+    given_on_cli = cli_backend == "tmux"
+    if not (used_interactively or explicit_in_config or given_on_cli):
+        return None
+
+    sources: list[str] = []
+    notice = ""
+    if explicit_in_config:
+        sources.append(f'interactive_terminal_backend = "tmux" in {config_source}')
+        notice = (
+            'Remove or change the value in that file: after removal, an explicit "tmux" '
+            "in config fails config loading even with --agent-runner headless or "
+            "--interactive-terminal-backend herdr. "
+        )
+    if given_on_cli:
+        sources.append("--interactive-terminal-backend tmux")
+    if not sources:
+        sources.append("the built-in default (interactive_terminal_backend is not set)")
+        notice = "After removal, the default backend becomes Herdr. "
+    return (
+        f"{TMUX_BACKEND_DEPRECATION_PREFIX} and will be removed in a subsequent kaji release. "
+        f"tmux is selected by: {'; '.join(sources)}. "
+        'Migrate to Herdr (interactive_terminal_backend = "herdr", run kaji inside a Herdr pane) '
+        'or to the headless runner (agent_runner = "headless"). '
+        f"{notice}See {_TMUX_BACKEND_DEPRECATION_DOCS}"
+    )
 
 
 @dataclass(frozen=True)
@@ -443,6 +507,11 @@ class KajiConfig:
             interactive_terminal_close_on_verdict=raw_close,
             failure_triage=parse_bool("failure_triage", True),
             auto_recover=parse_bool("auto_recover", False),
+            interactive_terminal_backend_source=(
+                source("interactive_terminal_backend")
+                if "interactive_terminal_backend" in merged
+                else None
+            ),
         )
 
     @staticmethod
