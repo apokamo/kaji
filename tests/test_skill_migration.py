@@ -85,10 +85,10 @@ class TestSkillNoLegacyPlaceholders:
 
 @pytest.mark.medium
 class TestSkillNoHashIssueIdHardcode:
-    """`#[issue_id]` は禁止（local mode で `#local-pc1-1` を生成し ref 契約を壊す）。
+    """`#[issue_id]` は禁止（issue ref の整形契約を Skill 側で重複させない）。
 
-    `#` の hard-code は `[issue_ref]` に集約する。`prompt.py` 側で github なら
-    `#153`、local なら bare ID にフォーマットされるため、Skill 側は `[issue_ref]`
+    `#` の hard-code は `[issue_ref]` に集約する。`prompt.py` 側で provider に応じて
+    `#153` 形式にフォーマットされるため、Skill 側は `[issue_ref]`
     を使うのが正解。`promote-design.md` の `git commit` 例で `#[issue_id]` が
     残っていた事案（PR review 指摘）の回帰防止。
     """
@@ -128,7 +128,6 @@ class TestPrReviewCommentsCliRunnerIntegration:
             ExecutionConfig,
             GitHubProviderConfig,
             KajiConfig,
-            LocalProviderConfig,
             PathsConfig,
             ProviderConfig,
         )
@@ -140,7 +139,6 @@ class TestPrReviewCommentsCliRunnerIntegration:
                 execution=ExecutionConfig(default_timeout=1800),
                 provider=ProviderConfig(
                     type="github",
-                    local=LocalProviderConfig(),
                     github=GitHubProviderConfig(repo="acme/widgets"),
                 ),
             )

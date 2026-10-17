@@ -27,8 +27,18 @@ from kaji_harness.errors import (
     TmuxSessionRequiredError,
 )
 from kaji_harness.models import CLIResult, Step, Workflow
+from kaji_harness.providers.github import GitHubProvider
 from kaji_harness.runner import WorkflowRunner
 from kaji_harness.skill import SkillMetadata
+
+pytestmark = pytest.mark.usefixtures("stub_github_issue")
+
+
+@pytest.fixture(autouse=True)
+def _no_pr_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``gh pr list`` を呼ばせず PR 未作成扱いにする。"""
+    monkeypatch.setattr(GitHubProvider, "resolve_pr_context", lambda self, branch: None)
+
 
 _PASS_YAML = "status: PASS\nreason: ok\nevidence: e\nsuggestion: ''\n"
 
@@ -40,8 +50,8 @@ def _make_config(tmp_path: Path, *, execution_extra: str = "") -> KajiConfig:
     cfg.write_text(
         '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n'
         f"[execution]\ndefault_timeout = 60\n{execution_extra}\n\n"
-        '[provider]\ntype = "local"\n\n'
-        '[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+        '[provider]\ntype = "github"\n\n'
+        '[provider.github]\nrepo = "owner/name"\n'
     )
     if not (tmp_path / ".git").exists():
         subprocess.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)

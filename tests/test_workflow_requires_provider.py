@@ -41,10 +41,17 @@ def test_requires_provider_defaults_to_any() -> None:
 
 
 @pytest.mark.small
-@pytest.mark.parametrize("value", ["github", "local", "any"])
+@pytest.mark.parametrize("value", ["github", "any"])
 def test_requires_provider_accepts_valid_enum(value: str) -> None:
     wf = load_workflow_from_str(_yaml_with_requires_provider(value))
     assert wf.requires_provider == value
+
+
+@pytest.mark.small
+def test_requires_provider_rejects_removed_local() -> None:
+    """local provider 削除（#448）後、``requires_provider: local`` は検証エラー。"""
+    with pytest.raises(WorkflowValidationError, match="must be one of \\['any', 'github'\\]"):
+        load_workflow_from_str(_yaml_with_requires_provider("local"))
 
 
 @pytest.mark.small

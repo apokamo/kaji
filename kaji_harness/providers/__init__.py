@@ -1,24 +1,21 @@
 """Provider abstraction for kaji_harness.
 
 Phase 3-ab で導入。`IssueProvider` Protocol と `IssueContext` を中心に
-GitHub / local 両方を統一 interface で扱う。本パッケージは dispatcher
-未切替の段階で導入されるため、`cli_main.py` / `prompt.py` への組み込みは
-Phase 3-c で行う（design.md L226-244 参照）。
+provider を統一 interface で扱う（現行の実装は GitHub provider のみ）。
 """
 
 from __future__ import annotations
 
 import re
 import tomllib
-from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
+from ..errors import MainWorktreeResolutionError
 from ._mappings import DEFAULT_BRANCH_PREFIX, LABEL_TO_PREFIX
 from ._worktree import resolve_main_worktree
 from .base import IssueProvider
 from .github import GitHubProvider
-from .local import LocalProvider, LocalProviderError
 from .models import Comment, Issue, IssueContext, Label, PRContext
 
 if TYPE_CHECKING:
@@ -40,9 +37,7 @@ __all__ = [
     "IssueContext",
     "IssueProvider",
     "Label",
-    "LocalProvider",
     "PRContext",
-    "ResolvedId",
     "actual_provider_type",
     "get_provider",
     "normalize_id",
@@ -63,7 +58,7 @@ def actual_provider_type(config: KajiConfig) -> str:
             検証済みであることが前提。
 
     Returns:
-        ``"github"`` / ``"local"`` のいずれか。
+        ``"github"``。
 
     Raises:
         ValueError: ``config.provider`` が ``None``（``get_provider()`` を
@@ -84,7 +79,6 @@ def get_provider(config: KajiConfig) -> IssueProvider:
     要求する。
 
     - ``provider.type == "github"`` → GitHubProvider
-    - ``provider.type == "local"`` → LocalProvider
     """
     if config.provider is None:
         raise ValueError(
@@ -94,9 +88,7 @@ def get_provider(config: KajiConfig) -> IssueProvider:
             '    type = "github"\n\n'
             "    [provider.github]\n"
             '    repo = "<owner>/<repo>"\n\n'
-            "For GitHub-independent (local-first) development, run "
-            "`kaji local init`.\n"
-            "See `docs/cli-guides/local-mode.md`."
+            "See `docs/cli-guides/github-mode.md`."
         )
 
     if config.provider.type == "github":
@@ -109,30 +101,6 @@ def get_provider(config: KajiConfig) -> IssueProvider:
             repo_root=config.repo_root,
             default_branch=config.provider.github.default_branch,
             git_remote=config.provider.github.git_remote,
-            worktree_prefix=config.paths.worktree_prefix,
-            design_dir=config.paths.design_dir,
-        )
-    if config.provider.type == "local":
-        local_cfg = config.provider.local
-        if not local_cfg.machine_id:
-            raise ValueError(
-                "provider.type='local' requires provider.local.machine_id. "
-                "Run 'kaji local init' or set machine_id in "
-                ".kaji/config.local.toml."
-            )
-        # cwd 起点 discover では feature worktree が repo_root になりうるため、
-        # LocalProvider の I/O 正本を ``default_branch`` を checkout している worktree
-        # (= main worktree) に固定する。GitHubProvider は外部 API 経由なので
-        # repo_root は cwd 起点のまま。
-        main_root = resolve_main_worktree(
-            start_dir=config.repo_root,
-            default_branch=local_cfg.default_branch,
-        )
-        return LocalProvider(
-            repo_root=main_root,
-            machine_id=local_cfg.machine_id,
-            default_branch=local_cfg.default_branch,
-            git_remote=local_cfg.git_remote,
             worktree_prefix=config.paths.worktree_prefix,
             design_dir=config.paths.design_dir,
         )
@@ -175,7 +143,7 @@ def provider_overlay_divergence_warning(config: KajiConfig) -> str | None:
     WARN 文言を返し、ズレが無ければ ``None`` を返す。
 
     検出は best-effort。非 git / git CLI 不在 / main worktree 未構成では
-    ``resolve_main_worktree`` が ``LocalProviderError`` を送出するが、握り潰して
+    ``resolve_main_worktree`` が ``MainWorktreeResolutionError`` を送出するが、握り潰して
     ``None`` を返す（コマンド自体は壊さない）。
 
     overlay 非継承は ``git worktree add`` 由来の linked worktree でのみ起きる構造
@@ -201,13 +169,13 @@ def provider_overlay_divergence_warning(config: KajiConfig) -> str | None:
         # subprocess を起動せず即 None を返す。
         return None
     current_type = config.provider.type
-    default_branch: str = getattr(config.provider, current_type).default_branch
+    default_branch = config.provider.github.default_branch
     try:
         main_root = resolve_main_worktree(
             start_dir=config.repo_root,
             default_branch=default_branch,
         )
-    except LocalProviderError:
+    except MainWorktreeResolutionError:
         return None
     if main_root == config.repo_root:
         return None  # 自分が main worktree
@@ -219,118 +187,35 @@ def provider_overlay_divergence_warning(config: KajiConfig) -> str | None:
         f"provider.type resolved to {current_type!r} from tracked "
         f".kaji/config.toml, but the main worktree's overlay selects "
         f"{main_type!r}. Copy .kaji/config.local.toml from the main worktree "
-        "or run 'kaji local init' here. See docs/guides/git-worktree.md."
+        "to this worktree. See docs/guides/git-worktree.md."
     )
-
-
-ResolvedKind = Literal["github", "local", "remote_cache"]
-
-
-@dataclass(frozen=True)
-class ResolvedId:
-    """正規化済み Issue ID。
-
-    Attributes:
-        kind: ID の所属。``github`` は active な GitHub provider 経路、
-            ``local`` は LocalProvider 経路、``remote_cache`` は
-            ``provider=local`` 配下で ``gh:N`` として読み出される
-            キャッシュ参照（read-only）。
-        value: provider 内部表現での ID 文字列。
-            github → 数値文字列（``"153"``）、
-            local → ``local-<machine>-<n>``（``"local-pc1-3"``）、
-            remote_cache → 数値文字列（cache JSON 上の番号）。
-        raw: 入力された原文字列（デバッグ・エラーメッセージ用）。
-    """
-
-    kind: ResolvedKind
-    value: str
-    raw: str
 
 
 # Issue 番号は 1 始まり整数。leading zero（``007``）や ``0`` は拒否する。
 _POS_INT = r"[1-9]\d*"
 _GH_PREFIX_RE = re.compile(rf"^gh:({_POS_INT})$")
-_LOCAL_FULL_RE = re.compile(rf"^local-([a-z0-9]{{1,16}})-({_POS_INT})$")
-_LOCAL_SHORT_RE = re.compile(rf"^([a-z0-9]{{1,16}})-({_POS_INT})$")
 _NUMERIC_RE = re.compile(rf"^{_POS_INT}$")
-_MACHINE_ID_RE = re.compile(r"^[a-z0-9]{1,16}$")
 
 
-def normalize_id(
-    raw: str,
-    *,
-    provider_name: str,
-    machine_id: str | None,
-) -> ResolvedId:
-    """user 入力の Issue ID を `ResolvedId` に正規化する。
+def normalize_id(raw: str) -> str:
+    """user 入力の Issue ID を GitHub Issue 番号文字列に正規化する。
 
-    受理する形式は以下:
-
-    - ``"153"``           — provider に応じて github / local どちらにも解釈
-    - ``"gh:153"``        — provider=local 配下では remote_cache、
-                            provider=github では github（``gh:`` を剥がす）
-    - ``"local-pc1-3"``   — local（machine_id まで明示）
-    - ``"pc1-3"``         — local（短縮形、machine_id を埋めて拡張）
+    受理する形式は ``"153"`` と ``"gh:153"``（``gh:`` を剥がす）のみ。
 
     Args:
         raw: ユーザー入力。
-        provider_name: ``"github"`` / ``"local"`` のいずれか。
-        machine_id: provider=local 時の machine_id。``"153"`` や
-            ``"pc1-3"`` を解釈する際に必要。
+
+    Returns:
+        正規化済み Issue 番号（例: ``"153"``）。
 
     Raises:
-        ValueError: 入力が空 / 文法不一致 / machine_id 欠落 等。
+        ValueError: 入力が空、または受理形式に一致しない。
     """
     if not isinstance(raw, str) or not raw:
         raise ValueError("issue id must be a non-empty string")
-    if provider_name not in {"github", "local"}:
-        raise ValueError(f"unknown provider: {provider_name!r}")
-
-    # gh:N — provider=github で github、provider=local で remote_cache
     m = _GH_PREFIX_RE.match(raw)
     if m:
-        if provider_name == "github":
-            return ResolvedId(kind="github", value=m.group(1), raw=raw)
-        # provider_name == "local"
-        return ResolvedId(kind="remote_cache", value=m.group(1), raw=raw)
-
-    # local-<machine>-<n>
-    m = _LOCAL_FULL_RE.match(raw)
-    if m:
-        if provider_name != "local":
-            raise ValueError(
-                f"local-form id {raw!r} requires provider.type='local' "
-                f"(current: {provider_name!r}). "
-                f"Use 'gh:N' to read cached issues from local mode."
-            )
-        return ResolvedId(kind="local", value=raw, raw=raw)
-
-    # 数値のみ
+        return m.group(1)
     if _NUMERIC_RE.match(raw):
-        if provider_name == "github":
-            return ResolvedId(kind="github", value=raw, raw=raw)
-        # provider=local + 数値 → 自分の machine_id を補完
-        if not machine_id:
-            raise ValueError(
-                f"numeric id {raw!r} under provider.type='local' requires "
-                f"provider.local.machine_id to be configured. "
-                f"Run 'kaji local init' or set [provider.local] machine_id "
-                f"in .kaji/config.local.toml."
-            )
-        if not _MACHINE_ID_RE.match(machine_id):
-            raise ValueError(f"invalid machine_id {machine_id!r}: must match [a-z0-9]{{1,16}}")
-        return ResolvedId(kind="local", value=f"local-{machine_id}-{raw}", raw=raw)
-
-    # <machine>-<n> 短縮形
-    m = _LOCAL_SHORT_RE.match(raw)
-    if m:
-        if provider_name != "local":
-            raise ValueError(
-                f"short-form id {raw!r} requires provider.type='local' (current: {provider_name!r})"
-            )
-        return ResolvedId(kind="local", value=f"local-{raw}", raw=raw)
-
-    raise ValueError(
-        f"invalid issue id {raw!r}: expected one of "
-        f"'<number>', 'gh:<number>', 'local-<machine>-<n>', '<machine>-<n>'"
-    )
+        return raw
+    raise ValueError(f"invalid issue id {raw!r}: expected '<number>' or 'gh:<number>'")

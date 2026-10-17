@@ -15,7 +15,6 @@ from .recover import cmd_recover
 from .run import cmd_run
 from .series import cmd_run_series, cmd_validate_series
 from .starter import cmd_starter_release_plan, cmd_starter_task_plan, cmd_starter_tracking_plan
-from .sync import cmd_sync_from_github, cmd_sync_status
 from .validate import cmd_validate
 
 
@@ -47,17 +46,6 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_config_design_dir(args)
         parser.print_help()
         return EXIT_ABORT
-    if args.command == "sync":
-        if args.sync_command == "from-github":
-            return cmd_sync_from_github(args)
-        if args.sync_command == "status":
-            return cmd_sync_status(args)
-        parser.print_help()
-        return EXIT_ABORT
-    if args.command == "local":
-        from ..local_init import cmd_local
-
-        return cmd_local(args)
     if args.command == "starter":
         if args.starter_command == "release-plan":
             return cmd_starter_release_plan()

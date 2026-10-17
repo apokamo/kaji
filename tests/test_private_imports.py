@@ -69,7 +69,7 @@ def _pkg(module: str, packages: frozenset[str]) -> str:
 
     ``kaji_harness.providers``          → ``kaji_harness.providers``（package 自身）
     ``kaji_harness.providers.__init__`` → ``kaji_harness.providers``（自 package）
-    ``kaji_harness.providers.local``    → ``kaji_harness.providers``
+    ``kaji_harness.providers.github``   → ``kaji_harness.providers``
 
     Args:
         module: 対象の dotted name。
@@ -222,20 +222,11 @@ SYNTHETIC_TRANSITIONAL_ALLOWLIST: frozenset[Signature] = frozenset(
             "kaji_harness.cli_main",
             "kaji_harness.commands.issue",
             (
-                "_LOCAL_ISSUE_SUBS",
                 "_github_issue_comment_with_verdict",
                 "_handle_issue",
                 "_handle_issue_context",
-                "_handle_issue_local",
                 "_handle_issue_prepend_note",
                 "_has_verdict_flags",
-                "_local_issue_close",
-                "_local_issue_comment",
-                "_local_issue_create",
-                "_local_issue_edit",
-                "_local_issue_list",
-                "_local_issue_view",
-                "_resolve_local_id",
             ),
         ),
         (
@@ -261,7 +252,6 @@ SYNTHETIC_TRANSITIONAL_ALLOWLIST: frozenset[Signature] = frozenset(
                 "_register_pr",
                 "_register_recover",
                 "_register_run",
-                "_register_sync",
                 "_register_validate",
             ),
         ),
@@ -271,7 +261,6 @@ SYNTHETIC_TRANSITIONAL_ALLOWLIST: frozenset[Signature] = frozenset(
             (
                 "_FORGE_METHOD_FLAGS",
                 "_GH_MISSING_GUIDANCE",
-                "_PR_BARE_PROVIDER_ERROR",
                 "_PR_BUILTIN_SUBCOMMANDS",
                 "_detect_repo",
                 "_dispatch_pr_builtin",
@@ -387,26 +376,26 @@ def test_same_package_private_import_is_allowed() -> None:
 @pytest.mark.small
 def test_cross_package_private_symbol_is_forbidden() -> None:
     result = classify_source(
-        "from .providers.local import _atomic_write\n",
-        "kaji_harness.sync",
+        "from .providers.github import _comment_url\n",
+        "kaji_harness.runner",
         PACKAGES,
     )
     assert [r.classification for r in result] == ["forbidden"]
-    assert result[0].target == "kaji_harness.providers.local"
+    assert result[0].target == "kaji_harness.providers.github"
 
 
 @pytest.mark.small
 def test_sub_package_facade_private_symbol_is_forbidden_relative() -> None:
     """sub-package の facade (`__init__`) から private symbol を取るのも境界違反。
 
-    ``pkg(T)`` は「T が package なら T 自身」なので、``kaji_harness.sync``
+    ``pkg(T)`` は「T が package なら T 自身」なので、``kaji_harness.runner``
     (所属 ``kaji_harness``) から見た ``kaji_harness.providers`` は別 package。
     import 先を package 自身と判別しないと、末尾成分を落とした親 package 同士の
     比較になって許容と誤判定する。
     """
     result = classify_source(
         "from .providers import _internal\n",
-        "kaji_harness.sync",
+        "kaji_harness.runner",
         PACKAGES,
     )
     assert len(result) == 1
@@ -420,7 +409,7 @@ def test_sub_package_facade_private_symbol_is_forbidden_absolute() -> None:
     """絶対 import 形式でも sub-package facade 経由の private symbol は禁止。"""
     result = classify_source(
         "from kaji_harness.providers import _internal\n",
-        "kaji_harness.sync",
+        "kaji_harness.runner",
         PACKAGES,
     )
     assert [r.classification for r in result] == ["forbidden"]
@@ -432,7 +421,7 @@ def test_own_package_facade_private_symbol_is_allowed() -> None:
     """同一 package の facade (``from . import _x``) は package 内なので許容。"""
     result = classify_source(
         "from . import _internal\n",
-        "kaji_harness.providers.local",
+        "kaji_harness.providers.github",
         PACKAGES,
     )
     assert len(result) == 1
@@ -472,7 +461,7 @@ def test_plain_import_of_private_module_is_forbidden() -> None:
 @pytest.mark.small
 def test_plain_import_of_public_module_is_out_of_scope() -> None:
     result = classify_source(
-        "import kaji_harness.providers\nimport kaji_harness.sync\n",
+        "import kaji_harness.providers\nimport kaji_harness.runner\n",
         "kaji_harness.worktree_discovery",
         PACKAGES,
     )
@@ -483,7 +472,7 @@ def test_plain_import_of_public_module_is_out_of_scope() -> None:
 def test_dunder_import_is_not_private() -> None:
     result = classify_source(
         "from __future__ import annotations\n",
-        "kaji_harness.sync",
+        "kaji_harness.runner",
         PACKAGES,
     )
     assert result == []
@@ -494,8 +483,8 @@ def test_public_symbol_and_third_party_imports_are_out_of_scope() -> None:
     result = classify_source(
         "import os\nimport yaml\nfrom pathlib import Path\n"
         "from .providers import get_provider\n"
-        "from kaji_harness.errors import SyncError\n",
-        "kaji_harness.sync",
+        "from kaji_harness.errors import ConfigLoadError\n",
+        "kaji_harness.runner",
         PACKAGES,
     )
     assert result == []

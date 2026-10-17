@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -15,6 +14,7 @@ from kaji_harness.commands.issue import (
     resolve_latest_verdict,
 )
 from kaji_harness.providers import Comment
+from kaji_harness.providers.github import GitHubProvider
 
 
 def _comment(body: str, created_at: str) -> Comment:
@@ -82,21 +82,39 @@ def test_latest_verdict_required_metadata_fails_closed() -> None:
         )
 
 
+class _InMemoryGitHubProvider(GitHubProvider):
+    """``comment_issue`` / ``list_issue_comments_all`` を gh 不要の in-memory 実装に置換する。"""
+
+    def __init__(self, repo_root: Path) -> None:
+        super().__init__(repo="owner/name", repo_root=repo_root)
+        self.posted: list[Comment] = []
+
+    def comment_issue(self, issue_id: str, body: str) -> Comment:
+        comment = Comment(
+            author="tester",
+            body=body,
+            created_at=f"2026-07-16T00:{len(self.posted):02d}:00Z",
+        )
+        self.posted.append(comment)
+        return comment
+
+    def list_issue_comments_all(self, issue_id: str) -> list[Comment]:
+        return list(self.posted)
+
+
 @pytest.mark.medium
-def test_local_comment_meta_round_trip(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    from kaji_harness.commands.issue import _handle_issue_resolve_verdict, _local_issue_comment
-    from kaji_harness.providers.local import LocalProvider
+def test_github_comment_meta_round_trip(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from kaji_harness.commands.issue import (
+        _github_issue_comment_with_verdict,
+        _handle_issue_resolve_verdict,
+    )
 
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q", "--initial-branch=main", str(repo)], check=True)
-    provider = LocalProvider(repo_root=repo, machine_id="pc1")
-    issue = provider.create_issue(title="t", body="b", slug="x", labels=["type:feature"])
+    provider = _InMemoryGitHubProvider(tmp_path)
 
-    rc = _local_issue_comment(
+    rc = _github_issue_comment_with_verdict(
         provider,
         [
-            issue.id,
+            "1",
             "--verdict-step",
             "review-starter-update",
             "--verdict-status",
@@ -109,6 +127,7 @@ def test_local_comment_meta_round_trip(tmp_path: Path, capsys: pytest.CaptureFix
             "candidate=bbb",
             "--body",
             "reviewed",
+            "--commit",
         ],
     )
     assert rc == 0
@@ -117,7 +136,7 @@ def test_local_comment_meta_round_trip(tmp_path: Path, capsys: pytest.CaptureFix
     rc = _handle_issue_resolve_verdict(
         provider,
         [
-            issue.id,
+            "1",
             "--step",
             "review-starter-update",
             "--require-meta",
@@ -150,15 +169,10 @@ def test_resolve_verdict_cli_distinguishes_fail_closed_codes(
     expected_code: int,
 ) -> None:
     from kaji_harness.commands.issue import _handle_issue_resolve_verdict
-    from kaji_harness.providers.local import LocalProvider
 
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q", "--initial-branch=main", str(repo)], check=True)
-    provider = LocalProvider(repo_root=repo, machine_id="pc1")
-    issue = provider.create_issue(title="t", body="b", slug="x", labels=["type:feature"])
-    provider.comment_issue(issue.id, body)
-    args = [issue.id, "--step", "review-starter-update"]
+    provider = _InMemoryGitHubProvider(tmp_path)
+    provider.comment_issue("1", body)
+    args = ["1", "--step", "review-starter-update"]
     for key in required_meta:
         args.extend(["--require-meta", key])
 

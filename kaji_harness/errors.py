@@ -26,18 +26,12 @@ class SessionResolution:
     session_id: str | None
 
 
-# --- cache 同期エラー ---
-class SyncError(RuntimeError):
-    """``kaji sync`` 固有のエラー（config 不在 / gh CLI 不在 / API 失敗等）。
+# --- main worktree 解決エラー ---
+class MainWorktreeResolutionError(RuntimeError):
+    """``resolve_main_worktree`` が main worktree を特定できない。
 
-    Issue #285 で ``sync.py`` から foundation 層へ移設した。``providers.cache_guard``
-    （下位層）が raise し ``sync`` / ``commands`` （上位層）が catch するため、
-    どちらにも属さない ``errors`` に置く。
-
-    基底は ``RuntimeError`` を維持する。``HarnessError`` に付け替えると
-    ``except RuntimeError`` の到達範囲が変わり振る舞い変更になるため、基底の統一は
-    本 Issue の scope 外（`draft/design/issue-285-refactor-private-import-r3.md`
-    § 制約・前提条件）。
+    Issue #448 で local provider の例外型を置き換えた。基底は ``RuntimeError`` を維持し、
+    ``except RuntimeError`` の到達範囲を変えない（#285 の ``SyncError`` 移設と同じ判断）。
     """
 
 
@@ -51,11 +45,9 @@ class ConfigNotFoundError(HarnessError):
             f".kaji/config.toml not found. Searched from {self.start_dir} to /.\n\n"
             "`kaji issue` / `kaji pr` / `kaji run` require a kaji repository.\n"
             "First create `.kaji/config.toml` with `[paths]` and `[execution]`\n"
-            "sections (template in `docs/cli-guides/local-mode.md` § 2),\n"
+            "sections (template in `docs/cli-guides/github-mode.md` § 1.3),\n"
             "then add a `[provider]` section:\n"
-            '  - For GitHub:    type = "github" + [provider.github] repo = "<owner>/<repo>"\n'
-            '  - For local-first: type = "local"  (then run `kaji local init`\n'
-            "                    to write the gitignored machine_id overlay)."
+            '  type = "github" + [provider.github] repo = "<owner>/<repo>"'
         )
 
 
@@ -66,6 +58,23 @@ class ConfigLoadError(HarnessError):
         self.path = path
         self.reason = reason
         super().__init__(f"Error loading {path}: {reason}")
+
+
+class ProviderTypeRemovedError(ConfigLoadError):
+    """``provider.type = "local"`` が設定された（local provider は削除済み）。
+
+    ``ConfigLoadError`` のサブクラスなので、既存の ``except ConfigLoadError`` 経路
+    （exit 2）がそのまま捕捉する。``kaji validate`` は本型だけを判別して exit 2 にする。
+    """
+
+    def __init__(self, path: Path):
+        super().__init__(
+            path,
+            'provider.type = "local" is no longer supported: '
+            "the local provider was removed after its deprecation in kaji v0.21.0. "
+            'Set provider.type = "github" and [provider.github] repo = "<owner>/<repo>" '
+            "(see docs/cli-guides/github-mode.md).",
+        )
 
 
 # --- ワークフロー定義エラー（起動時に検出） ---
@@ -250,7 +259,7 @@ class IssueContextResolutionError(HarnessError):
     """`provider.resolve_issue_context` が失敗した。
 
     Phase 3-c で導入、Phase 3-e で `[provider]` セクションが必須化されたため、
-    Issue 解決失敗（machine_id 不在 / Issue dir 不在 / cache 不整合 等）は
+    Issue 解決失敗（Issue 不在 / ID 不正 等）は
     agent 起動前に常に fail-fast する。``cmd_run`` では `EXIT_RUNTIME_ERROR
     (= 3)` にマップされる。``[provider]`` 未設定 / 設定不整合の問題は
     ``ValueError`` として `cmd_run` 冒頭で `EXIT_INVALID_INPUT (= 2)` に

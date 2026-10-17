@@ -7,8 +7,8 @@ PR-3c のスコープのうち、``kaji issue`` / ``kaji pr`` の dispatch 経�
 カバー範囲:
 
 - ``KajiConfig`` が ``[provider]`` セクションを optional に parse できる
-- ``providers.get_provider`` の routing（github / local / 未設定 fallback）
-- ``commands.issue._handle_issue`` の dispatch（local provider 経路 + フラグ）
+- ``providers.get_provider`` の routing（github / 未設定 fail-fast）
+- ``commands.issue._handle_issue`` の dispatch（gh passthrough + ``--commit`` 剥離）
 - ``commands.pr._forward_to_gh`` の ``--repo`` 強制注入
 
 phase3-design.md § 4 ロールアウト戦略 PR-3c に対応。
@@ -16,8 +16,6 @@ phase3-design.md § 4 ロールアウト戦略 PR-3c に対応。
 
 from __future__ import annotations
 
-import json
-import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -28,7 +26,6 @@ from kaji_harness.commands.pr import _user_specified_repo
 from kaji_harness.config import KajiConfig
 from kaji_harness.providers import (
     GitHubProvider,
-    LocalProvider,
     get_provider,
 )
 
@@ -38,22 +35,12 @@ from kaji_harness.providers import (
 
 
 def _write_repo(tmp_path: Path, *, provider_section: str = "") -> Path:
-    """``.kaji/config.toml`` を持つ最小 repo を tmp_path 下に作る。
-
-    gl:21: ``provider.type='local'`` は git repo + main worktree を前提とするため、
-    ``get_provider()`` 経由で ``resolve_main_worktree()`` が成功する形で git init
-    しておく。github/gitlab provider テストでも害はない（resolve_main_worktree は
-    local 経路でしか呼ばれない）。
-    """
+    """``.kaji/config.toml`` を持つ最小 repo を tmp_path 下に作る。"""
     repo = tmp_path / "repo"
     (repo / ".kaji").mkdir(parents=True)
     (repo / ".kaji" / "config.toml").write_text(
         '[paths]\nartifacts_dir = ".kaji-artifacts"\nskill_dir = ".claude/skills"\n\n'
         "[execution]\ndefault_timeout = 1800\n" + provider_section
-    )
-    subprocess.run(
-        ["git", "init", "-q", "--initial-branch=main", str(repo)],
-        check=True,
     )
     return repo
 
@@ -82,21 +69,6 @@ class TestProviderConfigParsing:
         assert cfg.provider.type == "github"
         assert cfg.provider.github.repo == "kamo/kaji"
 
-    def test_local_provider_with_overlay(self, tmp_path: Path) -> None:
-        repo = _write_repo(
-            tmp_path,
-            provider_section=(
-                '\n[provider]\ntype = "local"\n\n[provider.local]\ndefault_branch = "main"\n'
-            ),
-        )
-        # config.local.toml で machine_id を上書き注入する
-        (repo / ".kaji" / "config.local.toml").write_text('[provider.local]\nmachine_id = "pc1"\n')
-        cfg = KajiConfig.discover(start_dir=repo)
-        assert cfg.provider is not None
-        assert cfg.provider.type == "local"
-        assert cfg.provider.local.machine_id == "pc1"
-        assert cfg.provider.local.default_branch == "main"
-
     def test_invalid_provider_type_rejected(self, tmp_path: Path) -> None:
         from kaji_harness.errors import ConfigLoadError
 
@@ -105,6 +77,17 @@ class TestProviderConfigParsing:
             provider_section='\n[provider]\ntype = "bitbucket"\n',
         )
         with pytest.raises(ConfigLoadError):
+            KajiConfig.discover(start_dir=repo)
+
+    def test_removed_local_provider_type_rejected(self, tmp_path: Path) -> None:
+        """#448: 削除済み ``provider.type = "local"`` は ``ProviderTypeRemovedError``。"""
+        from kaji_harness.errors import ProviderTypeRemovedError
+
+        repo = _write_repo(
+            tmp_path,
+            provider_section='\n[provider]\ntype = "local"\n',
+        )
+        with pytest.raises(ProviderTypeRemovedError):
             KajiConfig.discover(start_dir=repo)
 
 
@@ -131,28 +114,6 @@ class TestGetProviderRouting:
         provider = get_provider(cfg)
         assert isinstance(provider, GitHubProvider)
         assert provider.repo == "o/r"
-
-    def test_local_provider_routing(self, tmp_path: Path) -> None:
-        repo = _write_repo(
-            tmp_path,
-            provider_section=(
-                '\n[provider]\ntype = "local"\n\n'
-                '[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
-            ),
-        )
-        cfg = KajiConfig.discover(start_dir=repo)
-        provider = get_provider(cfg)
-        assert isinstance(provider, LocalProvider)
-        assert provider.machine_id == "pc1"
-
-    def test_local_without_machine_id_raises(self, tmp_path: Path) -> None:
-        repo = _write_repo(
-            tmp_path,
-            provider_section='\n[provider]\ntype = "local"\n',
-        )
-        cfg = KajiConfig.discover(start_dir=repo)
-        with pytest.raises(ValueError, match="machine_id"):
-            get_provider(cfg)
 
     def test_github_without_repo_raises(self, tmp_path: Path) -> None:
         repo = _write_repo(
@@ -203,14 +164,13 @@ class TestHandleIssueDispatch:
         assert cmd[:3] == ["gh", "issue", "view"]
         assert "--json" in cmd  # passthrough は引数を保持する
 
-    def test_github_provider_strips_local_only_commit_flag(
+    def test_github_provider_strips_noop_commit_flag(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Issue local-pc5090-16 B: github mode forwards to gh without `--commit`.
+        """github mode forwards to gh without `--commit`.
 
-        Skill 側は provider 型を意識せず `--commit` を付与できるよう設計したため、
-        github mode では silent に剥がして gh に forward する（gh CLI に渡ると
-        unknown flag で fail する）。
+        `--commit` は既存 skill 呼び出しとの互換のため受理する no-op で、
+        silent に剥がして gh に forward する（gh CLI に渡ると unknown flag で fail する）。
         """
         repo = _write_repo(
             tmp_path,
@@ -227,461 +187,6 @@ class TestHandleIssueDispatch:
         cmd = mock_run.call_args[0][0]
         assert "--commit" not in cmd
         assert cmd[:3] == ["gh", "issue", "comment"]
-
-    def test_local_provider_view_dispatches_to_local_handler(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        repo = _write_repo(
-            tmp_path,
-            provider_section=(
-                '\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\n'
-            ),
-        )
-        monkeypatch.chdir(repo)
-        # local issue を 1 件作る
-        from kaji_harness.providers import LocalProvider as _LP
-
-        provider = _LP(repo_root=repo, machine_id="pc1")
-        provider.create_issue(
-            title="Hello", body="body text", labels=["type:feature"], slug="hello-test"
-        )
-        # `kaji issue view local-pc1-1` が gh を呼ばずに local 経由で動く。
-        # gl:21: ``subprocess.run`` を patch すると同じ subprocess module を
-        # 共有する ``_worktree.subprocess.run`` にも波及して main worktree 解決が壊れる。
-        # 設計書 § 方針 §§ 2 系統 A（実 git 経由）を維持するため、subprocess.run は
-        # passthrough し、gh が呼ばれていないことだけを spy で検証する。
-        real_run = subprocess.run
-        with patch("subprocess.run", side_effect=real_run) as mock_run:
-            rc = _handle_issue(["view", "local-pc1-1"])
-        assert rc == 0
-        gh_calls = [c for c in mock_run.call_args_list if c[0] and c[0][0] and c[0][0][0] == "gh"]
-        assert gh_calls == [], f"gh must not be invoked: {gh_calls}"
-        captured = capsys.readouterr()
-        assert "Hello" in captured.out
-        assert "body text" in captured.out
-
-    def test_local_provider_create_and_close(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        repo = _write_repo(
-            tmp_path,
-            provider_section=(
-                '\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\n'
-            ),
-        )
-        monkeypatch.chdir(repo)
-        rc = _handle_issue(
-            [
-                "create",
-                "--title",
-                "Test",
-                "--body",
-                "body",
-                "--slug",
-                "test-issue",
-                "--label",
-                "type:bug",
-            ]
-        )
-        assert rc == 0
-        captured = capsys.readouterr()
-        assert "local-pc1-1" in captured.out
-
-        rc = _handle_issue(["close", "local-pc1-1", "--reason", "completed"])
-        assert rc == 0
-        # 確認: state が closed に
-        from kaji_harness.providers import LocalProvider as _LP
-
-        provider = _LP(repo_root=repo, machine_id="pc1")
-        issue = provider.view_issue("local-pc1-1")
-        assert issue.state == "closed"
-
-
-# ============================================================
-# Review fixes: normalize_id 経由の id 解決 + write/read 分離
-# ============================================================
-
-
-@pytest.fixture()
-def local_repo(tmp_path: Path) -> Path:
-    """provider=local + machine_id=pc1 の最小 repo + Issue 1 件付き fixture。"""
-    repo = _write_repo(
-        tmp_path,
-        provider_section=('\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\n'),
-    )
-    provider = LocalProvider(repo_root=repo, machine_id="pc1")
-    provider.create_issue(
-        title="Hello", body="body text", labels=["type:feature"], slug="hello-test"
-    )
-    return repo
-
-
-@pytest.mark.medium
-class TestLocalDispatcherIdNormalization:
-    """``_handle_issue_local`` が ``normalize_id`` 経由で全 id 形式を扱う。"""
-
-    def test_numeric_id_resolves_with_machine_id(
-        self,
-        local_repo: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        monkeypatch.chdir(local_repo)
-        # `kaji issue view 1` → local-pc1-1 として解決される
-        rc = _handle_issue(["view", "1"])
-        assert rc == 0
-        captured = capsys.readouterr()
-        assert "Hello" in captured.out
-
-    def test_short_form_id_resolves(
-        self,
-        local_repo: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        monkeypatch.chdir(local_repo)
-        rc = _handle_issue(["view", "pc1-1"])
-        assert rc == 0
-        captured = capsys.readouterr()
-        assert "Hello" in captured.out
-
-    def test_full_local_id_resolves(
-        self,
-        local_repo: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        monkeypatch.chdir(local_repo)
-        rc = _handle_issue(["view", "local-pc1-1"])
-        assert rc == 0
-        captured = capsys.readouterr()
-        assert "Hello" in captured.out
-
-    def test_gh_prefix_routes_to_remote_cache(
-        self,
-        local_repo: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """``gh:N`` は cache JSON 経路。cache 不在は明示エラーで exit 3。"""
-        monkeypatch.chdir(local_repo)
-        rc = _handle_issue(["view", "gh:153"])
-        assert rc == 3  # IssueNotFoundError → EXIT_RUNTIME_ERROR
-        captured = capsys.readouterr()
-        assert "no cached" in captured.err.lower() or "cache" in captured.err.lower()
-
-    def test_gh_prefix_with_cache_returns_issue(
-        self,
-        local_repo: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """cache を投入してから ``gh:N`` が read-only に view される (issue gl:34 wrapper layout)。"""
-        cache_dir = local_repo / ".kaji" / "cache"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        (cache_dir / "gh-153.json").write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "forge": "github",
-                    "fetched_at": "2026-05-21T00:00:00Z",
-                    "kaji_local": {
-                        "is_stale": False,
-                        "last_seen_at": "2026-05-21T00:00:00Z",
-                        "staled_at": None,
-                    },
-                    "issue": {
-                        "number": 153,
-                        "title": "Cached",
-                        "body": "cached body",
-                        "state": "open",
-                        "labels": [],
-                    },
-                }
-            )
-        )
-        monkeypatch.chdir(local_repo)
-        rc = _handle_issue(["view", "gh:153"])
-        assert rc == 0
-        captured = capsys.readouterr()
-        assert "Cached" in captured.out
-        assert "cached body" in captured.out
-
-    def test_gh_prefix_write_rejected_as_readonly(
-        self,
-        local_repo: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """``gh:N`` への write 系（edit / comment / close）は exit 2。"""
-        monkeypatch.chdir(local_repo)
-        rc = _handle_issue(["edit", "gh:153", "--body", "x"])
-        assert rc == 2
-        captured = capsys.readouterr()
-        assert "read-only" in captured.err.lower() or "cannot modify" in captured.err.lower()
-
-        rc = _handle_issue(["close", "gh:153"])
-        assert rc == 2
-
-        rc = _handle_issue(["comment", "gh:153", "--body", "x"])
-        assert rc == 2
-
-    def test_invalid_id_returns_exit_2(
-        self,
-        local_repo: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        monkeypatch.chdir(local_repo)
-        rc = _handle_issue(["view", "Bogus-ID"])
-        assert rc == 2
-        captured = capsys.readouterr()
-        assert "invalid issue id" in captured.err.lower()
-
-
-@pytest.mark.medium
-class TestLocalDispatcherFlags:
-    """Skill が依存する CLI フラグを LocalProvider 経由で受理する。"""
-
-    def test_view_json_with_jq_emits_raw_string(
-        self,
-        local_repo: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """``-q '.body'`` は ``gh --jq`` 互換で **quote 無し** raw 出力する。
-
-        Skill が ``CURRENT_BODY=$(kaji issue view N --json body -q '.body')``
-        の形で shell 変数に代入するため、``"body text"`` のような quote
-        付き出力では下流が壊れる。jq の ``-r`` モード採用を構造的に検証。
-        """
-        monkeypatch.chdir(local_repo)
-        rc = _handle_issue(["view", "1", "--json", "body", "-q", ".body"])
-        assert rc == 0
-        captured = capsys.readouterr()
-        # gh --jq 互換: raw string、末尾に改行 1 つのみ
-        assert captured.out == "body text\n"
-        # 構造的にも quote が混入していないことを assert（regression guard）
-        assert '"' not in captured.out
-        assert "'" not in captured.out
-
-    def test_view_jq_array_result_keeps_json_format(
-        self,
-        local_repo: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """array / object 結果は ``-r`` でも JSON のまま（gh と同じ挙動）。"""
-        monkeypatch.chdir(local_repo)
-        rc = _handle_issue(["view", "1", "--json", "labels", "--jq", "[.labels[].name]"])
-        assert rc == 0
-        captured = capsys.readouterr()
-        # array は JSON 形式（quoted strings の配列）。型を厳密に確認する
-        import json as _json
-
-        parsed = _json.loads(captured.out)
-        assert parsed == ["type:feature"]
-
-    def test_view_jq_string_stream_emits_raw_lines(
-        self,
-        local_repo: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """string ストリーム ``.labels[].name`` は raw 行で並ぶ（gh 互換）。"""
-        monkeypatch.chdir(local_repo)
-        # 追加 label を 1 つ足してストリームの確認を厚くする
-        from kaji_harness.providers import LocalProvider as _LP
-
-        provider = _LP(repo_root=local_repo, machine_id="pc1")
-        provider.edit_issue("local-pc1-1", add_labels=["type:bug"])
-        rc = _handle_issue(["view", "1", "--json", "labels", "--jq", ".labels[].name"])
-        assert rc == 0
-        captured = capsys.readouterr()
-        # 各 label が独立行・quote 無し
-        lines = captured.out.splitlines()
-        assert lines == ["type:feature", "type:bug"]
-
-    def test_view_jq_without_json_emits_raw_string(
-        self,
-        local_repo: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """``--jq`` 単独でも full Issue JSON を入力に raw 結果を返す。"""
-        monkeypatch.chdir(local_repo)
-        rc = _handle_issue(["view", "1", "--jq", ".title"])
-        assert rc == 0
-        captured = capsys.readouterr()
-        assert captured.out == "Hello\n"
-        assert '"' not in captured.out
-
-    def test_view_jq_shell_capture_round_trip(
-        self,
-        local_repo: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """実際の subshell 経由（``$(...)``）の用途を端から端まで再現する。
-
-        Skill ``issue-start`` / ``i-pr`` / ``_shared/worktree-resolve`` が
-        ``CURRENT_BODY=$(kaji issue view ... --json body -q '.body')`` を
-        使っている。capsys 経由のテストでは検出しきれない subshell 取り込み
-        の挙動（末尾改行剥ぎ落とし含む）を、subprocess + ``$()`` 等価の
-        ``str.rstrip("\\n")`` で再現する。
-        """
-        import subprocess
-        import sys as _sys
-
-        monkeypatch.chdir(local_repo)
-        proc = subprocess.run(
-            [
-                _sys.executable,
-                "-m",
-                "kaji_harness.cli_main",
-                "issue",
-                "view",
-                "1",
-                "--json",
-                "body",
-                "-q",
-                ".body",
-            ],
-            cwd=local_repo,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert proc.returncode == 0, proc.stderr
-        # subshell 取り込み相当: 末尾改行を剥ぐ → 純 raw string
-        captured = proc.stdout.rstrip("\n")
-        assert captured == "body text"
-
-    def test_view_jq_works_without_system_jq_binary(
-        self,
-        local_repo: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """Phase 3-d preflight § 2: PATH に system ``jq`` バイナリが無くても動作する。
-
-        Python ``jq`` package が runtime dependency になったため、system ``jq``
-        に依存しない契約を構造的に検証する（``shutil.which("jq")`` を None で
-        固定化しても結果が出る）。
-        """
-        monkeypatch.chdir(local_repo)
-        with patch(
-            "shutil.which",
-            side_effect=lambda name: None if name == "jq" else "/usr/bin/" + name,
-        ):
-            rc = _handle_issue(["view", "1", "--json", "body", "-q", ".body"])
-        assert rc == 0
-        captured = capsys.readouterr()
-        assert captured.out == "body text\n"
-
-    def test_view_with_comments_flag(
-        self,
-        local_repo: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        # コメントを 1 件付ける
-        provider = LocalProvider(repo_root=local_repo, machine_id="pc1")
-        provider.comment_issue("local-pc1-1", "first comment body")
-
-        monkeypatch.chdir(local_repo)
-        rc = _handle_issue(["view", "1", "--comments"])
-        assert rc == 0
-        captured = capsys.readouterr()
-        assert "Hello" in captured.out
-        assert "first comment body" in captured.out
-        assert "pc1" in captured.out  # コメント author = machine_id
-
-    def test_create_with_body_file(
-        self,
-        local_repo: Path,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        body_file = tmp_path / "body.md"
-        body_file.write_text("body from file\n## section")
-        monkeypatch.chdir(local_repo)
-        rc = _handle_issue(
-            [
-                "create",
-                "--title",
-                "T",
-                "--body-file",
-                str(body_file),
-                "--slug",
-                "from-file",
-            ]
-        )
-        assert rc == 0
-        captured = capsys.readouterr()
-        assert "local-pc1-2" in captured.out  # local-pc1-1 は fixture が消費済み
-        # 内容検証
-        provider = LocalProvider(repo_root=local_repo, machine_id="pc1")
-        issue = provider.view_issue("local-pc1-2")
-        assert "body from file" in issue.body
-        assert "## section" in issue.body
-
-    def test_comment_with_body_file_stdin(
-        self,
-        local_repo: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """``--body-file -`` で stdin からコメント本文を読む。"""
-        import io
-
-        monkeypatch.chdir(local_repo)
-        monkeypatch.setattr("sys.stdin", io.StringIO("comment from stdin"))
-        rc = _handle_issue(["comment", "1", "--body-file", "-"])
-        assert rc == 0
-        provider = LocalProvider(repo_root=local_repo, machine_id="pc1")
-        issue = provider.view_issue("local-pc1-1")
-        assert any("comment from stdin" in c.body for c in issue.comments)
-
-    def test_body_and_body_file_are_mutually_exclusive(
-        self,
-        local_repo: Path,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        body_file = tmp_path / "b.md"
-        body_file.write_text("x")
-        monkeypatch.chdir(local_repo)
-        rc = _handle_issue(
-            [
-                "create",
-                "--title",
-                "T",
-                "--body",
-                "inline",
-                "--body-file",
-                str(body_file),
-                "--slug",
-                "x-y",
-            ]
-        )
-        assert rc == 2
-        captured = capsys.readouterr()
-        assert "mutually exclusive" in captured.err.lower()
-
-    def test_list_with_jq_filter(
-        self,
-        local_repo: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        monkeypatch.chdir(local_repo)
-        rc = _handle_issue(
-            ["list", "--state", "open", "--json", "labels", "--jq", ".[0].labels[0].name"]
-        )
-        assert rc == 0
-        captured = capsys.readouterr()
-        assert "type:feature" in captured.out
 
 
 @pytest.mark.medium
@@ -727,19 +232,24 @@ class TestDispatcherFailFastOnConfig:
         assert rc == 2
         mock_run.assert_not_called()
 
-    def test_local_missing_machine_id_yields_exit_2(
+    def test_removed_local_type_yields_exit_2(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """``type=local`` で machine_id 不在は traceback ではなく exit 2。"""
-        repo = _write_repo(tmp_path, provider_section='\n[provider]\ntype = "local"\n')
+        """#448: 削除済み ``type=local`` は traceback / gh fallback ではなく exit 2。"""
+        repo = _write_repo(
+            tmp_path,
+            provider_section='\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\n',
+        )
         monkeypatch.chdir(repo)
-        rc = _handle_issue(["view", "1"])
+        with patch("subprocess.run") as mock_run:
+            rc = _handle_issue(["view", "1"])
         assert rc == 2
+        mock_run.assert_not_called()
         captured = capsys.readouterr()
-        assert "machine_id" in captured.err
+        assert "provider.type" in captured.err
 
     def test_github_missing_repo_yields_exit_2(
         self,
@@ -760,30 +270,30 @@ class TestDispatcherFailFastOnConfig:
 class TestConfigLocalOverlayProviderType:
     """`config.local.toml` の ``[provider]`` 全体 overlay（review #4）。"""
 
-    def test_overlay_can_switch_type_to_local(self, tmp_path: Path) -> None:
-        """tracked が ``type=github`` でも overlay で ``type=local`` に切替できる。"""
+    def test_overlay_switching_type_to_local_is_rejected(self, tmp_path: Path) -> None:
+        """#448: tracked が ``type=github`` でも overlay の ``type=local`` は拒否される。"""
+        from kaji_harness.errors import ProviderTypeRemovedError
+
         repo = _write_repo(
             tmp_path,
             provider_section=('\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "o/r"\n'),
         )
-        # overlay で type と machine_id を導入
         (repo / ".kaji" / "config.local.toml").write_text(
             '[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\n'
         )
-        cfg = KajiConfig.discover(start_dir=repo)
-        assert cfg.provider is not None
-        assert cfg.provider.type == "local"
-        assert cfg.provider.local.machine_id == "pc1"
+        with pytest.raises(ProviderTypeRemovedError):
+            KajiConfig.discover(start_dir=repo)
 
     def test_overlay_only_introduces_provider_section(self, tmp_path: Path) -> None:
         """tracked に ``[provider]`` が無くても overlay だけで section を導入できる。"""
         repo = _write_repo(tmp_path)  # tracked は [provider] 無し
         (repo / ".kaji" / "config.local.toml").write_text(
-            '[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\n'
+            '[provider]\ntype = "github"\n\n[provider.github]\nrepo = "o/r"\n'
         )
         cfg = KajiConfig.discover(start_dir=repo)
         assert cfg.provider is not None
-        assert cfg.provider.type == "local"
+        assert cfg.provider.type == "github"
+        assert cfg.provider.github.repo == "o/r"
 
 
 # ============================================================

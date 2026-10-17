@@ -19,16 +19,14 @@ import pytest
 from kaji_harness.artifacts import _try_resolve_main_worktree, resolve_artifacts_dir
 from kaji_harness.commands.main import main
 from kaji_harness.config import (
-    LOCAL_PROVIDER_DEPRECATION_WARNING,
     ExecutionConfig,
     GitHubProviderConfig,
     KajiConfig,
-    LocalProviderConfig,
     PathsConfig,
     ProviderConfig,
 )
+from kaji_harness.errors import MainWorktreeResolutionError
 from kaji_harness.models import Verdict
-from kaji_harness.providers.local import LocalProviderError
 from kaji_harness.state import SessionState
 
 
@@ -47,11 +45,10 @@ def _make_config(
     )
 
 
-def _local_provider(default_branch: str = "main") -> ProviderConfig:
+def _github_provider(default_branch: str = "main") -> ProviderConfig:
     return ProviderConfig(
-        type="local",
-        local=LocalProviderConfig(machine_id="pc1", default_branch=default_branch),
-        github=GitHubProviderConfig(),
+        type="github",
+        github=GitHubProviderConfig(repo="owner/name", default_branch=default_branch),
     )
 
 
@@ -105,16 +102,16 @@ class TestTryResolveMainWorktreeSmall:
         cfg = _make_config(repo_root=tmp_path, provider=None)
         assert _try_resolve_main_worktree(cfg) is None
 
-    def test_local_provider_error_swallowed(self, tmp_path: Path) -> None:
-        cfg = _make_config(repo_root=tmp_path, provider=_local_provider())
+    def test_main_worktree_resolution_error_swallowed(self, tmp_path: Path) -> None:
+        cfg = _make_config(repo_root=tmp_path, provider=_github_provider())
         with patch(
             "kaji_harness.providers.resolve_main_worktree",
-            side_effect=LocalProviderError("no git"),
+            side_effect=MainWorktreeResolutionError("no git"),
         ):
             assert _try_resolve_main_worktree(cfg) is None
 
     def test_normal_returns_resolved_path(self, tmp_path: Path) -> None:
-        cfg = _make_config(repo_root=tmp_path, provider=_local_provider())
+        cfg = _make_config(repo_root=tmp_path, provider=_github_provider())
         resolved = tmp_path / "main"
         with patch(
             "kaji_harness.providers.resolve_main_worktree",
@@ -133,15 +130,15 @@ _CONFIG_TOML = (
     'skill_dir = ".claude/skills"\n'
     'artifacts_dir = ".kaji-artifacts"\n\n'
     "[execution]\ndefault_timeout = 1800\n\n"
-    '[provider]\ntype = "local"\n\n'
-    "[provider.local]\n"
-    'machine_id = "pc1"\n'
+    '[provider]\ntype = "github"\n\n'
+    "[provider.github]\n"
+    'repo = "owner/name"\n'
     'default_branch = "main"\n'
 )
 
 
 def _seed_kaji_config(wt: Path) -> None:
-    """Write ``.kaji/config.toml`` into a worktree (provider.type=local)."""
+    """Write ``.kaji/config.toml`` into a worktree (provider.type=github)."""
     cfg_dir = wt / ".kaji"
     cfg_dir.mkdir(parents=True, exist_ok=True)
     (cfg_dir / "config.toml").write_text(_CONFIG_TOML)
@@ -202,7 +199,7 @@ class TestCmdRunWiring:
         captured: dict[str, Path] = {}
 
         class _StubRunner:
-            canonical_issue_ref = "local-pc1-1"
+            canonical_issue_ref = "#1"
 
             def __init__(self, *, artifacts_dir: Path, **kwargs: object) -> None:
                 captured["artifacts_dir"] = artifacts_dir
@@ -213,16 +210,14 @@ class TestCmdRunWiring:
                 return state
 
         monkeypatch.setattr("kaji_harness.commands.run.WorkflowRunner", _StubRunner)
-        # provider=local は skill 存在検証を行うため、test-skill を validate 段階で
-        # 通過させるため validate_workflow_provider_match のみ最小限通過する設計に
-        # しているが、念のため skill validation はそのまま走らせる前にここで弾く。
+        # skill validation は本テストの関心外のため validate 段階で通過させる。
         monkeypatch.setattr("kaji_harness.runner.validate_skill_exists", lambda *a, **kw: None)
 
         rc = main(
             [
                 "run",
                 str(workflow_path),
-                "local-pc1-1",
+                "1",
                 "--workdir",
                 str(feat_wt),
             ]
@@ -267,7 +262,7 @@ class TestFallbackPaths:
     def test_non_git_dir_falls_back_to_repo_root(self, outside_project_tmp_path: Path) -> None:
         repo_root = outside_project_tmp_path / "plain"
         repo_root.mkdir()
-        cfg = _make_config(repo_root=repo_root, provider=_local_provider())
+        cfg = _make_config(repo_root=repo_root, provider=_github_provider())
         result = resolve_artifacts_dir(cfg)
         assert result == repo_root / ".kaji-artifacts"
 
@@ -318,8 +313,7 @@ class TestConfigArtifactsDirCommand:
         rc, stdout, stderr = _run_cli(["config", "artifacts-dir", "--workdir", str(feat_wt)])
         assert rc == 0, stderr
         assert stdout == f"{main_wt.resolve() / '.kaji-artifacts'}\n"
-        # #438: fixture の provider は local のため、非推奨警告のみが stderr に出る。
-        assert stderr == f"{LOCAL_PROVIDER_DEPRECATION_WARNING}\n"
+        assert stderr == ""
         # cwd 相対では feature worktree 配下を指してしまうことの明示（回帰の核心）。
         assert stdout.strip() != str(feat_wt / ".kaji-artifacts")
 

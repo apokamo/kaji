@@ -21,7 +21,17 @@ from kaji_harness.config import KajiConfig
 from kaji_harness.errors import WorkflowValidationError
 from kaji_harness.logger import RunLogger
 from kaji_harness.models import CLIResult, CostInfo, CycleDefinition, Step, Verdict, Workflow
+from kaji_harness.providers.github import GitHubProvider
 from kaji_harness.runner import WorkflowRunner
+
+pytestmark = pytest.mark.usefixtures("stub_github_issue")
+
+
+@pytest.fixture(autouse=True)
+def _no_pr_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``gh pr list`` を呼ばせず PR 未作成扱いにする。"""
+    monkeypatch.setattr(GitHubProvider, "resolve_pr_context", lambda self, branch: None)
+
 
 # ============================================================
 # Fixtures / helpers
@@ -57,9 +67,9 @@ def workdir(tmp_path: Path) -> Path:
     config_dir = d / ".kaji"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
-        '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+        '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n'
     )
-    # gl:21: provider.type='local' requires a git repo.
+    # main worktree resolution requires a git repo.
     _sp.run(["git", "init", "-q", "--initial-branch=main", str(d)], check=True)
     return d
 
@@ -164,9 +174,9 @@ def _make_config(tmp_path: Path) -> KajiConfig:
     config_file = kaji_dir / "config.toml"
     if not config_file.exists():
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n'
         )
-    # gl:21: provider.type='local' requires a git repo.
+    # main worktree resolution requires a git repo.
     if not (tmp_path / ".git").exists():
         _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
     return KajiConfig._load(config_file)
@@ -481,7 +491,7 @@ class TestRunnerBarrier:
         workflow = _three_step_linear_workflow()
         # 既存セッション state に ABORT verdict を仕込む（前回 run の遺物を再現）
         artifacts_dir = tmp_path / ".kaji-artifacts"
-        prior = SessionState.load_or_create("local-pc1-99", artifacts_dir)
+        prior = SessionState.load_or_create("99", artifacts_dir)
         prior.record_step(
             "A",
             Verdict(status="ABORT", reason="prior failure", evidence="ev", suggestion="sg"),
@@ -495,7 +505,7 @@ class TestRunnerBarrier:
         # pre-dispatch barrier 経由で stop した場合、stale verdict はクリアされる
         assert state.last_transition_verdict is None
         # ディスク永続化も確認
-        reloaded = SessionState.load_or_create("local-pc1-99", artifacts_dir)
+        reloaded = SessionState.load_or_create("99", artifacts_dir)
         assert reloaded.last_transition_verdict is None
 
     def test_barrier_missed_warning_suppressed_on_abort(

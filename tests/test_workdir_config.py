@@ -26,6 +26,8 @@ from kaji_harness.errors import WorkflowValidationError
 from kaji_harness.models import Step, Workflow
 from kaji_harness.workflow import load_workflow_from_str, validate_workflow
 
+pytestmark = pytest.mark.usefixtures("stub_github_issue")
+
 # ============================================================
 # Helpers
 # ============================================================
@@ -413,9 +415,9 @@ class TestWorkdirRunnerIntegration:
         config_dir.mkdir(exist_ok=True)
         config_file = config_dir / "config.toml"
         config_file.write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n'
         )
-        # gl:21: provider.type='local' requires a git repo.
+        # main worktree resolution requires a git repo.
         if not (tmp_path / ".git").exists():
             _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
         return config_file
@@ -632,7 +634,7 @@ class TestWorkdirConfigE2E:
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n'
         )
 
         skills_dir = project_dir / ".claude" / "skills" / "test-skill"
@@ -679,7 +681,7 @@ class TestWorkdirConfigE2E:
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n'
         )
 
         wf_path = tmp_path / "workflow.yaml"

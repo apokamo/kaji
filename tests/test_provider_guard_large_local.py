@@ -1,14 +1,14 @@
-"""Phase 4 Large-local: subprocess E2E tests for the 3-layer guard.
+"""Large-local: subprocess E2E tests for provider guards.
 
-CLI 層 / Skill 層 / Workflow 層の bare-provider ガードを実 subprocess 経由で
-確認する。実 agent CLI（claude / codex / antigravity）は起動しない（API コスト
-発生のため、別途 large_forge で扱う）。
-
-phase4-design.md § 受け入れ条件 § 機械検証 / § テスト戦略 § Large-local 参照。
+local provider 削除（#448）後の設定エラー（exit 2）、``kaji local`` / ``kaji sync``
+サブコマンド不在、github provider の既存ガード（``config provider-type``、
+``[provider]`` 欠落、``requires_provider`` 検証）を実 subprocess 経由で確認する。
+実 agent CLI（claude / codex / antigravity）は起動しない。
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -18,12 +18,16 @@ import pytest
 pytestmark = [pytest.mark.large, pytest.mark.large_local]
 
 _KAJI_CMD = [sys.executable, "-m", "kaji_harness.cli_main"]
+# editable install が別 checkout を指していても、検証対象のこの checkout を import させる。
+_WORKTREE_ROOT = Path(__file__).resolve().parents[1]
+_MIGRATION_HINT = 'Set provider.type = "github"'
 
 
 def _run_kaji(repo: Path, *args: str, timeout: int = 30) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [*_KAJI_CMD, *args],
         cwd=repo,
+        env={**os.environ, "PYTHONPATH": str(_WORKTREE_ROOT)},
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -57,43 +61,63 @@ def github_repo(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def local_repo(tmp_path: Path) -> Path:
+    """tracked config に ``provider.type = "local"`` を持つ（削除済み provider）repo。"""
     repo = tmp_path / "repo"
     repo.mkdir()
-    # gl:21: provider.type='local' requires a git repo.
-    subprocess.run(["git", "init", "-q", "--initial-branch=main", str(repo)], check=True)
     _write_base_config(repo)
-    rc = _run_kaji(repo, "local", "init", "--machine-id", "pc1", "--non-interactive")
-    assert rc.returncode == 0, rc.stderr
+    (repo / ".kaji" / "config.toml").write_text(
+        (repo / ".kaji" / "config.toml").read_text() + '\n[provider]\ntype = "local"\n'
+    )
     return repo
 
 
 # ============================================================
-# CLI 層: kaji pr が provider=local 配下で fail-fast
+# local provider 削除: provider.type = "local" は設定エラー（exit 2）
 # ============================================================
 
 
-def test_pr_create_under_local_exits_2(local_repo: Path) -> None:
-    result = _run_kaji(local_repo, "pr", "create", "-t", "x", "-b", "y")
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("issue", "view", "1"),
+        ("pr", "list"),
+        ("config", "provider-type"),
+    ],
+)
+def test_local_provider_config_exits_2(local_repo: Path, args: tuple[str, ...]) -> None:
+    result = _run_kaji(local_repo, *args)
     assert result.returncode == 2
-    assert "forge-only" in result.stderr
-    assert "provider.type='local'" in result.stderr
-    assert "/issue-review-code" in result.stderr
+    assert "local provider was removed" in result.stderr
+    assert _MIGRATION_HINT in result.stderr
+    assert str(local_repo / ".kaji" / "config.toml") in result.stderr
 
 
-def test_pr_review_comments_under_local_exits_2(local_repo: Path) -> None:
-    result = _run_kaji(local_repo, "pr", "review-comments", "1")
+def test_validate_under_local_provider_config_exits_2(local_repo: Path) -> None:
+    wf = _write_workflow(local_repo, "wf-gh", "github")
+    result = _run_kaji(local_repo, "validate", str(wf))
     assert result.returncode == 2
-    assert "forge-only" in result.stderr
+    assert f"✗ {wf}" in result.stderr
+    assert _MIGRATION_HINT in result.stderr
 
 
-def test_pr_list_under_local_exits_2(local_repo: Path) -> None:
-    result = _run_kaji(local_repo, "pr", "list")
+def test_help_does_not_list_local_or_sync(github_repo: Path) -> None:
+    result = _run_kaji(github_repo, "--help")
+    assert result.returncode == 0
+    choices_line = next(line for line in result.stdout.splitlines() if line.strip().startswith("{"))
+    choices = choices_line.strip().strip("{}").split(",")
+    assert "local" not in choices
+    assert "sync" not in choices
+
+
+@pytest.mark.parametrize("args", [("local", "init"), ("sync", "status")])
+def test_removed_subcommands_exit_2(github_repo: Path, args: tuple[str, ...]) -> None:
+    result = _run_kaji(github_repo, *args)
     assert result.returncode == 2
-    assert "forge-only" in result.stderr
+    assert "invalid choice" in result.stderr
 
 
 # ============================================================
-# Workflow 層: requires_provider 不整合で fail-fast
+# Workflow 層: requires_provider 検証
 # ============================================================
 
 
@@ -116,26 +140,11 @@ def _write_workflow(repo: Path, name: str, requires: str) -> Path:
     return wf
 
 
-def test_run_github_workflow_under_local_exits_2(local_repo: Path) -> None:
-    wf = _write_workflow(local_repo, "wf-gh", "github")
-    result = _run_kaji(local_repo, "run", str(wf), "local-pc1-1")
-    assert result.returncode == 2
-    assert "requires provider.type='github'" in result.stderr
-
-
-def test_run_local_workflow_under_github_exits_2(github_repo: Path) -> None:
+def test_validate_rejects_requires_provider_local(github_repo: Path) -> None:
     wf = _write_workflow(github_repo, "wf-local", "local")
-    result = _run_kaji(github_repo, "run", str(wf), "1")
-    assert result.returncode == 2
-    assert "requires provider.type='local'" in result.stderr
-
-
-def test_run_any_workflow_under_local_passes_provider_match(local_repo: Path) -> None:
-    """``requires_provider: any`` は両 provider で provider 整合を通過する
-    （その先 skill 不在で別エラーになるが、provider mismatch ではない）。"""
-    wf = _write_workflow(local_repo, "wf-any", "any")
-    result = _run_kaji(local_repo, "run", str(wf), "local-pc1-1")
-    assert "requires provider.type" not in result.stderr
+    result = _run_kaji(github_repo, "validate", str(wf))
+    assert result.returncode == 1
+    assert "'requires_provider' must be one of ['any', 'github'], got 'local'" in result.stderr
 
 
 # ============================================================
@@ -148,12 +157,6 @@ def test_config_provider_type_github(github_repo: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert result.stdout == "github\n"
     assert result.stderr == ""
-
-
-def test_config_provider_type_local(local_repo: Path) -> None:
-    result = _run_kaji(local_repo, "config", "provider-type")
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == "local\n"
 
 
 def test_config_provider_type_missing_provider_section(tmp_path: Path) -> None:

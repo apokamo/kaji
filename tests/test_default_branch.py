@@ -1,10 +1,9 @@
 """Phase 3-d: ``default_branch`` placeholder の供給を検証する。
 
 - Small: ``IssueContext.default_branch`` field の default 値、
-  ``GitHubProviderConfig.default_branch`` の TOML parse、
-  ``LocalProvider.default_branch`` のフィールド伝搬。
+  ``GitHubProviderConfig.default_branch`` の TOML parse。
 - Medium: provider 経由で `IssueContext` を解決した結果に
-  ``default_branch`` が provider 別に正しく流れていることを確認。
+  ``default_branch`` が正しく流れていることを確認。
 """
 
 from __future__ import annotations
@@ -20,26 +19,25 @@ from kaji_harness.config import (
     ExecutionConfig,
     GitHubProviderConfig,
     KajiConfig,
-    LocalProviderConfig,
     PathsConfig,
     ProviderConfig,
 )
-from kaji_harness.providers import GitHubProvider, LocalProvider, get_provider
+from kaji_harness.providers import GitHubProvider, get_provider
 from kaji_harness.providers.models import IssueContext
 
 
 @pytest.mark.small
 def test_issue_context_default_branch_default_value() -> None:
     ctx = IssueContext(
-        issue_id="local-pc1-1",
-        issue_ref="local-pc1-1",
-        issue_input="local-pc1-1",
+        issue_id="1",
+        issue_ref="#1",
+        issue_input="1",
         slug="x",
         branch_prefix="feat",
-        branch_name="feat/local-pc1-1",
+        branch_name="feat/1",
         worktree_dir="/tmp/wt",
-        design_path="draft/design/local-pc1-1-x.md",
-        provider_type="local",
+        design_path="draft/design/issue-1-x.md",
+        provider_type="github",
     )
     assert ctx.default_branch == "main"
 
@@ -47,15 +45,15 @@ def test_issue_context_default_branch_default_value() -> None:
 @pytest.mark.small
 def test_issue_context_default_branch_explicit() -> None:
     ctx = IssueContext(
-        issue_id="local-pc1-1",
-        issue_ref="local-pc1-1",
-        issue_input="local-pc1-1",
+        issue_id="1",
+        issue_ref="#1",
+        issue_input="1",
         slug="x",
         branch_prefix="feat",
-        branch_name="feat/local-pc1-1",
+        branch_name="feat/1",
         worktree_dir="/tmp/wt",
-        design_path="draft/design/local-pc1-1-x.md",
-        provider_type="local",
+        design_path="draft/design/issue-1-x.md",
+        provider_type="github",
         default_branch="develop",
     )
     assert ctx.default_branch == "develop"
@@ -71,18 +69,6 @@ def test_github_provider_config_default_branch_default() -> None:
 def test_github_provider_config_default_branch_explicit() -> None:
     cfg = GitHubProviderConfig(repo="owner/name", default_branch="trunk")
     assert cfg.default_branch == "trunk"
-
-
-@pytest.mark.small
-def test_local_provider_default_branch_default(tmp_path: Path) -> None:
-    p = LocalProvider(repo_root=tmp_path, machine_id="pc1")
-    assert p.default_branch == "main"
-
-
-@pytest.mark.small
-def test_local_provider_default_branch_explicit(tmp_path: Path) -> None:
-    p = LocalProvider(repo_root=tmp_path, machine_id="pc1", default_branch="develop")
-    assert p.default_branch == "develop"
 
 
 @pytest.mark.medium
@@ -154,65 +140,12 @@ def test_get_provider_flows_default_branch_to_github_provider(tmp_path: Path) ->
         execution=ExecutionConfig(default_timeout=1800),
         provider=ProviderConfig(
             type="github",
-            local=LocalProviderConfig(),
             github=GitHubProviderConfig(repo="owner/name", default_branch="trunk"),
         ),
     )
     provider = get_provider(cfg)
     assert isinstance(provider, GitHubProvider)
     assert provider.default_branch == "trunk"
-
-
-@pytest.mark.medium
-def test_get_provider_flows_default_branch_to_local_provider(tmp_path: Path) -> None:
-    import subprocess as _sp
-
-    # gl:21: provider.type='local' requires a git repo. Use 'develop' to match
-    # the configured default_branch so resolve_main_worktree finds it.
-    _sp.run(["git", "init", "-q", "--initial-branch=develop", str(tmp_path)], check=True)
-    cfg = KajiConfig(
-        repo_root=tmp_path,
-        paths=PathsConfig(artifacts_dir=".kaji-artifacts", skill_dir=".claude/skills"),
-        execution=ExecutionConfig(default_timeout=1800),
-        provider=ProviderConfig(
-            type="local",
-            local=LocalProviderConfig(machine_id="pc1", default_branch="develop"),
-            github=GitHubProviderConfig(),
-        ),
-    )
-    provider = get_provider(cfg)
-    assert isinstance(provider, LocalProvider)
-    assert provider.default_branch == "develop"
-
-
-@pytest.mark.medium
-def test_local_provider_resolve_issue_context_flows_default_branch(tmp_path: Path) -> None:
-    """LocalProvider の `IssueContext` に `default_branch` が流れる。"""
-    issues_dir = tmp_path / ".kaji" / "issues"
-    issues_dir.mkdir(parents=True)
-    issue_dir = issues_dir / "local-pc1-1-foo"
-    issue_dir.mkdir()
-    (issue_dir / "issue.md").write_text(
-        dedent(
-            """
-            ---
-            id: local-pc1-1
-            title: foo
-            state: open
-            slug: foo
-            branch_prefix: feat
-            labels: []
-            ---
-            body
-            """
-        ).strip()
-        + "\n",
-        encoding="utf-8",
-    )
-    provider = LocalProvider(repo_root=tmp_path, machine_id="pc1", default_branch="develop")
-    ctx = provider.resolve_issue_context("local-pc1-1")
-    assert ctx.default_branch == "develop"
-    assert ctx.provider_type == "local"
 
 
 @pytest.mark.medium

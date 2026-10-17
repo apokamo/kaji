@@ -25,10 +25,33 @@ from kaji_harness.commands.parser import create_parser
 from kaji_harness.commands.run import _apply_execution_overrides
 from kaji_harness.config import ExecutionConfig, IncidentConfig, KajiConfig, PathsConfig
 from kaji_harness.errors import ConfigLoadError, StepTimeoutError
+from kaji_harness.providers.base import Comment
+from kaji_harness.providers.github import GitHubProvider
 from kaji_harness.recovery.handler import RecoveryHandler
 from kaji_harness.recovery.models import RECOVERY_FILE
 
-_ISSUE = "local-pc1-99"
+pytestmark = pytest.mark.usefixtures("stub_github_issue")
+
+
+@pytest.fixture(autouse=True)
+def _offline_github(monkeypatch: pytest.MonkeyPatch) -> None:
+    """runner / triage が触る GitHubProvider の gh 呼び出しを決定的 stub にする（#448）。"""
+    monkeypatch.setattr(GitHubProvider, "resolve_pr_context", lambda self, branch: None)
+    monkeypatch.setattr(
+        GitHubProvider,
+        "comment_issue",
+        lambda self, issue_id, body: Comment(
+            author="",
+            body=body,
+            created_at="",
+            ref=f"https://github.com/owner/name/issues/{issue_id}#issuecomment-1",
+        ),
+    )
+    monkeypatch.setattr(GitHubProvider, "list_issue_comments_all", lambda self, issue_id: [])
+    monkeypatch.setattr(GitHubProvider, "search_issues_all", lambda self, **kwargs: [])
+
+
+_ISSUE = "99"
 
 
 def _parse(argv: list[str]):
@@ -122,8 +145,8 @@ def _write_config(tmp_path: Path, execution_extra: str = "") -> Path:
     path.write_text(
         '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji-artifacts"\n\n'
         f"[execution]\ndefault_timeout = 1800\n{execution_extra}\n"
-        '[provider]\ntype = "local"\n\n'
-        '[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+        '[provider]\ntype = "github"\n\n'
+        '[provider.github]\nrepo = "owner/name"\n'
     )
     return path
 
@@ -176,14 +199,6 @@ def _repo(tmp_path: Path, execution_extra: str = "") -> Path:
     skill_dir = repo / ".claude" / "skills" / "issue-implement"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("# issue-implement\n", encoding="utf-8")
-    from kaji_harness.providers import LocalProvider
-
-    counter = repo / ".kaji" / "counters" / "pc1.txt"
-    counter.parent.mkdir(parents=True, exist_ok=True)
-    counter.write_text("98")
-    LocalProvider(repo_root=repo, machine_id="pc1").create_issue(
-        title="t", body="b", labels=["type:feature"], slug="t"
-    )
     # safety gate（worktree 実在 + branch 一致）を満たすため、repo 自身を worktree として
     # state に焼き込む。これを省くと triage が常に worktree_unavailable で止まる。
     state_dir = repo / ".kaji-artifacts" / _ISSUE
@@ -394,25 +409,6 @@ class TestCmdRecover:
         decision = json.loads((run_dir / RECOVERY_FILE).read_text(encoding="utf-8"))
         assert decision["workflow_path"] == str(repo / "wf.yaml")
         assert str(repo / "wf.yaml") in decision["resume_command"]
-
-    def test_recover_rejects_provider_mismatch(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """``requires_provider`` 不一致は triage 前に fail-fast する（cmd_run と同挙動）。"""
-        repo = _repo(tmp_path)
-        run_dir = self._failed_run(repo)
-        wf = repo / "wf-github.yaml"
-        wf.write_text(
-            (repo / "wf.yaml")
-            .read_text()
-            .replace("requires_provider: any", "requires_provider: github")
-        )
-
-        rc = main(["recover", str(wf), "99", "--workdir", str(repo)])
-
-        assert rc == EXIT_INVALID_INPUT
-        assert "requires provider.type='github'" in capsys.readouterr().err
-        assert not (run_dir / RECOVERY_FILE).exists()
 
     @pytest.mark.parametrize(
         ("replacement", "expected"),

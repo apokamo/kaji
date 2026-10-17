@@ -14,9 +14,18 @@ import pytest
 
 from kaji_harness.config import KajiConfig
 from kaji_harness.models import CLIResult, Step, Workflow
+from kaji_harness.providers.github import GitHubProvider
 from kaji_harness.runner import WorkflowRunner
 from kaji_harness.skill import SkillMetadata
 from kaji_harness.state import SessionState
+
+pytestmark = pytest.mark.usefixtures("stub_github_issue")
+
+
+@pytest.fixture(autouse=True)
+def _no_pr_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``gh pr list`` を呼ばせず PR 未作成扱いにする。"""
+    monkeypatch.setattr(GitHubProvider, "resolve_pr_context", lambda self, branch: None)
 
 
 def _make_config(repo: Path) -> KajiConfig:
@@ -26,14 +35,17 @@ def _make_config(repo: Path) -> KajiConfig:
     cfg.write_text(
         '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n'
         "[execution]\ndefault_timeout = 60\n\n"
-        '[provider]\ntype = "local"\n\n'
-        '[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+        '[provider]\ntype = "github"\n\n'
+        '[provider.github]\nrepo = "owner/name"\n'
     )
     return KajiConfig._load(cfg)
 
 
-def _init_local_repo_with_issue(repo: Path, labels: list[str]) -> str:
-    """local provider repo + 1 issue を作って issue_id を返す。"""
+def _init_repo_with_issue(repo: Path) -> str:
+    """git repo を初期化し、``stub_github_issue`` が解決する issue_id を返す。
+
+    stub Issue は ``type:feature`` label を持つ（label 由来 prefix は ``feat``）。
+    """
     subprocess.run(["git", "init", "-q", "--initial-branch=main", str(repo)], check=True)
     subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
     subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
@@ -41,16 +53,7 @@ def _init_local_repo_with_issue(repo: Path, labels: list[str]) -> str:
         ["git", "-C", str(repo), "commit", "--allow-empty", "-m", "init", "-q"],
         check=True,
     )
-    from kaji_harness.providers import LocalProvider
-
-    provider = LocalProvider(repo_root=repo, machine_id="pc1")
-    issue = provider.create_issue(
-        title="resumed workflow worktree bug",
-        body="b",
-        labels=labels,
-        slug="bug-worktree",
-    )
-    return issue.id
+    return "1"
 
 
 def _verdict(status: str) -> str:
@@ -66,7 +69,7 @@ class TestRunnerBackfillAndOverride:
         """事前保存 state.worktree_dir/branch_name が context を override する。"""
         repo = tmp_path / "repo"
         repo.mkdir()
-        issue_id = _init_local_repo_with_issue(repo, labels=["type:feature"])
+        issue_id = _init_repo_with_issue(repo)
         config = _make_config(repo)
 
         # 事前に SessionState に「過去確定」した worktree を焼き込む
@@ -111,7 +114,7 @@ class TestRunnerBackfillAndOverride:
         """旧 state file（worktree_dir/branch_name 未保存）でも physical worktree から backfill。"""
         repo = tmp_path / "repo"
         repo.mkdir()
-        issue_id = _init_local_repo_with_issue(repo, labels=["type:feature"])
+        issue_id = _init_repo_with_issue(repo)
         config = _make_config(repo)
 
         # physical worktree を chore prefix で作る
@@ -176,7 +179,7 @@ class TestRunnerBackfillAndOverride:
         """multi-candidate 検出 → main loop に入らず ABORT verdict を emit。"""
         repo = tmp_path / "repo"
         repo.mkdir()
-        issue_id = _init_local_repo_with_issue(repo, labels=["type:feature"])
+        issue_id = _init_repo_with_issue(repo)
         config = _make_config(repo)
 
         wt1 = tmp_path / f"kaji-chore-{issue_id}"
@@ -257,7 +260,7 @@ class TestRunnerBackfillAndOverride:
         """新規 run で worktree が physical 存在すれば dispatch 直前に capture される。"""
         repo = tmp_path / "repo"
         repo.mkdir()
-        issue_id = _init_local_repo_with_issue(repo, labels=["type:feature"])
+        issue_id = _init_repo_with_issue(repo)
         config = _make_config(repo)
 
         # label-derived path（=feat）に合わせて physical worktree を作る
@@ -316,7 +319,7 @@ class TestRunnerBackfillAndOverride:
 
         repo = tmp_path / "repo"
         repo.mkdir()
-        issue_id = _init_local_repo_with_issue(repo, labels=["type:feature"])
+        issue_id = _init_repo_with_issue(repo)
         _make_config(repo)
 
         # 多重候補 worktree を作る

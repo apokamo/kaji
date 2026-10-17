@@ -25,12 +25,20 @@ import pytest
 from kaji_harness.config import KajiConfig
 from kaji_harness.errors import CLIExecutionError, StepTimeoutError, VerdictNotFound
 from kaji_harness.models import CLIResult, CostInfo, CycleDefinition, Step, Verdict, Workflow
-from kaji_harness.providers import LocalProvider
+from kaji_harness.providers.github import GitHubProvider
 from kaji_harness.providers.models import Comment
 from kaji_harness.runner import WorkflowRunner, allocate_attempt_dir, allocate_run_dir
 from kaji_harness.verdict import load_verdict_yaml, write_verdict_yaml
 
 VALID = {"PASS", "RETRY", "BACK", "ABORT"}
+
+pytestmark = pytest.mark.usefixtures("stub_github_issue")
+
+
+@pytest.fixture(autouse=True)
+def _no_pr_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``gh pr list`` を呼ばせず PR 未作成扱いにする。"""
+    monkeypatch.setattr(GitHubProvider, "resolve_pr_context", lambda self, branch: None)
 
 
 # ============================================================
@@ -158,36 +166,19 @@ def _make_config(tmp_path: Path) -> KajiConfig:
     config_file.write_text(
         '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n'
         "[execution]\ndefault_timeout = 1800\n\n"
-        '[provider]\ntype = "local"\n\n'
-        '[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+        '[provider]\ntype = "github"\n\n'
+        '[provider.github]\nrepo = "owner/name"\n'
     )
+    # main worktree resolution requires a git repo.
     if not (tmp_path / ".git").exists():
         _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
     return KajiConfig._load(config_file)
-
-
-def _ensure_local_issue(tmp_path: Path, issue: int) -> None:
-    counter_path = tmp_path / ".kaji" / "counters" / "pc1.txt"
-    counter_path.parent.mkdir(parents=True, exist_ok=True)
-    issues_root = tmp_path / ".kaji" / "issues"
-    issues_root.mkdir(parents=True, exist_ok=True)
-    if any(d.name.startswith(f"local-pc1-{issue}-") for d in issues_root.iterdir()):
-        return
-    counter_path.write_text(str(issue - 1))
-    provider = LocalProvider(repo_root=tmp_path, machine_id="pc1")
-    provider.create_issue(
-        title=f"test issue {issue}",
-        body="body",
-        labels=["type:feature"],
-        slug=f"test-{issue}",
-    )
 
 
 def _make_runner(
     tmp_path: Path, workflow: Workflow, issue: int = 99, **kwargs: object
 ) -> WorkflowRunner:
     config = _make_config(tmp_path)
-    _ensure_local_issue(tmp_path, issue)
     return WorkflowRunner(
         workflow=workflow,
         issue_number=str(issue),
@@ -259,8 +250,8 @@ def _cycle_workflow() -> Workflow:
 
 
 def _run_root(tmp_path: Path, issue: int = 99) -> Path:
-    """``.kaji-artifacts/local-pc1-<issue>/runs/<run_id>/`` の最新 run dir。"""
-    runs = tmp_path / ".kaji-artifacts" / f"local-pc1-{issue}" / "runs"
+    """``.kaji-artifacts/<issue>/runs/<run_id>/`` の最新 run dir。"""
+    runs = tmp_path / ".kaji-artifacts" / str(issue) / "runs"
     run_dirs = sorted(p for p in runs.iterdir() if p.is_dir())
     assert run_dirs, f"no run dir under {runs}"
     return run_dirs[-1]
@@ -385,7 +376,7 @@ class TestRunnerStdoutNormalization:
             _make_runner(tmp_path, workflow).run()
             _make_runner(tmp_path, workflow).run()
 
-        runs = tmp_path / ".kaji-artifacts" / "local-pc1-99" / "runs"
+        runs = tmp_path / ".kaji-artifacts" / "99" / "runs"
         run_dirs = sorted(p for p in runs.iterdir() if p.is_dir())
         assert [p.name for p in run_dirs] == ["260710014301", "260710014301-002"]
 
@@ -506,14 +497,14 @@ class TestRunnerCycleAttemptSeparation:
 
 
 class _CommentProvider:
-    """real LocalProvider に委譲しつつ ``view_issue`` のみ制御 comment を返す。
+    """real GitHubProvider に委譲しつつ ``view_issue`` のみ制御 comment を返す。
 
     comment fallback の wiring を runner レベルで検証するための注入用 provider。
     ``resolve_issue_context`` は実 provider に委譲し、``resolve_pr_context`` は
     no-op（None）。
     """
 
-    def __init__(self, real: LocalProvider, comments: list[Comment]) -> None:
+    def __init__(self, real: GitHubProvider, comments: list[Comment]) -> None:
         self._real = real
         self._comments = comments
 
@@ -534,8 +525,7 @@ class TestRunnerCommentFallback:
         → comment で解決し、verdict.yaml に正規化保存される。"""
         workflow = _single_step_workflow()
         config = _make_config(tmp_path)
-        _ensure_local_issue(tmp_path, 99)
-        real = LocalProvider(repo_root=tmp_path, machine_id="pc1")
+        real = GitHubProvider(repo="owner/name", repo_root=tmp_path)
         # far-future timestamp → 必ず attempt_started_at 以降に scope される
         comment = Comment(
             author="agent",
@@ -575,8 +565,7 @@ class TestRunnerCommentFallback:
         のみ存在し artifact / stdout が無い場合、古い comment を採用せず VerdictNotFound。"""
         workflow = _single_step_workflow()
         config = _make_config(tmp_path)
-        _ensure_local_issue(tmp_path, 99)
-        real = LocalProvider(repo_root=tmp_path, machine_id="pc1")
+        real = GitHubProvider(repo="owner/name", repo_root=tmp_path)
         # far-past timestamp → 現在 attempt の dispatch より前 = stale
         stale = Comment(
             author="agent",
@@ -614,8 +603,7 @@ class TestRunnerCommentFallback:
         どの attempt の ``attempt_started_at`` より前に位置し常に除外される。"""
         workflow = _cycle_workflow()
         config = _make_config(tmp_path)
-        _ensure_local_issue(tmp_path, 99)
-        real = LocalProvider(repo_root=tmp_path, machine_id="pc1")
+        real = GitHubProvider(repo="owner/name", repo_root=tmp_path)
         stale = Comment(
             author="agent",
             body=_verdict_block("PASS", reason="stale prev attempt"),
@@ -663,7 +651,7 @@ class TestRunnerLegacyLayoutCompat:
         新 run は steps/<step_id>/attempt-NNN/ で正常完了し crash しない。"""
         workflow = _single_step_workflow()
         # 旧 layout を事前作成（attempt 無しの flat 構造）
-        legacy = tmp_path / ".kaji-artifacts" / "local-pc1-99" / "runs" / "2401010000" / "implement"
+        legacy = tmp_path / ".kaji-artifacts" / "99" / "runs" / "2401010000" / "implement"
         legacy.mkdir(parents=True, exist_ok=True)
         (legacy / "stdout.log").write_text("legacy run stdout", encoding="utf-8")
 
@@ -680,7 +668,7 @@ class TestRunnerLegacyLayoutCompat:
         # 旧 layout は温存される
         assert (legacy / "stdout.log").exists()
         # 新 run は新 layout
-        runs = tmp_path / ".kaji-artifacts" / "local-pc1-99" / "runs"
+        runs = tmp_path / ".kaji-artifacts" / "99" / "runs"
         new_runs = [p for p in runs.iterdir() if p.is_dir() and p.name != "2401010000"]
         assert len(new_runs) == 1
         assert (new_runs[0] / "steps" / "implement" / "attempt-001" / "verdict.yaml").exists()
@@ -737,7 +725,7 @@ class TestRunnerResultJsonNormal:
         assert ends[-1]["signal"] is None
 
         # progress.md に attempt 番号が出る（正常終了は exit/signal を出さない）
-        progress = (tmp_path / ".kaji-artifacts" / "local-pc1-99" / "progress.md").read_text()
+        progress = (tmp_path / ".kaji-artifacts" / "99" / "progress.md").read_text()
         assert "implement (attempt 1): PASS" in progress
         # clean exit は (exit 0) を付けない（設計書 § C の例示と一致）
         assert "(exit 0)" not in progress
@@ -804,7 +792,7 @@ class TestRunner143RetryRegression:
         assert verify_ends[1]["attempt"] == 2
 
         # progress.md に failed attempt（exit 143）と最終 PASS の両方
-        progress = (tmp_path / ".kaji-artifacts" / "local-pc1-99" / "progress.md").read_text()
+        progress = (tmp_path / ".kaji-artifacts" / "99" / "progress.md").read_text()
         assert "verify (attempt 1): RETRY" in progress
         assert "(exit 143, SIGTERM)" in progress
         assert "verify (attempt 2): PASS" in progress
@@ -845,7 +833,7 @@ class TestRunnerAbortBestEffort:
         assert ends[0]["verdict"]["status"] == "ABORT"
 
         # progress.md に aborted attempt が現れる
-        progress = (tmp_path / ".kaji-artifacts" / "local-pc1-99" / "progress.md").read_text()
+        progress = (tmp_path / ".kaji-artifacts" / "99" / "progress.md").read_text()
         assert "implement (attempt 1): ABORT" in progress
         assert "(exit 143, SIGTERM)" in progress
 
@@ -910,5 +898,5 @@ class TestRunnerAbortBestEffort:
         assert ends[0]["verdict"]["status"] == "ABORT"
 
         # progress.md に aborted attempt が現れる。
-        progress = (tmp_path / ".kaji-artifacts" / "local-pc1-99" / "progress.md").read_text()
+        progress = (tmp_path / ".kaji-artifacts" / "99" / "progress.md").read_text()
         assert "implement (attempt 1): ABORT" in progress

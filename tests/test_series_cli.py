@@ -15,7 +15,6 @@ from kaji_harness.config import (
     ExecutionConfig,
     GitHubProviderConfig,
     KajiConfig,
-    LocalProviderConfig,
     PathsConfig,
     ProviderConfig,
 )
@@ -34,7 +33,6 @@ def _config(tmp_path: Path) -> KajiConfig:
         execution=ExecutionConfig(default_timeout=60),
         provider=ProviderConfig(
             type="github",
-            local=LocalProviderConfig(),
             github=GitHubProviderConfig(repo="owner/name"),
         ),
     )

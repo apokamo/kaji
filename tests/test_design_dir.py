@@ -26,7 +26,7 @@ from kaji_harness.design_dir import LEGACY_DESIGN_DIR, validate_design_dir
 from kaji_harness.errors import ConfigLoadError
 from kaji_harness.models import Step, Workflow
 from kaji_harness.prompt import build_prompt
-from kaji_harness.providers import GitHubProvider, LocalProvider, get_provider
+from kaji_harness.providers import GitHubProvider, get_provider
 from kaji_harness.providers.context import build_design_path, validate_slug
 from kaji_harness.providers.models import Issue, Label
 from kaji_harness.state import SessionState
@@ -200,12 +200,6 @@ def _write_config(
     return repo
 
 
-def _git_init(repo: Path) -> None:
-    subprocess.run(["git", "init", "-q", "--initial-branch=main", str(repo)], check=True)
-    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@example.com"], check=True)
-    subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
-
-
 def _run_cli(argv: list[str]) -> tuple[int, str, str]:
     out, err = io.StringIO(), io.StringIO()
     with redirect_stdout(out), redirect_stderr(err):
@@ -361,41 +355,6 @@ class TestProviderDesignPath:
             ctx = provider.resolve_issue_context("42")
         assert ctx.design_path == "draft/design/issue-42-example.md"
 
-    def test_local_matches_github_directory(self, tmp_path: Path) -> None:
-        local_repo = tmp_path / "local"
-        _git_init(local_repo)
-        _write_config(
-            local_repo,
-            design_dir_line='design_dir = "designs/issues"',
-            provider='[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\n',
-        )
-        config = KajiConfig.discover(start_dir=local_repo)
-        provider = get_provider(config)
-        assert isinstance(provider, LocalProvider)
-        issue = provider.create_issue(
-            title="Example", body="b", labels=["type:feature"], slug="example"
-        )
-        ctx = provider.resolve_issue_context(issue.id)
-        assert ctx.design_path == build_design_path(issue.id, "example", "designs/issues")
-
-        gh_repo = _write_config(tmp_path / "gh", design_dir_line='design_dir = "designs/issues"')
-        gh_provider = get_provider(KajiConfig.discover(start_dir=gh_repo))
-        with patch.object(GitHubProvider, "view_issue", _stub_view_issue):
-            gh_ctx = gh_provider.resolve_issue_context("42")
-        assert Path(ctx.design_path).parent.as_posix() == Path(gh_ctx.design_path).parent.as_posix()
-
-    def test_local_unset_is_legacy(self, tmp_path: Path) -> None:
-        repo = tmp_path / "local"
-        _git_init(repo)
-        _write_config(
-            repo,
-            provider='[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\n',
-        )
-        provider = get_provider(KajiConfig.discover(start_dir=repo))
-        issue = provider.create_issue(title="x", body="b", labels=["type:feature"], slug="x")
-        ctx = provider.resolve_issue_context(issue.id)
-        assert ctx.design_path == f"draft/design/issue-{issue.id}-x.md"
-
 
 @pytest.mark.medium
 class TestConfigDesignDirCommand:
@@ -439,10 +398,14 @@ class TestConfigDesignDirCommand:
 _KAJI_CMD = [sys.executable, "-m", "kaji_harness.cli_main"]
 
 
-def _run_kaji(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def _run_kaji(
+    repo: Path, *args: str, path_prefix: Path | None = None
+) -> subprocess.CompletedProcess[str]:
     # subprocess は tmp repo を cwd にするため、テスト対象の checkout を明示的に import させる。
     package_root = str(Path(kaji_harness.__file__).resolve().parent.parent)
     env = {**os.environ, "PYTHONPATH": package_root}
+    if path_prefix is not None:
+        env["PATH"] = f"{path_prefix}{os.pathsep}{env.get('PATH', '')}"
     return subprocess.run(
         [*_KAJI_CMD, *args], cwd=repo, capture_output=True, text=True, timeout=60, env=env
     )
@@ -468,19 +431,34 @@ class TestDesignDirSubprocess:
         assert "paths.design_dir" in result.stderr
         assert "Traceback" not in result.stderr
 
-    def test_local_issue_context_json_uses_design_dir(self, tmp_path: Path) -> None:
-        repo = tmp_path / "repo"
-        _git_init(repo)
-        _write_config(
-            repo,
-            design_dir_line='design_dir = "designs/issues"',
-            provider='[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\n',
+    def test_issue_context_json_uses_design_dir(self, tmp_path: Path) -> None:
+        repo = _write_config(tmp_path / "repo", design_dir_line='design_dir = "designs/issues"')
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        issue_json = json.dumps(
+            {
+                "number": 42,
+                "title": "Example",
+                "body": "",
+                "state": "OPEN",
+                "stateReason": None,
+                "labels": [{"name": "type:feature"}],
+                "comments": [],
+            }
         )
-        created = _run_kaji(
-            repo, "issue", "create", "--title", "Example", "--body", "b", "--slug", "example"
+        gh = bin_dir / "gh"
+        gh.write_text(
+            "#!/bin/bash\n"
+            'if [ "$1" = "--version" ]; then echo "gh version 2.80.0 (2025-01-01)"; exit 0; fi\n'
+            'if [ "$1" = "issue" ] && [ "$2" = "view" ]; then\n'
+            f"  printf '%s\\n' '{issue_json}'\n"
+            "  exit 0\n"
+            "fi\n"
+            'echo "unexpected gh invocation: $*" >&2\n'
+            "exit 1\n"
         )
-        assert created.returncode == 0, created.stderr
-        ctx = _run_kaji(repo, "issue", "context", "local-pc1-1")
+        gh.chmod(0o755)
+        ctx = _run_kaji(repo, "issue", "context", "42", path_prefix=bin_dir)
         assert ctx.returncode == 0, ctx.stderr
         payload = json.loads(ctx.stdout)
-        assert payload["design_path"] == "designs/issues/issue-local-pc1-1-example.md"
+        assert payload["design_path"] == "designs/issues/issue-42-example.md"

@@ -27,7 +27,6 @@ import pytest
 from kaji_harness.errors import StepTimeoutError
 from kaji_harness.interactive_terminal import execute_interactive_terminal
 from kaji_harness.models import Step
-from kaji_harness.providers import LocalProvider
 
 pytestmark = [pytest.mark.large, pytest.mark.large_local]
 
@@ -62,6 +61,63 @@ def _install_fake_claude(root: Path, body: str) -> Path:
     return bin_dir
 
 
+# Issue #448: local provider 削除に伴い、subprocess の ``kaji run`` は github provider で
+# 実行する。PATH 先頭に置く fake ``gh`` が ``gh issue view`` / ``gh issue comment`` /
+# ``gh pr list`` / ``gh api`` に決定的に応答する（コメントは同ディレクトリの jsonl に記録）。
+_FAKE_GH = """\
+import json, os, sys
+
+args = sys.argv[1:]
+log = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gh-comments.jsonl")
+
+
+def comments():
+    if not os.path.exists(log):
+        return []
+    with open(log, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+if args[:1] == ["--version"]:
+    print("gh version 2.60.0 (fake)")
+elif args[:2] == ["issue", "view"]:
+    n = args[2]
+    print(json.dumps({
+        "number": int(n), "title": "test issue " + n, "body": "body", "state": "OPEN",
+        "stateReason": "", "labels": [{"name": "type:feature"}],
+        "comments": [{"author": {"login": "kaji"}, "body": c["body"], "createdAt": ""}
+                     for c in comments()],
+    }))
+elif args[:2] == ["issue", "comment"]:
+    body = args[args.index("--body") + 1]
+    seq = len(comments()) + 1
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"issue": args[2], "body": body}) + "\\n")
+    print(f"https://github.com/owner/name/issues/{args[2]}#issuecomment-{seq}")
+elif args[:2] == ["pr", "list"]:
+    print("[]")
+elif args[:1] == ["api"]:
+    query = args[-1]
+    if "/comments" in query:
+        print(json.dumps([[{"body": c["body"], "user": {"login": "kaji"}, "created_at": ""}
+                           for c in comments()]]))
+    else:
+        print("[[]]")
+else:
+    print("fake gh: unsupported args: " + " ".join(args), file=sys.stderr)
+    sys.exit(1)
+"""
+
+
+def _install_fake_gh(bin_dir: Path) -> Path:
+    """``bin_dir/gh`` に fake gh を置き、記録コメントの jsonl path を返す。"""
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    gh = bin_dir / "gh"
+    gh.write_text(f"#!{sys.executable}\n{_FAKE_GH}", encoding="utf-8")
+    gh.chmod(gh.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return bin_dir / "gh-comments.jsonl"
+
+
 def _make_repo(tmp_path: Path, step_timeout: int) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -71,8 +127,8 @@ def _make_repo(tmp_path: Path, step_timeout: int) -> Path:
     (kaji_dir / "config.toml").write_text(
         '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji-artifacts"\n\n'
         "[execution]\ndefault_timeout = 600\n\n"
-        '[provider]\ntype = "local"\n\n'
-        '[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+        '[provider]\ntype = "github"\n\n'
+        '[provider.github]\nrepo = "owner/name"\n'
     )
     skill_dir = repo / ".claude" / "skills" / "e2e-impl"
     skill_dir.mkdir(parents=True)
@@ -91,16 +147,11 @@ def _make_repo(tmp_path: Path, step_timeout: int) -> Path:
         "      PASS: end\n"
         "      ABORT: end\n"
     )
-    counter = repo / ".kaji" / "counters" / "pc1.txt"
-    counter.parent.mkdir(parents=True, exist_ok=True)
-    counter.write_text("98")
-    LocalProvider(repo_root=repo, machine_id="pc1").create_issue(
-        title="e2e", body="body", labels=["type:feature"], slug="e2e"
-    )
     return repo
 
 
 def _run_kaji(repo: Path, bin_dir: Path) -> subprocess.CompletedProcess[str]:
+    _install_fake_gh(bin_dir)
     env = dict(os.environ)
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
     worktree_root = Path(__file__).resolve().parents[1]
@@ -128,7 +179,7 @@ def _run_kaji(repo: Path, bin_dir: Path) -> subprocess.CompletedProcess[str]:
 
 
 def _attempt_dir(repo: Path) -> Path:
-    runs = repo / ".kaji-artifacts" / "local-pc1-99" / "runs"
+    runs = repo / ".kaji-artifacts" / "99" / "runs"
     run_dirs = [p for p in runs.iterdir() if p.is_dir()]
     assert len(run_dirs) == 1, f"expected 1 run dir, got {run_dirs}"
     return run_dirs[0] / "steps" / "implement" / "attempt-001"

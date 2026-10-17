@@ -44,7 +44,7 @@ def _load_config_for_dispatch() -> KajiConfig:
 
 
 def cmd_config_provider_type(args: argparse.Namespace) -> int:
-    """Print resolved ``provider.type`` ("github" / "local") to stdout.
+    """Print resolved ``provider.type`` ("github") to stdout.
 
     Phase 4 で導入。Skill / 自動化スクリプトが overlay 込みの provider type を
     副作用なく取得するための read-only エントリ。``KajiConfig.discover()``
@@ -52,7 +52,7 @@ def cmd_config_provider_type(args: argparse.Namespace) -> int:
     / `cmd_run` と同じ config resolution path を共有する。
 
     Exit codes:
-        0: 解決成功（stdout に ``"github\\n"`` / ``"local\\n"``）
+        0: 解決成功（stdout に ``"github\\n"``）
         2: config 不在 or 不正（stderr に診断メッセージ）
     """
     start_dir = args.workdir.resolve()

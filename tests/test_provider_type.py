@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from kaji_harness.commands.main import main as cli_main
-from kaji_harness.config import LOCAL_PROVIDER_DEPRECATION_WARNING, KajiConfig
+from kaji_harness.config import KajiConfig
 from kaji_harness.providers import actual_provider_type
 
 _BASE_CONFIG = """
@@ -35,7 +35,7 @@ def _write_config(repo_root: Path, *, body: str = "", overlay: str | None = None
     (repo_root / ".kaji" / "config.toml").write_text(_BASE_CONFIG + body)
     if overlay is not None:
         (repo_root / ".kaji" / "config.local.toml").write_text(overlay)
-    # gl:21: provider.type='local' resolution requires a git repo.
+    # discover の repo root 解決を実 git repo 上で行う。
     if not (repo_root / ".git").exists():
         _sp.run(["git", "init", "-q", "--initial-branch=main", str(repo_root)], check=True)
 
@@ -48,16 +48,6 @@ def test_actual_provider_type_returns_github(tmp_path: Path) -> None:
     )
     config = KajiConfig.discover(start_dir=tmp_path)
     assert actual_provider_type(config) == "github"
-
-
-@pytest.mark.small
-def test_actual_provider_type_returns_local(tmp_path: Path) -> None:
-    _write_config(
-        tmp_path,
-        body='[provider]\ntype = "local"\n[provider.local]\nmachine_id = "pc1"\n',
-    )
-    config = KajiConfig.discover(start_dir=tmp_path)
-    assert actual_provider_type(config) == "local"
 
 
 @pytest.mark.small
@@ -94,16 +84,16 @@ def test_kaji_config_provider_type_github(tmp_path: Path) -> None:
 
 
 @pytest.mark.medium
-def test_kaji_config_provider_type_local(tmp_path: Path) -> None:
+def test_kaji_config_provider_type_local_rejected(tmp_path: Path) -> None:
+    """撤去済み ``provider.type = "local"`` は config load で拒否され exit 2。"""
     _write_config(
         tmp_path,
-        body='[provider]\ntype = "local"\n[provider.local]\nmachine_id = "pc1"\n',
+        body='[provider]\ntype = "local"\n',
     )
     rc, stdout, stderr = _run_cli(["config", "provider-type", "--workdir", str(tmp_path)])
-    assert rc == 0, stderr
-    assert stdout == "local\n"
-    # #438: local provider は非推奨。警告は stderr のみ（stdout は skill が解析する）。
-    assert LOCAL_PROVIDER_DEPRECATION_WARNING in stderr
+    assert rc == 2
+    assert stdout == ""
+    assert "no longer supported" in stderr
 
 
 @pytest.mark.medium
@@ -127,15 +117,17 @@ def test_kaji_config_provider_type_missing_config(outside_project_tmp_path: Path
 
 @pytest.mark.medium
 def test_kaji_config_provider_type_overlay_takes_precedence(tmp_path: Path) -> None:
-    """``.kaji/config.local.toml`` overlay が tracked config を上書きする経路。"""
+    """``.kaji/config.local.toml`` overlay が tracked config に provider を与える経路。
+
+    tracked config に ``[provider]`` が無くても overlay の provider が採用される。
+    """
     _write_config(
         tmp_path,
-        body='[provider]\ntype = "github"\n[provider.github]\nrepo = "owner/name"\n',
-        overlay='[provider]\ntype = "local"\n[provider.local]\nmachine_id = "pc1"\n',
+        overlay='[provider]\ntype = "github"\n[provider.github]\nrepo = "owner/name"\n',
     )
-    rc, stdout, _ = _run_cli(["config", "provider-type", "--workdir", str(tmp_path)])
-    assert rc == 0
-    assert stdout == "local\n"
+    rc, stdout, stderr = _run_cli(["config", "provider-type", "--workdir", str(tmp_path)])
+    assert rc == 0, stderr
+    assert stdout == "github\n"
 
 
 @pytest.mark.medium

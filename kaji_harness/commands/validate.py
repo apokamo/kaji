@@ -10,11 +10,12 @@ from ..config import KajiConfig
 from ..errors import (
     ConfigLoadError,
     ConfigNotFoundError,
+    ProviderTypeRemovedError,
     WorkflowValidationError,
 )
 from ..preflight import preflight_workflow
 from ..workflow import load_workflow, validate_workflow
-from .exit_codes import EXIT_OK, EXIT_VALIDATION_ERROR
+from .exit_codes import EXIT_CONFIG_NOT_FOUND, EXIT_OK, EXIT_VALIDATION_ERROR
 
 
 def _resolve_project_root_for_validate(explicit_root: Path | None, yaml_path: Path) -> Path:
@@ -49,8 +50,13 @@ def _resolve_project_root_for_validate(explicit_root: Path | None, yaml_path: Pa
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
-    """Execute the `validate` subcommand."""
+    """Execute the `validate` subcommand.
+
+    ``provider.type = "local"``（削除済み provider）の設定エラーが 1 件でもあれば、
+    他ファイルの検証失敗（exit 1）より優先して ``EXIT_CONFIG_NOT_FOUND``（2）を返す。
+    """
     failed = 0
+    removed_local_provider = False
     total = len(args.files)
 
     for path in args.files:
@@ -66,7 +72,16 @@ def cmd_validate(args: argparse.Namespace) -> int:
             except (ConfigNotFoundError, ConfigLoadError) as e:
                 # L3 needs project config; without it still surface L2 diagnostics,
                 # which are more actionable than the config error itself.
-                validate_workflow(workflow)
+                if isinstance(e, ProviderTypeRemovedError):
+                    removed_local_provider = True
+                    try:
+                        validate_workflow(workflow)
+                    except WorkflowValidationError as wf_error:
+                        _print_error(path, [*wf_error.errors, str(e)])
+                        failed += 1
+                        continue
+                else:
+                    validate_workflow(workflow)
                 _print_error(path, [str(e)])
                 failed += 1
                 continue
@@ -94,6 +109,8 @@ def cmd_validate(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
+    if removed_local_provider:
+        return EXIT_CONFIG_NOT_FOUND
     return EXIT_VALIDATION_ERROR if failed > 0 else EXIT_OK
 
 

@@ -236,7 +236,6 @@ def _build_e2e_env(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
 
     workdir = tmp_path / "project"
     workdir.mkdir()
-    # gl:21: provider.type='local' requires a git repo (main worktree).
     subprocess.run(
         ["git", "init", "-q", "--initial-branch=main", str(workdir)],
         check=True,
@@ -244,19 +243,41 @@ def _build_e2e_env(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     config_dir = workdir / ".kaji"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
-        '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+        '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n'
     )
     skill_dir = workdir / ".claude" / "skills" / "test-skill"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("# Test Skill\n")
 
-    # Phase 3-e: provider=local の subprocess kaji run は IssueContext 解決を
-    # 走らせるため、テストで使う Issue id を予め local に作成しておく。
-    from tests.conftest import ensure_local_issue
-
-    ensure_local_issue(workdir, "101")
-
     return wf, workdir
+
+
+def _create_mock_gh_script(bin_dir: Path) -> Path:
+    """IssueContext 解決用の ``gh --version`` / ``gh issue view`` stub を作成する。"""
+    gh = bin_dir / "gh"
+    issue_json = json.dumps(
+        {
+            "number": 101,
+            "title": "test issue 101",
+            "body": "body",
+            "state": "OPEN",
+            "stateReason": None,
+            "labels": [{"name": "type:feature"}],
+            "comments": [],
+        }
+    )
+    gh.write_text(
+        "#!/bin/bash\n"
+        'if [ "$1" = "--version" ]; then echo "gh version 2.80.0 (2025-01-01)"; exit 0; fi\n'
+        'if [ "$1" = "issue" ] && [ "$2" = "view" ]; then\n'
+        f"  printf '%s\\n' '{issue_json}'\n"
+        "  exit 0\n"
+        "fi\n"
+        'echo "unexpected gh invocation: $*" >&2\n'
+        "exit 1\n"
+    )
+    gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
+    return gh
 
 
 def _create_mock_claude_script(bin_dir: Path) -> Path:
@@ -297,6 +318,7 @@ class TestKajiRunTimestampLarge:
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
         _create_mock_claude_script(bin_dir)
+        _create_mock_gh_script(bin_dir)
 
         # Python venv の bin も PATH に含める（kaji モジュール実行のため）
         python_dir = str(Path(sys.executable).parent)
@@ -356,6 +378,7 @@ class TestKajiRunTimestampLarge:
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
         _create_mock_claude_script(bin_dir)
+        _create_mock_gh_script(bin_dir)
 
         python_dir = str(Path(sys.executable).parent)
         import shutil

@@ -15,7 +15,7 @@ from kaji_harness.recovery.target import resolve_recover_issue_context, select_t
 
 @pytest.mark.small
 class TestResolveRecoverIssueContext:
-    def test_github_numeric_resolves_without_machine_id(self) -> None:
+    def test_github_numeric_resolves(self) -> None:
         config = SimpleNamespace(provider=SimpleNamespace(type="github"))
         expected = object()
         provider = MagicMock()
@@ -25,22 +25,6 @@ class TestResolveRecoverIssueContext:
 
         assert result is expected
         provider.resolve_issue_context.assert_called_once_with("282")
-
-    def test_local_numeric_uses_machine_id(self) -> None:
-        config = SimpleNamespace(
-            provider=SimpleNamespace(
-                type="local",
-                local=SimpleNamespace(machine_id="pc1"),
-            )
-        )
-        expected = object()
-        provider = MagicMock()
-        provider.resolve_issue_context.return_value = expected
-
-        result = resolve_recover_issue_context(config, provider, "3")
-
-        assert result is expected
-        provider.resolve_issue_context.assert_called_once_with("local-pc1-3")
 
     def test_github_rejects_local_form_id(self) -> None:
         config = SimpleNamespace(provider=SimpleNamespace(type="github"))

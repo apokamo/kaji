@@ -19,10 +19,31 @@ import pytest
 from kaji_harness.config import KajiConfig
 from kaji_harness.errors import ScriptExecutionError, StepTimeoutError, VerdictNotFound
 from kaji_harness.models import CLIResult, Step, Workflow
-from kaji_harness.providers.local import LocalProvider
+from kaji_harness.providers.base import Comment, Issue, Label
+from kaji_harness.providers.github import GitHubProvider
 from kaji_harness.runner import WorkflowRunner
 from kaji_harness.script_exec import execute_exec
 from kaji_harness.skill import SkillMetadata
+
+pytestmark = pytest.mark.usefixtures("stub_github_issue")
+
+
+@pytest.fixture(autouse=True)
+def _offline_github(monkeypatch: pytest.MonkeyPatch) -> None:
+    """runner / triage が触る GitHubProvider の gh 呼び出しを決定的 stub にする（#448）。"""
+    monkeypatch.setattr(GitHubProvider, "resolve_pr_context", lambda self, branch: None)
+    monkeypatch.setattr(
+        GitHubProvider,
+        "comment_issue",
+        lambda self, issue_id, body: Comment(
+            author="",
+            body=body,
+            created_at="",
+            ref=f"https://github.com/owner/name/issues/{issue_id}#issuecomment-1",
+        ),
+    )
+    monkeypatch.setattr(GitHubProvider, "list_issue_comments_all", lambda self, issue_id: [])
+    monkeypatch.setattr(GitHubProvider, "search_issues_all", lambda self, **kwargs: [])
 
 
 def _step() -> Step:
@@ -158,8 +179,8 @@ def _make_config(tmp_path: Path) -> KajiConfig:
     cfg.write_text(
         '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n'
         "[execution]\ndefault_timeout = 60\n\n"
-        '[provider]\ntype = "local"\n\n'
-        '[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+        '[provider]\ntype = "github"\n\n'
+        '[provider.github]\nrepo = "owner/name"\n'
     )
     if not (tmp_path / ".git").exists():
         subprocess.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
@@ -302,12 +323,23 @@ class TestRunnerExecDispatch:
         with (
             patch("kaji_harness.runner.execute_exec", return_value=CLIResult(_verdict("RETRY"))),
             patch.object(
-                LocalProvider, "view_issue", return_value=MagicMock(comments=[other_step_comment])
+                GitHubProvider,
+                "view_issue",
+                return_value=Issue(
+                    id="99",
+                    title="test issue 99",
+                    body="body",
+                    state="open",
+                    labels=[Label(name="type:feature")],
+                    comments=[other_step_comment],
+                    slug="test-99",
+                ),
             ) as mock_view_issue,
         ):
             runner.run()
 
-        mock_view_issue.assert_not_called()
+        # IssueContext 解決の 1 回のみ。verdict 解決で Issue コメントを読みに行かない。
+        assert mock_view_issue.call_count == 1
         run_logs = list((tmp_path / ".kaji-artifacts").rglob("run.log"))
         events = [json.loads(line) for line in run_logs[0].read_text().splitlines() if line]
         sources = [e for e in events if e["event"] == "verdict_source"]
