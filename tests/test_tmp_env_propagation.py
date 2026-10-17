@@ -22,7 +22,7 @@ import pytest
 from kaji_harness.cli import execute_cli
 from kaji_harness.config import KajiConfig
 from kaji_harness.errors import TmpDirPreparationError
-from kaji_harness.interactive_terminal import _build_wrapper_command
+from kaji_harness.interactive_terminal_common import _build_wrapper_command
 from kaji_harness.models import CLIResult, Step, Workflow
 from kaji_harness.runner import WorkflowRunner, build_tmp_env
 from kaji_harness.script_exec import execute_exec

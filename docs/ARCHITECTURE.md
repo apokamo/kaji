@@ -250,6 +250,13 @@ agent 経路の起動 backend は repository config の `[execution] agent_runne
   kind / truncation / revisionを`pane-metadata.json`へ記録する（Issue #396、
   [ADR 007](./adr/007-interactive-terminal-runner.md) v4）。
 
+`interactive_terminal` のモジュール構成（Issue #474）: 公開入口 `execute_interactive_terminal()` は
+`interactive_terminal.py` に置いた backend dispatch だけを担い、`deadline_monotonic` を含む引数をそのまま
+`interactive_terminal_tmux.py`（tmux 実装）または `interactive_terminal_herdr.py`（Herdr 実装）へ渡す。
+wrapper の引数・環境変数組み立て、Codex session 解決、異常終了時の session 解決、terminal 診断は
+`interactive_terminal_common.py` に集約し、tmux / Herdr の双方が import する（依存方向は
+`interactive_terminal` → `_tmux` / `_herdr` → `_common`。`_common` と `_herdr` は dispatch・tmux 実装を import しない）。
+
 設定方法と手動検証手順は
 [Interactive Terminal Runner ガイド](./cli-guides/interactive-terminal-runner.md) を参照。
 技術選定の経緯は [ADR 007](./adr/007-interactive-terminal-runner.md)。

@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from kaji_harness.config import IncidentConfig
-from kaji_harness.interactive_terminal import _terminal_exit_detail
+from kaji_harness.interactive_terminal_common import _terminal_exit_detail
 from kaji_harness.models import Step, Workflow
 from kaji_harness.providers.models import Comment, Issue
 from kaji_harness.recovery.handler import RecoveryHandler

@@ -187,64 +187,68 @@ def test_headless_hard_deadline_matches_displayed_deadline(tmp_path: Path) -> No
     assert -0.5 <= elapsed_past_shown < 6.0, elapsed_past_shown
 
 
-@pytest.fixture()
-def isolated_tmux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """利用者の tmux を一切使わない専用 server を起動し、後始末で必ず kill する。"""
-    socket_name = f"kaji-test-{uuid.uuid4().hex[:12]}"
-    bin_dir = _install_fake_claude(tmp_path, _FAKE_CLAUDE_HANGING)
-    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-    tmux = shutil.which("tmux")
-    assert tmux is not None, "tmux is required for the interactive terminal large test"
+class TestTmuxAttemptDeadlineE2E:
+    """実 tmux を使う #421 deadline E2E（Issue #474: 子 Issue B で class ごと削除できる単位）。"""
 
-    def run(*args: str) -> str:
-        proc = subprocess.run(
-            [tmux, "-L", socket_name, "-f", "/dev/null", *args],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return proc.stdout.strip()
+    @pytest.fixture()
+    def isolated_tmux(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+        """利用者の tmux を一切使わない専用 server を起動し、後始末で必ず kill する。"""
+        socket_name = f"kaji-test-{uuid.uuid4().hex[:12]}"
+        bin_dir = _install_fake_claude(tmp_path, _FAKE_CLAUDE_HANGING)
+        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+        tmux = shutil.which("tmux")
+        assert tmux is not None, "tmux is required for the interactive terminal large test"
 
-    try:
-        run("new-session", "-d", "-s", "kajitest", "-x", "200", "-y", "50", "sleep 600")
-        socket_path = run("display-message", "-p", "-t", "kajitest", "#{socket_path}")
-        pane_id = run("display-message", "-p", "-t", "kajitest", "#{pane_id}")
-        server_pid = run("display-message", "-p", "-t", "kajitest", "#{pid}")
-        session_idx = run("display-message", "-p", "-t", "kajitest", "#{session_id}").lstrip("$")
-        monkeypatch.setenv("TMUX", f"{socket_path},{server_pid},{session_idx}")
-        monkeypatch.setenv("TMUX_PANE", pane_id)
-        yield socket_name
-    finally:
-        subprocess.run(
-            [tmux, "-L", socket_name, "kill-server"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        def run(*args: str) -> str:
+            proc = subprocess.run(
+                [tmux, "-L", socket_name, "-f", "/dev/null", *args],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return proc.stdout.strip()
 
+        try:
+            run("new-session", "-d", "-s", "kajitest", "-x", "200", "-y", "50", "sleep 600")
+            socket_path = run("display-message", "-p", "-t", "kajitest", "#{socket_path}")
+            pane_id = run("display-message", "-p", "-t", "kajitest", "#{pane_id}")
+            server_pid = run("display-message", "-p", "-t", "kajitest", "#{pid}")
+            session_idx = run("display-message", "-p", "-t", "kajitest", "#{session_id}").lstrip(
+                "$"
+            )
+            monkeypatch.setenv("TMUX", f"{socket_path},{server_pid},{session_idx}")
+            monkeypatch.setenv("TMUX_PANE", pane_id)
+            yield socket_name
+        finally:
+            subprocess.run(
+                [tmux, "-L", socket_name, "kill-server"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
 
-def test_tmux_times_out_at_attempt_deadline_not_pane_launch_plus_timeout(
-    tmp_path: Path, isolated_tmux: str
-) -> None:
-    attempt_dir = tmp_path / "artifacts" / "attempt-001"
-    attempt_dir.mkdir(parents=True)
-    prompt = attempt_dir / "prompt.txt"
-    prompt.write_text("do the step", encoding="utf-8")
-    verdict = attempt_dir / "verdict.yaml"
+    def test_tmux_times_out_at_attempt_deadline_not_pane_launch_plus_timeout(
+        self, tmp_path: Path, isolated_tmux: str
+    ) -> None:
+        attempt_dir = tmp_path / "artifacts" / "attempt-001"
+        attempt_dir.mkdir(parents=True)
+        prompt = attempt_dir / "prompt.txt"
+        prompt.write_text("do the step", encoding="utf-8")
+        verdict = attempt_dir / "verdict.yaml"
 
-    attempt_start = time.monotonic()
-    with pytest.raises(StepTimeoutError) as exc_info:
-        execute_interactive_terminal(
-            step=Step(id="design", skill="x", agent="claude"),
-            prompt_path=prompt,
-            verdict_path=verdict,
-            workdir=tmp_path,
-            timeout=600,  # 設定 timeout は大きく、deadline_monotonic が優先されることを示す。
-            backend="tmux",
-            deadline_monotonic=attempt_start + 4.0,
-        )
-    elapsed = time.monotonic() - attempt_start
+        attempt_start = time.monotonic()
+        with pytest.raises(StepTimeoutError) as exc_info:
+            execute_interactive_terminal(
+                step=Step(id="design", skill="x", agent="claude"),
+                prompt_path=prompt,
+                verdict_path=verdict,
+                workdir=tmp_path,
+                timeout=600,  # 設定 timeout は大きく、deadline_monotonic が優先されることを示す。
+                backend="tmux",
+                deadline_monotonic=attempt_start + 4.0,
+            )
+        elapsed = time.monotonic() - attempt_start
 
-    assert exc_info.value.timeout == 600
-    # attempt 開始基準の 4 秒で打ち切られ、pane 起動所要時間は加算されない。
-    assert 4.0 <= elapsed < 4.0 + 3.0, elapsed
+        assert exc_info.value.timeout == 600
+        # attempt 開始基準の 4 秒で打ち切られ、pane 起動所要時間は加算されない。
+        assert 4.0 <= elapsed < 4.0 + 3.0, elapsed

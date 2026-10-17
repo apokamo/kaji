@@ -132,38 +132,6 @@ class TestRunnerBackendDispatch:
         assert state.last_completed_step == "design"
         assert captured["backend"] == "herdr"
 
-    def test_tmux_session_required_type_name_reaches_run_log(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Issue #322: 送出した例外型名が run.log の failure_event に載ることを固定する。
-
-        recovery classifier は live class ではなく artifact 上の型名文字列で判定する。
-        「送出した型名が artifact に正しく載る」ことを押さえないと、classify 側の Small
-        テストが実運用と乖離しうる。
-        """
-        config = _make_config(tmp_path, execution_extra='agent_runner = "interactive_terminal"')
-        artifacts_dir = tmp_path / "art-tmux"
-        runner = _make_runner(config, tmp_path, artifacts_dir=artifacts_dir)
-        plain_meta = SkillMetadata(name="plain", description="", exec_script=None)
-        monkeypatch.delenv("TMUX", raising=False)
-        monkeypatch.delenv("TMUX_PANE", raising=False)
-
-        with (
-            patch("kaji_harness.runner.validate_skill_exists"),
-            patch("kaji_harness.runner.load_skill_metadata", return_value=plain_meta),
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
-        ):
-            with pytest.raises(TmuxSessionRequiredError):
-                runner.run()
-
-        run_logs = sorted(artifacts_dir.glob("*/runs/*/run.log"))
-        assert len(run_logs) == 1
-        events = [json.loads(line) for line in run_logs[0].read_text().splitlines()]
-        failure = [e for e in events if e["event"] == "failure_event"]
-        assert len(failure) == 1
-        assert failure[0]["kind"] == "dispatch_exception"
-        assert failure[0]["exception_type"] == "TmuxSessionRequiredError"
-
     def test_herdr_session_required_type_name_reaches_run_log(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -280,6 +248,45 @@ class TestRunnerBackendDispatch:
             hl_runner.run()
 
         assert it_captured["workdir"] == hl_captured["workdir"] == tmp_path
+
+
+@pytest.mark.medium
+class TestTmuxRunnerDispatch:
+    """tmux backend 固有の runner dispatch テスト（Issue #474: 子 Issue B で class ごと削除できる単位）。"""
+
+    def test_tmux_session_required_type_name_reaches_run_log(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Issue #322: 送出した例外型名が run.log の failure_event に載ることを固定する。
+
+        recovery classifier は live class ではなく artifact 上の型名文字列で判定する。
+        「送出した型名が artifact に正しく載る」ことを押さえないと、classify 側の Small
+        テストが実運用と乖離しうる。
+        """
+        config = _make_config(tmp_path, execution_extra='agent_runner = "interactive_terminal"')
+        artifacts_dir = tmp_path / "art-tmux"
+        runner = _make_runner(config, tmp_path, artifacts_dir=artifacts_dir)
+        plain_meta = SkillMetadata(name="plain", description="", exec_script=None)
+        monkeypatch.delenv("TMUX", raising=False)
+        monkeypatch.delenv("TMUX_PANE", raising=False)
+
+        with (
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.runner.load_skill_metadata", return_value=plain_meta),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
+        ):
+            with pytest.raises(TmuxSessionRequiredError):
+                runner.run()
+
+        run_logs = sorted(artifacts_dir.glob("*/runs/*/run.log"))
+        assert len(run_logs) == 1
+        events = [json.loads(line) for line in run_logs[0].read_text().splitlines()]
+        failure = [e for e in events if e["event"] == "failure_event"]
+        assert len(failure) == 1
+        assert failure[0]["kind"] == "dispatch_exception"
+        assert failure[0]["exception_type"] == "TmuxSessionRequiredError"
 
 
 @pytest.mark.medium

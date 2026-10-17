@@ -20,7 +20,7 @@ from kaji_harness.cli import (
     is_transient_error_text,
 )
 from kaji_harness.errors import CLIExecutionError
-from kaji_harness.interactive_terminal import _terminal_exit_detail
+from kaji_harness.interactive_terminal_common import _terminal_exit_detail
 from kaji_harness.recovery.classify import classify_failure
 from kaji_harness.recovery.snapshot import FailureEvent, FailureSnapshot
 from tests.conftest import capacity_terminal_log_text
