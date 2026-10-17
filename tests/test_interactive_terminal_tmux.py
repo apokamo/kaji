@@ -3,8 +3,10 @@
 Covers the tmux split-window argv builder (``-h`` right split), fail-fast
 validation (``tmux`` / ``$TMUX`` / ``$TMUX_PANE`` / ``tmux -V``), ``#{pane_dead}``
 liveness mapping, verdict polling with ``kill-pane`` / ``remain-on-exit``
-cleanup, pane metadata snapshots, Codex session-id resolution, the wrapper
-shell contract, and a real-tmux end-to-end pass.
+cleanup, pane metadata snapshots, Codex session-id resolution through the tmux
+runner, and a real-tmux end-to-end pass. Shared helper tests (wrapper contract,
+diagnostics) live in ``test_interactive_terminal_common.py`` (Issue #474); this
+file is the tmux-only unit that the follow-up tmux removal can delete as a whole.
 """
 
 from __future__ import annotations
@@ -19,7 +21,6 @@ from unittest.mock import patch
 
 import pytest
 
-from kaji_harness.cli import _TRANSIENT_PATTERNS, is_transient_error_text
 from kaji_harness.errors import (
     CLIExecutionError,
     CLINotFoundError,
@@ -27,23 +28,16 @@ from kaji_harness.errors import (
     StepTimeoutError,
     TmuxSessionRequiredError,
 )
-from kaji_harness.interactive_terminal import (
+from kaji_harness.interactive_terminal import execute_interactive_terminal
+from kaji_harness.interactive_terminal_tmux import (
     KajiAgentPane,
     _build_tmux_split_argv,
-    _build_wrapper_command,
     _list_kaji_agent_panes,
     _pane_dead,
     _parse_kaji_pane_marker,
     _prune_kaji_agent_panes,
-    _resolve_abnormal_exit_session,
-    _terminal_exit_detail,
-    _wrapper_skill_invocation,
-    execute_interactive_terminal,
-    extract_terminal_diagnostic,
-    read_terminal_diagnostic,
 )
 from kaji_harness.models import Step
-from kaji_harness.recovery.handler import _sensitive_failure_text
 from kaji_harness.verdict import load_verdict_yaml
 
 WRAPPER = (
@@ -222,7 +216,7 @@ class TestRunnerEntryValidation:
     def test_missing_tmux_fails_loud(self, tmp_path: Path) -> None:
         prompt = tmp_path / "prompt.txt"
         prompt.write_text("prompt", encoding="utf-8")
-        with patch("kaji_harness.interactive_terminal.shutil.which", return_value=None):
+        with patch("kaji_harness.interactive_terminal_tmux.shutil.which", return_value=None):
             with pytest.raises(CLINotFoundError, match="tmux") as excinfo:
                 execute_interactive_terminal(
                     step=_step("claude"),
@@ -241,7 +235,9 @@ class TestRunnerEntryValidation:
         prompt.write_text("prompt", encoding="utf-8")
         monkeypatch.delenv("TMUX", raising=False)
         monkeypatch.delenv("TMUX_PANE", raising=False)
-        with patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"):
+        with patch(
+            "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+        ):
             with pytest.raises(TmuxSessionRequiredError) as excinfo:
                 execute_interactive_terminal(
                     step=_step("claude"),
@@ -262,7 +258,9 @@ class TestRunnerEntryValidation:
         prompt.write_text("prompt", encoding="utf-8")
         monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
         monkeypatch.delenv("TMUX_PANE", raising=False)
-        with patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"):
+        with patch(
+            "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+        ):
             with pytest.raises(CLINotFoundError, match="TMUX_PANE") as excinfo:
                 execute_interactive_terminal(
                     step=_step("claude"),
@@ -289,7 +287,9 @@ class TestRunnerEntryValidation:
             return _completed(stdout=version)
 
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
             patch.object(subprocess, "run", side_effect=fake_run),
         ):
             with pytest.raises(CLINotFoundError, match="tmux >= 3.1") as excinfo:
@@ -317,7 +317,9 @@ class TestRunnerEntryValidation:
             on_split=lambda: verdict.write_text(_PASS_VERDICT, encoding="utf-8"),
         )
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
             patch.object(subprocess, "run", side_effect=fake_run),
         ):
             result = execute_interactive_terminal(
@@ -336,7 +338,9 @@ class TestRunnerEntryValidation:
         prompt.write_text("prompt", encoding="utf-8")
         monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
         monkeypatch.setenv("TMUX_PANE", "%7")
-        with patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"):
+        with patch(
+            "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+        ):
             with pytest.raises(ValueError, match="does not support agent"):
                 execute_interactive_terminal(
                     step=Step(id="s", skill="x", agent="unsupported"),
@@ -351,7 +355,9 @@ class TestRunnerEntryValidation:
     ) -> None:
         monkeypatch.setenv("TMUX", "/tmp/tmux-sock,1,0")
         monkeypatch.setenv("TMUX_PANE", "%7")
-        with patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"):
+        with patch(
+            "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+        ):
             with pytest.raises(FileNotFoundError, match="prompt.txt"):
                 execute_interactive_terminal(
                     step=_step("claude"),
@@ -398,7 +404,9 @@ class TestSessionIdLaunch:
             calls=calls, on_split=lambda: verdict.write_text(_PASS_VERDICT, encoding="utf-8")
         )
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
             patch.object(subprocess, "run", side_effect=fake_run),
         ):
             result = execute_interactive_terminal(
@@ -421,7 +429,7 @@ class TestSessionIdLaunch:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         with patch(
-            "kaji_harness.interactive_terminal.uuid.uuid4",
+            "kaji_harness.interactive_terminal_tmux.uuid.uuid4",
             return_value=uuid.UUID("11111111-1111-4111-8111-111111111111"),
         ):
             result, calls = self._run(tmp_path, monkeypatch, _step("claude", model="haiku"))
@@ -479,9 +487,11 @@ class TestRunnerPaneLifecycle:
         )
 
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
             patch(
-                "kaji_harness.interactive_terminal.uuid.uuid4",
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.uuid.uuid4",
                 return_value=uuid.UUID("11111111-1111-4111-8111-111111111111"),
             ),
             patch.object(subprocess, "run", side_effect=fake_run),
@@ -518,7 +528,9 @@ class TestRunnerPaneLifecycle:
         )
 
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
             patch.object(subprocess, "run", side_effect=fake_run),
             caplog.at_level("INFO", logger="kaji.interactive_terminal"),
         ):
@@ -555,7 +567,9 @@ class TestRunnerPaneLifecycle:
         )
 
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
             patch.object(subprocess, "run", side_effect=fake_run),
         ):
             execute_interactive_terminal(
@@ -589,7 +603,9 @@ class TestRunnerPaneLifecycle:
         )
 
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
             patch.object(subprocess, "run", side_effect=fake_run),
         ):
             execute_interactive_terminal(
@@ -624,9 +640,11 @@ class TestRunnerPaneLifecycle:
         )
 
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
             patch(
-                "kaji_harness.interactive_terminal.uuid.uuid4",
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.uuid.uuid4",
                 return_value=uuid.UUID("11111111-1111-4111-8111-111111111111"),
             ),
             patch.object(subprocess, "run", side_effect=fake_run),
@@ -654,7 +672,9 @@ class TestRunnerPaneLifecycle:
         fake_run = _make_fake_tmux(calls=calls, pipe_returncode=1)
 
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
             patch.object(subprocess, "run", side_effect=fake_run),
         ):
             with pytest.raises(CLIExecutionError) as excinfo:
@@ -681,7 +701,9 @@ class TestRunnerPaneLifecycle:
         fake_run = _make_fake_tmux(pane_dead="1")  # pane dead, no verdict ever
 
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
             patch.object(subprocess, "run", side_effect=fake_run),
         ):
             with pytest.raises(CLIExecutionError) as excinfo:
@@ -705,11 +727,13 @@ class TestRunnerPaneLifecycle:
         fake_run = _make_fake_tmux(calls=calls)  # never writes verdict; pane alive
 
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
-            patch.object(subprocess, "run", side_effect=fake_run),
-            patch("kaji_harness.interactive_terminal.time.sleep", return_value=None),
             patch(
-                "kaji_harness.interactive_terminal.time.monotonic",
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
+            patch.object(subprocess, "run", side_effect=fake_run),
+            patch("kaji_harness.interactive_terminal_tmux.time.sleep", return_value=None),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.time.monotonic",
                 side_effect=[0.0, 0.5, 2.0],
             ),
         ):
@@ -743,7 +767,9 @@ class TestCodexSessionIdExtraction:
         # pane reported dead so the codex session-id grace loop returns at once.
         fake_run = _make_fake_tmux(pane_dead="1", on_split=on_split)
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
             patch.object(subprocess, "run", side_effect=fake_run),
         ):
             result = execute_interactive_terminal(
@@ -822,57 +848,6 @@ class TestCodexSessionIdExtraction:
         )
 
 
-@pytest.mark.small
-class TestResolveAbnormalExitSessionPureBranches:
-    """Issue #403: 異常終了経路の session 解決のうち、store I/O を伴わない分岐。"""
-
-    def _resolve(
-        self,
-        agent: str,
-        *,
-        resume_session_id: str | None = None,
-        launch_session_id: str = "",
-        pane_alive: bool = True,
-    ) -> SessionResolution:
-        return _resolve_abnormal_exit_session(
-            agent,
-            prompt_path=Path("/tmp/attempt-001/prompt.txt"),
-            verdict_path=Path("/tmp/attempt-001/verdict.yaml"),
-            resume_session_id=resume_session_id,
-            launch_session_id=launch_session_id,
-            pane_alive=pane_alive,
-        )
-
-    def test_claude_resume_returns_resume_input(self) -> None:
-        # `claude --resume <id>` は同一 session を継続するため、resume 入力が当該 attempt の ID。
-        assert self._resolve("claude", resume_session_id="parent-sess") == SessionResolution(
-            "parent-sess"
-        )
-        assert self._resolve(
-            "claude", resume_session_id="parent-sess", pane_alive=False
-        ) == SessionResolution("parent-sess")
-
-    def test_claude_fresh_timeout_returns_launch_session_id(self) -> None:
-        assert self._resolve(
-            "claude", launch_session_id="launch-uuid", pane_alive=True
-        ) == SessionResolution("launch-uuid")
-
-    def test_claude_fresh_pane_dead_returns_none(self) -> None:
-        # pane 死亡は起動失敗を含むため、採番 UUID に対応する session が実在しない。
-        assert self._resolve(
-            "claude", launch_session_id="launch-uuid", pane_alive=False
-        ) == SessionResolution(None)
-
-    def test_antigravity_always_returns_none(self) -> None:
-        assert self._resolve("antigravity", launch_session_id="x") == SessionResolution(None)
-
-    def test_resolution_none_is_distinguishable_from_untried(self) -> None:
-        # 「解決を試みて null」は確定値であり、「未試行（例外に載せない）」とは別物。
-        resolved = self._resolve("antigravity")
-        assert resolved is not None
-        assert resolved.session_id is None
-
-
 @pytest.mark.medium
 class TestAbnormalExitSessionResolution:
     """Issue #403: timeout / pane-dead の session 解決（Codex session store 照合）。"""
@@ -910,11 +885,13 @@ class TestAbnormalExitSessionResolution:
         fake_run = _make_fake_tmux(calls=calls)  # pane alive, verdict never appears
 
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
-            patch.object(subprocess, "run", side_effect=fake_run),
-            patch("kaji_harness.interactive_terminal.time.sleep", return_value=None),
             patch(
-                "kaji_harness.interactive_terminal.time.monotonic",
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
+            patch.object(subprocess, "run", side_effect=fake_run),
+            patch("kaji_harness.interactive_terminal_tmux.time.sleep", return_value=None),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.time.monotonic",
                 side_effect=[0.0, 0.5, 2.0],
             ),
             pytest.raises(StepTimeoutError) as excinfo,
@@ -944,7 +921,9 @@ class TestAbnormalExitSessionResolution:
         fake_run = _make_fake_tmux(pane_dead="1")
 
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
             patch.object(subprocess, "run", side_effect=fake_run),
             pytest.raises(CLIExecutionError) as excinfo,
         ):
@@ -1153,9 +1132,13 @@ class TestInteractiveTerminalInterrupt:
         fake_run = _make_fake_tmux(calls=calls)
 
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
             patch.object(subprocess, "run", side_effect=fake_run),
-            patch("kaji_harness.interactive_terminal.time.sleep", side_effect=KeyboardInterrupt()),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.time.sleep", side_effect=KeyboardInterrupt()
+            ),
             pytest.raises(KeyboardInterrupt),
         ):
             execute_interactive_terminal(
@@ -1187,11 +1170,15 @@ class TestInteractiveTerminalInterrupt:
         fake_run = _make_fake_tmux()
 
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
-            patch.object(subprocess, "run", side_effect=fake_run),
-            patch("kaji_harness.interactive_terminal.time.sleep", side_effect=KeyboardInterrupt()),
             patch(
-                "kaji_harness.interactive_terminal._write_pane_metadata",
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
+            patch.object(subprocess, "run", side_effect=fake_run),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.time.sleep", side_effect=KeyboardInterrupt()
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_tmux._write_pane_metadata",
                 side_effect=OSError("disk full"),
             ),
             pytest.raises(KeyboardInterrupt),
@@ -1203,291 +1190,6 @@ class TestInteractiveTerminalInterrupt:
                 workdir=tmp_path,
                 timeout=600,
             )
-
-
-@pytest.mark.small
-class TestWrapperSkillInvocationArgument:
-    """Issue #408: wrapper の第 10 位置引数 ``skill_invocation``（codex のときだけ非空）。"""
-
-    def _command_argv(self, **overrides: str) -> list[str]:
-        import shlex
-
-        kwargs = {
-            "agent": "codex",
-            "prompt_path": Path("/p/prompt.txt"),
-            "verdict_path": Path("/p/verdict.yaml"),
-            "workdir": Path("/w"),
-            "resume_session_id": "",
-            "launch_session_id": "",
-            "model": "m",
-            "effort": "e",
-            "execution_policy": "auto",
-        }
-        kwargs.update(overrides)
-        return shlex.split(_build_wrapper_command(Path("/pkg/wrapper.sh"), **kwargs))  # type: ignore[arg-type]
-
-    def test_tenth_argument_is_invocation_line_for_codex(self) -> None:
-        argv = self._command_argv(skill_invocation="$review を実行してください。")
-
-        assert len(argv) == 11
-        assert argv[10] == "$review を実行してください。"
-
-    def test_tenth_argument_defaults_to_empty_string(self) -> None:
-        argv = self._command_argv(agent="claude")
-
-        assert len(argv) == 11
-        assert argv[10] == ""
-
-    def test_wrapper_skill_invocation_is_codex_only(self) -> None:
-        assert _wrapper_skill_invocation(_step("codex")) == "$issue-design を実行してください。"
-        assert _wrapper_skill_invocation(_step("claude")) == ""
-        assert _wrapper_skill_invocation(_step("antigravity")) == ""
-
-
-@pytest.mark.medium
-class TestInteractiveTerminalWrapper:
-    """Wrapper shell contract: cwd, arg order, and agent command lines (10 positions)."""
-
-    def test_wrapper_syntax_is_valid(self) -> None:
-        result = subprocess.run(
-            ["bash", "-n", str(WRAPPER)], capture_output=True, text=True, check=False
-        )
-        assert result.returncode == 0, result.stderr
-
-    def _fake_agent_recording_argv(self, tmp_path: Path, name: str) -> tuple[Path, Path]:
-        """Create a fake agent on PATH that records its argv and cwd."""
-        fake_bin = tmp_path / "bin"
-        fake_bin.mkdir(exist_ok=True)
-        args_path = tmp_path / f"{name}-args.txt"
-        cwd_path = tmp_path / f"{name}-cwd.txt"
-        agent = fake_bin / name
-        agent.write_text(
-            "#!/usr/bin/env bash\n"
-            'pwd > "$CWD_PATH"\n'
-            'printf "%s\\n" "$@" > "$ARGS_PATH"\n'
-            'printf "status: PASS\\nreason: ok\\nevidence: e\\nsuggestion: \x27\x27\\n" > "$FAKE_VERDICT_PATH"\n',
-            encoding="utf-8",
-        )
-        agent.chmod(0o755)
-        return args_path, cwd_path
-
-    def _run_wrapper(
-        self,
-        tmp_path: Path,
-        agent: str,
-        wrapper_args: list[str],
-        *,
-        path_prefix: Path,
-        extra_env: dict[str, str] | None = None,
-    ) -> subprocess.CompletedProcess[str]:
-        verdict = tmp_path / "verdict.yaml"
-        env = dict(os.environ)
-        env["PATH"] = f"{path_prefix}:{os.environ['PATH']}"
-        env["FAKE_VERDICT_PATH"] = str(verdict)
-        env["ARGS_PATH"] = str(tmp_path / f"{agent}-args.txt")
-        env["CWD_PATH"] = str(tmp_path / f"{agent}-cwd.txt")
-        if extra_env:
-            env.update(extra_env)
-        return subprocess.run(
-            [str(WRAPPER), *wrapper_args],
-            cwd=tmp_path,
-            text=True,
-            capture_output=True,
-            check=False,
-            env=env,
-        )
-
-    def _base_args(self, tmp_path: Path, agent: str) -> list[str]:
-        prompt = tmp_path / "prompt.txt"
-        prompt.write_text("prompt", encoding="utf-8")
-        workdir = tmp_path / "work"
-        workdir.mkdir(exist_ok=True)
-        # 9-position contract prefix: agent prompt verdict workdir ...
-        return [agent, str(prompt), str(tmp_path / "verdict.yaml"), str(workdir)]
-
-    def test_wrapper_cds_into_workdir_before_agent(self, tmp_path: Path) -> None:
-        workdir = tmp_path / "work"
-        workdir.mkdir()
-        _, cwd_path = self._fake_agent_recording_argv(tmp_path, "claude")
-        fake_bin = tmp_path / "bin"
-        (tmp_path / "prompt.txt").write_text("prompt", encoding="utf-8")
-        result = self._run_wrapper(
-            tmp_path,
-            "claude",
-            ["claude", str(tmp_path / "prompt.txt"), str(tmp_path / "verdict.yaml"), str(workdir)],
-            path_prefix=fake_bin,
-        )
-        assert result.returncode == 0, result.stderr
-        recorded_cwd = Path(cwd_path.read_text(encoding="utf-8").strip())
-        assert recorded_cwd.resolve() == workdir.resolve()
-
-    def test_wrapper_enables_truecolor_for_agent(self, tmp_path: Path) -> None:
-        env_path = tmp_path / "claude-env.txt"
-        fake_bin = tmp_path / "bin"
-        fake_bin.mkdir(exist_ok=True)
-        fake_claude = fake_bin / "claude"
-        fake_claude.write_text(
-            "#!/usr/bin/env bash\n"
-            'printf "NO_COLOR=%s\\n" "${NO_COLOR-<unset>}" > "$ENV_PATH"\n'
-            'printf "COLORTERM=%s\\n" "${COLORTERM-<unset>}" >> "$ENV_PATH"\n'
-            'printf "status: PASS\\nreason: ok\\nevidence: e\\nsuggestion: \x27\x27\\n" > "$FAKE_VERDICT_PATH"\n',
-            encoding="utf-8",
-        )
-        fake_claude.chmod(0o755)
-        result = self._run_wrapper(
-            tmp_path,
-            "claude",
-            self._base_args(tmp_path, "claude"),
-            path_prefix=fake_bin,
-            extra_env={"NO_COLOR": "1", "COLORTERM": "falsecolor", "ENV_PATH": str(env_path)},
-        )
-        assert result.returncode == 0, result.stderr
-        assert env_path.read_text(encoding="utf-8").splitlines() == [
-            "NO_COLOR=<unset>",
-            "COLORTERM=truecolor",
-        ]
-
-    def test_claude_fresh_command_matches_contract(self, tmp_path: Path) -> None:
-        args_path, _ = self._fake_agent_recording_argv(tmp_path, "claude")
-        fake_bin = tmp_path / "bin"
-        wrapper_args = self._base_args(tmp_path, "claude") + ["", "launch-uuid", "haiku", "low"]
-        result = self._run_wrapper(tmp_path, "claude", wrapper_args, path_prefix=fake_bin)
-        assert result.returncode == 0, result.stderr
-        args = args_path.read_text(encoding="utf-8").splitlines()
-        assert args[:6] == [
-            "--dangerously-skip-permissions",
-            "--model",
-            "haiku",
-            "--effort",
-            "low",
-            "--session-id",
-        ]
-        assert args[6] == "launch-uuid"
-
-    def test_claude_resume_command_matches_contract(self, tmp_path: Path) -> None:
-        args_path, _ = self._fake_agent_recording_argv(tmp_path, "claude")
-        fake_bin = tmp_path / "bin"
-        wrapper_args = self._base_args(tmp_path, "claude") + ["resume-uuid", "", "haiku", "low"]
-        result = self._run_wrapper(tmp_path, "claude", wrapper_args, path_prefix=fake_bin)
-        assert result.returncode == 0, result.stderr
-        args = args_path.read_text(encoding="utf-8").splitlines()
-        assert args[:6] == [
-            "--dangerously-skip-permissions",
-            "--model",
-            "haiku",
-            "--effort",
-            "low",
-            "--resume",
-        ]
-        assert args[6] == "resume-uuid"
-
-    def test_codex_fresh_command_matches_contract(self, tmp_path: Path) -> None:
-        args_path, _ = self._fake_agent_recording_argv(tmp_path, "codex")
-        fake_bin = tmp_path / "bin"
-        wrapper_args = self._base_args(tmp_path, "codex") + ["", "", "gpt-5.4-mini", "low"]
-        result = self._run_wrapper(tmp_path, "codex", wrapper_args, path_prefix=fake_bin)
-        assert result.returncode == 0, result.stderr
-        args = args_path.read_text(encoding="utf-8").splitlines()
-        assert args[:7] == [
-            "--cd",
-            str(tmp_path / "work"),
-            "--dangerously-bypass-approvals-and-sandbox",
-            "--model",
-            "gpt-5.4-mini",
-            "--config",
-            'model_reasoning_effort="low"',
-        ]
-
-    def test_codex_resume_command_matches_contract(self, tmp_path: Path) -> None:
-        args_path, _ = self._fake_agent_recording_argv(tmp_path, "codex")
-        fake_bin = tmp_path / "bin"
-        wrapper_args = self._base_args(tmp_path, "codex") + [
-            "33333333-3333-4333-8333-333333333333",
-            "",
-            "gpt-5.4-mini",
-            "low",
-        ]
-        result = self._run_wrapper(tmp_path, "codex", wrapper_args, path_prefix=fake_bin)
-        assert result.returncode == 0, result.stderr
-        args = args_path.read_text(encoding="utf-8").splitlines()
-        assert args[:4] == [
-            "resume",
-            "--cd",
-            str(tmp_path / "work"),
-            "--dangerously-bypass-approvals-and-sandbox",
-        ]
-        assert args[4:9] == [
-            "--model",
-            "gpt-5.4-mini",
-            "--config",
-            'model_reasoning_effort="low"',
-            "33333333-3333-4333-8333-333333333333",
-        ]
-
-    @pytest.mark.parametrize(
-        ("policy", "expected_flag"),
-        [
-            ("auto", "--dangerously-skip-permissions"),
-            ("sandbox", "--sandbox"),
-            ("interactive", None),
-        ],
-    )
-    def test_antigravity_policy_command_matches_contract(
-        self,
-        tmp_path: Path,
-        policy: str,
-        expected_flag: str | None,
-    ) -> None:
-        """AGY interactive argv に 3 policy を同じ意味で写像する。"""
-        args_path, _ = self._fake_agent_recording_argv(tmp_path, "agy")
-        fake_bin = tmp_path / "bin"
-        wrapper_args = self._base_args(tmp_path, "antigravity") + [
-            "",
-            "",
-            "gemini-3-pro",
-            "high",
-            policy,
-        ]
-
-        result = self._run_wrapper(
-            tmp_path,
-            "agy",
-            wrapper_args,
-            path_prefix=fake_bin,
-        )
-
-        assert result.returncode == 0, result.stderr
-        args = args_path.read_text(encoding="utf-8").splitlines()
-        prompt_index = args.index("-i")
-        assert args[prompt_index + 1].startswith("Read the full task prompt from:")
-        assert "--model" in args
-        assert "gemini-3-pro" in args
-        assert "--effort" in args
-        assert "high" in args
-        for policy_flag in ("--dangerously-skip-permissions", "--sandbox"):
-            assert (policy_flag in args) is (policy_flag == expected_flag)
-
-    def test_antigravity_resume_is_rejected_by_wrapper(self, tmp_path: Path) -> None:
-        """validation を迂回した AGY resume を wrapper でも拒否する。"""
-        fake_bin = tmp_path / "bin"
-        fake_bin.mkdir(exist_ok=True)
-        wrapper_args = self._base_args(tmp_path, "antigravity") + [
-            "unsupported-session",
-            "",
-            "",
-            "",
-            "auto",
-        ]
-
-        result = self._run_wrapper(
-            tmp_path,
-            "agy",
-            wrapper_args,
-            path_prefix=fake_bin,
-        )
-
-        assert result.returncode == 2
-        assert "does not support resume" in result.stderr
 
 
 @pytest.mark.small
@@ -1615,7 +1317,9 @@ class TestRightColumnPanePlacement:
             on_split=on_split,
         )
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
             patch.object(subprocess, "run", side_effect=fake_run),
         ):
             execute_interactive_terminal(
@@ -1719,7 +1423,9 @@ class TestRightColumnPanePlacement:
             set_option_returncode=1,
         )
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
             patch.object(subprocess, "run", side_effect=fake_run),
         ):
             with pytest.raises(CLIExecutionError):
@@ -1746,221 +1452,6 @@ class TestRightColumnPanePlacement:
         assert metadata["kaji_agent_panes_pruned"] == []
 
 
-def _ansi_noisy_capacity_line() -> str:
-    """One physical transcript line with capacity + shutdown + Token usage, each
-    character wrapped in a truecolor ANSI escape (Issue #296 real-artifact shape:
-    the OB terminal.log has these three phrases connected on a single physical
-    line via TUI redraw cursor-movement/color codes).
-    """
-    raw = (
-        "⚠ Selected model is at capacity. Please try a different model. "
-        "› Shutting down... Token usage: total=32,386 input=31,159 output=1,227"
-    )
-    chars = []
-    for i, ch in enumerate(raw):
-        r, g, b = (i * 7) % 256, (i * 13) % 256, (i * 19) % 256
-        chars.append(f"\x1b[38;2;{r};{g};{b};49m{ch}")
-    chars.append("\x1b[39m\n")
-    return "".join(chars)
-
-
-def _buried_capacity_transcript() -> str:
-    """A large TUI transcript with the capacity line buried well before the
-    ``_TERMINAL_LOG_TAIL_CHARS`` (2000-char) tail window, matching the real
-    298KB OB artifact where the capacity line was near the head and the tail
-    was pure ANSI redraw noise.
-    """
-    header = "assistant is thinking...\n" * 60
-    capacity_line = _ansi_noisy_capacity_line()
-    footer = ("\x1b[2K\x1b[1A" * 400) + "\n"
-    return header + capacity_line + footer
-
-
-@pytest.mark.small
-class TestExtractTerminalDiagnostic:
-    """`extract_terminal_diagnostic` (Issue #296): full-transcript transient scan."""
-
-    def test_detects_capacity_line_buried_before_tail_window(self) -> None:
-        text = _buried_capacity_transcript()
-        # Regression demonstration: the pre-#296 tail-only extraction
-        # (`text[-2000:]`) does not contain the capacity phrase at all.
-        assert "at capacity" not in text[-2000:].lower()
-
-        diagnostic = extract_terminal_diagnostic(text)
-        assert diagnostic.kind == "provider_error"
-        assert diagnostic.matched_pattern == "at capacity"
-
-    def test_kind_no_pattern_for_transient_free_transcript(self) -> None:
-        diagnostic = extract_terminal_diagnostic("let me proceed with the next step\n")
-        assert diagnostic.kind == "no_pattern"
-        assert diagnostic.matched_pattern is None
-
-    def test_kind_empty_for_blank_text(self) -> None:
-        diagnostic = extract_terminal_diagnostic("   \n\t  ")
-        assert diagnostic.kind == "empty"
-        assert diagnostic.clean_tail == ""
-
-    @pytest.mark.parametrize("phrase", ["rate limit", "overloaded"])
-    def test_reuses_cli_transient_patterns_consistently(self, phrase: str) -> None:
-        diagnostic = extract_terminal_diagnostic(f"provider said: {phrase} exceeded\n")
-        assert diagnostic.kind == "provider_error"
-        assert diagnostic.matched_pattern == phrase
-
-    def test_ansi_escape_fragments_are_removed_from_excerpt_and_tail(self) -> None:
-        diagnostic = extract_terminal_diagnostic(_buried_capacity_transcript())
-        assert diagnostic.clean_excerpt is not None
-        assert "\x1b" not in diagnostic.clean_excerpt
-        assert "\x1b" not in diagnostic.clean_tail
-        assert "at capacity" in diagnostic.clean_excerpt.lower()
-
-
-@pytest.mark.small
-class TestSensitiveSafeFocusedMessage:
-    """Canonical-only focalization keeps ``Token usage`` out of the gate input."""
-
-    def test_capacity_message_is_transient_but_not_sensitive(self, tmp_path: Path) -> None:
-        # This is the core regression guard for review-design 指摘 1: the same
-        # physical line carries both "at capacity" and "Token usage", but the
-        # CLIExecutionError message built by `_terminal_exit_detail` must only
-        # ever surface the canonical pattern literal.
-        terminal_log = tmp_path / "terminal.log"
-        terminal_log.write_text(_buried_capacity_transcript(), encoding="utf-8")
-
-        message = _terminal_exit_detail(terminal_log)
-
-        assert "at capacity" in message
-        assert "Token usage" not in message
-        assert is_transient_error_text(message) is True
-        assert _sensitive_failure_text(message) is False
-
-    def test_no_pattern_message_keeps_raw_tail_but_is_not_a_candidate(self, tmp_path: Path) -> None:
-        terminal_log = tmp_path / "terminal.log"
-        terminal_log.write_text("agent failed at launch\n", encoding="utf-8")
-
-        message = _terminal_exit_detail(terminal_log)
-
-        assert "agent failed at launch" in message
-        assert is_transient_error_text(message) is False
-
-    def test_no_transient_pattern_is_ever_sensitive(self) -> None:
-        # Canonical-only healthiness (review-design 指摘 1): every literal
-        # `_TRANSIENT_PATTERNS` can produce must never trip the sensitive gate,
-        # independent of any single sample. Breaks loudly if a future pattern
-        # addition collides with `_SENSITIVE_FAILURE_PATTERNS`.
-        for pattern in _TRANSIENT_PATTERNS:
-            message = f"tmux pane exited before writing verdict.yaml; transient provider error detected (pattern: '{pattern}')"
-            assert _sensitive_failure_text(message) is False, pattern
-
-
-def _ansi_noisy_capacity_and_401_line() -> str:
-    """One physical transcript line combining a transient capacity phrase with a
-    genuine auth marker (PR #300 review: providers can emit ``rate limit ... 401``
-    / ``try again ... invalid token`` style lines where transient and sensitive
-    markers share one line).
-    """
-    raw = (
-        "⚠ Selected model is at capacity. Please try a different model. "
-        "› upstream returned 401 status"
-    )
-    chars = []
-    for i, ch in enumerate(raw):
-        r, g, b = (i * 7) % 256, (i * 13) % 256, (i * 19) % 256
-        chars.append(f"\x1b[38;2;{r};{g};{b};49m{ch}")
-    chars.append("\x1b[39m\n")
-    return "".join(chars)
-
-
-def _buried_capacity_and_401_transcript() -> str:
-    header = "assistant is thinking...\n" * 60
-    line = _ansi_noisy_capacity_and_401_line()
-    footer = ("\x1b[2K\x1b[1A" * 400) + "\n"
-    return header + line + footer
-
-
-@pytest.mark.small
-class TestSensitiveMarkerCoexistsWithTransient:
-    """PR #300 review (P2): a transcript carrying both a transient literal and a
-    high-confidence auth marker (401/403/credential/permission denied/unauthorized/
-    authentication failed) must let the sensitive marker reach the message that
-    becomes ``result.json.error``, so ``_safety_gates`` can still trip
-    ``sensitive_failure_pattern`` instead of being structurally bypassed.
-    """
-
-    def test_diagnostic_records_high_confidence_sensitive_marker(self) -> None:
-        diagnostic = extract_terminal_diagnostic(_buried_capacity_and_401_transcript())
-        assert diagnostic.kind == "provider_error"
-        assert diagnostic.matched_pattern == "at capacity"
-        assert diagnostic.sensitive_marker == "401"
-
-    def test_exit_detail_message_trips_sensitive_gate(self, tmp_path: Path) -> None:
-        terminal_log = tmp_path / "terminal.log"
-        terminal_log.write_text(_buried_capacity_and_401_transcript(), encoding="utf-8")
-
-        message = _terminal_exit_detail(terminal_log)
-
-        assert "at capacity" in message
-        assert is_transient_error_text(message) is True
-        assert _sensitive_failure_text(message) is True
-
-    def test_exit_detail_message_trips_sensitive_gate_for_invalid_token(
-        self, tmp_path: Path
-    ) -> None:
-        # PR #300 review: reproduces the reported gap directly — a transcript
-        # whose only sensitive marker is a compound "invalid token" phrase (no
-        # 401/403/credential/etc alongside it) must still trip the gate, even
-        # though bare `token` is excluded to avoid "Token usage" telemetry noise.
-        terminal_log = tmp_path / "terminal.log"
-        terminal_log.write_text("Please try again: invalid token\n", encoding="utf-8")
-
-        message = _terminal_exit_detail(terminal_log)
-
-        assert "try again" in message
-        assert is_transient_error_text(message) is True
-        assert _sensitive_failure_text(message) is True
-
-
-@pytest.mark.small
-class TestFalsePositiveBoundary:
-    """review-design 指摘 3: generic pattern の transcript 全体走査の境界。"""
-
-    def test_benign_transcript_without_transient_words_is_no_pattern(self) -> None:
-        # negative: prose with no transient vocabulary must not be misclassified
-        # as a candidate, even though the scan covers the entire transcript.
-        benign = "let me proceed with the next step and finish up the review.\n" * 5
-        diagnostic = extract_terminal_diagnostic(benign)
-        assert diagnostic.kind == "no_pattern"
-        message = f"tmux pane exited before writing verdict.yaml; no known provider error pattern in transcript; log tail:\n{diagnostic.clean_tail}"
-        assert is_transient_error_text(message) is False
-
-    def test_generic_try_again_phrase_is_characterized_as_provider_error(self) -> None:
-        # characterization: `try again` is a generic transient pattern shared
-        # with headless (cli.py single source of truth). This scan only runs on
-        # the verdict-not-written abnormal pane-death path, and the blast radius
-        # of a false positive is bounded by RECOVERY_BUDGET=1 (one extra resume).
-        diagnostic = extract_terminal_diagnostic("connection reset, please try again\n")
-        assert diagnostic.kind == "provider_error"
-        assert diagnostic.matched_pattern == "try again"
-
-
-@pytest.mark.small
-class TestReadTerminalDiagnostic:
-    """`read_terminal_diagnostic` extraction-failure kinds (no_log / empty)."""
-
-    def test_missing_file_is_no_log(self, tmp_path: Path) -> None:
-        diagnostic = read_terminal_diagnostic(tmp_path / "missing-terminal.log")
-        assert diagnostic.kind == "no_log"
-
-    def test_empty_file_is_empty(self, tmp_path: Path) -> None:
-        terminal_log = tmp_path / "terminal.log"
-        terminal_log.write_text("", encoding="utf-8")
-        assert read_terminal_diagnostic(terminal_log).kind == "empty"
-
-    def test_missing_file_message_is_diagnostic_unavailable(self, tmp_path: Path) -> None:
-        message = _terminal_exit_detail(tmp_path / "missing-terminal.log")
-        assert "diagnostic unavailable" in message
-        assert is_transient_error_text(message) is False
-
-
 @pytest.mark.medium
 class TestPaneExitStatusDistinguishable:
     """完了条件: pane exit 0 / 非 0 / verdict 有りが観測可能に区別できること。"""
@@ -1976,7 +1467,9 @@ class TestPaneExitStatusDistinguishable:
         fake_run = _make_fake_tmux(pane_dead="1", pane_dead_status=pane_dead_status)
 
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
             patch.object(subprocess, "run", side_effect=fake_run),
         ):
             with pytest.raises(CLIExecutionError):
@@ -2028,7 +1521,9 @@ class TestPaneExitStatusDistinguishable:
         )
 
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
             patch.object(subprocess, "run", side_effect=fake_run),
         ):
             execute_interactive_terminal(
@@ -2306,9 +1801,11 @@ class TestTmuxAttemptDeadline:
         clock = self._Clock(500.0)
 
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
             patch.object(subprocess, "run", side_effect=_make_fake_tmux(calls=calls)),
-            patch("kaji_harness.interactive_terminal.time.monotonic", clock.monotonic),
+            patch("kaji_harness.interactive_terminal_tmux.time.monotonic", clock.monotonic),
             pytest.raises(StepTimeoutError) as excinfo,
         ):
             execute_interactive_terminal(
@@ -2334,12 +1831,14 @@ class TestTmuxAttemptDeadline:
         clock = self._Clock(100.0)
 
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
-            patch.object(subprocess, "run", side_effect=_make_fake_tmux(calls=calls)),
-            patch("kaji_harness.interactive_terminal.time.monotonic", clock.monotonic),
-            patch("kaji_harness.interactive_terminal.time.sleep", clock.sleep),
             patch(
-                "kaji_harness.interactive_terminal.uuid.uuid4",
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
+            patch.object(subprocess, "run", side_effect=_make_fake_tmux(calls=calls)),
+            patch("kaji_harness.interactive_terminal_tmux.time.monotonic", clock.monotonic),
+            patch("kaji_harness.interactive_terminal_tmux.time.sleep", clock.sleep),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.uuid.uuid4",
                 return_value=uuid.UUID("11111111-1111-4111-8111-111111111111"),
             ),
             pytest.raises(StepTimeoutError) as excinfo,
@@ -2371,10 +1870,12 @@ class TestTmuxAttemptDeadline:
         clock = self._Clock(0.0)
 
         with (
-            patch("kaji_harness.interactive_terminal.shutil.which", return_value="/usr/bin/tmux"),
+            patch(
+                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
+            ),
             patch.object(subprocess, "run", side_effect=_make_fake_tmux()),
-            patch("kaji_harness.interactive_terminal.time.monotonic", clock.monotonic),
-            patch("kaji_harness.interactive_terminal.time.sleep", clock.sleep),
+            patch("kaji_harness.interactive_terminal_tmux.time.monotonic", clock.monotonic),
+            patch("kaji_harness.interactive_terminal_tmux.time.sleep", clock.sleep),
             pytest.raises(StepTimeoutError),
         ):
             execute_interactive_terminal(

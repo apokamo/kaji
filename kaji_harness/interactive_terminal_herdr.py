@@ -30,7 +30,7 @@ from .errors import (
     HerdrSessionRequiredError,
     StepTimeoutError,
 )
-from .interactive_terminal import (
+from .interactive_terminal_common import (
     _build_wrapper_command,
     _extract_codex_session_id,
     _resolve_abnormal_exit_session,
