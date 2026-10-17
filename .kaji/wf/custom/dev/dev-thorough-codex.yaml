@@ -1,10 +1,10 @@
 name: dev-thorough-codex
 description: |
   series 自動選択対象外の明示 override 専用 variant。
-  開発作業の丁寧版 workflow。dev-thorough-fable の役割を反転させ、
-  設計・実装フェーズの生成/修正を Codex (gpt-6-astra/high)、
+  開発作業の丁寧版 workflow。dev-thorough の役割を反転させ、
+  設計・実装フェーズの生成/修正を Codex (gpt-6-astra)、
   レビュー/検証を Claude (opus/xhigh) が担当する。
-  定型 step (start / pr / close) は gpt-5.6-luna で軽く回す。
+  定型 step (start / pr / close) は gpt-6-luna で軽く回す。
   issue-create は事前に完了していることが前提。
   review-ready が RETRY の場合は fix-ready で Issue 本文を修正してから再試行する。
 execution_policy: auto
@@ -51,8 +51,8 @@ steps:
   - id: review-ready
     skill: issue-review-ready
     agent: codex
-    model: gpt-6-astra
-    effort: medium
+    model: gpt-6.1-sol
+    effort: high
     on:
       PASS: start
       RETRY: fix-ready
@@ -70,7 +70,7 @@ steps:
   - id: start
     skill: issue-start
     agent: codex
-    model: gpt-5.6-luna
+    model: gpt-6-luna
     effort: medium
     on:
       PASS: design
@@ -80,7 +80,7 @@ steps:
     skill: issue-design
     agent: codex
     model: gpt-6-astra
-    effort: high
+    effort: xhigh
     on:
       PASS: review-design
       ABORT: end
@@ -99,7 +99,7 @@ steps:
     skill: issue-fix-design
     agent: codex
     model: gpt-6-astra
-    effort: medium
+    effort: xhigh
     resume: design
     on:
       PASS: verify-design
@@ -126,7 +126,7 @@ steps:
     skill: issue-implement
     agent: codex
     model: gpt-6-astra
-    effort: high
+    effort: xhigh
     timeout: 6000
     on:
       PASS: review-code
@@ -150,7 +150,7 @@ steps:
     skill: issue-fix-code
     agent: codex
     model: gpt-6-astra
-    effort: medium
+    effort: high
     timeout: 3600
     on:
       PASS: verify-code
@@ -169,7 +169,7 @@ steps:
   - id: final-check
     skill: i-dev-final-check
     agent: codex
-    model: gpt-6-astra
+    model: gpt-6.1-sol
     effort: medium
     on:
       PASS: pr
@@ -181,7 +181,7 @@ steps:
   - id: pr
     skill: i-pr
     agent: codex
-    model: gpt-5.6-luna
+    model: gpt-6-luna
     effort: medium
     on:
       PASS: review-poll
@@ -199,8 +199,8 @@ steps:
   - id: review
     skill: review
     agent: codex
-    model: gpt-6-astra
-    effort: medium
+    model: gpt-6.1-sol
+    effort: high
     on:
       PASS: close
       RETRY: pr-fix
@@ -210,7 +210,7 @@ steps:
     skill: pr-fix
     agent: claude
     model: opus
-    effort: xhigh
+    effort: high
     on:
       PASS: pr-verify
       ABORT: end
@@ -218,8 +218,8 @@ steps:
   - id: pr-verify
     skill: pr-verify
     agent: codex
-    model: gpt-6-astra
-    effort: medium
+    model: gpt-6.1-sol
+    effort: high
     on:
       PASS: close
       RETRY: pr-fix
@@ -228,7 +228,7 @@ steps:
   - id: close
     skill: issue-close
     agent: codex
-    model: gpt-5.6-luna
+    model: gpt-6-luna
     effort: medium
     on:
       PASS: end

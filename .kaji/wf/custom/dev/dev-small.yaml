@@ -43,7 +43,7 @@ steps:
     skill: issue-review-ready
     agent: codex
     model: gpt-6.1-sol
-    effort: medium
+    effort: high
     on:
       PASS: start
       RETRY: fix-ready
@@ -53,7 +53,7 @@ steps:
     skill: issue-fix-ready
     agent: claude
     model: opus
-    effort: medium
+    effort: high
     on:
       PASS: review-ready
       ABORT: end
@@ -61,7 +61,7 @@ steps:
   - id: start
     skill: issue-start
     agent: codex
-    model: gpt-5.6-luna
+    model: gpt-6-luna
     effort: medium
     on:
       PASS: baseline
@@ -78,7 +78,7 @@ steps:
     skill: issue-small-change-execute
     agent: claude
     model: opus
-    effort: medium
+    effort: high
     on:
       PASS: review-change
       RETRY: change
@@ -88,7 +88,7 @@ steps:
     skill: issue-small-change-review
     agent: codex
     model: gpt-6.1-sol
-    effort: medium
+    effort: high
     on:
       PASS: pr
       RETRY: fix-change
@@ -116,7 +116,7 @@ steps:
   - id: pr
     skill: i-pr
     agent: codex
-    model: gpt-5.6-luna
+    model: gpt-6-luna
     effort: medium
     on:
       PASS: review-poll
@@ -135,7 +135,7 @@ steps:
     skill: review
     agent: codex
     model: gpt-6.1-sol
-    effort: medium
+    effort: high
     on:
       PASS: close
       RETRY: pr-fix
@@ -144,7 +144,7 @@ steps:
   - id: pr-fix
     skill: pr-fix
     agent: claude
-    model: sonnet
+    model: opus
     effort: high
     on:
       PASS: pr-verify
@@ -163,7 +163,7 @@ steps:
   - id: close
     skill: issue-close
     agent: codex
-    model: gpt-5.6-luna
+    model: gpt-6-luna
     effort: medium
     on:
       PASS: end
