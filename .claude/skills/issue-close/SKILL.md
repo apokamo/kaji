@@ -26,16 +26,16 @@ PR マージ、worktree 削除、ブランチ削除、Issue クローズを一�
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_id` | str | 正規化済み Issue ID（GitHub 数値または local ID） |
-| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID） |
+| `issue_id` | str | 正規化済み Issue ID（GitHub 数値） |
+| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`） |
 | `step_id` | str | 現在のステップ ID |
 
 **provider 解決時に追加で注入される変数:**
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `provider_type` | str | `github` / `local` のいずれか。本 Skill の経路分岐に使用 |
-| `default_branch` | str | ベースブランチ名（`main` 等）。local 経路で merge / push の引数に使用 |
+| `provider_type` | str | `github`（現行唯一の provider） |
+| `default_branch` | str | ベースブランチ名（`main` 等）。branch 削除判定と `git pull` の引数に使用 |
 | `branch_name` | str | フィーチャーブランチ名（`feat/<id>` 等） |
 | `worktree_dir` | str | worktree 絶対パス |
 | `verdict_path` | str | harness 経由でのみ注入される、この step の `verdict.yaml` 絶対パス。Step 2.5（review-poll 承認証跡の照合）の適用判定に使う |
@@ -51,7 +51,7 @@ $ARGUMENTS = <issue_id>
 コンテキスト変数 `issue_id` が存在すればそちらを使用。
 なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
 
-`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
+`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から `#<issue_id>` を導出する。
 
 ## 前提条件
 
@@ -60,14 +60,8 @@ $ARGUMENTS = <issue_id>
 
 ## 実行手順
 
-`[provider_type]` に応じて手順が分岐する。
-
-- `[provider_type]` が `github`（または未注入の legacy 環境）→ 既存の
-  Step 1〜6 を順に実行する（`kaji pr merge` / worktree 削除 / branch 削除 /
-  `git pull` / `kaji issue close` / 報告）。
-- `[provider_type]` が `local` → 後述の **provider=local の場合** セクションへ
-  ジャンプし、design.md § local mode における /issue-close の手順 (6 step) を
-  実行する。github 用の Step 1〜6 は実行しない（PR 概念が無いため）。
+Step 1〜6 を順に実行する（`kaji pr merge` / worktree 削除 / branch 削除 /
+`git pull` / `kaji issue close` / 報告）。
 
 ## 共通: ワークフロー完了後の確認項目の移管
 
@@ -123,7 +117,7 @@ follow-up のタイトルは次の完全一致形式に固定する。
 
 ```bash
 FOLLOW_UP_STATE=$(kaji issue view "$FOLLOW_UP_ID" --json state -q '.state')
-# GitHub は OPEN/CLOSED、local は open/closed を返すため小文字化して比較する
+# 大文字小文字の揺れに依存しないよう小文字化して比較する
 case "$(printf '%s' "$FOLLOW_UP_STATE" | tr '[:upper:]' '[:lower:]')" in
   open) : ;;
   *)
@@ -170,8 +164,7 @@ CREATE_OUTPUT=$(kaji issue create \
   }
 FOLLOW_UP_ID=${CREATE_OUTPUT##*/}
 
-# local provider では create した issue.md を atomic commit する。
-# github provider では --commit が除去されるため同じコマンドを使える。
+# github provider では --commit は無視される（CLI 互換のため付与を維持）。
 kaji issue edit "$FOLLOW_UP_ID" --commit \
   --body-file /tmp/kaji-follow-up-body.md || {
     echo "ABORT: follow-up Issue persistence failed"
@@ -599,164 +592,6 @@ COMMENT_EOF
 | Issue 状態 | [close_result] |
 ```
 
-### provider=local の場合
-
-`[provider_type]` が `local` のとき、PR 概念が無いため
-design.md § local mode における /issue-close の手順 (6 step) を実行する。
-
-> **重要 (worktree 運用)**: bare repository + worktree パターンでは
-> `[default_branch]` は **feature worktree とは別の worktree**（通常 main repo 側）
-> で checkout されている。そのため merge / close commit は **base worktree 側
-> で実行**し、feature worktree (`[worktree_dir]`) はその後で削除する。
-> feature worktree 内で `git switch [default_branch]` を実行しても、別 worktree
-> がそのブランチを保持しているため Git に拒否される。
-
-#### Step 1: Preflight check（feature worktree で確認）
-
-```bash
-cd [worktree_dir]
-test -z "$(git status --porcelain)" || { echo "ABORT: uncommitted changes in [worktree_dir]"; exit 1; }
-git rev-parse --abbrev-ref HEAD | grep -qE "^[a-z]+/local-[a-z0-9]+-[0-9]+(-[a-z0-9-]+)?$" || { echo "ABORT: not on feature branch"; exit 1; }
-```
-
-未コミット変更 / feature ブランチ外なら ABORT。
-
-#### Step 2: Base worktree を特定し、base branch を最新化
-
-`git worktree list --porcelain` から `[default_branch]` を checkout している
-worktree を抽出する。見つからなければ user が手動で base 側を準備する必要が
-あるため ABORT。
-
-```bash
-# [default_branch] を checkout している worktree を取得
-BASE_WT=$(git worktree list --porcelain | awk -v b="[default_branch]" '
-    /^worktree / { wt=$2 }
-    $0 == "branch refs/heads/" b { print wt; exit }
-')
-test -n "$BASE_WT" || { echo "ABORT: no worktree has [default_branch] checked out. Run 'git worktree add <path> [default_branch]' or 'git switch [default_branch]' in your main checkout first."; exit 1; }
-
-cd "$BASE_WT"
-
-# Step 2.1: 3 段ガードによる救済 commit 判定（Issue local-p1-16 B）
-#
-# 標準動線（各 skill での `kaji issue {comment,edit} --commit`）が機能していれば
-# base worktree は clean。蓄積が残っている場合は LocalProvider 永続化由来の path
-# のみ救済し、それ以外は ABORT する。
-#
-# 救済対象 (LocalProvider 命名規則):
-#   - .kaji/issues/<issue_id>-<slug>/issue.md
-#   - .kaji/issues/<issue_id>-<slug>/comments/<4桁seq>-<machine_id>.md
-# 出典: kaji_harness/providers/local.py:586 / providers/context.py:17 / providers/local.py:36
-DIRTY=$(git status --porcelain)
-if [ -n "$DIRTY" ]; then
-    # 条件 1: dirty path がすべて [issue_id] の永続化 whitelist に一致するか検査
-    ISSUE_DIR_RE='^\.kaji/issues/[issue_id]-[a-z0-9-]+/(issue\.md|comments/[0-9]{4}-[a-z0-9]{1,16}\.md)$'
-    UNRELATED=$(printf '%s\n' "$DIRTY" | awk -v re="$ISSUE_DIR_RE" '
-        {
-            # rename / copy ("R  old -> new") は救済対象外として ABORT に倒す
-            if (match($0, /->/)) { print; next }
-            # 先頭 3 文字 (status + space) を除いた残りを path として扱う
-            path = substr($0, 4)
-            # quoted path (path に空白等あり) は対応外として ABORT
-            if (substr(path, 1, 1) == "\"") { print; next }
-            if (path !~ re) { print }
-        }
-    ')
-    if [ -n "$UNRELATED" ]; then
-        echo "ABORT: dirty files outside LocalProvider persistence whitelist in base worktree $BASE_WT:"
-        printf '%s\n' "$UNRELATED"
-        echo "  Allowed pattern: $ISSUE_DIR_RE"
-        exit 1
-    fi
-    # 条件 2: whitelist 命名規則の glob で限定 add + atomic commit
-    #   - `comments/` ディレクトリ全体を add してはならない (note.txt 等を巻き込む)
-    #   - `git commit --only` で他の staged change を HEAD に混入させない
-    git add \
-        ".kaji/issues/[issue_id]-"*"/issue.md" \
-        ".kaji/issues/[issue_id]-"*"/comments/"[0-9][0-9][0-9][0-9]-*.md \
-        2>/dev/null || true
-    git commit --only \
-        -m "chore(local): salvage uncommitted issue files for [issue_ref]" \
-        -- \
-        ".kaji/issues/[issue_id]-"*"/issue.md" \
-        ".kaji/issues/[issue_id]-"*"/comments/"[0-9][0-9][0-9][0-9]-*.md \
-        || { echo "ABORT: salvage commit failed"; exit 1; }
-    # 条件 3: 救済後の残差を再検証 (rename/copy/rm 等の取りこぼしを検出)
-    test -z "$(git status --porcelain)" || {
-        echo "ABORT: residual dirty files after salvage commit in base worktree $BASE_WT:"
-        git status --porcelain
-        exit 1
-    }
-fi
-
-# remote 設定がある場合のみ fetch + ff-only merge。
-# fetch 失敗 (network 断 / 認証エラー / suspended account 等) は WARNING で skip し、
-# local-only で close を完結させる (Step 6 の push も同様に warning で続行する設計と整合)。
-# `kaji run` 非対話モードでは AskUserQuestion 経由のリカバリ不可のため、
-# deterministic に local fallback すること。手動 push は remote 復旧後に実施。
-if git remote get-url [git_remote] >/dev/null 2>&1; then
-    if git fetch [git_remote] [default_branch] 2>&1; then
-        git merge --ff-only "[git_remote]/[default_branch]" || { echo "ABORT: ff-only merge failed in base worktree"; exit 1; }
-    else
-        echo "WARNING: git fetch [git_remote] [default_branch] failed; proceeding with local-only close (manual push needed after remote recovery)"
-    fi
-fi
-```
-
-ABORT 条件:
-- fast-forward できない (ローカル [default_branch] が [git_remote]/[default_branch] から分岐) → resolve 後に再実行
-- base worktree 側に LocalProvider 永続化 whitelist 外の dirty file が残存 → 手動コミット後に再実行
-
-WARNING 継続条件:
-- `git fetch` 失敗 (remote 到達不可 / 認証失敗) → local merge は実行、push は Step 6 で warning skip
-
-標準動線で各 skill が `kaji issue {comment,edit} --commit` を使っていれば、ここまで到達した時点で
-base worktree は clean のはず。救済 commit は標準動線が機能しなかった場合の安全装置として残す。
-
-#### Step 3: Merge 実行（base worktree 上で）
-
-```bash
-git merge --no-ff --no-edit [branch_name] || { echo "ABORT: merge conflict, resolve manually in $BASE_WT then retry"; exit 1; }
-```
-
-衝突したら ABORT。Issue は open のまま、user が手動 resolve した後で再実行する。
-
-#### Step 4: 事後確認の移管 + Issue frontmatter 更新 + commit（base worktree 上で）
-
-最初に「共通: ワークフロー完了後の確認項目の移管」を実行する。follow-up 作成または
-親マーカー追記に失敗した場合は `ABORT` とし、親 Issue を close しない。
-
-移管成功後、親 Issue を close する。
-
-```bash
-kaji issue close [issue_id] --reason completed
-git add .kaji/issues/[issue_id]-*/issue.md
-git commit -m "chore(issue): close [issue_ref]" || { echo "ABORT: commit failed"; exit 1; }
-```
-
-`--reason completed` は明示で書く（`LocalProvider.close_issue` の default も
-`completed` だが、Skill markdown 上で明示することで読み手の予期外を減らす）。
-
-**Step 4 完了で Issue close は確定**。以降の失敗は警告のみ。
-
-#### Step 5: Cleanup（base worktree から feature worktree を削除）
-
-base worktree に居る状態で feature worktree を削除する。`cwd == 削除対象` を
-回避するため、Step 2 の `cd "$BASE_WT"` は維持したまま実行する。
-
-```bash
-git worktree remove [worktree_dir] || echo "WARNING: worktree remove failed for [worktree_dir]; manual cleanup needed"
-git branch -d [branch_name] || echo "WARNING: branch delete failed for [branch_name]; manual cleanup needed"
-```
-
-#### Step 6: Push（remote 設定がある場合、base worktree から）
-
-```bash
-if git remote get-url [git_remote] >/dev/null 2>&1; then
-    git push [git_remote] [default_branch] || echo "WARNING: push failed; manual push needed"
-fi
-```
-
 ## Verdict 出力
 
 実行完了後、以下の形式で verdict を出力すること:
@@ -779,4 +614,4 @@ suggestion: |
 | status | 条件 |
 |--------|------|
 | PASS | クローズ完了 |
-| ABORT | review-poll 承認証跡の欠落・不変条件違反・現在の PR との不一致・`--match-head-commit` による merge 拒否、follow-up 作成・再利用・親マーカー追記の失敗（マーカー参照先が close 済みの場合を含む）、またはクローズ失敗（`kaji issue close` 失敗を含む / local merge 衝突） |
+| ABORT | review-poll 承認証跡の欠落・不変条件違反・現在の PR との不一致・`--match-head-commit` による merge 拒否、follow-up 作成・再利用・親マーカー追記の失敗（マーカー参照先が close 済みの場合を含む）、またはクローズ失敗（`kaji issue close` 失敗を含む） |

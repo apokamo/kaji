@@ -144,7 +144,7 @@ exec_script: kaji_harness.scripts.review_poll_entry
 | `KAJI_STEP_ID` | 実行中の step id |
 | `KAJI_WORKTREE_DIR` | Issue worktree の絶対パス |
 | `KAJI_BRANCH_NAME` | Issue branch 名 |
-| `KAJI_PROVIDER_TYPE` | `github` / `local` |
+| `KAJI_PROVIDER_TYPE` | `github` |
 | `KAJI_GIT_REMOTE` | git remote 名（既定 `origin`） |
 | `KAJI_DEFAULT_BRANCH` | default branch 名 |
 | `KAJI_PR_ID` | PR 解決済みなら数値文字列、未解決なら未注入 |
@@ -248,8 +248,8 @@ suggestion: |
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_id` | str | 正規化済み Issue ID（GitHub 数値または local ID。例: `"153"` / `"local-pc1-1"`） |
-| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID。例: `"#153"` / `"local-pc1-1"`） |
+| `issue_id` | str | 正規化済み Issue ID（GitHub Issue 番号。例: `"153"`） |
+| `issue_ref` | str | 人間可読の Issue 参照（`#<issue_id>`。例: `"#153"`） |
 | `step_id` | str | 現在のステップ ID |
 | `design_path` | str | 設計書の repository 相対パス。`[paths].design_dir`（未設定時は legacy default `draft/design`）配下の `issue-<id>-<slug>.md`（Issue #397） |
 | `verdict_path` | str | 当該 attempt の `verdict.yaml` 絶対パス（Issue #220）。スキルはここへ pure YAML の verdict を保存する。exec_script 経路では env `KAJI_VERDICT_PATH` として注入される |
@@ -347,8 +347,8 @@ git add <files> && git commit -m "test: add tests for X"
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_id` | str | 正規化済み Issue ID（GitHub 数値または local ID） |
-| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID） |
+| `issue_id` | str | 正規化済み Issue ID（GitHub Issue 番号） |
+| `issue_ref` | str | 人間可読の Issue 参照（`#<issue_id>`） |
 | `step_id` | str | 現在のステップ ID |
 
 ### 手動実行（スラッシュコマンド）
@@ -360,7 +360,7 @@ $ARGUMENTS = <issue_id>
 コンテキスト変数 `issue_id` が存在すればそちらを使用。
 なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
 
-`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
+`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から `#<issue_id>` として導出する。
 ```
 
 **優先順位**: コンテキスト変数 > `$ARGUMENTS`。ハーネスが変数を注入している場合はそちらを使い、手動実行時は従来通り `$ARGUMENTS` から取得する。

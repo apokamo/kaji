@@ -24,9 +24,7 @@ at least one supported agent CLI.
    workflow.
 5. Use `./scripts/kaji` for every kaji command.
 
-GitHub development starts with `.kaji/wf/custom/dev/dev.yaml`. For a local
-trial, run `./scripts/kaji local init`, create/start a local issue, and select
-`.kaji/wf/custom/local/dev-local.yaml`.
+GitHub development starts with `.kaji/wf/custom/dev/dev.yaml`.
 
 ## Agent and quality commands
 

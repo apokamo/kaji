@@ -12,7 +12,7 @@
 docs-only の Issue は [docs_maintenance_workflow.md](./docs_maintenance_workflow.md) を使用する。
 
 本書の規定（設計フェーズ、Pre-Handoff Review、設計書の扱い、final-check）は標準 dev（`official/dev.yaml`、
-custom の dev-thorough 系、`official/local/dev-local.yaml`）に適用する。設計判断済み小修正向けの custom
+custom の dev-thorough 系）に適用する。設計判断済み小修正向けの custom
 `dev-small`（試験導入）は設計書・Pre-Handoff Review・final-check の独立工程を持たず、
 [workflow_guide.md § dev-small](./workflow_guide.md) に従う。
 
@@ -153,12 +153,10 @@ provenance が不足しているだけなら `RETRY` で補完する。
 
 - official workflow（`.kaji/wf/official/**/*.yaml`）はすべて `requires_provider` を明示済
   （[workflow_guide.md](workflow_guide.md) § provider × workflow の対応表）
-- 例: `provider.type='local'` 配下で `kaji run .kaji/wf/official/dev.yaml ...` を
-  打つと、step `i-pr` まで進む前に exit 2 で停止する
-- `requires_provider: any` の workflow は両 provider で通る（`design-only.yaml`）
+- `requires_provider: any` の workflow は provider を問わず通る（`design-only.yaml`）
 
-CLI 層（`kaji pr` の bare-provider error）／Skill 層（`pr-fix` / `pr-verify` /
-`i-pr` の Step 0 ガード）と組み合わせて、3 層で forge 機能の誤起動を止める。
+Skill 層（`pr-fix` / `pr-verify` / `i-pr` の Step 0 の provider 解決確認）と組み合わせて、
+forge 機能の誤起動を止める。
 
 ## GitHub CLI の最低 version 管理（Issue #372）
 

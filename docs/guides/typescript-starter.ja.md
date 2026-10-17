@@ -20,8 +20,7 @@ Linux / macOS / WSL2、Node 24.18.1、npm 11.16.0、uv、対応 agent CLI が前
 4. exact lockfile を維持し、workflow 前に初期設定を commit します。
 5. kaji は常に `./scripts/kaji` から起動します。
 
-GitHub 開発は `.kaji/wf/custom/dev/dev.yaml`、local 試行は
-`./scripts/kaji local init` 後に `.kaji/wf/custom/local/dev-local.yaml` を使います。
+GitHub 開発は `.kaji/wf/custom/dev/dev.yaml` を使います。
 
 `npm run set-agent -- codex` は全 workflow を atomic・冪等に変換します。対応
 target は Claude / Codex のみです。Gemini は kaji v0.18.0 で廃止済み、

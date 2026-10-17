@@ -205,7 +205,6 @@ docs: READMEにインストール手順を追加
 feature branch (worktree) → `--no-ff` merge とし、main 直コミットを禁止する。
 ただし以下のみ main 直コミットを許容する:
 
-- `chore(local)`: kaji local Issue ファイル（`.kaji/issues/`）の追加・更新（`kaji issue create/edit/comment/close` の永続化）
 - `docs(...)`: `docs/` / `draft/` 配下の設計文書 / lab note 等、コードを伴わない文書変更
 - `chore`: 設定ファイル（`.gitignore` / `.github/labels.yml` 等）の minor 修正（コードビルドに影響しない範囲）
 

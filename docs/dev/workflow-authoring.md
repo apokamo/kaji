@@ -33,10 +33,7 @@ workflow YAML は所有権で 2 系統に分かれる。本節が official / cus
 ├── official/                       # kaji 公式提供・更新・テスト対象
 │   ├── dev.yaml
 │   ├── docs.yaml
-│   ├── incident.yaml
-│   └── local/                      # local provider 用
-│       ├── dev-local.yaml
-│       └── docs-local.yaml
+│   └── incident.yaml
 └── custom/                         # リポジトリ固有・利用者管理
     ├── dev/
     │   ├── dev-small.yaml             # 設計判断済み小修正向け（試験導入）
@@ -53,7 +50,7 @@ workflow YAML は所有権で 2 系統に分かれる。本節が official / cus
 追跡できないため、実ファイルが必要になるまで作成しない運用としてきたが、managed starter 同期
 （`starter-sync.yaml`）が最初の実ファイルとして存在する。
 
-`official/` 直下は既定の GitHub provider 用、`official/local/` は local provider 用とする。
+`official/` 直下は GitHub provider 用とする。
 provider 整合性は各 YAML の `requires_provider` でも fail-fast 検証される。GitHub 以外の
 forge provider を公式提供する段階まで、`official/github/` 等の provider 対称 directory は作らない。
 
@@ -101,7 +98,7 @@ description: "設計→実装→PR フロー" # 必須: 説明
 execution_policy: auto             # 必須: auto / sandbox / interactive
 default_timeout: 600               # 省略可: ワークフロー全体のデフォルトタイムアウト（秒）
 workdir: /home/user/project        # 省略可: 全ステップのデフォルト作業ディレクトリ
-requires_provider: github          # 省略可: github / local / any（default: any）
+requires_provider: github          # 省略可: github / any（default: any）
 
 cycles:                            # 省略可: ループサイクル定義
   <cycle-name>:
@@ -228,7 +225,6 @@ Phase 4 で導入。workflow が要求する provider を宣言する。`kaji ru
 | 値 | 意味 |
 |----|------|
 | `github` | `i-pr` / `pr-fix` / `pr-verify` / `kaji pr ...` 等の forge 機能を GitHub 経路で必要とする |
-| `local` | bare provider 限定の workflow（最終 step が `issue-close` 等） |
 | `any` | provider 中立。設計のみ / Issue 操作のみで forge を呼ばない |
 
 未指定時は `any`（既存 workflow の破壊を避けるため）。
@@ -237,8 +233,6 @@ Phase 4 で導入。workflow が要求する provider を宣言する。`kaji ru
 
 - forge 機能（`i-pr` / `pr-*` Skill / `kaji pr ...`）を含む custom workflow には
   `requires_provider: github` を追加することで早期 fail-fast の保護を opt-in できる
-- bare 機能のみで構成される custom workflow には `requires_provider: local`
-  を追加できる
 - 上記対応をしない custom workflow は本ガードの保護対象外であり、従来通り
   workflow 終盤で停止する挙動になる（ガードは fail-fast による早期検知のみで、
   workflow の意味的な動作は変わらない）
@@ -290,7 +284,7 @@ runtime validator が agent 別 allowed values で reject するため、本仕�
 > codex 側で `unknown variant 'High'` で workflow が ERROR 停止する（claude 側は
 > 暗黙の lowercase 化で通る場合があるが、許容値の方針として統一する）。
 
-採択方針 (Issue local-pc5090-16 / #376): **agent capability registry** を
+採択方針 (Issue #376): **agent capability registry** を
 `kaji_harness/agents.py` に保持し、`step.agent` でルックアップして reject する。
 共通 subset (`low/medium/high/xhigh`) のみで縛らない（claude `max` / codex
 `none/minimal` を将来も使えるようにするため）。新 agent 追加時は

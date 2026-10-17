@@ -105,5 +105,4 @@ measure が artifact を書けるのは、非 design の実装 commit がなく�
 - 実装前でも dirty tree: `dirty_worktree` で ABORT
 
 これにより、artifact は常に「実装 commit を含まない clean tree で測定された変更前 baseline」
-となる。コメントは `status != clean` の人間向け証跡であり、consumer は読まない。local provider
-ではコメントファイルの `commit_issue_change()` 完了後にのみ verdict を保存する。
+となる。コメントは `status != clean` の人間向け証跡であり、consumer は読まない。

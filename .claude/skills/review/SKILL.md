@@ -20,7 +20,6 @@ Approve / Changes Requested を投稿する。
 | `/pr-fix` 後の修正確認 | ❌ `/pr-verify` を使う |
 | `provider.type='github'` で codex auto-review が走る環境 | ⚠️ workflow からは `review-poll` 経由で fallback 用途のみ |
 | `provider.type='github'` で codex auto-review が走らない環境（クレジット不足等） | ✅ `review-poll` → `BACK_FALLBACK` → 本 skill |
-| `provider.type='local'` 配下 | ❌ Step 0 で ABORT。代替は `/issue-review-code` |
 
 **ワークフロー内の位置**: i-pr → [PR 作成] → **review** → (pr-fix → pr-verify) → close
 
@@ -32,7 +31,7 @@ Approve / Changes Requested を投稿する。
 |------|-----|------|
 | `issue_id` | str | 正規化済み Issue ID |
 | `issue_ref` | str | 人間可読の Issue 参照 |
-| `provider_type` | str | `github` / `local` のいずれか。Step 0 のガード判定に使用 |
+| `provider_type` | str | `github`（現行唯一の provider）。Step 0 のガード判定に使用 |
 | `step_id` | str | 現在のステップ ID |
 
 ### 手動実行（スラッシュコマンド）
@@ -91,20 +90,6 @@ $ARGUMENTS = <issue_id>
 2. **判定と verdict 出力**:
 
    - `PROVIDER_TYPE` が `github` → Step 1 に進む
-   - `PROVIDER_TYPE` が `local` → 以下を stdout に出力して終了:
-
-     ```text
-     ---VERDICT---
-     status: ABORT
-     reason: |
-       review is forge-only and cannot run under provider.type='local'.
-     evidence: |
-       Pull request concept does not exist in local mode (bare provider).
-     suggestion: |
-       Use /issue-review-code instead.
-     ---END_VERDICT---
-     ```
-
    - `PROVIDER_TYPE` がそれ以外 → ABORT verdict（reason: `review could not resolve
      provider_type`、suggestion: `Add [provider] to .kaji/config.toml.`）を出力して終了
 

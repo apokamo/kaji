@@ -9,8 +9,6 @@ configuration, naming rules, and troubleshooting in one file.
 ## When to use it
 
 - You operate a repository on GitHub (`github.com/<owner>/<name>`) as kaji's primary forge.
-- You are returning from emergency local-mode fallback ([Local Mode CLI Guide](local-mode.md)) to normal GitHub operation.
-- You want to import GitHub Issues into the local cache with `kaji sync from-github`.
 
 > **Auto-close keyword warning**: GitHub interprets `Closes #<N>`, `Fixes #<N>`,
 > `Resolves #<N>`, and similar phrases as auto-close keywords, via **two distinct
@@ -39,10 +37,10 @@ configuration, naming rules, and troubleshooting in one file.
 
 | Tool | Role | Notes |
 |------|------|-------|
-| `gh` | GitHub CLI (launched behind `kaji pr`, `kaji issue`, and `kaji sync from-github`) | Must be on PATH, version >= 2.50.0 |
+| `gh` | GitHub CLI (launched behind `kaji pr` and `kaji issue`) | Must be on PATH, version >= 2.50.0 |
 | `git` | Normal operation | SSH push to `git@github.com` is assumed |
 
-When `gh` is not installed, `kaji sync from-github` and `kaji issue` /
+When `gh` is not installed, `kaji issue` /
 `kaji pr` under `provider.type='github'` exit with an error starting with
 `'gh' CLI not found in PATH. ...` (the following guidance differs by entry
 point; for example, the passthrough path says
@@ -53,7 +51,7 @@ point; for example, the passthrough path says
 `stateReason` JSON field, which `gh` only supports from v2.50.0 onward. On an
 older `gh`, the provider stops before invoking any business `gh` command and
 raises an actionable error naming the detected version, the required version,
-and the install URL (see § 4.6). `gh` version whose output cannot be parsed
+and the install URL (see § 3.5). `gh` version whose output cannot be parsed
 is passed through unchecked (fail-open), so custom builds are not rejected
 outright.
 
@@ -197,99 +195,28 @@ in the CLI layer rather than prose in SKILL.md (ADR 008 decision 3).
   `^[a-z][a-z0-9_-]*$`, and `--verdict-status` must be `PASS`, `RETRY`, `ABORT`,
   `BACK`, or `BACK_<UPPER>` (`BACK_[A-Z0-9_]+`). Invalid values exit 2 without
   launching `gh`.
-- GitHub and local providers behave identically. `--commit` is silently ignored
-  on GitHub.
+- `--commit` is accepted and silently ignored on GitHub.
 - Example: `kaji issue comment 261 --verdict-step review-code --verdict-status BACK --body-file - <<'EOF' ... EOF`
 
-## 3. Using `kaji sync from-github`
+## 3. Troubleshooting
 
-This path populates a cache so GitHub Issues can be referenced read-only as
-`gh:N` from `provider.type = "local"`. It is unnecessary under
-`provider.type = "github"`, which calls the API directly.
+### 3.1 `'gh' CLI not found in PATH`
 
-```bash
-# Initial sync (when [provider.github].repo is written in config)
-kaji sync from-github
-
-# Specify repo by CLI argument
-kaji sync from-github --repo <owner>/<name>
-
-# Read from cache
-kaji issue view gh:42
-
-# Check sync status
-kaji sync status
-```
-
-Cache layout is `.kaji/cache/gh-<n>.json`. The schema wraps the raw issue:
-
-```json
-{
-  "schema_version": 1,
-  "forge": "github",
-  "fetched_at": "2026-05-21T12:34:56Z",
-  "kaji_local": {
-    "is_stale": false,
-    "last_seen_at": "2026-05-21T12:34:56Z",
-    "staled_at": null
-  },
-  "issue": {
-    "number": 42,
-    "title": "...",
-    "body": "...",
-    "state": "open",
-    "labels": [{"name": "type:feature"}]
-  }
-}
-```
-
-The `issue` field is the **raw JSON from GitHub REST API
-`GET /repos/{owner}/{repo}/issues`** (snake_case). GitHub REST also returns PRs
-from the `/issues` endpoint, so entries with a `pull_request` key are excluded
-during sync.
-
-### 3.1 Local manual connectivity check
-
-GitHub-side E2E targets are not added in this release. Manually verify real
-GitHub API connectivity with this procedure:
-
-```bash
-# auth check
-gh auth status
-
-# List issues
-gh api -X GET repos/<owner>/<name>/issues -F state=open -F per_page=100 -F page=1 | jq '.[].number'
-
-# Through kaji
-kaji sync from-github --repo <owner>/<name>
-kaji issue view gh:<N>
-kaji sync status            # forge=github / repo=<owner>/<name> / cached=<N>
-```
-
-## 4. Troubleshooting
-
-### 4.1 `'gh' CLI not found in PATH`
-
-You ran `kaji issue`, `kaji pr`, or `kaji sync from-github` under
+You ran `kaji issue` or `kaji pr` under
 `provider.type='github'`, but `gh` is not installed. Install it with your OS
 package manager.
 
-### 4.2 `gh auth status` says `not logged in`
+### 3.2 `gh auth status` says `not logged in`
 
 Run `gh auth login`, or export `GH_TOKEN`. The env path is recommended in CI.
 
-### 4.3 `'kaji sync from-github' requires a GitHub repo`
-
-Add `repo = "owner/name"` to `.kaji/config.toml` `[provider.github]`, or pass
-`--repo owner/name` as a CLI argument.
-
-### 4.4 `multiple open pull requests found for head branch ...`
+### 3.3 `multiple open pull requests found for head branch ...`
 
 `GitHubProvider.resolve_pr_context` assumes one open PR per branch. If
 `gh pr list --head <branch> --state open` returns multiple PRs, close the
 unneeded PRs or operate on the target one explicitly with `kaji pr`.
 
-### 4.5 Commit / PR description `Fix #<N>` auto-closes an unrelated GitHub issue
+### 3.4 Commit / PR description `Fix #<N>` auto-closes an unrelated GitHub issue
 
 GitHub closing keywords (`Closes`, `Fix(es|ed)`, `Resolves`, etc. + `#<N>`) close the
 referenced issue automatically: from a **PR description** on merge (suppressed when
@@ -307,7 +234,7 @@ If an issue was closed unintentionally, reopen it with
 `gh issue reopen <N> --repo <owner>/<repo>` and check whether the repository
 setting is still disabled.
 
-### 4.6 `gh <version> is too old for provider.type='github' ...`
+### 3.5 `gh <version> is too old for provider.type='github' ...`
 
 Symptom: `kaji issue` / `kaji run` under `provider.type='github'` exits with
 `GitHubProviderError: gh <detected> is too old for provider.type='github'
@@ -320,7 +247,6 @@ Fix: upgrade GitHub CLI following the
 [official installation instructions](https://github.com/cli/cli#installation),
 then re-run `gh --version` to confirm `>= 2.50.0`.
 
-## 5. References
+## 4. References
 
-- Local mode: [docs/cli-guides/local-mode.md](local-mode.md)
 - Design: `draft/design/issue-34-github-pr-context-auto-injection-kaji-sy.md`

@@ -11,8 +11,8 @@ The starter ships:
 
 - A Python project skeleton (`src/` layout / `uv` / `ruff` / `mypy` / `pytest` / `Makefile`)
 - kaji preinstalled as a dev dependency (run it with `uv run kaji`)
-- Five workflow YAMLs under `.kaji/wf/` (3 for the GitHub provider, 2 for the
-  local provider), all in a claude single-agent configuration by default
+- Three workflow YAMLs under `.kaji/wf/` for the GitHub provider, all in a
+  claude single-agent configuration by default
   - The starter still uses the flat `.kaji/wf/` layout. The kaji repository
     itself moved to the `official/` / `custom/` split (#352); the starter
     follows in a post-release starter-sync
@@ -83,31 +83,11 @@ and at least one agent CLI (the default configuration uses
 Linux / macOS / WSL2. Native Windows is not supported — the interactive
 terminal runner is tmux-based — so Windows users should work inside WSL2.
 
-### 2.2 Choosing a provider
+### 2.2 Provider
 
-| Provider | When to use | Workflows |
-|----------|-------------|-----------|
-| `github` (default) | Standard path. Issues, PRs, and reviews on GitHub | `dev.yaml` / `dev-thorough.yaml` / `docs.yaml` |
-| `local` | Trying kaji without GitHub, working before auth is set up, or as a fallback | `dev-local.yaml` / `docs-local.yaml` |
-
-The starter's tracked `.kaji/config.toml` is GitHub-first. To try the local
-provider, create a machine-local overlay (gitignored) with:
-
-```bash
-uv run kaji local init
-```
-
-The local provider stores issues under `.kaji/issues/` (tracked) and has no
-PR concept: `dev-local.yaml` starts at the `design` step and assumes
-issue-create / issue-start were done manually (worktree creation included).
-The manual steps are documented in the starter's
-[`docs/dev/kaji-workflow.md`](https://github.com/apokamo/kaji-starter-python/blob/main/docs/dev/kaji-workflow.md)
-(§ local provider issue-create / issue-start). Do not expect the GitHub
-experience (PR review cycle, review-ready gate driven by GitHub issues) from
-the local provider.
-
-Keep the provider and the workflow consistent — running `dev-local.yaml`
-under the github provider (or vice versa) is rejected fail-fast by kaji.
+The starter runs on the `github` provider, the only provider kaji supports.
+Issues, PRs, and reviews live on GitHub, and the workflows are `dev.yaml` /
+`dev-thorough.yaml` / `docs.yaml`.
 
 ### 2.3 GitHub authentication and labels
 
@@ -122,7 +102,7 @@ under the github provider (or vice versa) is rejected fail-fast by kaji.
 
 ### 2.4 Agent CLIs and models
 
-All five workflow YAMLs default to a **claude single-agent configuration**.
+All three workflow YAMLs default to a **claude single-agent configuration**.
 If you use a different agent CLI, convert all YAMLs at once:
 
 ```bash
@@ -182,15 +162,13 @@ uv run kaji run .kaji/wf/dev.yaml <issue-id> --from <step>   # resume from a ste
 uv run kaji run .kaji/wf/dev.yaml <issue-id> --step <step>   # run one step only
 ```
 
-### 3.2 Choosing among the five workflows
+### 3.2 Choosing among the three workflows
 
 | Workflow | Provider | Use for |
 |----------|----------|---------|
 | `dev.yaml` | github | Standard development: issue → design → implement → review → PR → close |
 | `dev-thorough.yaml` | github | Same transition graph as `dev.yaml` with higher effort on design / implementation |
 | `docs.yaml` | github | Docs-only changes: doc-update → doc-review → PR → close |
-| `dev-local.yaml` | local | Development without GitHub (no PR concept) |
-| `docs-local.yaml` | local | Docs-only without GitHub (no PR concept) |
 
 ## 4. Customization
 
@@ -301,7 +279,7 @@ converts its outcome into a workflow verdict.
 | `docs/dev/change-types-and-gates.md` | Required quality gates per change type |
 | `docs/dev/testing-convention.md` | Small / Medium / Large test conventions and when to add permanent tests |
 | `docs/dev/git-workflow.md` | Branch / commit / merge rules (`--no-ff`, no direct commits to main) |
-| `docs/dev/kaji-workflow.md` | The five workflows, skill lifecycle, and local-provider manual steps |
+| `docs/dev/kaji-workflow.md` | The three workflows and skill lifecycle |
 | `docs/dev/shared_skill_rules.md` | Responsibility boundaries between skills and verdict conventions |
 | `docs/dev/documentation_update_criteria.md` | Framework for deciding whether a change needs docs updates |
 | `docs/reference/configuration.md` (+ `.en.md`) | `.kaji/config.toml` and `.env` responsibilities, including where run logs go (Japanese primary + English — the starter's current layout, see the note below) |
@@ -329,13 +307,10 @@ here.
 | Issue creation fails with a label error | `type:*` labels do not exist — GitHub labels are not copied by "Use this template" | Run `scripts/setup_labels.sh` once |
 | Workflow fails to resolve the repository | `.kaji/config.toml` still has the `repo = "<owner>/<repo>"` placeholder | Set your repository, commit, and land it on `main` |
 | Setup changes (config / rename / `uv.lock`) show up in your first feature PR | Initial setup was left uncommitted when the workflow ran, and skills self-repaired it inside the worktree | Rename → `uv sync` → `make check` → commit to `main` **before** the first run ([§ 1](#1-create-a-repository-from-the-starter) step 4) |
-| kaji exits immediately with a provider error | Provider / workflow mismatch (github provider with `dev-local.yaml`, or local with `dev.yaml`) | Match them; kaji rejects the mismatch fail-fast by design |
 | A step dies at agent launch, or the model is rejected | The agent CLI named in the YAML is not installed, or the model / effort does not match your environment | Install the CLI or convert with `uv run python scripts/set_agent.py <cli>` |
 | `review-poll` keeps polling and never progresses | You switched to the review-poll configuration but `chatgpt-codex-connector[bot]` is not installed on the repo | Install the Codex GitHub connector, or revert to the default `review` step (see § 5) |
 | Interactive terminal runner fails to start panes | Running outside a tmux session, or tmux is older than 3.1 | Start a tmux session first, upgrade tmux, or keep the default `headless` runner |
-| `dev-local.yaml` aborts around `design` with a missing worktree | Local workflows start at `design` and assume manual issue-create / issue-start | Follow the manual steps in the starter's `docs/dev/kaji-workflow.md`, then rerun |
 | `issue-close` aborts, warning about untracked files | A stray log file sits in the repository root (e.g. a redirected `kaji run ... > run.log`) and trips the close safety guard | No redirect is needed — full logs are already in `.kaji/artifacts/<issue>/runs/<ts>/`. If you must keep stdout, write it outside the repo (or a gitignored `tmp/`) |
-| Local provider feels "incomplete" | Expecting GitHub PRs / review-poll / the review-ready gate from the local provider | That is by design: the local provider has no PR concept. Use GitHub for the full experience |
 
 ## Related documents
 
@@ -343,5 +318,4 @@ here.
 - kaji configuration reference: [configuration.md](../reference/configuration.md)
   ([Japanese](../reference/configuration.ja.md))
 - Workflow YAML authoring: [workflow-authoring.md](../dev/workflow-authoring.md)
-- Local mode CLI guide: [local-mode.md](../cli-guides/local-mode.md)
 - Interactive terminal runner: [interactive-terminal-runner.md](../cli-guides/interactive-terminal-runner.md)

@@ -122,7 +122,7 @@ cross-skill 契約（BACK 再入検出など）は SKILL.md の散文ではな�
 - **語彙**: `--verdict-step` は `^[a-z][a-z0-9_-]*$`、`--verdict-status` は
   `PASS` / `RETRY` / `ABORT` / `BACK` / `BACK_<UPPER>`（`BACK_[A-Z0-9_]+`、
   [`workflow-authoring.md`](workflow-authoring.md) § `BACK_*` 文法と整合）。不正語彙・
-  片方のみのフラグ指定は fail-loud（exit 2）。github / local 両 provider で同一。
+  片方のみのフラグ指定は fail-loud（exit 2）。
 - **BREAKING 適用指針**: 下流 repo で判定コメントを投稿する skill をカスタマイズして
   いる場合、producer 側は投稿コマンドへ `--verdict-step/--verdict-status` を付与
   （呼び出し 1 行の差し替え）、consumer 側は `issue-design` Step 1.6 の diff を自版へ移植する。
@@ -208,7 +208,7 @@ skill が生成する **commit body**、および **PR description**（`/i-pr` �
 - review item index の参照は `Must Fix item N` / `Must Fix 指摘 N` / `point N` 等
   を使い、`Must Fix #N` / `(Fix #N)` のような close keyword と隣接する `#` 表記を
   避ける
-- issue 参照は `local-pNN-N` などの provider 内部 ID を明示する（`#N` 単独表記を
+- issue 参照は `gh:N` 形式や `Issue N` 表記で明示する（`#N` 単独表記を
   避ける）
 
 #### placeholder convention 使い分け
@@ -217,7 +217,7 @@ skill が生成する **commit body**、および **PR description**（`/i-pr` �
 |------|---------|-----|------|
 | spec / API の literal 例文 | `#<N>` placeholder | `Fix #<N>` / `Closes #<N>` | `<N>` を明示することで close keyword pattern と grep の両方で生 hazard と区別できる |
 | review item / 指摘の参照 | `item N` 形式 | `Must Fix item 3` / `指摘 5` | `#` を伴わないので auto-close 対象外 |
-| forge 上の issue 参照 | `local-pNN-N` などの provider 内部 ID | `local-p1-7 を close する` | provider 横断で共通の表記。`#N` 単独は避ける |
+| forge 上の issue 参照 | `gh:N` 形式 / `Issue N` 表記 | `gh:7 を close する` | `#N` 単独は避ける |
 | 句読点で隣接する場合 | 1 char 以上の空白を keyword と `#` の間に挟まない placeholder 化 | `(Closes #<N>)` ではなく `(closes-pattern: item N)` | 句読点内でも word boundary で match するため隣接配置自体を避ける
 
 ### kaji の追加運用ルール（仕様外 / 保守的防御）

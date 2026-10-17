@@ -6,6 +6,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### BREAKING CHANGE
+
+- **The local provider is removed** (#448), after its deprecation in v0.21.0.
+  kaji now supports only the GitHub provider. `kaji local init`,
+  `kaji sync from-github`, `kaji sync status`, and the official
+  `.kaji/wf/official/local/` workflows (`dev-local.yaml` / `docs-local.yaml`)
+  are gone, and skills no longer carry `provider_type == local` branches.
+  `--commit` on `kaji issue ...` is still accepted and stays a no-op on GitHub.
+  - **Broken contract**: `provider.type = "local"` (including from the
+    `.kaji/config.local.toml` overlay) is now a configuration error (exit 2).
+    `kaji local init` / `kaji sync from-github` / `kaji sync status` no longer
+    exist. `requires_provider: local` in a workflow YAML fails validation
+    (valid values are `github` / `any`). Local-format Issue IDs
+    (`local-<machine>-<n>`, `<machine>-<n>`) and `.kaji/issues/` are no longer
+    read; only `<n>` and `gh:<n>` remain. A `[provider.local]` table is
+    ignored.
+  - **How to check whether you are affected**: run `kaji config provider-type`
+    and see whether it fails with exit 2, or run
+    `grep -rnE 'type *= *"local"|requires_provider: *local' .kaji/`. No
+    failure and no hits means you are not affected.
+  - **Migration**: before upgrading, move any `.kaji/issues/` Issues you still
+    need to GitHub Issues. Set `provider.type = "github"` and
+    `[provider.github] repo` (see `docs/cli-guides/github-mode.md`), and remove
+    `type = "local"` from `.kaji/config.local.toml`. Delete custom workflows
+    with `requires_provider: local` or change them to `github`. An
+    uncustomized starter only needs the starter update for this release; for
+    customized skills, port the local-branch removals from the PR for #448.
+
 ### Deprecated
 
 - **review-poll legacy codex review markup path** is deprecated and will be

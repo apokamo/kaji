@@ -41,7 +41,7 @@ Issue 起票 → 着手前ゲート → 設計 → レビュー → 実装 → �
 
 | スキル | 位置付け |
 |--------|----------|
-| `issue-review-ready` | **着手前ゲート**: Issue 本文が作業着手に足る記述品質かを判定するゲート（GitHub 系 workflow 共通。local workflow は手動起票を前提に design から始まる） |
+| `issue-review-ready` | **着手前ゲート**: Issue 本文が作業着手に足る記述品質かを判定するゲート（全 workflow 共通） |
 | `issue-fix-ready` | **ゲート修正**: `issue-review-ready` が RETRY を返した指摘に基づき Issue 本文を修正 |
 | `review-poll` | **PR レビュー入口**: codex auto-review の結果を polling し、PASS / RETRY / fallback（`/review`）を判定 |
 | `pr-fix` | **PR レビュー対応**: PR レビューコメントに対する修正と反論の使い分けを行う |
@@ -59,5 +59,5 @@ Issue 起票 → 着手前ゲート → 設計 → レビュー → 実装 → �
 ## 前提条件
 
 - AI エージェントがリポジトリに対して読み書きアクセスを持つ
-- `gh` CLI が認証済みである（GitHub mode の場合。local mode では不要）
+- `gh` CLI が認証済みである
 - ワークフロー定義（YAML）とスキルファイル（Markdown）が整備されている

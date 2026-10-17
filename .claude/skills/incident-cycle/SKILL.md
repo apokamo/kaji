@@ -18,7 +18,6 @@ skill（`/review-cycle` 同型）。第2層（インシデント原因調査・�
 |-----------|-----------|
 | 第1層が起票したインシデントの調査サイクルを 1 コマンドで回したい | ✅ 必須 |
 | `provider.type='github'` の環境 | ✅ 前提（`incident.yaml` は `requires_provider: github`） |
-| `provider.type='github'` 以外（`local` 等） | ❌ workflow が `requires_provider: github` で exit 2 |
 
 **ワークフロー内の位置**: 第1層のインシデント起票 → **/incident-cycle** →（人間が処遇判断）
 

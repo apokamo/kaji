@@ -25,8 +25,8 @@ name: issue-design
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_id` | str | 正規化済み Issue ID（GitHub 数値または local ID） |
-| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID） |
+| `issue_id` | str | 正規化済み Issue ID（GitHub 数値） |
+| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`） |
 | `step_id` | str | 現在のステップ ID |
 
 ### 手動実行（スラッシュコマンド）
@@ -40,7 +40,7 @@ $ARGUMENTS = <issue_id>
 コンテキスト変数 `issue_id` が存在すればそちらを使用。
 なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
 
-`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
+`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から `#<issue_id>` を導出する。
 
 ## 前提知識の読み込み
 
@@ -249,10 +249,7 @@ VERDICT_BLOCK
 fi
 # BACK_COUNT >= 1 → design 再入マーカーあり
 #
-# provider 差分: `--json comments` は github / local 両 provider で同一構造
-# （`.comments[].body`）を返す（local は cli_main.py `_local_issue_view` が
-# gh 互換 `--json` を実装済み）。provider 別の抽出器は不要。マーカーは CLI が
-# 両 provider で同一形式で付与するため、consumer 側も provider 非依存。
+# `--json comments` は gh 互換の構造（`.comments[].body`）を返す。
 ```
 
 `[worktree_dir]` は Step 1 で取得した絶対パスを再利用する（再解決しない）。

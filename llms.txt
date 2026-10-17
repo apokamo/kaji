@@ -130,16 +130,6 @@ repo = "<owner>/<name>"
 default_branch = "main"
 ```
 
-For local mode without GitHub, use `type = "local"` and create the local machine
-overlay:
-
-```bash
-kaji local init
-```
-
-Local mode uses local-specific workflows such as
-`.kaji/wf/official/local/dev-local.yaml`.
-
 ## Important Paths
 
 - `kaji_harness/`: supported runtime package behind the `kaji` CLI.

@@ -10,8 +10,7 @@ starter には以下が同梱されている。
 
 - Python プロジェクト骨格（`src/` layout / `uv` / `ruff` / `mypy` / `pytest` / `Makefile`）
 - kaji（dev dependency として導入済み。`uv run kaji` で実行）
-- `.kaji/wf/` の workflow YAML 5 本（GitHub provider 用 3 本 + local provider 用 2 本、
-  既定は claude 単騎構成）
+- `.kaji/wf/` の GitHub provider 用 workflow YAML 3 本（既定は claude 単騎構成）
   - starter は現時点で flat な `.kaji/wf/` レイアウトのまま。kaji リポジトリ本体は
     `official/` / `custom/` 分離へ移行済み（#352）で、starter は Release 後の
     starter-sync で追随する（[runbook](../operations/release/starter-sync-runbook.md)）。
@@ -79,30 +78,10 @@ codex / gemini は [§ 2.4](#24-agent-cli-と-model) を参照）。
 Linux / macOS / WSL2。native Windows は対象外（interactive terminal runner が
 tmux 前提のため）。Windows 利用者は WSL2 内で作業する。
 
-### 2.2 provider の選択
+### 2.2 provider
 
-| provider | 使いどころ | workflow |
-|----------|-----------|----------|
-| `github`（既定） | 標準導線。Issue / PR / レビューを GitHub で回す | `dev.yaml` / `dev-thorough.yaml` / `docs.yaml` |
-| `local` | GitHub なしでの試用、認証前の確認、障害時の fallback | `dev-local.yaml` / `docs-local.yaml` |
-
-starter の tracked `.kaji/config.toml` は GitHub 前提。local provider を試す
-場合は、machine-local overlay（gitignored）を作る:
-
-```bash
-uv run kaji local init
-```
-
-local provider は Issue を `.kaji/issues/`（tracked）に永続化し、PR の概念を
-持たない。`dev-local.yaml` は `design` step から始まり、issue-create /
-issue-start（worktree 作成を含む）は手動実行済みが前提。手動手順は starter の
-[`docs/dev/kaji-workflow.md`](https://github.com/apokamo/kaji-starter-python/blob/main/docs/dev/kaji-workflow.md)
-（§ local provider での issue-create / issue-start）に記載。GitHub と同じ体験
-（PR レビューサイクル、GitHub Issue による review-ready gate）を local provider
-に期待しないこと。
-
-provider と workflow は一致させる — github provider で `dev-local.yaml` を
-実行する（またはその逆の）不整合は、kaji が fail-fast で reject する。
+starter は kaji が対応する唯一の provider である `github` で動く。Issue / PR /
+レビューは GitHub で回し、workflow は `dev.yaml` / `dev-thorough.yaml` / `docs.yaml`。
 
 ### 2.3 GitHub 認証とラベル
 
@@ -116,7 +95,7 @@ provider と workflow は一致させる — github provider で `dev-local.yaml
 
 ### 2.4 agent CLI と model
 
-workflow YAML 5 本の既定は **claude 単騎構成**。別の agent CLI を使う場合は
+workflow YAML 3 本の既定は **claude 単騎構成**。別の agent CLI を使う場合は
 全 YAML を一括変換する:
 
 ```bash
@@ -174,15 +153,13 @@ uv run kaji run .kaji/wf/dev.yaml <issue-id> --from <step>   # 指定 step か�
 uv run kaji run .kaji/wf/dev.yaml <issue-id> --step <step>   # 1 step だけ実行
 ```
 
-### 3.2 workflow 5 本の使い分け
+### 3.2 workflow 3 本の使い分け
 
 | workflow | provider | 用途 |
 |----------|----------|------|
 | `dev.yaml` | github | 開発作業の標準。Issue → 設計 → 実装 → レビュー → PR → close |
 | `dev-thorough.yaml` | github | `dev.yaml` と同じ遷移グラフで設計・実装の effort を上げた丁寧版 |
 | `docs.yaml` | github | docs-only 変更。doc-update → doc-review → PR → close |
-| `dev-local.yaml` | local | GitHub 連携なしの開発 workflow（PR concept なし） |
-| `docs-local.yaml` | local | GitHub 連携なしの docs workflow（PR concept なし） |
 
 ## 4. カスタマイズ
 
@@ -290,7 +267,7 @@ skills は同梱コピーであり kaji 本体とは同期されない: kaji を
 | `docs/dev/change-types-and-gates.md` | 変更種別ごとの required 品質 gate |
 | `docs/dev/testing-convention.md` | Small / Medium / Large テスト規約と恒久テスト追加の判断基準 |
 | `docs/dev/git-workflow.md` | branch / commit / merge 運用（`--no-ff`、main 直コミット禁止） |
-| `docs/dev/kaji-workflow.md` | workflow 5 本・skill lifecycle・local provider の手動手順 |
+| `docs/dev/kaji-workflow.md` | workflow 3 本・skill lifecycle |
 | `docs/dev/shared_skill_rules.md` | skill 間の責務境界と verdict 規約 |
 | `docs/dev/documentation_update_criteria.md` | 変更に docs 更新が必要かの判断フレームワーク |
 | `docs/reference/configuration.md`（+ `.en.md`） | `.kaji/config.toml` と `.env` の責務。実行ログの出力先の定義を含む（日本語正本 + 英語 — starter の現行構成、下記注記参照） |
@@ -315,13 +292,10 @@ starter template 側の追随は starter リポジトリで扱い、本ガイド
 | Issue 起票がラベルエラーで失敗する | `type:*` ラベルが存在しない — GitHub ラベルは「Use this template」で複製されない | `scripts/setup_labels.sh` を一度実行 |
 | workflow が repository を解決できない | `.kaji/config.toml` の `repo = "<owner>/<repo>"` が placeholder のまま | 自分の repository を設定し、commit して `main` へ反映 |
 | セットアップ変更（config / rename / `uv.lock`）が最初の feature PR に混入する | 初期セットアップを未 commit のまま workflow を回し、skill が worktree 内で自己修復した | rename → `uv sync` → `make check` → commit を初回実行**前**に済ませる（[§ 1](#1-starter-から-repository-を作る) 手順 4） |
-| kaji が provider エラーで即終了する | provider と workflow の不一致（github provider で `dev-local.yaml`、または local で `dev.yaml`） | 一致させる。この不整合は設計どおり fail-fast で reject される |
 | step が agent 起動時に落ちる、model が拒否される | YAML が指定する agent CLI が未インストール、または model / effort が手元環境と不一致 | CLI をインストールするか `uv run python scripts/set_agent.py <cli>` で寄せ替える |
 | `review-poll` が polling し続けて進まない | review-poll 構成へ書き換えたが `chatgpt-codex-connector[bot]` が repo に未導入 | Codex GitHub connector を導入するか、既定の `review` step 構成へ戻す（§ 5 参照） |
 | interactive terminal runner の pane が起動しない | tmux セッション外で実行している、または tmux が 3.1 未満 | tmux セッションを先に開始する、tmux を更新する、または既定の `headless` runner を使う |
-| `dev-local.yaml` が `design` 付近で worktree 不在で止まる | local 系 workflow は `design` から始まり、issue-create / issue-start の手動実行が前提 | starter の `docs/dev/kaji-workflow.md` の手動手順を実施してから再実行 |
 | `issue-close` が未追跡ファイルを警告して ABORT する | repo 直下に stray なログファイル（例: `kaji run ... > run.log` のリダイレクト）があり、close の安全ガードが検知した | リダイレクトは不要 — 完全ログは `.kaji/artifacts/<issue>/runs/<ts>/` に残っている。stdout を残すなら repo 外（または gitignored な `tmp/`）へ |
-| local provider が「物足りない」 | local provider に GitHub PR / review-poll / review-ready gate を期待している | 仕様どおり: local provider に PR の概念はない。フル体験には GitHub を使う |
 
 ## 関連ドキュメント
 
@@ -329,5 +303,4 @@ starter template 側の追随は starter リポジトリで扱い、本ガイド
 - kaji 設定リファレンス: [configuration.md](../reference/configuration.md)（英語正本）
   （[日本語版](../reference/configuration.ja.md)）
 - workflow YAML の書き方: [workflow-authoring.md](../dev/workflow-authoring.md)
-- Local Mode CLI ガイド: [local-mode.md](../cli-guides/local-mode.md)
 - Interactive Terminal Runner: [interactive-terminal-runner.md](../cli-guides/interactive-terminal-runner.md)

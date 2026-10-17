@@ -33,7 +33,6 @@ module を直接 subprocess 実行する。entry module が env から PR 情報
 | タイミング | このスキル |
 |-----------|-----------|
 | PR 作成後、codex auto-review が走っている GitHub 環境 | ✅ 必須 |
-| `provider.type='local'` 配下 | ❌ ABORT verdict |
 | `review-poll` で `BACK_FALLBACK` を受けた場合 | 既存 `review` skill (codex agent) に進む |
 
 **ワークフロー内の位置**: i-pr → [PR 作成] → **review-poll**（builtin workflow では `exec` step として起動）→ (PASS=close / RETRY=pr-fix / BACK_FALLBACK=review fallback)

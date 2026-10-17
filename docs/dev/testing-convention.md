@@ -144,7 +144,7 @@ dispatch / provider 結合テストで worktree 解決の git 経路まで盲目
 
 | テスト層 | 属性 patch | 代替 / 条件 |
 |---------|-----------|-------------|
-| dispatch / provider 結合のうち **worktree 解決に届く経路**（local provider 構築・`--commit` の git 動線等）の盲目 stub | **禁止** | 系統 A: 実 git fixture / real-run passthrough spy。系統 B: `patch("kaji_harness.providers.resolve_main_worktree", return_value=...)` |
+| dispatch / provider 結合のうち **worktree 解決に届く経路**（main worktree 解決を伴う artifacts / baseline 経路等）の盲目 stub | **禁止** | 系統 A: 実 git fixture / real-run passthrough spy。系統 B: `patch("kaji_harness.providers.resolve_main_worktree", return_value=...)` |
 | dispatch / provider 結合のうち worktree 解決に届かない経路（github passthrough の gh 転送境界検証・provider 構築前 fail-fast の不呼出し検証・転送層関数の直接駆動） | 許可 | 到達すれば必ず fail する assertion（`rc` / `call_count` / `argv[0] == "gh"` / `assert_not_called()`）を伴うこと。gl:21 の fail-fast により偶発到達は silent に通らない |
 | `resolve_main_worktree()` 自身の Small unit test | 許可 | `subprocess.run` の戻り値・例外分岐を検証する経路では mock 必須 |
 

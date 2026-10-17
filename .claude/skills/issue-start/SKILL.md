@@ -23,9 +23,9 @@ name: issue-start
 $ARGUMENTS = <issue_id>
 ```
 
-- `issue_id` (必須): Issue番号 (例: 247 / `local-pc1-3` / `gh:153`)
+- `issue_id` (必須): Issue番号 (例: 247 / `gh:153`)
 
-第 2 引数は **廃止** されました（issue local-p1-17）。ブランチ prefix は
+第 2 引数は **廃止** されました。ブランチ prefix は
 `kaji issue context` が返す `branch_prefix`（frontmatter `branch_prefix` →
 `type:*` ラベル → `chore` fallback の優先順）から自動決定します。
 
@@ -76,12 +76,11 @@ ln -s "$MAIN_REPO/.venv" "$WT/.venv"
 
 これにより `make check` が即座に実行可能になります。
 
-### Step 2.6: provider overlay (`.kaji/config.local.toml`) シンボリックリンク作成
+### Step 2.6: config overlay (`.kaji/config.local.toml`) シンボリックリンク作成
 
 `.kaji/config.local.toml` は gitignored のため `git worktree add` では worktree に転写されない。
-overlay 不在の worktree では `kaji` CLI が `.kaji/config.toml` の `provider.type=github` 既定値で動き、
-`local-*` / `gl:N` 形式 ID が拒否される（codex 等が worktree 配下で `kaji issue comment` を
-叩けず、レビュー判定の Issue 記録が欠落する原因）。
+overlay 不在の worktree では `kaji` CLI が `.kaji/config.toml` だけで動き、main 側で上書きした
+マシン固有設定（`[execution]` 等）が worktree 配下の実行に反映されない。
 
 main の overlay が存在する場合のみ、worktree の `.kaji/` にシンボリックリンクで共有する:
 
@@ -92,8 +91,7 @@ fi
 ```
 
 `-f` で再作成を許容（既存 symlink を上書き）。`.gitignore` に登録済みのパスなので
-worktree 側 git status には現れない。`provider=github` 運用では main にも overlay が
-無いため何も起きない（既存挙動と等価）。
+worktree 側 git status には現れない。main に overlay が無い場合は何も起きない。
 
 ### Step 3: Worktreeの確認
 
@@ -117,8 +115,7 @@ kaji issue prepend-note [issue_id] --worktree "$WT_BASENAME" --branch "$BRANCH" 
 `kaji issue prepend-note` は現在の Issue 本文を取得し、`> [!NOTE]` メタブロックと
 本文の間に **空行ちょうど 1 行** を保証して合成・更新する。blank line がエージェント
 ではなく Python 文字列リテラルに固定されるため、どのモデルでも blockquote と本文
-heading が密着しない（Issue #200）。`--commit` は local provider で `issue.md` を
-atomic commit する（github では silent に無視）。
+heading が密着しない（Issue #200）。`--commit` は github provider では silent に無視される（CLI 互換のため付与を維持）。
 
 ### Step 5: セットアップ完了報告
 
@@ -134,7 +131,7 @@ atomic commit する（github では silent に無視）。
 | ディレクトリ | ../$(basename "$WT") |
 | 基点ブランチ | main |
 | venv | シンボリックリンク作成済み |
-| provider overlay | シンボリックリンク作成済み / 不要（main に未配置） |
+| config overlay | シンボリックリンク作成済み / 不要（main に未配置） |
 | メタ情報 | Issue本文に追記済み |
 
 ### 次のステップ
