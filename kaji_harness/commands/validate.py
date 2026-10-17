@@ -10,11 +10,12 @@ from ..config import KajiConfig
 from ..errors import (
     ConfigLoadError,
     ConfigNotFoundError,
+    ProviderTypeRemovedError,
     WorkflowValidationError,
 )
 from ..preflight import preflight_workflow
 from ..workflow import load_workflow, validate_workflow
-from .exit_codes import EXIT_OK, EXIT_VALIDATION_ERROR
+from .exit_codes import EXIT_CONFIG_NOT_FOUND, EXIT_OK, EXIT_VALIDATION_ERROR
 
 
 def _resolve_project_root_for_validate(explicit_root: Path | None, yaml_path: Path) -> Path:
@@ -49,25 +50,39 @@ def _resolve_project_root_for_validate(explicit_root: Path | None, yaml_path: Pa
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
-    """Execute the `validate` subcommand."""
+    """Execute the `validate` subcommand.
+
+    ``provider.type = "local"``（削除済み provider）の設定エラーが 1 件でもあれば、
+    他ファイルの検証失敗（exit 1）より優先して ``EXIT_CONFIG_NOT_FOUND``（2）を返す。
+    """
     failed = 0
+    removed_local_provider = False
     total = len(args.files)
 
     for path in args.files:
-        if not path.exists():
-            _print_error(path, ["File not found"])
-            failed += 1
-            continue
+        config_error: ConfigNotFoundError | ConfigLoadError | None = None
+        # Appended to every failure of this file so the removed-provider diagnostic
+        # survives even when the workflow itself is missing or fails to load.
+        removed_provider_errors: list[str] = []
         try:
-            workflow = load_workflow(path)
             try:
                 project_root = _resolve_project_root_for_validate(args.project_root, path)
                 config = KajiConfig.discover(start_dir=project_root)
             except (ConfigNotFoundError, ConfigLoadError) as e:
+                config_error = e
+                if isinstance(e, ProviderTypeRemovedError):
+                    removed_local_provider = True
+                    removed_provider_errors = [str(e)]
+            if not path.exists():
+                _print_error(path, ["File not found", *removed_provider_errors])
+                failed += 1
+                continue
+            workflow = load_workflow(path)
+            if config_error is not None:
                 # L3 needs project config; without it still surface L2 diagnostics,
                 # which are more actionable than the config error itself.
                 validate_workflow(workflow)
-                _print_error(path, [str(e)])
+                _print_error(path, [str(config_error)])
                 failed += 1
                 continue
             result = preflight_workflow(
@@ -82,10 +97,10 @@ def cmd_validate(args: argparse.Namespace) -> int:
                 continue
             _print_success(path)
         except WorkflowValidationError as e:
-            _print_error(path, e.errors)
+            _print_error(path, [*e.errors, *removed_provider_errors])
             failed += 1
         except OSError as e:
-            _print_error(path, [str(e)])
+            _print_error(path, [str(e), *removed_provider_errors])
             failed += 1
 
     if failed > 0 and total > 1:
@@ -94,6 +109,8 @@ def cmd_validate(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
+    if removed_local_provider:
+        return EXIT_CONFIG_NOT_FOUND
     return EXIT_VALIDATION_ERROR if failed > 0 else EXIT_OK
 
 

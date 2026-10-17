@@ -2,9 +2,8 @@
 
 Language: English | [日本語](failure-recovery.ja.md)
 
-CLI reference for the failure triage and auto recovery layer (Issue #288). It applies to both
-`provider.type = "github"` and `provider.type = "local"`; the triage comment is posted through the
-active provider.
+CLI reference for the failure triage and auto recovery layer (Issue #288). The triage comment is
+posted through the active provider (`provider.type = "github"`).
 
 For the operational rules (what is and is not resumable, why the wait exists), see
 [Workflow guide](../dev/workflow_guide.md) § failure triage と自動再開. For the config keys, see
@@ -137,13 +136,12 @@ The existing map (`0 = OK`, `1 = ABORT`, `2 = definition error`, `3 = runtime er
 | `runs/<run_id>/recovery.json` | `RecoveryDecision` (`schema_version: 1`), overwritten on every decision update. Carries `incident_suppressed` / `incident_suppression_reason` when incident recording was skipped (Issue #322) |
 | `runs/<run_id>/recovery-chain.json` | `{root_run_id, parent_run_id}`, written by a recovery child run at startup |
 | `runs/<run_id>/run.log` | `failure_event`, `recovery_decision`, `recovery_scheduled`, `recovery_attempt_start`, `recovery_attempt_end`, `incident_recorded`, `incident_recording_failed`, `incident_suppressed` |
-| `incidents/occurrences.jsonl` | Local occurrence log of the incident layer (directly under `<artifacts_dir>`, append-only). One line per failure for every provider, **except for the exempted causes below** |
+| `incidents/occurrences.jsonl` | Local occurrence log of the incident layer (directly under `<artifacts_dir>`, append-only). One line per failure, **except for the exempted causes below** |
 | Issue comment | Machine-generated triage report (posted before the child launch) plus a follow-up result comment when an auto recovery ran. No kaji-verdict marker (it is not a step verdict) |
 | stderr | A short `--- failure triage ---` summary printed after the existing terminal message |
 
 The `comment:` line of the stderr summary shows `Comment.ref`: the created comment URL for the
-GitHub provider, the repo-root-relative comment file path for the local provider, and `n/a` when the
-reference could not be captured.
+GitHub provider, and `n/a` when the reference could not be captured.
 
 ### Incident recording exemption (Issue #322 / #403 / #405)
 

@@ -6,10 +6,9 @@
 kaji の設定ファイル `.kaji/config.toml` および overlay `.kaji/config.local.toml` の
 全 section / key 仕様を集約したリファレンス。仕様の**正本（Source of Truth）**は英語版
 [configuration.md](configuration.md) であり、本書はその日本語訳。各 key の型 / 既定値 /
-検証規則 / 挙動はすべて `kaji_harness/config.py` / `kaji_harness/local_init.py` を一次情報として記載する。
+検証規則 / 挙動はすべて `kaji_harness/config.py` を一次情報として記載する。
 
 how-to 文脈での最小設定例は各 CLI ガイド（[GitHub Mode](../cli-guides/github-mode.md) /
-[Local Mode](../cli-guides/local-mode.md) /
 [Interactive Terminal Runner](../cli-guides/interactive-terminal-runner.md)）を参照する。
 本書は「key の網羅的な仕様」に責務を限定する。
 
@@ -29,10 +28,10 @@ how-to 文脈での最小設定例は各 CLI ガイド（[GitHub Mode](../cli-gu
 | `.kaji/config.toml` | tracked | repository default。リポジトリ標準の設定値を保持する |
 | `.kaji/config.local.toml` | gitignored | 個人環境の overlay。`[execution]` / `[provider]` のみ tracked を key 単位で上書きする（[overlay merge 規則](#overlay-merge-規則) 参照） |
 
-- overlay は `kaji local init` が生成する（[Local Mode CLI Guide](../cli-guides/local-mode.md) § 2 参照）。
+- overlay はマシン固有の値（`[execution]` の設定など）が必要な場合に利用者が手で作成する。
 - `git worktree add` は **tracked ファイルだけを checkout** するため、gitignored の overlay は
   **新規 worktree に引き継がれない**。詳細と回避手順は
-  [Git Worktree ガイド](../guides/git-worktree.md#provider-overlay-kajiconfiglocaltoml-は新規-worktree-に引き継がれない)
+  [Git Worktree ガイド](../guides/git-worktree.md#config-overlay-kajiconfiglocaltoml-は新規-worktree-に引き継がれない)
   を参照。
 
 ## 探索ルール
@@ -53,9 +52,9 @@ overlay（`.kaji/config.local.toml`）が tracked を上書きできるのは **
 
 - `[execution]`: overlay の同名 key が tracked の同名 key を上書きする。overlay に書かれていない
   key は tracked の値を維持する。
-- `[provider]`: `type` / `[provider.github]` / `[provider.local]` を **deep-1 merge** できる。
-  overlay が `type = "local"` を書けば tracked が `type = "github"` でも provider を切り替えられ、
-  `[provider.github]` / `[provider.local]` のサブテーブルは key 単位でマージされる。
+- `[provider]`: `type` / `[provider.github]` を **deep-1 merge** できる。`[provider.github]` の
+  サブテーブルは key 単位でマージされる。`type = "local"` は overlay 由来でも拒否される
+  （[`[provider]`](#provider) 参照）。
 - tracked と overlay の双方に `[provider]` が無い場合のみ、loader は provider を `None` として返す。
 - `[incident]` も overlay 対象外。tracked `.kaji/config.toml` のみから読み、overlay に書かれた
   `[incident]` は無視される（ラベル名はリポジトリ単位の規約のため）。
@@ -64,10 +63,10 @@ overlay（`.kaji/config.local.toml`）が tracked を上書きできるのは **
   しか渡されない（`config.py:141-154`）。overlay に `[paths]` を書いても無視される。
 
 検証エラーのメッセージが「その key を実際に定義したファイル」（tracked / overlay）を指すのは、
-`[execution]` の各 key と `provider.local.machine_id` に限られる（`config.py:213-249` の `source()`、
-`config.py:369-374` の `source_path`）。`[provider]` のそれ以外の検証エラー（`type` /
-`[provider.github]` の型エラーなど）は `ConfigLoadError(path, ...)` を使うため、overlay 由来の値で
-あっても tracked `.kaji/config.toml` を指す（`config.py:323-354`）。
+`[execution]` の各 key（`_parse_execution` の `source()`）と、削除済みの `provider.type = "local"` に
+限られる。`[provider]` のそれ以外の検証エラー（その他の `type` 値 / `[provider.github]` の型エラーなど）は
+`ConfigLoadError(path, ...)` を使うため、overlay 由来の値であっても tracked `.kaji/config.toml` を指す
+（`_parse_provider`）。
 
 ## section / key 仕様
 
@@ -98,7 +97,7 @@ path 算出時に適用する**実効 fallback** が異なる key（`worktree_pr
 
 `[paths] design_dir` で設計書の置き場所を設定する。Kaji は
 `design_path = <design_dir>/issue-<id>-<slug>.md`（`design_path` コンテキスト変数、および
-`kaji issue context <id>` の `design_path`）を GitHub / Local 両 provider で同一規約で注入する。
+`kaji issue context <id>` の `design_path`）を GitHub provider 経由で注入する。
 Kaji が行うのは path 値の算出・検証・注入までで、設計書の作成・commit は skill の責務。
 
 - **設定 default（loader 層）**: 未設定（または `design_dir = ""`）のとき `config.paths.design_dir` は空文字 `""`。
@@ -216,11 +215,15 @@ transient_label = "incident:cause:transient"
 `[provider]` section は config loader 層では任意で、tracked / overlay の双方に無い場合 loader は
 provider を `None` として返す（`config.py:303-304`）。ただし `kaji issue` / `kaji pr` / `kaji run` の
 provider 解決経路では `[provider]` は必須（未設定は exit 2。
-[Local Mode CLI Guide](../cli-guides/local-mode.md) § 2 参照）。
+[GitHub Mode CLI Guide](../cli-guides/github-mode.md) 参照）。
 
 | key | 必須/任意 | 型 | 既定 | 検証規則 | 一次情報 |
 |-----|----------|----|------|----------|---------|
-| `type` | `[provider]` を書くなら必須 | `"github"` \| `"local"` | —（`[provider]` 記載時は必須） | 列挙外は `ConfigLoadError` | `config.py:320-329` |
+| `type` | `[provider]` を書くなら必須 | `"github"` | —（`[provider]` 記載時は必須） | 列挙外は `ConfigLoadError` | `config.py` の `_parse_provider` |
+
+`provider.type = "local"`（overlay 由来を含む）は設定エラー（exit 2）になる。local provider は kaji v0.21.0
+での非推奨化を経て削除された。代わりに `provider.type = "github"` と `[provider.github] repo` を設定する。
+残存する `[provider.local]` テーブルは無視される。
 
 ### `[provider.github]`
 
@@ -235,33 +238,6 @@ provider 解決経路では `[provider]` は必須（未設定は exit 2。
 - `git_remote` は skill 内の `git push` / `git fetch` が対象とする git remote 名。release 運用では
   `provider.github.git_remote` が GitHub を指す remote 名の整合確認に使われる
   （[Release Runbook](../operations/release/runbook.md) 参照）。
-
-### `[provider.local]`
-
-| key | 必須/任意 | 型 | 既定 | 検証規則 | 一次情報 |
-|-----|----------|----|------|----------|---------|
-| `machine_id` | 任意 | str | `""` | 非空時は `[a-z0-9]{1,16}`（lowercase 英数字のみ・ハイフン不可・最大 16 文字）。違反は `ConfigLoadError` | `config.py:352-377` |
-| `default_branch` | 任意 | str | `"main"` | str 以外は `ConfigLoadError` | `config.py:378-380` |
-| `git_remote` | 任意 | str | `"origin"` | str 以外は `ConfigLoadError` | `config.py:381-383` |
-
-## local provider / overlay の扱い
-
-local provider はこのリポジトリの標準運用ではない。値の仕様は上記 `[provider.local]` を、運用 how-to は
-[Local Mode CLI Guide](../cli-guides/local-mode.md) を参照する。
-
-`kaji local init` は overlay（`.kaji/config.local.toml`）に次の 3 値を書き込む
-（`kaji_harness/local_init.py:243-258`）:
-
-- `[provider] type = "local"`
-- `[provider.local] machine_id = "<解決値>"`
-- `[provider.local] default_branch = "<--default-branch | main>"`
-
-`machine_id` の解決順（`local_init.py:215-240`）:
-
-1. `--machine-id <name>` 明示（`[a-z0-9]{1,16}` 違反は exit 2）。
-2. `socket.gethostname()` を sanitize（lowercase + 英数字 + 16 文字切り詰め）し、既存 local Issue と
-   衝突しなければ採用。
-3. `pc1` / `pc2` / … に fallback（既存 `.kaji/issues/local-*` と衝突しない最小値）。
 
 ## 設定例
 
@@ -299,7 +275,6 @@ git_remote = "origin"
 ## 関連ドキュメント
 
 - [GitHub Mode CLI Guide](../cli-guides/github-mode.md) — GitHub provider のセットアップ / 運用
-- [Local Mode CLI Guide](../cli-guides/local-mode.md) — local provider / overlay の運用 how-to
 - [Interactive Terminal Runner ガイド](../cli-guides/interactive-terminal-runner.md) — `[execution] agent_runner`
 - [ワークフロー作成](../dev/workflow-authoring.md) — `.kaji/config.toml` を前提とする workflow 定義
 - [Git Worktree ガイド](../guides/git-worktree.md) — overlay が新規 worktree に引き継がれない注意

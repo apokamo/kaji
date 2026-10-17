@@ -180,23 +180,17 @@ ln -s /home/user/dev/kaji/.venv /home/user/dev/kaji-feat-42/.venv
 
 > **⚠️ 注意**: `.venv` を共有しているため、worktree 内での `uv pip install` はメインリポジトリの環境にも影響する。`pyproject.toml` の依存関係を変更する場合は、個別の venv を作成して検証すること。
 
-### provider overlay (`.kaji/config.local.toml`) は新規 worktree に引き継がれない
+### config overlay (`.kaji/config.local.toml`) は新規 worktree に引き継がれない
 
-`.kaji/config.local.toml`（provider overlay）は `.gitignore` 管理されている。`git worktree add` は **コミット済み（tracked）ファイルだけを checkout** するため、gitignored な overlay は新規 worktree にコピーされない。
+`.kaji/config.local.toml`（machine-local overlay）は `.gitignore` 管理されている。`git worktree add` は **コミット済み（tracked）ファイルだけを checkout** するため、gitignored な overlay は新規 worktree にコピーされない。
 
-その結果、overlay でメインリポジトリと異なる provider（例: tracked `config.toml` は `type = "github"`、overlay は `type = "local"`）を選んでいる場合、**新規 worktree では overlay が効かず tracked default にフォールバックする**。`kaji issue` / `kaji pr` / `kaji run` が意図と異なる provider に routing され得る。
+その結果、overlay で tracked `config.toml` と異なる値（例: `[execution] agent_runner`）を選んでいる場合、**新規 worktree では overlay が効かず tracked default にフォールバックする**。
 
-worktree 作成後に overlay を使う場合は、いずれかで揃える:
+worktree 作成後に overlay を使う場合は、メインリポジトリから overlay をコピーする:
 
 ```bash
-# メインリポジトリから overlay をコピーする
 cp /home/user/dev/kaji/.kaji/config.local.toml ../kaji-feat-42/.kaji/config.local.toml
-
-# または当該 worktree で再初期化する
-cd ../kaji-feat-42 && kaji local init
 ```
-
-> **WARN**: overlay 不在の worktree から provider 解決を伴うコマンドを実行し、かつメインリポジトリの overlay が異なる `provider.type` を選んでいる場合、kaji は stderr に WARN を出して気付かせる（コマンド自体は従来どおり続行する）。詳細は [`docs/cli-guides/local-mode.md`](../cli-guides/local-mode.md) § 3「provider 切替」を参照。
 
 `.kaji/config.toml` / `.kaji/config.local.toml` の役割と全 key 仕様は
 [設定リファレンス](../reference/configuration.md) を参照。

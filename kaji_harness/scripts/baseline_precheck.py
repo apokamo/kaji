@@ -26,15 +26,9 @@ from kaji_harness.baseline import (
 )
 from kaji_harness.config import KajiConfig
 from kaji_harness.design_dir import LEGACY_DESIGN_DIR
-from kaji_harness.errors import ConfigNotFoundError
+from kaji_harness.errors import ConfigNotFoundError, MainWorktreeResolutionError
 from kaji_harness.fsio import atomic_write
-from kaji_harness.providers import (
-    LocalProvider,
-    get_provider,
-    normalize_id,
-    resolve_main_worktree,
-)
-from kaji_harness.providers.local import LocalProviderError
+from kaji_harness.providers import get_provider, resolve_main_worktree
 
 ARTIFACT_RELATIVE_PATH = Path(".kaji-artifacts/baseline/baseline.json")
 REPORT_DIRECTORY = Path(".kaji-artifacts/baseline")
@@ -200,7 +194,7 @@ def _resolve_run_config(worktree: Path, default_branch: str) -> KajiConfig:
     """
     try:
         main_root = resolve_main_worktree(start_dir=worktree, default_branch=default_branch)
-    except LocalProviderError:
+    except MainWorktreeResolutionError:
         return KajiConfig.discover(worktree)
     return KajiConfig.discover(main_root)
 
@@ -230,22 +224,11 @@ def _post_comment(
     artifact: BaselineArtifact,
     default_branch: str,
 ) -> None:
-    """Post baseline evidence through the active provider and commit local comments."""
+    """Post baseline evidence through the active provider."""
     config = _resolve_run_config(worktree, default_branch)
     _assert_provider_matches_run(config)
     provider = get_provider(config)
-    comment = provider.comment_issue(issue_id, _format_comment(artifact))
-    if isinstance(provider, LocalProvider):
-        resolved = normalize_id(
-            issue_id,
-            provider_name="local",
-            machine_id=provider.machine_id,
-        )
-        provider.commit_issue_change(
-            resolved,
-            "comment",
-            [Path("comments") / f"{comment.seq}-{comment.machine_id}.md"],
-        )
+    provider.comment_issue(issue_id, _format_comment(artifact))
 
 
 def _verdict_fields(

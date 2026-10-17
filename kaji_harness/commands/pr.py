@@ -10,7 +10,6 @@ import sys
 from ..errors import ConfigLoadError, ConfigNotFoundError
 from ..providers import get_provider
 from ..providers.github import build_kaji_review_marker
-from ..providers.local import LocalProvider
 from .config import _load_config_for_dispatch
 from .exit_codes import EXIT_INVALID_INPUT, EXIT_OK, EXIT_RUNTIME_ERROR
 from .output import _compose_json_and_jq, _read_body_arg
@@ -88,21 +87,6 @@ def _forward_to_gh(group: str, raw_args: list[str], *, repo: str | None = None) 
 
 
 _PR_BUILTIN_SUBCOMMANDS = {"review-comments", "reviews", "reply-to-comment"}
-
-_PR_BARE_PROVIDER_ERROR = (
-    "Error: 'kaji pr' is a forge-only command and cannot run under "
-    "provider.type='local'.\n"
-    "Pull request concept does not exist in local mode (bare provider). "
-    "Use git/issue operations directly:\n\n"
-    "  - Code review:        /issue-review-code, /issue-fix-code, "
-    "/issue-verify-code\n"
-    "  - Merge + close:      /issue-close (executes 'git merge --no-ff' + "
-    "frontmatter update)\n"
-    "  - Branch listing:     git branch --list 'feat/local-*'\n\n"
-    "To switch back to GitHub mode (e.g. after the outage), edit\n"
-    '.kaji/config.local.toml and set [provider] type = "github" (or remove the\n'
-    "overlay so the tracked .kaji/config.toml takes effect).\n"
-)
 
 
 def _is_ascii_decimal(s: str) -> bool:
@@ -514,16 +498,9 @@ def _handle_pr(raw_args: list[str]) -> int:
     builtin sub (``review-comments`` / ``reviews`` / ``reply-to-comment``) →
     dedicated handler; otherwise fall back to ``gh pr`` passthrough.
 
-    Phase 4: ``provider.type='local'`` 配下では bare-provider エラーで
-    fail-fast する。``_PR_BUILTIN_SUBCOMMANDS`` （``gh api`` 直叩き）も
-    同じガードで止める。GitHub mode の挙動は Phase 3-e と bit-exact に
-    維持する。
-
     Note: ``kaji pr --help`` / ``-h`` は本関数に到達せず、argparse 上位の
     ``unrecognized arguments`` エラーで先に止まる（``_register_pr`` が
     ``add_help=False`` + ``REMAINDER`` で登録されている既存挙動）。
-    bare provider 配下でも GitHub mode でも同じ。設計書 § 1 設計判断
-    「`kaji pr --help` を bare で見せない」要件は本挙動で満たされる。
     """
     try:
         config = _load_config_for_dispatch()
@@ -532,13 +509,9 @@ def _handle_pr(raw_args: list[str]) -> int:
         return EXIT_INVALID_INPUT
 
     try:
-        provider = get_provider(config)
+        get_provider(config)
     except ValueError as exc:
         sys.stderr.write(f"Error: {exc}\n")
-        return EXIT_INVALID_INPUT
-
-    if isinstance(provider, LocalProvider):
-        sys.stderr.write(_PR_BARE_PROVIDER_ERROR)
         return EXIT_INVALID_INPUT
 
     repo_override: str | None = None
@@ -549,7 +522,6 @@ def _handle_pr(raw_args: list[str]) -> int:
             )
             return EXIT_INVALID_INPUT
         repo_override = config.provider.github.repo
-    del provider  # PR routing は config 経由で済む
 
     args = list(raw_args)
     if args and args[0] == "--":

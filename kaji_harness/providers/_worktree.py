@@ -1,11 +1,9 @@
-"""Resolve the main worktree (``default_branch`` checkout) for LocalProvider.
+"""Resolve the main worktree (``default_branch`` checkout).
 
-cwd 起点で ``.kaji/config.toml`` を discover すると feature worktree
-配下では ``repo_root`` が feature worktree のルートになり、LocalProvider の
-``.kaji/issues/`` 書き込みと ``git commit`` が feature branch に向かってしまう。
-本 module は ``git worktree list --porcelain`` を解析し、
-``provider.local.default_branch`` を checkout している worktree（= main worktree）
-の絶対パスを返す。
+feature worktree 配下で動く処理（artifacts の main 側解決、provider overlay の
+divergence 検査、baseline precheck）が main worktree を参照するために使う。
+本 module は ``git worktree list --porcelain`` を解析し、``default_branch`` を
+checkout している worktree（= main worktree）の絶対パスを返す。
 """
 
 from __future__ import annotations
@@ -14,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .local import LocalProviderError
+from ..errors import MainWorktreeResolutionError
 
 
 def parse_worktree_porcelain(output: str) -> list[dict[str, str]]:
@@ -43,13 +41,13 @@ def resolve_main_worktree(*, start_dir: Path, default_branch: str) -> Path:
 
     Args:
         start_dir: ``git -C`` の作業ディレクトリ（``config.repo_root`` を渡す）。
-        default_branch: ``provider.local.default_branch`` の値。
+        default_branch: provider 設定の ``default_branch`` の値。
 
     Returns:
         ``default_branch`` を checkout している worktree の絶対パス。
 
     Raises:
-        LocalProviderError: 以下のいずれか。
+        MainWorktreeResolutionError: 以下のいずれか。
             - ``git`` CLI が PATH 上に無い (``FileNotFoundError``)。
             - ``git worktree list --porcelain`` が exit != 0 を返した（非 git repo 等）。
             - ``default_branch`` に一致する worktree が無い（= 作業者が main worktree を
@@ -64,18 +62,14 @@ def resolve_main_worktree(*, start_dir: Path, default_branch: str) -> Path:
             check=False,
         )
     except FileNotFoundError as exc:
-        raise LocalProviderError(
-            "git CLI not found on PATH. "
-            "provider.type='local' requires git; install git and ensure it is on PATH, "
-            "or switch provider.type to a non-local value."
+        raise MainWorktreeResolutionError(
+            "git CLI not found on PATH; install git and ensure it is on PATH."
         ) from exc
     if proc.returncode != 0:
         stderr = proc.stderr.strip() or "(empty)"
-        raise LocalProviderError(
+        raise MainWorktreeResolutionError(
             f"'git -C {start_dir} worktree list' failed (exit {proc.returncode}). "
-            f"provider.type='local' requires a git repository; "
-            f"run from a git worktree (or 'git init' first), "
-            f"or switch provider.type to a non-local value. "
+            f"run from a git worktree (or 'git init' first). "
             f"stderr: {stderr}"
         )
     blocks = parse_worktree_porcelain(proc.stdout)
@@ -84,10 +78,10 @@ def resolve_main_worktree(*, start_dir: Path, default_branch: str) -> Path:
         Path(b["worktree"]) for b in blocks if b.get("branch") == target and "worktree" in b
     ]
     if not matches:
-        raise LocalProviderError(
+        raise MainWorktreeResolutionError(
             f"no worktree found for branch {default_branch!r}. "
             f"Run 'git worktree add ../{default_branch} {default_branch}' "
-            f"(or adjust provider.local.default_branch)."
+            f"(or adjust the provider's default_branch)."
         )
     if len(matches) > 1:
         sys.stderr.write(

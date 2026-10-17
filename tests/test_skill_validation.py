@@ -133,7 +133,10 @@ class TestSymlinkResolution:
 class TestRunnerSkillDirIntegration:
     """WorkflowRunner passes config.paths.skill_dir to validate_skill_exists."""
 
-    def test_runner_validates_with_skill_dir(self, tmp_path: Path) -> None:
+    @pytest.mark.usefixtures("stub_github_issue")
+    def test_runner_validates_with_skill_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Runner uses config.paths.skill_dir for skill validation."""
         import subprocess as _sp
         from unittest.mock import patch
@@ -148,9 +151,9 @@ class TestRunnerSkillDirIntegration:
         config_dir = tmp_path / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = "my-skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+            '[paths]\nskill_dir = "my-skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n'
         )
-        # gl:21: provider.type='local' requires a git repo.
+        # main worktree resolution requires a git repo.
         _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
         config = KajiConfig._load(config_dir / "config.toml")
 
@@ -177,7 +180,10 @@ class TestRunnerSkillDirIntegration:
                 session_id="sess-1",
             )
 
+        from kaji_harness.providers.github import GitHubProvider
         from kaji_harness.runner import WorkflowRunner
+
+        monkeypatch.setattr(GitHubProvider, "resolve_pr_context", lambda self, branch: None)
 
         runner = WorkflowRunner(
             workflow=workflow,
@@ -197,6 +203,45 @@ class TestRunnerSkillDirIntegration:
 # Large tests — E2E kaji run with real config
 # ============================================================
 
+_FAKE_GH = """\
+#!{python}
+import json
+import sys
+
+args = sys.argv[1:]
+if args[:1] == ["--version"]:
+    print("gh version 2.83.0 (2025-01-01)")
+    sys.exit(0)
+if args[:2] == ["issue", "view"]:
+    n = args[2]
+    print(json.dumps({{
+        "number": int(n), "title": f"test issue {{n}}", "body": "body", "state": "OPEN",
+        "stateReason": None, "labels": [{{"name": "type:feature"}}], "comments": [],
+    }}))
+    sys.exit(0)
+if args[:2] == ["pr", "list"]:
+    print("[]")
+    sys.exit(0)
+sys.stderr.write(f"fake gh: unsupported args {{args}}\\n")
+sys.exit(1)
+"""
+
+
+def _write_fake_gh(tmp_path: Path) -> Path:
+    """``gh`` を決定的 JSON を返す fake に差し替える bin dir を作る。
+
+    subprocess 起動の ``kaji run`` には monkeypatch が効かないため、PATH 先頭に
+    置いた fake ``gh`` で ``gh issue view`` / ``gh pr list`` に応答する。
+    """
+    import sys
+
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(_FAKE_GH.format(python=sys.executable), encoding="utf-8")
+    gh.chmod(0o755)
+    return bin_dir
+
 
 @pytest.mark.large
 class TestSkillDirE2E:
@@ -208,7 +253,7 @@ class TestSkillDirE2E:
         import subprocess
         import sys
 
-        # gl:21: provider.type='local' requires a git repo.
+        # main worktree resolution requires a git repo.
         subprocess.run(
             ["git", "init", "-q", "--initial-branch=main", str(tmp_path)],
             check=True,
@@ -217,7 +262,7 @@ class TestSkillDirE2E:
         kaji_dir = tmp_path / ".kaji"
         kaji_dir.mkdir()
         (kaji_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n'
         )
 
         # Create skill
@@ -244,7 +289,8 @@ steps:
         import shutil
 
         git_dir = str(Path(shutil.which("git") or "/usr/bin/git").parent)
-        env = {**os.environ, "PATH": f"{python_dir}:{git_dir}"}
+        fake_bin = _write_fake_gh(tmp_path)
+        env = {**os.environ, "PATH": f"{fake_bin}:{python_dir}:{git_dir}"}
 
         result = subprocess.run(
             [
@@ -274,7 +320,7 @@ steps:
         import subprocess
         import sys
 
-        # gl:21: provider.type='local' requires a git repo.
+        # main worktree resolution requires a git repo.
         subprocess.run(
             ["git", "init", "-q", "--initial-branch=main", str(tmp_path)],
             check=True,
@@ -282,7 +328,7 @@ steps:
         kaji_dir = tmp_path / ".kaji"
         kaji_dir.mkdir()
         (kaji_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = "custom/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+            '[paths]\nskill_dir = "custom/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n'
         )
 
         _create_skill(tmp_path, "custom/skills", "my-skill")
@@ -307,7 +353,8 @@ steps:
         import shutil
 
         git_dir = str(Path(shutil.which("git") or "/usr/bin/git").parent)
-        env = {**os.environ, "PATH": f"{python_dir}:{git_dir}"}
+        fake_bin = _write_fake_gh(tmp_path)
+        env = {**os.environ, "PATH": f"{fake_bin}:{python_dir}:{git_dir}"}
 
         result = subprocess.run(
             [
@@ -340,7 +387,7 @@ steps:
         kaji_dir.mkdir()
         # No skill_dir in config (but artifacts_dir is present to isolate the error)
         (kaji_dir / "config.toml").write_text(
-            '[paths]\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+            '[paths]\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n'
         )
 
         workflows_dir = tmp_path / "workflows"

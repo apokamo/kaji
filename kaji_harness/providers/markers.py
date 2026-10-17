@@ -2,11 +2,11 @@
 
 cross-skill 契約（BACK 再入検出など）を SKILL.md の散文ではなく CLI / harness
 層に置くため（ADR 008 決定 3）、判定コメント本文の 1 行目に決定的な HTML
-コメントマーカーを付与する。github / local 両 provider で同一の振る舞いを持つ。
+コメントマーカーを付与する。provider に依存しない振る舞いを持つ。
 
 既存の ``providers.github.build_kaji_review_marker`` は PR review state 専用で
 GitHubProvider に結合しているのに対し、verdict marker は provider に依存しない
-（local でも同じ 1 行目マーカーを永続化する）ため独立モジュールに置く。
+ため独立モジュールに置く。
 """
 
 from __future__ import annotations
@@ -16,8 +16,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 # marker 形式: comment body の 1 行目に置く HTML コメント。GitHub UI 上では
-# 不可視のため review 体験を壊さない。local provider では
-# ``.kaji/issues/<id>/comments/<seq>-<machine>.md`` の 1 行目に永続化される。
+# 不可視のため review 体験を壊さない。
 _KAJI_VERDICT_MARKER_PREFIX = "<!-- kaji-verdict: "
 _KAJI_VERDICT_MARKER_SUFFIX = " -->"
 

@@ -35,7 +35,6 @@ MODULE_LAYERS: dict[str, str] = {
     "kaji_harness.interactive_terminal_common": "application",
     "kaji_harness.interactive_terminal_herdr": "application",
     "kaji_harness.interactive_terminal_tmux": "application",
-    "kaji_harness.local_init": "application",
     "kaji_harness.logger": "application",
     "kaji_harness.models": "application",
     "kaji_harness.preflight": "application",
@@ -52,7 +51,6 @@ MODULE_LAYERS: dict[str, str] = {
     "kaji_harness.state": "application",
     "kaji_harness.starter_release": "application",
     "kaji_harness.starter_tracking": "application",
-    "kaji_harness.sync": "application",
     "kaji_harness.verdict": "application",
     "kaji_harness.workflow": "application",
     "kaji_harness.worktree_discovery": "application",
@@ -197,8 +195,8 @@ SYNTHETIC_MODULES = frozenset(
         "kaji_harness.errors",
         "kaji_harness.fsio",
         "kaji_harness.models",
-        "kaji_harness.providers.local",
-        "kaji_harness.sync",
+        "kaji_harness.providers.github",
+        "kaji_harness.runner",
     }
 )
 
@@ -206,7 +204,7 @@ SYNTHETIC_MODULES = frozenset(
 @pytest.mark.small
 class TestLayerClassification:
     def test_longest_prefix_classifies_provider_module(self) -> None:
-        assert layer_of("kaji_harness.providers.local") == "provider"
+        assert layer_of("kaji_harness.providers.github") == "provider"
 
     def test_unclassified_module_fails_loud(self) -> None:
         with pytest.raises(ValueError, match="unclassified module"):
@@ -217,24 +215,24 @@ class TestLayerClassification:
 class TestRuntimeImportClassification:
     def test_provider_to_application_symbol_import_is_violation(self) -> None:
         violations = classify_layer_source(
-            "from ..sync import sync_from_github\n",
-            "kaji_harness.providers.local",
+            "from ..runner import WorkflowRunner\n",
+            "kaji_harness.providers.github",
             SYNTHETIC_MODULES,
         )
-        assert [violation.target for violation in violations] == ["kaji_harness.sync"]
+        assert [violation.target for violation in violations] == ["kaji_harness.runner"]
 
     @pytest.mark.parametrize(
         "guard",
         ["TYPE_CHECKING", "typing.TYPE_CHECKING"],
     )
     def test_type_checking_import_is_not_runtime_violation(self, guard: str) -> None:
-        source = f"if {guard}:\n    from ..sync import sync_from_github\n"
+        source = f"if {guard}:\n    from ..runner import WorkflowRunner\n"
         assert (
-            classify_layer_source(source, "kaji_harness.providers.local", SYNTHETIC_MODULES) == []
+            classify_layer_source(source, "kaji_harness.providers.github", SYNTHETIC_MODULES) == []
         )
         edges = iter_runtime_imports(
             source,
-            "kaji_harness.providers.local",
+            "kaji_harness.providers.github",
             SYNTHETIC_MODULES,
         )
         assert len(edges) == 1
@@ -243,8 +241,8 @@ class TestRuntimeImportClassification:
     @pytest.mark.parametrize(
         ("source", "module_name"),
         [
-            ("from .providers import IssueProvider\n", "kaji_harness.sync"),
-            ("from ..sync import sync_from_github\n", "kaji_harness.commands.issue"),
+            ("from .providers import IssueProvider\n", "kaji_harness.runner"),
+            ("from ..runner import WorkflowRunner\n", "kaji_harness.commands.issue"),
             ("from .commands import issue\n", "kaji_harness.cli_main"),
         ],
     )
@@ -253,17 +251,17 @@ class TestRuntimeImportClassification:
 
     def test_child_module_import_is_resolved_before_layer_check(self) -> None:
         violations = classify_layer_source(
-            "from .. import sync\n",
-            "kaji_harness.providers.local",
+            "from .. import runner\n",
+            "kaji_harness.providers.github",
             SYNTHETIC_MODULES,
         )
-        assert [violation.target for violation in violations] == ["kaji_harness.sync"]
+        assert [violation.target for violation in violations] == ["kaji_harness.runner"]
 
     def test_foundation_child_module_import_is_allowed_from_provider(self) -> None:
         assert (
             classify_layer_source(
                 "from .. import errors\n",
-                "kaji_harness.providers.local",
+                "kaji_harness.providers.github",
                 SYNTHETIC_MODULES,
             )
             == []
@@ -272,8 +270,8 @@ class TestRuntimeImportClassification:
     def test_foundation_symbol_import_is_allowed_from_provider(self) -> None:
         assert (
             classify_layer_source(
-                "from ..errors import SyncError\n",
-                "kaji_harness.providers.local",
+                "from ..errors import ConfigLoadError\n",
+                "kaji_harness.providers.github",
                 SYNTHETIC_MODULES,
             )
             == []
@@ -290,20 +288,20 @@ class TestRuntimeImportClassification:
 
     def test_plain_import_reverse_dependency_is_detected(self) -> None:
         violations = classify_layer_source(
-            "import kaji_harness.sync\n",
-            "kaji_harness.providers.local",
+            "import kaji_harness.runner\n",
+            "kaji_harness.providers.github",
             SYNTHETIC_MODULES,
         )
-        assert [violation.target for violation in violations] == ["kaji_harness.sync"]
+        assert [violation.target for violation in violations] == ["kaji_harness.runner"]
 
     def test_function_local_import_remains_runtime_dependency(self) -> None:
-        source = "def load():\n    from ..sync import sync_from_github\n"
+        source = "def load():\n    from ..runner import WorkflowRunner\n"
         violations = classify_layer_source(
             source,
-            "kaji_harness.providers.local",
+            "kaji_harness.providers.github",
             SYNTHETIC_MODULES,
         )
-        assert [violation.target for violation in violations] == ["kaji_harness.sync"]
+        assert [violation.target for violation in violations] == ["kaji_harness.runner"]
 
 
 @pytest.mark.medium

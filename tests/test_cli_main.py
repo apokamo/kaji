@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import subprocess
 import sys
 from pathlib import Path
@@ -16,7 +17,6 @@ from kaji_harness.config import (
     ExecutionConfig,
     GitHubProviderConfig,
     KajiConfig,
-    LocalProviderConfig,
     PathsConfig,
     ProviderConfig,
 )
@@ -41,9 +41,8 @@ def _stub_github_config() -> KajiConfig:
     """Return a minimal github-provider KajiConfig for `_handle_pr` test isolation.
 
     Used by autouse fixtures in PR builtin test classes to bypass CWD-based
-    config discovery (which picks up ``.kaji/config.local.toml`` overlay
-    in main checkout and triggers bare-provider early-exit). See
-    issue local-pc5090-15.
+    config discovery (which may pick up a ``.kaji/config.local.toml`` overlay
+    in the main checkout).
     """
     return KajiConfig(
         repo_root=Path("/tmp/stub"),
@@ -51,7 +50,6 @@ def _stub_github_config() -> KajiConfig:
         execution=ExecutionConfig(default_timeout=1800),
         provider=ProviderConfig(
             type="github",
-            local=LocalProviderConfig(),
             github=GitHubProviderConfig(repo="owner/repo"),
         ),
     )
@@ -93,9 +91,8 @@ def workdir(tmp_path: Path) -> Path:
     (config_dir / "config.toml").write_text(
         '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n'
         "[execution]\ndefault_timeout = 1800\n\n"
-        '[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+        '[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n'
     )
-    # gl:21: provider.type='local' requires a git repo.
     subprocess.run(["git", "init", "-q", "--initial-branch=main", str(d)], check=True)
     return d
 
@@ -149,6 +146,17 @@ class TestParserSmall:
         with pytest.raises(SystemExit) as exc_info:
             parser.parse_args([])
         assert exc_info.value.code != 0
+
+    @pytest.mark.small
+    def test_removed_local_and_sync_subcommands_absent(self) -> None:
+        """Issue #448: `kaji local` / `kaji sync` は削除済みで subcommand に存在しない。"""
+        parser = create_parser()
+        subparsers = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
+        assert len(subparsers) == 1
+        choices = subparsers[0].choices
+        assert "run" in choices
+        assert "local" not in choices
+        assert "sync" not in choices
 
 
 # ============================================================
@@ -565,7 +573,6 @@ class TestCLILarge:
         # Create project dir with config and skill
         workdir = tmp_path / "project"
         workdir.mkdir()
-        # gl:21: provider.type='local' requires a git repo.
         subprocess.run(
             ["git", "init", "-q", "--initial-branch=main", str(workdir)],
             check=True,
@@ -575,22 +582,42 @@ class TestCLILarge:
         (config_dir / "config.toml").write_text(
             '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n'
             "[execution]\ndefault_timeout = 1800\n\n"
-            '[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+            '[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n'
         )
         skill_dir = workdir / ".claude" / "skills" / "test-skill"
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("# Test Skill\n")
 
-        # Phase 3-e: provider=local の subprocess kaji run は対象 issue dir 要。
-        from tests.conftest import ensure_local_issue
-
-        ensure_local_issue(workdir, "999")
+        # provider=github の subprocess kaji run は Issue 解決に `gh` を呼ぶ。
+        # 実 gh / network に依存しないよう、`issue view` だけ応答する fake gh を置く。
+        fake_bin = tmp_path / "fake-bin"
+        fake_bin.mkdir()
+        fake_gh = fake_bin / "gh"
+        fake_gh.write_text(
+            f"#!{sys.executable}\n"
+            "import json, sys\n"
+            "args = sys.argv[1:]\n"
+            "if args[:1] == ['--version']:\n"
+            "    print('gh version 2.60.0 (2024-01-01)')\n"
+            "elif args[:2] == ['issue', 'view']:\n"
+            "    print(json.dumps({'number': int(args[2]), 'title': 'test issue',\n"
+            "        'body': 'body', 'state': 'OPEN', 'stateReason': None,\n"
+            "        'labels': [{'name': 'type:feature'}], 'comments': []}))\n"
+            "else:\n"
+            "    sys.exit(1)\n"
+        )
+        fake_gh.chmod(0o755)
 
         # Restrict PATH to only the Python executable's directory so that
         # agent CLIs (claude, codex, antigravity) are guaranteed not to be found.
         python_dir = str(Path(sys.executable).parent)
         git_dir = str(Path(__import__("shutil").which("git") or "/usr/bin/git").parent)
-        env = {**__import__("os").environ, "PATH": f"{python_dir}:{git_dir}"}
+        repo_root = str(Path(__file__).resolve().parents[1])
+        env = {
+            **__import__("os").environ,
+            "PATH": f"{fake_bin}:{python_dir}:{git_dir}",
+            "PYTHONPATH": repo_root,
+        }
 
         result = subprocess.run(
             [
@@ -622,11 +649,6 @@ class TestCLILarge:
 @pytest.mark.small
 class TestIssuePrPassthrough:
     """`kaji issue` / `kaji pr` は `gh` に引数を転送する Phase 1 wrapper。"""
-
-    def test_run_issue_accepts_local_id(self) -> None:
-        parser = create_parser()
-        args = parser.parse_args(["run", "wf.yaml", "local-pc1-1"])
-        assert args.issue == "local-pc1-1"
 
     def test_issue_subcommand_forwards_to_gh(self) -> None:
         parser = create_parser()
@@ -930,7 +952,6 @@ class TestPrReviewPollBuiltin:
                 execution=ExecutionConfig(default_timeout=1800),
                 provider=ProviderConfig(
                     type="github",
-                    local=LocalProviderConfig(),
                     github=GitHubProviderConfig(repo=""),
                 ),
             )
@@ -1911,131 +1932,10 @@ class TestIssueCommentVerdictMarker:
 
     両 provider で comment body の 1 行目が決定的にマーカーになること・不正入力が
     silent に通らないこと・従来経路の非回帰を検証する。testing-convention.md
-    § patch スコープ表遵守（local は git init fixture、github は handler 単体 +
-    投稿 body capture）。
+    § patch スコープ表遵守（github は handler 単体 + 投稿 body capture）。
     """
 
     pytestmark = pytest.mark.medium
-
-    # ---------- local provider ----------
-
-    def _seed_local(self, tmp_path: Path) -> tuple[object, str]:
-        from kaji_harness.providers.local import LocalProvider
-
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        subprocess.run(["git", "init", "-q", "--initial-branch=main", str(repo)], check=True)
-        subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
-        subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
-        subprocess.run(["git", "-C", str(repo), "config", "commit.gpgsign", "false"], check=True)
-        provider = LocalProvider(repo_root=repo, machine_id="pc1")
-        issue = provider.create_issue(title="t", body="b", slug="x", labels=["type:bug"])
-        subprocess.run(["git", "-C", str(repo), "add", ".kaji"], check=True)
-        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "seed"], check=True)
-        return provider, issue.id
-
-    def _comment_files(self, provider: object, issue_id: str) -> list[Path]:
-        issue_dir = provider._resolve_issue_dir(issue_id)  # type: ignore[attr-defined]
-        return sorted((issue_dir / "comments").glob("*.md"))
-
-    def test_local_first_line_is_marker(self, tmp_path: Path) -> None:
-        from kaji_harness.commands.issue import _local_issue_comment
-        from kaji_harness.providers.markers import build_kaji_verdict_marker
-
-        provider, issue_id = self._seed_local(tmp_path)
-        rc = _local_issue_comment(
-            provider,
-            [
-                issue_id,
-                "--verdict-step",
-                "design",
-                "--verdict-status",
-                "PASS",
-                "--body",
-                "設計完了",
-            ],
-        )
-        assert rc == 0
-        files = self._comment_files(provider, issue_id)
-        assert len(files) == 1
-        # frontmatter を除いた本文の 1 行目 == marker、2 行目以降 == body。
-        raw = files[0].read_text(encoding="utf-8")
-        body_section = raw.split("---\n", 2)[-1]
-        lines = body_section.splitlines()
-        assert lines[0] == build_kaji_verdict_marker("design", "PASS")
-        assert "設計完了" in body_section
-
-    def test_local_commit_flag_preserved_with_verdict(self, tmp_path: Path) -> None:
-        from kaji_harness.commands.issue import _local_issue_comment
-
-        provider, issue_id = self._seed_local(tmp_path)
-        repo = provider.repo_root  # type: ignore[attr-defined]
-        head_before = subprocess.run(
-            ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        rc = _local_issue_comment(
-            provider,
-            [
-                issue_id,
-                "--commit",
-                "--verdict-step",
-                "review-code",
-                "--verdict-status",
-                "BACK",
-                "--body",
-                "差し戻し",
-            ],
-        )
-        assert rc == 0
-        head_after = subprocess.run(
-            ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        assert head_after != head_before
-
-    def test_local_invalid_status_exits_two(self, tmp_path: Path) -> None:
-        from kaji_harness.commands.issue import _handle_issue_local
-
-        provider, issue_id = self._seed_local(tmp_path)
-        rc = _handle_issue_local(
-            provider,
-            [
-                "comment",
-                issue_id,
-                "--verdict-step",
-                "review-code",
-                "--verdict-status",
-                "back",
-                "--body",
-                "x",
-            ],
-        )
-        assert rc == 2
-
-    def test_local_partial_flags_exits_two(self, tmp_path: Path) -> None:
-        from kaji_harness.commands.issue import _handle_issue_local
-
-        provider, issue_id = self._seed_local(tmp_path)
-        rc = _handle_issue_local(
-            provider,
-            ["comment", issue_id, "--verdict-step", "design", "--body", "x"],
-        )
-        assert rc == 2
-
-    def test_local_no_verdict_flags_unchanged(self, tmp_path: Path) -> None:
-        """verdict フラグ無しの従来呼び出しは body を一切変更しない（非回帰）。"""
-        from kaji_harness.commands.issue import _local_issue_comment
-
-        provider, issue_id = self._seed_local(tmp_path)
-        rc = _local_issue_comment(provider, [issue_id, "--body", "plain body"])
-        assert rc == 0
-        raw = self._comment_files(provider, issue_id)[0].read_text(encoding="utf-8")
-        assert "<!-- kaji-verdict:" not in raw
 
     # ---------- github provider ----------
 

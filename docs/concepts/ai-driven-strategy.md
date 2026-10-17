@@ -48,7 +48,7 @@ review feedback handling is closed as a convergence-guaranteed cycle.
 
 | Skill | Role |
 |-------|------|
-| `issue-review-ready` | **Pre-start gate**: determines whether the issue body has enough description quality to start work (common to GitHub workflows; local workflows assume manual issue creation and start from design) |
+| `issue-review-ready` | **Pre-start gate**: determines whether the issue body has enough description quality to start work (common to all workflows) |
 | `issue-fix-ready` | **Gate fix**: updates the issue body based on RETRY feedback from `issue-review-ready` |
 | `review-poll` | **PR review entry**: polls codex auto-review results and decides PASS / RETRY / fallback (`/review`) |
 | `pr-fix` | **PR review handling**: chooses between fixing and rebutting PR review comments |
@@ -66,5 +66,5 @@ review feedback handling is closed as a convergence-guaranteed cycle.
 ## Prerequisites
 
 - AI agents have read/write access to the repository
-- `gh` CLI is authenticated (for GitHub mode; unnecessary in local mode)
+- `gh` CLI is authenticated
 - Workflow definitions (YAML) and skill files (Markdown) are prepared

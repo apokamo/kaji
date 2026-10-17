@@ -22,8 +22,8 @@ name: issue-implement
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_id` | str | 正規化済み Issue ID（GitHub 数値または local ID） |
-| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID） |
+| `issue_id` | str | 正規化済み Issue ID（GitHub 数値） |
+| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`） |
 | `step_id` | str | 現在のステップ ID |
 
 ### 手動実行（スラッシュコマンド）
@@ -35,7 +35,7 @@ $ARGUMENTS = <issue_id>
 ### 解決ルール
 
 コンテキスト変数 `issue_id` が存在すればそちらを使用し、なければ `$ARGUMENTS` の第1引数を使う。
-手動実行時の `issue_ref` は、数値なら `#<issue_id>`、`local-*` なら bare ID とする。
+手動実行時の `issue_ref` は `#<issue_id>` とする。
 
 ## 読み込み方針（段階的開示）
 

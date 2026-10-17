@@ -19,9 +19,8 @@ class IssueProvider(Protocol):
     def is_readonly(self) -> bool:
         """provider が write 操作を受け付けない場合 True。
 
-        ``provider=local`` 配下の remote_cache 経路（``gh:N``）など、
-        部分的に read-only な経路が将来発生する可能性がある。Phase 3 では
-        provider 単位でのみ表現する。
+        部分的に read-only な経路が将来発生する可能性がある。provider 単位で
+        のみ表現する。
         """
         ...
 
@@ -93,7 +92,7 @@ class IssueProvider(Protocol):
     def resolve_pr_context(self, branch_name: str) -> PRContext | None:
         """branch 名から PR を逆引きし `PRContext` を返す。
 
-        GitHubProvider が本実装、LocalProvider は ``return None`` の no-op。
+        GitHubProvider が本実装。
 
         Returns:
             PRContext: branch に対応する open な PR が一意に存在する場合。

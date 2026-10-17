@@ -1,12 +1,11 @@
 """atomic な filesystem 書き込み helper (foundation 層)。
 
-`providers.local`（Issue ファイル / コメントファイルの書き込み）と `sync`
-（GitHub cache の書き込み）の双方が使う。kaji 固有の概念を含まない純粋な
-filesystem utility であり、`kaji_harness` 内部への import を一切持たない。
+baseline artifact / review-poll 証跡 / series 状態などの書き込みが使う。kaji 固有の
+概念を含まない純粋な filesystem utility であり、`kaji_harness` 内部への import を
+一切持たない。
 
-Issue #285: 以前は `providers/local.py` の private 関数だったため
-`sync.py -> providers.local._atomic_write` という package 境界を越える
-private import が生じていた。foundation 層へ切り出して両者が下位層を見る形に
+Issue #285: 以前は provider 実装の private 関数だったため package 境界を越える
+private import が生じていた。foundation 層へ切り出して利用者が下位層を見る形に
 是正した（ADR 009）。
 """
 

@@ -154,9 +154,7 @@ tests/
 .kaji/wf/
 ├── official/            # kaji 公式提供・更新・テスト対象
 │   ├── dev.yaml
-│   ├── docs.yaml
-│   └── local/           # local provider 用
-│       └── dev-local.yaml
+│   └── docs.yaml
 └── custom/              # リポジトリ固有・利用者管理
     └── dev/
         └── dev-thorough.yaml

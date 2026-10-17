@@ -20,6 +20,8 @@ Covers:
 
 from __future__ import annotations
 
+import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -32,6 +34,8 @@ from kaji_harness.config import KajiConfig
 from kaji_harness.errors import ConfigLoadError, WorkflowValidationError
 from kaji_harness.models import Step, Workflow
 from kaji_harness.workflow import load_workflow_from_str, validate_workflow
+
+pytestmark = pytest.mark.usefixtures("stub_github_issue")
 
 # ============================================================
 # Helpers
@@ -46,7 +50,7 @@ def _write_config(tmp_path: Path, content: str) -> Path:
     config_dir.mkdir(exist_ok=True)
     config_file = config_dir / "config.toml"
     config_file.write_text(content)
-    # gl:21: provider.type='local' tests require a git repo for main worktree resolution.
+    # main worktree resolution requires a git repo.
     if not (tmp_path / ".git").exists():
         _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
     return config_file
@@ -94,7 +98,7 @@ class TestExecutionConfigValidation:
         """Valid positive integer default_timeout is accepted."""
         _write_config(
             tmp_path,
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n',
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n',
         )
         config = KajiConfig._load(tmp_path / ".kaji" / "config.toml")
         assert config.execution.default_timeout == 1800
@@ -621,7 +625,7 @@ class TestTimeoutFallbackIntegration:
         """Config default_timeout is used when workflow and step omit timeout."""
         _write_config(
             tmp_path,
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n',
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n',
         )
         config = KajiConfig._load(tmp_path / ".kaji" / "config.toml")
 
@@ -639,7 +643,7 @@ class TestTimeoutFallbackIntegration:
         """Workflow default_timeout overrides config default_timeout."""
         _write_config(
             tmp_path,
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n',
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n',
         )
         config = KajiConfig._load(tmp_path / ".kaji" / "config.toml")
 
@@ -664,7 +668,7 @@ class TestWorkflowRunnerWithConfig:
 
         _write_config(
             tmp_path,
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 900\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n',
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 900\n\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n',
         )
         config = KajiConfig._load(tmp_path / ".kaji" / "config.toml")
 
@@ -704,7 +708,7 @@ class TestWorkflowRunnerWithConfig:
 
         _write_config(
             tmp_path,
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n',
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n',
         )
         config = KajiConfig._load(tmp_path / ".kaji" / "config.toml")
 
@@ -775,6 +779,62 @@ class TestConfigMissingExecutionErrorPath:
         assert exit_code == 2
 
 
+# Issue #448: subprocess の ``kaji run`` は github provider で実行する。PATH 先頭に置く fake ``gh`` が ``gh issue view`` / ``gh issue comment`` /
+# ``gh pr list`` / ``gh api`` に決定的に応答する（コメントは同ディレクトリの jsonl に記録）。
+_FAKE_GH = """\
+import json, os, sys
+
+args = sys.argv[1:]
+log = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gh-comments.jsonl")
+
+
+def comments():
+    if not os.path.exists(log):
+        return []
+    with open(log, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+if args[:1] == ["--version"]:
+    print("gh version 2.60.0 (fake)")
+elif args[:2] == ["issue", "view"]:
+    n = args[2]
+    print(json.dumps({
+        "number": int(n), "title": "test issue " + n, "body": "body", "state": "OPEN",
+        "stateReason": "", "labels": [{"name": "type:feature"}],
+        "comments": [{"author": {"login": "kaji"}, "body": c["body"], "createdAt": ""}
+                     for c in comments()],
+    }))
+elif args[:2] == ["issue", "comment"]:
+    body = args[args.index("--body") + 1]
+    seq = len(comments()) + 1
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"issue": args[2], "body": body}) + "\\n")
+    print(f"https://github.com/owner/name/issues/{args[2]}#issuecomment-{seq}")
+elif args[:2] == ["pr", "list"]:
+    print("[]")
+elif args[:1] == ["api"]:
+    query = args[-1]
+    if "/comments" in query:
+        print(json.dumps([[{"body": c["body"], "user": {"login": "kaji"}, "created_at": ""}
+                           for c in comments()]]))
+    else:
+        print("[[]]")
+else:
+    print("fake gh: unsupported args: " + " ".join(args), file=sys.stderr)
+    sys.exit(1)
+"""
+
+
+def _install_fake_gh(bin_dir: Path) -> Path:
+    """``bin_dir/gh`` に fake gh を置き、記録コメントの jsonl path を返す。"""
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    gh = bin_dir / "gh"
+    gh.write_text(f"#!{sys.executable}\n{_FAKE_GH}", encoding="utf-8")
+    gh.chmod(gh.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return bin_dir / "gh-comments.jsonl"
+
+
 # ============================================================
 # Large tests — CLI E2E
 # ============================================================
@@ -789,7 +849,7 @@ class TestTimeoutConfigE2E:
         # Create a project structure with config.toml
         project_dir = tmp_path / "project"
         project_dir.mkdir()
-        # gl:21: provider.type='local' requires a git repo.
+        # main worktree resolution requires a git repo.
         subprocess.run(
             ["git", "init", "-q", "--initial-branch=main", str(project_dir)],
             check=True,
@@ -797,7 +857,7 @@ class TestTimeoutConfigE2E:
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n'
         )
 
         # Create skills directory structure for validation
@@ -843,7 +903,7 @@ class TestTimeoutConfigE2E:
         """kaji validate accepts a workflow YAML without default_timeout (optional)."""
         project_dir = tmp_path / "project"
         project_dir.mkdir()
-        # gl:21: provider.type='local' requires a git repo.
+        # main worktree resolution requires a git repo.
         subprocess.run(
             ["git", "init", "-q", "--initial-branch=main", str(project_dir)],
             check=True,
@@ -851,7 +911,7 @@ class TestTimeoutConfigE2E:
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n'
         )
 
         skills_dir = project_dir / ".claude" / "skills" / "test-skill"
@@ -898,7 +958,7 @@ class TestTimeoutConfigE2E:
         """
         project_dir = tmp_path / "project"
         project_dir.mkdir()
-        # gl:21: provider.type='local' requires a git repo.
+        # main worktree resolution requires a git repo.
         subprocess.run(
             ["git", "init", "-q", "--initial-branch=main", str(project_dir)],
             check=True,
@@ -906,7 +966,7 @@ class TestTimeoutConfigE2E:
         config_dir = project_dir / ".kaji"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+            '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n'
         )
 
         skills_dir = project_dir / ".claude" / "skills" / "test-skill"
@@ -929,12 +989,14 @@ class TestTimeoutConfigE2E:
         """)
         )
 
-        # Use minimal PATH (only git) so 'claude' CLI is not found, causing CLINotFoundError.
-        # ``provider.type='local'`` requires git on PATH (gl:21 fail-fast).
+        # Use minimal PATH (fake gh + git) so 'claude' CLI is not found, causing
+        # CLINotFoundError. github provider の Issue 解決は fake gh が応答する。
         import shutil
 
+        gh_bin = tmp_path / "gh-bin"
+        _install_fake_gh(gh_bin)
         git_dir = str(Path(shutil.which("git") or "/usr/bin/git").parent)
-        env = {"HOME": str(tmp_path), "PATH": git_dir}
+        env = {"HOME": str(tmp_path), "PATH": f"{gh_bin}{os.pathsep}{git_dir}"}
         result = subprocess.run(
             [
                 sys.executable,
@@ -956,3 +1018,4 @@ class TestTimeoutConfigE2E:
         assert result.returncode == 3, (
             f"Expected runtime error (3), got {result.returncode}. stderr: {result.stderr}"
         )
+        assert "IssueContext" not in result.stderr, result.stderr

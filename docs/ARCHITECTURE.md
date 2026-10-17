@@ -95,25 +95,18 @@ kaji_harness/
   prompt.py       # プロンプトビルダー
   skill.py        # スキル存在確認 & パストラバーサル防御 (config.paths.skill_dir ベース)
   state.py        # セッション状態永続化 (artifacts_dir ベース)
-  sync.py         # GitHub → ローカル cache 同期 (kaji sync)
   artifacts.py    # artifacts_dir 解決
   worktree_discovery.py  # worktree / branch 探索
   logger.py       # JSONL 構造化ログ
   runner.py       # WorkflowRunner (自動遷移・サイクル管理)
   scripts/baseline_precheck.py  # agentless baseline measure / evaluate / compare entrypoint
   series/         # ordered Issue series の schema / state / lock / runner / generator
-  providers/      # Issue provider 抽象 (GitHub / local) — foundation のみに依存
+  providers/      # Issue provider 抽象 (GitHub) — foundation のみに依存
     __init__.py   # facade。__all__ が package の public API を宣言する
     base.py       # IssueProvider Protocol
     models.py     # Issue / Comment / Label / IssueContext / PRContext
     github.py     # GitHubProvider (gh CLI 委譲)
-    local.py      # LocalProvider facade (Issue CRUD + local issue change の atomic commit)
-    _local_common.py    # local frontmatter / validation / error vocabulary
-    _local_store.py     # local Issue storage / ID allocation
-    _local_comments.py  # local comment read / atomic append
-    _local_cache.py     # read-only GitHub cache reader
     context.py    # branch / worktree / design path / issue ref / NOTE 本文の決定的合成
-    cache_guard.py  # legacy forge cache の fail-fast 検出 (sync と LocalProvider が共有する契約)
     markers.py    # kaji-verdict marker の生成 / optional flag 解決
     _mappings.py  # label → branch_prefix mapping (private。facade 経由で公開)
     _worktree.py  # main worktree 解決 (private。facade 経由で公開)
@@ -137,7 +130,7 @@ kaji_harness/
       ▲
 [provider]    providers/                     ← foundation のみに依存
       ▲
-[application] sync.py / state.py / artifacts.py / worktree_discovery.py / runner.py / series/ …
+[application] state.py / artifacts.py / worktree_discovery.py / runner.py / series/ …
       ▲
 [command]     commands/
       ▲
@@ -424,7 +417,7 @@ Verdict 解析に失敗した場合は、まず parser ではなく収集済み�
 
 - `artifacts_dir` は `.kaji/config.toml` の `paths.artifacts_dir`（必須設定項目）で決まる
 - 相対パス指定の場合、`kaji run` は **main worktree（`provider.<type>.default_branch` を checkout している worktree）** 基準で解決する（Issue #177）。feature worktree 内で `kaji run` を実行しても artifacts は main worktree 配下に集約され、`/issue-close` で feature worktree を削除してもログが残る。絶対パス指定はそのまま。非 git / main worktree 未構成 / `provider` 未設定では legacy fallback として `repo_root` 基準に解決する
-- 上記の main worktree 解決は `kaji run` 経路のみで発生する（`kaji validate` / `kaji issue` / `kaji pr` / `kaji sync` 等は従来通り `repo_root` 基準で `KajiConfig.artifacts_dir` を読む）
+- 上記の main worktree 解決は `kaji run` 経路のみで発生する（`kaji validate` / `kaji issue` / `kaji pr` 等は従来通り `repo_root` 基準で `KajiConfig.artifacts_dir` を読む）
 - issue 単位で1ファイル。クラッシュ後の再開基盤
 - `session_id`: CLI resume 用のセッション ID をステップごとに保存
 - `cycle_counts`: サイクルのイテレーション数

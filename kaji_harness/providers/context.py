@@ -121,10 +121,10 @@ def build_design_path(issue_id: str, slug: str, design_dir: str = "") -> str:
 
 
 def format_issue_ref(issue_id: str) -> str:
-    """``#153`` / ``local-pc1-3`` 形式の人間可読参照を返す。
+    """``#153`` 形式の人間可読参照を返す。
 
     数値のみ（GitHub Issue 番号）→ ``#153``。
-    それ以外（local-pc1-1 等）→ そのまま返す。
+    それ以外 → そのまま返す。
 
     Issue #285 で ``kaji_harness.state._format_issue_ref`` を統合し、本実装を正本に
     した（重複していた 2 実装のロジックは一致していた）。`state` / `commands` は

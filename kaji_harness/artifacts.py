@@ -47,14 +47,14 @@ def _try_resolve_main_worktree(config: KajiConfig) -> Path | None:
     """
     if config.provider is None:
         return None
-    default_branch: str = getattr(config.provider, config.provider.type).default_branch
+    default_branch = config.provider.github.default_branch
+    from .errors import MainWorktreeResolutionError
     from .providers import resolve_main_worktree
-    from .providers.local import LocalProviderError
 
     try:
         return resolve_main_worktree(
             start_dir=config.repo_root,
             default_branch=default_branch,
         )
-    except LocalProviderError:
+    except MainWorktreeResolutionError:
         return None

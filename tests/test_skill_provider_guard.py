@@ -49,12 +49,11 @@ def test_skill_has_kaji_config_provider_type_fallback(skill: str) -> None:
 
 @pytest.mark.medium
 @pytest.mark.parametrize("skill", _FORGE_SKILLS)
-def test_skill_step0_aborts_on_local(skill: str) -> None:
-    """Step 0 で ``provider.type='local'`` 時に ABORT verdict を返す指示がある。"""
+def test_skill_step0_aborts_on_non_github(skill: str) -> None:
+    """Step 0 で ``provider.type`` が ``github`` 以外の時に ABORT verdict を返す指示がある。"""
     text = (SKILL_DIR / skill / "SKILL.md").read_text(encoding="utf-8")
     # ABORT verdict（``status: ABORT`` を Step 0 セクション内で出す）
     assert "status: ABORT" in text, f"{skill}: missing ABORT verdict in Step 0"
-    assert "forge-only" in text, f"{skill}: missing 'forge-only' guidance text in Step 0 message"
 
 
 @pytest.mark.medium

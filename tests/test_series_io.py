@@ -12,7 +12,6 @@ from kaji_harness.config import (
     ExecutionConfig,
     GitHubProviderConfig,
     KajiConfig,
-    LocalProviderConfig,
     PathsConfig,
     ProviderConfig,
 )
@@ -35,7 +34,6 @@ def _kaji_config(repo_root: Path) -> KajiConfig:
         execution=ExecutionConfig(default_timeout=60),
         provider=ProviderConfig(
             type="github",
-            local=LocalProviderConfig(),
             github=GitHubProviderConfig(repo="owner/name"),
         ),
     )
@@ -115,7 +113,6 @@ def test_load_series_member_with_removed_inject_verdict_key_raises(tmp_path: Pat
     ("workflow", "provider", "match"),
     [
         (".kaji/wf/official/missing.yaml", "github", "not found"),
-        (".kaji/wf/official/dev.yaml", "local", "requires provider"),
         ("../escape.yaml", "github", "inside repo root"),
     ],
 )

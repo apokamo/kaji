@@ -199,8 +199,8 @@ def _make_config(tmp_path: Path) -> KajiConfig:
     cfg.write_text(
         '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n'
         "[execution]\ndefault_timeout = 60\n\n"
-        '[provider]\ntype = "local"\n\n'
-        '[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+        '[provider]\ntype = "github"\n\n'
+        '[provider.github]\nrepo = "owner/name"\n'
     )
     if not (tmp_path / ".git").exists():
         subprocess.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)

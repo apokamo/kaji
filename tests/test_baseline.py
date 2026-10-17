@@ -22,17 +22,13 @@ from kaji_harness.baseline import (
     save_artifact,
 )
 from kaji_harness.providers.github import GitHubProvider
-from kaji_harness.providers.local import LocalProvider
 from kaji_harness.scripts import baseline_precheck
 from kaji_harness.workflow import load_workflow, validate_workflow
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 # official のみを対象とする（custom variant の routing は kaji の pytest で保証しない。
 # 所有権境界の意図的トレードオフ: Issue #352）。
-OFFICIAL_DEV_WORKFLOWS = (
-    "dev.yaml",
-    "local/dev-local.yaml",
-)
+OFFICIAL_DEV_WORKFLOWS = ("dev.yaml",)
 
 
 def _git_run(repo: Path, *args: str) -> str:
@@ -489,57 +485,8 @@ def test_legacy_design_commit_is_implementation_commit_when_design_dir_configure
     assert baseline_precheck._has_implementation_commit(project, "main") is True
 
 
-@pytest.mark.medium
-def test_non_clean_local_comment_is_committed_to_provider_main(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    main_repo = tmp_path / "main"
-    main_repo.mkdir()
-    _git_run(main_repo, "init", "-b", "main")
-    _git_run(main_repo, "config", "user.email", "baseline@example.invalid")
-    _git_run(main_repo, "config", "user.name", "Baseline Test")
-    provider = LocalProvider(repo_root=main_repo, machine_id="pc1")
-    issue = provider.create_issue(
-        title="baseline",
-        body="body",
-        slug="baseline",
-        labels=["type:feature"],
-    )
-    _git_run(main_repo, "add", ".kaji")
-    _git_run(main_repo, "commit", "-m", "chore: seed issue")
-    feature_worktree = tmp_path / "feature"
-    _git_run(
-        main_repo,
-        "worktree",
-        "add",
-        "-b",
-        "feat/local-comment",
-        str(feature_worktree),
-    )
-    monkeypatch.setattr(baseline_precheck, "_resolve_run_config", lambda *_: object())
-    monkeypatch.setattr(baseline_precheck, "_assert_provider_matches_run", lambda _: None)
-    monkeypatch.setattr(baseline_precheck, "get_provider", lambda _: provider)
-
-    baseline_precheck._post_comment(
-        feature_worktree,
-        issue.id,
-        _artifact(failures=[_failure()]),
-        "main",
-    )
-
-    assert _git_run(main_repo, "status", "--porcelain") == ""
-    assert _git_run(feature_worktree, "status", "--porcelain") == ""
-    assert _git_run(main_repo, "log", "-1", "--format=%s") == (
-        f"chore(local): comment for {issue.id}"
-    )
-    comments = provider.list_issue_comments_all(issue.id)
-    assert len(comments) == 1
-    assert comments[0].body.startswith("## Baseline Check 結果")
-
-
 def _write_overlay_repo(tmp_path: Path) -> tuple[Path, Path]:
-    """Build a main worktree whose local-only overlay overrides tracked github config."""
+    """Build a main worktree whose gitignored overlay overrides the tracked github repo."""
     main_repo = tmp_path / "main"
     (main_repo / ".kaji").mkdir(parents=True)
     _git_run(main_repo, "init", "-b", "main")
@@ -553,7 +500,7 @@ def _write_overlay_repo(tmp_path: Path) -> tuple[Path, Path]:
     )
     # gitignored overlay: `git worktree add` never copies it into a feature worktree.
     (main_repo / ".kaji" / "config.local.toml").write_text(
-        '[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\n',
+        '[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/overlay"\n',
         encoding="utf-8",
     )
     (main_repo / ".gitignore").write_text(".kaji/config.local.toml\n", encoding="utf-8")
@@ -575,9 +522,10 @@ def test_run_config_resolves_main_worktree_overlay_from_feature_worktree(
 
     assert config.repo_root == main_repo.resolve()
     assert config.provider is not None
-    # Discovering from the feature worktree would silently resolve 'github' and post
-    # baseline evidence to the wrong provider.
-    assert config.provider.type == "local"
+    # Discovering from the feature worktree would silently resolve the tracked repo and
+    # post baseline evidence to the wrong repository.
+    assert config.provider.type == "github"
+    assert config.provider.github.repo == "owner/overlay"
 
 
 @pytest.mark.medium
@@ -607,6 +555,8 @@ def test_post_comment_fails_loud_when_provider_diverges_from_run(
 ) -> None:
     main_repo, feature_worktree = _write_overlay_repo(tmp_path)
     (main_repo / ".kaji" / "config.local.toml").unlink()
+    # A stale runner selection (e.g. the removed 'local' provider) must not be
+    # silently replaced by the discovered github provider.
     monkeypatch.setenv("KAJI_PROVIDER_TYPE", "local")
     posted: list[object] = []
     monkeypatch.setattr(
@@ -618,7 +568,7 @@ def test_post_comment_fails_loud_when_provider_diverges_from_run(
     with pytest.raises(ValueError, match="provider mismatch"):
         baseline_precheck._post_comment(
             feature_worktree,
-            "local-1",
+            "1",
             _artifact(failures=[_failure()]),
             "main",
         )

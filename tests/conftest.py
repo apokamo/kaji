@@ -1,10 +1,6 @@
 """Shared test helpers across kaji_harness test suite.
 
-Phase 3-e: 既存 runner E2E テスト群が ``provider=local`` 経由で動くようになり、
-``WorkflowRunner.run()`` 起動時に IssueContext 解決が走るため、tmp repo 内に
-対象 Issue dir を予め作っておく必要がある。autouse fixture で
-``WorkflowRunner.__post_init__`` 完了直後に Issue dir を作成し、既存テストの
-書き換えなしで Phase 3-e 移行を吸収する。
+runner / CLI テスト群が共有する fixture と helper。
 """
 
 from __future__ import annotations
@@ -21,7 +17,7 @@ from unittest.mock import patch
 import pytest
 
 from kaji_harness.console_log import ROOT_LOGGER_NAME
-from kaji_harness.providers import IssueContext, LocalProvider
+from kaji_harness.providers import Issue, IssueContext, Label
 from kaji_harness.providers.github import _MIN_GH_VERSION, GitHubProvider
 
 
@@ -145,12 +141,11 @@ def make_issue_context(
 
     Phase 3-e で provider 経由解決が fail-fast 化されたが、``build_prompt`` を
     直接呼び出すテストは provider 経由を回避して `IssueContext` を組み立てる
-    必要がある。本 helper は github / local 両 provider 用の最小限な
-    ``IssueContext`` を返す。
+    必要がある。本 helper は github provider 用の最小限な ``IssueContext`` を返す。
 
     Args:
-        provider_type: ``"github"`` / ``"local"``。
-        issue_id: github なら数値文字列、local なら ``"local-pc1-3"`` 形式。
+        provider_type: ``"github"``。
+        issue_id: 数値文字列。
         slug: Issue 末尾 slug（``test`` 等）。
         branch_prefix: ``feat`` / ``fix`` / ``docs`` 等。
         repo_root: worktree_dir の親パス。``None`` の場合は ``"/tmp/repo"``。
@@ -161,10 +156,6 @@ def make_issue_context(
     base = repo_root if repo_root is not None else Path("/tmp/repo")
     if provider_type == "github":
         issue_ref = f"#{issue_id}"
-        issue_input = issue_id
-    elif provider_type == "local":
-        # local では issue_id がそのまま ref / input
-        issue_ref = issue_id
         issue_input = issue_id
     else:
         raise ValueError(f"unknown provider_type: {provider_type!r}")
@@ -209,39 +200,6 @@ def capacity_terminal_log_text() -> str:
     return header + capacity_line + footer
 
 
-def ensure_local_issue(repo_root: Path, issue: str, machine_id: str = "pc1") -> None:
-    """provider=local 配下で ``local-<machine>-<issue>`` の Issue dir を作成する。
-
-    counter file を ``issue - 1`` に固定してから 1 度 ``create_issue`` を呼ぶ
-    ことで目的の id を直接採番させる（O(1)）。``issue`` が数値以外の場合や
-    Issue dir が既に存在する場合は no-op。
-    """
-    if not issue.isdigit() or issue == "0":
-        return
-    n = int(issue)
-    issues_root = repo_root / ".kaji" / "issues"
-    issues_root.mkdir(parents=True, exist_ok=True)
-    if any(d.name.startswith(f"local-{machine_id}-{n}-") for d in issues_root.iterdir()):
-        return
-    counter_path = repo_root / ".kaji" / "counters" / f"{machine_id}.txt"
-    counter_path.parent.mkdir(parents=True, exist_ok=True)
-    counter_path.write_text(str(n - 1))
-    provider = LocalProvider(repo_root=repo_root, machine_id=machine_id)
-    provider.create_issue(
-        title=f"test issue {n}",
-        body="body",
-        labels=["type:feature"],
-        slug=f"test-{n}",
-    )
-
-
-_AUTOCREATE_OPT_OUT_FILES = {
-    "test_runner.py",
-    "test_preflight.py",
-    "test_local_cli_large_local.py",
-}
-
-
 @pytest.fixture(autouse=True)
 def _default_skill_metadata_for_runner(monkeypatch: pytest.MonkeyPatch) -> None:
     """Issue #204: ``WorkflowRunner.run()`` の L2 preflight が全 step について
@@ -263,34 +221,27 @@ def _default_skill_metadata_for_runner(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_runner, "load_skill_metadata", _fake)
 
 
-@pytest.fixture(autouse=True)
-def _autocreate_local_issue_for_runner(
-    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``WorkflowRunner`` 構築時に provider=local config なら対象 Issue dir を作る。
+@pytest.fixture
+def stub_github_issue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``GitHubProvider.view_issue`` を gh 不要の決定的 Issue に置き換える（#448）。
 
-    Phase 3-e で fail-fast 化したことで、既存 runner E2E テストが Issue dir
-    不在で IssueContextResolutionError を吹くため。``__post_init__`` 完了直後に
-    フックする。numeric な issue_number のみ対象（``local-pc1-1`` のような
-    完全形 id は明示的に作られている前提）。fail-fast 自体を検証する test
-    file は ``_AUTOCREATE_OPT_OUT_FILES`` で除外する。
+    local provider 削除前は runner / CLI テストが tmp repo の local Issue で
+    IssueContext を解決していた。github provider 設定へ移したテストは本 fixture で
+    ``title="test issue <n>"`` / ``slug="test-<n>"`` / ``type:feature`` の Issue を
+    返させ、``resolve_issue_context`` の実ロジックはそのまま通す。
     """
-    if Path(request.node.fspath).name in _AUTOCREATE_OPT_OUT_FILES:
-        return
-    from kaji_harness import runner as _runner
 
-    original = _runner.WorkflowRunner.__post_init__
+    def _fake_view_issue(self: GitHubProvider, issue_id: str) -> Issue:
+        return Issue(
+            id=issue_id,
+            title=f"test issue {issue_id}",
+            body="body",
+            state="open",
+            labels=[Label(name="type:feature")],
+            slug=f"test-{issue_id}",
+        )
 
-    def patched_post_init(self: _runner.WorkflowRunner) -> None:  # type: ignore[no-redef]
-        original(self)
-        provider_cfg = self.config.provider
-        if provider_cfg is None or provider_cfg.type != "local":
-            return
-        machine_id = provider_cfg.local.machine_id or "pc1"
-        repo_root = self.config.repo_root
-        ensure_local_issue(repo_root, str(self.issue_number), machine_id=machine_id)
-
-    monkeypatch.setattr(_runner.WorkflowRunner, "__post_init__", patched_post_init)
+    monkeypatch.setattr(GitHubProvider, "view_issue", _fake_view_issue)
 
 
 @pytest.fixture(autouse=True)
@@ -306,18 +257,6 @@ def _stub_gh_version(request: pytest.FixtureRequest) -> Iterator[None]:
         return
     with patch.object(GitHubProvider, "_detect_gh_version", return_value=_MIN_GH_VERSION):
         yield
-
-
-@pytest.fixture(autouse=True)
-def _reset_local_provider_deprecation_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    """local provider 非推奨警告の 1 プロセス 1 回フラグを各テスト前に reset する（#438）。
-
-    flag は interpreter 寿命で残るため、reset しないと ``pytest -n auto`` の
-    worker 割当やテスト順によって stderr 内容が変わる。
-    """
-    from kaji_harness import config as _config
-
-    monkeypatch.setattr(_config, "_LOCAL_PROVIDER_DEPRECATION_EMITTED", False)
 
 
 def _has_project_marker_ancestor(path: Path) -> bool:

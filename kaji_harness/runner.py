@@ -41,7 +41,6 @@ from .preflight import preflight_workflow
 from .prompt import build_prompt
 from .providers import IssueContext, IssueProvider, PRContext, get_provider, normalize_id
 from .providers.github import GitHubProviderError
-from .providers.local import LocalProvider
 from .recovery.models import RECOVERY_CHAIN_FILE, write_recovery_chain
 from .result import RESULT_FILE, AttemptResult, derive_signal, write_result_json
 from .script_exec import execute_exec, execute_script
@@ -290,7 +289,7 @@ class RunIssueContext:
 
     Phase 3-d preflight § 1 で導入。``input_id`` は user 入力、``canonical_id`` は
     state / artifacts / run log / prompt が共有する正規化済み Issue ID。
-    ``issue_ref`` は人間可読な参照（``#153`` / ``local-pc1-3`` など）。
+    ``issue_ref`` は人間可読な参照（``#153`` など）。
 
     ``issue_context`` は provider が解決した IssueContext。Phase 3-e の fail-fast
     化以降は必ず非 None（``cmd_run`` 冒頭で `[provider]` 必須化を validate するため）。
@@ -770,16 +769,15 @@ class WorkflowRunner:
         validation を済ませているため、ここで `config.provider is None` には
         到達しない（型 checker のため assert を残す）。
 
-        ``normalize_id`` を経由して provider 内部 ID に正規化（``1`` /
-        ``pc1-1`` / ``local-pc1-1`` / ``gh:N`` を一貫して扱う）してから解決。
-        失敗は ``IssueContextResolutionError`` で raise し、agent 起動前に
-        exit する（machine_id 不足 / Issue 不在 / frontmatter 不備で半端な
-        context のまま Skill 起動を許さない）。
+        ``normalize_id`` を経由して provider 内部 ID に正規化（``1`` / ``gh:N`` を
+        一貫して扱う）してから解決。失敗は ``IssueContextResolutionError`` で raise し、
+        agent 起動前に exit する（Issue 不在等で半端な context のまま Skill 起動を
+        許さない）。
         """
         try:
             provider = get_provider(self.config)
         except ValueError as exc:
-            # 明示 provider 設定の不整合（machine_id 不在 / repo 不在等）
+            # 明示 provider 設定の不整合（repo 不在等）
             raise IssueContextResolutionError(
                 issue_input=self.issue_number,
                 provider_type=(self.config.provider.type if self.config.provider else "unset"),
@@ -788,13 +786,8 @@ class WorkflowRunner:
 
         assert self.config.provider is not None  # for type checker
         provider_type = self.config.provider.type
-        machine_id = self.config.provider.local.machine_id if provider_type == "local" else None
         try:
-            rid = normalize_id(
-                self.issue_number,
-                provider_name=provider_type,
-                machine_id=machine_id,
-            )
+            issue_id = normalize_id(self.issue_number)
         except ValueError as exc:
             raise IssueContextResolutionError(
                 issue_input=self.issue_number,
@@ -802,25 +795,8 @@ class WorkflowRunner:
                 cause=exc,
             ) from exc
 
-        if rid.kind == "remote_cache":
-            # `provider=local` 配下で `gh:N` を `kaji run` 対象にするのは
-            # write 系 Skill が走るため意味的に矛盾。明示的に拒否する。
-            raise IssueContextResolutionError(
-                issue_input=self.issue_number,
-                provider_type=provider_type,
-                cause=ValueError(
-                    "remote_cache (gh:N) issues are read-only and cannot be "
-                    "the target of `kaji run`. Use a local issue id "
-                    "(e.g. local-<machine>-<n>) or run under provider.type='github'."
-                ),
-            )
-
-        # provider 別に内部 ID で resolve
         try:
-            if isinstance(provider, LocalProvider):
-                return provider.resolve_issue_context(rid.value)
-            # GitHubProvider: rid.kind == "github"、value は数値文字列
-            return provider.resolve_issue_context(rid.value)
+            return provider.resolve_issue_context(issue_id)
         except Exception as exc:
             raise IssueContextResolutionError(
                 issue_input=self.issue_number,
@@ -838,8 +814,7 @@ class WorkflowRunner:
 
         legacy raw-id artifacts directory が残っていた場合（例: 補正前の
         ``kaji run ... 1`` で作られた ``.kaji-artifacts/1/``）は WARN を出すが
-        自動 migration はしない。raw / canonical の対応は provider config /
-        machine_id に依存し、agent が暗黙に move / copy すると別 Issue の state
+        自動 migration はしない。raw / canonical の対応は provider config に依存し、agent が暗黙に move / copy すると別 Issue の state
         を混ぜる事故が起きうるため。
         """
         ctx = self._resolve_issue_context()

@@ -5,8 +5,8 @@
 ``IssueContext.git_remote`` を経由して prompt の ``[git_remote]`` に届く本体
 経路は CI で固定されていなかった。本ファイルでその空白を埋める:
 
-- Small: ``IssueContext.git_remote`` field default / explicit、2 ProviderConfig
-  の TOML default、2 Provider class の field default / explicit。
+- Small: ``IssueContext.git_remote`` field default / explicit、ProviderConfig
+  の TOML default、Provider class の field default / explicit。
 - Medium: TOML から ``provider.<type>.git_remote`` を parse、``get_provider``
   が ``git_remote`` を Provider に渡す、``resolve_issue_context`` が
   ``IssueContext.git_remote`` を埋める、``build_prompt`` が ``[git_remote]``
@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
@@ -30,17 +29,12 @@ from kaji_harness.config import (
     ExecutionConfig,
     GitHubProviderConfig,
     KajiConfig,
-    LocalProviderConfig,
     PathsConfig,
     ProviderConfig,
 )
 from kaji_harness.models import Step, Workflow
 from kaji_harness.prompt import build_prompt
-from kaji_harness.providers import (
-    GitHubProvider,
-    LocalProvider,
-    get_provider,
-)
+from kaji_harness.providers import GitHubProvider, get_provider
 from kaji_harness.providers.models import IssueContext
 from kaji_harness.state import SessionState
 
@@ -53,15 +47,15 @@ from kaji_harness.state import SessionState
 def test_issue_context_git_remote_default_value() -> None:
     """``IssueContext.git_remote`` が未指定なら ``"origin"`` になる。"""
     ctx = IssueContext(
-        issue_id="local-pc1-1",
-        issue_ref="local-pc1-1",
-        issue_input="local-pc1-1",
+        issue_id="1",
+        issue_ref="#1",
+        issue_input="1",
         slug="x",
         branch_prefix="feat",
-        branch_name="feat/local-pc1-1",
+        branch_name="feat/1",
         worktree_dir="/tmp/wt",
-        design_path="draft/design/local-pc1-1-x.md",
-        provider_type="local",
+        design_path="draft/design/issue-1-x.md",
+        provider_type="github",
     )
     assert ctx.git_remote == "origin"
 
@@ -97,18 +91,6 @@ def test_github_provider_config_git_remote_explicit() -> None:
 
 
 @pytest.mark.small
-def test_local_provider_config_git_remote_default() -> None:
-    cfg = LocalProviderConfig()
-    assert cfg.git_remote == "origin"
-
-
-@pytest.mark.small
-def test_local_provider_config_git_remote_explicit() -> None:
-    cfg = LocalProviderConfig(machine_id="pc1", git_remote="backup")
-    assert cfg.git_remote == "backup"
-
-
-@pytest.mark.small
 def test_github_provider_git_remote_default(tmp_path: Path) -> None:
     p = GitHubProvider(repo="owner/name", repo_root=tmp_path)
     assert p.git_remote == "origin"
@@ -118,18 +100,6 @@ def test_github_provider_git_remote_default(tmp_path: Path) -> None:
 def test_github_provider_git_remote_explicit(tmp_path: Path) -> None:
     p = GitHubProvider(repo="owner/name", repo_root=tmp_path, git_remote="upstream")
     assert p.git_remote == "upstream"
-
-
-@pytest.mark.small
-def test_local_provider_git_remote_default(tmp_path: Path) -> None:
-    p = LocalProvider(repo_root=tmp_path, machine_id="pc1")
-    assert p.git_remote == "origin"
-
-
-@pytest.mark.small
-def test_local_provider_git_remote_explicit(tmp_path: Path) -> None:
-    p = LocalProvider(repo_root=tmp_path, machine_id="pc1", git_remote="backup")
-    assert p.git_remote == "backup"
 
 
 # --------------------------------------------------------------------------
@@ -170,31 +140,6 @@ def test_config_parses_provider_github_git_remote(tmp_path: Path) -> None:
 
 
 @pytest.mark.medium
-def test_config_parses_provider_local_git_remote(tmp_path: Path) -> None:
-    _write_config(
-        tmp_path,
-        """
-        [paths]
-        artifacts_dir = ".kaji-artifacts"
-        skill_dir = ".claude/skills"
-
-        [execution]
-        default_timeout = 1800
-
-        [provider]
-        type = "local"
-
-        [provider.local]
-        machine_id = "pc1"
-        git_remote = "backup"
-        """,
-    )
-    cfg = KajiConfig.discover(start_dir=tmp_path)
-    assert cfg.provider is not None
-    assert cfg.provider.local.git_remote == "backup"
-
-
-@pytest.mark.medium
 def test_config_provider_git_remote_default_when_omitted(tmp_path: Path) -> None:
     """``git_remote`` を TOML で省略すると ``origin`` がデフォルト適用される。"""
     _write_config(
@@ -217,7 +162,6 @@ def test_config_provider_git_remote_default_when_omitted(tmp_path: Path) -> None
     cfg = KajiConfig.discover(start_dir=tmp_path)
     assert cfg.provider is not None
     assert cfg.provider.github.git_remote == "origin"
-    assert cfg.provider.local.git_remote == "origin"
 
 
 @pytest.mark.medium
@@ -268,37 +212,12 @@ def test_get_provider_flows_git_remote_to_github_provider(tmp_path: Path) -> Non
         execution=exec_cfg,
         provider=ProviderConfig(
             type="github",
-            local=LocalProviderConfig(),
             github=GitHubProviderConfig(repo="owner/name", git_remote="upstream"),
         ),
     )
     provider = get_provider(cfg)
     assert isinstance(provider, GitHubProvider)
     assert provider.git_remote == "upstream"
-
-
-@pytest.mark.medium
-def test_get_provider_flows_git_remote_to_local_provider(tmp_path: Path) -> None:
-    # gl:21: ``get_provider()`` の local 経路は ``resolve_main_worktree()`` を踏むため、
-    # tmp_path を本物の git repo として初期化しておく。
-    subprocess.run(
-        ["git", "init", "-q", "--initial-branch=main", str(tmp_path)],
-        check=True,
-    )
-    paths, exec_cfg = _base_paths(tmp_path)
-    cfg = KajiConfig(
-        repo_root=tmp_path,
-        paths=paths,
-        execution=exec_cfg,
-        provider=ProviderConfig(
-            type="local",
-            local=LocalProviderConfig(machine_id="pc1", git_remote="backup"),
-            github=GitHubProviderConfig(),
-        ),
-    )
-    provider = get_provider(cfg)
-    assert isinstance(provider, LocalProvider)
-    assert provider.git_remote == "backup"
 
 
 # --------------------------------------------------------------------------
@@ -326,36 +245,6 @@ def test_github_provider_resolve_issue_context_flows_git_remote(tmp_path: Path) 
         ctx = provider.resolve_issue_context("153")
     assert ctx.git_remote == "upstream"
     assert ctx.provider_type == "github"
-
-
-@pytest.mark.medium
-def test_local_provider_resolve_issue_context_flows_git_remote(tmp_path: Path) -> None:
-    """LocalProvider の `IssueContext` に `git_remote` が流れる。"""
-    issues_dir = tmp_path / ".kaji" / "issues"
-    issues_dir.mkdir(parents=True)
-    issue_dir = issues_dir / "local-pc1-1-foo"
-    issue_dir.mkdir()
-    (issue_dir / "issue.md").write_text(
-        dedent(
-            """
-            ---
-            id: local-pc1-1
-            title: foo
-            state: open
-            slug: foo
-            branch_prefix: feat
-            labels: []
-            ---
-            body
-            """
-        ).strip()
-        + "\n",
-        encoding="utf-8",
-    )
-    provider = LocalProvider(repo_root=tmp_path, machine_id="pc1", git_remote="backup")
-    ctx = provider.resolve_issue_context("local-pc1-1")
-    assert ctx.git_remote == "backup"
-    assert ctx.provider_type == "local"
 
 
 # --------------------------------------------------------------------------

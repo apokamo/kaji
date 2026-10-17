@@ -26,15 +26,36 @@ from kaji_harness.errors import (
 )
 from kaji_harness.logger import RUN_LOG_SCHEMA_VERSION
 from kaji_harness.models import CLIResult, CostInfo, CycleDefinition, Step, Workflow
+from kaji_harness.providers.base import Comment
+from kaji_harness.providers.github import GitHubProvider
 from kaji_harness.recovery.classify import classify_failure
 from kaji_harness.recovery.snapshot import collect_snapshot
 from kaji_harness.result import AttemptResult
 from kaji_harness.runner import WorkflowRunner
 from kaji_harness.worktree_discovery import AmbiguousWorktreeError
 
-pytestmark = pytest.mark.medium
+pytestmark = [pytest.mark.medium, pytest.mark.usefixtures("stub_github_issue")]
 
-_CANONICAL = "local-pc1-99"
+
+@pytest.fixture(autouse=True)
+def _offline_github(monkeypatch: pytest.MonkeyPatch) -> None:
+    """runner / triage が触る GitHubProvider の gh 呼び出しを決定的 stub にする（#448）。"""
+    monkeypatch.setattr(GitHubProvider, "resolve_pr_context", lambda self, branch: None)
+    monkeypatch.setattr(
+        GitHubProvider,
+        "comment_issue",
+        lambda self, issue_id, body: Comment(
+            author="",
+            body=body,
+            created_at="",
+            ref=f"https://github.com/owner/name/issues/{issue_id}#issuecomment-1",
+        ),
+    )
+    monkeypatch.setattr(GitHubProvider, "list_issue_comments_all", lambda self, issue_id: [])
+    monkeypatch.setattr(GitHubProvider, "search_issues_all", lambda self, **kwargs: [])
+
+
+_CANONICAL = "99"
 
 
 def _make_config(tmp_path: Path) -> KajiConfig:
@@ -44,8 +65,8 @@ def _make_config(tmp_path: Path) -> KajiConfig:
     config_file.write_text(
         '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji-artifacts"\n\n'
         "[execution]\ndefault_timeout = 1800\n\n"
-        '[provider]\ntype = "local"\n\n'
-        '[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+        '[provider]\ntype = "github"\n\n'
+        '[provider.github]\nrepo = "owner/name"\n'
     )
     if not (tmp_path / ".git").exists():
         _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)

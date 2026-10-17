@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 import re
-import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,29 +16,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from .design_dir import validate_design_dir
-from .errors import ConfigLoadError, ConfigNotFoundError
-
-LOCAL_PROVIDER_DEPRECATION_WARNING = (
-    'WARNING: provider.type = "local" and the local-only commands '
-    "(`kaji local init`, `kaji sync from-github`, `kaji sync status`) are deprecated "
-    "starting with this release; removal is planned for a subsequent kaji release "
-    "after one release of deprecation warnings. Migrate to the GitHub provider "
-    '(provider.type = "github"). See docs/cli-guides/local-mode.md.'
-)
-_LOCAL_PROVIDER_DEPRECATION_EMITTED = False
-
-
-def warn_local_provider_deprecated() -> None:
-    """local provider の非推奨警告を stderr に 1 プロセス 1 回だけ出す。
-
-    設定読み込みは 1 回の CLI 実行の中で複数回行われるため、module-level flag で
-    重複を抑止する。stdout は skill が解析するため使わない。
-    """
-    global _LOCAL_PROVIDER_DEPRECATION_EMITTED
-    if _LOCAL_PROVIDER_DEPRECATION_EMITTED:
-        return
-    _LOCAL_PROVIDER_DEPRECATION_EMITTED = True
-    print(LOCAL_PROVIDER_DEPRECATION_WARNING, file=sys.stderr)
+from .errors import ConfigLoadError, ConfigNotFoundError, ProviderTypeRemovedError
 
 
 class _DesignDirInput(BaseModel):
@@ -85,15 +62,6 @@ class ExecutionConfig:
 
 
 @dataclass(frozen=True)
-class LocalProviderConfig:
-    """``[provider.local]`` セクション。"""
-
-    machine_id: str = ""
-    default_branch: str = "main"
-    git_remote: str = "origin"
-
-
-@dataclass(frozen=True)
 class GitHubProviderConfig:
     """``[provider.github]`` セクション。"""
 
@@ -110,8 +78,7 @@ class ProviderConfig:
     fallback）。Phase 3-e で必須化される（fail-fast）。
     """
 
-    type: Literal["github", "local"]
-    local: LocalProviderConfig
+    type: Literal["github"]
     github: GitHubProviderConfig
 
 
@@ -495,9 +462,10 @@ class KajiConfig:
         Overlay rules（phase3c review #4 で拡張）:
 
         - ``.kaji/config.local.toml`` の ``[provider]`` 全体をマージできる
-        - ``type`` / ``[provider.github]`` / ``[provider.local]`` のいずれも
-          上書き可能（tracked が ``type=github`` でも overlay で ``type=local``
-          に切替えられる）
+        - ``type`` / ``[provider.github]`` のいずれも上書き可能
+        - ``type = "local"``（overlay 由来を含む）は local provider 削除済みとして
+          ``ProviderTypeRemovedError`` で停止する。``[provider.local]`` テーブルは
+          他の未知キーと同じく読み捨てる
         - tracked と overlay の双方が無いときのみ ``None`` を返す
 
         ``overlay_data`` は ``_read_overlay`` が事前に読んだ ``config.local.toml``
@@ -530,7 +498,7 @@ class KajiConfig:
             merged = dict(provider_data)
         if overlay_provider is not None:
             for k, v in overlay_provider.items():
-                if k in {"github", "local"} and isinstance(v, dict):
+                if k == "github" and isinstance(v, dict):
                     base_sub = merged.get(k) or {}
                     if not isinstance(base_sub, dict):
                         base_sub = {}
@@ -543,13 +511,19 @@ class KajiConfig:
         if ptype_raw is None or not isinstance(ptype_raw, str):
             raise ConfigLoadError(path, "provider.type is required (string)")
         ptype = ptype_raw.strip()
-        if ptype not in {"github", "local"}:
+        if ptype == "local":
+            # 修正先 path は type の出所を優先: overlay が定義していれば overlay path。
+            source_path = (
+                local_overlay_path
+                if overlay_provider is not None and "type" in overlay_provider
+                else path
+            )
+            raise ProviderTypeRemovedError(source_path)
+        if ptype != "github":
             raise ConfigLoadError(
                 path,
-                f"provider.type must be 'github' or 'local', got {ptype!r}",
+                f"provider.type must be 'github', got {ptype!r}",
             )
-        if ptype == "local":
-            warn_local_provider_deprecated()
 
         github_raw = merged.get("github") or {}
         if not isinstance(github_raw, dict):
@@ -569,51 +543,9 @@ class KajiConfig:
             git_remote=gh_git_remote_raw,
         )
 
-        local_raw = merged.get("local") or {}
-        if not isinstance(local_raw, dict):
-            raise ConfigLoadError(path, "[provider.local] must be a table")
-        machine_id = local_raw.get("machine_id", "") or ""
-        if not isinstance(machine_id, str):
-            raise ConfigLoadError(path, "provider.local.machine_id must be a string")
-        if machine_id:
-            # Phase 3-e: 手書き overlay の罠を構造で防ぐ。`type=github` + 空 [provider.local]
-            # は default で空文字を残す正常ケースなので non-empty 時のみ検証する。
-            from .providers.local import validate_machine_id as _validate_machine_id
-
-            try:
-                _validate_machine_id(machine_id)
-            except ValueError as exc:
-                # 修正先 path は machine_id の出所を優先: overlay が定義していれば
-                # overlay path、そうでなければ tracked path。`kaji local init` で
-                # 作る overlay を直接編集させたいケースを誤誘導しない。
-                overlay_local = (
-                    overlay_provider.get("local") if isinstance(overlay_provider, dict) else None
-                )
-                source_path = (
-                    local_overlay_path
-                    if isinstance(overlay_local, dict) and "machine_id" in overlay_local
-                    else path
-                )
-                raise ConfigLoadError(
-                    source_path,
-                    f"provider.local.machine_id {machine_id!r} is invalid: {exc}",
-                ) from exc
-        default_branch = local_raw.get("default_branch", "main") or "main"
-        if not isinstance(default_branch, str):
-            raise ConfigLoadError(path, "provider.local.default_branch must be a string")
-        local_git_remote_raw = local_raw.get("git_remote", "origin") or "origin"
-        if not isinstance(local_git_remote_raw, str):
-            raise ConfigLoadError(path, "provider.local.git_remote must be a string")
-        local_cfg = LocalProviderConfig(
-            machine_id=machine_id,
-            default_branch=default_branch,
-            git_remote=local_git_remote_raw,
-        )
-
         del repo_root  # reserved for future cross-checks
         return ProviderConfig(
-            type=ptype,  # type: ignore[arg-type]
-            local=local_cfg,
+            type="github",
             github=github_cfg,
         )
 

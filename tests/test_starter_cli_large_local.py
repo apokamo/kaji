@@ -17,8 +17,15 @@ def _run_kaji(
     repo: Path,
     *args: str,
     input_text: str | None = None,
+    fake_bin: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run the installed module entry point in a temporary repository."""
+    """Run the installed module entry point in a temporary repository.
+
+    ``fake_bin`` が与えられた場合は PATH 先頭に置き、fake ``gh`` を優先させる。
+    """
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+    if fake_bin is not None:
+        env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
     return subprocess.run(
         [sys.executable, "-m", "kaji_harness.cli_main", *args],
         cwd=repo,
@@ -26,7 +33,7 @@ def _run_kaji(
         capture_output=True,
         text=True,
         check=False,
-        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])},
+        env=env,
     )
 
 
@@ -172,7 +179,49 @@ def test_starter_unknown_subcommand_prints_help_and_exits_nonzero() -> None:
     assert proc.returncode != 0
 
 
-def test_issue_resolve_verdict_cli_dispatch(tmp_path: Path) -> None:
+# ------------------------------------------------------------
+# kaji issue resolve-verdict（github provider + fake gh）
+# ------------------------------------------------------------
+
+# subprocess 起動の kaji には monkeypatch が効かないため、PATH 先頭に置く fake
+# ``gh`` が Issue comment を同 dir の ``comments.json`` に保存 / 返却する。
+_FAKE_GH = """\
+#!{python}
+import json
+import sys
+from pathlib import Path
+
+store = Path(__file__).with_name("comments.json")
+args = sys.argv[1:]
+
+
+def _load():
+    return json.loads(store.read_text()) if store.exists() else []
+
+
+if args[:1] == ["--version"]:
+    print("gh version 2.83.0 (2025-01-01)")
+    sys.exit(0)
+if args[:2] == ["issue", "comment"]:
+    comments = _load()
+    body = args[args.index("--body") + 1]
+    comments.append({{
+        "body": body, "user": {{"login": "kamo"}},
+        "created_at": f"2026-01-01T00:00:{{len(comments):02d}}Z",
+    }})
+    store.write_text(json.dumps(comments))
+    print(f"https://github.com/owner/name/issues/{{args[2]}}#issuecomment-{{len(comments)}}")
+    sys.exit(0)
+if args[:3] == ["api", "--paginate", "--slurp"] and "/issues/1/comments" in args[-1]:
+    print(json.dumps([_load()]))
+    sys.exit(0)
+sys.stderr.write(f"fake gh: unsupported args {{args}}\\n")
+sys.exit(1)
+"""
+
+
+def _make_github_repo(tmp_path: Path) -> tuple[Path, Path]:
+    """github provider 設定の tmp repo と fake ``gh`` 入りの bin dir を作る。"""
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", "--initial-branch=main", str(repo)], check=True)
@@ -183,36 +232,28 @@ def test_issue_resolve_verdict_cli_dispatch(tmp_path: Path) -> None:
         'artifacts_dir = ".kaji-artifacts"\n'
         'skill_dir = ".claude/skills"\n\n'
         "[execution]\n"
-        "default_timeout = 1800\n",
+        "default_timeout = 1800\n\n"
+        "[provider]\n"
+        'type = "github"\n\n'
+        "[provider.github]\n"
+        'repo = "owner/name"\n',
         encoding="utf-8",
     )
-    (repo / ".gitignore").write_text("", encoding="utf-8")
-    initialized = _run_kaji(
-        repo,
-        "local",
-        "init",
-        "--machine-id",
-        "pc1",
-        "--non-interactive",
-    )
-    assert initialized.returncode == 0, initialized.stderr
-    created = _run_kaji(
-        repo,
-        "issue",
-        "create",
-        "--title",
-        "starter review",
-        "--body",
-        "tracking",
-        "--slug",
-        "starter-review",
-    )
-    assert created.returncode == 0, created.stderr
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    gh = fake_bin / "gh"
+    gh.write_text(_FAKE_GH.format(python=sys.executable), encoding="utf-8")
+    gh.chmod(0o755)
+    return repo, fake_bin
+
+
+def test_issue_resolve_verdict_cli_dispatch(tmp_path: Path) -> None:
+    repo, fake_bin = _make_github_repo(tmp_path)
     commented = _run_kaji(
         repo,
         "issue",
         "comment",
-        "local-pc1-1",
+        "1",
         "--body",
         "reviewed",
         "--verdict-step",
@@ -225,6 +266,7 @@ def test_issue_resolve_verdict_cli_dispatch(tmp_path: Path) -> None:
         "base=aaa",
         "--verdict-meta",
         "candidate=bbb",
+        fake_bin=fake_bin,
     )
     assert commented.returncode == 0, commented.stderr
 
@@ -232,7 +274,7 @@ def test_issue_resolve_verdict_cli_dispatch(tmp_path: Path) -> None:
         repo,
         "issue",
         "resolve-verdict",
-        "local-pc1-1",
+        "1",
         "--step",
         "review-starter-update",
         "--require-meta",
@@ -241,6 +283,7 @@ def test_issue_resolve_verdict_cli_dispatch(tmp_path: Path) -> None:
         "base",
         "--require-meta",
         "candidate",
+        fake_bin=fake_bin,
     )
 
     assert resolved.returncode == 0, resolved.stderr
@@ -248,92 +291,31 @@ def test_issue_resolve_verdict_cli_dispatch(tmp_path: Path) -> None:
 
 
 def test_issue_resolve_verdict_not_found_exit_code(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q", "--initial-branch=main", str(repo)], check=True)
-    kaji_dir = repo / ".kaji"
-    kaji_dir.mkdir()
-    (kaji_dir / "config.toml").write_text(
-        "[paths]\n"
-        'artifacts_dir = ".kaji-artifacts"\n'
-        'skill_dir = ".claude/skills"\n\n'
-        "[execution]\n"
-        "default_timeout = 1800\n",
-        encoding="utf-8",
-    )
-    (repo / ".gitignore").write_text("", encoding="utf-8")
-    assert (
-        _run_kaji(repo, "local", "init", "--machine-id", "pc1", "--non-interactive").returncode == 0
-    )
-    assert (
-        _run_kaji(
-            repo,
-            "issue",
-            "create",
-            "--title",
-            "starter review",
-            "--body",
-            "tracking",
-            "--slug",
-            "starter-review",
-        ).returncode
-        == 0
-    )
+    repo, fake_bin = _make_github_repo(tmp_path)
 
     resolved = _run_kaji(
         repo,
         "issue",
         "resolve-verdict",
-        "local-pc1-1",
+        "1",
         "--step",
         "review-starter-update",
+        fake_bin=fake_bin,
     )
 
-    assert resolved.returncode == 4
+    assert resolved.returncode == 4, resolved.stderr
 
 
 def test_issue_resolve_verdict_artifact_fallback_via_run_option(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q", "--initial-branch=main", str(repo)], check=True)
-    kaji_dir = repo / ".kaji"
-    kaji_dir.mkdir()
-    (kaji_dir / "config.toml").write_text(
-        "[paths]\n"
-        'artifacts_dir = ".kaji-artifacts"\n'
-        'skill_dir = ".claude/skills"\n\n'
-        "[execution]\n"
-        "default_timeout = 1800\n",
-        encoding="utf-8",
+    repo, fake_bin = _make_github_repo(tmp_path)
+    commented = _run_kaji(
+        repo, "issue", "comment", "1", "--body", "report without marker", fake_bin=fake_bin
     )
-    (repo / ".gitignore").write_text("", encoding="utf-8")
-    assert (
-        _run_kaji(repo, "local", "init", "--machine-id", "pc1", "--non-interactive").returncode == 0
-    )
-    assert (
-        _run_kaji(
-            repo,
-            "issue",
-            "create",
-            "--title",
-            "artifact fallback",
-            "--body",
-            "tracking",
-            "--slug",
-            "artifact-fallback",
-        ).returncode
-        == 0
-    )
-    assert (
-        _run_kaji(
-            repo, "issue", "comment", "local-pc1-1", "--body", "report without marker"
-        ).returncode
-        == 0
-    )
+    assert commented.returncode == 0, commented.stderr
     attempt = (
         repo
         / ".kaji-artifacts"
-        / "local-pc1-1"
+        / "1"
         / "runs"
         / "260903210335"
         / "steps"
@@ -349,11 +331,12 @@ def test_issue_resolve_verdict_artifact_fallback_via_run_option(tmp_path: Path) 
         repo,
         "issue",
         "resolve-verdict",
-        "local-pc1-1",
+        "1",
         "--step",
         "implement-precheck",
         "--run",
         "260903210335",
+        fake_bin=fake_bin,
     )
 
     assert resolved.returncode == 0, resolved.stderr

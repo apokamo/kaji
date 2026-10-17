@@ -1,6 +1,6 @@
 """Provider-neutral data classes for kaji_harness.
 
-`Issue` / `Comment` / `Label` は GitHub / local 両方の表現を吸収する
+`Issue` / `Comment` / `Label` は provider の表現を吸収する
 正規形。`IssueContext` は Skill が参照する 9 変数体系のうち
 Phase 3 で確立する 7 変数（`issue_id` / `issue_ref` / `issue_input` /
 `branch_prefix` / `branch_name` / `worktree_dir` / `design_path`）を
@@ -28,17 +28,8 @@ class Comment:
     author: str
     body: str
     created_at: str  # ISO8601 文字列
-    # local mode 固有: コメントファイル名の uniqueness 部分。
-    # Issue local-pc5090-21 以降は compact ISO 8601 timestamp
-    # (``YYYYMMDDTHHMMSSZ``、例: ``"20260510T142536Z"``)。
-    # GitHub provider では空文字列。
-    # 注: filename の uniqueness 用であり、comment ordering の正本は
-    # frontmatter ``created_at``（同秒衝突 retry で +1s 加算され乖離しうる）。
-    seq: str = ""
-    # local mode 固有: コメント投稿元の machine_id。GitHub では空。
-    machine_id: str = ""
     # Issue #288: 投稿したコメントへの provider 中立な参照。GitHub では作成コメント
-    # URL、local では comment file の repo-root 相対パス。取得不能なら空文字列。
+    # URL。取得不能なら空文字列。
     # consumer は形式に依存せず不透明文字列として扱い、空文字は `n/a` と表示する。
     ref: str = ""
 
@@ -48,8 +39,7 @@ class Issue:
     """Provider 非依存の Issue 表現。
 
     Attributes:
-        id: provider 内部 ID。github なら ``"153"``、local なら
-            ``"local-pc1-3"``。
+        id: provider 内部 ID（github なら ``"153"``）。
         title: Issue タイトル。
         body: Issue 本文（markdown）。
         state: ``"open"`` または ``"closed"``。
@@ -58,10 +48,7 @@ class Issue:
         slug: ディレクトリ末尾 / branch / worktree / design path 合成用の
             kebab-case 名。GitHub では title から sanitize 導出する。
         state_reason: Issue state の理由。GitHub の値を小文字に正規化し、
-            provider が理由を持たない場合は空文字列。local では frontmatter
-            ``close_reason`` を同じく小文字化して載せるため、GitHub の値域
-            (``completed`` / ``not_planned`` / ``duplicate`` / ``reopened``)
-            外の自由文字列（``"merged into main"`` 等）もありうる。
+            provider が理由を持たない場合は空文字列。
     """
 
     id: str
@@ -83,13 +70,12 @@ class IssueContext:
     `IssueContext` をそのまま参照する（design.md L918, phase3-design.md § 1）。
 
     Attributes:
-        issue_id: provider 内部 ID（``"153"`` / ``"local-pc1-3"``）。
-        issue_ref: 人間可読参照（``"#153"`` / ``"local-pc1-3"``）。
-        issue_input: CLI / skill 引数で再投入できる入力形式。
-            github なら ``"153"``、local なら ``"local-pc1-3"``。
+        issue_id: provider 内部 ID（``"153"``）。
+        issue_ref: 人間可読参照（``"#153"``）。
+        issue_input: CLI / skill 引数で再投入できる入力形式（``"153"``）。
         slug: Issue ディレクトリ末尾 / design_path / 将来の worktree 命名で使用。
         branch_prefix: ``feat`` / ``fix`` / ``docs`` 等。GitHub label から
-            mapping、local では frontmatter から read。
+            mapping。
         branch_prefix_fallback: ``type:*`` label 不在で ``chore`` fallback
             された場合 True。CLI 層の warning 表示などに使う。
         branch_name: ``<branch_prefix>/<id>``（``feat/153`` 等）。
@@ -97,10 +83,9 @@ class IssueContext:
             Phase 3 では slug 同梱しない（既存 ``kaji-<prefix>-<id>`` を維持）。
         design_path: 設計書の repository 相対パス。``[paths].design_dir``（未設定時は
             legacy default ``draft/design``）配下の ``issue-<id>-<slug>.md``。
-        provider_type: ``"github"`` / ``"local"``。
+        provider_type: ``"github"``。
         default_branch: provider の default branch。``main`` 等。
-            ``provider=local`` では ``provider.local.default_branch``、
-            ``provider=github`` では ``provider.github.default_branch`` が source。
+            ``provider.github.default_branch`` が source。
             Skill prompt の ``[default_branch]`` placeholder で参照される
             （phase3d-design.md § 2）。
         git_remote: skill 内の ``git push`` / ``git fetch`` 等が対象とする

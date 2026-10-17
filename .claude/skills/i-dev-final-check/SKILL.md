@@ -25,8 +25,8 @@ dev workflow の PR 前最終ゲート。
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_id` | str | 正規化済み Issue ID（GitHub 数値または local ID） |
-| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`、local では bare ID） |
+| `issue_id` | str | 正規化済み Issue ID（GitHub 数値） |
+| `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`） |
 | `step_id` | str | 現在のステップ ID |
 
 ### 手動実行（スラッシュコマンド）
@@ -40,7 +40,7 @@ $ARGUMENTS = <issue_id>
 コンテキスト変数 `issue_id` が存在すればそちらを使用。
 なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
 
-`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
+`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から `#<issue_id>` を導出する。
 
 ## 前提知識の読み込み
 
@@ -344,7 +344,7 @@ valid status 一覧（`prompt.py:75, 92-97` の `valid_statuses = list(step.on.k
 |------------------------------------------------|-------------------------|
 | `BACK_DESIGN` と `BACK_IMPLEMENT` の両方が定義（例: `dev.yaml`） | root-cause を判定して `BACK_DESIGN` / `BACK_IMPLEMENT` を使い分け。無印 `BACK` は使わない |
 | `BACK` のみが定義（例: `implement-to-pr.yaml`） | 従来通り `BACK` を返す（root-cause 判定結果に関わらず YAML 制約に従う） |
-| BACK 系が一切未定義（例: `dev-local.yaml`） | BACK 系を返さない。`RETRY`（軽微修正）または `ABORT`（重大な前提不整合）で表現 |
+| BACK 系が一切未定義（例: BACK 系 transition を持たない custom workflow） | BACK 系を返さない。`RETRY`（軽微修正）または `ABORT`（重大な前提不整合）で表現 |
 | `BACK_DESIGN` のみ / `BACK_IMPLEMENT` のみ定義 | **想定外構成**。`ABORT` を返し、運用に workflow YAML の見直しを促す |
 
 prompt と skill 出力に不整合が生じた場合（valid status に無い status を返した場合）、harness

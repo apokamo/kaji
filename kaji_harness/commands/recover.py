@@ -17,7 +17,6 @@ from ..errors import (
 from ..preflight import preflight_workflow
 from ..providers import get_provider
 from ..providers.github import GitHubProviderError
-from ..providers.local import LocalProviderError
 from ..recovery.handler import RecoveryHandler
 from ..recovery.target import resolve_recover_issue_context, select_target_run_dir
 from ..workflow import load_workflow
@@ -85,7 +84,7 @@ def cmd_recover(args: argparse.Namespace) -> int:
 
     try:
         issue_context = resolve_recover_issue_context(config, provider, args.issue)
-    except (ValueError, HarnessError, GitHubProviderError, LocalProviderError) as e:
+    except (ValueError, HarnessError, GitHubProviderError) as e:
         print(f"Error: cannot resolve issue {args.issue!r}: {e}", file=sys.stderr)
         return EXIT_INVALID_INPUT
 

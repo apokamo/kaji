@@ -530,7 +530,10 @@ class TestRunnerVerdictNotFoundPropagation:
     must raise VerdictNotFound (HarnessError subclass) rather than recording a
     fabricated PASS via the AI formatter (Issue #193 / #184)."""
 
-    def test_runner_propagates_verdict_not_found_on_silent_agent_exit(self, tmp_path: Path) -> None:
+    @pytest.mark.usefixtures("stub_github_issue")
+    def test_runner_propagates_verdict_not_found_on_silent_agent_exit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from unittest.mock import patch
 
         from kaji_harness.config import KajiConfig
@@ -552,30 +555,22 @@ class TestRunnerVerdictNotFoundPropagation:
             ],
         )
 
-        # Minimal local-provider repo.
+        # Minimal github-provider repo (IssueContext は stub_github_issue で解決する)。
         import subprocess as _sp
+
+        from kaji_harness.providers.github import GitHubProvider
 
         kaji_dir = tmp_path / ".kaji"
         kaji_dir.mkdir()
         (kaji_dir / "config.toml").write_text(
             '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n'
             "[execution]\ndefault_timeout = 1800\n\n"
-            '[provider]\ntype = "local"\n\n'
-            '[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+            '[provider]\ntype = "github"\n\n'
+            '[provider.github]\nrepo = "owner/name"\n'
         )
         _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
         config = KajiConfig._load(kaji_dir / "config.toml")
-
-        # Seed a local issue so IssueContext resolution succeeds.
-        from kaji_harness.providers import LocalProvider
-
-        counter = kaji_dir / "counters" / "pc1.txt"
-        counter.parent.mkdir(parents=True, exist_ok=True)
-        counter.write_text("98")
-        (kaji_dir / "issues").mkdir(exist_ok=True)
-        LocalProvider(repo_root=tmp_path, machine_id="pc1").create_issue(
-            title="silent", body="b", labels=["type:bug"], slug="silent-exit"
-        )
+        monkeypatch.setattr(GitHubProvider, "resolve_pr_context", lambda self, branch: None)
 
         # Agent output mirrors Issue #184: progress report, no delimiter at all.
         silent_output = (
@@ -630,11 +625,14 @@ class TestRunnerVerdictNotFoundPropagation:
         # session_id 保存時に state.json が永続化されるため必ず読み戻して検証する。
         from kaji_harness.state import SessionState
 
+        # local provider 時代は state key が ``local-pc1-99`` だったため ``"99"`` の
+        # 読み戻しは空 state だった。github id では実 state を読むため、runner が
+        # 記録する synthetic ABORT（捏造ではない）を許容し、捏造 PASS のみを禁止する。
         reloaded = SessionState.load_or_create("99", tmp_path / ".kaji-artifacts")
-        assert reloaded.last_transition_verdict is None, (
-            "永続化された state に fabricated verdict が残ってはならない: "
-            f"got {reloaded.last_transition_verdict!r}"
-        )
+        persisted = reloaded.last_transition_verdict
+        assert persisted is None or (
+            persisted.status == "ABORT" and persisted.reason != "fabricated"
+        ), f"永続化された state に fabricated verdict が残ってはならない: got {persisted!r}"
         assert all(rec.verdict_status != "PASS" for rec in reloaded.step_history), (
             "step_history に fabricated PASS が記録されてはならない: "
             f"got {[rec.verdict_status for rec in reloaded.step_history]!r}"

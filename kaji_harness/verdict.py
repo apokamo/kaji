@@ -705,7 +705,7 @@ def parse_verdict_block(
 def _parse_comment_timestamp(created_at: str) -> datetime | None:
     """comment の ISO8601 ``created_at`` を timezone-aware datetime に変換する。
 
-    GitHub / local とも ``%Y-%m-%dT%H:%M:%SZ`` 形式。parse 不能なら ``None`` を
+    GitHub の ``createdAt`` は ``%Y-%m-%dT%H:%M:%SZ`` 形式。parse 不能なら ``None`` を
     返し、呼び出し側は fail-safe（現在 attempt 判定から除外）に倒す。
     """
     try:
@@ -725,7 +725,7 @@ def _is_current_comment(comment: CommentLike, attempt_started_at: datetime) -> b
     誤採用するより解決失敗を選ぶ）。
 
     比較の lower bound は **秒に切り捨てて** から用いる。``attempt_started_at`` は
-    ``datetime.now(UTC)`` 由来でマイクロ秒精度を持つ一方、local comment / GitHub
+    ``datetime.now(UTC)`` 由来でマイクロ秒精度を持つ一方、GitHub
     ``createdAt`` の timestamp は秒精度（``%Y-%m-%dT%H:%M:%SZ``）で保存される。
     dispatch と同一秒に投稿された fresh comment（例: dispatch ``12:00:00.5``、
     comment ``12:00:00Z``）が、マイクロ秒差だけで stale 扱いされ取りこぼされるのを

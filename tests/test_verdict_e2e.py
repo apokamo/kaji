@@ -169,9 +169,8 @@ class TestKajiRunWorkflowExecution:
         """kaji validate succeeds on all official workflow files (no agent required).
 
         Issue #352: the official workflow YAMLs live under
-        ``.kaji/wf/official/`` (5 files: ``dev`` / ``docs`` / ``incident`` plus
-        ``local/`` provider variants); ``.kaji/wf/custom/`` is repository-owned
-        and outside kaji's pytest scope. Assert that the directory and files
+        ``.kaji/wf/official/`` (3 files: ``dev`` / ``docs`` / ``incident``);
+        ``.kaji/wf/custom/`` is repository-owned and outside kaji's pytest scope. Assert that the directory and files
         exist instead of silently skipping when they are missing, so a
         regression that empties ``.kaji/wf/official/`` surfaces as a failure
         rather than a silent skip.
@@ -317,6 +316,30 @@ class TestKajiRunWorkflowExecution:
 # ============================================================
 
 
+_FAKE_GH = """\
+#!/usr/bin/env python3
+import json
+import sys
+
+args = sys.argv[1:]
+if args[:1] == ["--version"]:
+    print("gh version 2.83.0 (2025-01-01)")
+    sys.exit(0)
+if args[:2] == ["issue", "view"]:
+    n = args[2]
+    print(json.dumps({
+        "number": int(n), "title": f"test issue {n}", "body": "body", "state": "OPEN",
+        "stateReason": None, "labels": [{"name": "type:feature"}], "comments": [],
+    }))
+    sys.exit(0)
+if args[:2] == ["pr", "list"]:
+    print("[]")
+    sys.exit(0)
+sys.stderr.write(f"fake gh: unsupported args {args}\\n")
+sys.exit(1)
+"""
+
+
 def _setup_fake_agent_env(
     tmp_path: Path,
     *,
@@ -377,6 +400,12 @@ def _setup_fake_agent_env(
     )
     fake_claude.chmod(fake_claude.stat().st_mode | stat.S_IEXEC)
 
+    # Fake gh: subprocess の kaji run には monkeypatch が効かないため、PATH 先頭の
+    # fake ``gh`` が ``gh issue view`` / ``gh pr list`` に決定的 JSON で応答する。
+    fake_gh = bin_dir / "gh"
+    fake_gh.write_text(_FAKE_GH)
+    fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IEXEC)
+
     # Create workflow YAML
     workflow = tmp_path / "workflow.yaml"
     if multi_step:
@@ -419,22 +448,16 @@ def _setup_fake_agent_env(
     # Create project directory with config and skill
     workdir = tmp_path / "project"
     workdir.mkdir()
-    # gl:21: provider.type='local' requires a git repo.
+    # main worktree resolution requires a git repo.
     subprocess.run(["git", "init", "-q", "--initial-branch=main", str(workdir)], check=True)
     config_dir = workdir / ".kaji"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
-        '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+        '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n'
     )
     skill_dir = workdir / ".claude" / "skills" / "test-skill"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("# Test Skill\n")
-
-    # Phase 3-e: provider=local の subprocess kaji run には対象 issue dir が必要。
-    from tests.conftest import ensure_local_issue
-
-    for issue in ("9990", "9991", "9992"):
-        ensure_local_issue(workdir, issue)
 
 
 # ============================================================

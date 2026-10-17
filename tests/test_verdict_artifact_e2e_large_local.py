@@ -21,8 +21,6 @@ from pathlib import Path
 
 import pytest
 
-from kaji_harness.providers import LocalProvider
-
 pytestmark = [pytest.mark.large, pytest.mark.large_local]
 
 
@@ -65,6 +63,30 @@ print(json.dumps({"type": "result", "subtype": "success", "total_cost_usd": 0.0}
 '''
 
 
+_FAKE_GH = '''#!/usr/bin/env python3
+"""Fake `gh` CLI: subprocess の kaji run に決定的な Issue / PR 応答を返す。"""
+import json
+import sys
+
+args = sys.argv[1:]
+if args[:1] == ["--version"]:
+    print("gh version 2.83.0 (2025-01-01)")
+    sys.exit(0)
+if args[:2] == ["issue", "view"]:
+    n = args[2]
+    print(json.dumps({
+        "number": int(n), "title": "e2e", "body": "body", "state": "OPEN",
+        "stateReason": None, "labels": [{"name": "type:feature"}], "comments": [],
+    }))
+    sys.exit(0)
+if args[:2] == ["pr", "list"]:
+    print("[]")
+    sys.exit(0)
+sys.stderr.write(f"fake gh: unsupported args {args}\\n")
+sys.exit(1)
+'''
+
+
 _WORKFLOW_YAML = """name: e2e-verdict
 description: single agent step for artifact verdict E2E
 requires_provider: any
@@ -90,8 +112,8 @@ def _make_repo(tmp_path: Path) -> Path:
     (kaji_dir / "config.toml").write_text(
         '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji-artifacts"\n\n'
         "[execution]\ndefault_timeout = 60\n\n"
-        '[provider]\ntype = "local"\n\n'
-        '[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+        '[provider]\ntype = "github"\n\n'
+        '[provider.github]\nrepo = "owner/name"\n'
     )
     # minimal agent skill（frontmatter 無し → exec_script=None で agent step として通る）
     skill_dir = repo / ".claude" / "skills" / "e2e-impl"
@@ -107,6 +129,10 @@ def _make_fake_claude(tmp_path: Path) -> Path:
     fake = bin_dir / "claude"
     fake.write_text(_FAKE_CLAUDE)
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    # subprocess には monkeypatch が効かないため、fake gh を PATH 先頭に置く。
+    gh = bin_dir / "gh"
+    gh.write_text(_FAKE_GH)
+    gh.chmod(gh.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     return bin_dir
 
 
@@ -114,13 +140,7 @@ def test_fake_agent_artifact_primary_e2e(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     bin_dir = _make_fake_claude(tmp_path)
 
-    # local issue 99 (type:feature) を作成
-    counter = repo / ".kaji" / "counters" / "pc1.txt"
-    counter.parent.mkdir(parents=True, exist_ok=True)
-    counter.write_text("98")
-    provider = LocalProvider(repo_root=repo, machine_id="pc1")
-    provider.create_issue(title="e2e", body="body", labels=["type:feature"], slug="e2e")
-
+    # issue 99 (type:feature) は fake gh の ``gh issue view`` が返す
     env = dict(os.environ)
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
     # subprocess の ``python -m kaji_harness.cli_main`` が editable install 経由で
@@ -153,7 +173,7 @@ def test_fake_agent_artifact_primary_e2e(tmp_path: Path) -> None:
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
     # layout: steps/<step_id>/attempt-001/verdict.yaml
-    runs = repo / ".kaji-artifacts" / "local-pc1-99" / "runs"
+    runs = repo / ".kaji-artifacts" / "99" / "runs"
     run_dirs = [p for p in runs.iterdir() if p.is_dir()]
     assert len(run_dirs) == 1, f"expected 1 run dir, got {run_dirs}"
     attempt = run_dirs[0] / "steps" / "implement" / "attempt-001"

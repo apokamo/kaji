@@ -31,6 +31,7 @@ import pytest
 
 from kaji_harness.config import KajiConfig
 from kaji_harness.models import CLIResult, Step, Workflow
+from kaji_harness.providers.github import GitHubProvider
 from kaji_harness.runner import WorkflowRunner
 from kaji_harness.workflow import load_workflow
 
@@ -114,15 +115,23 @@ def _make_config(tmp_path: Path) -> KajiConfig:
     cfg.write_text(
         '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n'
         "[execution]\ndefault_timeout = 60\n\n"
-        '[provider]\ntype = "local"\n\n'
-        '[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+        '[provider]\ntype = "github"\n\n'
+        '[provider.github]\nrepo = "owner/name"\n'
     )
+    # main worktree resolution requires a git repo.
     if not (tmp_path / ".git").exists():
         subprocess.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
     return KajiConfig._load(cfg)
 
 
+@pytest.fixture
+def _no_pr_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``gh pr list`` を呼ばせず PR 未作成扱いにする。"""
+    monkeypatch.setattr(GitHubProvider, "resolve_pr_context", lambda self, branch: None)
+
+
 @pytest.mark.medium
+@pytest.mark.usefixtures("stub_github_issue", "_no_pr_context")
 class TestReviewPollExecDispatch:
     @pytest.mark.parametrize("path", OFFICIAL_PATHS, ids=OFFICIAL_IDS)
     def test_review_poll_dispatches_to_execute_exec(self, path: Path, tmp_path: Path) -> None:

@@ -27,8 +27,18 @@ from kaji_harness.config import KajiConfig
 from kaji_harness.errors import WorkflowValidationError
 from kaji_harness.logger import RunLogger
 from kaji_harness.models import CLIResult, CostInfo, CycleDefinition, Step, Verdict, Workflow
+from kaji_harness.providers.github import GitHubProvider
 from kaji_harness.runner import WorkflowRunner
 from kaji_harness.state import STATE_FILE, SessionState
+
+pytestmark = pytest.mark.usefixtures("stub_github_issue")
+
+
+@pytest.fixture(autouse=True)
+def _no_pr_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``gh pr list`` を呼ばせず PR 未作成扱いにする。"""
+    monkeypatch.setattr(GitHubProvider, "resolve_pr_context", lambda self, branch: None)
+
 
 # ============================================================
 # Fixtures / helpers
@@ -65,10 +75,10 @@ def workdir(tmp_path: Path) -> Path:
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
         '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n'
-        '[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n'
-        '[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+        '[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "github"\n\n'
+        '[provider.github]\nrepo = "owner/name"\n'
     )
-    # gl:21: provider.type='local' requires a git repo.
+    # main worktree resolution requires a git repo.
     _sp.run(["git", "init", "-q", "--initial-branch=main", str(d)], check=True)
     return d
 
@@ -160,10 +170,10 @@ def _make_config(tmp_path: Path) -> KajiConfig:
     if not config_file.exists():
         config_file.write_text(
             '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji/artifacts"\n\n'
-            '[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "local"\n\n'
-            '[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+            '[execution]\ndefault_timeout = 1800\n\n[provider]\ntype = "github"\n\n'
+            '[provider.github]\nrepo = "owner/name"\n'
         )
-    # gl:21: provider.type='local' requires a git repo.
+    # main worktree resolution requires a git repo.
     if not (tmp_path / ".git").exists():
         _sp.run(["git", "init", "-q", "--initial-branch=main", str(tmp_path)], check=True)
     return KajiConfig._load(config_file)
@@ -385,7 +395,7 @@ class TestRunnerResetCycle:
         """回帰の再現（対照群）: --reset-cycle なしでは即 ABORT する。"""
         workflow = _cycle_workflow()
         artifacts_dir = tmp_path / ".kaji-artifacts"
-        _write_state(artifacts_dir, "local-pc1-99", cycle_counts={"rev": 3})
+        _write_state(artifacts_dir, "99", cycle_counts={"rev": 3})
 
         with (
             patch("kaji_harness.runner.execute_cli") as mock_execute,
@@ -403,7 +413,7 @@ class TestRunnerResetCycle:
         """実験群: --reset-cycle 併用で ABORT せず step が dispatch される。"""
         workflow = _cycle_workflow()
         artifacts_dir = tmp_path / ".kaji-artifacts"
-        _write_state(artifacts_dir, "local-pc1-99", cycle_counts={"rev": 3})
+        _write_state(artifacts_dir, "99", cycle_counts={"rev": 3})
 
         called: list[str] = []
 
@@ -426,7 +436,7 @@ class TestRunnerResetCycle:
     def test_reset_cycle_state_postcondition_other_cycle_preserved(self, tmp_path: Path) -> None:
         workflow = _cycle_workflow()
         artifacts_dir = tmp_path / ".kaji-artifacts"
-        _write_state(artifacts_dir, "local-pc1-99", cycle_counts={"rev": 3, "other": 2})
+        _write_state(artifacts_dir, "99", cycle_counts={"rev": 3, "other": 2})
 
         with (
             patch("kaji_harness.runner.execute_cli", return_value=_make_cli_result("PASS")),
@@ -450,7 +460,7 @@ class TestRunnerResetCycle:
         """validate/apply 分離の回帰テスト: 旧形式 state を入力にした誤用で state が不変。"""
         workflow = _linear_workflow()
         artifacts_dir = tmp_path / ".kaji-artifacts"
-        state_path = _write_state(artifacts_dir, "local-pc1-99", cycle_counts={}, old_format=True)
+        state_path = _write_state(artifacts_dir, "99", cycle_counts={}, old_format=True)
         before_mtime = state_path.stat().st_mtime_ns
         before_content = state_path.read_text()
 
@@ -484,7 +494,7 @@ class TestRunnerResetCycle:
     def test_run_log_records_cycle_reset_event(self, tmp_path: Path) -> None:
         workflow = _cycle_workflow()
         artifacts_dir = tmp_path / ".kaji-artifacts"
-        _write_state(artifacts_dir, "local-pc1-99", cycle_counts={"rev": 3})
+        _write_state(artifacts_dir, "99", cycle_counts={"rev": 3})
 
         with (
             patch("kaji_harness.runner.execute_cli", return_value=_make_cli_result("PASS")),
@@ -493,7 +503,7 @@ class TestRunnerResetCycle:
             runner = _make_runner(tmp_path, workflow, from_step="review", reset_cycle=True)
             runner.run()
 
-        run_dirs = list((artifacts_dir / "local-pc1-99" / "runs").iterdir())
+        run_dirs = list((artifacts_dir / "99" / "runs").iterdir())
         assert len(run_dirs) == 1
         log_content = (run_dirs[0] / "run.log").read_text()
         assert '"event": "cycle_reset"' in log_content
@@ -544,7 +554,7 @@ class TestCmdRunResetCycleE2E:
         )
         # config.toml (workdir fixture) declares paths.artifacts_dir = ".kaji/artifacts"
         artifacts_dir = workdir / ".kaji" / "artifacts"
-        _write_state(artifacts_dir, "local-pc1-1", cycle_counts={"rev": 3})
+        _write_state(artifacts_dir, "1", cycle_counts={"rev": 3})
 
         with (
             patch("kaji_harness.runner.execute_cli", return_value=_make_cli_result("PASS")),
@@ -561,6 +571,6 @@ class TestCmdRunResetCycleE2E:
             )
 
         assert exit_code == 0
-        state = SessionState.load_or_create("local-pc1-1", artifacts_dir)
+        state = SessionState.load_or_create("1", artifacts_dir)
         assert state.last_transition_verdict is not None
         assert state.last_transition_verdict.status == "PASS"

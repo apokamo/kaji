@@ -49,7 +49,7 @@ kaji のドキュメント一覧。[Diataxis フレームワーク](https://diat
 | [アーキテクチャ](ARCHITECTURE.md) | システム構成・モジュール依存関係 |
 | [設定リファレンス](reference/configuration.md) | `.kaji/config.toml` / overlay の全 section/key 仕様の正本（英語正本、[日本語](reference/configuration.ja.md)） |
 | [テストサイズ判断ガイド](reference/testing-size-guide.md) | S/M/L の境界ケース判断基準 |
-| [CLI ガイド](cli-guides/) | CLI 操作リファレンス（[GitHub Mode](cli-guides/github-mode.md)（英語正本、[日本語](cli-guides/github-mode.ja.md)） / [Local Mode](cli-guides/local-mode.md)（英語正本、[日本語](cli-guides/local-mode.ja.md)） / [Interactive Terminal Runner](cli-guides/interactive-terminal-runner.md)（英語正本、[日本語](cli-guides/interactive-terminal-runner.ja.md)） / [Failure Triage / Recovery](cli-guides/failure-recovery.md)（英語正本、[日本語](cli-guides/failure-recovery.ja.md)） / [Claude Code CLI](cli-guides/claude-code-cli-guide.md)（英語正本、[日本語](cli-guides/claude-code-cli-guide.ja.md)） / [Codex CLI](cli-guides/codex-cli-session-guide.md)（英語正本、[日本語](cli-guides/codex-cli-session-guide.ja.md)） / [Antigravity CLI](cli-guides/antigravity-cli-session-guide.md)（英語正本）） |
+| [CLI ガイド](cli-guides/) | CLI 操作リファレンス（[GitHub Mode](cli-guides/github-mode.md)（英語正本、[日本語](cli-guides/github-mode.ja.md)） / [Interactive Terminal Runner](cli-guides/interactive-terminal-runner.md)（英語正本、[日本語](cli-guides/interactive-terminal-runner.ja.md)） / [Failure Triage / Recovery](cli-guides/failure-recovery.md)（英語正本、[日本語](cli-guides/failure-recovery.ja.md)） / [Claude Code CLI](cli-guides/claude-code-cli-guide.md)（英語正本、[日本語](cli-guides/claude-code-cli-guide.ja.md)） / [Codex CLI](cli-guides/codex-cli-session-guide.md)（英語正本、[日本語](cli-guides/codex-cli-session-guide.ja.md)） / [Antigravity CLI](cli-guides/antigravity-cli-session-guide.md)（英語正本）） |
 
 ### Python 品質規約
 
@@ -69,7 +69,6 @@ kaji のドキュメント一覧。[Diataxis フレームワーク](https://diat
 | [Release Runbook](operations/release/runbook.md) | `/release` skill ベースのリリース運用（CI 非依存 / maintainer 手元実行）と緊急時 fallback |
 | [Managed Starter Sync Runbook](operations/release/starter-sync-runbook.md) | kaji Release 後の starter 追随・独立 review・検証済み snapshot 公開運用 |
 | [Release-Please Admin 設定（historical）](operations/release/admin-setup.md) | 旧 GitHub release-please 運用の admin 初期設定。現在は非運用。GitHub 運用を再開する場合の参考資料 |
-| [Local Mode 緊急時 Fallback Runbook](operations/local-mode-runbook.md) | GitHub 障害・不通時に local-mode へ一時退避するための手順、複数 PC 運用、GitHub 復帰判断（英語正本、[日本語](operations/local-mode-runbook.ja.md)） |
 
 ## Explanation（コンセプト）
 

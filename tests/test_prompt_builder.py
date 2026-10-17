@@ -147,24 +147,6 @@ class TestPromptContainsIssueNumber:
         assert "- issue_ref: #123" in prompt
         assert "issue_number" not in prompt
 
-    def test_prompt_local_id_uses_bare_ref_without_hash(self) -> None:
-        """local-<machine>-<n> 形式は #-prefix を付けず生 ID を ref として出す。"""
-        step = _make_step()
-        workflow = _make_workflow(steps=[step])
-        state = _make_state(issue="local-pc1-1")
-
-        prompt = build_prompt(
-            step,
-            issue="local-pc1-1",
-            state=state,
-            workflow=workflow,
-            issue_context=make_issue_context(provider_type="local", issue_id="local-pc1-1"),
-        )
-
-        assert "- issue_id: local-pc1-1" in prompt
-        assert "- issue_ref: local-pc1-1" in prompt
-        assert "- issue_ref: #local-pc1-1" not in prompt
-
 
 # ============================================================
 # 3. Basic prompt contains step_id

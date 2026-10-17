@@ -15,13 +15,12 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
-
-from kaji_harness.providers import LocalProvider
 
 pytestmark = [pytest.mark.large, pytest.mark.large_local]
 
@@ -44,6 +43,63 @@ print("step=" + os.environ.get("KAJI_STEP_ID", "?"))
 """
 
 
+# Issue #448: local provider 削除に伴い、subprocess の ``kaji run`` は github provider で
+# 実行する。PATH 先頭に置く fake ``gh`` が ``gh issue view`` / ``gh issue comment`` /
+# ``gh pr list`` / ``gh api`` に決定的に応答する（コメントは同ディレクトリの jsonl に記録）。
+_FAKE_GH = """\
+import json, os, sys
+
+args = sys.argv[1:]
+log = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gh-comments.jsonl")
+
+
+def comments():
+    if not os.path.exists(log):
+        return []
+    with open(log, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+if args[:1] == ["--version"]:
+    print("gh version 2.60.0 (fake)")
+elif args[:2] == ["issue", "view"]:
+    n = args[2]
+    print(json.dumps({
+        "number": int(n), "title": "test issue " + n, "body": "body", "state": "OPEN",
+        "stateReason": "", "labels": [{"name": "type:feature"}],
+        "comments": [{"author": {"login": "kaji"}, "body": c["body"], "createdAt": ""}
+                     for c in comments()],
+    }))
+elif args[:2] == ["issue", "comment"]:
+    body = args[args.index("--body") + 1]
+    seq = len(comments()) + 1
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"issue": args[2], "body": body}) + "\\n")
+    print(f"https://github.com/owner/name/issues/{args[2]}#issuecomment-{seq}")
+elif args[:2] == ["pr", "list"]:
+    print("[]")
+elif args[:1] == ["api"]:
+    query = args[-1]
+    if "/comments" in query:
+        print(json.dumps([[{"body": c["body"], "user": {"login": "kaji"}, "created_at": ""}
+                           for c in comments()]]))
+    else:
+        print("[[]]")
+else:
+    print("fake gh: unsupported args: " + " ".join(args), file=sys.stderr)
+    sys.exit(1)
+"""
+
+
+def _install_fake_gh(bin_dir: Path) -> Path:
+    """``bin_dir/gh`` に fake gh を置き、記録コメントの jsonl path を返す。"""
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    gh = bin_dir / "gh"
+    gh.write_text(f"#!{sys.executable}\n{_FAKE_GH}", encoding="utf-8")
+    gh.chmod(gh.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return bin_dir / "gh-comments.jsonl"
+
+
 def _make_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -53,8 +109,8 @@ def _make_repo(tmp_path: Path) -> Path:
     (kaji_dir / "config.toml").write_text(
         '[paths]\nskill_dir = ".claude/skills"\nartifacts_dir = ".kaji-artifacts"\n\n'
         "[execution]\ndefault_timeout = 60\n\n"
-        '[provider]\ntype = "local"\n\n'
-        '[provider.local]\nmachine_id = "pc1"\ndefault_branch = "main"\n'
+        '[provider]\ntype = "github"\n\n'
+        '[provider.github]\nrepo = "owner/name"\n'
     )
     # exec-step が実行するスクリプト。skill ファイルは作らない（exec-step は不要）。
     script = repo / "exec_step.py"
@@ -79,14 +135,12 @@ def _make_repo(tmp_path: Path) -> Path:
 def test_exec_step_run_e2e(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
 
-    # local issue 99 (type:feature) を作成
-    counter = repo / ".kaji" / "counters" / "pc1.txt"
-    counter.parent.mkdir(parents=True, exist_ok=True)
-    counter.write_text("98")
-    provider = LocalProvider(repo_root=repo, machine_id="pc1")
-    provider.create_issue(title="e2e exec", body="body", labels=["type:feature"], slug="e2e-exec")
+    # github Issue 99 (type:feature) を fake gh で応答させる。
+    gh_bin = tmp_path / "gh-bin"
+    _install_fake_gh(gh_bin)
 
     env = dict(os.environ)
+    env["PATH"] = f"{gh_bin}{os.pathsep}{env['PATH']}"
     # subprocess の ``python -m kaji_harness.cli_main`` が別 worktree の古い
     # kaji_harness を読まないよう、本 worktree を PYTHONPATH 先頭に固定する。
     worktree_root = Path(__file__).resolve().parents[1]
@@ -116,7 +170,7 @@ def test_exec_step_run_e2e(tmp_path: Path) -> None:
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
     # layout: steps/<step_id>/attempt-001/{verdict.yaml,result.json,stdout.log}
-    runs = repo / ".kaji-artifacts" / "local-pc1-99" / "runs"
+    runs = repo / ".kaji-artifacts" / "99" / "runs"
     run_dirs = [p for p in runs.iterdir() if p.is_dir()]
     assert len(run_dirs) == 1, f"expected 1 run dir, got {run_dirs}"
     attempt = run_dirs[0] / "steps" / "collect" / "attempt-001"
@@ -131,7 +185,7 @@ def test_exec_step_run_e2e(tmp_path: Path) -> None:
     # stdout.log に exec script の出力が残る。
     stdout_log = attempt / "stdout.log"
     assert stdout_log.exists()
-    assert "exec-step ran; issue=local-pc1-99" in stdout_log.read_text(encoding="utf-8")
+    assert "exec-step ran; issue=99" in stdout_log.read_text(encoding="utf-8")
 
     # result.json の dispatch が "exec"、session_id は None。
     result_json = json.loads((attempt / "result.json").read_text(encoding="utf-8"))

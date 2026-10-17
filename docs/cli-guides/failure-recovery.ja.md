@@ -2,8 +2,8 @@
 
 Language: [English](failure-recovery.md) | 日本語
 
-failure triage / 自動再開レイヤ（Issue #288）の CLI リファレンス。`provider.type = "github"` /
-`"local"` の双方に適用され、triage コメントは有効な provider 経由で投稿される。
+failure triage / 自動再開レイヤ（Issue #288）の CLI リファレンス。triage コメントは
+有効な provider（`provider.type = "github"`）経由で投稿される。
 
 運用ルール（何が再開可能で何がそうでないか、なぜウェイトを置くのか）は
 [workflow guide](../dev/workflow_guide.md) § failure triage と自動再開、config key は
@@ -114,7 +114,7 @@ kaji recover .kaji/wf/official/dev.yaml 288 --run-id 260710120000
 | `runs/<run_id>/recovery.json` | `RecoveryDecision`（`schema_version: 1`）。decision 更新のたびに上書き。第1層の `incident_ref` / `incident_action` / `incident_transient_closed` を含む（Issue #304）。incident 記録を抑止した場合は `incident_suppressed` / `incident_suppression_reason`（Issue #322） |
 | `runs/<run_id>/recovery-chain.json` | `{root_run_id, parent_run_id}`。recovery child run が起動直後に書く |
 | `runs/<run_id>/run.log` | `failure_event` / `recovery_decision` / `recovery_scheduled` / `recovery_attempt_start` / `recovery_attempt_end` / `incident_recorded` / `incident_recording_failed` / `incident_suppressed` |
-| `incidents/occurrences.jsonl` | 第1層のローカル occurrence 記録（`<artifacts_dir>` 直下・append-only）。**incident 記録の対象外**（下記）を除く全 provider・全失敗で必ず 1 行追記。GitHub 起票の成否と無関係（fail-open の受け皿・backfill 元） |
+| `incidents/occurrences.jsonl` | 第1層のローカル occurrence 記録（`<artifacts_dir>` 直下・append-only）。**incident 記録の対象外**（下記）を除く全失敗で必ず 1 行追記。GitHub 起票の成否と無関係（fail-open の受け皿・backfill 元） |
 | Issue コメント | 機械生成 triage report（child 起動前）と、自動再開した場合の結果報告 follow-up。第1層のインシデントイシュー本文 / occurrence コメント。kaji-verdict マーカーは付けない（step verdict ではないため） |
 | stderr | 既存の終端表示の直後に出る `--- failure triage ---` の数行サマリ |
 
@@ -162,7 +162,7 @@ terminal runner では pane を kill せずに残し、その `pane_id` を tria
 `incident_suppression_reason` から確認できる。
 
 stderr サマリの `comment:` 行は `Comment.ref` をそのまま表示する。GitHub provider では作成コメント
-URL、local provider では comment file の repo-root 相対パス、取得不能時は `n/a`。
+URL、取得不能時は `n/a`。
 
 ## 関連ドキュメント
 

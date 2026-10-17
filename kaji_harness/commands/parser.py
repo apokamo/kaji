@@ -30,11 +30,7 @@ def create_parser() -> argparse.ArgumentParser:
     _register_issue(subparsers)
     _register_pr(subparsers)
     _register_config(subparsers)
-    _register_sync(subparsers)
     _register_starter(subparsers)
-    from ..local_init import register_subcommand as _register_local
-
-    _register_local(subparsers)
     return parser
 
 
@@ -58,43 +54,6 @@ def _register_starter(
     )
 
 
-def _register_sync(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    """``kaji sync`` 系の subcommand 登録。
-
-    ``from-github``: GitHub repo から open Issue を全件 fetch して
-    ``.kaji/cache/gh-<number>.json`` に atomic write する。
-    ``status``: 最終 sync 時刻 / cache 件数 / 経過時間を表示する。
-
-    ``--include-closed`` / ``--state`` / ``--since`` は将来予約 flag。
-    本 release では受理せず exit 2 で fail-fast する（completion criterion）。
-    """
-    p = subparsers.add_parser("sync", help="Cache synchronization commands")
-    sync_subs = p.add_subparsers(dest="sync_command", required=True)
-
-    fh = sync_subs.add_parser(
-        "from-github",
-        help="Sync open issues from a GitHub repo into local cache",
-    )
-    fh.add_argument(
-        "--repo",
-        default=None,
-        type=str,
-        help="GitHub repo (owner/name). Defaults to [provider.github].repo.",
-    )
-    fh.add_argument("--quiet", action="store_true", help="Suppress progress logs.")
-    fh.add_argument(
-        "--include-closed",
-        dest="include_closed",
-        action="store_true",
-        help=argparse.SUPPRESS,
-    )
-    fh.add_argument("--state", dest="state", default=None, type=str, help=argparse.SUPPRESS)
-    fh.add_argument("--since", dest="since", default=None, type=str, help=argparse.SUPPRESS)
-
-    st = sync_subs.add_parser("status", help="Show local cache sync status")
-    st.add_argument("--json", dest="json_mode", action="store_true", help="Output JSON.")
-
-
 def _register_config(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """Register the ``config`` subcommand group.
 
@@ -106,7 +65,7 @@ def _register_config(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
     config_subs = p.add_subparsers(dest="config_command", required=True)
     pt = config_subs.add_parser(
         "provider-type",
-        help="Print resolved provider.type ('github' or 'local')",
+        help="Print resolved provider.type ('github')",
     )
     pt.add_argument(
         "--workdir",
@@ -149,7 +108,7 @@ def _register_run(subparsers: argparse._SubParsersAction[argparse.ArgumentParser
     p.add_argument(
         "issue",
         type=str,
-        help="Issue ID (GitHub number like '153' or local form like 'local-pc1-1')",
+        help="Issue ID (GitHub number like '153')",
     )
     p.add_argument("--from", dest="from_step", help="Resume from a specific step")
     p.add_argument("--step", dest="single_step", help="Run a single step only")
@@ -270,7 +229,7 @@ def _register_recover(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     """
     p = subparsers.add_parser("recover", help="Run failure triage against a failed run's artifacts")
     p.add_argument("workflow", type=Path, help="Workflow YAML used by the target run")
-    p.add_argument("issue", type=str, help="Issue ID (GitHub number or local form)")
+    p.add_argument("issue", type=str, help="Issue ID (GitHub number)")
     p.add_argument(
         "--run-id",
         dest="run_id",
@@ -295,13 +254,11 @@ def _register_recover(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
 def _register_issue(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """Register the `issue` subcommand.
 
-    Phase 3-e 以降は ``provider.type`` に応じて分岐する。
-    ``provider.type='local'`` → LocalProvider 経由の structured CRUD、
     ``provider.type='github'`` → ``gh issue`` passthrough（``--repo`` 自動注入）。
     """
     p = subparsers.add_parser(
         "issue",
-        help="Issue operations (provider-aware: github passthrough or local CRUD)",
+        help="Issue operations (provider-aware: github passthrough)",
         add_help=False,
     )
     p.add_argument("args", nargs=argparse.REMAINDER, help="Arguments forwarded to 'gh issue'")
@@ -315,7 +272,6 @@ def _register_pr(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]
     (``--merge`` / ``--squash`` / ``--rebase``) を露出せず、内部で常に
     ``--merge`` (= ``--no-ff`` 相当) 固定で gh に渡す
     (`docs/guides/git-commit-flow.md` の merge 規約に従う)。
-    Phase 4 で `provider.type='local'` 配下では bare-provider エラー化予定。
     """
     p = subparsers.add_parser(
         "pr",

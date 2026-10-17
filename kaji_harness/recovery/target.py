@@ -26,14 +26,7 @@ def resolve_recover_issue_context(
         The provider's canonical Issue context.
     """
     assert config.provider is not None
-    provider_type = config.provider.type
-    machine_id = config.provider.local.machine_id if provider_type == "local" else None
-    resolved_id = normalize_id(
-        issue_input,
-        provider_name=provider_type,
-        machine_id=machine_id,
-    )
-    return provider.resolve_issue_context(resolved_id.value)
+    return provider.resolve_issue_context(normalize_id(issue_input))
 
 
 def select_target_run_dir(runs_dir: Path, run_id: str | None) -> Path:

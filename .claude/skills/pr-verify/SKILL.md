@@ -20,7 +20,6 @@ PR レビュー修正後の確認を行う。
 | `/pr-fix` 後の修正確認 | ✅ 必須 |
 | 新規レビューが必要な場合 | ❌ PR 上で直接レビューを実施 |
 | `provider.type='github'` 配下 | ✅ 受理（gh CLI 経由） |
-| `provider.type='local'` 配下 | ❌ Step 0 で ABORT。代替は `/issue-verify-code` |
 
 **ワークフロー内の位置**: i-pr → [PR review] → (pr-fix → **pr-verify**) → close
 
@@ -36,16 +35,16 @@ $ARGUMENTS = <issue_id>
 
 | 変数 | 型 | 説明 |
 |------|-----|------|
-| `issue_id` | str | 正規化済み Issue ID（GitHub 数値、または `local-*`） |
+| `issue_id` | str | 正規化済み Issue ID（GitHub 数値） |
 | `issue_ref` | str | 人間可読の Issue 参照 |
-| `provider_type` | str | `github` / `local` のいずれか。Step 0 のガード判定に使用 |
+| `provider_type` | str | `github`（現行唯一の provider）。Step 0 のガード判定に使用 |
 
 ### 解決ルール
 
 コンテキスト変数 `issue_id` が存在すればそちらを使用。
 なければ `$ARGUMENTS` の第1引数を `issue_id` として使用。
 
-`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から導出する: GitHub 数値 ID なら `#<issue_id>`、`local-*` 形式なら bare ID（`#` を付けない）。
+`issue_ref` はハーネス経由ではプロンプトに自動注入される（`prompt.py` 側で provider 別に整形）。手動実行時は `issue_id` から `#<issue_id>` を導出する。
 
 `pr_id` / `pr_ref` はハーネス経由ではプロンプトに自動注入される（`runner.py` の `_resolve_pr_context_safe` が `GitHubProvider.resolve_pr_context()` 経由でブランチから PR を逆引きして展開する）。手動実行時、および auto-resolve が失敗した（branch 未 push / PR 未作成）場合は Step 1 で fallback として `kaji pr list --head` から取得する。`pr_ref` は `gh:<pr_id>` 形式で組み立てる（`kaji_harness/providers/models.py` `PRContext` 準拠）。
 
@@ -91,21 +90,6 @@ $ARGUMENTS = <issue_id>
 2. **判定と verdict 出力**:
 
    - `PROVIDER_TYPE` が `github` → Step 1 に進む
-   - `PROVIDER_TYPE` が `local` → 以下の ABORT verdict を **そのまま stdout に
-     出力**して以降のステップは実行しない:
-
-     ```text
-     ---VERDICT---
-     status: ABORT
-     reason: |
-       pr-verify is forge-only and cannot run under provider.type='local'.
-     evidence: |
-       Pull request concept does not exist in local mode (bare provider).
-     suggestion: |
-       Use /issue-verify-code instead.
-     ---END_VERDICT---
-     ```
-
    - `PROVIDER_TYPE` がそれ以外（空文字 / 不明値）→ 以下の ABORT verdict を
      出力して終了:
 
@@ -118,7 +102,7 @@ $ARGUMENTS = <issue_id>
        provider_type was not injected and `kaji config provider-type` failed
        (likely missing `[provider]` section in .kaji/config.toml).
      suggestion: |
-       Add `[provider]` to .kaji/config.toml. See docs/cli-guides/local-mode.md.
+       Add `[provider]` to .kaji/config.toml. See docs/cli-guides/github-mode.md.
      ---END_VERDICT---
      ```
 

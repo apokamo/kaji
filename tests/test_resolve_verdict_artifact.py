@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -14,8 +13,8 @@ from kaji_harness.commands.issue import (
     EXIT_VERDICT_ARTIFACT_UNUSABLE,
     _handle_issue_resolve_verdict,
 )
-from kaji_harness.providers.github import GitHubProviderError
-from kaji_harness.providers.local import LocalProvider
+from kaji_harness.providers.github import GitHubProvider, GitHubProviderError
+from kaji_harness.providers.models import Comment
 
 pytestmark = pytest.mark.medium
 
@@ -26,9 +25,29 @@ OTHER_RUN = "260903220114"
 MARKER_PASS = f"<!-- kaji-verdict: step={PRODUCER} status=PASS -->\nmarker comment"
 
 
+class _InMemoryGitHubProvider(GitHubProvider):
+    """``comment_issue`` / ``list_issue_comments_all`` を gh 不要の in-memory 実装に置換する。"""
+
+    def __init__(self, repo_root: Path) -> None:
+        super().__init__(repo="owner/name", repo_root=repo_root)
+        self.posted: list[Comment] = []
+
+    def comment_issue(self, issue_id: str, body: str) -> Comment:
+        comment = Comment(
+            author="tester",
+            body=body,
+            created_at=f"2026-09-03T12:{len(self.posted):02d}:00Z",
+        )
+        self.posted.append(comment)
+        return comment
+
+    def list_issue_comments_all(self, issue_id: str) -> list[Comment]:
+        return list(self.posted)
+
+
 @dataclass
 class Env:
-    provider: LocalProvider
+    provider: _InMemoryGitHubProvider
     issue_id: str
     artifacts: Path
 
@@ -118,12 +137,10 @@ def _no_inherited_verdict_path(monkeypatch: pytest.MonkeyPatch) -> None:
 def env(tmp_path: Path) -> Env:
     repo = tmp_path / "repo"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q", "--initial-branch=main", str(repo)], check=True)
-    provider = LocalProvider(repo_root=repo, machine_id="pc1")
-    issue = provider.create_issue(title="t", body="b", slug="x", labels=["type:bug"])
+    provider = _InMemoryGitHubProvider(repo)
     artifacts = tmp_path / "artifacts"
     artifacts.mkdir()
-    return Env(provider=provider, issue_id=issue.id, artifacts=artifacts)
+    return Env(provider=provider, issue_id="1", artifacts=artifacts)
 
 
 def _out(capsys: pytest.CaptureFixture[str]) -> dict[str, Any]:

@@ -1,52 +1,49 @@
-"""Tests for ``kaji issue context`` helper CLI (issue local-pc5090-17).
+"""Tests for ``kaji issue context`` helper CLI.
 
-Bug 再現: ``_LOCAL_ISSUE_SUBS`` に ``context`` がないため
-``kaji issue context <id>`` は EXIT_INVALID_INPUT で失敗する。本ファイルが
-Red → Green の証跡となる。
-
-設計書: ``draft/design/issue-local-pc5090-17-issue-start-skill-prefix-type-label-bran.md``
+``kaji issue context <id>`` は provider 共通 helper として
+``provider.resolve_issue_context()`` の結果を JSON 出力する。#448 で local provider を
+削除したため、github provider 設定 + ``view_issue`` stub で検証する。
 """
 
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from kaji_harness.commands.issue import _handle_issue
-from kaji_harness.providers import LocalProvider
-from kaji_harness.providers.models import IssueContext
+from kaji_harness.providers.github import GitHubProvider
+from kaji_harness.providers.models import Issue, IssueContext, Label
 
 
-def _write_local_repo(tmp_path: Path, *, machine_id: str = "pc1") -> Path:
-    """gl:21: ``provider.type='local'`` は git repo を前提とするので git init する。"""
+def _write_github_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     (repo / ".kaji").mkdir(parents=True)
     (repo / ".kaji" / "config.toml").write_text(
         '[paths]\nartifacts_dir = ".kaji-artifacts"\nskill_dir = ".claude/skills"\n\n'
         "[execution]\ndefault_timeout = 1800\n\n"
-        '[provider]\ntype = "local"\n\n'
-        f'[provider.local]\nmachine_id = "{machine_id}"\n'
-    )
-    subprocess.run(
-        ["git", "init", "-q", "--initial-branch=main", str(repo)],
-        check=True,
+        '[provider]\ntype = "github"\n\n[provider.github]\nrepo = "owner/name"\n'
     )
     return repo
 
 
-def _create_local_issue(repo: Path, *, machine_id: str, labels: list[str]) -> str:
-    provider = LocalProvider(repo_root=repo, machine_id=machine_id)
-    issue = provider.create_issue(
-        title="Hello",
-        body="body text",
-        labels=labels,
-        slug="hello-test",
-    )
-    return issue.id
+def _stub_issue(monkeypatch: pytest.MonkeyPatch, *, labels: list[str]) -> str:
+    """``GitHubProvider.view_issue`` を指定 label 付きの決定的 Issue に置き換える。"""
+
+    def _fake_view_issue(self: GitHubProvider, issue_id: str) -> Issue:
+        return Issue(
+            id=issue_id,
+            title="Hello",
+            body="body text",
+            state="open",
+            labels=[Label(name=name) for name in labels],
+            slug="hello-test",
+        )
+
+    monkeypatch.setattr(GitHubProvider, "view_issue", _fake_view_issue)
+    return "1"
 
 
 # ============================================================
@@ -62,8 +59,8 @@ class TestContextCLISmall:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        repo = _write_local_repo(tmp_path)
-        issue_id = _create_local_issue(repo, machine_id="pc1", labels=["type:bug"])
+        repo = _write_github_repo(tmp_path)
+        issue_id = _stub_issue(monkeypatch, labels=["type:bug"])
         monkeypatch.chdir(repo)
         rc = _handle_issue(["context", issue_id])
         assert rc == 0
@@ -91,8 +88,8 @@ class TestContextCLISmall:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        repo = _write_local_repo(tmp_path)
-        issue_id = _create_local_issue(repo, machine_id="pc1", labels=["type:bug"])
+        repo = _write_github_repo(tmp_path)
+        issue_id = _stub_issue(monkeypatch, labels=["type:bug"])
         monkeypatch.chdir(repo)
         rc = _handle_issue(["context", issue_id, "--json", "branch_prefix,branch_name"])
         assert rc == 0
@@ -106,8 +103,8 @@ class TestContextCLISmall:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        repo = _write_local_repo(tmp_path)
-        issue_id = _create_local_issue(repo, machine_id="pc1", labels=["type:bug"])
+        repo = _write_github_repo(tmp_path)
+        issue_id = _stub_issue(monkeypatch, labels=["type:bug"])
         monkeypatch.chdir(repo)
         rc = _handle_issue(["context", issue_id, "--json", "branch_prefix", "-q", ".branch_prefix"])
         assert rc == 0
@@ -121,8 +118,8 @@ class TestContextCLISmall:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """設計契約: 未知 ``--json`` field は ``null`` + exit 0（``kaji issue view`` と同挙動）。"""
-        repo = _write_local_repo(tmp_path)
-        issue_id = _create_local_issue(repo, machine_id="pc1", labels=["type:bug"])
+        repo = _write_github_repo(tmp_path)
+        issue_id = _stub_issue(monkeypatch, labels=["type:bug"])
         monkeypatch.chdir(repo)
         rc = _handle_issue(["context", issue_id, "--json", "branch_prefix,nonexistent"])
         assert rc == 0
@@ -135,14 +132,14 @@ class TestContextCLISmall:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        repo = _write_local_repo(tmp_path)
+        repo = _write_github_repo(tmp_path)
         monkeypatch.chdir(repo)
         rc = _handle_issue(["context", "Bogus-ID"])
         assert rc == 2
 
 
 # ============================================================
-# Medium: 再現テスト + 全 8 種 type label + frontmatter override + fallback + github 経路
+# Medium: 再現テスト + 全 8 種 type label + fallback + github 経路
 # ============================================================
 
 
@@ -154,13 +151,9 @@ class TestContextCLIMedium:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """再現テスト: ``type:bug`` Issue が ``fix`` prefix に解決される。
-
-        本テストは Red Phase では ``_LOCAL_ISSUE_SUBS`` に ``context`` が
-        ないため ``EXIT_INVALID_INPUT`` で失敗。Green Phase で PASS する。
-        """
-        repo = _write_local_repo(tmp_path)
-        issue_id = _create_local_issue(repo, machine_id="pc1", labels=["type:bug"])
+        """再現テスト: ``type:bug`` Issue が ``fix`` prefix に解決される。"""
+        repo = _write_github_repo(tmp_path)
+        issue_id = _stub_issue(monkeypatch, labels=["type:bug"])
         monkeypatch.chdir(repo)
         rc = _handle_issue(["context", issue_id, "-q", ".branch_prefix"])
         assert rc == 0
@@ -187,8 +180,8 @@ class TestContextCLIMedium:
         label: str,
         expected_prefix: str,
     ) -> None:
-        repo = _write_local_repo(tmp_path)
-        issue_id = _create_local_issue(repo, machine_id="pc1", labels=[label])
+        repo = _write_github_repo(tmp_path)
+        issue_id = _stub_issue(monkeypatch, labels=[label])
         monkeypatch.chdir(repo)
         rc = _handle_issue(["context", issue_id, "-q", ".branch_prefix"])
         assert rc == 0
@@ -200,40 +193,14 @@ class TestContextCLIMedium:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        repo = _write_local_repo(tmp_path)
-        issue_id = _create_local_issue(repo, machine_id="pc1", labels=[])
+        repo = _write_github_repo(tmp_path)
+        issue_id = _stub_issue(monkeypatch, labels=[])
         monkeypatch.chdir(repo)
         rc = _handle_issue(["context", issue_id])
         assert rc == 0
         out = json.loads(capsys.readouterr().out)
         assert out["branch_prefix"] == "chore"
         assert out["branch_prefix_fallback"] is True
-
-    def test_frontmatter_override_takes_priority_over_label(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """frontmatter ``branch_prefix: docs`` + label ``type:bug`` → ``docs`` を返す。"""
-        repo = _write_local_repo(tmp_path)
-        issue_id = _create_local_issue(repo, machine_id="pc1", labels=["type:bug"])
-        # Inject frontmatter branch_prefix manually
-        provider = LocalProvider(repo_root=repo, machine_id="pc1")
-        issue_dir = provider._resolve_issue_dir(issue_id)
-        issue_path = issue_dir / "issue.md"
-        text = issue_path.read_text(encoding="utf-8")
-        # Insert branch_prefix line into frontmatter block (after first ``---``)
-        lines = text.splitlines()
-        assert lines[0] == "---"
-        # find closing ---
-        end = lines.index("---", 1)
-        new_lines = lines[:end] + ["branch_prefix: docs"] + lines[end:]
-        issue_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-        monkeypatch.chdir(repo)
-        rc = _handle_issue(["context", issue_id, "-q", ".branch_prefix"])
-        assert rc == 0
-        assert capsys.readouterr().out.strip() == "docs"
 
     def test_github_provider_error_is_normalized_to_runtime_error(
         self,
