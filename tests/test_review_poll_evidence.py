@@ -1,4 +1,4 @@
-"""Tests for kaji_harness.review_poll_evidence (schema v1 approval evidence)."""
+"""Tests for kaji_harness.review_poll_evidence (schema v1 / v2 approval evidence)."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from kaji_harness.review_poll_evidence import (
     EVIDENCE_FILENAME,
     ReviewPollEvidence,
+    ReviewPollEvidenceV2,
     load_evidence,
     parse_timestamp,
     save_evidence,
@@ -221,6 +222,144 @@ _VIOLATIONS: list[tuple[str, dict[str, Any]]] = [
 ]
 
 
+def _valid_payload_v2() -> dict[str, Any]:
+    payload = _valid_payload()
+    payload["schema_version"] = 2
+    payload["approval"] = {
+        "bot": payload["approval"]["bot"],
+        "reaction": payload["approval"]["reaction"],
+        "review_state": {
+            "comment_id": 5577710898,
+            "url": (
+                "https://github.com/apokamo/fullstack-agent-template/pull/163"
+                "#issuecomment-5577710898"
+            ),
+            "comment_updated_at": "2026-09-08T01:33:33Z",
+            "state_version": "v1",
+            "code_review": {"commit_sha": HEAD, "status": "completed", "has_any_findings": False},
+            "security_review": {"commit_sha": None, "status": None, "has_any_findings": None},
+        },
+    }
+    del payload["checks"]["short_sha_matching_pr_commits"]
+    return payload
+
+
+_STATE = ("approval", "review_state")
+_CODE = (*_STATE, "code_review")
+_SECURITY = (*_STATE, "security_review")
+
+# (id, mutated payload) — 各ケースが schema v2 の不変条件違反を 1 つ表す。
+_VIOLATIONS_V2: list[tuple[str, dict[str, Any]]] = [
+    # I1(v2)
+    ("v2_schema_version_3", _set(_valid_payload_v2(), ("schema_version",), 3)),
+    ("v2_top_level_extra_key", _set(_valid_payload_v2(), ("unexpected",), 1)),
+    (
+        "v2_with_review_summary",
+        _set(_valid_payload_v2(), ("approval", "review_summary"), {"comment_id": 1}),
+    ),
+    (
+        "v2_with_short_sha_check",
+        _set(_valid_payload_v2(), ("checks", "short_sha_matching_pr_commits"), 1),
+    ),
+    ("v2_state_extra_key", _set(_valid_payload_v2(), (*_STATE, "extra"), 1)),
+    ("v2_entry_missing_key", _delete(_valid_payload_v2(), (*_CODE, "status"))),
+    ("v2_entry_extra_key", _set(_valid_payload_v2(), (*_SECURITY, "extra"), 1)),
+    ("v2_review_state_missing", _delete(_valid_payload_v2(), _STATE)),
+    # I2〜I5（v1 と共通）
+    ("v2_pull_number_zero", _set(_valid_payload_v2(), ("pull_request", "number"), 0)),
+    ("v2_sha_uppercase", _set(_valid_payload_v2(), ("reviewed_head", "sha"), HEAD.upper())),
+    ("v2_bot_id_mismatch", _set(_valid_payload_v2(), ("approval", "bot", "id"), 1)),
+    (
+        "v2_reaction_api_path_mismatch",
+        _set(_valid_payload_v2(), ("approval", "reaction", "api_path"), "repos/a/b/issues/1/x"),
+    ),
+    # I6(v2)
+    ("v2_comment_id_zero", _set(_valid_payload_v2(), (*_STATE, "comment_id"), 0)),
+    (
+        "v2_url_mismatch",
+        _set(_valid_payload_v2(), (*_STATE, "url"), "https://github.com/a/b/pull/163#x-1"),
+    ),
+    ("v2_state_version_v2", _set(_valid_payload_v2(), (*_STATE, "state_version"), "v2")),
+    ("v2_updated_at_unparsable", _set(_valid_payload_v2(), (*_STATE, "comment_updated_at"), "x")),
+    ("v2_code_other_head", _set(_valid_payload_v2(), (*_CODE, "commit_sha"), _OTHER_HEAD)),
+    ("v2_code_sha_null", _set(_valid_payload_v2(), (*_CODE, "commit_sha"), None)),
+    ("v2_code_not_completed", _set(_valid_payload_v2(), (*_CODE, "status"), "in_progress")),
+    ("v2_code_findings", _set(_valid_payload_v2(), (*_CODE, "has_any_findings"), True)),
+    ("v2_code_findings_null", _set(_valid_payload_v2(), (*_CODE, "has_any_findings"), None)),
+    ("v2_code_findings_zero", _set(_valid_payload_v2(), (*_CODE, "has_any_findings"), 0)),
+    (
+        "v2_security_pending_on_head",
+        _set(
+            _set(_valid_payload_v2(), (*_SECURITY, "status"), "in_progress"),
+            (*_SECURITY, "commit_sha"),
+            HEAD,
+        ),
+    ),
+    (
+        "v2_security_pending_without_sha",
+        _set(_valid_payload_v2(), (*_SECURITY, "status"), "in_progress"),
+    ),
+    (
+        "v2_security_findings_on_head",
+        _set(
+            _set(
+                _set(_valid_payload_v2(), (*_SECURITY, "status"), "completed"),
+                (*_SECURITY, "commit_sha"),
+                HEAD,
+            ),
+            (*_SECURITY, "has_any_findings"),
+            True,
+        ),
+    ),
+    ("v2_security_sha_not_hex", _set(_valid_payload_v2(), (*_SECURITY, "commit_sha"), "g" * 40)),
+    ("v2_security_status_empty", _set(_valid_payload_v2(), (*_SECURITY, "status"), "")),
+    # I7(v2)
+    (
+        "v2_reaction_same_second_as_update",
+        _set(_valid_payload_v2(), ("approval", "reaction", "created_at"), "2026-09-08T01:33:33Z"),
+    ),
+    (
+        "v2_update_after_reaction",
+        _set(_valid_payload_v2(), (*_STATE, "comment_updated_at"), "2026-09-08T01:33:35Z"),
+    ),
+    (
+        "v2_reaction_before_head_commit",
+        _set(_valid_payload_v2(), ("reviewed_head", "committed_at"), "2026-09-08T01:40:00Z"),
+    ),
+    # I8(v2)
+    (
+        "v2_checks_after_decision_mismatch",
+        _set(_valid_payload_v2(), ("checks", "head_sha_after_decision"), _OTHER_HEAD),
+    ),
+    (
+        "v2_current_head_bot_reviews_one",
+        _set(_valid_payload_v2(), ("checks", "current_head_bot_reviews"), 1),
+    ),
+    # I9
+    (
+        "v2_fetched_before_reaction",
+        _set(_valid_payload_v2(), ("fetched_at",), "2026-09-08T01:33:34Z"),
+    ),
+]
+
+# schema v2 で受理される security_review の組み合わせ（I6(v2)）。
+_VALID_SECURITY_V2: list[tuple[str, dict[str, Any]]] = [
+    ("null", {"commit_sha": None, "status": None, "has_any_findings": None}),
+    (
+        "other_head_with_findings",
+        {"commit_sha": _OTHER_HEAD, "status": "completed", "has_any_findings": True},
+    ),
+    (
+        "other_head_pending",
+        {"commit_sha": _OTHER_HEAD, "status": "in_progress", "has_any_findings": None},
+    ),
+    (
+        "head_completed_without_findings",
+        {"commit_sha": HEAD, "status": "completed", "has_any_findings": False},
+    ),
+]
+
+
 @pytest.mark.small
 class TestReviewPollEvidenceModel:
     def test_valid_payload_passes(self) -> None:
@@ -274,3 +413,55 @@ class TestSaveEvidence:
 
     def test_filename_constant(self) -> None:
         assert EVIDENCE_FILENAME == "review-poll-evidence.json"
+
+
+@pytest.mark.small
+class TestReviewPollEvidenceV2Model:
+    def test_valid_payload_passes(self) -> None:
+        evidence = ReviewPollEvidenceV2.model_validate(_valid_payload_v2())
+        assert evidence.approval.review_state.comment_id == 5577710898
+
+    @pytest.mark.parametrize(
+        "payload", [p for _, p in _VIOLATIONS_V2], ids=[name for name, _ in _VIOLATIONS_V2]
+    )
+    def test_invariant_violation_is_rejected(self, payload: dict[str, Any]) -> None:
+        with pytest.raises(ValidationError):
+            ReviewPollEvidenceV2.model_validate(payload)
+
+    @pytest.mark.parametrize(
+        "security", [s for _, s in _VALID_SECURITY_V2], ids=[n for n, _ in _VALID_SECURITY_V2]
+    )
+    def test_allowed_security_review_states(self, security: dict[str, Any]) -> None:
+        ReviewPollEvidenceV2.model_validate(_set(_valid_payload_v2(), _SECURITY, security))
+
+    def test_reaction_in_next_second_after_update_is_accepted(self) -> None:
+        payload = _set(
+            _valid_payload_v2(), ("approval", "reaction", "created_at"), "2026-09-08T01:33:34Z"
+        )
+        payload = _set(payload, ("fetched_at",), "2026-09-08T01:33:34Z")
+        ReviewPollEvidenceV2.model_validate(payload)
+
+
+@pytest.mark.medium
+class TestLoadEvidenceVersions:
+    def test_v1_and_v2_are_dispatched_by_schema_version(self, tmp_path: Path) -> None:
+        v1_path = tmp_path / "v1.json"
+        v2_path = tmp_path / "v2.json"
+        save_evidence(v1_path, ReviewPollEvidence.model_validate(_valid_payload()))
+        save_evidence(v2_path, ReviewPollEvidenceV2.model_validate(_valid_payload_v2()))
+        assert isinstance(load_evidence(v1_path), ReviewPollEvidence)
+        assert isinstance(load_evidence(v2_path), ReviewPollEvidenceV2)
+        assert json.loads(v2_path.read_text(encoding="utf-8")) == _valid_payload_v2()
+
+    @pytest.mark.parametrize("version", [3, 0, "2"])
+    def test_unknown_version_is_rejected(self, tmp_path: Path, version: object) -> None:
+        path = tmp_path / "evidence.json"
+        path.write_text(json.dumps(_set(_valid_payload_v2(), ("schema_version",), version)))
+        with pytest.raises(ValidationError):
+            load_evidence(path)
+
+    def test_v1_shape_with_version_2_is_rejected(self, tmp_path: Path) -> None:
+        path = tmp_path / "evidence.json"
+        path.write_text(json.dumps(_set(_valid_payload(), ("schema_version",), 2)))
+        with pytest.raises(ValidationError):
+            load_evidence(path)

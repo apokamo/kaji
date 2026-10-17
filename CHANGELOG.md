@@ -6,6 +6,51 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Deprecated
+
+- **review-poll legacy codex review markup path** is deprecated and will be
+  removed in the next release (apokamo/kaji#473, tracked in #478). When the
+  bot's review summary comment carries no `<!-- codex-review-state:v1 {...} -->`,
+  `review-poll` still decides RETRY from the review body heading
+  (`### 💡 Codex Review`) and PASS from the summary table (`Code Review` row),
+  and now prints a deprecation warning to stderr once when that path decides
+  the result. Approval evidence written by this path stays `schema_version: 1`,
+  and `issue-close` keeps accepting it during the deprecation period.
+  - **Broken contract**: after removal, a summary comment without
+    `codex-review-state:v1` will no longer produce PASS / RETRY, and
+    `issue-close` will reject `schema_version: 1` approval evidence.
+  - **How to check whether you are affected**: look for
+    `kaji: deprecation: review-poll used the legacy codex review markup` in the
+    review-poll step's `stderr.log`, or for `"schema_version": 1` in
+    `review-poll-evidence.json`. No hits means you are not affected.
+  - **How to migrate**: nothing to change in kaji configuration; the state is
+    emitted by `chatgpt-codex-connector[bot]`. If your repository's summary
+    comments still lack the state, report it on #478 before upgrading past
+    the removal.
+
+### Changed
+
+- `review-poll` PASS through `codex-review-state:v1` saves approval evidence
+  as `schema_version: 2` (`ReviewPollEvidenceV2`): `approval.review_state`
+  records the summary comment and the observed `code_review` /
+  `security_review` state, and `checks` drops `short_sha_matching_pr_commits`
+  because the full SHA is matched directly. `issue-close` verifies v1 and v2
+  with one jq program switched by `schema_version` (#473).
+
+### Fixed
+
+- `review-poll` no longer misses a Codex review whose body starts with an HTML
+  comment such as `<!-- codex-review-receipt:v1 -->`, which left the step
+  `in_progress` until `IN_PROGRESS_TIMEOUT_SEC` (1800s) aborted it instead of
+  returning RETRY (#473). The machine-readable `codex-review-state:v1` in the
+  bot's summary comment is now the primary signal for both RETRY and PASS
+  (full head SHA, `status`, `has_any_findings`; a head-bound
+  `security_review` that is still running blocks PASS and one with findings
+  returns RETRY). PASS still requires a later trusted bot `+1`. A state that
+  is present but unparsable or of an unknown version returns `BACK_FALLBACK`
+  immediately. Without the state, the legacy path now skips leading HTML
+  comments before matching the review heading.
+
 ## [0.22.0] - 2026-10-05
 
 This release adds configurable design document paths and attempt-local temporary

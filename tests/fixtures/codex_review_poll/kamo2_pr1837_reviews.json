@@ -1,0 +1,14 @@
+[
+  {
+    "id": 5551610965,
+    "user": {
+      "id": 199175422,
+      "login": "chatgpt-codex-connector[bot]"
+    },
+    "state": "COMMENTED",
+    "commit_id": "dc8eb9cb83b0a48ca51218d919288ae14297120f",
+    "submitted_at": "2026-10-16T17:50:56Z",
+    "html_url": "https://github.com/apokamo/kamo2/pull/1837#pullrequestreview-5551610965",
+    "body": "<!-- codex-review-receipt:v1 -->\n\n\n### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n**Reviewed commit:** `dc8eb9cb83`\n    \n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\".\n\nIf Codex has suggestions, it will comment; otherwise it will react with 👍.\n\n\n\n\nCodex can also answer questions or update the PR. Try commenting \"@codex address that feedback\".\n            \n</details>"
+  }
+]
