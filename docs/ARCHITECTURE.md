@@ -56,7 +56,7 @@ PR 作成後は `review-poll` が codex auto-review を監視し、指摘があ�
 
 ### Layer 3: スキル本体
 
-`.kaji/config.toml` の `paths.skill_dir` で設定されたカノニカルディレクトリ配下の `<name>/SKILL.md`。CLI が `cwd=workdir` で実行する際にネイティブにロードされる。他エージェント用ディレクトリ（例: `.agents/skills/`）はカノニカルディレクトリへのシンボリックリンクとして構成する。codex step では `<workdir>/.agents/skills/<skill>/SKILL.md` の存在を preflight が必須検証し、欠けていれば Codex を起動する前にエラーで止める（#408）。
+`.kaji/config.toml` の `paths.skill_dir` で設定されたカノニカルディレクトリ配下の `<name>/SKILL.md`。CLI が `cwd=workdir` で実行する際にネイティブにロードされる。他エージェント用ディレクトリ（例: `.agents/skills/`）はカノニカルディレクトリへのシンボリックリンクとして構成する。codex step では、workdir から Git repo root まで（両端を含む。Git repo 外では workdir 直下のみ）のいずれかの階層に `.agents/skills/<skill>/SKILL.md` があることを preflight が必須検証し、欠けていれば Codex を起動する前にエラーで止める（#408 / #489）。
 
 kaji 標準スキルセット（`.claude/skills/` 実体、計 23 種）はライフサイクル順に次の category に整理される。
 

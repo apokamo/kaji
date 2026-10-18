@@ -37,23 +37,35 @@ skill を明示的に呼び出す（claude / antigravity は従来の ``スキ�
 新規実行と resume の両方で同じ形式になる。interactive terminal で codex を起動する場合も、
 agent に渡す初期メッセージの先頭に同じ行が付く。
 
-Codex は `$<skill>` を `<workdir>/.agents/skills/<skill>/SKILL.md` から解決する。解決できない
-`$<skill>` はエラーにならず普通の文字列として扱われ、Codex が自力でファイルを探しに行く（fail-open）。
-これを防ぐため、preflight（`kaji run` / `kaji validate` / `kaji recover` / series loader 共通）は
+Codex は `$<skill>` を、起動 cwd から Git repo root まで（両端を含む）の各階層の
+`.agents/skills/<skill>/SKILL.md` から解決する。repo root より上の `.agents/skills` は使わない。
+解決できない `$<skill>` はエラーにならず普通の文字列として扱われ、Codex が自力でファイルを探しに行く
+（fail-open）。これを防ぐため、preflight（`kaji run` / `kaji validate` / `kaji recover` / series loader 共通）は
 codex step ごとに次を検証し、欠けていれば Codex を起動する前にエラーで止める。
 
-- 検証対象は step の実効 workdir（`step.workdir` > workflow の `workdir` > project root）の
-  `.agents/skills/<skill>/SKILL.md` 1 箇所だけ。user / admin スコープの skill は合格扱いにしない
-- `..` を含む skill 名と、resolve 後に workdir の外へ出る symlink は拒否する
+- 起点は step の実効 workdir（`step.workdir` > workflow の `workdir` > project root）。symlink を
+  解決した実パスから、`.git`（ディレクトリまたは worktree / submodule の `gitdir:` ファイル）を持つ
+  最も近い祖先までの各階層の `.agents/skills/<skill>/SKILL.md` を候補にし、どれか 1 つあれば合格
+- workdir が kaji の project root の外の別 Git repo にある場合は、その repo の root が境界になる。
+  project root の `.agents/skills` は数えない。入れ子の repo では内側の root で止まる
+- Git repo が見つからない workdir では、workdir 直下の `.agents/skills/<skill>/SKILL.md` 1 箇所だけを見る
+- user / admin スコープの skill は合格扱いにしない
+- `..` を含む skill 名は拒否する。候補の symlink は Git repo 内の別ディレクトリを指すものは許可し、
+  resolve 後に repo の外（Git repo 外の workdir では workdir の外）へ出るものは拒否する。範囲内の同名候補が
+  1 つでも外へ出れば、他に正しい候補があっても不合格にする
 - `exec_script` を宣言した skill は agent を起動しないため対象外
 - 存在とパスの安全性だけを保証する。SKILL.md の frontmatter `name` とディレクトリ名の一致は検査しない
   （`$<ディレクトリ名>` で解決させるため、`name` はディレクトリ名と揃える）
 
-codex step で使う skill は、`.agents/skills/<skill>` を canonical への symlink として必ず用意する
-（例: `.agents/skills/review -> ../../.claude/skills/review`）。
+codex step で使う skill は、workdir から Git repo root までのどこか（通常は repo root）に
+`.agents/skills/<skill>` を canonical への symlink として必ず用意する
+（例: `.agents/skills/review -> ../../.claude/skills/review`）。サブディレクトリを workdir にする場合も、
+repo root にあればサブディレクトリへの複製は不要。
 
 確認済みの Codex version は codex-cli 0.159.2（`codex exec` / `codex exec resume` で `$<skill>` が
-skill として注入されることを実機で確認）。最低 version は強制しない。
+skill として注入されることを実機で確認）と codex-cli 0.163.0（repo root・中間ディレクトリ・
+`git worktree add` した worktree の root にある skill がサブディレクトリの cwd から注入され、repo root より上の
+skill は注入されないことを実機で確認。#489）。最低 version は強制しない。
 
 ## 段階的開示と遅延読込
 

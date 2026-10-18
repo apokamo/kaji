@@ -132,7 +132,7 @@ cross-skill 契約（BACK 再入検出など）は SKILL.md の散文ではな�
 - 実体: `.claude/skills/`
 - 互換導線: `.agents/skills/` の symlink
 
-新規スキル追加や改名時は `.claude/skills/` を先に更新し、`.agents/skills/` に symlink を追加する。codex step で使う skill では symlink が必須で、欠けていると preflight がエラーにする（[skill-authoring.md](./skill-authoring.md)）。
+新規スキル追加や改名時は `.claude/skills/` を先に更新し、`.agents/skills/` に symlink を追加する。codex step で使う skill では、step の workdir から Git repo root までのどこか（通常は repo root の `.agents/skills/`）に symlink が必須で、欠けていると preflight がエラーにする（[skill-authoring.md](./skill-authoring.md)）。
 
 ## auto close keyword 回避
 
