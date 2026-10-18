@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.23.2] - 2026-10-18
+
+### Fixed
+
+- **Headless agent CLI no longer inherits kaji's stdin** (#494). Child
+  processes now receive `DEVNULL`, preventing Codex from waiting for EOF on
+  an open parent pipe until the step times out. Added a regression test.
+- **Codex skill preflight searches up to the Git repository root** (#489).
+  When a step runs from a repository subdirectory, preflight now finds skills
+  in parent `.agents/skills` directories. Symlink targets remain restricted
+  to the repository root; workdirs outside a Git repository still use the
+  immediate directory.
+
+### Changed
+
+- Documented the headless stdin behavior and Codex skill lookup boundary in
+  the architecture and skill authoring guides (#494, #489).
+- Recorded the Herdr full terminal transcript feasibility investigation and
+  revised its follow-up recommendation to use the existing #466 child Issue
+  (#476).
+
 ## [0.23.1] - 2026-10-18
 
 This release lets starter sync carry fixes that exist only in a starter
