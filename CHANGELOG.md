@@ -6,6 +6,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-10-18
+
+This release lets starter sync carry fixes that exist only in a starter
+repository, with no matching change in kaji itself. The kaji package and its
+CLI are unchanged.
+
+### Changed
+
+- **Starter sync now includes starter-only fix Issues** (#490). Until now,
+  `update-starter` and `review-starter-update` built their investigation set
+  only from the kaji changes between two Releases, so a fix needed only in a
+  starter (for example the CI failure in kaji-starter-typescript, #477) had
+  no path into a starter Release. Both skills now also find open kaji Issues
+  that have the `starter-fix` label and a body line
+  `starter_repo: <owner/repo>` that matches the target starter exactly. They
+  put each such Issue into one of the 3 categories. The reviewer rebuilds this
+  set on its own and checks it against the updater's table. The
+  starter-sync runbook documents the procedure and explains why this is not
+  part of the `kaji starter` CLI decision. The tracking Issue v1 schema and the
+  `kaji starter` CLI are unchanged.
+
+### Internal
+
+- Added a static test that checks the five starter-sync documents describe the
+  discovery condition (`starter-fix` label + exact `starter_repo:` line) the
+  same way (#490).
+
 ## [0.23.0] - 2026-10-17
 
 This release removes the deprecated local provider, deprecates the tmux
