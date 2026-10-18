@@ -200,14 +200,14 @@ def _root_of_length(base: Path, length: int) -> Path:
 class TestChromeSocketRegression:
     """Issue #508 回帰: 47 byte の root なら Chrome 相当の socket を tmp dir 配下に作れる。
 
-    workflow 内の ``tmp_path`` はリポジトリ内の長い path になるため、``/tmp`` 配下の
-    ``outside_project_tmp_path`` を起点に root の長さを固定する。
+    workflow 内の ``tmp_path`` はリポジトリ内の長い path になり、外部 ``TMPDIR`` も長くなりうるため、
+    ``TMPDIR`` に依存しない ``short_outside_project_tmp_path`` を起点に root の長さを固定する。
     """
 
     def test_socket_binds_under_tmp_dir_for_47_byte_root(
-        self, outside_project_tmp_path: Path
+        self, short_outside_project_tmp_path: Path
     ) -> None:
-        root = _root_of_length(outside_project_tmp_path, 47)
+        root = _root_of_length(short_outside_project_tmp_path, 47)
         tmp_dir = prepare_attempt_tmp_dir(root, issue_id="1831")
         assert len(os.fsencode(str(tmp_dir))) == 66
         assert socket_path_budget_exceeded(tmp_dir) is None
@@ -219,9 +219,9 @@ class TestChromeSocketRegression:
         assert Path(socket_path).is_socket()
 
     def test_48_byte_root_exceeds_budget_and_bind_fails(
-        self, outside_project_tmp_path: Path
+        self, short_outside_project_tmp_path: Path
     ) -> None:
-        root = _root_of_length(outside_project_tmp_path, 48)
+        root = _root_of_length(short_outside_project_tmp_path, 48)
         tmp_dir = prepare_attempt_tmp_dir(root, issue_id="1831")
         assert socket_path_budget_exceeded(tmp_dir) == (108, 107)
 

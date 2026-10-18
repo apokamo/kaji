@@ -523,10 +523,11 @@ runner は各 attempt の dispatch 前に、project root（`kaji run` では `co
   `.git` の探索）は実リポジトリを見つける。
 - path 長（Issue #508）: AF_UNIX socket の pathname は `sun_path` から終端 NUL を除いた Linux 107 /
   macOS 103 byte まで。Chrome（Playwright 等）は `TMPDIR` の後ろに
-  `/com.google.Chrome.XXXXXX/SingletonSocket`（41 byte）を足すため、`KAJI_TMP_DIR` は Linux 66 /
-  macOS 62 byte までに収める必要がある。root より後ろは `/tmp/kaji/<issue_id>/<NNNN>`（issue 番号 4 桁なら
-  19 byte）で step に依存しないため、project root に使える長さは Linux 47 / macOS 43 byte（issue 番号
-  4 桁の場合）で、成否は project root の長さだけで決まる。作成時にこの suffix を足した byte 長が上限を
+  `/com.google.Chrome.XXXXXX/SingletonSocket`（41 byte）を足すため、一般条件は
+  `len(os.fsencode(tmp_dir)) + 41 <= limit`、すなわち `KAJI_TMP_DIR` は Linux 66 / macOS 62 byte までに
+  収める必要がある。root より後ろは `/tmp/kaji/<issue_id>/<NNNN>` で step / run_id / attempt 番号に
+  依存しない。issue 番号 4 桁かつ通番 4 桁（`9999` 以下）なら 19 byte のため、project root に使える長さは
+  Linux 47 / macOS 43 byte となる（issue 番号の桁数や通番 `10000` 以降の桁増加分だけ予算は減る）。作成時にこの suffix を足した byte 長が上限を
   超えると `run.log` の `tmp_dir_path_warning` と console に警告を出し、dispatch は続ける（警告は Chrome
   基準の目安で、より長い suffix を足すツールは対象外）。
 

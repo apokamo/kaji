@@ -259,6 +259,9 @@ def _stub_gh_version(request: pytest.FixtureRequest) -> Iterator[None]:
         yield
 
 
+_PLATFORM_TEMP_BASES = [Path(p) for p in ("/tmp", "/var/tmp", "/usr/tmp")]
+
+
 def _has_project_marker_ancestor(path: Path) -> bool:
     """``path`` 自身または祖先に ``.kaji/config.toml`` か ``.git`` があれば True。"""
     return any(
@@ -277,21 +280,38 @@ def outside_project_tmp_path() -> Iterator[Path]:
     見つけてしまう。この fixture は ``TMPDIR`` / ``TMP`` / ``TEMP`` を参照しない platform 既定
     候補（POSIX は ``/tmp``）配下に作り、作成後に祖先検査を行って満たせなければ fail loud する。
     """
-    candidates = [Path(tempfile.gettempdir())]
-    candidates += [Path(p) for p in ("/tmp", "/var/tmp", "/usr/tmp")]
+    candidates = [Path(tempfile.gettempdir()), *_PLATFORM_TEMP_BASES]
+    yield from _outside_project_dir("outside_project_tmp_path", candidates, prefix="kaji-outside-")
+
+
+@pytest.fixture()
+def short_outside_project_tmp_path() -> Iterator[Path]:
+    """path 長の境界を検査する test 用の、短い project 外一時ディレクトリを返す。
+
+    Issue #508: ``outside_project_tmp_path`` は project 外なら ``tempfile.gettempdir()`` を優先するため、
+    長い外部 ``TMPDIR`` では base が長くなり byte 長を固定できない。こちらは ``TMPDIR`` / ``TMP`` /
+    ``TEMP`` を参照せず platform 既定候補（POSIX は ``/tmp``）だけを使い、prefix も短くする。
+    """
+    yield from _outside_project_dir(
+        "short_outside_project_tmp_path", _PLATFORM_TEMP_BASES, prefix="k-"
+    )
+
+
+def _outside_project_dir(fixture: str, candidates: list[Path], *, prefix: str) -> Iterator[Path]:
+    """``candidates`` のうち project 外の最初の base に一意な dir を作って yield し、終了時に削除する。"""
     base = next(
         (c for c in candidates if c.is_dir() and not _has_project_marker_ancestor(c)),
         None,
     )
     if base is None:
         pytest.fail(
-            "outside_project_tmp_path: no temp base outside any kaji project / git repo "
+            f"{fixture}: no temp base outside any kaji project / git repo "
             f"(tried: {[str(c) for c in candidates]})"
         )
-    path = Path(tempfile.mkdtemp(prefix="kaji-outside-", dir=base)).resolve()
+    path = Path(tempfile.mkdtemp(prefix=prefix, dir=base)).resolve()
     try:
         if _has_project_marker_ancestor(path):
-            pytest.fail(f"outside_project_tmp_path: {path} is inside a kaji project or git repo")
+            pytest.fail(f"{fixture}: {path} is inside a kaji project or git repo")
         yield path
     finally:
         shutil.rmtree(path, ignore_errors=True)

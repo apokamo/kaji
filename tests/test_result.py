@@ -146,7 +146,6 @@ class TestAttemptResultRoundTrip:
         assert path.exists()
 
 
-@pytest.mark.small
 class TestAttemptResultTmpDir:
     """Issue #508: ``tmp_dir`` の追加と旧形式 ``result.json`` の互換。"""
 
@@ -165,6 +164,7 @@ class TestAttemptResultTmpDir:
         "synthetic": False,
     }
 
+    @pytest.mark.medium
     def test_tmp_dir_is_last_key_and_round_trips(self, tmp_path: Path) -> None:
         result = AttemptResult(**self._LEGACY, tmp_dir="/p/tmp/kaji/508/0001")
         path = tmp_path / "result.json"
@@ -175,10 +175,12 @@ class TestAttemptResultTmpDir:
         assert loaded["tmp_dir"] == "/p/tmp/kaji/508/0001"
         assert AttemptResult(**loaded) == result
 
+    @pytest.mark.small
     def test_legacy_result_without_tmp_dir_loads_as_none(self) -> None:
         assert "tmp_dir" not in self._LEGACY
         assert AttemptResult(**self._LEGACY).tmp_dir is None
 
+    @pytest.mark.small
     def test_legacy_result_is_still_evaluated(self) -> None:
         ended_at = self._LEGACY["ended_at"]
         assert evaluate_result(dict(self._LEGACY), "PASS") == ended_at

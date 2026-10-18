@@ -270,7 +270,7 @@ class TestRunLogger:
         events = _read_events(deep_path)
         assert len(events) == 1
 
-    @pytest.mark.small
+    @pytest.mark.medium
     def test_log_step_start_records_tmp_dir(self, tmp_path: Path) -> None:
         """Issue #508: step_start に attempt 一時ディレクトリの絶対パスを記録する。"""
         logger = RunLogger(log_path=tmp_path / "run.jsonl")
@@ -284,7 +284,7 @@ class TestRunLogger:
         assert first["tmp_dir"] == "/p/tmp/kaji/508/0001"
         assert second["tmp_dir"] is None
 
-    @pytest.mark.small
+    @pytest.mark.medium
     def test_log_tmp_dir_path_warning(self, tmp_path: Path) -> None:
         """Issue #508: tmp dir が AF_UNIX socket path の上限を超えうることを記録する。"""
         logger = RunLogger(log_path=tmp_path / "run.jsonl")
