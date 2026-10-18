@@ -45,7 +45,7 @@ Step '...' uses agent 'codex' but skill 'zq-probe' is not discoverable by Codex:
    `preflight_workflow(..., project_root=repo, skill_dir=".claude/skills")` を実行する（`kaji validate` も同じ経路）
 3. OB: `errors` に `... is not discoverable by Codex: <repo>/sub/deeper/.agents/skills/review/SKILL.md not found. ...` が 1 件入る
 
-この手順は Medium の恒久回帰テストとしてそのまま固定する（テスト戦略を参照）。
+この手順を恒久回帰テストとして固定する。Medium ではファイル操作で `.git` マーカーを作り、Large（`large_local`）では実 `git init` と `kaji validate` を使う（テスト戦略を参照）。
 
 ## 根本原因（Root Cause）
 
@@ -197,8 +197,8 @@ def _find_git_repo_root(start: Path) -> Path | None:
 | canonical skill 検証 | `paths.skill_dir` の存在・メタデータ検証を維持 | Issue 本文「決定事項」3 行目、grill-me provenance「人間の決定と理由」3（人間決定、選択肢 A） | `preflight_workflow` の canonical 検証部分は変更しない。canonical 失敗時に codex エラーを重ねない既存挙動も維持 |
 | Git repo 外の workdir | 現行の workdir 直下検査を維持 | Issue 本文「決定事項」4 行目（書き戻し確認で人間が承認） | `_find_git_repo_root` が `None` のときは現行コードと同じ呼び出し・同じエラー文にする |
 | 旧い制約・テスト・文書 | Codex の実挙動と照合して更新または削除。fail-open 防止は維持 | Issue 本文「決定事項」5 行目、grill-me provenance「人間の決定と理由」4（人間決定） | 更新対象を「根本原因」の列挙に特定。`test_step_workdir_is_the_discovery_root` は Git repo 外の現行挙動を保つテストへ置き換え、Git repo 内で合格するテストを追加 |
-| repo root の判定方法 | `.git`（ディレクトリまたはファイル）が存在する最も近い祖先。`git rev-parse` は使わない | AI の仮定。根拠: Issue 本文が判定方法を設計に委ねている。gitrepository-layout / git-worktree の公式仕様で worktree・submodule は `.git` ファイルを持つ。preflight を subprocess なしに保てる。Issue 実測の worktree ケースと一致。検査先: review-design、Medium テスト（worktree ケース） | `exists()` で両形式を受け入れ、最初に見つかった階層で止める |
-| 探索の起点の正規化 | Git repo 内の探索は `workdir.resolve()` を起点にする | AI の仮定。根拠: Codex は chdir 後の実パスから探索する。symlink 境界も resolve 後のパスで比較している。検査先: review-design / review-code | Git repo 外の分岐は未正規化のまま（現行維持） |
+| repo root の判定方法 | `.git`（ディレクトリまたはファイル）が存在する最も近い祖先。`git rev-parse` は使わない | AI の仮定。根拠: Issue 本文が判定方法を設計に委ねている。gitrepository-layout / git-worktree の公式仕様で worktree・submodule は `.git` ファイルを持つ。preflight を subprocess なしに保てる。Issue 実測の worktree ケースと一致。検査先: review-design、Medium テスト（`.git` ファイル形の worktree）と Large（`large_local`）テスト（実 `git worktree add`） | `exists()` で両形式を受け入れ、最初に見つかった階層で止める（入れ子の repo では内側で止まることを Medium で検査） |
+| 探索の起点の正規化 | Git repo 内の探索は `workdir.resolve()` を起点にする | AI の仮定。根拠: Codex は chdir 後の実パスから探索する。symlink 境界も resolve 後のパスで比較している。検査先: review-design / review-code、Medium テスト（実体が別 repo にある symlink workdir） | Git repo 外の分岐は未正規化のまま（現行維持） |
 | repo 外 symlink と正しい候補が同時にある場合 | 範囲内の同名候補が 1 つでも repo 外を指せば不合格 | AI の仮定。根拠: 決定事項は repo 外 symlink を「拒否」としている。Codex が同名候補のどれを採るかは公式 docs で保証されていないため、厳しい側に倒す。誤りなら判定を緩めるだけで直せる two-way door。検査先: review-design、Medium テスト | 全候補を走査し、`SecurityError` を見つけた時点でエラーを返す |
 | エラー文の構成 | 探索範囲（workdir と repo root）と追加先の案内を含む 1 行 | AI の仮定。根拠: Issue 本文が具体的な構成を実装に委ねている。検査先: review-code | 既存テストが依存する `not discoverable by Codex` と、repo 外 symlink の `escapes workdir` 文字列は残す |
 | CHANGELOG | 本 PR では `CHANGELOG.md` を編集しない | AI の仮定。根拠: `[Unreleased]` は空で、変更点は `/release` が記載している（0.23.1 の記載例）。0.22.0 の BREAKING 記述は過去 release の記録。検査先: i-dev-final-check | — |
@@ -215,68 +215,72 @@ one-way door の未決はない。公開 CLI の引数・終了コード・出�
 
 ### 再現テスト（Red → Green）
 
-修正前に Red になる恒久回帰テストを Medium で追加する。加えて、Issue 本文の `kaji validate`
-実出力（OB）が実装前 Red の実ログにあたる。
+修正前に Red になる恒久回帰テストを追加する。Issue 本文の `kaji validate` の実出力（OB）も、実装前に Red だったことを示す実ログになる。
 
-- Git repo の root に skill symlink があり、workdir が `repo/sub/deeper` の codex step は preflight を通る
-  （現状は `not discoverable by Codex` が出るので Red）
-- 同じ構成の workflow YAML（`workdir: <repo>/sub/deeper`）で `kaji validate`（`cmd_validate`）が exit 0 になる
-  （Issue 再現手順 4 の CLI 経路）
+- Medium: `.git` マーカーをファイル操作で作った repo の root に skill symlink を置き、workdir を `repo/sub/deeper` にする。この codex step が preflight を通ること（現状は `not discoverable by Codex` が出るので Red）
+- Large（`large_local`）: 実 `git init` した repo で同じ構成の workflow YAML（`workdir: <repo>/sub/deeper`）を作り、`kaji validate`（`cmd_validate`）が exit 0 になること（Issue 再現手順 4 の CLI 経路）
+
+### テストサイズの配置方針
+
+`docs/reference/testing-size-guide.md` に従う。実 CLI を subprocess で実行するテストは Large、外部ネットワークを使わないものには `large_local` を付ける。
+
+- **Medium**: subprocess を使わない実ファイル検査。repo root の判定は `.git` の有無だけを見るので（方針を参照）、Git repo はファイル操作で作る。通常の repo は `.git/` ディレクトリを mkdir し、linked worktree / submodule の形は `gitdir: <path>` を書いた `.git` ファイルで作る（gitrepository-layout の形式）。探索範囲・symlink 境界・現行維持の観点は主にここで網羅する
+- **Large（`@pytest.mark.large` と `@pytest.mark.large_local` を併記）**: 実 `git` コマンド（`git init` / `git commit` / `git worktree add`）で作った repo と worktree を使う。ファイルで作ったマーカーが、実 Git が作る構造と一致していることを確認する。外部ネットワークと実 Codex は使わない
+- 既存テストのサイズは再分類しない。`TestRunnerStopsBeforeCodex` と `TestValidateCommandReportsCodexDiscovery` は `_make_config` の中で `git init` を呼ぶ既存の Medium テストで、今回は内容を変えずに残す（レビュー指摘でも全体の再分類は求められていない）。新しく追加するテストのうち実 Git を使うものは、すべて Large に置く
 
 ### Small テスト
 
-- 既存の `TestResolveStepWorkdir`（workdir の優先順位）を維持する
-- 新規 Small は追加しない。探索ロジックの本体は `.git` と `SKILL.md` の存在確認（ファイルシステム）であり、
-  mock で置き換えると「祖先のどこまで見るか」「symlink の境界」という回帰のポイントを検証できない。
-  これらは実ファイルを使う Medium で検証する
+- 既存の `TestResolveStepWorkdir`（workdir の優先順位）はそのまま残す
+- Small は新しく追加しない。探索ロジックの本体は `.git` と `SKILL.md` の存在確認（ファイルシステム）であり、mock で置き換えると、回帰が起きやすい「祖先のどこまで見るか」「symlink の境界」を検証できないため。これらは実ファイルを使う Medium で検証する
 
 ### Medium テスト
 
-`tests/test_codex_skill_discovery.py` で、`git init`（必要なら `git worktree add`）した一時ディレクトリと
-実ファイル・実 symlink を使う。`validate_skill_exists` は patch しない。
+`tests/test_codex_skill_discovery.py` で、一時ディレクトリに実ファイル・実 symlink・ファイル操作で作った `.git` マーカーを置いて検証する。subprocess は使わず、`validate_skill_exists` も patch しない。
 
 - **合格する配置**（完了条件 1）
   - repo root の `.agents/skills`、workdir = `repo/sub/deeper`
   - 中間ディレクトリ `repo/sub/.agents/skills`、workdir = `repo/sub/deeper`
-  - 中間ディレクトリから repo root の canonical を指す symlink（`repo/sub/.agents/skills/review -> ../../../.claude/skills/review`）。
-    候補ディレクトリではなく repo root が symlink の境界であることを確認する
-  - `git worktree add` した worktree の root にある skill、workdir = `worktree/sub/deeper`（`.git` ファイルの判定）
-  - `project_root` 外の別 Git repo に workdir がある場合、その repo の root の skill で合格する
+  - 中間ディレクトリから repo root の canonical を指す symlink（`repo/sub/.agents/skills/review -> ../../../.claude/skills/review`）。symlink の境界が候補ディレクトリではなく repo root であることを確認する
+  - root に `.git` ファイル（`gitdir: ...`）を持つ worktree 形のディレクトリで、root の skill が workdir = `wt/sub/deeper` から見つかる
+  - workdir が `project_root` 外の別 repo にあるとき、その repo の root の skill で合格する
 - **不合格になる配置**（完了条件 2）
-  - Git repo 外の親ディレクトリ（`outer/.agents/skills`、`outer/inner` が repo root）にだけ skill があり、
-    workdir = `outer/inner/sub` → 不合格
+  - repo の外にある親ディレクトリ（`outer/.agents/skills`。repo root は `outer/inner`）にだけ skill があり、workdir = `outer/inner/sub` → 不合格
   - 探索範囲のどこにもない → 不合格。エラー文に workdir・repo root・`not discoverable by Codex` を含む
-  - `project_root` には skill があるが、workdir が skill のない別 Git repo にある → 不合格（`project_root` を境界・候補に使わない）
+  - `project_root` には skill があるが、workdir は skill のない別 repo にある → 不合格（`project_root` を境界にも候補にも使わない）
+- **境界に関する仮定**（review-design の Should Fix を取り込んだもの）
+  - 入れ子の repo（`outer/` と `outer/inner/` の両方に `.git`）では、内側の root で探索が止まる。`outer/.agents/skills` にしかない場合は不合格
+  - workdir が symlink で、その実体が別 repo の中にある場合は、実体側の repo root を境界にして探索する（`workdir.resolve()` を起点にするという仮定の検査）
 - **symlink**（完了条件 3）
   - repo 内の別ディレクトリ（例 `repo/tools/skills/review`）を指す symlink → 合格
-  - repo 外を指す symlink（repo root の候補）→ 不合格、`escapes workdir` を含む（既存 `test_symlink_escaping_workdir_is_error` を Git repo 内へ移す）
-  - 中間ディレクトリの候補が repo 外を指し、repo root には正しい候補がある → 不合格（全候補走査の仮定）
-  - `..` を含む skill 名は canonical 検証で 1 エラーだけになる（既存テスト維持）
+  - repo root の候補が repo 外を指す symlink → 不合格。エラー文に `escapes workdir` を含む（既存の `test_symlink_escaping_workdir_is_error` を repo 内の構成に移す）
+  - 中間ディレクトリの候補が repo 外を指し、repo root には正しい候補がある → 不合格（全候補を走査するという仮定の検査）
+  - `..` を含む skill 名は、canonical 検証のエラー 1 件だけになる（既存テストを維持）
 - **変えない挙動**（完了条件 4）
-  - Git repo 外の workdir（`outside_project_tmp_path` 配下）: workdir 直下にあれば合格、親にしかなければ不合格。
-    既存 `test_step_workdir_is_the_discovery_root` をこの形に置き換える
-  - claude / antigravity step、`exec_script` skill、canonical 不在時にエラーを重ねない挙動、非文字列 workdir（既存テスト維持）
+  - Git repo の外にある workdir（`outside_project_tmp_path` 配下）: workdir 直下にあれば合格、親にしかなければ不合格。既存の `test_step_workdir_is_the_discovery_root` をこの形に置き換える
+  - claude / antigravity step、`exec_script` skill、canonical が無いときにエラーを重ねない挙動、非文字列の workdir（既存テストを維持）
   - `TestRunnerStopsBeforeCodex` / `TestValidateCommandReportsCodexDiscovery` の既存ケース（Codex を起動しないこと）
-- **テストの隔離**: 祖先を辿るロジックのため、Git repo を前提にするテストは必ず一時ディレクトリで
-  `git init` し、Git repo 外を前提にするテストは `outside_project_tmp_path` を使う。workflow 内の
-  `tmp_path` はリポジトリ配下にあり（#407）、そのままでは kaji 自身の `.git` と `.agents/skills` を拾うため。
-  既存 `TestCodexSkillPreflight` の `tmp_path` 直置きのケースもこの方針で書き直す
+- **テストの隔離**: 今回のロジックは祖先を辿るので、repo を前提にするテストは必ず一時ディレクトリに自前の `.git` マーカーを置く。Git repo の外を前提にするテストは `outside_project_tmp_path` を使う。workflow 内では `tmp_path` がリポジトリ配下になり（#407）、そのままでは kaji 自身の `.git` と `.agents/skills` を拾ってしまうため。既存の `TestCodexSkillPreflight` で `tmp_path` に直接置いているケースも、この方針で書き直す
 
 ### Large テスト
 
-追加しない。理由（`docs/dev/testing-convention.md` の観点）:
+`tests/test_codex_skill_discovery.py` に `@pytest.mark.large` と `@pytest.mark.large_local` を併記したクラスを追加する。実 `git` を subprocess で呼ぶが、外部ネットワークと実 Codex は使わない。
 
-1. 今回変えるのは kaji 側の「どのファイルを確認するか」というファイルシステム検査で、Medium で実ファイルを使って完全に再現できる
-2. Codex 自身の解決範囲は外部ツールの仕様で、公式 docs と Issue #489 の codex-cli 0.163.0 実測表が根拠になっている。
-   実 Codex を呼ぶテストは Codex の挙動（LLM 応答と認証）を検証することになり、kaji の回帰検出の情報はほとんど増えない
-3. preflight は Codex を起動する前に完結するので、実 API 疎通がなくても誤合格・誤不合格の回帰は Medium で検出できる
-4. 上記の理由はこの節でレビューできる
+- 実 `git init` した repo で、root に skill symlink を置き workdir を `repo/sub/deeper` にした workflow YAML に `kaji validate`（`cmd_validate`）を実行し、exit 0 になる（再現テストの CLI 経路）
+- 実 `git worktree add` で作った linked worktree で、worktree の root にある skill が workdir = `worktree/sub/deeper` から見つかる。実 Git が作る `.git` ファイルを repo root として判定できることを確認する
+- 実 `git init` した別 repo（`project_root` の外）にある workdir で、その repo の root の skill によって合格する
+- 実 `git init` した repo で skill がどこにもない場合、`kaji validate` が 0 以外で終了し、`not discoverable by Codex` を出力する
+
+実 Codex を呼ぶテストは追加しない。理由:
+
+1. 今回変えるのは kaji 側の「どのファイルを確認するか」という検査で、上記の Medium と Large（実 Git）で再現できる
+2. Codex 自身の解決範囲は外部ツールの仕様で、根拠は公式 docs と Issue #489 の codex-cli 0.163.0 実測表にある。実 Codex を呼ぶテストは Codex の挙動（LLM の応答と認証）を検証することになり、kaji の回帰検出の情報はほとんど増えない
+3. preflight は Codex を起動する前に終わるので、誤った合格・不合格の回帰は Codex なしで検出できる
+
+`make check` の `test` ターゲットは marker で絞らずに `pytest` を実行するので、追加する Large（`large_local`）も含めて実行される。`make test-large-local` で個別に実行することもできる。
 
 ### 長時間 acceptance の配置
 
-該当なし。追加する検証は `pytest` の Medium テストと `make check` だけで、nested `kaji run`、
-外部 agent を使う dogfood、fresh 環境での繰り返し acceptance はない。いずれも 1 回あたり
-implement step の timeout の 25% を大きく下回る。
+該当なし。追加する検証は、`pytest` の Medium テストと Large（`large_local`。ローカルの `git init` / `git worktree add` だけで、1 件あたり数秒程度）と `make check` だけ。nested `kaji run`、外部 agent を使う dogfood、fresh 環境での繰り返し acceptance は含まない。どれも 1 回の所要時間が implement step の timeout の 25% を大きく下回る。
 
 ## 影響ドキュメント
 
@@ -308,4 +312,5 @@ implement step の timeout の 25% を大きく下回る。
 | テスト用 tmp の隔離 | tests/conftest.py `outside_project_tmp_path`（#407） | workflow 内の `tmp_path` は `TMPDIR` によりリポジトリ配下になるため、git 外を前提にするテストは専用 fixture を使う |
 | Git: gitrepository-layout | https://git-scm.com/docs/gitrepository-layout | 作業ツリーの `.git` は、リポジトリのディレクトリか、実体を指す `gitdir: <path>` を書いたファイルのどちらか（worktree・submodule で使う） |
 | Git: git-worktree | https://git-scm.com/docs/git-worktree | linked worktree は作業ツリーの root に `.git` ファイルを持ち、`$GIT_DIR/worktrees/<id>` を指す |
-| テスト規約 | docs/dev/testing-convention.md | サイズ判定（ファイル I/O は Medium）、Large を省略するときの説明の要件 |
+| テスト規約 | docs/dev/testing-convention.md | サイズ判定（ファイル I/O は Medium）、恒久テストを省略するときに示す理由の要件 |
+| テストサイズ判断ガイド | docs/reference/testing-size-guide.md | 「実際の CLI コマンドを subprocess で実行」は Large。subprocess あり・外部ネットワークなしは `large_local` を併記する。実 `git` を使うテストを Large に置く根拠 |
