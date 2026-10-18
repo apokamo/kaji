@@ -81,8 +81,14 @@ def _write(self, event: str, **kwargs: Any) -> None:
 
 ### Pydantic モデル（外部入力・artifact）
 
-未知フィールドは `extra="forbid"` で拒否し、ファイルから読む場合は `model_validate_json()` で
-読み込みと検証を一度に行う。
+未知フィールドは `extra="forbid"` で拒否する。入力形式に応じて検証メソッドを使い分ける。
+
+- JSON 文字列（JSON artifact / state ファイルなど）: `model_validate_json()` でパースと検証を一度に行う
+- YAML: `model_validate_json()` は JSON 専用で YAML を受理しないため、`yaml.safe_load()` で
+  パースした結果を `model_validate()` に渡す（例: `kaji_harness/series/loader.py` の `SeriesConfig`）
+- パース済みの Python オブジェクト（`json.loads()` の結果など）: `model_validate()`
+
+以下は JSON artifact を読む例。
 
 ```python
 from __future__ import annotations
