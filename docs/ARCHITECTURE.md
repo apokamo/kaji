@@ -533,6 +533,7 @@ runner は各 attempt の dispatch 前に、project root（`kaji run` では `co
 
 - 読み手は `result.json` の **欠落を許容**する（旧 run / best-effort 書き出し前に死んだ attempt）。verdict 解決（`resolve_verdict`）は `result.json` に依存しないため、旧 run に無くても影響しない（migration 不要）。
 - `synthetic` は末尾に default 付きで追加されたフィールド。旧 `result.json`（キーなし）は `false` として読める。
+- `ended_at` は attempt 終了時刻であり、判定時刻・`verdict.yaml` 保存時刻ではない（正常経路では verdict 解決後に記録されるため判定の上界になる）。`verdict.yaml` 自体は時刻を持たず、artifact 由来の判定の新旧比較は `kaji issue resolve-verdict` が出力する `ended_at` で行う。時刻追加を見送る理由と再検討条件は [ADR 012](adr/012-verdict-yaml-no-timestamp.md)。
 - `run.log` の `step_start` / `step_end` には `attempt` が付与され、`step_end` は `exit_code` / `signal` も持つ（異常終了経路でも合成 `ABORT` verdict で発火）。詳細は [`docs/reference/python/logging.md`](reference/python/logging.md)。
 
 #### `recovery.json` / `recovery-chain.json`（failure triage, Issue #288）
