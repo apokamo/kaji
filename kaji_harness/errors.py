@@ -245,7 +245,8 @@ class WorkdirNotFoundError(HarnessError):
 class TmpDirPreparationError(HarnessError):
     """attempt 固有の一時作業ディレクトリ（``tmp/kaji/...``）を用意できない。
 
-    component 検査違反・``OSError``・既存 dir との衝突・境界不変条件違反を表す。
+    component 検査違反・``OSError``・境界不変条件違反を表す。番号の衝突
+    （``FileExistsError``）は次の番号で再試行するためエラーにならない（Issue #508）。
     dispatch 前に送出され、dispatch は行われない。
     """
 

@@ -235,7 +235,7 @@ def test_exec_step_child_uses_attempt_tmp_dir(tmp_path: Path) -> None:
 
     run_dir = _run_kaji(repo, outer_tmp)
 
-    expected = repo.resolve() / "tmp" / "kaji" / "99" / run_dir.name / "collect" / "attempt-001"
+    expected = repo.resolve() / "tmp" / "kaji" / "99" / "0001"
     attempt = run_dir / "steps" / "collect" / "attempt-001"
     record = json.loads((attempt / "exec-record.json").read_text())
     _assert_record_in_attempt_tmp(record, expected)
@@ -271,7 +271,7 @@ def test_headless_agent_child_uses_attempt_tmp_dir(tmp_path: Path) -> None:
 
     run_dir = _run_kaji(repo, outer_tmp, extra_path=_install_fake_claude(tmp_path))
 
-    expected = repo.resolve() / "tmp" / "kaji" / "99" / run_dir.name / "implement" / "attempt-001"
+    expected = repo.resolve() / "tmp" / "kaji" / "99" / "0001"
     attempt = run_dir / "steps" / "implement" / "attempt-001"
     record = json.loads((attempt / "fake-agent-record.json").read_text())
     _assert_record_in_attempt_tmp(record, expected)

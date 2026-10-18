@@ -1,12 +1,14 @@
-"""Issue #407: attempt tmp dir の 4 変数が各 dispatch 経路へ伝播することを検証する。
+"""Issue #407 / #508: attempt tmp dir の 4 変数が各 dispatch 経路へ伝播することを検証する。
 
 - small: ``_build_wrapper_command`` の ``env`` 前置
 - medium: ``execute_cli`` / ``execute_exec`` の実 subprocess、``WorkflowRunner`` の dispatch 配線
+- medium（Issue #508）: Issue 内通番 layout、``tmp_dir`` の記録、path 長警告
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shlex
 import stat
@@ -21,7 +23,7 @@ import pytest
 
 from kaji_harness.cli import execute_cli
 from kaji_harness.config import KajiConfig
-from kaji_harness.errors import TmpDirPreparationError
+from kaji_harness.errors import ScriptExecutionError, TmpDirPreparationError
 from kaji_harness.interactive_terminal_common import _build_wrapper_command
 from kaji_harness.models import CLIResult, Step, Workflow
 from kaji_harness.providers.base import Comment
@@ -77,11 +79,11 @@ class TestBuildWrapperCommandEnv:
         assert len(shlex.split(without)) == 11  # wrapper + 10 positional args
 
     def test_env_prefix_precedes_wrapper_and_its_args(self) -> None:
-        env = build_tmp_env(Path("/p/tmp/kaji/1/r/s/attempt-001"))
+        env = build_tmp_env(Path("/p/tmp/kaji/1/0001"))
         command = _build_wrapper_command(Path("/pkg/wrapper.sh"), env=env, **_WRAPPER_KWARGS)
         argv = shlex.split(command)
         assert argv[0] == "env"
-        assert argv[1:5] == [f"{k}=/p/tmp/kaji/1/r/s/attempt-001" for k in _TMP_VARS]
+        assert argv[1:5] == [f"{k}=/p/tmp/kaji/1/0001" for k in _TMP_VARS]
         assert argv[5] == "/pkg/wrapper.sh"
         legacy = shlex.split(_build_wrapper_command(Path("/pkg/wrapper.sh"), **_WRAPPER_KWARGS))
         assert argv[5:] == legacy
@@ -248,16 +250,15 @@ def _make_runner(config: KajiConfig, tmp_path: Path, step: Step) -> WorkflowRunn
     )
 
 
-def _assert_attempt_env(env: dict[str, str], project_root: Path, step_id: str) -> None:
+def _assert_attempt_env(env: dict[str, str], project_root: Path) -> None:
+    """Issue #508: 4 変数が ``<project_root>/tmp/kaji/<issue_id>/<NNNN>`` を指す。"""
     values = {env[name] for name in _TMP_VARS}
     assert len(values) == 1
     value = values.pop()
     path = Path(value)
     assert path.is_absolute()
     assert path.is_dir(), "tmp dir must exist at dispatch time"
-    assert path.is_relative_to(project_root.resolve() / "tmp")
-    assert path.parent.name == step_id
-    assert path.name == "attempt-001"
+    assert path == project_root.resolve() / "tmp" / "kaji" / "99" / "0001"
     assert os.path.normpath(value) == value
 
 
@@ -277,7 +278,7 @@ class TestRunnerDispatchWiring:
             runner.run()
 
         env = captured["env"]
-        _assert_attempt_env(env, tmp_path, "collect")
+        _assert_attempt_env(env, tmp_path)
         assert env["KAJI_STEP_ID"] == "collect"  # 既存 context env は維持される
 
     def test_exec_script_step_receives_four_variables(self, tmp_path: Path) -> None:
@@ -298,7 +299,7 @@ class TestRunnerDispatchWiring:
         ):
             runner.run()
 
-        _assert_attempt_env(captured["env"], tmp_path, "poll")
+        _assert_attempt_env(captured["env"], tmp_path)
 
     def test_headless_agent_receives_only_four_variables(self, tmp_path: Path) -> None:
         step = Step(id="design", skill="plain", agent="claude", on={"PASS": "end"})
@@ -320,7 +321,7 @@ class TestRunnerDispatchWiring:
 
         env = captured["env"]
         assert set(env) == set(_TMP_VARS)
-        _assert_attempt_env(env, tmp_path, "design")
+        _assert_attempt_env(env, tmp_path)
 
     @pytest.mark.parametrize("backend", ["tmux", "herdr"])
     def test_interactive_agent_receives_four_variables(self, tmp_path: Path, backend: str) -> None:
@@ -348,7 +349,7 @@ class TestRunnerDispatchWiring:
             runner.run()
 
         assert set(captured["env"]) == set(_TMP_VARS)
-        _assert_attempt_env(captured["env"], tmp_path, "design")
+        _assert_attempt_env(captured["env"], tmp_path)
 
     def test_prepare_failure_prevents_dispatch(self, tmp_path: Path) -> None:
         (tmp_path / "tmp").write_text("blocking regular file")
@@ -411,6 +412,148 @@ class TestRunnerDispatchWiring:
 
         assert len(seen) == 2
         assert seen[0] != seen[1]
-        assert seen[0].endswith("attempt-001")
-        assert seen[1].endswith("attempt-002")
+        assert seen[0] == str(tmp_path.resolve() / "tmp" / "kaji" / "99" / "0001")
+        assert seen[1] == str(tmp_path.resolve() / "tmp" / "kaji" / "99" / "0002")
         assert tempfile.gettempdir() != seen[0]  # test プロセス自体の env は変更されない
+
+
+def _run_dir(tmp_path: Path) -> Path:
+    run_dirs = list((tmp_path / ".kaji-artifacts" / "99" / "runs").iterdir())
+    assert len(run_dirs) == 1
+    return run_dirs[0]
+
+
+def _run_log_events(tmp_path: Path, event: str) -> list[dict[str, Any]]:
+    lines = (_run_dir(tmp_path) / "run.log").read_text(encoding="utf-8").splitlines()
+    return [e for e in map(json.loads, lines) if e["event"] == event]
+
+
+def _pass_exec(seen: list[str]) -> Any:
+    def fake_exec(**kwargs: Any) -> CLIResult:
+        seen.append(kwargs["env"]["KAJI_TMP_DIR"])
+        Path(kwargs["env"]["KAJI_VERDICT_PATH"]).write_text(_PASS_YAML)
+        return CLIResult(full_output="")
+
+    return fake_exec
+
+
+@pytest.mark.medium
+class TestTmpDirLayoutRecordAndWarning:
+    """Issue #508: Issue 内通番 layout・``tmp_dir`` の記録・path 長警告。"""
+
+    def test_path_length_does_not_depend_on_step_run_or_attempt(self, tmp_path: Path) -> None:
+        long_id = "review-change-with-a-considerably-long-step-identifier"
+        steps = [
+            Step(id="a", exec=["true"], on={"PASS": long_id}),
+            Step(id=long_id, exec=["true"], on={"RETRY": long_id, "PASS": "end"}),
+        ]
+        workflow = Workflow(name="t", description="", execution_policy="auto", steps=steps)
+        runner = WorkflowRunner(
+            workflow=workflow,
+            issue_number=99,
+            project_root=tmp_path,
+            artifacts_dir=tmp_path / ".kaji-artifacts",
+            config=_make_config(tmp_path),
+        )
+        seen: list[str] = []
+
+        def fake_exec(**kwargs: Any) -> CLIResult:
+            seen.append(kwargs["env"]["KAJI_TMP_DIR"])
+            status = "RETRY" if len(seen) == 2 else "PASS"
+            Path(kwargs["env"]["KAJI_VERDICT_PATH"]).write_text(
+                f"status: {status}\nreason: r\nevidence: e\nsuggestion: ''\n"
+            )
+            return CLIResult(full_output="")
+
+        def long_run_dir(runs_dir: Path, timestamp: Any = None) -> Path:
+            run_dir = runs_dir / "261018213458-002"
+            run_dir.mkdir(parents=True)
+            return run_dir
+
+        with (
+            patch("kaji_harness.runner.allocate_run_dir", side_effect=long_run_dir),
+            patch("kaji_harness.runner.execute_exec", side_effect=fake_exec),
+        ):
+            runner.run()
+
+        base = tmp_path.resolve() / "tmp" / "kaji" / "99"
+        assert seen == [str(base / "0001"), str(base / "0002"), str(base / "0003")]
+        assert len({len(value) for value in seen}) == 1
+        assert (_run_dir(tmp_path) / "steps" / long_id / "attempt-002").is_dir()
+
+    def test_step_start_and_result_json_record_tmp_dir(self, tmp_path: Path) -> None:
+        step = Step(id="collect", exec=["true"], on={"PASS": "end"})
+        runner = _make_runner(_make_config(tmp_path), tmp_path, step)
+        seen: list[str] = []
+
+        with patch("kaji_harness.runner.execute_exec", side_effect=_pass_exec(seen)):
+            runner.run()
+
+        (start,) = _run_log_events(tmp_path, "step_start")
+        assert start["tmp_dir"] == seen[0]
+        result_path = _run_dir(tmp_path) / "steps" / "collect" / "attempt-001" / "result.json"
+        assert json.loads(result_path.read_text())["tmp_dir"] == seen[0]
+
+    def test_dispatch_failure_result_json_records_tmp_dir(self, tmp_path: Path) -> None:
+        step = Step(id="collect", exec=["true"], on={"PASS": "end"})
+        runner = _make_runner(_make_config(tmp_path), tmp_path, step)
+        seen: list[str] = []
+
+        def failing_exec(**kwargs: Any) -> CLIResult:
+            seen.append(kwargs["env"]["KAJI_TMP_DIR"])
+            raise ScriptExecutionError("collect", "true", 2, "boom")
+
+        with patch("kaji_harness.runner.execute_exec", side_effect=failing_exec):
+            with pytest.raises(ScriptExecutionError):
+                runner.run()
+
+        result_path = _run_dir(tmp_path) / "steps" / "collect" / "attempt-001" / "result.json"
+        result = json.loads(result_path.read_text())
+        assert result["synthetic"] is True
+        assert result["tmp_dir"] == seen[0]
+
+    def test_over_budget_warns_and_dispatch_continues(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        step = Step(id="collect", exec=["true"], on={"PASS": "end"})
+        runner = _make_runner(_make_config(tmp_path), tmp_path, step)
+        seen: list[str] = []
+        checked: list[Path] = []
+
+        def over_budget(tmp_dir: Path) -> tuple[int, int]:
+            checked.append(tmp_dir)
+            return (120, 107)
+
+        with (
+            caplog.at_level(logging.WARNING, logger="kaji.runner"),
+            patch("kaji_harness.runner.socket_path_budget_exceeded", side_effect=over_budget),
+            patch("kaji_harness.runner.execute_exec", side_effect=_pass_exec(seen)),
+        ):
+            state = runner.run()
+
+        assert checked == [Path(seen[0])]
+        (warning,) = _run_log_events(tmp_path, "tmp_dir_path_warning")
+        assert warning["step_id"] == "collect"
+        assert warning["tmp_dir"] == seen[0]
+        assert warning["socket_path_length"] == 120
+        assert warning["limit"] == 107
+        messages = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert any(seen[0] in message and "120 > 107" in message for message in messages)
+        (end,) = _run_log_events(tmp_path, "step_end")
+        assert end["verdict"]["status"] == "PASS"
+        assert state.last_transition_verdict is not None
+        assert state.last_transition_verdict.status == "PASS"
+
+    def test_within_budget_emits_no_warning(self, tmp_path: Path) -> None:
+        step = Step(id="collect", exec=["true"], on={"PASS": "end"})
+        runner = _make_runner(_make_config(tmp_path), tmp_path, step)
+        seen: list[str] = []
+
+        with (
+            patch("kaji_harness.runner.socket_path_budget_exceeded", return_value=None),
+            patch("kaji_harness.runner.execute_exec", side_effect=_pass_exec(seen)),
+        ):
+            runner.run()
+
+        assert seen
+        assert _run_log_events(tmp_path, "tmp_dir_path_warning") == []

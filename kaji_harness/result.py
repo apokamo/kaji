@@ -63,6 +63,10 @@ class AttemptResult:
     except 経路）か、agent の正規 ABORT verdict かを ``result.json`` 単体で区別する
     ための直交属性。末尾に default 付きで追加するため、旧形式 ``result.json``
     （``synthetic`` キーなし）の読み込みは default ``False`` で互換を保つ。
+
+    Issue #508: ``tmp_dir`` は attempt tmp dir（``KAJI_TMP_DIR``）の絶対パス。path が
+    step を表さない layout になったため、どの attempt の dir かを辿る記録として残す。
+    同じく末尾 default 付きで、旧形式（``tmp_dir`` キーなし）は ``None`` で読める。
     """
 
     step_id: str
@@ -77,6 +81,7 @@ class AttemptResult:
     dispatch: str
     error: str | None = None
     synthetic: bool = False
+    tmp_dir: str | None = None
 
 
 def write_result_json(path: Path, result: AttemptResult) -> None:
