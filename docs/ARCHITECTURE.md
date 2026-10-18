@@ -516,7 +516,11 @@ runner は各 attempt の dispatch 前に、project root（`kaji run` では `co
   environment を継承するため。Herdr も同じ command を launcher の `exec env PATH=... <command>` に埋める）。
   親環境から継承した同名変数は attempt 固有値で上書きされる。agent 経路へ渡すのはこの 4 変数のみ。
 - 作成に失敗した場合（`OSError`・不正な path component）は `TmpDirPreparationError` で
-  dispatch せずに失敗する。作成した dir は自動削除しない。
+  dispatch せずに失敗する。
+- 削除（Issue #509）: runner は作成した dir を削除しない。Issue 単位の `tmp/kaji/<issue_id>/` は
+  `issue-close` が Issue close 後に削除する（harness 経由では close step 自身の attempt dir とそこへ至る
+  親 dir を残す）。それ以外の契機や保持期間による削除はない。手順と安全条件の正本は
+  `.claude/skills/issue-close/SKILL.md` § Step 5.6。
 - 強制力はない。標準 temp API（`tempfile` / `mktemp` / Node `os.tmpdir()` 等）を誘導するだけで、明示的な
   `/tmp` 書き込みや環境変数を参照しないツールは対象外。
 - 注意: 一時ディレクトリがリポジトリ内になるため、そこを起点に親方向を探索する処理（`.kaji/config.toml` /

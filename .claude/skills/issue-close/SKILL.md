@@ -1,12 +1,12 @@
 ---
-description: イシュー完了時に使用。PRマージ・worktree削除・ブランチ安全削除を一括実行
+description: イシュー完了時に使用。PRマージ・worktree削除・ブランチ安全削除・Issue の一時作業ディレクトリ削除を一括実行
 name: issue-close
 ---
 
 # Issue Close
 
 イシュー対応完了後のクリーンアップを実行します。
-PR マージ、worktree 削除、ブランチ削除、Issue クローズを一括実行します。
+PR マージ、worktree 削除、ブランチ削除、Issue クローズ、Issue の一時作業ディレクトリ削除を一括実行します。
 
 ## いつ使うか
 
@@ -61,7 +61,7 @@ $ARGUMENTS = <issue_id>
 ## 実行手順
 
 Step 1〜6 を順に実行する（`kaji pr merge` / worktree 削除 / branch 削除 /
-`git pull` / `kaji issue close` / 報告）。
+`git pull` / `kaji issue close` / `tmp/kaji/[issue_id]/` 削除 / 報告）。
 
 ## 共通: ワークフロー完了後の確認項目の移管
 
@@ -546,9 +546,131 @@ kaji issue close [issue_id] --reason completed
 >
 > **重要**: `kaji issue close` が失敗した場合は verdict を **ABORT** にすること。Issue が未クローズのまま残ることは許容しない。
 
+### Step 5.6: Issue の一時作業ディレクトリ削除
+
+Step 5.5 で Issue をクローズできた場合だけ、その Issue の一時作業ディレクトリ
+`<main checkout>/tmp/kaji/[issue_id]/`（runner が attempt ごとに作る `KAJI_TMP_DIR` の親。
+正本: [`docs/ARCHITECTURE.md`](../../../docs/ARCHITECTURE.md) § attempt 固有の一時作業ディレクトリ）を削除する。
+Step 5.5 までに ABORT した場合は実行しない（調査用に残す）。
+
+- 基点は `git worktree list --porcelain` のうち `branch refs/heads/[default_branch]` を持つ checkout
+  （ちょうど 1 件）。Step 2 の `$MAIN_REPO` は使わない（bare 構成では `.bare` になるため）
+- harness 経由では、実行中の close step 自身の `$KAJI_TMP_DIR` と、Issue dir からそこへ至る親 dir を残し、
+  それ以外を削除する。手動起動（`KAJI_TMP_DIR` 未設定）では Issue dir ごと削除する
+- 安全条件を満たさない場合は何も削除しない: `issue_id` が数字以外、default branch の checkout を 1 件に
+  特定できない、`tmp` / `tmp/kaji` / `tmp/kaji/[issue_id]` のいずれかが symlink または dir でない、
+  `KAJI_TMP_DIR` が設定済みなのに解決できない・Issue dir 自身またはその祖先を指す、harness 経由なのに
+  `KAJI_TMP_DIR` が未設定
+- 削除の失敗・スキップで close 全体を **ABORT にしない**。結果を記録して Step 6 へ進む
+
+ブロックの冒頭 3 行のプレースホルダーを実値に置き換えて実行する。`[close_via_harness]` は、プロンプトに
+`[verdict_path]` がある（Step 2.5.1 と同じ判定）なら `1`、ない手動起動なら `0` にする。
+cwd は main checkout など repo 内の既存 dir にする（Step 4 で削除した worktree 内では git が失敗し、
+スキップになる）。本体は POSIX sh で実行する（GNU / BSD 両対応。`realpath` / `readlink -f` を使わない）。
+
+```sh
+# kaji-issue-tmp-cleanup
+ISSUE_ID='[issue_id]' \
+DEFAULT_BRANCH='[default_branch]' \
+CLOSE_VIA_HARNESS='[close_via_harness]' \
+sh -s <<'KAJI_TMP_CLEANUP_EOF'
+cleanup() {
+  case $ISSUE_ID in
+    '' | *[!0123456789]*) RESULT="スキップ（issue_id が数字でない: $ISSUE_ID）"; return ;;
+  esac
+  case $CLOSE_VIA_HARNESS in
+    0 | 1) ;;
+    *) RESULT="スキップ（CLOSE_VIA_HARNESS が 0 / 1 でない）"; return ;;
+  esac
+  MAINS=$(git worktree list --porcelain 2>/dev/null | awk -v ref="branch refs/heads/$DEFAULT_BRANCH" '
+    /^worktree / { wt = substr($0, 10) }
+    $0 == ref { print wt }')
+  case $MAINS in
+    '') RESULT="スキップ（$DEFAULT_BRANCH の checkout が見つからない）"; return ;;
+    *"$NL"*) RESULT="スキップ（$DEFAULT_BRANCH の checkout が複数ある）"; return ;;
+  esac
+  # 基点は default branch checkout の物理パスだけを信頼し、下の各段は実 dir であることを要求する
+  BASE=$(CDPATH= cd -P -- "$MAINS" 2>/dev/null && pwd -P) || {
+    RESULT="スキップ（main checkout を解決できない: $MAINS）"; return
+  }
+  TARGET=$BASE/tmp/kaji/$ISSUE_ID
+  if [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ]; then RESULT="対象なし"; return; fi
+  for p in "$BASE/tmp" "$BASE/tmp/kaji" "$TARGET"; do
+    if [ -L "$p" ] || [ ! -d "$p" ]; then
+      RESULT="スキップ（symlink または dir でない: $p）"; return
+    fi
+  done
+  TARGET_REAL=$(CDPATH= cd -P -- "$TARGET" 2>/dev/null && pwd -P)
+  if [ "$TARGET_REAL" != "$TARGET" ]; then
+    RESULT="スキップ（物理パスが一致しない: $TARGET）"; return
+  fi
+  KEEP=""
+  if [ -n "${KAJI_TMP_DIR+set}" ]; then
+    KEEP=$( [ -n "$KAJI_TMP_DIR" ] && CDPATH= cd -P -- "$KAJI_TMP_DIR" 2>/dev/null && pwd -P) || {
+      RESULT="スキップ（KAJI_TMP_DIR を解決できない: $KAJI_TMP_DIR）"; return
+    }
+    case $TARGET/ in
+      "${KEEP%/}"/*) RESULT="スキップ（KAJI_TMP_DIR が Issue dir 自身または祖先: $KEEP）"; return ;;
+    esac
+    case $KEEP in
+      "$TARGET"/*) ;;
+      *) KEEP="" ;;   # Issue dir の外なので影響しない
+    esac
+  elif [ "$CLOSE_VIA_HARNESS" = 1 ]; then
+    RESULT="スキップ（harness 経由なのに KAJI_TMP_DIR が未設定）"; return
+  fi
+  # KEEP の祖先を Issue dir から 1 段ずつ辿り、各段で次の祖先以外の子を消す
+  FAILED=""
+  DIR=$TARGET
+  while :; do
+    NEXT=""
+    if [ -n "$KEEP" ]; then
+      REST=${KEEP#"$DIR"/}
+      NEXT=$DIR/${REST%%/*}
+    fi
+    for child in "$DIR"/* "$DIR"/.[!.]* "$DIR"/..?*; do
+      if [ ! -e "$child" ] && [ ! -L "$child" ]; then continue; fi
+      [ "$child" = "$NEXT" ] && continue
+      rm -rf -- "$child" || FAILED="$FAILED${FAILED:+, }$child"
+    done
+    if [ -z "$NEXT" ] || [ "$NEXT" = "$KEEP" ]; then break; fi
+    DIR=$NEXT
+  done
+  if [ -z "$KEEP" ] && [ -z "$FAILED" ]; then
+    rmdir -- "$TARGET" || FAILED=$TARGET
+  fi
+  if [ -n "$FAILED" ]; then
+    RESULT="一部削除失敗（要手動対応: $FAILED）"
+  elif [ -n "$KEEP" ]; then
+    RESULT="削除済み（実行中 attempt dir を保持: $KEEP）"
+  else
+    RESULT="削除済み"
+  fi
+}
+NL='
+'
+RESULT=""
+cleanup
+printf 'TMP_CLEANUP_RESULT=%s\n' "$RESULT"
+exit 0
+KAJI_TMP_CLEANUP_EOF
+```
+
+> **結果を記録**: `tmp_cleanup_result` = 出力された `TMP_CLEANUP_RESULT=` の値。この値は Step 6 で使用する。
+>
+> | 値 | 意味 |
+> |----|------|
+> | `削除済み` | Issue dir を丸ごと削除した（手動起動、または `KAJI_TMP_DIR` が Issue dir の外） |
+> | `削除済み（実行中 attempt dir を保持: <path>）` | 実行中 attempt dir とその親 dir 以外を削除した |
+> | `対象なし` | `tmp/kaji/[issue_id]` が存在しない |
+> | `スキップ（<理由>）` | 安全条件を満たさず何も削除していない |
+> | `一部削除失敗（要手動対応: <path>）` | 一部の削除に失敗した。記載の path を手動で確認する |
+>
+> どの値でも verdict は変えない（ブロックは常に exit 0）。
+
 ### Step 6: 完了報告
 
-Step 3〜5.5 の結果を使って、**stdout への報告**と **Issue タイムラインへのコメント投稿**の両方を行う。
+Step 3〜5.6 の結果を使って、**stdout への報告**と **Issue タイムラインへのコメント投稿**の両方を行う。
 
 #### 6a. Issue コメント投稿
 
@@ -567,6 +689,7 @@ kaji issue comment [issue_id] --commit --body-file - <<'COMMENT_EOF'
 | main | [pull_result] |
 | follow-up Issue | [follow_up_result] |
 | Issue | [close_result] |
+| 一時ディレクトリ | [tmp_cleanup_result] |
 COMMENT_EOF
 
 ```
@@ -590,6 +713,7 @@ COMMENT_EOF
 | main | [pull_result] |
 | follow-up Issue | [follow_up_result] |
 | Issue 状態 | [close_result] |
+| 一時ディレクトリ | [tmp_cleanup_result] |
 ```
 
 ## Verdict 出力
@@ -602,7 +726,7 @@ status: PASS
 reason: |
   クローズ完了
 evidence: |
-  事後確認の移管要否を確認し、必要な follow-up Issue の作成または再利用と親マーカー追記を完了した。PR マージ・worktree 削除・main 最新化・Issue クローズ済み
+  事後確認の移管要否を確認し、必要な follow-up Issue の作成または再利用と親マーカー追記を完了した。PR マージ・worktree 削除・main 最新化・Issue クローズ済み。一時ディレクトリ: [tmp_cleanup_result]
 suggestion: |
 ---END_VERDICT---
 ```
@@ -615,3 +739,5 @@ suggestion: |
 |--------|------|
 | PASS | クローズ完了 |
 | ABORT | review-poll 承認証跡の欠落・不変条件違反・現在の PR との不一致・`--match-head-commit` による merge 拒否、follow-up 作成・再利用・親マーカー追記の失敗（マーカー参照先が close 済みの場合を含む）、またはクローズ失敗（`kaji issue close` 失敗を含む） |
+
+Step 5.6 の一時ディレクトリ削除の結果（スキップ・一部削除失敗を含む）は status に影響しない。
