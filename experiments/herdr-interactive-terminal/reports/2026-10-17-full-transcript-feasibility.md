@@ -21,9 +21,11 @@ Issue: #476（親: #466）
   動くため、agent の終了後に `pane read` しても会話の痕跡は残らない。Claude で残ったのは
   `Resume this session with:` の 2 行だけだった。異常終了時の provider error 診断（#296 / #403）は、
   Herdr backend ではほぼ機能しない。
-- **推奨する次の手:** wrapper 側の PTY recorder を実装する Issue を起票する。Herdr 由来の情報の扱いと
-  opt-in にするかどうかは、人間が判断する。それとは別に、小さな修正（1000 行の上限と `truncated` の記録）を
-  別 Issue にする。Herdr upstream への要望は既に出ている（Discussion #3643）ので、kaji は待たない。
+- **次の手:** 新しい Issue は起票しない。調査結果は #466 の子 Issue B（tmux の削除）で反映する。具体的には、
+  docs と ADR 007 に書く snapshot の上限を実際の 1000 行に直し、alternate screen を使う agent では終了後に
+  会話がほとんど残らないことを制限事項として明記する。PTY recorder は B に含めず、完全な transcript が
+  必要になったときの選択肢として本報告書に残す。Herdr upstream への要望は既に出ている（Discussion #3643）
+  ので、kaji は待たない。
 
 ## 調査環境
 
@@ -252,7 +254,7 @@ v2 が `script(1)` を外したのは、util-linux と BSD の構文が違うた
 v2 は pipe-pane を「terminal multiplexer が提供する、OS に依存しない記録」として採った。Herdr にはその代わりが
 ないので、kaji が自分で PTY を中継するのが、移植性の点では v2 と同じ水準の解になる。
 
-### 実装時のリスク（実装 Issue で決めること）
+### 実装時のリスク（recorder を採るときに設計で決めること）
 
 1. **Herdr の agent 検出**（実測）。recorder に `HERDR_AGENT=<manifest 名>`（`claude` / `codex` / `agy`）を
    付ければ、3 agent とも idle / working / blocked / done の遷移と履歴回収が直接起動と同じになる
@@ -336,31 +338,36 @@ main screen で描画される（<https://code.claude.com/docs/en/fullscreen>）
 | D. `pane read` を短い間隔で poll して差分を積み上げる | ✗（1000 行を超える burst、alternate screen、`\e[3J` を取りこぼす。observe の実測と同じ構造） | ◎ | ◎ | ◎ | 中 | 却下 |
 | E. `terminal session observe` を記録する | ✗（実測 37/3000 行） | ◎ | ◎ | ◎ | 中 | 却下 |
 | F. util-linux の `script` | ◎ | ◎ | ✗（macOS） | ○（推定: recorder と同じく `HERDR_AGENT` で回避できる） | 小 | 却下（macOS） |
-| **G. kaji 所有の Python PTY recorder** | **◎（実測で欠落 0）** | **◎（実測）** | **○（macOS 実機は未検証）** | **○（`HERDR_AGENT` ヒントで、3 agent とも状態遷移と履歴回収が直接起動と一致することを実測。foreground の名前だけは `python3`）** | 中 | **推奨（実装 Issue で設計する）** |
+| **G. kaji 所有の Python PTY recorder** | **◎（実測で欠落 0）** | **◎（実測）** | **○（macOS 実機は未検証）** | **○（`HERDR_AGENT` ヒントで、3 agent とも状態遷移と履歴回収が直接起動と一致することを実測。foreground の名前だけは `python3`）** | 中 | **採るならこれ（必要になったときに設計する）** |
 | H. Herdr upstream に raw tap を実装してもらう | ◎（実現すれば） | ◎ | ◎ | ◎ | kaji 側は小 | 時期は不明（#3643 に回答なし）。待たない |
 | I. agent のセッションストアだけで済ませる | △（会話は追える。Codex の error は保存されない） | ◎ | ◎ | ◎ | 小〜中 | G を補うものとして使う |
 
 ## 推奨する次のアクション
 
-1. **実装 Issue を起票する（推奨）。** 「interactive_terminal の wrapper 層に backend 非依存の PTY recorder を
-   入れて、`terminal.log` を raw の append transcript に戻す」。設計で決めることは次のとおり。
-   - recorder に `HERDR_AGENT=<manifest 名>` を付けて Herdr の agent 検出を維持する（0.8.2 では 3 agent とも
-     実測済み）。既定で有効にするか opt-in にするかを決める。
-   - Herdr の snapshot を別名（例: `terminal-snapshot.txt`）で残し、併用するか。
-   - サイズの上限、機密情報の扱い、macOS 実機での検証。
-   - ADR 007 の改訂（v5: transcript の責務を backend から wrapper へ移す）。
-2. **小修正 Issue を別に起票する（任意・小さい）。** `_TRANSCRIPT_LINES = 2000` を Herdr の実際の上限 1000 に
-   合わせて docs に明記する。`transcript_truncated` は `null` ではなく推定値か実際の値を残す。ADR v4 の決定は
-   「CLI の argv だけを使い、raw socket client は使わない」なので、CLI の text 出力では `truncated` を得られない。
-   1000 行に達したら `true` と推定する方法などを検討する。
-3. **C（main screen での起動）を、1 の代わりか暫定策として採るかを人間が決める。** コストは最も小さく、
-   異常終了後の snapshot に会話と error 表示が残るようになる。ただし利用者が選んだ fullscreen 描画を
-   kaji が上書きすることになる。
-4. **Herdr upstream:** 要望は Discussion #3643 に既にある。kaji から追加で要望を出すなら、同じ discussion に
-   kaji の用途（異常終了診断）を補足するのにとどめる。kaji の実装はそれを待たない。
-5. **#466 B（tmux の削除）への申し送り:** B は本 Issue を待たないという決定は変わらない。ただし、tmux を
-   削除すると、完全な transcript を取る手段は 1 か 3 を実装するまでなくなる。alternate screen の agent では、
-   異常終了診断が `no_pattern` に劣化することを、B の docs 更新（制限事項）に明記することを推奨する。
+本調査は、#466（tmux 廃止）とその後の開発の判断材料を得るためのもの。新しい Issue は起票せず、
+次のとおり扱う。
+
+1. **#466 B（tmux の削除）で反映する。** B は本 Issue を待たないという決定は変わらない。B の docs と
+   ADR 007 の更新で、次の 2 点を制限事項として明記する。
+   - `terminal.log` の snapshot は最大 1000 行（#466 の決定にある「2000 行」は Herdr 側の上限で 1000 行に
+     切り詰められる）。
+   - Claude（`tui: "fullscreen"`）や Codex（既定）のように alternate screen を使う agent では、終了後の snapshot に
+     会話がほとんど残らず、異常終了診断は `no_pattern` に劣化する。
+2. **B で Herdr のコードに触れるなら、ついでに直す（任意）。** `_TRANSCRIPT_LINES = 2000` を実際の上限 1000 に
+   合わせる。`transcript_truncated` は `null` ではなく推定値を残す。ADR v4 の決定は「CLI の argv だけを使い、
+   raw socket client は使わない」なので、CLI の text 出力では `truncated` を得られない。1000 行に達したら
+   `true` と推定する方法などを検討する。単独の Issue にする規模ではない。
+3. **B の設計レビューで、snapshot を受け入れる決定を一度だけ確認する。** #466 の「rendered snapshot を受け入れる」
+   という人間の決定は、2000 行の履歴が残る前提でされた。実際には alternate screen の agent ではほぼ何も残らない。
+   それでも受け入れるかを確認し、変わらなければそのまま進める。
+4. **完全な transcript が必要になったときの選択肢（今は着手しない）。**
+   - G（wrapper 層の PTY recorder）: 欠落なく記録でき、`HERDR_AGENT=<manifest 名>` で Herdr の agent 検出も
+     維持できる（0.8.2 で 3 agent とも実測）。設計で決めることは、既定で有効にするか opt-in にするか、
+     Herdr の snapshot を別名で併用するか、サイズの上限、機密情報の扱い、macOS 実機での検証、ADR 007 の改訂。
+   - C（main screen での起動）: コストは最も小さく、異常終了後の snapshot に会話と error 表示が残る。ただし
+     利用者が選んだ fullscreen 描画を kaji が上書きすることになる。
+5. **Herdr upstream:** 要望は Discussion #3643 に既にある。kaji から追加で要望を出すなら、同じ discussion に
+   kaji の用途（異常終了診断）を補足するのにとどめる。kaji はそれを待たない。
 
 ## 副次的な発見（本 Issue の範囲外、記録のみ）
 
@@ -422,7 +429,7 @@ socket API を直接呼ぶ場合は、`$HERDR_SOCKET_PATH` に改行区切りの
 ## 付録 A: PTY recorder の試作
 
 検証用の最小実装で、production の品質ではない。ログのローテーション、`EINTR` の網羅的な扱い、BSD での EOF
-処理は実装 Issue で設計する。
+処理は、recorder を採るときに設計する。
 
 ```python
 """Prototype: backend-independent PTY transcript recorder (stdlib only, Linux/macOS).
