@@ -488,7 +488,7 @@ member ごとの workflow / child PID / run ID / exit code / 成功ゲートを�
 - `latest` symlink は人間 / 外部ツール向けの利便性。harness の verdict 解決は in-memory で保持した attempt path を使い `latest` に依存しない（symlink 非対応 FS でも壊れない）。
 - 新規 run は新 layout を正とする。旧 `runs/<run_id>/<step_id>/`（attempt なしの flat 構造）が残っていても新 run はそれを温存したまま新 layout で完了する（migration は必須としない）。
 
-#### attempt 固有の一時作業ディレクトリ（Issue #407）
+#### attempt 固有の一時作業ディレクトリ（Issue #407 / #508）
 
 runner は各 attempt の dispatch 前に、project root（`kaji run` では `config.repo_root`。issue worktree ではない）直下の
 `tmp/` 配下へ attempt 固有の一時作業ディレクトリを作成し、その正規化済み絶対パスを 4 つの環境変数
@@ -496,22 +496,39 @@ runner は各 attempt の dispatch 前に、project root（`kaji run` では `co
 
 ```text
 <project_root>/tmp/kaji/
-  .gitignore                                   # 内容 "*"。tmp/kaji 配下全体を git から隠す（初回のみ作成）
-  <issue_id>/<run_id>/<step_id>/attempt-NNN/   # = KAJI_TMP_DIR（attempt-NNN は artifacts と同番号）
+  .gitignore     # 内容 "*"。tmp/kaji 配下全体を git から隠す（初回のみ作成）
+  <issue_id>/
+    0001/        # = KAJI_TMP_DIR（1 回目の dispatch）
+    0002/        # 2 回目の dispatch（run や step が変わっても Issue 内の通番で続く）
 ```
+
+- 採番（Issue #508）: path に run_id / step_id / attempt 番号を含めず、Issue 内の通し番号（4 桁ゼロ埋め。
+  9999 を超えたら桁が増える）にする。次の番号は `<issue_id>/` 直下で名前が `^[0-9]{4,6}$` に合う
+  ディレクトリの最大値 + 1。並行実行で `mkdir` が `FileExistsError` になったら次の番号で再試行する。
+  旧構成の run_id ディレクトリ（`<issue_id>/<run_id>/<step_id>/attempt-NNN/`）は正規表現に合わないため
+  採番に影響せず、移行もしない。同じ attempt の中の headless 一時的再試行は同じディレクトリを使う。
+- どの step のディレクトリかは記録から辿る: `run.log` の `step_start.tmp_dir`（dispatch 前に書く）と
+  attempt の `result.json` の `tmp_dir`（下記）。
 
 - 注入経路: `exec` / `exec_script` は context env に merge（`script_exec._run_argv` が親 env を上書き）、
   headless agent は `execute_cli(env=...)`（`Popen(env={**os.environ, **env})`）、interactive terminal は
   wrapper command に `env K=V ... <wrapper> <10 args>` を前置する（tmux pane は kaji ではなく tmux server の
   environment を継承するため。Herdr も同じ command を launcher の `exec env PATH=... <command>` に埋める）。
   親環境から継承した同名変数は attempt 固有値で上書きされる。agent 経路へ渡すのはこの 4 変数のみ。
-- 作成に失敗した場合（`OSError`・既存 dir との衝突・不正な path component）は `TmpDirPreparationError` で
+- 作成に失敗した場合（`OSError`・不正な path component）は `TmpDirPreparationError` で
   dispatch せずに失敗する。作成した dir は自動削除しない。
 - 強制力はない。標準 temp API（`tempfile` / `mktemp` / Node `os.tmpdir()` 等）を誘導するだけで、明示的な
   `/tmp` 書き込みや環境変数を参照しないツールは対象外。
 - 注意: 一時ディレクトリがリポジトリ内になるため、そこを起点に親方向を探索する処理（`.kaji/config.toml` /
-  `.git` の探索）は実リポジトリを見つける。また AF_UNIX socket の `sun_path` は 108 byte 上限で、深い project
-  root では socket を作るツールが長い `TMPDIR` で失敗しうる。
+  `.git` の探索）は実リポジトリを見つける。
+- path 長（Issue #508）: AF_UNIX socket の pathname は `sun_path` から終端 NUL を除いた Linux 107 /
+  macOS 103 byte まで。Chrome（Playwright 等）は `TMPDIR` の後ろに
+  `/com.google.Chrome.XXXXXX/SingletonSocket`（41 byte）を足すため、`KAJI_TMP_DIR` は Linux 66 /
+  macOS 62 byte までに収める必要がある。root より後ろは `/tmp/kaji/<issue_id>/<NNNN>`（issue 番号 4 桁なら
+  19 byte）で step に依存しないため、project root に使える長さは Linux 47 / macOS 43 byte（issue 番号
+  4 桁の場合）で、成否は project root の長さだけで決まる。作成時にこの suffix を足した byte 長が上限を
+  超えると `run.log` の `tmp_dir_path_warning` と console に警告を出し、dispatch は続ける（警告は Chrome
+  基準の目安で、より長い suffix を足すツールは対象外）。
 
 #### `result.json`（attempt 終了情報, Issue #222）
 
@@ -530,9 +547,11 @@ runner は各 attempt の dispatch 前に、project root（`kaji run` では `co
 | `dispatch` | `str` | `"agent"` / `"exec_script"` / `"exec"`（exec-step・Issue #205） |
 | `error` | `str \| null` | 異常終了時の例外クラス名 + 短いメッセージ（正常時 null） |
 | `synthetic` | `bool` | 合成 ABORT record（dispatch / verdict の except 経路）なら `true`、agent が返した verdict なら `false`（Issue #288） |
+| `tmp_dir` | `str \| null` | attempt 固有の一時作業ディレクトリ（`KAJI_TMP_DIR`）の絶対パス（Issue #508） |
 
 - 読み手は `result.json` の **欠落を許容**する（旧 run / best-effort 書き出し前に死んだ attempt）。verdict 解決（`resolve_verdict`）は `result.json` に依存しないため、旧 run に無くても影響しない（migration 不要）。
 - `synthetic` は末尾に default 付きで追加されたフィールド。旧 `result.json`（キーなし）は `false` として読める。
+- `tmp_dir` も末尾に default 付きで追加されたフィールド（Issue #508）。旧 `result.json`（キーなし）は `null` として読める。
 - `ended_at` は attempt 終了時刻であり、判定時刻・`verdict.yaml` 保存時刻ではない（正常経路では verdict 解決後に記録されるため判定の上界になる）。`verdict.yaml` 自体は時刻を持たず、artifact 由来の判定の新旧比較は `kaji issue resolve-verdict` が出力する `ended_at` で行う。時刻追加を見送る理由と再検討条件は [ADR 012](adr/012-verdict-yaml-no-timestamp.md)。
 - `run.log` の `step_start` / `step_end` には `attempt` が付与され、`step_end` は `exit_code` / `signal` も持つ（異常終了経路でも合成 `ABORT` verdict で発火）。詳細は [`docs/reference/python/logging.md`](reference/python/logging.md)。
 

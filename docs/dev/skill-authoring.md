@@ -166,7 +166,7 @@ exec_script: kaji_harness.scripts.review_poll_entry
 
 `KAJI_TMP_DIR` / `TMPDIR` / `TMP` / `TEMP` は `exec_script` に限らず **agent step を含む全 dispatch 経路**
 （headless / interactive terminal / `exec` / `exec_script`）のプロセス環境に入る（agent 経路へはこの 4 変数のみ。
-他の `KAJI_*` は script-like 専用）。実体は project root 直下の `tmp/kaji/<issue_id>/<run_id>/<step_id>/attempt-NNN/`
+他の `KAJI_*` は script-like 専用）。実体は project root 直下の `tmp/kaji/<issue_id>/<NNNN>/`（Issue 内の通し番号。Issue #508）
 で、親環境の同名変数は上書きされる。kaji 固有の処理は `$KAJI_TMP_DIR` を明示参照してよい
 （例: `git diff > "$KAJI_TMP_DIR/diff.txt"`）。明示的な `/tmp` 書き込みは禁止しない（環境変数を尊重する処理だけを
 誘導する）。作成した dir は自動削除されない。詳細は [ARCHITECTURE.md](../ARCHITECTURE.md) § 実行アーティファクトの layout。

@@ -69,6 +69,7 @@ logger = RunLogger(log_path=Path(".kaji/run.jsonl"))
 | `session_id` | `str \| null` |
 | `attempt` | `int \| null` |
 | `dispatch` | `str` |
+| `tmp_dir` | `str \| null` |
 
 `dispatch` は dispatch 経路の識別子。`"agent"` は LLM 経由（既存）、`"exec_script"` は
 skill frontmatter `exec_script` による subprocess dispatch（Issue #204）、`"exec"` は
@@ -79,10 +80,33 @@ workflow.yaml の `exec:` step による subprocess dispatch（Issue #205）。�
 同一 step が cycle / retry / resume で再 dispatch されると `attempt` が増え、step retry の
 時系列を `run.log` から復元できる。
 
+`tmp_dir` は attempt 固有の一時作業ディレクトリ（`KAJI_TMP_DIR`）の絶対パス（Issue #508）。一時ディレクトリの
+path は Issue 内の通し番号（`tmp/kaji/<issue_id>/<NNNN>/`）で step を表さないため、どの step・attempt の
+ディレクトリかをこのフィールドで辿る。dispatch 前に書かれるので kaji が途中で落ちても残る。runner は常に記録する（`tmp_dir` を
+渡さない呼び出しでは null）。
+
 ```json
-{"ts": "2025-04-22T01:00:01+00:00", "event": "step_start", "step_id": "implement", "agent": "claude", "model": "claude-sonnet-4-6", "effort": null, "session_id": null, "attempt": 1, "dispatch": "agent"}
-{"ts": "2025-04-22T01:00:01+00:00", "event": "step_start", "step_id": "poll-review", "agent": null, "model": null, "effort": null, "session_id": null, "attempt": 1, "dispatch": "exec_script"}
-{"ts": "2025-04-22T01:00:01+00:00", "event": "step_start", "step_id": "collect-metrics", "agent": null, "model": null, "effort": null, "session_id": null, "attempt": 1, "dispatch": "exec"}
+{"ts": "2025-04-22T01:00:01+00:00", "event": "step_start", "step_id": "implement", "agent": "claude", "model": "claude-sonnet-4-6", "effort": null, "session_id": null, "attempt": 1, "dispatch": "agent", "tmp_dir": "/home/u/dev/repo/tmp/kaji/141/0001"}
+{"ts": "2025-04-22T01:00:01+00:00", "event": "step_start", "step_id": "poll-review", "agent": null, "model": null, "effort": null, "session_id": null, "attempt": 1, "dispatch": "exec_script", "tmp_dir": "/home/u/dev/repo/tmp/kaji/141/0002"}
+{"ts": "2025-04-22T01:00:01+00:00", "event": "step_start", "step_id": "collect-metrics", "agent": null, "model": null, "effort": null, "session_id": null, "attempt": 1, "dispatch": "exec", "tmp_dir": "/home/u/dev/repo/tmp/kaji/141/0003"}
+```
+
+#### `tmp_dir_path_warning`
+
+attempt 一時ディレクトリ配下に Chrome 相当の AF_UNIX socket（`TMPDIR` の後ろに
+`/com.google.Chrome.XXXXXX/SingletonSocket` の 41 byte を足した path）を作ると `sun_path` 上限
+（Linux 107 / macOS 103 byte）を超える場合に、`step_start` の直後で記録する（Issue #508）。警告のみで
+dispatch は止めない。
+
+| フィールド | 型 | 備考 |
+|-----------|-----|------|
+| `step_id` | `str` | |
+| `tmp_dir` | `str` | `KAJI_TMP_DIR` の絶対パス |
+| `socket_path_length` | `int` | `tmp_dir` の byte 長 + 41 |
+| `limit` | `int` | platform の上限（Linux 107 / macOS 103。その他は 107） |
+
+```json
+{"ts": "2025-04-22T01:00:01+00:00", "event": "tmp_dir_path_warning", "step_id": "review-change", "tmp_dir": "/home/someone/work/clients/acme/monorepo/services/api/tmp/kaji/1831/0001", "socket_path_length": 113, "limit": 107}
 ```
 
 #### `step_end`
@@ -197,7 +221,8 @@ verdict parse 境界（`_parse_yaml_fields`）で正規化した YAML 禁止制�
 | メソッド | いつ呼ぶか |
 |---------|-----------|
 | `log_workflow_start(issue, workflow)` | ワークフロー開始直後 |
-| `log_step_start(step_id, agent, model, effort, session_id, *, attempt=None, dispatch="agent")` | CLI / subprocess 実行前。決定論経路では `dispatch="exec_script"`（Issue #204）/ `dispatch="exec"`（exec-step・Issue #205）+ `agent=model=effort=None`。`attempt` は attempt-NNN の整数（Issue #222） |
+| `log_step_start(step_id, agent, model, effort, session_id, *, attempt=None, dispatch="agent", tmp_dir=None)` | CLI / subprocess 実行前。決定論経路では `dispatch="exec_script"`（Issue #204）/ `dispatch="exec"`（exec-step・Issue #205）+ `agent=model=effort=None`。`attempt` は attempt-NNN の整数（Issue #222）。`tmp_dir` は `KAJI_TMP_DIR` の絶対パス（Issue #508） |
+| `log_tmp_dir_path_warning(step_id, *, tmp_dir, socket_path_length, limit)` | `log_step_start` 直後、attempt 一時ディレクトリが AF_UNIX socket path 上限を超えうる場合のみ（Issue #508） |
 | `log_verdict_source(step_id, source, attempt)` | `resolve_verdict()` 直後（verdict 解決経路の記録、Issue #220） |
 | `log_verdict_sanitization(step_id, attempt, findings)` | `resolve_verdict()` の `findings` が非空の場合のみ、`log_verdict_source` と同じ場所で呼ぶ（YAML 禁止制御文字の正規化を永続記録、Issue #298） |
 | `log_step_end(step_id, verdict, duration_ms, cost, *, attempt=None, exit_code=None, signal=None, dispatch="agent")` | CLI / subprocess 終了・verdict 解析後（異常終了でも合成 ABORT で発火、Issue #222） |

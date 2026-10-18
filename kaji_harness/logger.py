@@ -67,12 +67,16 @@ class RunLogger:
         *,
         attempt: int | None = None,
         dispatch: str = "agent",
+        tmp_dir: str | None = None,
     ) -> None:
         """ステップ開始イベントを記録。
 
         Issue #222: ``attempt`` は ``attempt-NNN`` の 1 始まり整数。dispatch される
         step では常に整数。dispatch を伴わない合成 step（cycle 上限 exhaust 等）では
         ``None``。
+
+        Issue #508: ``tmp_dir`` は attempt tmp dir（``KAJI_TMP_DIR``）の絶対パス。
+        dispatch 前に書くため、kaji が途中で落ちても dir と step の対応が残る。
         """
         self._write(
             "step_start",
@@ -83,6 +87,23 @@ class RunLogger:
             session_id=session_id,
             attempt=attempt,
             dispatch=dispatch,
+            tmp_dir=tmp_dir,
+        )
+
+    def log_tmp_dir_path_warning(
+        self, step_id: str, *, tmp_dir: str, socket_path_length: int, limit: int
+    ) -> None:
+        """attempt tmp dir 配下の AF_UNIX socket path が上限を超えうることを記録する。
+
+        Issue #508: Chrome 相当の suffix を足した byte 長が ``limit`` を超えた場合のみ呼ぶ。
+        警告のみで dispatch は止めない。
+        """
+        self._write(
+            "tmp_dir_path_warning",
+            step_id=step_id,
+            tmp_dir=tmp_dir,
+            socket_path_length=socket_path_length,
+            limit=limit,
         )
 
     def log_step_end(

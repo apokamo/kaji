@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from kaji_harness.artifact_verdict import evaluate_result
 from kaji_harness.models import CLIResult
 from kaji_harness.result import AttemptResult, derive_signal, write_result_json
 
@@ -94,6 +95,8 @@ class TestAttemptResultRoundTrip:
             # Issue #288: except 経路の合成 ABORT record と agent 由来 verdict を
             # result.json 単体で区別するための直交属性。
             "synthetic": False,
+            # Issue #508: attempt 一時ディレクトリ（KAJI_TMP_DIR）の絶対パス。
+            "tmp_dir": None,
         }
 
     def test_null_fields_serialized_as_json_null(self, tmp_path: Path) -> None:
@@ -141,6 +144,44 @@ class TestAttemptResultRoundTrip:
         path = tmp_path / "a" / "b" / "c" / "result.json"
         write_result_json(path, result)
         assert path.exists()
+
+
+@pytest.mark.small
+class TestAttemptResultTmpDir:
+    """Issue #508: ``tmp_dir`` の追加と旧形式 ``result.json`` の互換。"""
+
+    _LEGACY = {
+        "step_id": "design",
+        "attempt": 1,
+        "status": "PASS",
+        "exit_code": 0,
+        "signal": None,
+        "started_at": "2026-10-18T00:00:00+00:00",
+        "ended_at": "2026-10-18T00:00:05+00:00",
+        "duration_ms": 5000,
+        "session_id": None,
+        "dispatch": "agent",
+        "error": None,
+        "synthetic": False,
+    }
+
+    def test_tmp_dir_is_last_key_and_round_trips(self, tmp_path: Path) -> None:
+        result = AttemptResult(**self._LEGACY, tmp_dir="/p/tmp/kaji/508/0001")
+        path = tmp_path / "result.json"
+        write_result_json(path, result)
+
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        assert list(loaded)[-1] == "tmp_dir"
+        assert loaded["tmp_dir"] == "/p/tmp/kaji/508/0001"
+        assert AttemptResult(**loaded) == result
+
+    def test_legacy_result_without_tmp_dir_loads_as_none(self) -> None:
+        assert "tmp_dir" not in self._LEGACY
+        assert AttemptResult(**self._LEGACY).tmp_dir is None
+
+    def test_legacy_result_is_still_evaluated(self) -> None:
+        ended_at = self._LEGACY["ended_at"]
+        assert evaluate_result(dict(self._LEGACY), "PASS") == ended_at
 
 
 @pytest.mark.small

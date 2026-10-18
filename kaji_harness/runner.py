@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -113,6 +114,11 @@ def allocate_attempt_dir(run_dir: Path, step_id: str) -> Path:
 
 
 _TMP_ENV_NAMES = ("KAJI_TMP_DIR", "TMPDIR", "TMP", "TEMP")
+_TMP_DIR_NUMBER_PATTERN = re.compile(r"[0-9]{4,6}")
+_CHROME_SOCKET_SUFFIX = "/com.google.Chrome.XXXXXX/SingletonSocket"
+# sun_path（Linux 108 / macOS 104 byte）から終端 NUL を除いた pathname の上限
+_SOCKET_PATH_LIMIT_DEFAULT = 107
+_SOCKET_PATH_LIMIT_DARWIN = 103
 
 
 def _validate_path_component(label: str, value: str, tmp_root: Path) -> None:
@@ -136,48 +142,35 @@ def _validate_path_component(label: str, value: str, tmp_root: Path) -> None:
         raise TmpDirPreparationError(tmp_root, f"invalid {label} {value!r}: {reason}")
 
 
-def prepare_attempt_tmp_dir(
-    project_root: Path,
-    *,
-    issue_id: str,
-    run_id: str,
-    step_id: str,
-    attempt_name: str,
-) -> Path:
-    """Issue #407: attempt 固有の一時作業ディレクトリを dispatch 前に作成する。
+def prepare_attempt_tmp_dir(project_root: Path, *, issue_id: str) -> Path:
+    """Issue #407 / #508: attempt 固有の一時作業ディレクトリを dispatch 前に作成する。
 
-    layout は ``<project_root>/tmp/kaji/<issue_id>/<run_id>/<step_id>/<attempt_name>/``。
+    layout は ``<project_root>/tmp/kaji/<issue_id>/<NNNN>/``（Issue 内の通し番号）。
+    path に run_id / step_id / attempt 番号を含めず、長さを project root だけで決める
+    （``TMPDIR`` 配下に AF_UNIX socket を作るツールの ``sun_path`` 上限対策、#508）。
+    次の番号は ``<issue_id>/`` 直下で ``^[0-9]{4,6}$`` に合う dir 名の最大値 + 1。
+    ``mkdir(exist_ok=False)`` が ``FileExistsError`` なら次の番号で再試行する。
     ``tmp/kaji/.gitignore``（内容 ``*``）を初回のみ作成し、配下全体を git から隠す。
     作成した dir は削除しない。
 
     Args:
         project_root: kaji project root（issue worktree ではない）。
         issue_id: ``RunIssueContext.canonical_id``。
-        run_id: ``run_dir.name``。
-        step_id: ``Step.id``。
-        attempt_name: ``attempt-NNN``。
 
     Returns:
         作成済み attempt tmp dir の正規化済み絶対パス。
 
     Raises:
-        TmpDirPreparationError: component が不正、``OSError``、既存 dir との衝突、
+        TmpDirPreparationError: component が不正、``FileExistsError`` 以外の ``OSError``、
             または path が不変条件を満たさない。不正 component では何も作成しない。
     """
     tmp_root = project_root.resolve() / "tmp"
-    components = {
-        "issue_id": issue_id,
-        "run_id": run_id,
-        "step_id": step_id,
-        "attempt_name": attempt_name,
-    }
-    for label, value in components.items():
-        _validate_path_component(label, value, tmp_root)
+    _validate_path_component("issue_id", issue_id, tmp_root)
 
     base = tmp_root / "kaji"
-    target = base / issue_id / run_id / step_id / attempt_name
-    if target.parent.parent.parent.parent != base or os.path.normpath(target) != str(target):
-        raise TmpDirPreparationError(target, "path violates the tmp layout invariant")
+    issue_dir = base / issue_id
+    if issue_dir.parent != base or os.path.normpath(issue_dir) != str(issue_dir):
+        raise TmpDirPreparationError(issue_dir, "path violates the tmp layout invariant")
 
     try:
         base.mkdir(parents=True, exist_ok=True)
@@ -186,11 +179,43 @@ def prepare_attempt_tmp_dir(
                 gitignore.write("*\n")
         except FileExistsError:
             pass
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.mkdir(exist_ok=False)
+        issue_dir.mkdir(exist_ok=True)
+        numbers = [
+            int(entry.name)
+            for entry in issue_dir.iterdir()
+            if _TMP_DIR_NUMBER_PATTERN.fullmatch(entry.name) and entry.is_dir()
+        ]
+        for number in count(max(numbers, default=0) + 1):
+            target = issue_dir / f"{number:04d}"
+            try:
+                target.mkdir()
+            except FileExistsError:
+                continue
+            return target
     except OSError as exc:
-        raise TmpDirPreparationError(target, str(exc)) from exc
-    return target
+        raise TmpDirPreparationError(issue_dir, str(exc)) from exc
+
+    raise RuntimeError("unreachable: itertools.count is infinite")
+
+
+def socket_path_budget_exceeded(
+    tmp_dir: Path, *, platform: str = sys.platform
+) -> tuple[int, int] | None:
+    """Issue #508: ``tmp_dir`` 配下の Chrome 相当 socket path が ``sun_path`` 上限を超えるか判定する。
+
+    Chrome は ``TMPDIR`` の後ろに ``/com.google.Chrome.XXXXXX/SingletonSocket`` を足す。
+    これより長い suffix を足すツールは対象外の目安判定。
+
+    Args:
+        tmp_dir: attempt tmp dir（``KAJI_TMP_DIR``）。
+        platform: ``sys.platform`` 相当。``darwin`` は 103 byte、それ以外は 107 byte を上限とする。
+
+    Returns:
+        超過時は ``(socket path の byte 長, 上限)``。収まる場合は ``None``。
+    """
+    length = len(os.fsencode(str(tmp_dir))) + len(_CHROME_SOCKET_SUFFIX)
+    limit = _SOCKET_PATH_LIMIT_DARWIN if platform == "darwin" else _SOCKET_PATH_LIMIT_DEFAULT
+    return (length, limit) if length > limit else None
 
 
 def build_tmp_env(tmp_dir: Path) -> dict[str, str]:
@@ -236,6 +261,7 @@ def _record_attempt_end(
     logger: RunLogger,
     state: SessionState,
     synthetic: bool = False,
+    tmp_dir: Path | None = None,
 ) -> None:
     """attempt 終了処理（Issue #222）を 1 箇所にまとめる。
 
@@ -250,6 +276,8 @@ def _record_attempt_end(
 
     Issue #288: ``synthetic`` は except 経路の合成 ABORT record で ``True``、
     dispatch 結果から解決した verdict で ``False``。
+
+    Issue #508: ``tmp_dir`` は attempt tmp dir（``KAJI_TMP_DIR``）で、``result.json`` に記録する。
     """
     result_duration_ms = int((ended_at - started_at).total_seconds() * 1000)
     result = AttemptResult(
@@ -265,6 +293,7 @@ def _record_attempt_end(
         dispatch=dispatch,
         error=error,
         synthetic=synthetic,
+        tmp_dir=None if tmp_dir is None else str(tmp_dir),
     )
     try:
         write_result_json(attempt_dir / RESULT_FILE, result)
@@ -368,16 +397,11 @@ class _StepExecutor:
         _validate_path_component("step_id", step.id, self.project_root.resolve() / "tmp")
         attempt_dir = allocate_attempt_dir(self.run_dir, step.id)
         attempt_no = _attempt_number(attempt_dir)
-        tmp_dir = prepare_attempt_tmp_dir(
-            self.project_root,
-            issue_id=self.run_ctx.canonical_id,
-            run_id=self.run_dir.name,
-            step_id=step.id,
-            attempt_name=attempt_dir.name,
-        )
+        tmp_dir = prepare_attempt_tmp_dir(self.project_root, issue_id=self.run_ctx.canonical_id)
         tmp_env = build_tmp_env(tmp_dir)
         verdict_path = attempt_dir / "verdict.yaml"
-        self._log_step_start(step, settings, session_id, attempt_dir, attempt_no)
+        self._log_step_start(step, settings, session_id, attempt_dir, attempt_no, tmp_dir)
+        self._warn_if_tmp_dir_too_long(step, tmp_dir)
         if not settings.workdir.is_dir():
             raise WorkdirNotFoundError(step.id, settings.workdir)
 
@@ -432,6 +456,7 @@ class _StepExecutor:
                 dispatch=settings.kind,
                 exit_code=exit_code,
                 signal_name=signal_name,
+                tmp_dir=tmp_dir,
             )
             raise
 
@@ -453,6 +478,7 @@ class _StepExecutor:
             logger=self.logger,
             state=self.state,
             synthetic=False,
+            tmp_dir=tmp_dir,
         )
         if verdict.status == "ABORT":
             self.logger.log_failure_event(kind="agent_abort", step_id=step.id, synthetic=False)
@@ -479,6 +505,7 @@ class _StepExecutor:
         session_id: str | None,
         attempt_dir: Path,
         attempt_no: int,
+        tmp_dir: Path,
     ) -> None:
         """Emit structured and human-readable step-start events."""
         self.logger.log_step_start(
@@ -489,6 +516,7 @@ class _StepExecutor:
             session_id,
             attempt=attempt_no,
             dispatch=settings.kind,
+            tmp_dir=str(tmp_dir),
         )
         agent_suffix = ""
         if not settings.is_script_like:
@@ -504,6 +532,26 @@ class _StepExecutor:
             attempt_dir.name,
             settings.kind,
             agent_suffix,
+        )
+
+    def _warn_if_tmp_dir_too_long(self, step: Step, tmp_dir: Path) -> None:
+        """Warn when tools may fail to create AF_UNIX sockets under ``tmp_dir`` (#508).
+
+        Dispatch continues: steps that never create sockets must not be blocked.
+        """
+        exceeded = socket_path_budget_exceeded(tmp_dir)
+        if exceeded is None:
+            return
+        length, limit = exceeded
+        self.logger.log_tmp_dir_path_warning(
+            step.id, tmp_dir=str(tmp_dir), socket_path_length=length, limit=limit
+        )
+        _console.warning(
+            "tmp dir may be too long for AF_UNIX sockets: %s %s (socket path %d > %d bytes)",
+            step.id,
+            tmp_dir,
+            length,
+            limit,
         )
 
     def _dispatch(
@@ -677,6 +725,7 @@ class _StepExecutor:
         dispatch: str,
         exit_code: int | None,
         signal_name: str | None,
+        tmp_dir: Path,
     ) -> None:
         """Record a synthetic ABORT attempt before the original exception escapes."""
         ended_at = datetime.now(UTC)
@@ -728,6 +777,7 @@ class _StepExecutor:
             logger=self.logger,
             state=self.state,
             synthetic=True,
+            tmp_dir=tmp_dir,
         )
 
 

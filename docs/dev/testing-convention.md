@@ -154,7 +154,7 @@ dispatch / provider 結合テストで worktree 解決の git 経路まで盲目
 ## workflow 内実行での `tmp_path` と project 外 fixture
 
 kaji workflow の agent / exec step は `TMPDIR` / `TMP` / `TEMP` を attempt 固有の
-`<project_root>/tmp/kaji/.../attempt-NNN/` に設定して起動される（Issue #407）。したがって workflow
+`<project_root>/tmp/kaji/<issue_id>/<NNNN>/` に設定して起動される（Issue #407 / #508）。したがって workflow
 内で `make check` / `pytest` を走らせると、pytest の `tmp_path` は **リポジトリ内**になる。
 
 - 一時ディレクトリを起点に親方向へ探索する処理（`KajiConfig.discover` の `.kaji/config.toml` 探索、

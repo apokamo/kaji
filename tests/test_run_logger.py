@@ -271,6 +271,40 @@ class TestRunLogger:
         assert len(events) == 1
 
     @pytest.mark.small
+    def test_log_step_start_records_tmp_dir(self, tmp_path: Path) -> None:
+        """Issue #508: step_start に attempt 一時ディレクトリの絶対パスを記録する。"""
+        logger = RunLogger(log_path=tmp_path / "run.jsonl")
+
+        logger.log_step_start(
+            "design", None, None, None, None, attempt=1, tmp_dir="/p/tmp/kaji/508/0001"
+        )
+        logger.log_step_start("design", None, None, None, None, attempt=2)
+
+        first, second = _read_events(logger.log_path)
+        assert first["tmp_dir"] == "/p/tmp/kaji/508/0001"
+        assert second["tmp_dir"] is None
+
+    @pytest.mark.small
+    def test_log_tmp_dir_path_warning(self, tmp_path: Path) -> None:
+        """Issue #508: tmp dir が AF_UNIX socket path の上限を超えうることを記録する。"""
+        logger = RunLogger(log_path=tmp_path / "run.jsonl")
+
+        logger.log_tmp_dir_path_warning(
+            "review-change", tmp_dir="/long/tmp/kaji/508/0001", socket_path_length=120, limit=107
+        )
+
+        (ev,) = _read_events(logger.log_path)
+        _assert_iso8601(ev["ts"])
+        assert ev == {
+            "ts": ev["ts"],
+            "event": "tmp_dir_path_warning",
+            "step_id": "review-change",
+            "tmp_dir": "/long/tmp/kaji/508/0001",
+            "socket_path_length": 120,
+            "limit": 107,
+        }
+
+    @pytest.mark.small
     def test_log_verdict_sanitization(self, tmp_path: Path) -> None:
         """Issue #298: 禁止制御文字の正規化を run.log に永続記録する。
 
