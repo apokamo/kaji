@@ -33,8 +33,10 @@ managed starter の local main に review 前の candidate を作る maintainer 
    最新の公開済み starter GitHub Release tag を開始点にする。開始点の Release 不在、
    tag / Release / dependency pin の矛盾があれば ABORT。
 3. この時点で初めて [classification guide](references/classification-guide.md) を読み、開始点から
-   `active_target` までの CHANGELOG、commit、changed assets を全件 3 区分する。dependency /
-   lockfile 更新だけで完了と判定しない。
+   `active_target` までの CHANGELOG、commit、changed assets と、starter-fix Issue を全件 3 区分する。
+   starter-fix Issue は `kaji issue list --label starter-fix --state open --limit 1000 --json number,body`
+   で列挙し、本文の `starter_repo: owner/repo` 行が tracking Issue の `starter_repo` と完全一致する
+   ものに限る（title の文字列検索はしない）。dependency / lockfile 更新だけで完了と判定しない。
 4. starter の remote main と同期した local main に区分 (1) だけを直接 commit する。
    feature branch / worktree / PR / merge は使わず、review 前に push しない。
 5. repository 実体から manifest、lockfile、quality gate を解決して実行する。Python 固有名を

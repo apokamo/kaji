@@ -21,6 +21,10 @@ ABORT する。
 1. tracking Issue と [starter sync runbook](../../../docs/operations/release/starter-sync-runbook.md) を読み、
    target（= 本文の `active_target`） / base / candidate と checkout identity を確認する。
 2. updater の分類表を見ずに、target tag、CHANGELOG、upstream diff から調査集合を独立に再構成する。
+   starter-fix Issue も同じ発見手順で独立に再構成する:
+   `kaji issue list --label starter-fix --state open --limit 1000 --json number,body` のうち、
+   本文の `starter_repo: owner/repo` 行が tracking Issue の `starter_repo` と完全一致するもの
+   （title の文字列検索はしない）。
 3. この時点で初めて [review rubric](references/review-rubric.md) を読み、全件 3 区分、移植の完全性、
    過剰コピー、dependency / lock / docs、template cleanliness、quality gate evidence を照合する。
 4. review 中に starter のファイルを修正しない。candidate SHA が変わったら review を中止して ABORT。

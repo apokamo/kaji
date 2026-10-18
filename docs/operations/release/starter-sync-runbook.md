@@ -99,6 +99,44 @@ tracking Issue は `open` も `syncing` も残っていないとき（全行 `do
 自動選択・自動統合せず `ABORT` する。人間がどちらを使うか `selected_issue_id` で明示指定して
 から再実行する。
 
+## Starter-fix Issue
+
+kaji 側に元の変更がない starter 固有の修正（例: starter repository だけにある CI 設定の修正）は、
+`starter-fix` label を付けた kaji Issue（starter-fix Issue）で要求する。starter 側 Issue は使わない。
+本文には対象 starter を示す行を 1 行置く（tracking Issue v1 schema とは別物で、schema marker は不要）:
+
+```markdown
+starter_repo: owner/repo
+```
+
+- 発見: `update-starter` と `review-starter-update` がそれぞれ独立に、`starter-fix` label を持つ
+  open Issue のうち本文の `starter_repo:` 行が tracking Issue の `starter_repo` と完全一致する
+  ものを調査集合へ加える。title の文字列検索はしない（`starter-sync` label を発見キーにしたのと
+  同じ理由）。
+- 対象になる時点: Issue 作成後の次回の `update-starter`。区分 (1) に分類し、Release 間差分と同じ
+  candidate → 独立 review → 承認後 atomic push の経路で公開する。開始点に既に含まれていれば
+  理由付きで区分 (3)（反映済み）とする。
+- close の責任: 公開と事後確認（公開 snapshot 上で Issue の完了条件を確認）の後に人間が close する。
+  `update-starter` / `review-starter-update` / `release-starter` は close しない。
+- kaji Release を伴わない starter 単独の修正: 単独の `-rN` を手作業で公開せず、次の kaji Release
+  （patch release を含む。必要なら version を上げる）の追随 batch に載せる。
+
+### CLI 判定にしない理由
+
+starter-fix Issue の発見・分類は `kaji starter` CLI ではなく skill 側で行う。§ 判定 CLI の
+「判定は skill の散文ではなく決定的 CLI に置く」（ADR 008 決定 3）は、あるスキルの出力を別の
+スキルが機械的に消費する producer / consumer 契約（verdict marker、tracking Issue v1 schema、
+`task-plan` の状態判定）を対象とし、それらは引き続き CLI が正本である。starter-fix Issue の発見条件は
+これに当たらない。
+
+- reviewer は updater の分類表を読まず、GitHub の Issue 一覧という一次情報から独立に再構成する。
+  両 skill が共有するのは一次情報を読む条件であり、相手の出力形式ではない。
+- Release 間の CHANGELOG / commit / changed path という既存の調査集合も、同じく skill の
+  reference の散文で定義されている。starter-fix Issue はその集合に要素を 1 種類加えるだけである。
+- 片側だけのずれは reviewer の Completeness / Excess 照合で検出される。両側が同じようにずれる
+  場合に備え、`tests/test_starter_skills.py` が両 skill の SKILL.md / reference と本 runbook に
+  `starter-fix` と `starter_repo:` が含まれることを静的に検査する。
+
 ## Workflow
 
 1. `/release` が PyPI publish 確認後、starter ごとに `kaji starter tracking-plan` を実行し、
