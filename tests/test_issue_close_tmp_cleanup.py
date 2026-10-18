@@ -454,3 +454,66 @@ def test_reports_partial_failure_and_exits_zero(repo: _Repo) -> None:
     assert result == f"一部削除失敗（要手動対応: {repo.target / '0001'}）"
     assert (locked / "a.txt").exists()
     assert not (repo.target / "0002").exists()
+
+
+@pytest.mark.large
+@pytest.mark.large_local
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory read permission")
+@pytest.mark.parametrize(
+    ("files", "unreadable", "close_via_harness", "keep"),
+    [
+        (("0001/a.txt", "0002/b.txt"), "", "0", None),
+        (("0001/a.txt", "0002/b.txt"), "", "1", "0002"),
+        # 列挙不能 dir に到達するまで、保護対象の祖先の各段に兄弟がない（何も削除していない）
+        (
+            ("261018140038/close/attempt-002/old.txt", "261018140038/close/attempt-001/c.txt"),
+            "261018140038/close",
+            "1",
+            "261018140038/close/attempt-001",
+        ),
+    ],
+    ids=["manual-issue-dir", "numbered-issue-dir", "run-id-ancestor"],
+)
+def test_skips_when_directory_cannot_be_listed_before_deletion(
+    repo: _Repo, files: tuple[str, ...], unreadable: str, close_via_harness: str, keep: str | None
+) -> None:
+    for rel in files:
+        _write(repo.target / rel)
+    before = _tree(repo.root)
+    locked = repo.target / unreadable
+    locked.chmod(stat.S_IWUSR | stat.S_IXUSR)
+    try:
+        result = _run(
+            repo,
+            close_via_harness=close_via_harness,
+            kaji_tmp_dir=None if keep is None else repo.target / keep,
+        )
+    finally:
+        locked.chmod(stat.S_IRWXU)
+
+    assert result == f"スキップ（列挙できない: {locked}）"
+    assert _tree(repo.root) == before
+
+
+@pytest.mark.large
+@pytest.mark.large_local
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory read permission")
+def test_reports_partial_failure_when_ancestor_cannot_be_listed_after_deletion(
+    repo: _Repo,
+) -> None:
+    run = repo.target / "261018140038"
+    _write(repo.target / "0001" / "a.txt")
+    old = _write(run / "close" / "attempt-002" / "old.txt")
+    _write(run / "close" / "attempt-001" / "c.txt", "running")
+    keep = run / "close" / "attempt-001"
+    locked = run / "close"
+    locked.chmod(stat.S_IWUSR | stat.S_IXUSR)
+    try:
+        result = _run(repo, close_via_harness="1", kaji_tmp_dir=keep)
+    finally:
+        locked.chmod(stat.S_IRWXU)
+
+    assert result == f"一部削除失敗（要手動対応: {locked}）"
+    assert not (repo.target / "0001").exists()
+    assert old.exists()
+    assert (keep / "c.txt").read_text(encoding="utf-8") == "running"

@@ -560,7 +560,8 @@ Step 5.5 までに ABORT した場合は実行しない（調査用に残す）�
 - 安全条件を満たさない場合は何も削除しない: `issue_id` が数字以外、default branch の checkout を 1 件に
   特定できない、`tmp` / `tmp/kaji` / `tmp/kaji/[issue_id]` のいずれかが symlink または dir でない、
   `KAJI_TMP_DIR` が設定済みなのに解決できない・Issue dir 自身またはその祖先を指す、harness 経由なのに
-  `KAJI_TMP_DIR` が未設定
+  `KAJI_TMP_DIR` が未設定、削除を始める前に辿る dir を列挙できない（読取権限がない等）
+- 一部を削除した後で辿る dir を列挙できなくなった場合は、その dir を一部削除失敗として報告する
 - 削除の失敗・スキップで close 全体を **ABORT にしない**。結果を記録して Step 6 へ進む
 
 ブロックの冒頭 3 行のプレースホルダーを実値に置き換えて実行する。`[close_via_harness]` は、プロンプトに
@@ -621,6 +622,7 @@ cleanup() {
   fi
   # KEEP の祖先を Issue dir から 1 段ずつ辿り、各段で次の祖先以外の子を消す
   FAILED=""
+  REMOVED=""
   DIR=$TARGET
   while :; do
     NEXT=""
@@ -628,9 +630,16 @@ cleanup() {
       REST=${KEEP#"$DIR"/}
       NEXT=$DIR/${REST%%/*}
     fi
+    # 読めない dir では glob が展開されず子が見えないため、列挙できることを先に確かめる
+    if ! ls -A -- "$DIR" >/dev/null 2>&1; then
+      if [ -z "$REMOVED" ]; then RESULT="スキップ（列挙できない: $DIR）"; return; fi
+      FAILED="$FAILED${FAILED:+, }$DIR"
+      break
+    fi
     for child in "$DIR"/* "$DIR"/.[!.]* "$DIR"/..?*; do
       if [ ! -e "$child" ] && [ ! -L "$child" ]; then continue; fi
       [ "$child" = "$NEXT" ] && continue
+      REMOVED=1
       rm -rf -- "$child" || FAILED="$FAILED${FAILED:+, }$child"
     done
     if [ -z "$NEXT" ] || [ "$NEXT" = "$KEEP" ]; then break; fi
@@ -664,7 +673,7 @@ KAJI_TMP_CLEANUP_EOF
 > | `削除済み（実行中 attempt dir を保持: <path>）` | 実行中 attempt dir とその親 dir 以外を削除した |
 > | `対象なし` | `tmp/kaji/[issue_id]` が存在しない |
 > | `スキップ（<理由>）` | 安全条件を満たさず何も削除していない |
-> | `一部削除失敗（要手動対応: <path>）` | 一部の削除に失敗した。記載の path を手動で確認する |
+> | `一部削除失敗（要手動対応: <path>）` | 一部の削除に失敗した、または一部を削除した後に列挙できない dir があった。記載の path を手動で確認する |
 >
 > どの値でも verdict は変えない（ブロックは常に exit 0）。
 

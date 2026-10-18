@@ -52,7 +52,7 @@ shell 変数は引き継がれない前提で、Step 2 の `MAIN_REPO` にも依
 | `削除済み（実行中 attempt dir を保持: <path>）` | 保護対象とその祖先以外を削除した |
 | `対象なし` | `tmp/kaji/<ISSUE_ID>` が存在しない |
 | `スキップ（<理由>）` | 安全条件を満たさず何も削除していない（下記「制約」の各ガード） |
-| `一部削除失敗（要手動対応: <path>）` | `rm` / `rmdir` の一部が失敗した |
+| `一部削除失敗（要手動対応: <path>）` | `rm` / `rmdir` の一部が失敗した、または一部を削除した後に辿る dir を列挙できなかった |
 
 - スクリプトは常に exit 0。どの値でも close の verdict は変えない（PASS 条件・ABORT 条件は既存のまま）
 - Step 6a の Issue コメント表と 6b の stdout 表に `| 一時ディレクトリ | [tmp_cleanup_result] |` 行を追加する
@@ -94,6 +94,9 @@ harness 経由（`dev.yaml` の `close` step、#508 layout）:
   - `KAJI_TMP_DIR` が設定されているのに物理パスへ解決できない（保護対象を特定できないため安全側に倒す）
   - `KAJI_TMP_DIR` が対象 dir そのものと一致する（保護すると何も消せず、消すと実行中 step を壊す）
   - `CLOSE_VIA_HARNESS=1` なのに `KAJI_TMP_DIR` が未設定（harness 契約違反。保護対象が不明）
+  - 削除を始める前に、辿る dir（Issue dir または保護対象の祖先）を列挙できない（読取権限がない等）。
+    読めない dir では glob が展開されず子が見えないため、`ls -A` で列挙できることを各段で先に確かめる
+    （review-code R1）。一部を削除した後に列挙できなくなった場合は、その dir を `一部削除失敗` として報告する
 - 保護対象: `KAJI_TMP_DIR` の物理パスが対象 dir の配下にある場合、その dir と、対象 dir からそこへ至る祖先 dir を
   残す。close step の実行中も終了時も消さない。残った dir は本 Issue では消さない（Issue スコープ境界）
 - `KAJI_TMP_DIR` が対象 dir の外（別 project root から `kaji run` した等）なら、保護対象なしとして対象 dir を丸ごと消す。
@@ -259,6 +262,9 @@ fixture と実行条件:
 - **ドットファイル**: `.hidden` ファイル / dir も消える
 - **削除失敗**: 書き込み権限を外した子 dir を置くと `一部削除失敗（要手動対応: ...）` を出し、exit code は 0
   （root 実行時は権限で失敗しないため skip 条件付き）
+- **列挙失敗**: 読取権限だけを外した dir（Issue dir、または保護対象の祖先）に削除前に到達すると
+  `スキップ（列挙できない: ...）` で何も消えない。一部削除後に到達すると `一部削除失敗（要手動対応: <その dir>）`
+  を出し、保護対象は残る（root 実行時は skip 条件付き。review-code R1）
 - **常に exit 0**: 上記すべてのケースで exit code 0、stdout に `TMP_CLEANUP_RESULT=` 行がちょうど 1 行
 
 `large_forge`（実 GitHub API）は追加しない。harness 経由で実際の close step が自身の attempt dir を残すことは、merge 後の
