@@ -36,7 +36,9 @@ Issue #426（`kaji issue resolve-verdict` の artifact fallback）の grill-me �
 時刻の利用者は次のとおり。
 
 - `resolve_verdict` の comment fallback: `created_at >= attempt_started_at`（下限は秒切り捨て）で
-  前 attempt のコメントを除外する（ADR 005）。異なる時計（GitHub とローカル）を比較している。
+  dispatch 開始秒より前のコメントを除外する（ADR 005）。異なる時計（GitHub とローカル）を比較している。
+  秒切り捨てのため、開始と同じ秒に投稿された前 attempt のコメントは時刻条件では除外できない
+  （§ 時計のずれと比較の限界）。
 - `kaji issue resolve-verdict`: marker 解決は `created_at`、artifact 解決は同じ attempt の
   `result.json` の `ended_at` を出力する。`ended_at` は記録文字列のまま出し、欠落・parse 不能・
   timezone なしなら `null`。mtime や現在時刻で補完しない。artifact 出力は `created_at` を含まない
@@ -85,10 +87,27 @@ Issue #426（`kaji issue resolve-verdict` の artifact fallback）の grill-me �
 
 - **新しい情報が得られない**: harness が `verdict.yaml` に時刻を書く場合、書けるのは verdict 解決時刻で
   あり、`ended_at` との差は同一処理内のミリ秒程度。agent / harness 以外に判定時刻を観測する主体は無い。
-- **欠落ケースを救えない**: `result.json` が無い経路（旧 run・書き出し失敗・割込み）では、harness が
-  `verdict.yaml` に書く時刻もほぼ残らない（旧 run には新 key も無く、割込みは通常 agent 実行中＝解決処理の
-  前に起きる。解決後・終了記録前の狭い区間だけが例外）。実質的に救えるのは agent が自分で時刻を書いた
-  場合だけである。
+- **欠落ケースの救済は限定的**: `result.json` が無い経路ごとに、案 C（harness が verdict 解決時に
+  `verdict.yaml` へ時刻を書く）が時刻を残せるかは次のとおり。
+
+  | `result.json` が無い経路 | 案 C で時刻が残るか | 理由 |
+  |---------------------------|--------------------|------|
+  | 旧 run（#222 以前・案 C 導入前） | 残らない | 新 key も存在しない。migration しない |
+  | 割込み（verdict 解決前。agent 実行中など） | 残らない | harness が解決処理に到達しない |
+  | 割込み（verdict 解決後・`_record_attempt_end` 前） | 残る | 解決時に保存済み |
+  | `result.json` 書き出しの `OSError`（解決後） | 残る | `_resolve_step_verdict` の保存が先行し、`_record_attempt_end` は `result.json` の `OSError` だけを WARN で握って継続する |
+
+  つまり案 C は「解決後に `result.json` だけが残らない」経路を救える（doc-review で
+  `write_result_json` のみを失敗させ `verdict.yaml` が残ることを確認済み）。一方、旧 run と解決前の
+  割込みは救えず、後者は agent 生成時刻（案 B）でなければ時刻を残せない。案 A を推奨するのは、案 C が
+  救う経路が (1) 解決直後のミリ秒単位の区間での割込み、(2) 直前に同じ attempt dir への
+  `verdict.yaml` 書き出しが成功した直後の `result.json` 書き出し失敗、という発生頻度の低い経路に限られ、
+  かつ救っても consumer は `ended_at` とほぼ同値の時刻を得るだけである一方、次の追加コストが恒常的に
+  かかるためである: artifact 経路でも agent が書いた `verdict.yaml` を常に書き直す、reader / writer /
+  `resolve-verdict` 出力 / consumer 規則に新 key と「どちらの時刻を使うか」の規則を追加する、旧 artifact
+  （key 無し）の扱いを定める。`result.json` 書き出し失敗が実際に問題になった場合は、時刻追加より先に
+  `result.json` 書き出しの失敗耐性（再試行など）を検討する方が、`status` / `synthetic` / `error` を含む
+  終了情報全体を守れる。
 - **agent 生成の時刻は信頼できない**: LLM は prompt の `attempt_started_at_utc` などを転記しうる。
   harness が `[attempt_started_at, 解決時刻]` の範囲検証を行っても、範囲内の誤値は検出できない。
   誤った時刻は「古い判定が新しく見える」方向にも働き、Issue の制約（復旧・コピー・再読込で古い判定を
@@ -106,7 +125,7 @@ Issue #426（`kaji issue resolve-verdict` の artifact fallback）の grill-me �
 |----|------|------|--------------|------|
 | A. 現状維持（推奨） | `verdict.yaml` は 4 key。時刻は `result.json` `ended_at` | 変更・BREAKING なし。生成主体が harness に一本化。#426 の consumer 規則と整合 | `result.json` 欠落時は時刻不明で consumer が停止する | 採用（提案） |
 | B. agent が判定時刻を書く | prompt で `decided_at` 等の保存を要求 | 割込み等で `result.json` が無くても時刻が残る | 値を検証できない。stdout / comment 経路では harness が補う値の意味が別物になる。exec_script・下流カスタマイズ skill に BREAKING | 却下 |
-| C. harness が解決時に `verdict.yaml` へ書く | `resolved_at` 等を正規化保存時に付与（artifact 経路も常に書き直す） | 時刻の生成主体が harness。`verdict.yaml` 単体で時刻が読める | `ended_at` とほぼ同値で新情報が無い。agent artifact を常に書き直す。欠落ケースは救えない | 現時点は不要。下記の条件で再検討 |
+| C. harness が解決時に `verdict.yaml` へ書く | `resolved_at` 等を正規化保存時に付与（artifact 経路も常に書き直す） | 時刻の生成主体が harness。`verdict.yaml` 単体で時刻が読める | `ended_at` とほぼ同値で新情報が無い。agent artifact を常に書き直す。救えるのは解決後の `result.json` 欠落（書き出し失敗・解決直後の割込み）のみで、旧 run と解決前の割込みは救えない | 現時点は不要。下記の条件で再検討 |
 | D. harness が `result.json` に別 key で書く | `verdict_resolved_at` 等を追加 | 判定上界をより厳密に表せる | `ended_at` との差がミリ秒程度で consumer の判断を変えない | 不要 |
 
 ## 判断を変える条件
@@ -126,8 +145,20 @@ Issue #426（`kaji issue resolve-verdict` の artifact fallback）の grill-me �
 - `created_at`（GitHub サーバ時計・秒精度）と `ended_at`（kaji 実行ホストのローカル時計・マイクロ秒）は
   別の時計である。ホスト時計のずれ以内で近接した判定同士は順序を保証できない。workflow の step は
   逐次実行で通常は分単位以上離れるため現行規則で足りるが、厳密な全順序は提供しない。
-- comment fallback の `attempt_started_at` 下限（ADR 005）も同じ限界を持つ。同一秒の区別は
-  `kaji-verdict` marker の step scoping で補っている（Issue #449）。
+- comment fallback の `attempt_started_at` 下限（ADR 005）も同じ限界を持つ。加えて下限は秒に
+  切り捨てるため、dispatch 開始と同じ秒に投稿されたコメントは時刻だけでは前後を区別できない。
+  `kaji-verdict` marker の step scoping（Issue #449）が補うのは、**有効な marker で別 step と識別できる
+  コメント（および marker 風だが文法外のコメント）の除外のみ**である。`_comment_step_scope_allows` は
+  step 名だけを比較するため、次の 2 つは識別できず、comment fallback で採用されうる（既知の限界。
+  本 ADR は動作変更を扱わない）。
+  - **同じ step の前 attempt** が dispatch 開始と同じ秒に投稿したコメント（retry / cycle で同一 step が
+    直後に再 dispatch された場合）。doc-review で、開始 `05:00:00.900000+00:00`・前 attempt コメント
+    `05:00:00Z`・同一 step の正常 marker・artifact / stdout なしの条件で、前 attempt のコメントが
+    `source=comment` として採用されることを確認済み。
+  - **marker 無しのコメント**（後方互換で候補に残る）が同じ秒に投稿された場合。
+  - いずれも artifact（`verdict.yaml`）が存在すれば comment fallback 自体を見ないため、artifact-primary
+    運用では顕在化しない。`verdict.yaml` に時刻を追加してもこの限界は解消しない（comment 経路の問題で
+    あり、識別には attempt 単位の marker などが必要）。
 
 ## 影響
 
