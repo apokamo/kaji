@@ -59,7 +59,7 @@ The overlay (`.kaji/config.local.toml`) can override tracked values in **only th
   `[incident]` table in the overlay is ignored (label names are a per-repository convention).
 - `[paths]` (`artifacts_dir` / `skill_dir` / `worktree_prefix` / `design_dir`) is **not** overlaid. `PathsConfig` is
   built solely from tracked `.kaji/config.toml`; the overlay is passed only to `[execution]` /
-  `[provider]` parsing (`config.py:141-154`). A `[paths]` table in the overlay is ignored.
+  `[provider]` parsing (`config.py` `KajiConfig._load`). A `[paths]` table in the overlay is ignored.
 
 Validation error messages point at the file that actually defined the key (tracked / overlay) only
 for each `[execution]` key (`source()` in `_parse_execution`) and for the removed
@@ -77,15 +77,15 @@ computation (`worktree_prefix`, `design_dir`), both are described separately.
 
 | key | Required/Optional | Type | Default | Validation | Source |
 |-----|-------------------|------|---------|------------|--------|
-| `artifacts_dir` | Required | str | — (unset is an error) | Relative paths must not contain `..` (prevents repo-root escape). Absolute paths / `~` expansion are allowed | `config.py:118-125`, `397-417` |
-| `skill_dir` | Required | str | — (unset is an error) | Relative only. No absolute paths, no `..` | `config.py:126-133`, `419-434` |
-| `worktree_prefix` | Optional | str | `""` (unset) | When non-empty, a single safe segment (`[A-Za-z0-9._-]+`; no separators / whitespace / `..` / absolute) | `config.py:134-140`, `436-452` |
+| `artifacts_dir` | Required | str | — (unset is an error) | Relative paths must not contain `..` (prevents repo-root escape). Absolute paths / `~` expansion are allowed | `config.py` `KajiConfig._load` (`artifacts_raw`) / `KajiConfig._validate_artifacts_dir` |
+| `skill_dir` | Required | str | — (unset is an error) | Relative only. No absolute paths, no `..` | `config.py` `KajiConfig._load` (`skill_dir_raw`) / `KajiConfig._validate_skill_dir` |
+| `worktree_prefix` | Optional | str | `""` (unset) | When non-empty, a single safe segment (`[A-Za-z0-9._-]+`; no separators / whitespace / `..` / absolute) | `config.py` `KajiConfig._load` (`wt_prefix_raw`) / `KajiConfig._validate_worktree_prefix` |
 | `design_dir` | Optional | str | `""` (unset) | Repository-relative POSIX directory. See the `design_dir` subsection below for rules V1–V7 | `design_dir.py` `validate_design_dir` / `config.py` `_DesignDirInput` / `KajiConfig._parse_design_dir` |
 
 > **`worktree_prefix`: "config default" vs "effective fallback"**:
 >
 > - **Config default (loader layer)**: when unset, `config.paths.worktree_prefix` is the **empty
->   string `""`** (`config.py:134`, `paths_data.get("worktree_prefix", "")`).
+>   string `""`** (`config.py` `KajiConfig._load`, `paths_data.get("worktree_prefix", "")`).
 > - **Effective fallback (provider layer)**: the worktree dir name is computed with
 >   `worktree_prefix or "kaji"` (`kaji_harness/providers/context.py:94` /
 >   `kaji_harness/worktree_discovery.py:92`), so the empty string falls back to `"kaji"` at path computation.
@@ -149,12 +149,12 @@ definition. `validate-series` and `run-series --dry-run` do not create the direc
 
 | key | Required/Optional | Type | Default | Validation | Source |
 |-----|-------------------|------|---------|------------|--------|
-| `default_timeout` | Required | int | — (unset is an error) | Integer `> 0` (bool not allowed) | `config.py:227-239` |
-| `agent_runner` | Optional | `"headless"` \| `"interactive_terminal"` | `"headless"` | Out-of-enum is `ConfigLoadError` | `config.py:241-252` |
-| `interactive_terminal_backend` | Optional | `"tmux"` (deprecated) \| `"herdr"` | `"tmux"` | Out-of-enum is `ConfigLoadError` | `config.py:472-484` |
-| `interactive_terminal_close_on_verdict` | Optional | bool | `true` | Non-bool is `ConfigLoadError` | `config.py:268-275` |
-| `failure_triage` | Optional | bool | `true` | Non-bool is `ConfigLoadError` | `config.py:276-291` |
-| `auto_recover` | Optional | bool | `false` | Non-bool is `ConfigLoadError` | `config.py:276-291` |
+| `default_timeout` | Required | int | — (unset is an error) | Integer `> 0` (bool not allowed) | `config.py` `KajiConfig._parse_execution` (`raw_timeout`) |
+| `agent_runner` | Optional | `"headless"` \| `"interactive_terminal"` | `"headless"` | Out-of-enum is `ConfigLoadError` | `config.py` `KajiConfig._parse_execution` (`raw_agent_runner`) |
+| `interactive_terminal_backend` | Optional | `"tmux"` (deprecated) \| `"herdr"` | `"tmux"` | Out-of-enum is `ConfigLoadError` | `config.py` `KajiConfig._parse_execution` (`raw_interactive_terminal_backend`) |
+| `interactive_terminal_close_on_verdict` | Optional | bool | `true` | Non-bool is `ConfigLoadError` | `config.py` `KajiConfig._parse_execution` (`raw_close`) |
+| `failure_triage` | Optional | bool | `true` | Non-bool is `ConfigLoadError` | `config.py` `KajiConfig._parse_execution` (`parse_bool`) |
+| `auto_recover` | Optional | bool | `false` | Non-bool is `ConfigLoadError` | `config.py` `KajiConfig._parse_execution` (`parse_bool`) |
 
 - `agent_runner` selects whether agent steps launch via a headless CLI or an interactive CLI inside a
   terminal pane. `interactive_terminal_backend` selects `tmux` or `herdr`; it is inert for the
@@ -260,8 +260,8 @@ See [incident label guide](../dev/incident-labels.md) for the meaning of each la
 ### `[provider]`
 
 The `[provider]` section is optional at the config loader layer: when neither tracked nor overlay
-defines it, the loader returns the provider as `None` (`config.py:303-304`). However, the provider
-resolution path of `kaji issue` / `kaji pr` / `kaji run` requires `[provider]` (unset exits 2; see
+defines it, the loader returns the provider as `None` (`config.py` `KajiConfig._parse_provider`).
+However, the provider resolution path of `kaji issue` / `kaji pr` / `kaji run` requires `[provider]` (unset exits 2; see
 [GitHub Mode CLI Guide](../cli-guides/github-mode.md)).
 
 | key | Required/Optional | Type | Default | Validation | Source |
@@ -276,9 +276,9 @@ local provider was removed after its deprecation in kaji v0.21.0. Set `provider.
 
 | key | Required/Optional | Type | Default | Validation | Source |
 |-----|-------------------|------|---------|------------|--------|
-| `repo` | Optional | str (`owner/name`) | `""` | Non-str is `ConfigLoadError`. Do not add an `https://` prefix or `.git` suffix | `config.py:334-336` |
-| `default_branch` | Optional | str | `"main"` | Non-str is `ConfigLoadError` | `config.py:337-339` |
-| `git_remote` | Optional | str | `"origin"` | Non-str is `ConfigLoadError` | `config.py:340-342` |
+| `repo` | Optional | str (`owner/name`) | `""` | Non-str is `ConfigLoadError`. Do not add an `https://` prefix or `.git` suffix | `config.py` `KajiConfig._parse_provider` (`repo_raw`) |
+| `default_branch` | Optional | str | `"main"` | Non-str is `ConfigLoadError` | `config.py` `KajiConfig._parse_provider` (`gh_default_branch_raw`) |
+| `git_remote` | Optional | str | `"origin"` | Non-str is `ConfigLoadError` | `config.py` `KajiConfig._parse_provider` (`gh_git_remote_raw`) |
 
 - `repo` is passed to `gh --repo <owner>/<name>` / `gh api repos/<owner>/<name>/...`. Setting it keeps
   the write target stable even when the worktree's git remote points at a fork.

@@ -60,7 +60,7 @@ overlay（`.kaji/config.local.toml`）が tracked を上書きできるのは **
   `[incident]` は無視される（ラベル名はリポジトリ単位の規約のため）。
 - `[paths]`（`artifacts_dir` / `skill_dir` / `worktree_prefix` / `design_dir`）は overlay 対象外。`PathsConfig` は
   tracked `.kaji/config.toml` のみから組み立てられ、overlay は `[execution]` / `[provider]` の解析に
-  しか渡されない（`config.py:141-154`）。overlay に `[paths]` を書いても無視される。
+  しか渡されない（`config.py` `KajiConfig._load`）。overlay に `[paths]` を書いても無視される。
 
 検証エラーのメッセージが「その key を実際に定義したファイル」（tracked / overlay）を指すのは、
 `[execution]` の各 key（`_parse_execution` の `source()`）と、削除済みの `provider.type = "local"` に
@@ -77,15 +77,15 @@ path 算出時に適用する**実効 fallback** が異なる key（`worktree_pr
 
 | key | 必須/任意 | 型 | 既定 | 検証規則 | 一次情報 |
 |-----|----------|----|------|----------|---------|
-| `artifacts_dir` | 必須 | str | —（未設定はエラー） | 相対パスは `..` 不可（repo root 脱出防止）。絶対パス / `~` 展開は許可 | `config.py:118-125`, `397-417` |
-| `skill_dir` | 必須 | str | —（未設定はエラー） | 相対パスのみ。絶対パス不可・`..` 不可 | `config.py:126-133`, `419-434` |
-| `worktree_prefix` | 任意 | str | `""`（未設定） | 非空時は単一の安全な segment（`[A-Za-z0-9._-]+`、separator / 空白 / `..` / 絶対 不可） | `config.py:134-140`, `436-452` |
+| `artifacts_dir` | 必須 | str | —（未設定はエラー） | 相対パスは `..` 不可（repo root 脱出防止）。絶対パス / `~` 展開は許可 | `config.py` `KajiConfig._load` (`artifacts_raw`) / `KajiConfig._validate_artifacts_dir` |
+| `skill_dir` | 必須 | str | —（未設定はエラー） | 相対パスのみ。絶対パス不可・`..` 不可 | `config.py` `KajiConfig._load` (`skill_dir_raw`) / `KajiConfig._validate_skill_dir` |
+| `worktree_prefix` | 任意 | str | `""`（未設定） | 非空時は単一の安全な segment（`[A-Za-z0-9._-]+`、separator / 空白 / `..` / 絶対 不可） | `config.py` `KajiConfig._load` (`wt_prefix_raw`) / `KajiConfig._validate_worktree_prefix` |
 | `design_dir` | 任意 | str | `""`（未設定） | repository 相対の POSIX directory。規則 V1〜V7 は下の `design_dir` 節を参照 | `design_dir.py` `validate_design_dir` / `config.py` `_DesignDirInput` / `KajiConfig._parse_design_dir` |
 
 > **`worktree_prefix` の「設定 default」と「実効 fallback」**:
 >
 > - **設定 default（config loader 層）**: 未設定時の `config.paths.worktree_prefix` は **空文字 `""`**
->   （`config.py:134` の `paths_data.get("worktree_prefix", "")`）。
+>   （`config.py` `KajiConfig._load` の `paths_data.get("worktree_prefix", "")`）。
 > - **実効 fallback（provider 層）**: worktree dir 名を算出する箇所では `worktree_prefix or "kaji"`
 >   が使われる（`kaji_harness/providers/context.py:94` /
 >   `kaji_harness/worktree_discovery.py:92`）。つまり空文字は path 算出時に `"kaji"` へ倒れる。
@@ -141,12 +141,12 @@ worktree）基準で解決される（Issue #177、[ワークフロー作成](..
 
 | key | 必須/任意 | 型 | 既定 | 検証規則 | 一次情報 |
 |-----|----------|----|------|----------|---------|
-| `default_timeout` | 必須 | int | —（未設定はエラー） | `> 0` の整数（bool 不可） | `config.py:227-239` |
-| `agent_runner` | 任意 | `"headless"` \| `"interactive_terminal"` | `"headless"` | 列挙外は `ConfigLoadError` | `config.py:241-252` |
-| `interactive_terminal_backend` | 任意 | `"tmux"`（非推奨） \| `"herdr"` | `"tmux"` | 列挙外は `ConfigLoadError` | `config.py:472-484` |
-| `interactive_terminal_close_on_verdict` | 任意 | bool | `true` | bool 以外は `ConfigLoadError` | `config.py:268-275` |
-| `failure_triage` | 任意 | bool | `true` | bool 以外は `ConfigLoadError` | `config.py:276-291` |
-| `auto_recover` | 任意 | bool | `false` | bool 以外は `ConfigLoadError` | `config.py:276-291` |
+| `default_timeout` | 必須 | int | —（未設定はエラー） | `> 0` の整数（bool 不可） | `config.py` `KajiConfig._parse_execution` (`raw_timeout`) |
+| `agent_runner` | 任意 | `"headless"` \| `"interactive_terminal"` | `"headless"` | 列挙外は `ConfigLoadError` | `config.py` `KajiConfig._parse_execution` (`raw_agent_runner`) |
+| `interactive_terminal_backend` | 任意 | `"tmux"`（非推奨） \| `"herdr"` | `"tmux"` | 列挙外は `ConfigLoadError` | `config.py` `KajiConfig._parse_execution` (`raw_interactive_terminal_backend`) |
+| `interactive_terminal_close_on_verdict` | 任意 | bool | `true` | bool 以外は `ConfigLoadError` | `config.py` `KajiConfig._parse_execution` (`raw_close`) |
+| `failure_triage` | 任意 | bool | `true` | bool 以外は `ConfigLoadError` | `config.py` `KajiConfig._parse_execution` (`parse_bool`) |
+| `auto_recover` | 任意 | bool | `false` | bool 以外は `ConfigLoadError` | `config.py` `KajiConfig._parse_execution` (`parse_bool`) |
 
 - `agent_runner` は agent step を headless CLI で起動するかterminal pane上の対話CLIで起動するかを選ぶ。
   `interactive_terminal_backend` は `tmux` / `herdr` を選ぶ。既定は `tmux` のままで、環境による
@@ -220,7 +220,7 @@ transient_label = "incident:cause:transient"
 ### `[provider]`
 
 `[provider]` section は config loader 層では任意で、tracked / overlay の双方に無い場合 loader は
-provider を `None` として返す（`config.py:303-304`）。ただし `kaji issue` / `kaji pr` / `kaji run` の
+provider を `None` として返す（`config.py` `KajiConfig._parse_provider`）。ただし `kaji issue` / `kaji pr` / `kaji run` の
 provider 解決経路では `[provider]` は必須（未設定は exit 2。
 [GitHub Mode CLI Guide](../cli-guides/github-mode.md) 参照）。
 
@@ -236,9 +236,9 @@ provider 解決経路では `[provider]` は必須（未設定は exit 2。
 
 | key | 必須/任意 | 型 | 既定 | 検証規則 | 一次情報 |
 |-----|----------|----|------|----------|---------|
-| `repo` | 任意 | str（`owner/name`） | `""` | str 以外は `ConfigLoadError`。`https://` プレフィクスや `.git` サフィックスは付けない | `config.py:334-336` |
-| `default_branch` | 任意 | str | `"main"` | str 以外は `ConfigLoadError` | `config.py:337-339` |
-| `git_remote` | 任意 | str | `"origin"` | str 以外は `ConfigLoadError` | `config.py:340-342` |
+| `repo` | 任意 | str（`owner/name`） | `""` | str 以外は `ConfigLoadError`。`https://` プレフィクスや `.git` サフィックスは付けない | `config.py` `KajiConfig._parse_provider` (`repo_raw`) |
+| `default_branch` | 任意 | str | `"main"` | str 以外は `ConfigLoadError` | `config.py` `KajiConfig._parse_provider` (`gh_default_branch_raw`) |
+| `git_remote` | 任意 | str | `"origin"` | str 以外は `ConfigLoadError` | `config.py` `KajiConfig._parse_provider` (`gh_git_remote_raw`) |
 
 - `repo` は `gh --repo <owner>/<name>` / `gh api repos/<owner>/<name>/...` に渡される。設定すると
   worktree の git remote が fork を指していても書き先がズレない。
