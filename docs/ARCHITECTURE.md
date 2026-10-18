@@ -229,7 +229,8 @@ agent 経路の起動 backend は repository config の `[execution] agent_runne
 `kaji run --agent-runner`）で選ぶ（Issue #224）。
 
 - **`headless`（既定）**: `execute_cli()` が `claude -p --output-format stream-json` /
-  `codex exec --json` / `agy -p` を起動する。
+  `codex exec --json` / `agy -p` を起動する。prompt は argv で渡し、子 CLI の stdin は
+  `/dev/null` に固定する（kaji の stdin を継承しない。Issue #494）。
   Antigravity の stdout は JSONL decode せず plain text 全行を保持する。
 - **`interactive_terminal`**: `execute_interactive_terminal()` が
   `[execution].interactive_terminal_backend` で `tmux`（既定）または `herdr` を明示選択し、pane上で通常の

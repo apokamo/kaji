@@ -239,8 +239,11 @@ def _execute_cli_once(
         raise StepTimeoutError(step.id, timeout)
 
     try:
+        # Issue #494: prompt は argv で渡す。kaji の stdin（閉じられない pipe 等）を継承すると、
+        # `codex exec` は stdin が pipe なら EOF まで読むため step timeout まで停止する。
         process = subprocess.Popen(
             args,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -480,7 +483,8 @@ def _build_codex_args(
         case "auto":
             args.append("--dangerously-bypass-approvals-and-sandbox")
         case "sandbox":
-            # `codex exec resume` は -s/--sandbox を受け付けず、元 session の sandbox も引き継がない
+            # `codex exec resume` は -s/--sandbox を受け付けない。codex-cli 0.163.0 では元 session の
+            # sandbox を引き継ぐが、旧版の挙動は未確認のため -c で明示する
             if session_id:
                 args += ["-c", 'sandbox_mode="workspace-write"']
             else:

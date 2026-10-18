@@ -9,6 +9,7 @@ Mock CLI process that outputs JSONL, verifying stream_and_log() behavior:
 """
 
 import json
+import os
 import stat
 import subprocess
 from pathlib import Path
@@ -588,6 +589,81 @@ class TestExecuteCLISuccessFlow:
         assert "output text" in result.full_output
         assert result.cost is not None
         assert result.cost.usd == 0.01
+
+
+@pytest.mark.medium
+class TestExecuteCLIStdinIsolation:
+    """Issue #494: kaji の stdin を子 CLI へ継承しない。"""
+
+    def test_cli_reading_stdin_gets_eof_when_kaji_stdin_is_open_pipe(self, tmp_path: Path) -> None:
+        """kaji の stdin が閉じられない pipe でも、stdin を EOF まで読む CLI が即完了する。
+
+        `codex exec` は stdin が pipe なら prompt 引数があっても EOF まで読む。
+        """
+        jsonl_lines = [
+            json.dumps({"type": "thread.started", "thread_id": "thread-stdin"}),
+            json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "OK"}}),
+            json.dumps(
+                {"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1}}
+            ),
+        ]
+        script = tmp_path / "stdin_reading_cli.sh"
+        echos = "\n".join(f"echo '{line}'" for line in jsonl_lines)
+        # builtin の read で EOF まで読む。外部コマンド（cat 等）だと timeout kill 後も
+        # 孫プロセスが stdout を保持し、修正前の Red が timeout ではなく hang になる。
+        script.write_text(f"#!/bin/bash\nwhile read -r _; do :; done\n{echos}\n")
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
+        step = Step(
+            id="codex-step", skill="test-skill", agent="codex", timeout=5, on={"PASS": "end"}
+        )
+
+        read_fd, write_fd = os.pipe()
+        saved_stdin_fd = os.dup(0)
+        os.dup2(read_fd, 0)
+        try:
+            with patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]):
+                result = execute_cli(
+                    step=step,
+                    prompt="test prompt",
+                    workdir=tmp_path,
+                    session_id=None,
+                    log_dir=tmp_path / "logs",
+                    execution_policy="auto",
+                    verbose=False,
+                    default_timeout=1800,
+                )
+        finally:
+            os.dup2(saved_stdin_fd, 0)
+            for fd in (saved_stdin_fd, read_fd, write_fd):
+                os.close(fd)
+
+        assert result.session_id == "thread-stdin"
+        assert "OK" in result.full_output
+
+    def test_popen_receives_devnull_stdin(self, tmp_path: Path) -> None:
+        """子 CLI の起動に stdin=subprocess.DEVNULL を渡す。"""
+        script = _create_mock_cli_script(
+            tmp_path, [json.dumps({"type": "result", "result": "final"})]
+        )
+        step = Step(id="test-step", skill="test-skill", agent="claude", on={"PASS": "end"})
+
+        with (
+            patch("kaji_harness.cli.build_cli_args", return_value=[str(script)]),
+            patch("kaji_harness.cli.subprocess.Popen", wraps=subprocess.Popen) as popen,
+        ):
+            execute_cli(
+                step=step,
+                prompt="test prompt",
+                workdir=tmp_path,
+                session_id=None,
+                log_dir=tmp_path / "logs",
+                execution_policy="auto",
+                verbose=False,
+                default_timeout=1800,
+            )
+
+        assert popen.call_args.kwargs["stdin"] is subprocess.DEVNULL
 
 
 @pytest.mark.medium
