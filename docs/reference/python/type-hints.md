@@ -64,9 +64,56 @@ def _write(self, event: str, **kwargs: Any) -> None:
     entry: dict[str, Any] = {"event": event, **kwargs}
 ```
 
+## Pydantic と dataclass の使い分け
+
+データ構造は「信頼境界の外から来るか」で使い分ける。
+
+| 用途 | 使うもの | 例 |
+|------|---------|-----|
+| 外部入力（ユーザーが書く YAML / CLI 入力 JSON など） | Pydantic v2 `BaseModel` | `SeriesConfig`（[ADR 010](../../adr/010-pydantic-series-input-validation.md)）、`TrackingPlanInput` |
+| 永続化して後で読み戻す構造化 artifact / state | Pydantic v2 `BaseModel` | `BaselineArtifact` / `PluginReport`（`kaji_harness/baseline.py`）、`SeriesState` |
+| 検証済みデータを受け取る内部データ構造 | `@dataclass` | `Step` / `Workflow`、`RunLogger` |
+
+- 外部入力は Pydantic で検証する（`AGENTS.md` の常時適用ルール）。フィールド検証を
+  呼び出し側ごとに手書きしない
+- 既存の workflow YAML は `@dataclass` + 明示的な validator で検証しており、Pydantic への移行は
+  行っていない（ADR 010）。新しい外部入力契約を追加するときは Pydantic で検証する
+
+### Pydantic モデル（外部入力・artifact）
+
+未知フィールドは `extra="forbid"` で拒否する。入力形式に応じて検証メソッドを使い分ける。
+
+- JSON 文字列（JSON artifact / state ファイルなど）: `model_validate_json()` でパースと検証を一度に行う
+- YAML: `model_validate_json()` は JSON 専用で YAML を受理しないため、`yaml.safe_load()` で
+  パースした結果を `model_validate()` に渡す（例: `kaji_harness/series/loader.py` の `SeriesConfig`）
+- パース済みの Python オブジェクト（`json.loads()` の結果など）: `model_validate()`
+
+以下は JSON artifact を読む例。
+
+```python
+from __future__ import annotations
+
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class BaselineSummary(BaseModel):
+    """Machine-readable pytest summary counts."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    collected: int = Field(ge=0)
+    passed: int = Field(ge=0)
+
+
+def load_summary(path: Path) -> BaselineSummary:
+    return BaselineSummary.model_validate_json(path.read_text(encoding="utf-8"))
+```
+
 ## dataclass パターン
 
-kaji は Pydantic を使用しない。データクラスには `@dataclass` を使用する。
+検証済みデータを扱う内部データ構造には `@dataclass` を使用する。
 
 ### 基本 dataclass
 
