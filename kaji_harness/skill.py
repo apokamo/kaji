@@ -11,7 +11,8 @@ import yaml
 
 from .errors import SecurityError, SkillFrontmatterError, SkillNotFound
 
-# Codex が repo スコープの skill を探索するディレクトリ（workdir からの相対パス）。
+# Codex が repo スコープの skill を探索するディレクトリ。workdir から Git repo root までの
+# 各階層（Git repo 外では workdir のみ）からの相対パス。
 # kaji の canonical な ``paths.skill_dir`` とは別に、codex step ではここも検証する。
 CODEX_SKILL_DIR = ".agents/skills"
 
