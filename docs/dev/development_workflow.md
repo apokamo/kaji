@@ -259,7 +259,7 @@ PR 作成後（`/i-pr` が PR 番号を追記）:
 | `/issue-start` | worktree 構築 + Issue 本文 NOTE ブロックに Worktree/Branch 追記 |
 | `/i-dev-final-check` | エビデンス集約 + 品質チェック + 設計書 NOTE 直下添付 + Issue 本文更新 |
 | `/i-pr` | コミット整理 + push + PR 作成 |
-| `/issue-close` | PR merge + worktree 削除 + ブランチ安全削除 + Issue クローズ（※手動実行） |
+| `/issue-close` | PR merge + worktree 削除 + ブランチ安全削除 + Issue クローズ + Issue の一時作業ディレクトリ（`tmp/kaji/<issue_id>/`）削除（※手動実行） |
 
 ### 設計フェーズ
 

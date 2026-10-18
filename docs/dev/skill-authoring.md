@@ -169,7 +169,9 @@ exec_script: kaji_harness.scripts.review_poll_entry
 他の `KAJI_*` は script-like 専用）。実体は project root 直下の `tmp/kaji/<issue_id>/<NNNN>/`（Issue 内の通し番号。Issue #508）
 で、親環境の同名変数は上書きされる。kaji 固有の処理は `$KAJI_TMP_DIR` を明示参照してよい
 （例: `git diff > "$KAJI_TMP_DIR/diff.txt"`）。明示的な `/tmp` 書き込みは禁止しない（環境変数を尊重する処理だけを
-誘導する）。作成した dir は自動削除されない。詳細は [ARCHITECTURE.md](../ARCHITECTURE.md) § 実行アーティファクトの layout。
+誘導する）。runner は作成した dir を削除しない。Issue 単位の `tmp/kaji/<issue_id>/` は `issue-close` が Issue close 後に
+削除する（harness 経由では close step 自身の attempt dir とその親 dir を残す）。詳細は
+[ARCHITECTURE.md](../ARCHITECTURE.md) § 実行アーティファクトの layout。
 
 **出力契約**:
 - verdict ブロックを stdout に出力する責務は script 側にある（既存 `kaji_harness.scripts.codex_review_poll.emit_verdict()` 同型）。

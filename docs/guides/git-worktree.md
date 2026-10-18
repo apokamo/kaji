@@ -152,7 +152,7 @@ worktree のライフサイクルはスキルで管理される:
 - `/issue-start [issue-number]`: worktree 作成、`.venv` シンボリックリンク、Issue 本文にメタ情報追記
 - `/pr-fix [issue-number]`: PR レビュー指摘対応を **同じ worktree** で実行
 - `/pr-verify [issue-number]`: 指摘修正の収束確認を行う（新規指摘は禁止）
-- `/issue-close [issue-number]`: `.venv` symlink 削除、worktree 削除、ブランチ削除、PR マージ
+- `/issue-close [issue-number]`: `.venv` symlink 削除、worktree 削除、ブランチ削除、PR マージ、Issue の一時作業ディレクトリ（`tmp/kaji/<issue_id>/`）削除
 
 手動で worktree を削除する場合は、`.venv` シンボリックリンクを先に削除する必要がある（untracked file があると `git worktree remove` が失敗する）:
 
