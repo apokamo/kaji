@@ -28,6 +28,7 @@ Issue #396 の Herdr backend と agent-originated kaji launch を検証するた
 - [Implementation validation](reports/2026-08-20-implementation-validation.md)
 - [Metadata ownership persistence](reports/2026-08-21-metadata-ownership-persistence.md)
 - [Guarded live Herdr fake-agent smoke](reports/2026-08-21-live-herdr-fake-agent.md)
+- [Full transcript feasibility (#476)](reports/2026-10-17-full-transcript-feasibility.md)
 
 ## Non-destructive fake CLI smoke
 
