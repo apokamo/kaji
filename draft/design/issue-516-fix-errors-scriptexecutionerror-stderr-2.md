@@ -7,7 +7,8 @@ Issue: #516
 `ScriptExecutionError` が例外メッセージに stderr の**先頭 200 文字**を入れているため、
 `exec_script` / `exec:` step の失敗原因（stderr 末尾の例外行）が `result.json.error`・`run.log`・
 incident から失われる。また incident の fingerprint が原因と無関係な先頭部分から作られる。
-メッセージに入れる部分を「stderr の最後の非空行（失敗原因行）」に替え、長さの上限は保つ。
+メッセージに入れる部分を「stderr の最後の失敗原因行を、fingerprint と同じ正規化に 1 回通したもの」に替え、
+長さの上限は保つ。
 原因行の抜粋は application 層の `script_exec.py`（例外の唯一の送出元）で行い、
 foundation 層の `errors.py` は渡された要約をメッセージに入れるだけにする。
 
@@ -145,18 +146,17 @@ incident の fingerprint 機構（Issue #304）は後から入り、このメッ
 
 `summary` の抜粋規則（`kaji_harness/script_exec.py` の private helper `_stderr_summary` として実装）:
 
-1. stderr を `str.splitlines()` で行に分け、各行の末尾空白を除く。`\r` だけで区切られた
-   進捗表示も行として分かれる。
-2. 空でない最後の行を「原因行」とする。
-3. 空でない行が無い（空文字・空白のみ）場合は `(no stderr)` とする
+1. stderr が空文字・空白のみなら `(no stderr)` とする
    （`script_exec.py:186` が空 stderr に渡す既存の表記と同じ）。
-4. 原因行が `_STDERR_SUMMARY_LIMIT`（**2000 文字** = `FINGERPRINT_LIMIT`）以下なら、そのまま（raw）入れる。
-5. 原因行が上限を超える場合は、raw の文字数では切らず、**`normalize_error_text(原因行)` の結果**を入れる。
-   `normalize_error_text` は path・timestamp 等を `<PATH>` / `<TS>` 等に置換した**後**に
-   `FINGERPRINT_LIMIT` 文字で切るので、結果は 2000 文字以下になり、かつ可変値の長さに依存しない
-   （正規化 → 切り詰めの順序。§ 制約・前提条件）。この場合のメッセージには `<PATH>` 等の placeholder が
-   現れ、それ自体が「正規化済み」の印になる。raw の全文は `stderr` 属性と `stderr.log` にある。
-6. 要約は 1 行（改行を含めない）。
+2. stderr を `str.splitlines()` で行に分ける（`\r\n` 改行も、`\r` だけで区切られた進捗表示も行として分かれる）。
+3. 最後の行から順に `normalize_error_text(行)` を計算し、結果が空でない最初の行を「原因行」とし、
+   **その正規化結果をそのまま要約にする**。行の長さによらず常に同じ規則で、raw の行は要約に入れない。
+   正規化で空になる行（空白行、`File "...", line N, in f` の traceback フレーム行、ANSI 制御列だけの行等）は
+   飛ばす。
+4. 全行が正規化で空になる（非空の stderr がフレーム行だけ等）場合は `(no cause line)` とする。
+5. `normalize_error_text` は path・timestamp 等を `<PATH>` / `<TS>` 等に置換し、redaction・空白正規化の
+   **後**に `FINGERPRINT_LIMIT`（2000）文字で切るので、要約は常に 1 行・2000 文字以下になる（有界）。
+   raw の全文は `stderr` 属性と `stderr.log` にある。
 
 ### 使用例
 
@@ -176,9 +176,9 @@ if process.returncode != 0:
 # の場合:
 str(exc)
 # "Step 'baseline' deterministic command 'kaji_harness.scripts.baseline_precheck' exited with "
-# "code 1: OSError: [Errno 30] Read-only file system: '/home/aki/dev/kaji/kaji-fix-489/.kaji-artifacts'"
-exc.stderr  # 全文（stderr.log と同じ）
-exc.summary  # "OSError: [Errno 30] Read-only file system: '/home/aki/dev/kaji/kaji-fix-489/.kaji-artifacts'"
+# "code 1: OSError: [Errno 30] Read-only file system: '<PATH>'"
+exc.stderr  # 全文（stderr.log と同じ。実際の path はここで読む）
+exc.summary  # "OSError: [Errno 30] Read-only file system: '<PATH>'"
 
 # テスト等で直接作る場合も summary を指定する
 ScriptExecutionError("s1", "lbl", 3, "the stderr tail", summary="the stderr tail")
@@ -214,32 +214,36 @@ ScriptExecutionError("s1", "lbl", 3, "the stderr tail", summary="the stderr tail
   （#499 の例で約 150 文字）の後に原因行が続く。原因行が長い場合（長い path を含む等）は
   根拠欄と ABORT evidence で原因行の末尾が切れるが、例外の種類とメッセージの書き出しは先頭側に
   あるので残る。`result.json.error` には要約の全体が残る。
-- **正規化してから切る（正規化前の文字数で切らない）。** fingerprint は `normalize_error_text` が
-  path・timestamp 等を placeholder に置換した**後**の text を `FINGERPRINT_LIMIT = 2000` 文字で切って
-  作られる。正規化**前**の原因行を文字数で切ると、上限をいくつにしても、切るかどうか・
-  どこで切るかが可変値の長さで変わり、同じ原因でも hash が分裂する（design review の指摘 2 回:
-  300 文字上限で path 20 / 333 文字、8192 文字上限で 3 path × 20 / 3006 文字の同じ EROFS 行が分裂）。
-  そこで、上限を超える原因行は **同じ `normalize_error_text` に通した結果**を要約にする。
-  切り詰めは常に正規化の後でだけ起きる。
-- **不変条件（実装とテストで固定する）**: 任意の原因行 `L` と、fingerprint 算出時に前に付く固定の
-  接頭辞 `P`（`ScriptExecutionError: Step '...' deterministic command '...' exited with code N: `）に
-  ついて `normalize_error_text(P + L) == normalize_error_text(P + normalize_error_text(L))`。
-  これが成り立てば、上限以下（raw）と上限超過（正規化済み）のどちらの表現になっても、同じ原因
-  （正規化後が同じ）の fingerprint は一致する。成り立つ理由: 正規化は冪等（placeholder は再度の置換
-  対象にならず、`mask_secrets` の伏字も同じ伏字に置換される）で、`P` は固定文字列で `: ` で終わるため
-  `L` 側の置換と境界で干渉しない。正規化結果は 2000 文字で切られているが、`P` が前に付く分、外側の
-  `[:2000]` の窓はその切れ目より手前で終わる。試作（本版で再実行）で、3 つの path を 20 / 333 / 3006 / 10000 文字に
-  変えた原因行（134〜30,077 文字）がすべて同じ hash（先頭 `ddbe02653c7d`、verify-design の独立確認と同値）、
-  行内 timestamp・run_id が違う原因行も同じ hash、`RuntimeError` の行とは別 hash になることを確認した。
-- **上限 2000 の理由**: `FINGERPRINT_LIMIT` と同じ値にすると、raw で入れた原因行が fingerprint の窓
-  （正規化後 2000 文字）をはみ出す量と、正規化表現に切り替わる境界がそろい、メッセージは最大で
-  接頭辞 + 2000 文字程度に収まる（有界）。値は不変条件に影響しない（どの値でも hash は一致する）ため、
-  可読性とメッセージ長の兼ね合いで選んだ。定数は `script_exec.py` に置き、`FINGERPRINT_LIMIT` を参照して
-  値の重複を避ける（`kaji_harness.recovery` の facade は `FINGERPRINT_LIMIT` も `__all__` に載せている）。
+- **要約は常に「原因行を 1 回正規化したもの」にする（raw 行の長さで表現を切り替えない）。**
+  fingerprint は `normalize_error_text` が path・timestamp 等を placeholder に置換した**後**の text を
+  `FINGERPRINT_LIMIT = 2000` 文字で切って作られる。これまでの版の問題と、本版で取り除いた前提:
+  - 初版（300 文字）・第 2 版（8192 文字）: 正規化**前**の raw 行を文字数で切ったため、切るかどうか・
+    どこで切るかが可変値の長さで変わり、同じ原因でも hash が分裂した（design review の指摘 2 回）。
+  - 第 3・4 版（2000 文字以下は raw、超過時は正規化結果）: raw 行の長さで「fingerprint 側で 1 回だけ
+    正規化される（`N(P+L)`）」か「2 回・接頭辞なしの文脈で正規化される（`N(P+N(L))`）」かが切り替わった。
+    既存の正規化は文脈依存（`_TRACEBACK_FRAME_RE` は行頭 anchor で、単独行と接頭辞付きで結果が違う）かつ
+    非冪等（redaction → ANSI 除去の順のため、ANSI で分断された `token=...` は 2 回目で初めて伏字になる）
+    なので、この 2 つは一般に一致せず、review で反例 2 種（frame 行、ANSI 着色キー）が示された。
+  - 本版: 長さによる分岐をなくし、要約 `S = N(L)` を常に使う。fingerprint は `N(P + N(L))`。
+    **同じ原因（`N(L)` が等しい）なら fingerprint 算出への入力文字列 `P + N(L)` 自体が同一**なので、
+    hash は正規化の冪等性・文脈非依存性を仮定せずに一致する（決定性だけを使う）。原因行の選択も
+    各行の `N(行)` が空かどうかだけで決まるので、occurrence 固有値だけが違う 2 つの stderr では同じ位置の
+    行が選ばれる。不変条件 `N(P+L) == N(P+N(L))` には依存しない（前版の記述は撤回）。
+  - 「同じ原因」の定義: 選ばれた原因行の `normalize_error_text` の結果が等しいこと。これは fingerprint
+    機構が occurrence 固有値として除くもの（`signature.py` module docstring）と同じ基準で、
+    review が反例の同一性判定に使った基準（全文の `N(L)` の一致）とも同じ。
+  - 試作（本版で実施）: 通常 EROFS の 3 path × 20 / 3006 / 約 10000 文字、review の反例 A（原因行の後に
+    frame 行で終わる / frame 行だけで終わる）と反例 B（ANSI 着色 `token` キー）の path 20 / 3006 /
+    約 10000 文字が、それぞれ同じ hash になった（EROFS は `ddbe02653c7d…`、反例 B は `d467a54ecc40…`）。
+    `OSError` と `RuntimeError` は別 hash、行内 timestamp・run_id 違いは同じ hash、10 万文字の行の要約は
+    2000 文字以下、incident 根拠欄（`sanitize_evidence`）に `Read-only file system` が残ることも確認した。
+- **差分の識別に使える範囲**: 2 つの原因行の `N(L)` が違っても、その差が `N(L)` の 2000 文字の切り詰めより
+  後ろ、または `P + N(L)` の外側の 2000 文字の窓より後ろにしかなければ、同じ hash になる。これは
+  `signature.py` が先頭 2000 文字だけを識別に使う既存の性質で、本変更で広げも狭めもしない。
 - **抜粋は行単位で決める（文字数の窓で決めない）。** 「末尾 N 文字」の窓は、worktree 名などの
   path の長さで窓の開始位置がずれ、同じ原因でも fingerprint が変わる。行単位なら path の長さは
   行の中だけの差になり、正規化（`<PATH>`）で消える。
-- **原因行より前の行は要約に入れない。** 前の行には pytest の実行時間
+- **原因行より前の行は要約に入れない。**（正規化で空になる行を飛ばす場合を除く） 前の行には pytest の実行時間
   （例: `in 312.45s`）のような、正規化で消えない実行ごとの値が入りうる。入れると EB 3 を壊す。
   前の文脈（traceback のフレーム）は `stderr.log` で読む。
 - **既存の正規化に頼る範囲を明確にする。** 原因行に入る実行ごとの値は、絶対 path・timestamp・
@@ -259,11 +263,17 @@ ScriptExecutionError("s1", "lbl", 3, "the stderr tail", summary="the stderr tail
 
 ### 既知の限界
 
-- 最後の非空行が原因を表さない stderr（失敗の後に無関係な警告を出して終わる command 等）では、
+- 正規化後に空でない最後の行が原因を表さない stderr（失敗の後に無関係な警告を出して終わる command 等）では、
   原因行の代わりにその行が残る。現行の banner よりは原因に近く、全文は `stderr.log` に残る。
-- 原因行が 2000 文字を超えると、メッセージ上の path 等は `<PATH>` 等の placeholder になり、実際の
-  値は読めない（`stderr.log` で読む）。fingerprint の一意性と有界性を優先した結果で、通常の例外行
-  （#499 で約 90 文字）はこの経路に入らない。
+- メッセージ（`result.json.error` / `run.log` / ABORT evidence）上の path・timestamp・長い数値等は、
+  原因行の長さによらず `<PATH>` / `<TS>` / `<N>` 等の placeholder になり、実際の値は読めない
+  （`stderr` 属性と `stderr.log` で読む）。#499 の例ではメッセージは
+  `OSError: [Errno 30] Read-only file system: '<PATH>'` になる。EB 1 が求める原因（例外の種類と
+  メッセージ）は残り、fingerprint の一意性と有界性を優先した結果である。副次的に、redaction（`mask_secrets`）
+  が 1 回かかるため、従来 raw のまま出ていた stderr 先頭の秘匿値がメッセージに出にくくなる。ただし
+  正規化は非冪等なので、ANSI で分断された `token=...` のように 1 回目では伏字にならない値は要約に残りうる
+  （従来の raw 先頭 200 文字と比べて悪化はしない。incident 根拠欄は従来どおり `sanitize_evidence` で再度 mask される）。
+- traceback フレーム行だけで終わる stderr では、その上の行（正規化後に空でない最後の行）が要約になる。
 - fingerprint は正規化後の `attempt_error` 全体（接頭辞 + 要約）の先頭 2000 文字から作られる。
   `command_label` が長い（長い argv の `exec:` step 等）と接頭辞が窓の大半を占め、原因行の一部
   または全部が窓に入らない場合がある。その場合は原因の識別に使われない。これは `signature.py` の
@@ -288,30 +298,28 @@ class ScriptExecutionError(HarnessError):
 
 
 # kaji_harness/script_exec.py（application）
-from .recovery import FINGERPRINT_LIMIT, normalize_error_text
-
-_STDERR_SUMMARY_LIMIT = FINGERPRINT_LIMIT
+from .recovery import normalize_error_text
 
 def _stderr_summary(stderr: str) -> str:
-    """stderr の最後の非空行を、失敗原因行として有界に返す。
+    """stderr の最後の失敗原因行を、fingerprint と同じ正規化に 1 回通して返す。
 
-    上限を超える行は raw で切らず、fingerprint と同じ正規化を通した結果を返す
-    （正規化 → 切り詰めの順序を保ち、可変値の長さで署名が変わらないようにする）。
+    行の長さで表現を切り替えない。署名側では ``P + summary`` がもう一度正規化されるが、
+    同じ原因（正規化結果が等しい行）なら入力文字列が同一になるので hash は一致する。
     """
+    if not stderr.strip():
+        return "(no stderr)"
     for line in reversed(stderr.splitlines()):
-        line = line.rstrip()
-        if line:
-            if len(line) <= _STDERR_SUMMARY_LIMIT:
-                return line
-            return normalize_error_text(line)
-    return "(no stderr)"
+        summary = normalize_error_text(line)
+        if summary:
+            return summary
+    return "(no cause line)"
 ```
 
-- `ScriptExecutionError` の docstring に、メッセージには送出元が作った要約（stderr の最後の非空行）
+- `ScriptExecutionError` の docstring に、メッセージには送出元が作った要約（stderr の最後の失敗原因行の正規化結果）
   だけを入れること、全文は `stderr` 属性と `stderr.log` にあること、要約を送出元で作る理由
   （正規化は application 層にあり、foundation の `errors.py` からは使えない）を書く。
 - `script_exec.py` の module docstring の不変条件（「exit code != 0 は `ScriptExecutionError` で fail-loud」）に、
-  メッセージは stderr の最後の非空行を要約したものであることを 1 行足す。
+  メッセージは stderr の最後の失敗原因行を正規化した要約であることを 1 行足す。
 - 両経路とも同じ `_run_argv` の送出箇所（`script_exec.py:185-187`）を通るため、1 箇所の変更で EB 5 を満たす。
 - `signature.py` / `SIGNATURE_SCHEMA_VERSION` は変更しない。署名の算出方法は変わらず、
   入力（メッセージ）だけが変わるため。正規化の定義は `signature.py` の 1 箇所に保つ。
@@ -326,9 +334,9 @@ def _stderr_summary(stderr: str) -> str:
 |------|------|----------------|--------------------|
 | 既存 incident の fingerprint 互換性 | 互換処理をしない。既存の `ScriptExecutionError` 系 incident（open は #499 のみ）は新しい hash と一致せず、同じ原因でも新規起票されうることを許容する | Issue 本文「重要判断」1 項目目（AI の仮定・two-way door と明記、review-design で再確認）。既存方針として `kaji_harness/recovery/signature.py` の `SIGNATURE_SCHEMA_VERSION` コメント（「migration 機構は作らない — #303 決定 E」、不一致は新規起票に倒す）と ADR 008（`docs/adr/008-no-backward-compat-layer.md` 決定 1: 互換レイヤを書かない）。readiness review コメントも同じ整理で PASS | `SIGNATURE_SCHEMA_VERSION` は上げない（算出方法は不変で入力だけが変わるため）。#499 の処遇（close 等）は既存どおり人間判断とし、本 Issue では操作しない |
 | `ScriptExecutionError` の型名と属性 | 型名と既存属性（`step_id` / `command_label` / `returncode` / `stderr`）は変えない。変えるのはメッセージ本文の抜粋方法だけ | Issue 本文「重要判断」2 項目目。`kaji_harness/errors.py` の既存 docstring（型名は artifact 互換の契約、#205 の共有契約） | `stderr` 属性は全文を保持し続けることを使用例とテストで固定。抜粋方法の変更を layer 規約に沿って配線するため、keyword-only 必須引数と属性 `summary` を**追加**する（次行） |
-| 抜粋の配置（layer） | 抜粋は application 層の `script_exec.py` で行い、`ScriptExecutionError` は keyword-only 必須引数 `summary` で受け取る。`errors.py` は kaji_harness 内部を import しない | AI の仮定（two-way door: 例外の生成元は repo 内の 1 箇所とテスト 5 箇所だけで、公開契約は `kaji` console entry point のみ — ADR 009 帰結）。契機は implement の差し戻しコメント（verdict marker `step=implement status=BACK`）。根拠: `tests/test_layer_imports.py`（`errors`=foundation、foundation からの `kaji_harness.*` runtime import は関数内も違反）、ADR 009 決定 1、`python-style.md` § モジュール境界。差し戻しが挙げた 3 候補を § 採用しなかった配置で比較。既存属性・型名は不変なので Issue「重要判断」2 項目目の範囲内と判断。後段の検査先: review-design、`make check`（`test_layer_imports` / `test_private_imports`）、Medium テスト（両経路） | `summary` に既定値を持たせない（fallback を作らない。ADR 008 決定 1）。`normalize_error_text` / `FINGERPRINT_LIMIT` は facade `kaji_harness.recovery` から module 先頭で import（関数内 import をしない）。循環なしと layer 違反 0 件を試作で確認 |
-| stderr から残す部分の選び方 | 最後の非空行（2000 文字以下は raw、超過時は `normalize_error_text` の結果）。原因行より前の行は入れない | AI の仮定。根拠: (1) Python traceback と #499 の実ログで最終例外行が原因を表す、(2) 下流 3 箇所が先頭を残して切るので原因行を先頭側に置く必要がある、(3) 文字数の窓や前の行を入れると path 長・実行時間で hash が変わり EB 3 を壊す。Issue 完了条件 1 は選び方を設計で特定するよう求めている（候補: 末尾 N 文字 / 先頭＋末尾 / 最終例外行の抽出）。後段の検査先: review-design、Small テスト（同一原因で path 違いの hash 一致） | 候補のうち「末尾 N 文字」と「先頭＋末尾」は不採用（理由は § 制約・前提条件）。「最終例外行の抽出」は Python 以外の `exec:` command にも効くよう、例外行の正規表現ではなく「最後の非空行」に一般化 |
-| 長い原因行の有界化（正規化と切り詰めの順序） | 2000 文字超の原因行は raw で切らず、`normalize_error_text` を通した結果（2000 文字以下）を入れる。切り詰めは正規化の後にだけ起きる | AI の仮定（初版 300 文字 raw 切り詰め → 第 2 版 8192 文字 raw 切り詰めを、design review の指摘 2 回で変更。第 3 版で確定し verify-design で承認。本版は配置のみ変更し規則は同じ）。根拠: raw の文字数で切る限り、上限の値によらず可変値の長さで hash が分裂する（review の試作で 2 回実証）。不変条件 `N(P+L) == N(P+N(L))` を試作で確認。後段の検査先: review-design、Small テスト（不変条件と長さの違う path・行内 timestamp の同一 hash） | 上限は `FINGERPRINT_LIMIT` と同じ 2000（定数を参照）。正規化の定義を複製しない。incident 根拠欄（500 文字）で長い原因行の末尾が切れることは許容（全体は `result.json.error` に残る） |
+| 抜粋の配置（layer） | 抜粋は application 層の `script_exec.py` で行い、`ScriptExecutionError` は keyword-only 必須引数 `summary` で受け取る。`errors.py` は kaji_harness 内部を import しない | AI の仮定（two-way door: 例外の生成元は repo 内の 1 箇所とテスト 5 箇所だけで、公開契約は `kaji` console entry point のみ — ADR 009 帰結）。契機は implement の差し戻しコメント（verdict marker `step=implement status=BACK`）。根拠: `tests/test_layer_imports.py`（`errors`=foundation、foundation からの `kaji_harness.*` runtime import は関数内も違反）、ADR 009 決定 1、`python-style.md` § モジュール境界。差し戻しが挙げた 3 候補を § 採用しなかった配置で比較。既存属性・型名は不変なので Issue「重要判断」2 項目目の範囲内と判断。後段の検査先: review-design、`make check`（`test_layer_imports` / `test_private_imports`）、Medium テスト（両経路） | `summary` に既定値を持たせない（fallback を作らない。ADR 008 決定 1）。`normalize_error_text` は facade `kaji_harness.recovery` から module 先頭で import（関数内 import をしない）。循環なしと layer 違反 0 件を試作で確認 |
+| stderr から残す部分の選び方 | 正規化結果が空でない最後の行（原因行）を、`normalize_error_text` に 1 回通した結果。原因行より前の行は入れない | AI の仮定。根拠: (1) Python traceback と #499 の実ログで最終例外行が原因を表す、(2) 下流 3 箇所が先頭を残して切るので原因行を先頭側に置く必要がある、(3) 文字数の窓や前の行を入れると path 長・実行時間で hash が変わり EB 3 を壊す。Issue 完了条件 1 は選び方を設計で特定するよう求めている（候補: 末尾 N 文字 / 先頭＋末尾 / 最終例外行の抽出）。後段の検査先: review-design、Small テスト（同一原因で path 違いの hash 一致） | 候補のうち「末尾 N 文字」と「先頭＋末尾」は不採用（理由は § 制約・前提条件）。「最終例外行の抽出」は Python 以外の `exec:` command にも効くよう、例外行の正規表現ではなく「正規化後に空でない最後の行」に一般化（traceback フレーム行は正規化で空になるので自然に飛ばされる） |
+| 有界化と fingerprint の同一性（要約の表現） | 原因行の長さによらず、要約は常に `normalize_error_text(原因行)`。raw 行は要約に入れない。切り詰めは正規化の後にだけ起きる | AI の仮定（変更の経緯: 初版 300 文字 raw 切り詰め → 第 2 版 8192 文字 raw 切り詰め → 第 3・4 版「2000 以下は raw / 超過は正規化」を、design review の指摘 3 回で変更）。根拠: raw 行の文字数で切る限り可変値の長さで hash が分裂し（review で 2 回実証）、長さで raw / 正規化を切り替えると既存正規化の文脈依存・非冪等性で分裂する（review の反例 2 種）。常に正規化すれば同じ原因の入力文字列が同一になり、正規化の性質に依存しない。代償はメッセージ上の path 等が placeholder になること（§ 既知の限界）。Issue EB 1 は原因を示す行（#499 では `OSError: [Errno 30] Read-only file system`）を求めており、path の実値までは求めていない。後段の検査先: verify-design、Small テスト（反例 2 種・長さの違う path・行内 timestamp の同一 hash、`(no cause line)`） | 上限は `normalize_error_text` 内の `FINGERPRINT_LIMIT`（2000）をそのまま使い、`script_exec.py` に別の上限定数を置かない。正規化の定義を複製しない。incident 根拠欄（500 文字）で長い要約の末尾が切れることは許容（全体は `result.json.error` に残る） |
 | `CLIExecutionError` 等の同じパターン | 本 Issue では直さず、調査結果を記録する | Issue 完了条件 5（「調査結果が設計書に記載されている」）。直すかどうかは Issue 本文で決まっていない | transient 判定（`classify.py:101`）への影響を理由に分離。別 Issue 化は完了報告で提案（人間判断） |
 
 one-way door の未決はない。fingerprint 互換性は Issue 本文で two-way door と明示され、
@@ -361,24 +369,29 @@ layer 規約（ADR 009）は変更せず従う。既存記録の削除・書き�
   `/home/b/kaji-fix-1234/...` のように長さも違う）と、先頭部分の timestamp・run_id・実行時間の行が
   異なり、最後の行の原因が同じ 2 つの stderr は、同じ `fingerprint_hash` になる。
 - **長い可変値でも集約が分裂しない（design review の指摘 2 回に対応）**: 同じ EROFS 例外行に path を
-  3 つ含め、各 path を 20 / 333 / 3006 / 10000 文字に変えた原因行（上限 2000 の前後をまたぐ:
+  3 つ含め、各 path を 20 / 333 / 3006 / 10000 文字に変えた原因行（2000 文字の前後をまたぐ:
   約 130 / 1050 / 9100 / 30000 文字）が、すべて同じ `fingerprint_hash` になる。初版（300 文字）と
   第 2 版（8192 文字）の raw 切り詰めではこの観点が FAIL する。
+- **正規化の文脈・回数に依存しない（design review cycle 3 の反例に対応）**: 次の 2 種について、path を
+  20 / 3006 文字に変えた（原因行長が 2000 文字をまたぐ）stderr がそれぞれ同じ `fingerprint_hash` になる。
+  第 3・4 版ではどちらも FAIL する。
+  - 反例 A: `OSError: boom` の後に `  File "<path>", line 42, in save_artifact` で終わる stderr
+    （要約は `OSError: boom`）。および traceback フレーム行だけで終わる stderr（要約はその上の行）。
+  - 反例 B: `RuntimeError: \x1b[31mtoken\x1b[0m=sample-credential path='<path>'`（ANSI で着色したキー）。
 - **原因行の中の timestamp・run_id**: 原因行の中の timestamp（`2026-10-18T03:55:46Z` と
   `2027-01-01T00:00:00Z`）や run_id だけが違う 2 つの stderr は、同じ `fingerprint_hash` になる
   （先頭部分だけでなく原因行の中の可変値も対象）。
-- **不変条件**: 代表的な原因行（path・timestamp・run_id・`exit code N`・secret 形跡・前後の空白・
-  `Last N chars:` を含むもの、2000 文字超のもの）について
-  `normalize_error_text(P + L) == normalize_error_text(P + normalize_error_text(L))` が成り立つ
-  （`P` は runner が付ける `ScriptExecutionError: ` を含む実際の接頭辞）。
+- **同一性の根拠そのもの**: 原因行の `normalize_error_text` が等しい任意の 2 つの stderr（上記の各組）で、
+  `_stderr_summary` の戻り値が等しい（hash 一致はこの等式から決定的に従う。不変条件
+  `N(P+L)==N(P+N(L))` は前提にしないのでテストしない）。
 - **長い原因の分離**: 2000 文字を超える原因行でも、例外の種類やメッセージが違えば（正規化後の
   先頭 2000 文字の範囲で違えば）hash が異なる。
 - **incident 根拠欄**: 上記の `attempt_error` を `sanitize_evidence(f"steps/baseline/result.json error={attempt_error}")`
   に通しても `Read-only file system` が残る（下流の 500 文字切り詰めで原因行が落ちないこと）。
 - **抜粋規則の境界**: 末尾の空行・空白行は飛ばす。`\r\n` 改行と `\r` 区切りの進捗表示で最後の
-  区切りを原因行にする。空文字・空白のみは `(no stderr)`。2000 文字ちょうどの原因行は raw のまま、
-  2001 文字以上は正規化表現（2000 文字以下、`<PATH>` 等を含む）になる。どちらも要約長は有界で、
-  要約に改行が入らない。
+  区切りを原因行にする。空文字・空白のみは `(no stderr)`。非空だが全行が正規化で空になる stderr
+  （traceback フレーム行だけ）は `(no cause line)`。短い原因行（例: `OSError: x '/a/b'`）でも要約は
+  正規化表現（`OSError: x '<PATH>'`）になる。10 万文字の原因行でも要約は 2000 文字以下。要約に改行が入らない。
 - **例外の組み立て**: `str(exc)` は `summary` をそのまま末尾に持つ。`stderr` 属性は全文と一致、
   `step_id` / `command_label` / `returncode` も不変、`summary` 属性は渡した値。既存の
   `tests/test_exec_step_parser.py::TestScriptExecutionErrorGeneralization` は `summary=` を足すだけで
