@@ -17,6 +17,7 @@ private helper ``_run_argv`` で共有する。共通の不変条件:
 - exit code != 0 は ``ScriptExecutionError`` で fail-loud。stdout の verdict
   有無を問わない（決定論性確保のため、Issue #204 § exit code と verdict の
   優先順位の正本契約）。
+  例外メッセージは stderr の最後の失敗原因行を正規化した要約（Issue #516）。
 - stdout は line-buffered で ``stdout.log`` / ``console.log`` に書き出しつつ
   ``CLIResult.full_output`` に蓄積する（既存 ``execute_cli`` と同方針）。
 """
@@ -34,6 +35,7 @@ from pathlib import Path
 
 from .errors import CLINotFoundError, ScriptExecutionError, StepTimeoutError
 from .models import CLIResult, Step
+from .recovery import normalize_error_text
 from .result import derive_signal
 
 # Issue #235: 起動コンソール向け progress logger（kaji.* 名前空間）。
@@ -48,6 +50,30 @@ _ARGV_DISPLAY_LIMIT = 200
 # review_poll_entry 等が無関係 PR を polling する事故を防ぐため、
 # 現在 step の env に含まれない限り os.environ からも除外する。
 _OPTIONAL_RESERVED_ENV = frozenset({"KAJI_PR_ID", "KAJI_PR_REF"})
+
+
+def _stderr_summary(stderr: str) -> str:
+    """stderr の最後の失敗原因行を、fingerprint と同じ正規化に 1 回通して返す。
+
+    後ろから見て正規化結果が空でない最初の行を原因行とする（空白行・traceback
+    フレーム行・ANSI 制御列だけの行は飛ばす）。行の長さで表現を切り替えない。
+    署名側では ``接頭辞 + 要約`` がもう一度正規化されるが、同じ原因（正規化結果が
+    等しい行）なら入力文字列が同一になるので hash は一致する（Issue #516）。
+
+    Args:
+        stderr: subprocess の stderr 全文。
+
+    Returns:
+        原因行の正規化結果（1 行・``FINGERPRINT_LIMIT`` 文字以下）。stderr が空白のみなら
+        ``(no stderr)``、全行が正規化で空になるなら ``(no cause line)``。
+    """
+    if not stderr.strip():
+        return "(no stderr)"
+    for line in reversed(stderr.splitlines()):
+        summary = normalize_error_text(line)
+        if summary:
+            return summary
+    return "(no cause line)"
 
 
 def _now_stamp() -> str:
@@ -183,7 +209,11 @@ def _run_argv(
 
     if process.returncode != 0:
         raise ScriptExecutionError(
-            step.id, command_label, process.returncode, stderr or "(no stderr)"
+            step.id,
+            command_label,
+            process.returncode,
+            stderr or "(no stderr)",
+            summary=_stderr_summary(stderr),
         )
 
     # Issue #222: 正常終了の exit_code / signal を CLIResult へ運ぶ。

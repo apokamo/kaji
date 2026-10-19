@@ -357,7 +357,7 @@ class TestRunnerExecDispatch:
 
         with patch(
             "kaji_harness.runner.execute_exec",
-            side_effect=ScriptExecutionError("run", "python -m foo", 2, "boom"),
+            side_effect=ScriptExecutionError("run", "python -m foo", 2, "boom", summary="boom"),
         ):
             with pytest.raises(ScriptExecutionError):
                 runner.run()
@@ -394,3 +394,78 @@ class TestRunnerMixedDispatch:
         mock_exec.assert_not_called()
         mock_script.assert_not_called()
         assert state.last_completed_step == "s"
+
+
+# ============================================================
+# Issue #516: 失敗原因行が result.json.error / run.log に残る（両経路）
+# ============================================================
+
+_CAUSE_TAIL_SCRIPT = (
+    "import sys; "
+    "sys.stderr.write('=' * 29 + ' test session starts ' + '=' * 30 + '\\n'); "
+    "sys.stderr.write('platform linux -- Python 3.12.3, pytest-9.0.2\\n' * 5); "
+    "sys.stderr.write(\"OSError: [Errno 30] Read-only file system: '/x'\\n\"); "
+    "sys.exit(1)"
+)
+_CAUSE_SUMMARY_SUFFIX = "exited with code 1: OSError: [Errno 30] Read-only file system: '<PATH>'"
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _result_json(tmp_path: Path) -> dict[str, Any]:
+    result_files = list((tmp_path / ".kaji-artifacts").rglob("result.json"))
+    assert result_files, "result.json was not written"
+    data: dict[str, Any] = json.loads(result_files[0].read_text())
+    return data
+
+
+@pytest.mark.medium
+class TestRunnerScriptFailureCauseLine:
+    def test_exec_path_records_cause_line(self, tmp_path: Path) -> None:
+        step = Step(
+            id="run",
+            exec=[sys.executable, "-c", _CAUSE_TAIL_SCRIPT],
+            on={"PASS": "end", "ABORT": "end"},
+        )
+        runner = _runner(tmp_path, step)
+
+        with pytest.raises(ScriptExecutionError) as exc_info:
+            runner.run()
+
+        assert len(exc_info.value.stderr) > 200
+        data = _result_json(tmp_path)
+        assert data["dispatch"] == "exec"
+        assert data["error"].startswith("ScriptExecutionError: ")
+        # command_label（argv の join）に script 本文が入るので、メッセージ末尾の要約だけを見る。
+        assert data["error"].endswith(_CAUSE_SUMMARY_SUFFIX)
+
+        run_logs = list((tmp_path / ".kaji-artifacts").rglob("run.log"))
+        events = [json.loads(line) for line in run_logs[0].read_text().splitlines() if line]
+        ends = [e for e in events if e["event"] == "workflow_end"]
+        assert ends and "Read-only file system" in ends[-1]["error"]
+
+    def test_exec_script_path_records_cause_line(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # subprocess の cwd は project_root（tmp_path）なので、fixture module を解決できるよう
+        # repo root を PYTHONPATH に足す。
+        monkeypatch.setenv("PYTHONPATH", str(_REPO_ROOT))
+        step = Step(id="poll", skill="rp", on={"PASS": "end", "ABORT": "end"})
+        runner = _runner(tmp_path, step)
+        metadata = SkillMetadata(
+            name="rp",
+            description="",
+            exec_script="tests.fixtures.scripts.dummy_nonzero_cause_tail",
+        )
+
+        with (
+            patch("kaji_harness.runner.validate_skill_exists"),
+            patch("kaji_harness.runner.load_skill_metadata", return_value=metadata),
+        ):
+            with pytest.raises(ScriptExecutionError) as exc_info:
+                runner.run()
+
+        assert len(exc_info.value.stderr) > 200
+        data = _result_json(tmp_path)
+        assert data["dispatch"] == "exec_script"
+        assert data["error"].endswith(_CAUSE_SUMMARY_SUFFIX)
+        assert "test session starts" not in data["error"]

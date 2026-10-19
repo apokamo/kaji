@@ -175,16 +175,32 @@ class ScriptExecutionError(HarnessError):
     失敗 artifact 上の調査用ラベルで、``execute_script`` は module 名、
     ``execute_exec`` は ``" ".join(argv)`` を渡す。経路に依存しない中立表現に
     することで、どちらの dispatch の失敗かを誤解させない。
+
+    メッセージには送出元が作った ``summary``（stderr の最後の失敗原因行を
+    fingerprint と同じ正規化に通したもの）だけを入れる（Issue #516）。メッセージは
+    ``result.json.error`` / incident の fingerprint に使われるため、原因と無関係な
+    stderr 先頭を入れない。stderr 全文は ``stderr`` 属性と ``stderr.log`` に残る。
+    正規化は application 層（``kaji_harness.recovery``）にあり、foundation の本 module
+    からは使えないため、要約は送出元（``script_exec``）で作って渡す。
     """
 
-    def __init__(self, step_id: str, command_label: str, returncode: int, stderr: str):
+    def __init__(
+        self,
+        step_id: str,
+        command_label: str,
+        returncode: int,
+        stderr: str,
+        *,
+        summary: str,
+    ):
         self.step_id = step_id
         self.command_label = command_label
         self.returncode = returncode
         self.stderr = stderr
+        self.summary = summary
         super().__init__(
             f"Step '{step_id}' deterministic command '{command_label}' exited with "
-            f"code {returncode}: {stderr[:200]}"
+            f"code {returncode}: {summary}"
         )
 
 
