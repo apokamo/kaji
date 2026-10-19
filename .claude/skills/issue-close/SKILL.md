@@ -299,10 +299,8 @@ suggestion は「`kaji run <workflow> [issue_id] --from review-poll` で再確�
 
 不変条件 I1〜I9（正本: `docs/ARCHITECTURE.md` の「review-poll の承認証跡」節、
 producer は `kaji_harness/review_poll_evidence.py`）を 1 本の jq プログラムで検証する。
-`schema_version` で検査式を切り替える: `1` は summary comment の表で承認した旧経路の証跡、
-`2` は `codex-review-state:v1` で承認した経路の証跡（Issue #473）。I2〜I5・I9 は両版共通で、
-I1（キー集合）・I6（承認根拠）・I7（時刻順序）・I8（確定確認）は版ごとに異なる。`1` / `2` 以外は I1 違反。
-v1 の受け付けは review-poll の旧経路と一緒に撤去する予定（CHANGELOG `[Unreleased]` の Deprecated）。
+受け付ける版は `schema_version: 2`（`codex-review-state:v1` で承認した証跡、Issue #473）だけで、
+`2` 以外は I1 違反（Issue #478）。
 出力は、すべて満たせば `OK` の 1 語、違反があれば違反した不変条件 ID のカンマ区切りになる。
 `OK` 以外（jq エラーや JSON 破損を含む）はすべて **ABORT** とし、違反した ID を報告する。
 
@@ -360,32 +358,7 @@ VERIFIED=$(jq -r '
       and (.status == null or (.status | str1))
       and (.has_any_findings == null or (.has_any_findings | type == "boolean"));
     (try .schema_version catch null) as $v
-  | if $v == 1 then [
-      chk("I1"; top_keys and .schema_version == 1),
-      chk("I1.sections";
-        common_sections
-        and (.approval | keys_eq(["bot","reaction","review_summary"]))
-        and (.approval.review_summary | keys_eq(["comment_id","url","commit_short_sha","status","completed_at","comment_updated_at"]))
-        and (.checks | keys_eq(["head_sha_at_start","head_sha_before_decision","head_sha_after_decision","short_sha_matching_pr_commits","current_head_bot_reviews"]))),
-      common_checks[],
-      chk("I6";
-        (.approval.review_summary.comment_id | posint)
-        and (.approval.review_summary.url | type == "string"
-             and endswith("#issuecomment-\($e.approval.review_summary.comment_id)"))
-        and .approval.review_summary.status == "Completed"
-        and (.approval.review_summary.commit_short_sha | type == "string" and test("^[0-9a-f]{7,40}$"))
-        and ($e.reviewed_head.sha | startswith($e.approval.review_summary.commit_short_sha))
-        and (.approval.review_summary.completed_at | ists) and (.approval.review_summary.completed_at | ts | . > 0)
-        and (.approval.review_summary.comment_updated_at | ists) and (.approval.review_summary.comment_updated_at | ts | . > 0)),
-      chk("I7";
-        (.approval.reaction.created_at | ts) >= ((.approval.review_summary.completed_at | ts | sec) + 1000000)
-        and (.approval.reaction.created_at | ts) >= (.reviewed_head.committed_at | ts)
-        and (.approval.review_summary.comment_updated_at | ts) >= (.approval.review_summary.completed_at | ts | sec)),
-      chk("I8";
-        head_checks
-        and .checks.short_sha_matching_pr_commits == 1 and .checks.current_head_bot_reviews == 0)
-    ]
-    elif $v == 2 then [
+  | if $v == 2 then [
       chk("I1"; top_keys and .schema_version == 2),
       chk("I1.sections";
         common_sections
@@ -420,10 +393,9 @@ VERIFIED=$(jq -r '
 ```
 
 `ts` は小数秒を保持した epoch マイクロ秒を返す（`fromdateiso8601` は小数秒を受け付けないため、整数秒と小数部を別々に変換して合成する）。
-`sec` は `floor(秒)` で、producer の `next_second_after` / `replace(microsecond=0)` に対応する。floor を使うのは
-v1 の `completed_at` に対する比較（I7 の reaction・`comment_updated_at`）と v2 の `review_state.comment_updated_at` に対する
-比較（I7 の reaction）だけで、他の時刻比較（I7 の `committed_at`、I9）は小数秒まで比較する。
-I7 は v1 では「reaction の秒が完了秒より厳密に後」、v2 では「reaction の秒が state を含む summary comment の更新秒より厳密に後」を要求する。
+`sec` は `floor(秒)` で、producer の `next_second_after` に対応する。floor を使うのは
+`review_state.comment_updated_at` に対する比較（I7 の reaction）だけで、他の時刻比較（I7 の `committed_at`、I9）は小数秒まで比較する。
+I7 は「reaction の秒が state を含む summary comment の更新秒より厳密に後」を要求する。
 `ists` は形式に加えて暦日・時分秒の実在を検証する（`fromdateiso8601 | todateiso8601` が元の秒部分に往復一致しなければ不正。`2026-02-30` 等を拒否する）。
 
 #### 2.5.4 現在の PR との照合（`MODE=verify` のみ）

@@ -1,4 +1,4 @@
-"""Tests for kaji_harness.review_poll_evidence (schema v1 / v2 approval evidence)."""
+"""Tests for kaji_harness.review_poll_evidence (schema v2 approval evidence)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from pydantic import ValidationError
 
 from kaji_harness.review_poll_evidence import (
     EVIDENCE_FILENAME,
-    ReviewPollEvidence,
     ReviewPollEvidenceV2,
     load_evidence,
     parse_timestamp,
@@ -22,7 +21,8 @@ from kaji_harness.review_poll_evidence import (
 HEAD = "91d11b151e50a90ff02ffd427205f78017205bb4"
 
 
-def _valid_payload() -> dict[str, Any]:
+def _v1_payload() -> dict[str, Any]:
+    """撤去した schema v1 の（撤去前は妥当だった）payload。拒否されることの確認にだけ使う。"""
     return {
         "schema_version": 1,
         "kind": "kaji.review-poll.approval",
@@ -86,144 +86,9 @@ def _delete(payload: dict[str, Any], path: tuple[str, ...]) -> dict[str, Any]:
 
 _OTHER_HEAD = "0" * 40
 
-# (id, mutated payload) — 各ケースが不変条件 I1〜I9 の違反を 1 つ表す。
-_VIOLATIONS: list[tuple[str, dict[str, Any]]] = [
-    # I1
-    ("schema_version_2", _set(_valid_payload(), ("schema_version",), 2)),
-    ("kind_other", _set(_valid_payload(), ("kind",), "kaji.other")),
-    ("result_retry", _set(_valid_payload(), ("result",), "RETRY")),
-    ("provider_gitlab", _set(_valid_payload(), ("provider",), "gitlab")),
-    ("top_level_extra_key", _set(_valid_payload(), ("unexpected",), 1)),
-    ("approval_missing", _delete(_valid_payload(), ("approval",))),
-    ("repository_missing", _delete(_valid_payload(), ("repository",))),
-    ("checks_missing", _delete(_valid_payload(), ("checks",))),
-    ("fetched_at_missing", _delete(_valid_payload(), ("fetched_at",))),
-    ("section_extra_key", _set(_valid_payload(), ("approval", "bot", "extra"), 1)),
-    ("section_missing_key", _delete(_valid_payload(), ("approval", "reaction", "api_path"))),
-    ("checks_missing_key", _delete(_valid_payload(), ("checks", "head_sha_at_start"))),
-    # I2
-    ("repository_owner_empty", _set(_valid_payload(), ("repository", "owner"), "")),
-    ("pull_number_zero", _set(_valid_payload(), ("pull_request", "number"), 0)),
-    ("pull_url_not_github", _set(_valid_payload(), ("pull_request", "url"), "https://x/pull/163")),
-    (
-        "pull_url_number_mismatch",
-        _set(_valid_payload(), ("pull_request", "url"), "https://github.com/a/b/pull/164"),
-    ),
-    # I3
-    ("sha_39_chars", _set(_valid_payload(), ("reviewed_head", "sha"), HEAD[:39])),
-    ("sha_uppercase", _set(_valid_payload(), ("reviewed_head", "sha"), HEAD.upper())),
-    ("sha_non_hex", _set(_valid_payload(), ("reviewed_head", "sha"), "g" * 40)),
-    ("committed_at_unparsable", _set(_valid_payload(), ("reviewed_head", "committed_at"), "x")),
-    (
-        "committed_at_invalid_date",
-        _set(_valid_payload(), ("reviewed_head", "committed_at"), "2026-13-45T00:00:00Z"),
-    ),
-    # I4
-    ("bot_id_mismatch", _set(_valid_payload(), ("approval", "bot", "id"), 1)),
-    ("bot_login_mismatch", _set(_valid_payload(), ("approval", "bot", "login"), "someone")),
-    # I5
-    ("reaction_id_zero", _set(_valid_payload(), ("approval", "reaction", "id"), 0)),
-    ("reaction_id_string", _set(_valid_payload(), ("approval", "reaction", "id"), "123")),
-    (
-        "reaction_content_heart",
-        _set(_valid_payload(), ("approval", "reaction", "content"), "heart"),
-    ),
-    (
-        "reaction_created_at_missing",
-        _delete(_valid_payload(), ("approval", "reaction", "created_at")),
-    ),
-    (
-        "reaction_created_at_unparsable",
-        _set(_valid_payload(), ("approval", "reaction", "created_at"), "soon"),
-    ),
-    (
-        "reaction_api_path_mismatch",
-        _set(
-            _valid_payload(),
-            ("approval", "reaction", "api_path"),
-            "repos/apokamo/other/issues/163/reactions",
-        ),
-    ),
-    # I6
-    (
-        "summary_comment_id_zero",
-        _set(_valid_payload(), ("approval", "review_summary", "comment_id"), 0),
-    ),
-    (
-        "summary_url_mismatch",
-        _set(
-            _valid_payload(),
-            ("approval", "review_summary", "url"),
-            "https://github.com/apokamo/fullstack-agent-template/pull/163#issuecomment-1",
-        ),
-    ),
-    (
-        "summary_status_in_progress",
-        _set(_valid_payload(), ("approval", "review_summary", "status"), "In progress"),
-    ),
-    (
-        "summary_short_sha_6_chars",
-        _set(_valid_payload(), ("approval", "review_summary", "commit_short_sha"), "91d11b"),
-    ),
-    (
-        "summary_short_sha_not_prefix",
-        _set(_valid_payload(), ("approval", "review_summary", "commit_short_sha"), "abcdef0"),
-    ),
-    (
-        "summary_completed_at_missing",
-        _delete(_valid_payload(), ("approval", "review_summary", "completed_at")),
-    ),
-    (
-        "summary_updated_before_completed",
-        _set(
-            _valid_payload(),
-            ("approval", "review_summary", "comment_updated_at"),
-            "2026-09-08T01:33:31Z",
-        ),
-    ),
-    # I7
-    (
-        "reaction_same_second_as_completed",
-        _set(_valid_payload(), ("approval", "reaction", "created_at"), "2026-09-08T01:33:32Z"),
-    ),
-    (
-        "reaction_before_completed",
-        _set(_valid_payload(), ("approval", "reaction", "created_at"), "2026-09-08T01:33:31Z"),
-    ),
-    (
-        "reaction_before_head_commit",
-        _set(_valid_payload(), ("reviewed_head", "committed_at"), "2026-09-08T01:40:00Z"),
-    ),
-    # I8
-    (
-        "checks_at_start_mismatch",
-        _set(_valid_payload(), ("checks", "head_sha_at_start"), _OTHER_HEAD),
-    ),
-    (
-        "checks_before_decision_mismatch",
-        _set(_valid_payload(), ("checks", "head_sha_before_decision"), _OTHER_HEAD),
-    ),
-    (
-        "checks_after_decision_mismatch",
-        _set(_valid_payload(), ("checks", "head_sha_after_decision"), _OTHER_HEAD),
-    ),
-    (
-        "short_sha_matches_two",
-        _set(_valid_payload(), ("checks", "short_sha_matching_pr_commits"), 2),
-    ),
-    (
-        "current_head_bot_reviews_one",
-        _set(_valid_payload(), ("checks", "current_head_bot_reviews"), 1),
-    ),
-    # I9
-    ("fetched_before_reaction", _set(_valid_payload(), ("fetched_at",), "2026-09-08T01:33:34Z")),
-    ("fetched_after_decided", _set(_valid_payload(), ("decided_at",), "2026-09-08T01:33:40Z")),
-    ("decided_at_unparsable", _set(_valid_payload(), ("decided_at",), "later")),
-]
-
 
 def _valid_payload_v2() -> dict[str, Any]:
-    payload = _valid_payload()
+    payload = _v1_payload()
     payload["schema_version"] = 2
     payload["approval"] = {
         "bot": payload["approval"]["bot"],
@@ -242,6 +107,95 @@ def _valid_payload_v2() -> dict[str, Any]:
     }
     del payload["checks"]["short_sha_matching_pr_commits"]
     return payload
+
+
+# (id, mutated payload) — 各ケースが schema v2 と共通の検査（I1〜I5・I7〜I9）の違反を 1 つ表す。
+_VIOLATIONS: list[tuple[str, dict[str, Any]]] = [
+    # I1
+    ("kind_other", _set(_valid_payload_v2(), ("kind",), "kaji.other")),
+    ("result_retry", _set(_valid_payload_v2(), ("result",), "RETRY")),
+    ("provider_gitlab", _set(_valid_payload_v2(), ("provider",), "gitlab")),
+    ("top_level_extra_key", _set(_valid_payload_v2(), ("unexpected",), 1)),
+    ("approval_missing", _delete(_valid_payload_v2(), ("approval",))),
+    ("repository_missing", _delete(_valid_payload_v2(), ("repository",))),
+    ("checks_missing", _delete(_valid_payload_v2(), ("checks",))),
+    ("fetched_at_missing", _delete(_valid_payload_v2(), ("fetched_at",))),
+    ("section_extra_key", _set(_valid_payload_v2(), ("approval", "bot", "extra"), 1)),
+    ("section_missing_key", _delete(_valid_payload_v2(), ("approval", "reaction", "api_path"))),
+    ("checks_missing_key", _delete(_valid_payload_v2(), ("checks", "head_sha_at_start"))),
+    # I2
+    ("repository_owner_empty", _set(_valid_payload_v2(), ("repository", "owner"), "")),
+    ("pull_number_zero", _set(_valid_payload_v2(), ("pull_request", "number"), 0)),
+    (
+        "pull_url_not_github",
+        _set(_valid_payload_v2(), ("pull_request", "url"), "https://x/pull/163"),
+    ),
+    (
+        "pull_url_number_mismatch",
+        _set(_valid_payload_v2(), ("pull_request", "url"), "https://github.com/a/b/pull/164"),
+    ),
+    # I3
+    ("sha_39_chars", _set(_valid_payload_v2(), ("reviewed_head", "sha"), HEAD[:39])),
+    ("sha_uppercase", _set(_valid_payload_v2(), ("reviewed_head", "sha"), HEAD.upper())),
+    ("sha_non_hex", _set(_valid_payload_v2(), ("reviewed_head", "sha"), "g" * 40)),
+    ("committed_at_unparsable", _set(_valid_payload_v2(), ("reviewed_head", "committed_at"), "x")),
+    (
+        "committed_at_invalid_date",
+        _set(_valid_payload_v2(), ("reviewed_head", "committed_at"), "2026-13-45T00:00:00Z"),
+    ),
+    # I4
+    ("bot_id_mismatch", _set(_valid_payload_v2(), ("approval", "bot", "id"), 1)),
+    ("bot_login_mismatch", _set(_valid_payload_v2(), ("approval", "bot", "login"), "someone")),
+    # I5
+    ("reaction_id_zero", _set(_valid_payload_v2(), ("approval", "reaction", "id"), 0)),
+    ("reaction_id_string", _set(_valid_payload_v2(), ("approval", "reaction", "id"), "123")),
+    (
+        "reaction_content_heart",
+        _set(_valid_payload_v2(), ("approval", "reaction", "content"), "heart"),
+    ),
+    (
+        "reaction_created_at_missing",
+        _delete(_valid_payload_v2(), ("approval", "reaction", "created_at")),
+    ),
+    (
+        "reaction_created_at_unparsable",
+        _set(_valid_payload_v2(), ("approval", "reaction", "created_at"), "soon"),
+    ),
+    (
+        "reaction_api_path_mismatch",
+        _set(
+            _valid_payload_v2(),
+            ("approval", "reaction", "api_path"),
+            "repos/apokamo/other/issues/163/reactions",
+        ),
+    ),
+    # I7
+    (
+        "reaction_before_head_commit",
+        _set(_valid_payload_v2(), ("reviewed_head", "committed_at"), "2026-09-08T01:40:00Z"),
+    ),
+    # I8
+    (
+        "checks_at_start_mismatch",
+        _set(_valid_payload_v2(), ("checks", "head_sha_at_start"), _OTHER_HEAD),
+    ),
+    (
+        "checks_before_decision_mismatch",
+        _set(_valid_payload_v2(), ("checks", "head_sha_before_decision"), _OTHER_HEAD),
+    ),
+    (
+        "checks_after_decision_mismatch",
+        _set(_valid_payload_v2(), ("checks", "head_sha_after_decision"), _OTHER_HEAD),
+    ),
+    (
+        "current_head_bot_reviews_one",
+        _set(_valid_payload_v2(), ("checks", "current_head_bot_reviews"), 1),
+    ),
+    # I9
+    ("fetched_before_reaction", _set(_valid_payload_v2(), ("fetched_at",), "2026-09-08T01:33:34Z")),
+    ("fetched_after_decided", _set(_valid_payload_v2(), ("decided_at",), "2026-09-08T01:33:40Z")),
+    ("decided_at_unparsable", _set(_valid_payload_v2(), ("decided_at",), "later")),
+]
 
 
 _STATE = ("approval", "review_state")
@@ -265,7 +219,7 @@ _VIOLATIONS_V2: list[tuple[str, dict[str, Any]]] = [
     ("v2_entry_missing_key", _delete(_valid_payload_v2(), (*_CODE, "status"))),
     ("v2_entry_extra_key", _set(_valid_payload_v2(), (*_SECURITY, "extra"), 1)),
     ("v2_review_state_missing", _delete(_valid_payload_v2(), _STATE)),
-    # I2〜I5（v1 と共通）
+    # I2〜I5
     ("v2_pull_number_zero", _set(_valid_payload_v2(), ("pull_request", "number"), 0)),
     ("v2_sha_uppercase", _set(_valid_payload_v2(), ("reviewed_head", "sha"), HEAD.upper())),
     ("v2_bot_id_mismatch", _set(_valid_payload_v2(), ("approval", "bot", "id"), 1)),
@@ -362,27 +316,15 @@ _VALID_SECURITY_V2: list[tuple[str, dict[str, Any]]] = [
 
 @pytest.mark.small
 class TestReviewPollEvidenceModel:
-    def test_valid_payload_passes(self) -> None:
-        evidence = ReviewPollEvidence.model_validate(_valid_payload())
-        assert evidence.reviewed_head.sha == HEAD
-        assert evidence.approval.reaction.id == 123456789
-        assert evidence.approval.review_summary.comment_id == 5577710898
-
     @pytest.mark.parametrize(
         "payload", [p for _, p in _VIOLATIONS], ids=[name for name, _ in _VIOLATIONS]
     )
     def test_invariant_violation_is_rejected(self, payload: dict[str, Any]) -> None:
         with pytest.raises(ValidationError):
-            ReviewPollEvidence.model_validate(payload)
-
-    def test_reaction_in_next_second_after_completed_is_accepted(self) -> None:
-        payload = _set(
-            _valid_payload(), ("approval", "reaction", "created_at"), "2026-09-08T01:33:33Z"
-        )
-        ReviewPollEvidence.model_validate(payload)
+            ReviewPollEvidenceV2.model_validate(payload)
 
     def test_model_is_frozen(self) -> None:
-        evidence = ReviewPollEvidence.model_validate(_valid_payload())
+        evidence = ReviewPollEvidenceV2.model_validate(_valid_payload_v2())
         with pytest.raises(ValidationError):
             evidence.result = "PASS"  # type: ignore[misc]
 
@@ -405,10 +347,10 @@ class TestParseTimestamp:
 @pytest.mark.medium
 class TestSaveEvidence:
     def test_round_trip(self, tmp_path: Path) -> None:
-        evidence = ReviewPollEvidence.model_validate(_valid_payload())
+        evidence = ReviewPollEvidenceV2.model_validate(_valid_payload_v2())
         path = tmp_path / "attempt-001" / EVIDENCE_FILENAME
         save_evidence(path, evidence)
-        assert json.loads(path.read_text(encoding="utf-8")) == _valid_payload()
+        assert json.loads(path.read_text(encoding="utf-8")) == _valid_payload_v2()
         assert load_evidence(path) == evidence
 
     def test_filename_constant(self) -> None:
@@ -444,16 +386,20 @@ class TestReviewPollEvidenceV2Model:
 
 @pytest.mark.medium
 class TestLoadEvidenceVersions:
-    def test_v1_and_v2_are_dispatched_by_schema_version(self, tmp_path: Path) -> None:
-        v1_path = tmp_path / "v1.json"
+    def test_v2_is_loaded(self, tmp_path: Path) -> None:
         v2_path = tmp_path / "v2.json"
-        save_evidence(v1_path, ReviewPollEvidence.model_validate(_valid_payload()))
         save_evidence(v2_path, ReviewPollEvidenceV2.model_validate(_valid_payload_v2()))
-        assert isinstance(load_evidence(v1_path), ReviewPollEvidence)
         assert isinstance(load_evidence(v2_path), ReviewPollEvidenceV2)
         assert json.loads(v2_path.read_text(encoding="utf-8")) == _valid_payload_v2()
 
-    @pytest.mark.parametrize("version", [3, 0, "2"])
+    def test_removed_v1_is_rejected(self, tmp_path: Path) -> None:
+        # schema v1 は Issue #478 で撤去した。撤去前に妥当だった v1 の証跡も読めない
+        path = tmp_path / "evidence.json"
+        path.write_text(json.dumps(_v1_payload()))
+        with pytest.raises(ValidationError):
+            load_evidence(path)
+
+    @pytest.mark.parametrize("version", [3, 1, 0, "2"])
     def test_unknown_version_is_rejected(self, tmp_path: Path, version: object) -> None:
         path = tmp_path / "evidence.json"
         path.write_text(json.dumps(_set(_valid_payload_v2(), ("schema_version",), version)))
@@ -462,6 +408,6 @@ class TestLoadEvidenceVersions:
 
     def test_v1_shape_with_version_2_is_rejected(self, tmp_path: Path) -> None:
         path = tmp_path / "evidence.json"
-        path.write_text(json.dumps(_set(_valid_payload(), ("schema_version",), 2)))
+        path.write_text(json.dumps(_set(_v1_payload(), ("schema_version",), 2)))
         with pytest.raises(ValidationError):
             load_evidence(path)

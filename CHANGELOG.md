@@ -6,6 +6,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### BREAKING CHANGE
+
+- **The review-poll legacy codex review markup path and approval evidence
+  `schema_version: 1` are removed** (#478), after their deprecation in
+  v0.23.0 (apokamo/kaji#473). `review-poll` now decides PASS / RETRY only from
+  the `<!-- codex-review-state:v1 {...} -->` in the bot's review summary
+  comment; the review body heading (`### 💡 Codex Review`) and the summary
+  table (`Code Review` row) are no longer read, PR commits are no longer
+  fetched for short-SHA matching, and the stderr deprecation warning is gone.
+  PASS evidence is always `schema_version: 2`. The CLI arguments, exit codes,
+  verdict format, and timeouts are unchanged.
+  - **Broken contract**: a summary comment without `codex-review-state:v1`
+    no longer produces PASS / RETRY. `review-poll` keeps waiting and ends
+    through the existing timeouts: `BACK_FALLBACK` after
+    `NO_REACTION_TIMEOUT_SEC` (60s) when no `eyes` reaction was seen, or
+    `ABORT` after `IN_PROGRESS_TIMEOUT_SEC` (1800s) once `eyes` was seen.
+    `issue-close` rejects `schema_version: 1` approval evidence as an I1
+    violation (ABORT), and `load_evidence()` raises `ValidationError` for it.
+  - **How to check whether you are affected**: look for
+    `<!-- codex-review-state:v1` in the bot's review summary comment on a
+    recent PR, and for `"schema_version": 1` in `review-poll-evidence.json`
+    of review-poll attempts whose PR is not yet closed. If every summary
+    carries the state and no open PR has v1 evidence, you are not affected.
+  - **Migration**: nothing to change in kaji configuration; the state is
+    emitted by `chatgpt-codex-connector[bot]`. For a PR approved with v1
+    evidence before upgrading, re-run
+    `kaji run <workflow> <issue> --from review-poll` to write v2 evidence
+    before `issue-close`.
+
 ## [0.23.2] - 2026-10-18
 
 ### Fixed

@@ -603,56 +603,43 @@ chain をまたいだ retry storm が構造的に起きない。
 `review-poll`（`exec: [kaji, pr, review-poll]` → `review_poll_entry` → `codex_review_poll`）が `PASS` を返すとき、
 承認した PR・完全な head SHA・承認シグナルを schema version 付きの JSON として
 `steps/review-poll/attempt-NNN/review-poll-evidence.json`（`verdict.yaml` の隣）に保存する。
-実装は `kaji_harness/review_poll_evidence.py`（`ReviewPollEvidence`（v1）/ `ReviewPollEvidenceV2`（v2）,
-`extra="forbid"` + 不変条件の検証。`load_evidence()` は `schema_version` で版を選ぶ）。
+実装は `kaji_harness/review_poll_evidence.py`（`ReviewPollEvidenceV2`, `extra="forbid"` + 不変条件の検証。
+`load_evidence()` は `schema_version: 2` だけを受け付ける）。
 
 - **承認の根拠**: `+1` reaction は commit SHA を持たないため単独では承認にしない。SHA を持つ bot シグナルと
-  その後の `+1` の 2 シグナルが揃った場合だけ `PASS` 候補にする。SHA を持つシグナルは経路で異なる:
-  - **state 経路（schema v2）**: trusted bot の review summary comment（`<!-- codex-pull-request-review-summary -->`
-    で始まる最新の 1 件）にある `<!-- codex-review-state:v1 {JSON} -->`。`code_review` が現在 head の full SHA で
-    `status: "completed"`・`has_any_findings: false`、head 向けの `security_review` があればそれも完了・指摘なし、
-    head 上に bot review がなく、`+1` が summary comment の `updated_at` より後の秒（かつ head commit 以降）に
-    付いている場合（Issue #473）
-  - **旧経路（schema v1、deprecated）**: summary に state がない場合だけ使う。summary の表の `Code Review` 行
-    （状態・完了時刻・短縮 SHA）が現在 head で `Completed` であり、かつ `+1` がその完了より後の秒に付いている場合。
-    次の版で撤去する（CHANGELOG `[Unreleased]` の Deprecated）
-  - state があるのに解析できない（版が未知・複数・JSON 破損・検証失敗）場合はどちらの経路でも判定せず、
-    即時 `BACK_FALLBACK` にする
-- **確定確認**: PASS 候補の確定時に `pulls/{n}` を再取得して head を確認する（判定の直前・直後）。旧経路だけは
-  PR commits で短縮 SHA がちょうど 1 件・かつ head に一致することも確認する（state 経路は full SHA の完全一致）。
-  head が動いた / 曖昧な場合は `ABORT`（fail-closed）
+  その後の `+1` の 2 シグナルが揃った場合だけ `PASS` 候補にする。SHA を持つシグナルは、trusted bot の
+  review summary comment（`<!-- codex-pull-request-review-summary -->` で始まる最新の 1 件）にある
+  `<!-- codex-review-state:v1 {JSON} -->`。`code_review` が現在 head の full SHA で
+  `status: "completed"`・`has_any_findings: false`、head 向けの `security_review` があればそれも完了・指摘なし、
+  head 上に bot review がなく、`+1` が summary comment の `updated_at` より後の秒（かつ head commit 以降）に
+  付いている場合（Issue #473）
+  - state があるのに解析できない（版が未知・複数・JSON 破損・検証失敗）場合は判定せず、即時 `BACK_FALLBACK` にする
+  - summary に state がない場合は PASS / RETRY を判定しない（terminal シグナルなし）。`eyes` を観測しなければ
+    `NO_REACTION_TIMEOUT_SEC`（60s）で `BACK_FALLBACK`、観測後は `IN_PROGRESS_TIMEOUT_SEC`（1800s）で `ABORT` になる
+    （Issue #478）
+- **確定確認**: PASS 候補の確定時に `pulls/{n}` を再取得して head を確認する（判定の直前・直後）。
+  承認は full SHA の完全一致なので PR commits は引かない。head が動いた場合は `ABORT`（fail-closed）
 - **書き込み順序**: 証跡の atomic write → stdout へ `PASS` verdict → runner が `verdict.yaml` を書く。
   `verdict.yaml` が PASS なら同じ attempt に証跡が必ず存在する。`PASS` 以外では証跡を書かない
 - **consumer**: `issue-close`（GitHub 経路）が `kaji issue resolve-verdict --step review-poll --current-verdict-path ...`
-  で得た `verdict_path` から証跡を辿り、`schema_version` で v1 / v2 の検査式を切り替えて整合不変条件（I1〜I9）を
-  jq で検証したうえで現在の PR（番号・URL・
+  で得た `verdict_path` から証跡を辿り、整合不変条件（I1〜I9）を jq で検証したうえで現在の PR（番号・URL・
   `headRefOid`・`OPEN`）と照合し、`kaji pr merge --match-head-commit <reviewed_head.sha>` を実行する。
   証跡の欠落・不一致は PR の現状から補わず停止する。Issue verdict marker の有無は判定に使わない
 
-**整合不変条件（schema v1。producer の Pydantic と consumer の jq の共通契約）**: 1 つでも欠落・型違い・不一致があれば、
+**整合不変条件（producer の Pydantic と consumer の jq の共通契約）**: 1 つでも欠落・型違い・不一致があれば、
 producer は PASS を出さず `ABORT`（`evidence unavailable`）、consumer は merge せず停止する。
 
 | ID | 不変条件 |
 |----|----------|
-| I1 | top-level と各 section（`repository` / `pull_request` / `reviewed_head` / `approval` 以下 / `checks`）のキー集合が完全一致（余分も欠落も不可）。`schema_version == 1`、`kind == "kaji.review-poll.approval"`、`result == "PASS"`、`provider == "github"` |
+| I1 | top-level と各 section のキー集合が完全一致（余分も欠落も不可）。top-level は `schema_version` / `kind` / `result` / `provider` / `repository` / `pull_request` / `reviewed_head` / `approval` / `checks` / `fetched_at` / `decided_at`、`approval` は `bot` / `reaction` / `review_state`、`review_state` は `comment_id` / `url` / `comment_updated_at` / `state_version` / `code_review` / `security_review`、各 review は `commit_sha` / `status` / `has_any_findings`、`checks` は `head_sha_at_start` / `head_sha_before_decision` / `head_sha_after_decision` / `current_head_bot_reviews`。各 review の値は `commit_sha` が 40 桁 hex か null、`status` が空でない文字列か null、`has_any_findings` が bool か null。`schema_version == 2`（consumer は `2` 以外なら I1 違反）、`kind == "kaji.review-poll.approval"`、`result == "PASS"`、`provider == "github"` |
 | I2 | `repository.owner` / `name` は空でない文字列。`pull_request.number` は正の整数、`url` は `https://github.com/` で始まり `/pull/<number>` で終わる |
 | I3 | `reviewed_head.sha` は `^[0-9a-f]{40}$`、`committed_at` は解析可能な ISO 8601 UTC |
 | I4 | `approval.bot.id == 199175422`、`login` は `chatgpt-codex-connector` で始まる |
 | I5 | `approval.reaction`: `id` は正の整数、`content == "+1"`、`created_at` は解析可能、`api_path == "repos/<owner>/<name>/issues/<number>/reactions"` |
-| I6 | `approval.review_summary`: `comment_id` は正の整数、`url` は `#issuecomment-<comment_id>` で終わる、`status == "Completed"`、`commit_short_sha` は 7〜40 桁の小文字 hex で `reviewed_head.sha` の前方一致、`completed_at` / `comment_updated_at` は解析可能 |
-| I7 | `reaction.created_at >= floor(completed_at) + 1s`（完了秒より後の秒）、`reaction.created_at >= reviewed_head.committed_at`、`comment_updated_at >= floor(completed_at)` |
-| I8 | `checks.head_sha_at_start` / `head_sha_before_decision` / `head_sha_after_decision` がすべて `reviewed_head.sha` と一致、`short_sha_matching_pr_commits == 1`、`current_head_bot_reviews == 0` |
+| I6 | `review_state.comment_id` は正の整数、`url` は `#issuecomment-<comment_id>` で終わる、`state_version == "v1"`、`comment_updated_at` は解析可能。`code_review.commit_sha == reviewed_head.sha`・`status == "completed"`・`has_any_findings == false`。`security_review` は「`status == null`」「`commit_sha` が head と異なる 40 桁 SHA」「head の `commit_sha` で `status == "completed"`・`has_any_findings == false`」のいずれか |
+| I7 | `reaction.created_at >= floor(review_state.comment_updated_at) + 1s`、`reaction.created_at >= reviewed_head.committed_at` |
+| I8 | 3 つの head SHA（`head_sha_at_start` / `head_sha_before_decision` / `head_sha_after_decision`）がすべて `reviewed_head.sha`、`current_head_bot_reviews == 0` |
 | I9 | `fetched_at` / `decided_at` は解析可能で `reaction.created_at <= fetched_at <= decided_at` |
-
-**整合不変条件（schema v2）**: I2〜I5・I9 は v1 と同じ。I1・I6〜I8 を次で置き換える（consumer は `schema_version` が
-`1` / `2` 以外なら I1 違反）。
-
-| ID | 不変条件 |
-|----|----------|
-| I1(v2) | キー集合の完全一致。`approval` は `bot` / `reaction` / `review_state`、`review_state` は `comment_id` / `url` / `comment_updated_at` / `state_version` / `code_review` / `security_review`、各 review は `commit_sha` / `status` / `has_any_findings`、`checks` は `head_sha_at_start` / `head_sha_before_decision` / `head_sha_after_decision` / `current_head_bot_reviews`。各 review の値は `commit_sha` が 40 桁 hex か null、`status` が空でない文字列か null、`has_any_findings` が bool か null。`schema_version == 2` |
-| I6(v2) | `review_state.comment_id` は正の整数、`url` は `#issuecomment-<comment_id>` で終わる、`state_version == "v1"`、`comment_updated_at` は解析可能。`code_review.commit_sha == reviewed_head.sha`・`status == "completed"`・`has_any_findings == false`。`security_review` は「`status == null`」「`commit_sha` が head と異なる 40 桁 SHA」「head の `commit_sha` で `status == "completed"`・`has_any_findings == false`」のいずれか |
-| I7(v2) | `reaction.created_at >= floor(review_state.comment_updated_at) + 1s`、`reaction.created_at >= reviewed_head.committed_at` |
-| I8(v2) | 3 つの head SHA がすべて `reviewed_head.sha`、`current_head_bot_reviews == 0`（`short_sha_matching_pr_commits` は持たない） |
 
 ---
 
