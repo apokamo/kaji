@@ -1,8 +1,13 @@
-# ADR 007: interactive_terminal runner（tmux / Herdr terminal backend）
+# ADR 007: interactive_terminal runner（Herdr terminal backend）
 
 ## ステータス
 
-承認 (2026-08-21) — Issue #396でHerdr 0.8.2 backendを追加。fake lifecycle、
+承認 (2026-10-19) — Issue #515 で tmux backend を削除し、Herdr を唯一の terminal backend にした。
+Herdr backend の agent 起動経路に kaji 所有の Python PTY recorder を挟み、`terminal.log` を raw PTY
+byte の記録にした（§ v5 の決定）。v2〜v4 の tmux backend 固有の決定は本版で supersede する
+（履歴として本文に残す）。
+
+旧: 承認 (2026-08-21) — Issue #396でHerdr 0.8.2 backendを追加。fake lifecycle、
 Claude / Codex / Antigravity fresh、Claude / Codex resume、agent起点のnested interactive kajiを
 実機検証済み。Antigravity resumeはadapter capabilityとして非対応。
 
@@ -35,6 +40,7 @@ terminal backend = `tmux` 単一の実現性を確定し、本版を承認に確
 | v2 | 2026-06-06 | terminal backend = `tmux` 単一 | 「kaji を tmux 内で起動 → runner が `split-window` で pane 追加」で**並列可視性をディスプレイ無しで再現できる**と判明し、v1 の前提が崩れたため改訂 |
 | v3 | 2026-06-08 | pane 配置を「初回右・以後右列内・最大2枚」に変更、最小 tmux を 3.1 に引き上げ | v2 の「毎 step で現在 pane の右に追加」は `close_on_verdict=false` で pane を残すと横幅が step ごとに狭くなる。Issue #238 で、初回のみ origin の右、2枚目以降は右列内の上下分割、右列の kaji 管理 pane を最大2枚に制限する配置へ更新。pane を kaji marker（pane user option）で識別するため最小 tmux を 3.1 に引き上げ |
 | v4 | 2026-08-21 | `tmux` \| `herdr`を明示選択可能にし、既定tmuxを維持 | Issue #396。Herdr 0.8.2 / protocol 20のCLI、caller-context guard、metadata ownership token、rendered snapshotを採用 |
+| v5 | 2026-10-19 | tmux backend を削除し Herdr 単一に。`terminal.log` を PTY recorder による raw 記録に | Issue #515（親 #466）。0.23.0 の非推奨告知（Issue #475）を経て削除。v2〜v4 の tmux 固有決定と v4 の rendered snapshot を supersede |
 
 v2 / v3 は v1 の **runner 抽象・verdict 解決経路・session 継続方針を維持**し、terminal backend の実体だけを
 `kitty` → `tmux` に差し替える。`agent_runner = "interactive_terminal"` という設定面・workflow 契約・
@@ -73,7 +79,47 @@ ADR 005 artifact-primary verdict 解決は不変。v3 は v2 の pane 配置契�
 - agent→pane→kajiの追加経路はrelease-matched Herdr skill + repository `herdr-kaji-launch` skillを使う。
   Claude Code `-p`は使用しない。Herdr pluginは任意の人間向けlauncherとしてのみ後段評価する。
 
-以下のv3「決定」節はtmux backend固有契約として維持し、v4の共通/Herdr契約と組み合わせて読む。
+v4 のうち「`tmux` | `herdr` の選択・既定 tmux」と「Herdr の `terminal.log` は rendered snapshot」の 2 点は
+v5 で supersede した。その他の Herdr 契約（caller-context guard、ownership token、launcher、配置、完了
+authority、cleanup、Ctrl-C）は v5 でも維持する。
+
+### v5の決定（Issue #515）
+
+- **tmux backend を削除する**。`interactive_terminal_tmux.py` と tmux を起動・操作する production 経路
+  （executable 探索、version 検査、session 解決、split、pane marker、list / prune、`pipe-pane`、存命判定、
+  kill、tmux metadata 作成）を持たない。Herdr が唯一の terminal backend で、headless runner は維持する。
+- **設定・CLI の契約**: `[execution].interactive_terminal_backend` と `--interactive-terminal-backend` は
+  残し、受理値は `herdr` のみ、既定は `herdr` とする。`"tmux"` は tracked config / `config.local.toml` の
+  どちらで定義しても、runner が headless でも、config 読み込み時に値を定義したファイル付きの
+  `ConfigLoadError` にする（CLI override で救済しない）。CLI の `tmux` は移行案内付きの usage error、
+  unknown 値は入力検証エラー。Herdr 外からの interactive 実行は `HerdrSessionRequiredError` で、暗黙の
+  headless fallback / terminal 自動検出はしない。
+- **完全な端末ログ（PTY recorder）**: launcher は `HERDR_AGENT=<manifest> <python> -I <recorder>
+  <terminal.log> -- <wrapper> <10 引数>` を実行する。recorder（`kaji_harness/interactive_terminal_recorder.py`、
+  stdlib のみ）は子を PTY 上で起動し、子の出力を chunk ごとに `terminal.log` へ先に追記してから pane へ
+  mirror する。alternate screen と `\e[3J` 後の出力を含む raw PTY byte で、v2 の `pipe-pane` と同じ形式。
+  サイズ上限・ローテーションなし、permission は umask に従う（raw PTY には画面に出たものがすべて入る）。
+  Linux の `EIO` と BSD の EOF を両方 EOF として扱う。macOS 実機検証は deferred（v2 承認時の前例）。
+- **`HERDR_AGENT` ヒント**: recorder のプロセスだけに付け（`antigravity` → `agy`）、recorder は子の環境から
+  取り除く。Herdr の agent 検出（idle / working / blocked / done）を直接起動と同じに保ち、nested kaji へ
+  漏らさない。
+- **記録の完全性**: recorder は `terminal.log.state`（固定長）に `recording` / `complete` /
+  `incomplete <ERRNO>` を書く。log 書き込み失敗時は記録を止めて relay を続け（fail-open）、状態を上書き
+  できなければ状態ファイルを unlink する。harness は `pane-metadata.json` に `transcript_kind =
+  "raw_pty_recording"`、`transcript_recorder_state`、`transcript_truncated`（`false` / `true` / `null`）、
+  `transcript_error`、`transcript_revision = null`、`transcript_bytes` を記録する。状態の保存・読み取りの
+  失敗は verdict・元の例外を置き換えない。残余リスク: 状態の上書きと unlink の両方が失敗した場合だけ、
+  欠落があっても `recording` が残る。
+- Herdr rendered snapshot（`pane read`）の取得は廃止し、別名ファイルでも残さない（正本を 1 つにする。
+  alternate screen では snapshot に会話がほぼ残らない。#476 報告書）。
+- **過去 artifact 互換**: `recovery/classify.py` は過去 run の `TmuxSessionRequiredError` 型名を文字列で
+  照合して `user_precondition_error` に分類し続ける（例外クラス自体は削除）。`recovery/snapshot.py` は
+  backend 非依存に `pane-metadata.json` の `pane_id` を読むため、旧 tmux 形式も読める。新たな互換読み取り
+  処理は書かない（ADR 008）。
+- 正常完了の判定は引き続き filesystem の `verdict.yaml` のみ。recorder の終了コードは完了判定に使わない。
+
+以下の「コンテキスト」「決定」「影響」「代替案」は v2〜v3（tmux backend）時点の記録であり、v5 で
+supersede された。経緯の参照用に残す。
 
 ## コンテキスト
 
@@ -113,7 +159,7 @@ agent の様子を同一画面で並列に見せられる**ことが分かった
 結果、v1 が「macOS を含む対象環境を最も単純にカバーできるのは kitty」とした根拠は**反転**し、
 `tmux` の方が移植性が高く（Linux / macOS 同一実装）、cleanup / transcript のコードも短くなる。
 
-## 決定
+## 決定（v2〜v3、v5 で supersede）
 
 repository config の `[execution] agent_runner`（または `kaji run --agent-runner`）で選べる
 runner backend `interactive_terminal` の既定terminal backendを **`tmux`** とする（Issue #229 / #396）。
@@ -168,7 +214,7 @@ runner backend `interactive_terminal` の既定terminal backendを **`tmux`** �
 - `agent_runner` 未指定時は既存の `headless` runner を使い、headless の CLI 引数 / stdout logging
   / verdict 解決挙動は変更しない（互換維持）。
 
-## 影響
+## 影響（v2〜v3 時点）
 
 - `kaji_harness/interactive_terminal.py`: terminal backend を `kitty` から `tmux` に置換。
   - `_build_kitty_argv` → `tmux split-window` argv 構築に置換。
@@ -212,4 +258,9 @@ runner backend `interactive_terminal` の既定terminal backendを **`tmux`** �
 - Issue #224: interactive_terminal runner（v1, kitty backend）の実装
 - Issue #229: terminal backend を tmux に改訂（v2 の PoC 検証 + 実装）
 - Issue #238: pane 配置を「初回右・以後右列内・最大2枚」に変更し最小 tmux を 3.1 に引き上げ（v3）
+- Issue #396: Herdr backend の追加（v4）
+- Issue #475: tmux backend の非推奨化（0.23.0）
+- Issue #476: 完全な端末ログの調査（`experiments/herdr-interactive-terminal/reports/2026-10-17-full-transcript-feasibility.md`）
+- Issue #515: tmux backend の削除と PTY recorder（v5）
+- ADR 008: 後方互換レイヤを書かない（BREAKING の記載要件）
 - `docs/cli-guides/interactive-terminal-runner.md`: 設定・手動検証手順

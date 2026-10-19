@@ -210,14 +210,14 @@ triage コメント投稿の**直後**に、同じ失敗を「識別署名」で
   行わない（新規起票・occurrence コメント・`incidents/occurrences.jsonl` 追記のいずれもしない）。
   triage コメント・run artifact・console のエラー表示は従来どおり維持し、抑止した事実と理由は
   `run.log` の `incident_suppressed` event で監査できる。該当するのは「interactive terminal
-  runner を tmux セッション外から起動した」（`TmuxSessionRequiredError`）、「利用者が Ctrl-C で
+  runner を Herdr セッション外から起動した」（`HerdrSessionRequiredError`。過去の tmux run の
+  artifact に残る `TmuxSessionRequiredError` も同じく分類する）、「利用者が Ctrl-C で
   run を中断した」（`failure_event.kind = "interrupted"`）、「agent が正規の ABORT verdict を
   返した」（`failure_event.kind = "agent_abort"`）、「cycle が `max_iterations` に到達した」
   （`failure_event.kind = "cycle_exhausted"`）の 4 ケース。前 2 者は調査を要さない既知の
   ユーザー起因の終了、後 2 者は契約上の正常終端であり、かつ例外を伴わないため識別署名が
   cause ごとの定数へ退化する（除外しないと無関係な安全停止が 1 incident へ誤って集約される）。
-  tmux 未インストール・tmux バージョン不足・`TMUX_PANE` 欠落・その他の `CLINotFoundError` は
-  従来どおり incident 記録の対象。
+  Herdr 未インストール・Herdr バージョン不足・その他の `CLINotFoundError` は従来どおり incident 記録の対象。
 - ラベル 2 軸の意味と遷移意図は [incident-labels.md](./incident-labels.md) を参照。
 
 ### 第2層: 調査・提案（Issue #305）
@@ -302,7 +302,7 @@ CLI 仕様の詳細は [Failure Triage / Recovery CLI](../cli-guides/failure-rec
 
 ## runner backend（headless / interactive-terminal）
 
-agent step を headless CLI で起動するか tmux pane 上の対話 CLI で起動するかは
+agent step を headless CLI で起動するか Herdr pane 上の対話 CLI で起動するかは
 **workflow YAML ではなく repository config の `[execution].agent_runner`** で選ぶ。
 workflow YAML は runner backend を固定しない。
 

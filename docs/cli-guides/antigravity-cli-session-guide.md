@@ -12,7 +12,7 @@ or machine-readable event stream through its public stdout contract.
 - Install and authenticate Antigravity CLI by following the
   [official installation guide](https://antigravity.google/docs/cli/install).
 - Ensure `agy` is on PATH.
-- Use `tmux` 3.1 or newer when selecting kaji's interactive terminal runner.
+- Use Herdr 0.8.2 or newer when selecting kaji's interactive terminal runner.
 
 Verify the local CLI:
 
@@ -88,11 +88,11 @@ Set the repository execution backend to interactive terminal:
 [execution]
 default_timeout = 2400
 agent_runner = "interactive_terminal"
-interactive_terminal_backend = "tmux"  # or "herdr"
+interactive_terminal_backend = "herdr"  # the only backend (default)
 interactive_terminal_close_on_verdict = true
 ```
 
-Run `kaji run` inside tmux. The wrapper launches:
+Run `kaji run` inside a Herdr pane. The wrapper launches (through kaji's PTY recorder):
 
 ```text
 agy [<policy flag>] [--model <model>] [--effort <effort>] -i <initial prompt>

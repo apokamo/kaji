@@ -22,8 +22,9 @@ in the `kaji_harness` package.
   available.
 - Human-in-the-loop gates: humans keep control of issue readiness, design
   direction, PR review, and merge decisions.
-- Interactive terminal runner: kaji can run normal agent CLIs in tmux panes and
-  advance the workflow when verdict artifacts appear.
+- Interactive terminal runner: kaji can run normal agent CLIs in Herdr panes,
+  record raw terminal logs, and advance the workflow when verdict artifacts
+  appear. The former tmux backend was removed.
 
 ## Start Here
 
@@ -45,7 +46,7 @@ in the `kaji_harness` package.
 - [Skill authoring](docs/dev/skill-authoring.md): how to write skills and their
   verdict contracts.
 - [Interactive terminal runner](docs/cli-guides/interactive-terminal-runner.md)
-  ([Japanese](docs/cli-guides/interactive-terminal-runner.ja.md)): tmux-backed
+  ([Japanese](docs/cli-guides/interactive-terminal-runner.ja.md)): Herdr-backed
   runner for normal Claude Code, Codex, and Antigravity CLI sessions.
 - [Antigravity CLI Guide](docs/cli-guides/antigravity-cli-session-guide.md):
   verified `agy -p` / `agy -i`, policy mapping, plain-text output, and explicit

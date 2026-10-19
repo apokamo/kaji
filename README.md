@@ -133,8 +133,8 @@ artifacts, and advances the workflow deterministically from each verdict.
   from one workflow definition.
 - **Closed review loops**: model review feedback as explicit
   review -> fix -> verify cycles.
-- **Interactive tmux runner**: run normal CLI agents in tmux panes while kaji
-  watches for artifact-backed verdicts.
+- **Interactive terminal runner**: run normal CLI agents in Herdr panes while kaji
+  watches for artifact-backed verdicts and records raw terminal logs.
 - **Headless runner**: keep existing non-interactive automation paths for CI-like
   execution.
 - **Deterministic exec steps**: run subprocess steps directly when no LLM is
@@ -163,7 +163,7 @@ tell us what workflow you want to run.
 - `uv`
 - Claude Code, Codex, or Antigravity CLI (`agy`) installed for the agents you want to run
 - `gh` 2.50.0 or newer, authenticated, if you use GitHub-backed issue and PR operations
-- `tmux` 3.1 or newer if you use the interactive terminal runner
+- [Herdr](https://herdr.dev/) 0.8.2 or newer if you use the interactive terminal runner
 - A target repository with kaji skills under `.claude/skills/`
 
 ### Install kaji
@@ -279,32 +279,33 @@ source .venv/bin/activate
 kaji --help
 ```
 
-## tmux interactive terminal runner
+## Interactive terminal runner (Herdr)
 
 Use this when you want kaji to launch normal Claude Code, Codex, or Antigravity
-CLI sessions inside tmux panes instead of using the headless runner. Antigravity
+CLI sessions inside Herdr panes instead of using the headless runner. Antigravity
 steps are single-run only; workflow `resume:` is rejected during validation.
 
-> [!WARNING]
-> The tmux backend is deprecated and will be removed in a subsequent release; `kaji run` warns on
-> stderr while it is in use. Migrate to Herdr or the headless runner — see
-> [tmux backend deprecation](docs/cli-guides/interactive-terminal-runner.md#tmux-backend-deprecation).
+> [!IMPORTANT]
+> The tmux backend was removed (deprecated in 0.23.0). `interactive_terminal_backend = "tmux"` now
+> fails config loading even for headless runs. Change or remove it in both `.kaji/config.toml` and
+> `.kaji/config.local.toml` — see
+> [Migrating from tmux](docs/cli-guides/interactive-terminal-runner.md#migrating-from-tmux).
 
 ```toml
 [execution]
 default_timeout = 2400
 agent_runner = "interactive_terminal"
+interactive_terminal_backend = "herdr"   # optional; herdr is the default and only backend
 interactive_terminal_close_on_verdict = true
 ```
 
-Then run from inside a tmux session:
+Then run from inside a Herdr pane:
 
 ```bash
-tmux new-session
 kaji run .kaji/wf/official/dev.yaml <issue-id> --agent-runner interactive-terminal
 ```
 
-The runner opens managed panes, records terminal transcripts, waits for
+The runner opens managed panes, records raw terminal transcripts through a PTY recorder, waits for
 `verdict.yaml`, and advances the workflow. This is useful for live observation,
 subscription CLI usage, and debugging agent behavior.
 

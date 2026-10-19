@@ -22,7 +22,7 @@ default_timeout = 1800               # 必須: タイムアウトのデフォル
 
 > **`artifacts_dir` の解決基準** (Issue #177): 相対パス指定の場合、`kaji run` は main worktree（`provider.<type>.default_branch` を checkout している worktree）基準で解決する。feature worktree 内で `kaji run` を実行しても artifacts/log は main worktree 配下に集約され、`git worktree remove` でログが消えない。絶対パス指定はそのまま。
 
-> **runner backend は repository config の責務** (Issue #224 / #230): agent step を headless CLI で起動するか tmux pane 上の対話 CLI で起動するかは `[execution] agent_runner`（または `kaji run --agent-runner`）で選ぶ。これは **repository config / 実行時 option の責務**であり、workflow YAML の step 定義には書かない。step は backend 非依存に保つ。詳細は [Interactive Terminal Runner ガイド](../cli-guides/interactive-terminal-runner.md)。
+> **runner backend は repository config の責務** (Issue #224 / #230): agent step を headless CLI で起動するか Herdr pane 上の対話 CLI で起動するかは `[execution] agent_runner`（または `kaji run --agent-runner`）で選ぶ。これは **repository config / 実行時 option の責務**であり、workflow YAML の step 定義には書かない。step は backend 非依存に保つ。詳細は [Interactive Terminal Runner ガイド](../cli-guides/interactive-terminal-runner.md)。
 
 ## ファイル配置
 
@@ -366,10 +366,10 @@ agent step の timeout は **attempt 開始時刻を起点とする hard deadlin
   解決済みの値が `AttemptDeadline`（`kaji_harness/deadline.py`）の `timeout_seconds` になる
 - **起点は 1 回だけ**: runner が attempt 開始時（prompt 生成直前）に `AttemptDeadline.start()` で
   UTC wall clock と `time.monotonic()` を同時に取得する。この 1 回の値が (1) prompt のコンテキスト変数
-  `step_timeout_seconds` / `attempt_started_at_utc` / `attempt_deadline_utc`、(2) headless / tmux / Herdr
-  各 backend の hard deadline、(3) `result.json` の `started_at` に配られる。表示される deadline と実際の
+  `step_timeout_seconds` / `attempt_started_at_utc` / `attempt_deadline_utc`、(2) headless / Herdr
+  各 runner の hard deadline、(3) `result.json` の `started_at` に配られる。表示される deadline と実際の
   deadline は同じ起点を共有する
-- **起点の位置**: interactive terminal（tmux / Herdr）では pane / launcher の起動所要時間も timeout に含まれる
+- **起点の位置**: interactive terminal（Herdr）では pane / launcher の起動所要時間も timeout に含まれる
   （従来は起動後から計測していた。差は通常数秒）。deadline 到達前に pane 起動へ進めない場合は pane を起動せず
   `StepTimeoutError` にする。Herdr の launcher 開始待ちは `min(launcher 上限 10 秒, attempt deadline)` で、
   attempt deadline が先に来た場合は launcher 失敗ではなく通常の timeout 経路（session 解決・pane cleanup）になる

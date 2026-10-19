@@ -90,7 +90,7 @@ triage コメント・run artifact・console 表示は維持され、失われ�
 
 | cause | 除外理由 | 出典 |
 |-------|----------|------|
-| `user_precondition_error` | 既知のユーザー前提エラー（例: tmux セッション必須）。原因と対処がエラー文に含まれ、障害調査を要さない | Issue #322 |
+| `user_precondition_error` | 既知のユーザー前提エラー（例: Herdr セッション必須。過去の tmux run の `TmuxSessionRequiredError` も含む）。原因と対処がエラー文に含まれ、障害調査を要さない | Issue #322 |
 | `user_interrupted` | 利用者による中断（Ctrl-C）。harness の不具合ではなく、再開要否は人間が artifact を見て判断する | Issue #403 |
 | `agent_declared_abort` | agent が返した正規の ABORT verdict（安全停止・手動確認要求）。契約上の正常終端であり障害ではない | Issue #405 |
 | `cycle_exhausted` | cycle が `max_iterations` に到達した安全弁の正常作動。triage コメントが `--reset-cycle` の次アクションを既に提示する | Issue #405 |

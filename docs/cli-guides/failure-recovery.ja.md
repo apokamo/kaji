@@ -25,8 +25,9 @@ failure triage / 自動再開レイヤ（Issue #288）の CLI リファレンス
 
 ### Interactive terminal: transcript に埋もれた transient provider error（Issue #296）
 
-`agent_runner = "interactive_terminal"` で tmux pane が `verdict.yaml` を書かずに終了した場合、
-kaji は `terminal.log` の transcript **全文**（末尾 2000 文字に限らない）を走査し、既知の
+`agent_runner = "interactive_terminal"` で Herdr pane の agent が `verdict.yaml` を書かずに終了した
+（pane が shell に戻った）場合、kaji は `terminal.log`（kaji の recorder による raw PTY の記録。alternate
+screen の出力を含む）の transcript **全文**（末尾 2000 文字に限らない）を走査し、既知の
 transient pattern（`"at capacity"` / `"rate limit"` / `"overloaded"` など、`execute_cli()` と
 同一の pattern list）を検出する。TUI redraw により transcript は旧来の tail window よりはるかに
 大きくなり得るため、1行の provider エラーが深く埋もれる。全文走査でなければ、一時的な capacity
@@ -131,7 +132,7 @@ kaji recover .kaji/wf/official/dev.yaml 288 --run-id 260710120000
 
 | 分類 | 該当ケース | 判定入力 |
 |---|---|---|
-| `user_precondition_error` | interactive terminal runner を選択した backend の session 外から起動した（`TmuxSessionRequiredError` / `HerdrSessionRequiredError`） | `failure_event.exception_type` の型名 |
+| `user_precondition_error` | interactive terminal runner を Herdr session 外から起動した（`HerdrSessionRequiredError`）。過去の tmux run の artifact に残る `TmuxSessionRequiredError` も引き続きここに分類する（tmux backend 自体は Issue #515 で削除） | `failure_event.exception_type` の型名 |
 | `user_interrupted` | 利用者が `kaji run` を Ctrl-C で中断した | `failure_event.kind == "interrupted"` |
 | `agent_declared_abort` | agent が正規の ABORT verdict を返した（安全停止・手動確認要求） | `failure_event.kind == "agent_abort"` |
 | `cycle_exhausted` | cycle が `max_iterations` に到達した（安全弁の正常作動） | `failure_event.kind == "cycle_exhausted"` |
