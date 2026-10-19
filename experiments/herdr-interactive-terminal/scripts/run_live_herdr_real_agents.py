@@ -48,7 +48,6 @@ def _run_attempt(
             timeout=_TIMEOUT_SECONDS,
             session_id=session_id,
             close_on_verdict=True,
-            backend="herdr",
         )
     except (CLIExecutionError, StepTimeoutError, OSError, ValueError) as error:
         return (

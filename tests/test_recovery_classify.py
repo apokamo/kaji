@@ -25,6 +25,8 @@ from kaji_harness.recovery.classify import classify_failure
 from kaji_harness.recovery.snapshot import FailureEvent, FailureSnapshot
 from tests.conftest import capacity_terminal_log_text
 
+_EXIT_PREFIX = "Herdr pane exited before writing verdict.yaml"
+
 pytestmark = pytest.mark.small
 
 
@@ -137,7 +139,7 @@ def test_classify_dispatch_candidate_with_canonical_only_capacity_message(
     # みを載せる）と既存 classify ロジックの接続を、生成元から一続きで固定する。
     terminal_log = tmp_path / "terminal.log"
     terminal_log.write_text(capacity_terminal_log_text(), encoding="utf-8")
-    message = _terminal_exit_detail(terminal_log)
+    message = _terminal_exit_detail(terminal_log, prefix=_EXIT_PREFIX)
     assert "at capacity" in message
     assert "Token usage" not in message
 
@@ -231,6 +233,7 @@ def test_dispatch_script_error_is_not_candidate() -> None:
 
 def test_dispatch_tmux_session_required_is_user_precondition_error() -> None:
     # Issue #322: tmux 外での interactive runner 起動は既知のユーザー前提エラー。
+    # Issue #515 で tmux backend は削除したが、過去 run の artifact に残る型名の分類を維持する。
     c = classify_failure(
         _snapshot(
             failure_event=FailureEvent(

@@ -2,10 +2,9 @@
 
 - 実 ``kaji run`` + ``exec:`` step
 - 実 ``kaji run`` + PATH 上の fake ``claude``（headless agent）
-- 隔離した実 tmux server 上の interactive terminal（server 環境と pane 環境の分離を含む）
 - Herdr launcher の実行（実 Herdr の起動は含まない。理由は設計書 § テスト戦略）
 
-いずれも subprocess を使うがネットワーク疎通は無い。tmux / python 等の前提は環境側で満たす
+いずれも subprocess を使うがネットワーク疎通は無い。python 等の前提は環境側で満たす
 （skip しない。testing-convention § 環境不備は修正対象）。
 """
 
@@ -13,22 +12,22 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import signal
 import stat
 import subprocess
 import sys
 import time
 import uuid
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
-from kaji_harness.interactive_terminal import execute_interactive_terminal
 from kaji_harness.interactive_terminal_common import _build_wrapper_command, _wrapper_path
-from kaji_harness.interactive_terminal_herdr import _materialize_herdr_launcher
-from kaji_harness.models import Step
+from kaji_harness.interactive_terminal_herdr import (
+    _build_recorded_command,
+    _materialize_herdr_launcher,
+    _recorder_path,
+)
 from kaji_harness.runner import build_tmp_env
 
 pytestmark = [pytest.mark.large, pytest.mark.large_local]
@@ -61,6 +60,10 @@ verdict = m.group(1).strip()
 record_path = os.path.join(os.path.dirname(verdict), "fake-agent-record.json")
 with open(record_path, "w", encoding="utf-8") as out:
     json.dump(record, out)
+if interactive:
+    # Issue #515: recorder が alternate screen と子の環境を記録することを確かめる（verdict 前に出す）。
+    hint = os.environ.get("HERDR_AGENT", "<unset>")
+    print("\x1b[?1049hFAKE-ALT HERDR_AGENT=" + hint + "\x1b[?1049l", flush=True)
 with open(verdict, "w", encoding="utf-8") as out:
     out.write("status: PASS\\nreason: tmp env e2e\\nevidence: recorded\\nsuggestion: ''\\n")
 print(json.dumps({"type": "system", "subtype": "init", "session_id": "fake-sess"}))
@@ -289,83 +292,6 @@ def _write_prompt(attempt_dir: Path) -> tuple[Path, Path]:
     return prompt, attempt_dir / "verdict.yaml"
 
 
-class TestTmuxTmpEnvE2E:
-    """実 tmux を使う #407 一時ディレクトリ環境変数 E2E（Issue #474: 子 Issue B で class ごと削除できる単位）。"""
-
-    @pytest.fixture()
-    def isolated_tmux(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-        """利用者の tmux を一切使わない専用 server を起動し、後始末で必ず kill する。
-
-        ``-L`` は既定 socket ディレクトリの別名 socket（長い tmp_path 配下に置くと AF_UNIX の
-        ``sun_path`` 108 byte 上限を超えうるため）、``-f /dev/null`` は利用者設定を読まない指定。
-        """
-        socket_name = f"kaji-test-{uuid.uuid4().hex[:12]}"
-        server_dir = tmp_path / "server-env"
-        parent_dir = tmp_path / "parent-env"
-        server_dir.mkdir()
-        parent_dir.mkdir()
-        bin_dir = _install_fake_claude(tmp_path)
-        # pane は server の environment を継承するため、PATH は server 起動前に通しておく。
-        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-        tmux = shutil.which("tmux")
-        assert tmux is not None, "tmux is required for the interactive terminal large test"
-
-        def run(*args: str) -> str:
-            proc = subprocess.run(
-                [tmux, "-L", socket_name, "-f", "/dev/null", *args],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            return proc.stdout.strip()
-
-        try:
-            run("new-session", "-d", "-s", "kajitest", "-x", "200", "-y", "50", "sleep 600")
-            for var in ("TMPDIR", "TMP", "TEMP"):
-                run("set-environment", "-g", var, str(server_dir))
-            socket_path = run("display-message", "-p", "-t", "kajitest", "#{socket_path}")
-            pane_id = run("display-message", "-p", "-t", "kajitest", "#{pane_id}")
-            server_pid = run("display-message", "-p", "-t", "kajitest", "#{pid}")
-            session_idx = run("display-message", "-p", "-t", "kajitest", "#{session_id}").lstrip(
-                "$"
-            )
-            monkeypatch.setenv("TMUX", f"{socket_path},{server_pid},{session_idx}")
-            monkeypatch.setenv("TMUX_PANE", pane_id)
-            for var in ("TMPDIR", "TMP", "TEMP"):
-                monkeypatch.setenv(var, str(parent_dir))
-            yield socket_name
-        finally:
-            subprocess.run(
-                [tmux, "-L", socket_name, "kill-server"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-
-    def test_tmux_pane_receives_attempt_tmp_env_over_server_environment(
-        self, tmp_path: Path, isolated_tmux: str
-    ) -> None:
-        attempt_tmp = tmp_path / "project" / "tmp" / "kaji" / "1" / "r" / "design" / "attempt-001"
-        attempt_tmp.mkdir(parents=True)
-        prompt, verdict = _write_prompt(tmp_path / "artifacts" / "attempt-001")
-
-        result = execute_interactive_terminal(
-            step=Step(id="design", skill="x", agent="claude"),
-            prompt_path=prompt,
-            verdict_path=verdict,
-            workdir=tmp_path,
-            timeout=30,
-            backend="tmux",
-            env=build_tmp_env(attempt_tmp),
-        )
-
-        assert result.session_id is not None
-        record = json.loads((verdict.parent / "fake-agent-record.json").read_text())
-        _assert_record_in_attempt_tmp(record, attempt_tmp)
-        assert str(tmp_path / "server-env") not in record.values()
-        assert str(tmp_path / "parent-env") not in record.values()
-
-
 def test_herdr_launcher_applies_attempt_tmp_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -378,17 +304,23 @@ def test_herdr_launcher_applies_attempt_tmp_env(
     attempt_tmp.mkdir(parents=True)
     prompt, verdict = _write_prompt(tmp_path / "artifacts" / "attempt-001")
 
-    command = _build_wrapper_command(
-        _wrapper_path(),
+    terminal_log = prompt.parent / "terminal.log"
+    command = _build_recorded_command(
+        _build_wrapper_command(
+            _wrapper_path(),
+            agent="claude",
+            prompt_path=prompt,
+            verdict_path=verdict,
+            workdir=tmp_path,
+            resume_session_id="",
+            launch_session_id=str(uuid.uuid4()),
+            model="",
+            effort="",
+            execution_policy="auto",
+        ),
         agent="claude",
-        prompt_path=prompt,
-        verdict_path=verdict,
-        workdir=tmp_path,
-        resume_session_id="",
-        launch_session_id=str(uuid.uuid4()),
-        model="",
-        effort="",
-        execution_policy="auto",
+        recorder=_recorder_path(),
+        terminal_log=terminal_log,
         env=build_tmp_env(attempt_tmp),
     )
     launcher = _materialize_herdr_launcher(prompt.parent / "herdr-launcher.sh", command)
@@ -408,6 +340,11 @@ def test_herdr_launcher_applies_attempt_tmp_env(
             assert proc.poll() is None, f"launcher exited early: {proc.stdout.read()}"
             time.sleep(0.1)
         assert verdict.exists(), "fake agent did not write verdict.yaml"
+        # recorder が verdict 前の出力を書き終えるまで待ってから pane 相当を落とす
+        while time.monotonic() < deadline and (
+            not terminal_log.exists() or b"FAKE-ALT" not in terminal_log.read_bytes()
+        ):
+            time.sleep(0.05)
     finally:
         os.killpg(proc.pid, signal.SIGKILL)
         proc.wait()
@@ -416,3 +353,7 @@ def test_herdr_launcher_applies_attempt_tmp_env(
 
     record = json.loads(record_path.read_text())
     _assert_record_in_attempt_tmp(record, attempt_tmp)
+    # Issue #515: launcher → recorder → wrapper → agent の raw byte が terminal.log に残る。
+    recorded = terminal_log.read_bytes()
+    assert b"kaji interactive terminal runner" in recorded
+    assert b"\x1b[?1049hFAKE-ALT HERDR_AGENT=<unset>\x1b[?1049l" in recorded

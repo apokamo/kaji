@@ -6,8 +6,10 @@ import json
 import shlex
 import stat
 import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -22,11 +24,10 @@ from kaji_harness.errors import (
 from kaji_harness.interactive_terminal_herdr import (
     HerdrManagedPane,
     HerdrPaneLaunch,
-    HerdrPaneRead,
     _AttemptDeadlineReachedError,
     _build_herdr_marker_argv,
     _build_herdr_split_argv,
-    _capture_herdr_snapshot,
+    _build_recorded_command,
     _classify_herdr_process_liveness,
     _close_owned_herdr_pane,
     _get_herdr_process_info,
@@ -37,7 +38,8 @@ from kaji_harness.interactive_terminal_herdr import (
     _materialize_herdr_launcher,
     _parse_herdr_version,
     _preflight_herdr,
-    _read_herdr_pane,
+    _recorded_exit_detail,
+    _recorder_path,
     _resolve_herdr,
     _resolve_herdr_origin,
     _run_herdr,
@@ -45,6 +47,7 @@ from kaji_harness.interactive_terminal_herdr import (
     _run_herdr_pane_command,
     _select_herdr_launch_placement,
     _wait_for_herdr_launcher_start,
+    _write_herdr_metadata,
     execute_interactive_terminal_herdr,
 )
 from kaji_harness.models import Step
@@ -57,8 +60,10 @@ class TestHerdrPreflight:
     def test_requires_installed_herdr(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("HERDR_BIN_PATH", raising=False)
         with patch("kaji_harness.interactive_terminal_herdr.shutil.which", return_value=None):
-            with pytest.raises(CLINotFoundError, match="CLI 'herdr' not found"):
+            with pytest.raises(CLINotFoundError, match="CLI 'herdr' not found") as exc_info:
                 _resolve_herdr()
+        assert "tmux" not in str(exc_info.value)
+        assert "headless" in str(exc_info.value)
 
     def test_prefers_executable_herdr_bin_path(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -76,14 +81,19 @@ class TestHerdrPreflight:
     def test_requires_herdr_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("HERDR_ENV", raising=False)
         monkeypatch.setenv("HERDR_PANE_ID", "w1:p1")
-        with pytest.raises(HerdrSessionRequiredError, match="inside Herdr"):
+        with pytest.raises(HerdrSessionRequiredError, match="inside Herdr") as exc_info:
             _resolve_herdr_origin()
+        assert "tmux" not in str(exc_info.value)
+        assert "Run kaji inside a Herdr pane" in str(exc_info.value)
+        assert 'agent_runner = "headless"' in str(exc_info.value)
 
     def test_requires_explicit_origin_pane(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HERDR_ENV", "1")
         monkeypatch.delenv("HERDR_PANE_ID", raising=False)
-        with pytest.raises(HerdrSessionRequiredError, match="HERDR_PANE_ID"):
+        with pytest.raises(HerdrSessionRequiredError, match="HERDR_PANE_ID") as exc_info:
             _resolve_herdr_origin()
+        assert "tmux" not in str(exc_info.value)
+        assert 'agent_runner = "headless"' in str(exc_info.value)
 
     def test_preflight_checks_caller_context_before_binary(
         self, monkeypatch: pytest.MonkeyPatch
@@ -477,48 +487,6 @@ class TestHerdrCommandContract:
         ):
             with pytest.raises(CLIExecutionError, match="invalid JSON response"):
                 _run_herdr_json("/usr/bin/herdr", ["pane", "list"])
-
-    def test_pane_read_accepts_plain_text_and_reads_revision_from_exact_pane(self) -> None:
-        read_completed = subprocess.CompletedProcess(
-            ["herdr"], 0, stdout="rendered pane text\n", stderr=""
-        )
-        get_completed = subprocess.CompletedProcess(
-            ["herdr"],
-            0,
-            stdout=json.dumps(
-                {
-                    "result": {
-                        "type": "pane_info",
-                        "pane": {"pane_id": "w1:p2", "revision": 7},
-                    }
-                }
-            ),
-            stderr="",
-        )
-        with patch(
-            "kaji_harness.interactive_terminal_herdr.subprocess.run",
-            side_effect=[read_completed, get_completed],
-        ) as run:
-            pane_read = _read_herdr_pane("/usr/bin/herdr", "w1:p2")
-
-        assert pane_read == HerdrPaneRead(
-            text="rendered pane text\n",
-            truncated=None,
-            revision=7,
-        )
-        assert [call.args[0] for call in run.call_args_list] == [
-            [
-                "/usr/bin/herdr",
-                "pane",
-                "read",
-                "w1:p2",
-                "--source",
-                "recent-unwrapped",
-                "--lines",
-                "2000",
-            ],
-            ["/usr/bin/herdr", "pane", "get", "w1:p2"],
-        ]
 
     @pytest.mark.parametrize("stdout", ["", json.dumps({"result": {"type": "ok"}})])
     def test_pane_run_accepts_empty_or_typed_ok_success(
@@ -1046,17 +1014,6 @@ class TestHerdrCommandContract:
         ):
             _list_managed_herdr_panes("/usr/bin/herdr", "w1:p1")
 
-    def test_snapshot_read_failure_is_best_effort(self, tmp_path: Path) -> None:
-        terminal_log = tmp_path / "terminal.log"
-        with patch(
-            "kaji_harness.interactive_terminal_herdr._read_herdr_pane",
-            side_effect=CLIExecutionError("interactive_terminal", 1, "pane read rejected"),
-        ):
-            pane_read = _capture_herdr_snapshot("/usr/bin/herdr", "w1:p2", terminal_log)
-
-        assert pane_read is None
-        assert not terminal_log.exists()
-
     @pytest.mark.parametrize(
         ("pane_id", "origin_pane", "run_id"),
         [("w1:p2", "w1:p1", ""), ("w1:p2", "", "run-1"), ("", "w1:p1", "run-1")],
@@ -1191,10 +1148,6 @@ class TestExecuteHerdr:
                 "kaji_harness.interactive_terminal_herdr._run_herdr_pane_command",
                 side_effect=run_command,
             ),
-            patch(
-                "kaji_harness.interactive_terminal_herdr._read_herdr_pane",
-                return_value=HerdrPaneRead(text="screen\n", truncated=False, revision=1),
-            ),
             patch("kaji_harness.interactive_terminal_herdr._get_herdr_process_info"),
             patch(
                 "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
@@ -1214,7 +1167,7 @@ class TestExecuteHerdr:
         if agent == "claude":
             assert "を実行してください。" not in launcher
 
-    def test_verdict_snapshot_and_owned_cleanup(self, tmp_path: Path) -> None:
+    def test_verdict_recording_metadata_and_owned_cleanup(self, tmp_path: Path) -> None:
         prompt_path = tmp_path / "prompt.txt"
         verdict_path = tmp_path / "verdict.yaml"
         prompt_path.write_text("do work", encoding="utf-8")
@@ -1223,7 +1176,9 @@ class TestExecuteHerdr:
         def run_command(*args: object, **kwargs: object) -> None:
             verdict_path.write_text("status: PASS\nreason: ok\nevidence: ok\n", encoding="utf-8")
 
-        pane_read = HerdrPaneRead(text="interactive screen\n", truncated=False, revision=4)
+        terminal_log = tmp_path / "terminal.log"
+        terminal_log.write_bytes(b"\x1b[?1049hinteractive screen\r\n")
+        (tmp_path / "terminal.log.state").write_bytes(b"complete".ljust(31) + b"\n")
         with (
             patch(
                 "kaji_harness.interactive_terminal_herdr._preflight_herdr",
@@ -1244,10 +1199,7 @@ class TestExecuteHerdr:
                 "kaji_harness.interactive_terminal_herdr._run_herdr_pane_command",
                 side_effect=run_command,
             ) as run,
-            patch(
-                "kaji_harness.interactive_terminal_herdr._read_herdr_pane",
-                return_value=pane_read,
-            ),
+            patch("kaji_harness.interactive_terminal_herdr._run_herdr") as run_herdr,
             patch("kaji_harness.interactive_terminal_herdr._get_herdr_process_info"),
             patch(
                 "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
@@ -1288,11 +1240,17 @@ class TestExecuteHerdr:
             run_id="11111111-1111-4111-8111-111111111111",
         )
         assert result.session_id == "11111111-1111-4111-8111-111111111111"
-        assert (tmp_path / "terminal.log").read_text(encoding="utf-8") == "interactive screen\n"
+        assert terminal_log.read_bytes() == b"\x1b[?1049hinteractive screen\r\n"
         metadata = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
         assert metadata["backend"] == "herdr"
-        assert metadata["transcript_kind"] == "rendered_recent_unwrapped_snapshot"
+        assert metadata["transcript_kind"] == "raw_pty_recording"
+        assert metadata["transcript_available"] is True
+        assert metadata["transcript_recorder_state"] == "complete"
         assert metadata["transcript_truncated"] is False
+        assert metadata["transcript_revision"] is None
+        assert metadata["transcript_bytes"] == len(terminal_log.read_bytes())
+        assert "terminal_diagnostic" not in metadata
+        assert all(call.args[1][:2] != ["pane", "read"] for call in run_herdr.call_args_list)
 
     def test_launcher_failure_never_dispatches_and_closes_owned_pane(self, tmp_path: Path) -> None:
         prompt_path = tmp_path / "prompt.txt"
@@ -1323,10 +1281,6 @@ class TestExecuteHerdr:
                 side_effect=launcher_error,
             ),
             patch("kaji_harness.interactive_terminal_herdr._run_herdr_pane_command") as run_wrapper,
-            patch(
-                "kaji_harness.interactive_terminal_herdr._capture_herdr_snapshot",
-                return_value=None,
-            ),
             patch(
                 "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
                 return_value=True,
@@ -1384,10 +1338,6 @@ class TestExecuteHerdr:
                 side_effect=start_error,
             ),
             patch(
-                "kaji_harness.interactive_terminal_herdr._capture_herdr_snapshot",
-                return_value=None,
-            ),
-            patch(
                 "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
                 return_value=True,
             ) as close,
@@ -1442,10 +1392,6 @@ class TestExecuteHerdr:
             patch("kaji_harness.interactive_terminal_herdr._mark_herdr_pane"),
             patch("kaji_harness.interactive_terminal_herdr._run_herdr_pane_command"),
             patch(
-                "kaji_harness.interactive_terminal_herdr._capture_herdr_snapshot",
-                return_value=None,
-            ),
-            patch(
                 "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
                 side_effect=cleanup_error,
             ),
@@ -1492,10 +1438,6 @@ class TestExecuteHerdr:
             patch(
                 "kaji_harness.interactive_terminal_herdr._run_herdr_pane_command",
                 side_effect=run_error,
-            ),
-            patch(
-                "kaji_harness.interactive_terminal_herdr._capture_herdr_snapshot",
-                return_value=None,
             ),
             patch(
                 "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
@@ -1585,10 +1527,6 @@ class TestExecuteHerdr:
                 return_value=shell_only,
             ),
             patch(
-                "kaji_harness.interactive_terminal_herdr._capture_herdr_snapshot",
-                return_value=None,
-            ),
-            patch(
                 "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
                 side_effect=CLIExecutionError(
                     "interactive_terminal", 1, "Herdr pane close was not confirmed: w1:p2"
@@ -1611,9 +1549,13 @@ class TestExecuteHerdr:
 
         close.assert_called_once()
         assert exc_info.value.session_resolution == SessionResolution(None)
-        assert "rendered snapshot may be incomplete" in exc_info.value.stderr
+        assert "rendered snapshot" not in exc_info.value.stderr
+        assert "transcript may be incomplete (recorder state: unknown)" in exc_info.value.stderr
         metadata = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
         assert metadata["terminal_diagnostic"]["kind"] == "no_log"
+        assert metadata["transcript_available"] is False
+        assert metadata["transcript_recorder_state"] == "unknown"
+        assert "transcript_truncated" not in metadata
         assert "close was not confirmed" in metadata["close_error"]
 
     def test_timeout_captures_metadata_and_closes_owned_pane(
@@ -1630,7 +1572,8 @@ class TestExecuteHerdr:
             panes_before=[],
             panes_pruned=[],
         )
-        pane_read = HerdrPaneRead(text="timed out screen\n", truncated=True, revision=9)
+        (tmp_path / "terminal.log").write_bytes(b"timed out screen\r\n")
+        (tmp_path / "terminal.log.state").write_bytes(b"incomplete ENOSPC".ljust(31) + b"\n")
 
         with (
             patch(
@@ -1643,10 +1586,6 @@ class TestExecuteHerdr:
             ),
             patch("kaji_harness.interactive_terminal_herdr._mark_herdr_pane"),
             patch("kaji_harness.interactive_terminal_herdr._run_herdr_pane_command"),
-            patch(
-                "kaji_harness.interactive_terminal_herdr._capture_herdr_snapshot",
-                return_value=pane_read,
-            ) as capture,
             patch(
                 "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
                 side_effect=CLIExecutionError(
@@ -1671,7 +1610,6 @@ class TestExecuteHerdr:
                     timeout=1,
                 )
 
-        capture.assert_called_once_with("/usr/bin/herdr", "w1:p2", tmp_path / "terminal.log")
         close.assert_called_once_with(
             "/usr/bin/herdr",
             "w1:p2",
@@ -1680,9 +1618,12 @@ class TestExecuteHerdr:
         )
         metadata = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
         assert metadata["close_on_verdict"] is True
-        assert metadata["transcript_revision"] == 9
+        assert metadata["transcript_revision"] is None
         assert metadata["transcript_truncated"] is True
-        assert metadata["terminal_diagnostic"]["kind"] == "no_log"
+        assert metadata["transcript_recorder_state"] == "incomplete"
+        assert metadata["transcript_error"] == "ENOSPC"
+        assert metadata["transcript_bytes"] == len(b"timed out screen\r\n")
+        assert metadata["terminal_diagnostic"]["kind"] == "no_pattern"
         assert "pane close" in metadata["close_error"]
         assert exc_info.value.session_resolution == SessionResolution(None)
 
@@ -1710,10 +1651,6 @@ class TestExecuteHerdr:
             patch("kaji_harness.interactive_terminal_herdr._mark_herdr_pane"),
             patch("kaji_harness.interactive_terminal_herdr._run_herdr_pane_command"),
             patch(
-                "kaji_harness.interactive_terminal_herdr._capture_herdr_snapshot",
-                return_value=None,
-            ),
-            patch(
                 "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
                 return_value=True,
             ),
@@ -1737,9 +1674,9 @@ class TestExecuteHerdr:
 
         assert exc_info.value.session_resolution == SessionResolution("launch-session-id")
 
-    @pytest.mark.parametrize("snapshot_error", [None, OSError("snapshot failed")])
+    @pytest.mark.parametrize("metadata_error", [None, OSError("metadata failed")])
     def test_interrupt_preserves_pane_and_original_exception(
-        self, tmp_path: Path, snapshot_error: OSError | None
+        self, tmp_path: Path, metadata_error: OSError | None
     ) -> None:
         prompt_path = tmp_path / "prompt.txt"
         prompt_path.write_text("do work", encoding="utf-8")
@@ -1771,10 +1708,9 @@ class TestExecuteHerdr:
                 },
             ),
             patch(
-                "kaji_harness.interactive_terminal_herdr._capture_herdr_snapshot",
-                return_value=None,
-                side_effect=snapshot_error,
-            ),
+                "kaji_harness.interactive_terminal_herdr._write_herdr_metadata",
+                side_effect=metadata_error,
+            ) as write_metadata,
             patch("kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane") as close,
             patch(
                 "kaji_harness.interactive_terminal_herdr.time.monotonic",
@@ -1795,7 +1731,8 @@ class TestExecuteHerdr:
             )
 
         close.assert_not_called()
-        assert (tmp_path / "pane-metadata.json").is_file() is (snapshot_error is None)
+        write_metadata.assert_called_once()
+        assert write_metadata.call_args.kwargs["terminal_log"] == tmp_path / "terminal.log"
 
     def test_unknown_process_info_resets_shell_only_confirmations(self, tmp_path: Path) -> None:
         prompt_path = tmp_path / "prompt.txt"
@@ -1841,10 +1778,6 @@ class TestExecuteHerdr:
             patch(
                 "kaji_harness.interactive_terminal_herdr._get_herdr_process_info",
                 side_effect=observations_then_verdict,
-            ),
-            patch(
-                "kaji_harness.interactive_terminal_herdr._capture_herdr_snapshot",
-                return_value=HerdrPaneRead(text="eventual verdict\n", truncated=False, revision=11),
             ),
             patch(
                 "kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane",
@@ -1942,10 +1875,6 @@ class TestExecuteHerdr:
                 "kaji_harness.interactive_terminal_herdr._run_herdr_pane_command",
                 side_effect=write_verdict,
             ),
-            patch(
-                "kaji_harness.interactive_terminal_herdr._capture_herdr_snapshot",
-                return_value=HerdrPaneRead(text="retained\n", truncated=False, revision=10),
-            ),
             patch("kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane") as close,
         ):
             result = execute_interactive_terminal_herdr(
@@ -1961,7 +1890,8 @@ class TestExecuteHerdr:
         assert result.session_id is None
         metadata = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
         assert metadata["close_on_verdict"] is False
-        assert metadata["transcript_revision"] == 10
+        assert metadata["transcript_kind"] == "raw_pty_recording"
+        assert metadata["transcript_available"] is False
 
 
 @pytest.mark.medium
@@ -2007,7 +1937,7 @@ def test_materialized_launcher_is_directly_executable(tmp_path: Path) -> None:
 def test_stateful_fake_herdr_executable_lifecycle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Exercise the subprocess-backed fake through verdict, snapshot, and exact close."""
+    """Exercise the subprocess-backed fake through verdict, recorder command, and exact close."""
     repo_root = Path(__file__).resolve().parents[1]
     fake_herdr = repo_root / "experiments/herdr-interactive-terminal/scripts/herdr"
     state_path = tmp_path / "state.json"
@@ -2034,8 +1964,11 @@ def test_stateful_fake_herdr_executable_lifecycle(
     assert verdict_path.is_file()
     assert state["closed"] is True
     assert metadata["marker_confirmed"] is True
-    assert metadata["transcript_revision"] == 7
-    assert metadata["transcript_truncated"] is None
+    assert metadata["transcript_kind"] == "raw_pty_recording"
+    assert "pane" not in state.get("reads", [])
+    command = state["command"]
+    assert command[0].endswith("wrapper.sh")
+    assert command[1] == "claude"
 
 
 # ============================================================
@@ -2175,7 +2108,6 @@ class TestExecuteHerdrAttemptDeadline:
             ) as wait,
             patch(f"{_HERDR}._get_herdr_process_info", return_value={}),
             patch(f"{_HERDR}._classify_herdr_process_liveness", return_value="running"),
-            patch(f"{_HERDR}._capture_herdr_snapshot", return_value=None) as capture,
             patch(f"{_HERDR}._close_owned_herdr_pane", return_value=True) as close,
             patch(f"{_HERDR}.time.monotonic", clock.monotonic),
             patch(f"{_HERDR}.time.sleep", clock.sleep),
@@ -2192,7 +2124,7 @@ class TestExecuteHerdrAttemptDeadline:
                 )
             except StepTimeoutError as exc:
                 recorded["error"] = exc
-            recorded.update(launch=launch, wait=wait, capture=capture, close=close, clock=clock)
+            recorded.update(launch=launch, wait=wait, close=close, clock=clock)
         return recorded
 
     def test_expired_deadline_does_not_launch_pane(self, tmp_path: Path) -> None:
@@ -2237,7 +2169,6 @@ class TestExecuteHerdrAttemptDeadline:
         error = recorded["error"]
         assert isinstance(error, StepTimeoutError)
         assert error.session_resolution == SessionResolution(None)
-        recorded["capture"].assert_called_once()  # type: ignore[attr-defined]
         recorded["close"].assert_called_once()  # type: ignore[attr-defined]
         metadata = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
         assert metadata["marker_confirmed"] is True
@@ -2260,7 +2191,6 @@ class TestExecuteHerdrAttemptDeadline:
                 f"{_HERDR}._wait_for_herdr_launcher_start",
                 side_effect=_AttemptDeadlineReachedError(),
             ),
-            patch(f"{_HERDR}._capture_herdr_snapshot", return_value=None),
             patch(f"{_HERDR}._close_owned_herdr_pane", return_value=True),
             patch(f"{_HERDR}.uuid.uuid4", side_effect=["run-id", "launch-session-id"]),
             patch(f"{_HERDR}.time.monotonic", return_value=0.0),
@@ -2287,7 +2217,7 @@ class TestExecuteHerdrAttemptDeadline:
 
 
 @pytest.mark.small
-class TestTmuxEntryForwardsDeadlineToHerdr:
+class TestDispatchForwardsDeadlineToHerdr:
     def test_deadline_monotonic_is_forwarded(self, tmp_path: Path) -> None:
         from kaji_harness.interactive_terminal import execute_interactive_terminal
 
@@ -2301,8 +2231,205 @@ class TestTmuxEntryForwardsDeadlineToHerdr:
                 verdict_path=tmp_path / "verdict.yaml",
                 workdir=tmp_path,
                 timeout=30,
-                backend="herdr",
                 deadline_monotonic=1234.5,
             )
 
         assert herdr_entry.call_args.kwargs["deadline_monotonic"] == 1234.5
+
+
+# ============================================================
+# Issue #515: PTY recorder の組み込み
+# ============================================================
+
+
+@pytest.mark.small
+class TestRecordedCommand:
+    @pytest.mark.parametrize(
+        ("agent", "manifest"),
+        [("claude", "claude"), ("codex", "codex"), ("antigravity", "agy")],
+    )
+    def test_order_is_env_hint_recorder_then_wrapper(self, agent: str, manifest: str) -> None:
+        wrapper_command = (
+            "/pkg/wrapper.sh claude '/prompt with spaces' /verdict /work '' '' '' '' auto ''"
+        )
+        command = _build_recorded_command(
+            wrapper_command,
+            agent=agent,
+            recorder=Path("/pkg/interactive_terminal_recorder.py"),
+            terminal_log=Path("/attempt dir/terminal.log"),
+            env={"TMPDIR": "/tmp/attempt", "KAJI_X": "a b"},
+        )
+
+        argv = shlex.split(command)
+        assert argv[:4] == ["env", "TMPDIR=/tmp/attempt", "KAJI_X=a b", f"HERDR_AGENT={manifest}"]
+        assert argv[4:9] == [
+            sys.executable,
+            "-I",
+            "/pkg/interactive_terminal_recorder.py",
+            "/attempt dir/terminal.log",
+            "--",
+        ]
+        assert argv[9:] == shlex.split(wrapper_command)
+        assert command.endswith(" " + wrapper_command)
+
+    def test_without_attempt_env_still_sets_hint(self) -> None:
+        argv = shlex.split(
+            _build_recorded_command(
+                "/pkg/wrapper.sh",
+                agent="codex",
+                recorder=Path("/pkg/rec.py"),
+                terminal_log=Path("/a/terminal.log"),
+                env=None,
+            )
+        )
+        assert argv[:2] == ["env", "HERDR_AGENT=codex"]
+
+    def test_unknown_agent_has_no_manifest(self) -> None:
+        with pytest.raises(ValueError, match="manifest"):
+            _build_recorded_command(
+                "/pkg/wrapper.sh",
+                agent="unknown",
+                recorder=Path("/pkg/rec.py"),
+                terminal_log=Path("/a/terminal.log"),
+                env=None,
+            )
+
+    def test_recorder_path_is_the_packaged_module(self) -> None:
+        assert _recorder_path().name == "interactive_terminal_recorder.py"
+        assert _recorder_path().is_file()
+
+
+def _write_state(terminal_log: Path, text: str) -> None:
+    (terminal_log.parent / (terminal_log.name + ".state")).write_bytes(
+        text.encode("ascii").ljust(31) + b"\n"
+    )
+
+
+@pytest.mark.medium
+class TestTranscriptMetadata:
+    def _metadata(self, tmp_path: Path, *, include_diagnostic: bool = False) -> dict[str, object]:
+        destination = tmp_path / "pane-metadata.json"
+        _write_herdr_metadata(
+            destination,
+            herdr_version="herdr 0.8.2",
+            pane_id="w1:p2",
+            origin_pane="w1:p1",
+            run_id="run",
+            close_on_verdict=True,
+            marker_confirmed=True,
+            terminal_log=tmp_path / "terminal.log",
+            include_diagnostic=include_diagnostic,
+        )
+        return cast(dict[str, object], json.loads(destination.read_text(encoding="utf-8")))
+
+    @pytest.mark.parametrize(
+        ("state", "expected_state", "truncated", "error"),
+        [
+            ("recording", "recording", False, None),
+            ("complete", "complete", False, None),
+            ("incomplete ENOSPC", "incomplete", True, "ENOSPC"),
+            (None, "unknown", None, None),
+            ("garbage", "unknown", None, None),
+        ],
+    )
+    def test_recorder_state_is_reflected(
+        self,
+        tmp_path: Path,
+        state: str | None,
+        expected_state: str,
+        truncated: bool | None,
+        error: str | None,
+    ) -> None:
+        (tmp_path / "terminal.log").write_bytes(b"\x1b[?1049hraw bytes\r\n")
+        if state is not None:
+            _write_state(tmp_path / "terminal.log", state)
+
+        metadata = self._metadata(tmp_path)
+
+        assert metadata["transcript_kind"] == "raw_pty_recording"
+        assert metadata["transcript_available"] is True
+        assert metadata["transcript_recorder_state"] == expected_state
+        assert metadata["transcript_truncated"] is truncated
+        assert metadata["transcript_revision"] is None
+        assert metadata["transcript_bytes"] == len(b"\x1b[?1049hraw bytes\r\n")
+        assert metadata.get("transcript_error") == error
+        assert "terminal_diagnostic" not in metadata
+
+    def test_unreadable_state_is_unknown(self, tmp_path: Path) -> None:
+        (tmp_path / "terminal.log").write_bytes(b"x")
+        (tmp_path / "terminal.log.state").mkdir()
+
+        metadata = self._metadata(tmp_path)
+
+        assert metadata["transcript_recorder_state"] == "unknown"
+        assert metadata["transcript_truncated"] is None
+
+    def test_missing_log_omits_size_fields(self, tmp_path: Path) -> None:
+        metadata = self._metadata(tmp_path)
+
+        assert metadata["transcript_available"] is False
+        for key in ("transcript_truncated", "transcript_revision", "transcript_bytes"):
+            assert key not in metadata
+
+    def test_state_read_error_does_not_break_metadata(self, tmp_path: Path) -> None:
+        (tmp_path / "terminal.log").write_bytes(b"x")
+        with patch.object(Path, "read_bytes", side_effect=PermissionError("denied")):
+            metadata = self._metadata(tmp_path)
+        assert metadata["transcript_recorder_state"] == "unknown"
+
+    def test_diagnostic_reads_recorder_log(self, tmp_path: Path) -> None:
+        (tmp_path / "terminal.log").write_bytes(
+            b"\x1b[?1049hAPI Error: 529 overloaded_error\r\n\x1b[?1049l"
+        )
+        _write_state(tmp_path / "terminal.log", "complete")
+
+        metadata = self._metadata(tmp_path, include_diagnostic=True)
+
+        diagnostic = cast(dict[str, object], metadata["terminal_diagnostic"])
+        assert diagnostic["kind"] == "provider_error"
+
+    @pytest.mark.parametrize(
+        ("state", "flagged"),
+        [("complete", False), ("recording", False), ("incomplete ENOSPC", True), (None, True)],
+    )
+    def test_exit_detail_flags_incomplete_or_unknown(
+        self, tmp_path: Path, state: str | None, flagged: bool
+    ) -> None:
+        terminal_log = tmp_path / "terminal.log"
+        terminal_log.write_bytes(b"API Error: 529 overloaded_error\r\n")
+        if state is not None:
+            _write_state(terminal_log, state)
+
+        detail = _recorded_exit_detail(terminal_log, prefix="Herdr pane exited")
+
+        assert detail.startswith("Herdr pane exited; transient provider error detected")
+        expected_state = "incomplete" if state and state.startswith("incomplete") else "unknown"
+        marker = f"; transcript may be incomplete (recorder state: {expected_state})"
+        assert (marker in detail) is flagged
+        assert "ENOSPC" not in detail
+
+
+@pytest.mark.small
+def test_missing_recorder_fails_before_pane_launch(tmp_path: Path) -> None:
+    prompt_path = tmp_path / "prompt.txt"
+    prompt_path.write_text("do work", encoding="utf-8")
+    with (
+        patch(
+            "kaji_harness.interactive_terminal_herdr._preflight_herdr",
+            return_value=("/usr/bin/herdr", "w1:p1", "herdr 0.8.2"),
+        ),
+        patch(
+            "kaji_harness.interactive_terminal_herdr._recorder_path",
+            return_value=tmp_path / "missing_recorder.py",
+        ),
+        patch("kaji_harness.interactive_terminal_herdr._launch_herdr_pane") as launch,
+        pytest.raises(FileNotFoundError, match="recorder not found"),
+    ):
+        execute_interactive_terminal_herdr(
+            step=Step(id="design", skill="design", agent="claude"),
+            prompt_path=prompt_path,
+            verdict_path=tmp_path / "verdict.yaml",
+            workdir=tmp_path,
+            timeout=30,
+        )
+    launch.assert_not_called()

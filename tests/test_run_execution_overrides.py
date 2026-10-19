@@ -17,7 +17,7 @@ from kaji_harness.config import ExecutionConfig, KajiConfig, PathsConfig
 
 
 def _config(
-    *, agent_runner: str = "headless", backend: str = "tmux", close: bool = True
+    *, agent_runner: str = "headless", backend: str = "herdr", close: bool = True
 ) -> KajiConfig:
     return KajiConfig(
         repo_root=Path("/repo"),
@@ -67,17 +67,30 @@ class TestRunParserThreeState:
         with pytest.raises(SystemExit):
             _parse(["--agent-runner", "interactive_terminal"])
 
-    def test_interactive_terminal_backend_choices(self) -> None:
+    def test_interactive_terminal_backend_accepts_herdr(self) -> None:
         assert (
             _parse(["--interactive-terminal-backend", "herdr"]).interactive_terminal_backend
             == "herdr"
         )
-        assert (
-            _parse(["--interactive-terminal-backend", "tmux"]).interactive_terminal_backend
-            == "tmux"
-        )
-        with pytest.raises(SystemExit):
+
+    def test_tmux_backend_is_rejected_with_migration_hint(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Issue #515: tmux は移行案内付きの usage error（exit 2）。
+        with pytest.raises(SystemExit) as exc_info:
+            _parse(["--interactive-terminal-backend", "tmux"])
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "tmux backend was removed" in err
+        assert "--interactive-terminal-backend herdr" in err
+        assert "--agent-runner headless" in err
+        assert "#migrating-from-tmux" in err
+
+    def test_unknown_backend_is_invalid_choice(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with pytest.raises(SystemExit) as exc_info:
             _parse(["--interactive-terminal-backend", "kitty"])
+        assert exc_info.value.code == 2
+        assert "invalid choice: 'kitty'" in capsys.readouterr().err
 
 
 @pytest.mark.small
@@ -105,7 +118,7 @@ class TestApplyExecutionOverrides:
         assert result.execution.agent_runner == "headless"
 
     def test_cli_overrides_interactive_terminal_backend(self) -> None:
-        config = _config(agent_runner="interactive_terminal", backend="tmux")
+        config = _config(agent_runner="interactive_terminal")
         result = _apply_execution_overrides(
             config, _parse(["--interactive-terminal-backend", "herdr"])
         )

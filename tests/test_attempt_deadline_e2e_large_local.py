@@ -2,31 +2,23 @@
 
 - 実 ``kaji run`` + PATH 上の fake ``claude``（headless）: prompt の表示値の到達と
   hard deadline の一致
-- 隔離した実 tmux server 上の interactive terminal: 渡した hard deadline で打ち切られる
 
 subprocess を使うがネットワーク疎通は無い。Herdr の実起動は含まない（実 Herdr pane 内からの
-起動が必要で、CI / 本 test 環境では物理的に作成できない。設計書 § テスト戦略）。
+起動が必要で、CI / 本 test 環境では物理的に作成できない。設計書 § テスト戦略）。Herdr backend の
+attempt deadline は ``tests/test_interactive_terminal_herdr.py`` が fake herdr CLI で検証する。
 """
 
 from __future__ import annotations
 
 import json
 import os
-import shutil
 import stat
 import subprocess
 import sys
-import time
-import uuid
-from collections.abc import Iterator
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-
-from kaji_harness.errors import StepTimeoutError
-from kaji_harness.interactive_terminal import execute_interactive_terminal
-from kaji_harness.models import Step
 
 pytestmark = [pytest.mark.large, pytest.mark.large_local]
 
@@ -236,70 +228,3 @@ def test_headless_hard_deadline_matches_displayed_deadline(tmp_path: Path) -> No
     # 表示は秒未満切り捨てのため、実 deadline は表示値から最大 1 秒後。
     elapsed_past_shown = (ended - shown_deadline).total_seconds()
     assert -0.5 <= elapsed_past_shown < 6.0, elapsed_past_shown
-
-
-class TestTmuxAttemptDeadlineE2E:
-    """実 tmux を使う #421 deadline E2E（Issue #474: 子 Issue B で class ごと削除できる単位）。"""
-
-    @pytest.fixture()
-    def isolated_tmux(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-        """利用者の tmux を一切使わない専用 server を起動し、後始末で必ず kill する。"""
-        socket_name = f"kaji-test-{uuid.uuid4().hex[:12]}"
-        bin_dir = _install_fake_claude(tmp_path, _FAKE_CLAUDE_HANGING)
-        monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-        tmux = shutil.which("tmux")
-        assert tmux is not None, "tmux is required for the interactive terminal large test"
-
-        def run(*args: str) -> str:
-            proc = subprocess.run(
-                [tmux, "-L", socket_name, "-f", "/dev/null", *args],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            return proc.stdout.strip()
-
-        try:
-            run("new-session", "-d", "-s", "kajitest", "-x", "200", "-y", "50", "sleep 600")
-            socket_path = run("display-message", "-p", "-t", "kajitest", "#{socket_path}")
-            pane_id = run("display-message", "-p", "-t", "kajitest", "#{pane_id}")
-            server_pid = run("display-message", "-p", "-t", "kajitest", "#{pid}")
-            session_idx = run("display-message", "-p", "-t", "kajitest", "#{session_id}").lstrip(
-                "$"
-            )
-            monkeypatch.setenv("TMUX", f"{socket_path},{server_pid},{session_idx}")
-            monkeypatch.setenv("TMUX_PANE", pane_id)
-            yield socket_name
-        finally:
-            subprocess.run(
-                [tmux, "-L", socket_name, "kill-server"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-
-    def test_tmux_times_out_at_attempt_deadline_not_pane_launch_plus_timeout(
-        self, tmp_path: Path, isolated_tmux: str
-    ) -> None:
-        attempt_dir = tmp_path / "artifacts" / "attempt-001"
-        attempt_dir.mkdir(parents=True)
-        prompt = attempt_dir / "prompt.txt"
-        prompt.write_text("do the step", encoding="utf-8")
-        verdict = attempt_dir / "verdict.yaml"
-
-        attempt_start = time.monotonic()
-        with pytest.raises(StepTimeoutError) as exc_info:
-            execute_interactive_terminal(
-                step=Step(id="design", skill="x", agent="claude"),
-                prompt_path=prompt,
-                verdict_path=verdict,
-                workdir=tmp_path,
-                timeout=600,  # 設定 timeout は大きく、deadline_monotonic が優先されることを示す。
-                backend="tmux",
-                deadline_monotonic=attempt_start + 4.0,
-            )
-        elapsed = time.monotonic() - attempt_start
-
-        assert exc_info.value.timeout == 600
-        # attempt 開始基準の 4 秒で打ち切られ、pane 起動所要時間は加算されない。
-        assert 4.0 <= elapsed < 4.0 + 3.0, elapsed

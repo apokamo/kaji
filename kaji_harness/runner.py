@@ -622,7 +622,6 @@ class _StepExecutor:
                 workdir=settings.workdir,
                 timeout=settings.timeout,
                 session_id=session_id,
-                backend=self.config.execution.interactive_terminal_backend,
                 close_on_verdict=self.config.execution.interactive_terminal_close_on_verdict,
                 execution_policy=self.workflow.execution_policy,
                 env=tmp_env,
@@ -1298,7 +1297,7 @@ class WorkflowRunner:
         except KeyboardInterrupt:
             # Issue #403: 割込みは ``BaseException`` なので ``except Exception`` を素通りし、
             # 初期値 ``COMPLETE`` のまま workflow_end が書かれていた。run レベルの終端だけを
-            # 整合させ、進行中 attempt の result.json は作らない（tmux pane 内の agent は
+            # 整合させ、進行中 attempt の result.json は作らない（Herdr pane 内の agent は
             # 生存しうるため exit_code / session の best-effort 推定は誤情報になる）。
             end_status = "ERROR"
             end_error = "KeyboardInterrupt: workflow interrupted by user"

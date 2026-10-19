@@ -599,6 +599,7 @@ def test_recurred_incident_is_not_transient_closed(tmp_path: Path) -> None:
 
 
 # --- incident 除外経路（Issue #322: tmux セッション外の interactive runner 起動） ---
+# Issue #515 で tmux backend は削除済み。過去 run の artifact に残る型名の互換として維持する。
 
 _TMUX_ERROR = (
     "interactive terminal runner requires tmux. Run `kaji run` inside tmux "

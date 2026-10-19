@@ -35,7 +35,6 @@ MODULE_LAYERS: dict[str, str] = {
     "kaji_harness.interactive_terminal_common": "application",
     "kaji_harness.interactive_terminal_herdr": "application",
     "kaji_harness.interactive_terminal_recorder": "foundation",
-    "kaji_harness.interactive_terminal_tmux": "application",
     "kaji_harness.logger": "application",
     "kaji_harness.models": "application",
     "kaji_harness.preflight": "application",

@@ -1,9 +1,10 @@
 """Tests for the terminal-backend independent helpers of the interactive terminal runner.
 
-Covers the shared helpers in ``kaji_harness.interactive_terminal_common`` that both the tmux
-and Herdr backends use (Issue #474): abnormal-exit / Codex session resolution (Issue #403),
-the ``wrapper.sh`` shell contract, and terminal transcript diagnostics (provider error /
-sensitive marker, Issue #296), plus the import boundary that keeps these helpers free of tmux.
+Covers the shared helpers in ``kaji_harness.interactive_terminal_common`` used by the Herdr
+backend (Issue #474 / #515): abnormal-exit / Codex session resolution (Issue #403), the
+``wrapper.sh`` shell contract, and terminal transcript diagnostics (provider error / sensitive
+marker, Issue #296), plus the import boundary that keeps these helpers free of the dispatch
+and Herdr modules.
 """
 
 from __future__ import annotations
@@ -31,6 +32,8 @@ from kaji_harness.interactive_terminal_common import (
 )
 from kaji_harness.models import Step
 from kaji_harness.recovery.handler import _sensitive_failure_text
+
+_EXIT_PREFIX = "Herdr pane exited before writing verdict.yaml"
 
 WRAPPER = (
     Path(__file__).resolve().parent.parent
@@ -471,7 +474,7 @@ class TestSensitiveSafeFocusedMessage:
         terminal_log = tmp_path / "terminal.log"
         terminal_log.write_text(_buried_capacity_transcript(), encoding="utf-8")
 
-        message = _terminal_exit_detail(terminal_log)
+        message = _terminal_exit_detail(terminal_log, prefix=_EXIT_PREFIX)
 
         assert "at capacity" in message
         assert "Token usage" not in message
@@ -482,7 +485,7 @@ class TestSensitiveSafeFocusedMessage:
         terminal_log = tmp_path / "terminal.log"
         terminal_log.write_text("agent failed at launch\n", encoding="utf-8")
 
-        message = _terminal_exit_detail(terminal_log)
+        message = _terminal_exit_detail(terminal_log, prefix=_EXIT_PREFIX)
 
         assert "agent failed at launch" in message
         assert is_transient_error_text(message) is False
@@ -493,7 +496,7 @@ class TestSensitiveSafeFocusedMessage:
         # independent of any single sample. Breaks loudly if a future pattern
         # addition collides with `_SENSITIVE_FAILURE_PATTERNS`.
         for pattern in _TRANSIENT_PATTERNS:
-            message = f"tmux pane exited before writing verdict.yaml; transient provider error detected (pattern: '{pattern}')"
+            message = f"{_EXIT_PREFIX}; transient provider error detected (pattern: '{pattern}')"
             assert _sensitive_failure_text(message) is False, pattern
 
 
@@ -541,7 +544,7 @@ class TestSensitiveMarkerCoexistsWithTransient:
         terminal_log = tmp_path / "terminal.log"
         terminal_log.write_text(_buried_capacity_and_401_transcript(), encoding="utf-8")
 
-        message = _terminal_exit_detail(terminal_log)
+        message = _terminal_exit_detail(terminal_log, prefix=_EXIT_PREFIX)
 
         assert "at capacity" in message
         assert is_transient_error_text(message) is True
@@ -557,7 +560,7 @@ class TestSensitiveMarkerCoexistsWithTransient:
         terminal_log = tmp_path / "terminal.log"
         terminal_log.write_text("Please try again: invalid token\n", encoding="utf-8")
 
-        message = _terminal_exit_detail(terminal_log)
+        message = _terminal_exit_detail(terminal_log, prefix=_EXIT_PREFIX)
 
         assert "try again" in message
         assert is_transient_error_text(message) is True
@@ -574,7 +577,7 @@ class TestFalsePositiveBoundary:
         benign = "let me proceed with the next step and finish up the review.\n" * 5
         diagnostic = extract_terminal_diagnostic(benign)
         assert diagnostic.kind == "no_pattern"
-        message = f"tmux pane exited before writing verdict.yaml; no known provider error pattern in transcript; log tail:\n{diagnostic.clean_tail}"
+        message = f"{_EXIT_PREFIX}; no known provider error pattern in transcript; log tail:\n{diagnostic.clean_tail}"
         assert is_transient_error_text(message) is False
 
     def test_generic_try_again_phrase_is_characterized_as_provider_error(self) -> None:
@@ -601,7 +604,7 @@ class TestReadTerminalDiagnostic:
         assert read_terminal_diagnostic(terminal_log).kind == "empty"
 
     def test_missing_file_message_is_diagnostic_unavailable(self, tmp_path: Path) -> None:
-        message = _terminal_exit_detail(tmp_path / "missing-terminal.log")
+        message = _terminal_exit_detail(tmp_path / "missing-terminal.log", prefix=_EXIT_PREFIX)
         assert "diagnostic unavailable" in message
         assert is_transient_error_text(message) is False
 
@@ -796,20 +799,18 @@ _HERDR_SHARED_HELPERS = (
 
 @pytest.mark.small
 class TestInteractiveTerminalImportBoundary:
-    """Issue #474: Herdr / 共用 helper が tmux 実装に依存しない import 境界を機械検査する。"""
+    """Issue #474: Herdr / 共用 helper / recorder の import 境界を機械検査する。"""
 
-    def test_herdr_does_not_import_dispatch_or_tmux_modules(self) -> None:
+    def test_herdr_does_not_import_dispatch_module(self) -> None:
         imports = _runtime_imports(_HERDR_MODULE)
 
         assert "kaji_harness.interactive_terminal" not in imports
-        assert "kaji_harness.interactive_terminal_tmux" not in imports
         assert "kaji_harness.interactive_terminal_common" in imports
 
     def test_common_does_not_import_other_interactive_terminal_modules(self) -> None:
         imports = _runtime_imports(_COMMON_MODULE)
 
         assert "kaji_harness.interactive_terminal" not in imports
-        assert "kaji_harness.interactive_terminal_tmux" not in imports
         assert "kaji_harness.interactive_terminal_herdr" not in imports
 
     def test_recorder_imports_only_the_standard_library(self) -> None:
@@ -833,7 +834,7 @@ class TestInteractiveTerminalImportBoundary:
         sample = tmp_path / "sample.py"
         sample.write_text(
             "from typing import TYPE_CHECKING\n"
-            "from . import interactive_terminal_tmux\n"
+            "from . import interactive_terminal_recorder\n"
             "if TYPE_CHECKING:\n"
             "    from .interactive_terminal_herdr import X\n"
             "def f():\n"
@@ -843,6 +844,6 @@ class TestInteractiveTerminalImportBoundary:
 
         imports = _runtime_imports(sample)
 
-        assert "kaji_harness.interactive_terminal_tmux" in imports
+        assert "kaji_harness.interactive_terminal_recorder" in imports
         assert "kaji_harness.interactive_terminal" in imports
         assert "kaji_harness.interactive_terminal_herdr" not in imports
