@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -742,6 +743,9 @@ _COMMON_MODULE = (
 _HERDR_MODULE = (
     Path(__file__).resolve().parent.parent / "kaji_harness" / "interactive_terminal_herdr.py"
 )
+_RECORDER_MODULE = (
+    Path(__file__).resolve().parent.parent / "kaji_harness" / "interactive_terminal_recorder.py"
+)
 
 
 def _runtime_imports(path: Path) -> set[str]:
@@ -807,6 +811,14 @@ class TestInteractiveTerminalImportBoundary:
         assert "kaji_harness.interactive_terminal" not in imports
         assert "kaji_harness.interactive_terminal_tmux" not in imports
         assert "kaji_harness.interactive_terminal_herdr" not in imports
+
+    def test_recorder_imports_only_the_standard_library(self) -> None:
+        # Issue #515: recorder は ``-I`` で path 起動されるため kaji の module を import できない
+        imports = _runtime_imports(_RECORDER_MODULE)
+
+        assert imports
+        assert not any(name.startswith("kaji_harness") for name in imports)
+        assert all(name.split(".")[0] in sys.stdlib_module_names for name in imports)
 
     def test_common_does_not_import_subprocess(self) -> None:
         assert "subprocess" not in _runtime_imports(_COMMON_MODULE)
