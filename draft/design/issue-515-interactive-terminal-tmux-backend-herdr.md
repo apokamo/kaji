@@ -61,7 +61,7 @@ per-key precedence（`config.local.toml` が tracked config を上書き）は�
 
 | option | 受理値 | 変更点 |
 |---|---|---|
-| `--agent-runner` | `headless` / `interactive_terminal` | 変更なし |
+| `--agent-runner` | `headless` / `interactive-terminal`（CLI はハイフン表記。設定ファイルの `interactive_terminal` とは別表記） | 変更なし |
 | `--interactive-terminal-backend` | **`herdr` のみ** | `tmux` は移行案内付きの usage error、その他は argparse 標準の `invalid choice` |
 
 新しい設定キー・CLI option は追加しない。
@@ -77,6 +77,8 @@ per-key precedence（`config.local.toml` が tracked config を上書き）は�
 - `<terminal_log>`: attempt directory の `terminal.log`（絶対 path）。
 - `<argv...>`: 子プロセスとして PTY 上で `execvp` する argv（実運用では packaged `wrapper.sh` と 10 引数）。
 - 環境変数 `HERDR_AGENT`: launcher が recorder プロセスにだけ付ける。recorder は子の環境から取り除いてから exec する。
+- 記録状態ファイル `<terminal_log>.state`（例: `terminal.log.state`）: recorder が記録の完全性を harness に
+  伝える内部契約（R1）。下記「記録状態ファイル」参照。
 
 ### 出力
 
@@ -98,9 +100,34 @@ per-key precedence（`config.local.toml` が tracked config を上書き）は�
 |---|---|---|
 | `transcript_kind` | `"rendered_recent_unwrapped_snapshot"` | `"raw_pty_recording"` |
 | `transcript_available` | snapshot 取得成否 | metadata 書き込み時点で `terminal.log` が通常ファイルとして存在するか |
-| `transcript_truncated` | `null`（不明固定） | `false`（recorder は上限を持たず切り詰めない）。`transcript_available` が `false` のときは出力しない |
+| `transcript_recorder_state`（新設） | — | 記録状態ファイルから読んだ状態: `"recording"` / `"complete"` / `"incomplete"` / `"unknown"`（下記） |
+| `transcript_truncated` | `null`（不明固定） | 記録状態から導出する。`recording` / `complete` → `false`（既知の欠落なし。recorder は上限を持たない）、`incomplete` → `true`、`unknown` → `null`（完全性を確認できない）。`transcript_available` が `false` のときは出力しない |
+| `transcript_error`（新設） | — | `incomplete` のときだけ、記録状態ファイルに残った失敗理由（`errno` 名、例 `ENOSPC`）。transcript の内容は含めない |
 | `transcript_revision` | Herdr pane の `revision` | `null`（recorder には revision 概念がない。キーは schema 安定のため残す）。`transcript_available` が `false` のときは出力しない |
 | `transcript_bytes`（新設） | — | metadata 書き込み時点の `terminal.log` の byte 数。`transcript_available` が `false` のときは出力しない |
+
+#### 記録状態ファイル（`terminal.log.state`、kaji 内部契約）
+
+recorder が書き、Herdr backend が metadata 書き込み時に読む。完全性を確認できない記録を、既知の欠落がない
+記録と区別するためのもの。
+
+| 内容（1 行の ASCII、固定長 32 byte に空白 padding） | 意味 | 書くタイミング |
+|---|---|---|
+| `recording` | 記録中。ここまで既知の欠落なし | 子の起動前（log を開いた直後）。作成できなければ log 不可と同じく exit 2 |
+| `complete` | 子の EOF まで欠落なく記録して終了 | relay loop を EOF で抜けた後 |
+| `incomplete <ERRNO名>` | log 書き込みに失敗し、以後の記録を止めた | log 書き込みの `OSError` を捕捉した直後 |
+
+- 更新は、作成時に確保した 32 byte を `os.pwrite(fd, data, 0)` で上書きする（ファイル長を変えないので新しい
+  block の確保を通常は要しない。disk full でも書ける可能性が最も高い方法）。
+- `incomplete` への上書きが失敗した場合は状態ファイルを `unlink` する（unlink は空き容量を要さない）。harness は
+  状態ファイルが無い記録を `unknown` として扱うので、「既知の欠落なし」と誤表示しない。unlink も失敗した場合
+  だけは `recording` が残る（同じ attempt directory への権限が途中で失われる等。残余リスクとして docs に記載）。
+- harness 側の読み取り: ファイルが無い、読めない、内容が上表のどれでもない → `unknown`。読み取りの例外は
+  metadata 書き込み内で捕捉し、`unknown` に倒す。**状態の保存・読み取りの失敗は、recorder の relay・終了コード、
+  harness の verdict・元の例外のいずれも置き換えない。**
+- 異常終了経路の `_terminal_exit_detail` には、状態が `incomplete` / `unknown` のとき
+  `"; transcript may be incomplete (recorder state: <state>)"` を付ける（canonical な固定文言のみ。transcript
+  の内容や errno の説明文は載せない）。
 
 transcript metadata は metadata を書くすべての経路（marker 失敗を除く）で出力する。`terminal_diagnostic`
 を付ける経路（launcher 失敗、shell 復帰、timeout）は現状を維持する。marker 設定失敗の経路は wrapper を
@@ -228,6 +255,7 @@ command = shlex.join([
 | `main(argv) -> int` | 引数解析（`<log> -- <argv...>`）、log を開く、子の起動、relay、終了コードの返却 |
 | `_read_master(fd) -> bytes` | master の read。`OSError(EIO)` と `b""` を同じく EOF（`b""`）として返し、それ以外の `OSError` は送出する |
 | `_child_exec(argv)` | 子側: 環境から `HERDR_AGENT` を除き `os.execvp`。失敗時は stderr（PTY）に理由を書いて `os._exit(127)` |
+| `_LogSink` / `_RecorderState`（仮称） | log 書き込み（partial write、失敗時の記録停止）と記録状態ファイルの更新。書き込み関数を注入でき、Small テストで fake writer を使える |
 | `_exit_code(status) -> int` | `os.waitstatus_to_exitcode` の結果を shell 慣習（signal は `128 + signum`）に変換 |
 
 処理の流れ:
@@ -239,13 +267,22 @@ command = shlex.join([
 3. `select` で master と stdin を待つ。master の chunk は **log へ先に全量書き込み**、次に stdout へ全量
    書き込む（partial write をループで処理）。stdin の chunk は master へ転送。stdin の EOF 後は stdin を
    監視対象から外す。`EINTR` は PEP 475 の自動再試行に任せ、`InterruptedError` は再試行する。
-4. `_read_master` が EOF を返したら loop を抜け、`finally` で terminal 設定を復元し log を閉じ、
+4. `_read_master` が EOF を返したら loop を抜け、`finally` で terminal 設定を復元し（relay 中の例外でも必ず復元）、log を閉じ、
    `waitpid` の結果を `_exit_code` で返す。
 5. 失敗の扱い（診断が本処理を壊さない）:
-   - log 書き込みの `OSError`（disk full 等）: stderr に 1 回だけ警告し、以後は記録を止めて relay を続ける。
+   - log 書き込みの `OSError`（disk full 等。部分書き込みの後に失敗した場合を含む）: 記録状態を
+     `incomplete <ERRNO名>` に更新し（失敗時は状態ファイルを unlink）、stderr に 1 回だけ警告し、以後は記録を
+     止めて relay を続ける。stderr の警告は外側の pane に出るだけで terminal.log には入らないため、harness への
+     伝達は状態ファイルだけで行う。
+   - relay loop を EOF で抜けたら状態を `complete` に更新する（`incomplete` からは戻さない）。
    - stdout 書き込みの `OSError`（pane が閉じられた等）: mirror を止め、子の EOF まで log 記録を続ける。
    - SIGHUP / SIGTERM には独自 handler を付けない（既定動作で終了。それまでの chunk は log に残っている。
-     master が閉じると kernel が子の session に SIGHUP を送る）。
+     master が閉じると kernel が子の session に SIGHUP を送る）。この場合の状態は `recording` のまま残る
+     （終了時に欠落は生じていないので「既知の欠落なし」で正しい）。
+   - pane 内のキー入力の Ctrl-C は、stdin を raw mode にしているので `\x03` として master へ転送され、内側の
+     PTY の line discipline が子の foreground process group に SIGINT を送る。recorder 自身は SIGINT を受けない。
+     これは kaji 側（harness プロセス）の Ctrl-C = `KeyboardInterrupt` で pane を保持する既存契約とは別の経路で、
+     後者は変更しない。
 
 `HERDR_AGENT` を recorder のプロセスだけに付ける要件は、「launcher の `env` prefix で recorder に付与」＋
 「recorder が子の環境から削除」で満たす。Herdr は pane の foreground（= recorder）の環境を見て manifest を
@@ -269,7 +306,7 @@ command = shlex.join([
 - shell 復帰時の prefix から「rendered snapshot may be incomplete」を削除する
   （例: `"Herdr pane returned to its shell before writing verdict.yaml"`）。
 - `_write_herdr_metadata` は `pane_read` 引数の代わりに `terminal_log` を受け、上記「出力」の
-  transcript metadata を計算する。`terminal_diagnostic` を付けるかどうかは別の bool 引数で現状の経路と
+  transcript metadata を記録状態ファイルとあわせて計算する（読み取り失敗は `unknown`、例外を外へ出さない）。`terminal_diagnostic` を付けるかどうかは別の bool 引数で現状の経路と
   一致させる。
 - 変更しないもの: caller-context guard、version 検査、split / 配置 / prune、ownership token、launcher の
   一度だけの起動と start marker、`close_on_verdict`、cleanup 失敗が元の verdict / 例外を置き換えない契約、
@@ -287,16 +324,17 @@ command = shlex.join([
 
 ### 6. 実装順序（tmux 削除前の突き合わせを含む）
 
-implement step 内で次の順に進め、各段階を commit する。
+implement step 内で次の順に進める。commit は 3 個に限定し、コード変更を含む commit（C1・C2）ごとに
+`make check` を通す（AGENTS.md）。
 
-1. recorder module と Small / Medium テスト。
-2. **tmux 削除前の突き合わせ**（下記「テスト戦略 > 変更固有検証」）。結果を
-   `experiments/herdr-interactive-terminal/reports/<日付>-recorder-vs-pipe-pane.md` に記録し、比較に使った
-   script を `experiments/herdr-interactive-terminal/scripts/` に置いて commit する。
-3. Herdr backend への組み込み、snapshot 削除、metadata 変更。
-4. 設定・CLI の契約変更、非推奨警告の削除。
-5. tmux backend・tmux 固有テストの削除。
-6. docs、ADR 007、CHANGELOG。
+| commit | 内容 | gate |
+|---|---|---|
+| C1 | recorder module とそのテスト ＋ **tmux 削除前の突き合わせ**（下記「テスト戦略 > 変更固有検証」）の report（`experiments/herdr-interactive-terminal/reports/<日付>-recorder-vs-pipe-pane.md`）と比較 script（`experiments/herdr-interactive-terminal/scripts/`）。突き合わせは recorder の実装・テスト後、C1 の commit 前に実行する | `make check` |
+| C2 | Herdr backend への組み込み、snapshot 削除、metadata 変更、設定・CLI の契約変更、非推奨警告の削除、tmux backend・tmux 固有テストの削除 | `make check` |
+| C3 | docs、ADR 007、CHANGELOG（docs のみ） | `make verify-docs`（`make check` は AGENTS.md により省略可。packaging は C2 後に `make verify-packaging`） |
+
+C1 の時点では tmux backend が repo に残っているため、突き合わせは「tmux を削除する前」に行われ、その証跡は
+tmux を削除する C2 より前の commit に入る。
 
 ## 重要判断 provenance
 
@@ -315,6 +353,7 @@ implement step 内で次の順に進め、各段階を commit する。
 | `HERDR_AGENT` の付け方 | recorder プロセスだけに付け、子からは削除。`antigravity` → `agy` | AI の仮定（#476 報告書「実装時のリスク」1、#466 追加決定の AI 仮定表）。検査先: 本設計レビュー、review-code | launcher の env prefix で付与し、recorder が子 exec 前に `HERDR_AGENT` を除去。Medium テストで子の環境に無いことを検証 |
 | tmux 削除前の突き合わせ | 同じ agent 実行で recorder の log と tmux `pipe-pane` の log を比較し、欠落がないことを記録 | 人間決定由来の完了条件: #515「Herdr backend の PTY recorder」（#466 追加決定の AI 仮定を readiness で Issue に固定） | private tmux server で、決定論的な fake TUI agent と実 Claude の 2 実行を比較。判定基準と記録先を定義（テスト戦略） |
 | `interactive_terminal` の `backend` 引数・`interactive_terminal_backend_source` の削除 | 単一値しか取らない引数と、非推奨警告専用だった field を削除 | AI の仮定（ADR 008「互換レイヤを書かない」、grep で利用箇所が警告とその field 設定だけであることを確認）。検査先: 本設計レビュー、review-code | 設定キー自体は人間決定どおり残す。エラーのファイル特定は既存の `source(key)` を使うため field は不要 |
+| 記録の完全性の伝達 | recorder が記録状態ファイル（`recording` / `complete` / `incomplete <ERRNO>`、更新不能なら unlink）を書き、harness が `transcript_recorder_state` / `transcript_truncated`（false / true / null）/ `transcript_error` に反映する。fail-open（relay 継続）は維持 | AI の仮定（設計レビュー R1 の指摘を受けて追加。#515 完了条件「transcript metadata が recorder の記録を正しく表す」の詳細化。新しい公開設定は追加しない）。検査先: 再レビュー（verify-design）、review-code | 固定長の in-place 上書きと unlink の fallback、読み取り失敗は `unknown`、状態の失敗が verdict / 例外を置き換えない |
 | `transcript_revision` の扱い | キーを残して `null` | AI の仮定（完了条件「kind / availability / revision / truncation が recorder の記録を正しく表す」に対し、recorder に revision 概念がないことを `null` で表す）。検査先: 本設計レビュー | `transcript_bytes` を追加して記録量を示す |
 
 one-way door の未決はない。公開契約（設定・CLI・エラー）、廃止時期、記録方式の採否、互換範囲はすべて
@@ -339,15 +378,19 @@ AI の仮定として上表に検査先を記録した。
   herdr` を受理。`tmux` は exit 2 で移行案内を stderr に出す。unknown は `invalid choice`。
 - **非推奨警告の削除**: `tests/test_tmux_backend_deprecation.py` を削除。stderr に deprecation 警告が
   出ないことは Medium の CLI 経路で確認する。
-- **recorder の純関数**（新規 `tests/test_interactive_terminal_recorder.py`）: `_read_master` が
+- **recorder の純関数**（新規 `tests/test_interactive_terminal_recorder.py`、subprocess・実 PTY なし）: `_read_master` が
   `OSError(EIO)` を EOF に、`b""` を EOF に、`EBADF` 等は送出（Linux / BSD 両方の終了を fake read で検証）。
   `_exit_code` が正常終了コードと signal 終了（`128 + signum`）を変換。引数解析（`--` 欠落・argv 空は exit 2）。
+  log 書き込み（R1）: fake writer で「partial write の後に `OSError(ENOSPC)`」を起こすと、それまでの byte は
+  書かれ、以後の chunk は log に書かれず stdout への relay は続き、状態が `incomplete ENOSPC` になる。状態の
+  上書きも失敗する fake では状態ファイルが unlink される。stdout 書き込み失敗では log 記録が続く。EOF 後に
+  `complete` になり、`incomplete` からは戻らない。
 - **Herdr command 組み立て**（`tests/test_interactive_terminal_herdr.py`）: launcher command が
   env prefix → `HERDR_AGENT=<manifest>` → `sys.executable -I <recorder> <terminal_log> --` → wrapper
   10 引数の順になる。claude / codex / antigravity が `claude` / `codex` / `agy` に写像される。
   wrapper 10 引数の順序・quoting は既存テストどおり。
 - **metadata**: `transcript_kind == "raw_pty_recording"`、log 有無で `transcript_available`、
-  `transcript_truncated is False`、`transcript_revision is None`、`transcript_bytes` が log サイズと一致。
+  記録状態ごとの `transcript_truncated`（Medium 参照）、`transcript_revision is None`、`transcript_bytes` が log サイズと一致。
   log がない場合に truncated / revision / bytes を出さない。既存の `transcript_revision == 9` 等の検証は置き換える。
 - **エラー文言**: missing CLI と caller-context のメッセージに `tmux` が含まれず、headless / Herdr pane の
   案内を含む。`_terminal_exit_detail` の既定 prefix 廃止に合わせて common テストの期待文字列
@@ -359,9 +402,21 @@ AI の仮定として上表に検査先を記録した。
 
 ### Medium テスト
 
-- **recorder を実 PTY 上で subprocess 起動**（新規、`tests/test_interactive_terminal_recorder.py`）。
-  test が `pty.openpty()` で作った slave を recorder の stdin / stdout にし、子に決定論的な fake TUI agent
-  （python script）を渡す。
+- **記録状態と metadata・診断の結合**（ファイル I/O、subprocess なし）: test が書いた `terminal.log` と
+  `terminal.log.state` の組み合わせ（`recording` / `complete` / `incomplete ENOSPC` / 状態ファイルなし /
+  不正な内容 / 読み取り不可）から、`_write_herdr_metadata` が `transcript_recorder_state`・`transcript_truncated`
+  （false / true / null）・`transcript_error` を正しく出す。状態の読み取りで例外が起きても metadata 書き込みと
+  呼び出し元の verdict / 例外が置き換わらない。`_terminal_exit_detail` が `incomplete` / `unknown` で固定文言を
+  付け、`complete` では付けない。
+
+### Large テスト（recorder の実 PTY・実プロセス。`large` + `large_local`）
+
+- **recorder を実 PTY 上で subprocess 起動**（新規、`tests/test_interactive_terminal_recorder_large_local.py`。
+  `docs/reference/testing-size-guide.md` の「実際の CLI コマンドを subprocess で実行 → Large」に従い
+  `large` + `large_local`）。test が `pty.openpty()`（または `pty.fork()`）で作った外側 PTY を recorder の
+  stdin / stdout / controlling terminal にし、子に決定論的な fake TUI agent（python script）を渡す。各テストは
+  10 秒の deadline を持ち、`finally` で recorder と fake agent（fake agent が自分の pid をファイルに書く）の
+  残存プロセスを SIGKILL し、PTY fd を閉じる。
   - fake agent が出す 3000 行の一括出力、`\e[?1049h` 〜 `\e[?1049l` の alternate screen 200 行、
     `\e[3J` 後の出力が、`terminal.log` に **byte 列として期待値どおり**すべて残る。
   - 子の終了コード 7 が recorder の終了コードになる。signal 終了は `128 + signum`。
@@ -371,10 +426,22 @@ AI の仮定として上表に検査先を記録した。
   - SIGWINCH: test 側 PTY の winsize を変えて recorder に SIGWINCH を送ると、子が新しいサイズを観測する。
   - 子 exec 失敗（存在しない command）→ 理由が log に残り、終了コード 127。
   - log を開けない path → 子を起動せず exit 2。
-- **診断との結合**: fake agent が alternate screen 内で canonical transient pattern（例: `overloaded` 系の
+  - **外側 TTY の復元**: 実行前と正常終了後で外側 PTY slave の `termios.tcgetattr` が一致する。relay 中の例外
+    （下記 Small の fake read で `EBADF` を注入した in-process 実行）の後も一致する。
+  - **キー入力の Ctrl-C**: 外側 master に `\x03` を書くと、SIGINT handler を持つ fake agent が
+    `GOT-SIGINT` を出して 130 で終了し、log にその出力が残り recorder の終了コードが 130 になる。
+  - **外側の close / SIGHUP**: 外側 master を閉じる（Herdr の pane close 相当）と、recorder と内側の fake agent が
+    deadline 内に両方とも終了する。recorder に SIGTERM を送った場合も同じ。終了前に書いた出力は log に残り、
+    状態ファイルは `recording` のまま。
+  - **verdict 後の記録継続**（`close_on_verdict = false` 相当）: fake agent が `verdict.yaml` を書いた後も生き続け、
+    test が verdict の出現を確認してから入力を送ると `AFTER-VERDICT` を出す。その出力が log に追記される。
+  - 正常終了で状態ファイルが `complete` になる。
+- **診断との結合**（同ファイル、`large_local`）: fake agent が alternate screen 内で canonical transient pattern（例: `overloaded` 系の
   既存 pattern）を出して非ゼロ終了 → recorder の log に対し `read_terminal_diagnostic` が
   `provider_error` を返し、`_terminal_exit_detail` が pattern literal を含む。sensitive marker が同居する
   場合の併記も確認する（#296 の契約を recorder の記録で再検証）。
+### Medium テスト（続き）
+
 - **Herdr backend（fake herdr CLI、既存 `tests/test_interactive_terminal_herdr.py`）**: fresh / resume、
   timeout、早期終了（shell 復帰）、Ctrl-C、`close_on_verdict` true / false、pane 保持・prune、
   ownership-safe cleanup、launcher の一度だけの起動と start marker、cleanup 失敗が元の verdict / 例外を
@@ -395,7 +462,7 @@ AI の仮定として上表に検査先を記録した。
   `test_recovery_models.py` の過去 artifact 前提のテストを残す。旧 tmux 形式の `pane-metadata.json`
   （`pane_id: "%3"`, `tmux_version` 等）から `_orphan_pane_id` が pane ID を返すテストがなければ追加する。
 
-### Large テスト
+### Large テスト（続き）
 
 - **launcher → recorder → wrapper → fake agent の実 subprocess**（`tests/test_tmp_dir_e2e_large_local.py` の
   `test_herdr_launcher_applies_attempt_tmp_env` を拡張、`large` + `large_local`）: 実際に生成された
@@ -444,9 +511,18 @@ AI の仮定として上表に検査先を記録した。
   1 回の所要は T の 25%（900 秒）未満。
 - 実行回数の上限: 2 回（初回 ＋ recorder 修正後の再実行 1 回）。2 回目も不一致なら implement は修正を続けず
   `BACK`（設計見直し）を返す。acceptance 合計 360 秒。
-- attempt 全体: 実装・失敗修正 1800 秒 ＋ acceptance 以外の検証（対象 pytest の反復、`make check` 2 回、
-  `make verify-docs` / `make verify-packaging`、Pre-Handoff Review）720 秒 ＋ acceptance 360 秒 ＋ 報告・commit・
-  verdict 保存 180 秒 ＋ 予備時間 R = min(max(300, 0.1 × 3600), 0.25 × 3600) = 360 秒 = **3420 秒 ≤ 3600 秒**。
+- 品質ゲートの所要: `make check` の実測は 212 秒（2026-10-19、本 worktree の `cedbb85`、3524 passed / 7 skipped。
+  tmux テスト削除後はこれ以下）。「実装順序」の commit 計画では、コード変更を含む commit が C1・C2 の 2 個なので
+  `make check` は 2 回必須。失敗時の再実行 1 回を加えて上限 3 回 = 636 秒。
+- attempt 全体:
+  実装・失敗修正 1500 秒
+  ＋ acceptance 以外の検証 1110 秒（`make check` 3 回 636 秒、対象 pytest の反復 200 秒、`make verify-docs` と
+  `make verify-packaging` 120 秒、Pre-Handoff Review 154 秒）
+  ＋ acceptance 360 秒 ＋ 報告・commit・verdict 保存 180 秒
+  ＋ 予備時間 R = min(max(300, 0.1 × 3600), 0.25 × 3600) = 360 秒
+  = **3510 秒 ≤ 3600 秒**。
+- commit を 3 個より細かく分けると gate 回数が増えて上の式が成り立たなくなるため、implement は「実装順序」の
+  commit 単位を守る。
 - 突き合わせの結果は実装順序 2 の時点で report を commit するため、implement が後段で `RETRY` されても
   再実行は不要（tmux 削除後は再実行できないので、report が唯一の証跡になる）。
 
@@ -493,3 +569,6 @@ AI の仮定として上表に検査先を記録した。
 | ADR 008 | `docs/adr/008-no-backward-compat-layer.md` | 互換レイヤを書かない、BREAKING の 3 要素、fail-safe は対象外 |
 | 現行コード | `kaji_harness/config.py:58,472-484,510-514`、`commands/parser.py:152-158`、`commands/run.py:38-61,176-180`、`interactive_terminal.py`、`interactive_terminal_herdr.py:49,178,286-399,478-512,1029-1063,1197-1247`、`interactive_terminal_common.py:104-145,317-330`、`errors.py:157-176`、`recovery/classify.py:35`、`recovery/snapshot.py:286-314` | 既定 tmux、choices、非推奨警告、snapshot 取得、metadata、診断の読み取り、型名文字列による分類、backend 非依存の orphan pane ID 読み取り |
 | テスト規約 | `docs/dev/testing-convention.md` | S/M/L の定義、`large_local` marker、恒久テストと変更固有検証の切り分け |
+| Python `os.pwrite` / `termios` | https://docs.python.org/3/library/os.html#os.pwrite 、https://docs.python.org/3/library/termios.html | offset 指定で既存ファイルを上書きする（記録状態ファイルの固定長更新）。`tcgetattr` / `tcsetattr` による端末設定の保存・復元（外側 TTY の復元テスト） |
+| テストサイズ定義 | `docs/reference/testing-size-guide.md` | 「実際の CLI コマンドを subprocess で実行 → Large」、`large_local` は subprocess あり・外部ネットワークなし（recorder の実 PTY テストの分類根拠） |
+| 品質ゲート | `AGENTS.md`、`.kaji/wf/official/dev.yaml`（implement timeout 3600） | コード変更を含む commit の前に `make check` 必須。時間予算の commit 単位と gate 回数の根拠 |
