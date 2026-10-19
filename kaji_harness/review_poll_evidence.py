@@ -4,9 +4,9 @@
 承認シグナルを schema version 付き JSON として step attempt に保存する。後続 close は
 この証跡を現在の PR head と照合する。
 
-schema v1 は summary comment の表（短縮 SHA・``Completed``・完了時刻）で承認した旧経路、
-schema v2 は summary comment の ``codex-review-state:v1``（full SHA・``status``・
-``has_any_findings``）で承認した経路の証跡（Issue #473）。
+証跡は schema v2 だけで、summary comment の ``codex-review-state:v1``（full SHA・
+``status``・``has_any_findings``）で承認したことを記録する（Issue #473）。summary comment の
+表で承認した旧経路の schema v1 は Issue #478 で撤去し、``load_evidence()`` は拒否する。
 
 producer（``codex_review_poll``）はこの model で書き込み前に不変条件 I1〜I9 を検証し、
 consumer（``issue-close`` skill）は同じ不変条件を jq で検証する。両者の契約は
@@ -26,13 +26,11 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
-    TypeAdapter,
     model_validator,
 )
 
 from kaji_harness.fsio import atomic_write
 
-EVIDENCE_SCHEMA_VERSION_V1: Literal[1] = 1
 EVIDENCE_SCHEMA_VERSION_V2: Literal[2] = 2
 EVIDENCE_KIND = "kaji.review-poll.approval"
 EVIDENCE_FILENAME = "review-poll-evidence.json"
@@ -45,7 +43,6 @@ _TIMESTAMP_RE = re.compile(_TIMESTAMP_PATTERN)
 
 Timestamp = Annotated[str, StringConstraints(pattern=_TIMESTAMP_PATTERN)]
 FullSha = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
-ShortSha = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{7,40}$")]
 NonEmptyStr = Annotated[str, StringConstraints(min_length=1)]
 PositiveInt = Annotated[int, Field(gt=0)]
 
@@ -151,102 +148,6 @@ class ReactionEvidence(BaseModel):
         return self
 
 
-class ReviewSummaryEvidence(BaseModel):
-    """承認の SHA 対応付けに使った bot の review summary comment。"""
-
-    model_config = _STRICT_FROZEN
-
-    comment_id: PositiveInt
-    url: NonEmptyStr
-    commit_short_sha: ShortSha
-    status: Literal["Completed"]
-    completed_at: Timestamp
-    comment_updated_at: Timestamp
-
-    @model_validator(mode="after")
-    def _validate(self) -> ReviewSummaryEvidence:
-        if not self.url.endswith(f"#issuecomment-{self.comment_id}"):
-            raise ValueError("review_summary.url must end with #issuecomment-<comment_id>")
-        completed = parse_timestamp(self.completed_at)
-        updated = parse_timestamp(self.comment_updated_at)
-        if updated < completed.replace(microsecond=0):
-            raise ValueError("review_summary.comment_updated_at precedes completed_at")
-        return self
-
-
-class Approval(BaseModel):
-    """承認シグナル一式。"""
-
-    model_config = _STRICT_FROZEN
-
-    bot: Bot
-    reaction: ReactionEvidence
-    review_summary: ReviewSummaryEvidence
-
-
-class Checks(BaseModel):
-    """確定確認の観測値。"""
-
-    model_config = _STRICT_FROZEN
-
-    head_sha_at_start: FullSha
-    head_sha_before_decision: FullSha
-    head_sha_after_decision: FullSha
-    short_sha_matching_pr_commits: int
-    current_head_bot_reviews: int
-
-
-class ReviewPollEvidence(BaseModel):
-    """``review-poll`` PASS 時の承認証跡（schema v1、summary comment の表の経路）。"""
-
-    model_config = _STRICT_FROZEN
-
-    schema_version: Literal[1]
-    kind: Literal["kaji.review-poll.approval"]
-    result: Literal["PASS"]
-    provider: Literal["github"]
-    repository: Repository
-    pull_request: PullRequest
-    reviewed_head: ReviewedHead
-    approval: Approval
-    checks: Checks
-    fetched_at: Timestamp
-    decided_at: Timestamp
-
-    @model_validator(mode="after")
-    def _validate_invariants(self) -> ReviewPollEvidence:
-        head = self.reviewed_head.sha
-        reaction = self.approval.reaction
-        summary = self.approval.review_summary
-
-        if not head.startswith(summary.commit_short_sha):
-            raise ValueError("review_summary.commit_short_sha is not a prefix of reviewed head")
-
-        reaction_at = parse_timestamp(reaction.created_at)
-        completed_at = parse_timestamp(summary.completed_at)
-        if reaction_at < next_second_after(completed_at):
-            raise ValueError("approval.reaction must be created in a later second than completion")
-
-        checks = self.checks
-        if checks.short_sha_matching_pr_commits != 1:
-            raise ValueError("checks.short_sha_matching_pr_commits must be 1")
-        _check_common_invariants(
-            repository=self.repository,
-            pull_request=self.pull_request,
-            reviewed_head=self.reviewed_head,
-            reaction=reaction,
-            fetched_at=self.fetched_at,
-            decided_at=self.decided_at,
-            head_shas=(
-                checks.head_sha_at_start,
-                checks.head_sha_before_decision,
-                checks.head_sha_after_decision,
-            ),
-            current_head_bot_reviews=checks.current_head_bot_reviews,
-        )
-        return self
-
-
 def _check_common_invariants(
     *,
     repository: Repository,
@@ -258,7 +159,7 @@ def _check_common_invariants(
     head_shas: tuple[str, str, str],
     current_head_bot_reviews: int,
 ) -> None:
-    """v1 / v2 で共通の不変条件（I5 の api_path、I7 の head commit 順序、I8 の head、I9）を検証する。
+    """I5 の api_path、I7 の head commit 順序、I8 の head、I9 の不変条件を検証する。
 
     Raises:
         ValueError: いずれかの不変条件に違反した場合。
@@ -410,23 +311,17 @@ class ReviewPollEvidenceV2(BaseModel):
         return self
 
 
-AnyReviewPollEvidence = ReviewPollEvidence | ReviewPollEvidenceV2
-
-_EVIDENCE_ADAPTER: TypeAdapter[AnyReviewPollEvidence] = TypeAdapter(
-    Annotated[AnyReviewPollEvidence, Field(discriminator="schema_version")]
-)
-
-
-def save_evidence(path: Path, evidence: AnyReviewPollEvidence) -> None:
+def save_evidence(path: Path, evidence: ReviewPollEvidenceV2) -> None:
     """検証済みの証跡を atomic に書き込む。"""
     content = json.dumps(evidence.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n"
     atomic_write(path, content)
 
 
-def load_evidence(path: Path) -> AnyReviewPollEvidence:
-    """証跡を読み込み、``schema_version`` で v1 / v2 を選んで不変条件を検証する。
+def load_evidence(path: Path) -> ReviewPollEvidenceV2:
+    """証跡を読み込み、schema v2 の不変条件を検証する。
 
     Raises:
-        pydantic.ValidationError: 未知の ``schema_version``、または不変条件に違反した場合。
+        pydantic.ValidationError: ``schema_version`` が 2 以外（撤去した 1 を含む）、または
+            不変条件に違反した場合。
     """
-    return _EVIDENCE_ADAPTER.validate_json(path.read_text(encoding="utf-8"))
+    return ReviewPollEvidenceV2.model_validate_json(path.read_text(encoding="utf-8"))

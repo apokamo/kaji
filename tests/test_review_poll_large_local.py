@@ -90,10 +90,10 @@ _REVIEW_STATE = (
 )
 
 
-def _summary_comment(*, with_state: bool = False) -> dict[str, Any]:
+def _summary_comment() -> dict[str, Any]:
     body = (
         "<!-- codex-pull-request-review-summary -->\n"
-        + (_REVIEW_STATE if with_state else "")
+        + _REVIEW_STATE
         + "\n## Codex Review Summary\n\n"
         "| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n"
         "| 📝 **Code Review** | ✅ **Completed** "
@@ -114,7 +114,7 @@ def _plus_one() -> dict[str, Any]:
     return {"id": 4242, "user": BOT, "content": "+1", "created_at": "2026-09-08T01:33:35Z"}
 
 
-def _data(*, pr_head: str = HEAD, with_state: bool = False) -> dict[str, Any]:
+def _data(*, pr_head: str = HEAD) -> dict[str, Any]:
     return {
         "pulls": {"head": {"sha": pr_head}, "state": "open", "html_url": PR_URL},
         "pr_view": {"headRefOid": HEAD, "committedDate": HEAD_AT},
@@ -122,8 +122,7 @@ def _data(*, pr_head: str = HEAD, with_state: bool = False) -> dict[str, Any]:
         "pages": {
             "reactions": [[], [_plus_one()]],
             "reviews": [[], []],
-            "comments": [[], [_summary_comment(with_state=with_state)]],
-            "commits": [[{"sha": "0" * 40}], [{"sha": HEAD}]],
+            "comments": [[], [_summary_comment()]],
         },
     }
 
@@ -186,11 +185,10 @@ class TestReviewPollEntryEndToEnd:
         assert evidence.pull_request.number == 163
         assert evidence.reviewed_head.sha == HEAD
         assert evidence.approval.reaction.id == 4242
-        assert evidence.approval.review_summary.comment_id == 5577710898
-        assert evidence.checks.short_sha_matching_pr_commits == 1
+        assert evidence.approval.review_state.comment_id == 5577710898
 
     def test_state_pass_saves_v2_evidence_without_deprecation(self, tmp_path: Path) -> None:
-        proc, evidence_path = _run_entry(tmp_path, _data(with_state=True))
+        proc, evidence_path = _run_entry(tmp_path, _data())
         assert proc.returncode == 0, proc.stderr
 
         verdict = parse_verdict_block(proc.stdout, VALID_STATUSES)
@@ -202,13 +200,6 @@ class TestReviewPollEntryEndToEnd:
         assert evidence.reviewed_head.sha == HEAD
         assert evidence.approval.reaction.id == 4242
         assert "deprecation" not in proc.stderr
-
-    def test_legacy_pass_warns_on_stderr_only(self, tmp_path: Path) -> None:
-        proc, evidence_path = _run_entry(tmp_path, _data())
-        assert proc.returncode == 0, proc.stderr
-        assert "kaji: deprecation: review-poll used the legacy codex review markup" in proc.stderr
-        assert "deprecation" not in proc.stdout
-        assert load_evidence(evidence_path).schema_version == 1
 
     def test_head_moved_after_resolution_aborts_without_evidence(self, tmp_path: Path) -> None:
         # entry が解決した head と、API が返す現在の head が違う（push された）
