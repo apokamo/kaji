@@ -500,7 +500,7 @@ class TestTmpDirLayoutRecordAndWarning:
 
         def failing_exec(**kwargs: Any) -> CLIResult:
             seen.append(kwargs["env"]["KAJI_TMP_DIR"])
-            raise ScriptExecutionError("collect", "true", 2, "boom")
+            raise ScriptExecutionError("collect", "true", 2, "boom", summary="boom")
 
         with patch("kaji_harness.runner.execute_exec", side_effect=failing_exec):
             with pytest.raises(ScriptExecutionError):

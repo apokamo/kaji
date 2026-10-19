@@ -163,18 +163,34 @@ class TestScriptExecutionErrorGeneralization:
     """ScriptExecutionError は exec / exec_script 共通の中立表現に一般化されている。"""
 
     def test_command_label_reflected_in_message(self) -> None:
-        err = ScriptExecutionError("s1", "python -m kaji_harness.scripts.foo", 2, "boom")
+        err = ScriptExecutionError(
+            "s1", "python -m kaji_harness.scripts.foo", 2, "boom", summary="boom"
+        )
         assert "python -m kaji_harness.scripts.foo" in str(err)
         assert err.command_label == "python -m kaji_harness.scripts.foo"
 
     def test_message_has_no_exec_script_specific_wording(self) -> None:
-        err = ScriptExecutionError("s1", "review_poll.entry", 1, "stderr")
+        err = ScriptExecutionError("s1", "review_poll.entry", 1, "stderr", summary="stderr")
         assert "exec_script" not in str(err)
         assert "deterministic command" in str(err)
 
     def test_returncode_and_stderr_preserved(self) -> None:
-        err = ScriptExecutionError("s1", "lbl", 3, "the stderr tail")
+        err = ScriptExecutionError("s1", "lbl", 3, "the stderr tail", summary="the stderr tail")
         assert err.returncode == 3
         assert err.stderr == "the stderr tail"
         assert err.step_id == "s1"
         assert "the stderr tail" in str(err)
+
+    def test_message_ends_with_summary_and_keeps_full_stderr(self) -> None:
+        """Issue #516: メッセージは送出元の要約を末尾に持ち、stderr 属性は全文を保持する。"""
+        stderr = "banner line\n" * 50 + "OSError: [Errno 30] Read-only file system: '/x'\n"
+        summary = "OSError: [Errno 30] Read-only file system: '<PATH>'"
+
+        err = ScriptExecutionError("s1", "lbl", 1, stderr, summary=summary)
+
+        assert str(err) == (f"Step 's1' deterministic command 'lbl' exited with code 1: {summary}")
+        assert err.summary == summary
+        assert err.stderr == stderr
+        assert err.step_id == "s1"
+        assert err.command_label == "lbl"
+        assert err.returncode == 1
