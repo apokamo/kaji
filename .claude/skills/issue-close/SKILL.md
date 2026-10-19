@@ -148,7 +148,9 @@ jq -r --arg title "$FOLLOW_UP_TITLE" \
 ### 3. follow-up Issue の作成
 
 完全一致候補がない場合だけ、`templates/follow-up-issue.md` を読み、以下を実値へ置換して
-`/tmp/kaji-follow-up-body.md` を作る。
+`/tmp/kaji-follow-up-body.md` を作る。テンプレートはファイル全体がそのまま follow-up 本文であり
+（1 行目は `<!-- kaji-follow-up-parent: [parent_issue_ref] -->`）、placeholder 以外の置換・追記・削除をしない。
+見出しや説明文、コードフェンスを本文に加えない。
 
 - `[parent_issue_ref]` / `[parent_issue_title]`
 - `[unchecked_items]`: 抽出した未チェック項目だけ

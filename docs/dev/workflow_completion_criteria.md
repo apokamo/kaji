@@ -252,7 +252,8 @@ gh issue edit [number] --body-file /tmp/issue-body.md
 
 - セクションなし、`- なし`、全項目 `[x]` の場合は follow-up を作成しない
 - 未チェック項目がある場合だけ、`.claude/skills/issue-close/templates/follow-up-issue.md`
-  を使って follow-up Issue を作成する
+  を使って follow-up Issue を作成する。テンプレートはファイル全体が本文そのもの
+  （1 行目が `<!-- kaji-follow-up-parent: ... -->` マーカー）で、placeholder だけを実値へ置換する
 - follow-up 本文には親 Issue、未完了項目、参照 docs、証跡記録先、人間による手動 close 方針を含める
 - 既存 open Issue の完全一致タイトルを検索して再利用し、親本文の
   `<!-- kaji-follow-up-issue: <issue-id> -->` マーカーで再実行時の重複を防ぐ

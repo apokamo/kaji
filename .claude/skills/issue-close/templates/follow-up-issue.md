@@ -1,9 +1,3 @@
-# Follow-up Issue 本文テンプレート
-
-`issue-close` が `### ワークフロー完了後の確認項目` の未完了項目を親 Issue から
-移管するときに使う。角括弧の placeholder は作成前に実値へ置換する。
-
-```markdown
 <!-- kaji-follow-up-parent: [parent_issue_ref] -->
 
 ## 親 Issue
@@ -29,4 +23,3 @@
 - 本 Issue は workflow が自動 close しない
 - 全項目の証跡を人間が確認し、すべて `[x]` になった後に手動で close する
 - 未確認、失敗、判定不能の項目が 1 件でもあれば open のまま維持する
-```
