@@ -57,8 +57,8 @@ if [[ -n "$skill_invocation" ]]; then
 $initial_prompt"
 fi
 
-# The runner records the pane transcript via `tmux pipe-pane`, so the wrapper
-# launches the agent directly (no util-linux script(1) dependency / OS branch).
+# The runner starts this wrapper under kaji's PTY recorder, which writes terminal.log,
+# so the wrapper launches the agent directly (no util-linux script(1) dependency / OS branch).
 run_agent() {
   exec bash -c "$1"
 }

@@ -14,6 +14,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import time
 import uuid
 from collections.abc import Mapping
@@ -23,6 +24,7 @@ from typing import Literal, NoReturn, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from . import interactive_terminal_recorder
 from .agents import AGENT_CAPABILITIES
 from .errors import (
     CLIExecutionError,
@@ -46,7 +48,11 @@ _console = logging.getLogger("kaji.interactive_terminal")
 _MIN_HERDR_VERSION = (0, 8, 2)
 _VERDICT_POLL_INTERVAL_SECONDS = 2
 _PROCESS_EXIT_CONFIRMATIONS = 3
-_TRANSCRIPT_LINES = 2000
+# Issue #515: Herdr の agent screen manifest 名。recorder を挟むと foreground が python に
+# なるため、HERDR_AGENT ヒントで検出対象を伝える。
+_HERDR_AGENT_MANIFESTS = {"claude": "claude", "codex": "codex", "antigravity": "agy"}
+_TRANSCRIPT_KIND = "raw_pty_recording"
+_HERDR_CONTEXT_GUIDANCE = 'Run kaji inside a Herdr pane, or set agent_runner = "headless".'
 _HERDR_METADATA_SOURCE = "kaji"
 _MAX_VISIBLE_AGENT_PANES = 2
 _HERDR_COMMAND_TIMEOUT_SECONDS = 10
@@ -101,21 +107,6 @@ class HerdrPaneLaunch:
     panes_skipped: list[str] = field(default_factory=list)
 
 
-@dataclass(frozen=True)
-class HerdrPaneRead:
-    """Rendered pane snapshot returned by ``pane read``.
-
-    Attributes:
-        text: Rendered terminal text.
-        truncated: Whether Herdr omitted older content, or None when the CLI cannot report it.
-        revision: Pane revision associated with the snapshot.
-    """
-
-    text: str
-    truncated: bool | None
-    revision: int
-
-
 def execute_interactive_terminal_herdr(
     *,
     step: Step,
@@ -164,6 +155,10 @@ def execute_interactive_terminal_herdr(
     wrapper = _wrapper_path()
     if not wrapper.is_file():
         raise FileNotFoundError(f"interactive terminal wrapper not found: {wrapper}")
+    recorder = _recorder_path()
+    for required in (Path(sys.executable), recorder):
+        if not required.is_file():
+            raise FileNotFoundError(f"interactive terminal recorder not found: {required}")
 
     if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
         # Issue #421: attempt の期限を preflight で使い切った場合は pane を起動しない。
@@ -198,19 +193,24 @@ def execute_interactive_terminal_herdr(
         )
         raise
 
-    command = _build_wrapper_command(
-        wrapper,
+    command = _build_recorded_command(
+        _build_wrapper_command(
+            wrapper,
+            agent=cast(str, step.agent),
+            prompt_path=prompt_path,
+            verdict_path=verdict_path,
+            workdir=workdir,
+            resume_session_id=session_id or "",
+            launch_session_id=launch_session_id,
+            model=step.model or "",
+            effort=step.effort or "",
+            execution_policy=execution_policy,
+            skill_invocation=_wrapper_skill_invocation(step),
+        ),
         agent=cast(str, step.agent),
-        prompt_path=prompt_path,
-        verdict_path=verdict_path,
-        workdir=workdir,
-        resume_session_id=session_id or "",
-        launch_session_id=launch_session_id,
-        model=step.model or "",
-        effort=step.effort or "",
-        execution_policy=execution_policy,
+        recorder=recorder,
+        terminal_log=terminal_log,
         env=env,
-        skill_invocation=_wrapper_skill_invocation(step),
     )
     launcher_budget_exhausted = False
     try:
@@ -228,10 +228,9 @@ def execute_interactive_terminal_herdr(
         )
     except _AttemptDeadlineReachedError:
         # launcher 固有の失敗ではなく attempt の期限消費。verdict 待ちループの timeout
-        # 経路と同じ後処理（snapshot / session 解決 / pane close / metadata）へ進む。
+        # 経路と同じ後処理（session 解決 / pane close / metadata）へ進む。
         launcher_budget_exhausted = True
     except CLIExecutionError:
-        pane_read = _capture_herdr_snapshot(herdr, pane_id, terminal_log)
         close_error = _close_owned_herdr_pane_best_effort(
             herdr,
             pane_id,
@@ -246,8 +245,8 @@ def execute_interactive_terminal_herdr(
             run_id=run_id,
             close_on_verdict=close_on_verdict,
             marker_confirmed=True,
-            pane_read=pane_read,
             terminal_log=terminal_log,
+            include_diagnostic=True,
             close_error=close_error,
             layout=launch,
         )
@@ -287,7 +286,6 @@ def execute_interactive_terminal_herdr(
     try:
         while time.monotonic() < deadline:
             if verdict_path.is_file():
-                pane_read = _capture_herdr_snapshot(herdr, pane_id, terminal_log)
                 result_session_id = session_id or launch_session_id or None
                 if result_session_id is None and step.agent == "codex":
                     result_session_id = _extract_codex_session_id(
@@ -311,7 +309,7 @@ def execute_interactive_terminal_herdr(
                     run_id=run_id,
                     close_on_verdict=close_on_verdict,
                     marker_confirmed=True,
-                    pane_read=pane_read,
+                    terminal_log=terminal_log,
                     close_error=close_error,
                     layout=launch,
                 )
@@ -322,7 +320,6 @@ def execute_interactive_terminal_herdr(
             if liveness == "confirmed_shell_only":
                 shell_only_observations += 1
                 if shell_only_observations >= _PROCESS_EXIT_CONFIRMATIONS:
-                    pane_read = _capture_herdr_snapshot(herdr, pane_id, terminal_log)
                     resolved = _resolve_abnormal_exit_session(
                         cast(str, step.agent),
                         prompt_path=prompt_path,
@@ -345,21 +342,18 @@ def execute_interactive_terminal_herdr(
                         run_id=run_id,
                         close_on_verdict=close_on_verdict,
                         marker_confirmed=True,
-                        pane_read=pane_read,
                         process_info=process_info,
                         terminal_log=terminal_log,
+                        include_diagnostic=True,
                         close_error=close_error,
                         layout=launch,
                     )
                     raise CLIExecutionError(
                         step.id,
                         1,
-                        _terminal_exit_detail(
+                        _recorded_exit_detail(
                             terminal_log,
-                            prefix=(
-                                "Herdr pane returned to its shell before writing verdict.yaml; "
-                                "rendered snapshot may be incomplete"
-                            ),
+                            prefix="Herdr pane returned to its shell before writing verdict.yaml",
                         ),
                         session_resolution=resolved,
                     )
@@ -370,7 +364,6 @@ def execute_interactive_terminal_herdr(
         # Preserve the live pane for inspection and leave enough ownership metadata for
         # recovery to report the orphan. Metadata failure must not mask Ctrl-C.
         try:
-            pane_read = _capture_herdr_snapshot(herdr, pane_id, terminal_log)
             _write_herdr_metadata(
                 metadata_path,
                 herdr_version=herdr_version,
@@ -379,8 +372,8 @@ def execute_interactive_terminal_herdr(
                 run_id=run_id,
                 close_on_verdict=close_on_verdict,
                 marker_confirmed=True,
-                pane_read=pane_read,
                 process_info=process_info,
+                terminal_log=terminal_log,
                 layout=launch,
             )
         except OSError as exc:
@@ -424,7 +417,7 @@ def _raise_step_timeout(
     close_on_verdict: bool,
     layout: HerdrPaneLaunch,
 ) -> NoReturn:
-    """Run the timeout cleanup (snapshot, session resolution, pane close) and raise.
+    """Run the timeout cleanup (session resolution, pane close, metadata) and raise.
 
     Shared by the verdict-wait loop and the launcher start wait so that an attempt
     deadline reached in either place yields the same ``StepTimeoutError`` (Issue #403 /
@@ -433,7 +426,6 @@ def _raise_step_timeout(
     Raises:
         StepTimeoutError: Always.
     """
-    pane_read = _capture_herdr_snapshot(herdr, pane_id, terminal_log)
     resolved = _resolve_abnormal_exit_session(
         cast(str, step.agent),
         prompt_path=prompt_path,
@@ -456,8 +448,8 @@ def _raise_step_timeout(
         run_id=run_id,
         close_on_verdict=close_on_verdict,
         marker_confirmed=True,
-        pane_read=pane_read,
         terminal_log=terminal_log,
+        include_diagnostic=True,
         close_error=close_error,
         layout=layout,
     )
@@ -489,7 +481,8 @@ def _resolve_herdr() -> str:
     herdr = shutil.which("herdr")
     if herdr is None:
         raise CLINotFoundError(
-            "CLI 'herdr' not found. Install Herdr or select interactive_terminal_backend='tmux'."
+            "CLI 'herdr' not found. Install Herdr (>= 0.8.2) or use the headless runner "
+            '(agent_runner = "headless").'
         )
     return herdr
 
@@ -502,12 +495,14 @@ def _resolve_herdr_origin() -> str:
     """
     if os.environ.get("HERDR_ENV") != "1":
         raise HerdrSessionRequiredError(
-            "Herdr interactive terminal backend must run inside Herdr (HERDR_ENV=1)."
+            "Herdr interactive terminal backend must run inside Herdr (HERDR_ENV=1). "
+            f"{_HERDR_CONTEXT_GUIDANCE}"
         )
     origin_pane = os.environ.get("HERDR_PANE_ID")
     if not origin_pane:
         raise HerdrSessionRequiredError(
-            "HERDR_PANE_ID is not set; cannot identify the caller pane safely."
+            "HERDR_PANE_ID is not set; cannot identify the caller pane safely. "
+            f"{_HERDR_CONTEXT_GUIDANCE}"
         )
     return origin_pane
 
@@ -1026,43 +1021,6 @@ def _wait_for_herdr_launcher_start(
     )
 
 
-def _read_herdr_pane(herdr: str, pane_id: str) -> HerdrPaneRead:
-    """Read a rendered recent-unwrapped diagnostic snapshot."""
-    completed = _run_herdr(
-        herdr,
-        [
-            "pane",
-            "read",
-            pane_id,
-            "--source",
-            "recent-unwrapped",
-            "--lines",
-            str(_TRANSCRIPT_LINES),
-        ],
-    )
-    pane = _get_herdr_pane(herdr, pane_id)
-    revision = pane.get("revision")
-    if pane.get("pane_id") != pane_id or not isinstance(revision, int):
-        raise CLIExecutionError(
-            "interactive_terminal", 1, "Herdr pane read revision was not confirmed"
-        )
-    return HerdrPaneRead(text=completed.stdout, truncated=None, revision=revision)
-
-
-def _capture_herdr_snapshot(herdr: str, pane_id: str, terminal_log: Path) -> HerdrPaneRead | None:
-    """Save a best-effort rendered pane snapshot without masking the main result."""
-    try:
-        pane_read = _read_herdr_pane(herdr, pane_id)
-        terminal_log.parent.mkdir(parents=True, exist_ok=True)
-        terminal_log.write_text(pane_read.text, encoding="utf-8")
-    except (CLIExecutionError, OSError) as error:
-        _console.warning(
-            "Herdr rendered snapshot capture failed: pane=%s detail=%s", pane_id, error
-        )
-        return None
-    return pane_read
-
-
 def _get_herdr_process_info(herdr: str, pane_id: str) -> dict[str, object]:
     """Return foreground process information for an explicit Herdr pane."""
     result = _herdr_result(
@@ -1194,6 +1152,84 @@ def _confirm_herdr_pane_closed(herdr: str, pane_id: str, *, workspace_id: str) -
             )
 
 
+def _recorder_path() -> Path:
+    """Return the packaged PTY recorder started by path inside the pane (Issue #515)."""
+    return Path(interactive_terminal_recorder.__file__).resolve()
+
+
+def _build_recorded_command(
+    wrapper_command: str,
+    *,
+    agent: str,
+    recorder: Path,
+    terminal_log: Path,
+    env: Mapping[str, str] | None,
+) -> str:
+    """Prefix the wrapper command with the PTY recorder that writes ``terminal_log``.
+
+    The order is attempt env (Issue #407) → ``HERDR_AGENT`` → recorder → wrapper argv.
+    ``HERDR_AGENT`` tells Herdr which agent screen manifest to use although the pane's
+    foreground process is the recorder; the recorder removes it before exec'ing the
+    wrapper so it does not leak into the agent or nested kaji panes.
+
+    Raises:
+        ValueError: ``agent`` has no Herdr manifest.
+    """
+    manifest = _HERDR_AGENT_MANIFESTS.get(agent)
+    if manifest is None:
+        raise ValueError(f"no Herdr agent manifest for agent: {agent}")
+    assignments = [f"{key}={value}" for key, value in (env or {}).items()]
+    prefix = shlex.join(
+        [
+            "env",
+            *assignments,
+            f"{interactive_terminal_recorder.HERDR_AGENT_ENV}={manifest}",
+            sys.executable,
+            "-I",
+            str(recorder),
+            str(terminal_log),
+            "--",
+        ]
+    )
+    return f"{prefix} {wrapper_command}"
+
+
+def _recorded_exit_detail(terminal_log: Path, *, prefix: str) -> str:
+    """Early-exit detail from the recording, flagging recordings of unknown completeness."""
+    detail = _terminal_exit_detail(terminal_log, prefix=prefix)
+    state, _error = interactive_terminal_recorder.read_recorder_state(terminal_log)
+    if state in ("incomplete", "unknown"):
+        detail += f"; transcript may be incomplete (recorder state: {state})"
+    return detail
+
+
+def _transcript_metadata(terminal_log: Path) -> dict[str, object]:
+    """Describe the recorder's ``terminal.log`` without raising (Issue #515)."""
+    try:
+        available = terminal_log.is_file()
+        size = terminal_log.stat().st_size if available else None
+    except OSError:
+        available, size = False, None
+    state, error = interactive_terminal_recorder.read_recorder_state(terminal_log)
+    metadata: dict[str, object] = {
+        "transcript_kind": _TRANSCRIPT_KIND,
+        "transcript_available": available,
+        "transcript_recorder_state": state,
+    }
+    if available:
+        truncated: bool | None = None
+        if state in ("recording", "complete"):
+            truncated = False
+        elif state == "incomplete":
+            truncated = True
+        metadata["transcript_truncated"] = truncated
+        metadata["transcript_revision"] = None
+        metadata["transcript_bytes"] = size
+    if state == "incomplete" and error is not None:
+        metadata["transcript_error"] = error
+    return metadata
+
+
 def _write_herdr_metadata(
     destination: Path,
     *,
@@ -1203,13 +1239,18 @@ def _write_herdr_metadata(
     run_id: str,
     close_on_verdict: bool,
     marker_confirmed: bool,
-    pane_read: HerdrPaneRead | None = None,
     process_info: dict[str, object] | None = None,
     layout: HerdrPaneLaunch | None = None,
     terminal_log: Path | None = None,
+    include_diagnostic: bool = False,
     close_error: str | None = None,
 ) -> None:
-    """Write a structured Herdr pane diagnostic snapshot."""
+    """Write a structured Herdr pane diagnostic snapshot.
+
+    ``terminal_log`` adds the transcript metadata of the recorder's log; it is omitted
+    when the wrapper never started. ``include_diagnostic`` additionally records the
+    early-exit ``terminal_diagnostic`` (launcher failure, shell return, timeout).
+    """
     metadata: dict[str, object] = {
         "backend": "herdr",
         "herdr_version": herdr_version,
@@ -1218,15 +1259,12 @@ def _write_herdr_metadata(
         "kaji_run": run_id,
         "marker_confirmed": marker_confirmed,
         "close_on_verdict": close_on_verdict,
-        "transcript_kind": "rendered_recent_unwrapped_snapshot",
-        "transcript_available": pane_read is not None,
     }
-    if pane_read is not None:
-        metadata["transcript_truncated"] = pane_read.truncated
-        metadata["transcript_revision"] = pane_read.revision
+    if terminal_log is not None:
+        metadata.update(_transcript_metadata(terminal_log))
     if process_info is not None:
         metadata["process_info"] = process_info
-    if terminal_log is not None:
+    if terminal_log is not None and include_diagnostic:
         diagnostic = read_terminal_diagnostic(terminal_log)
         metadata["terminal_diagnostic"] = {
             "kind": diagnostic.kind,

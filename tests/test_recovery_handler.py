@@ -29,6 +29,8 @@ from kaji_harness.recovery.models import (
 )
 from tests.conftest import capacity_terminal_log_text
 
+_EXIT_PREFIX = "Herdr pane exited before writing verdict.yaml"
+
 pytestmark = pytest.mark.medium
 
 _ISSUE = "local-pc1-99"
@@ -742,7 +744,7 @@ def _build_capacity_run(
     terminal_log = attempt / "terminal.log"
     if with_terminal_log:
         terminal_log.write_text(capacity_terminal_log_text(), encoding="utf-8")
-    error = _terminal_exit_detail(terminal_log)
+    error = _terminal_exit_detail(terminal_log, prefix=_EXIT_PREFIX)
 
     events = [
         {"event": "workflow_start", "issue": _ISSUE, "workflow": "dev", "schema_version": 1},

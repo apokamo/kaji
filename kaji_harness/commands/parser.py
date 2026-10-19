@@ -6,6 +6,8 @@ import argparse
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+from ..config import TMUX_BACKEND_MIGRATION_DOCS, TMUX_BACKEND_REMOVED
+
 
 def _get_version() -> str:
     """Return the installed package version, or 'unknown' if not found."""
@@ -13,6 +15,20 @@ def _get_version() -> str:
         return version("kaji")
     except PackageNotFoundError:
         return "unknown"
+
+
+def _interactive_terminal_backend(value: str) -> str:
+    """Reject the removed tmux backend with a migration hint (Issue #515).
+
+    Other values are returned unchanged so argparse ``choices`` reports them as
+    ``invalid choice``.
+    """
+    if value == "tmux":
+        raise argparse.ArgumentTypeError(
+            f"{TMUX_BACKEND_REMOVED}; use --interactive-terminal-backend herdr inside a "
+            f"Herdr pane, or --agent-runner headless. See {TMUX_BACKEND_MIGRATION_DOCS}"
+        )
+    return value
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -152,7 +168,8 @@ def _register_run(subparsers: argparse._SubParsersAction[argparse.ArgumentParser
     p.add_argument(
         "--interactive-terminal-backend",
         dest="interactive_terminal_backend",
-        choices=["tmux", "herdr"],
+        type=_interactive_terminal_backend,
+        choices=["herdr"],
         default=None,
         help="Override the terminal backend used by the interactive runner.",
     )

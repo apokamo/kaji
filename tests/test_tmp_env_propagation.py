@@ -323,12 +323,11 @@ class TestRunnerDispatchWiring:
         assert set(env) == set(_TMP_VARS)
         _assert_attempt_env(env, tmp_path)
 
-    @pytest.mark.parametrize("backend", ["tmux", "herdr"])
-    def test_interactive_agent_receives_four_variables(self, tmp_path: Path, backend: str) -> None:
+    def test_interactive_agent_receives_four_variables(self, tmp_path: Path) -> None:
         config = _make_config(
             tmp_path,
             execution_extra=(
-                f'agent_runner = "interactive_terminal"\ninteractive_terminal_backend = "{backend}"'
+                'agent_runner = "interactive_terminal"\ninteractive_terminal_backend = "herdr"'
             ),
         )
         step = Step(id="design", skill="plain", agent="claude", on={"PASS": "end"})

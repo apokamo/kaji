@@ -34,6 +34,47 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     evidence before upgrading, re-run
     `kaji run <workflow> <issue> --from review-poll` to write v2 evidence
     before `issue-close`.
+- **The tmux interactive terminal backend is removed** (#515, parent #466),
+  after its deprecation in v0.23.0 (#475). Herdr is the only
+  `interactive_terminal` backend; the headless runner is unchanged.
+  `interactive_terminal_backend` and `--interactive-terminal-backend` remain
+  but accept only `herdr`, which is now the default. The #475 deprecation
+  warning is replaced by errors.
+  - **Broken contract**: `interactive_terminal_backend = "tmux"` in
+    `.kaji/config.toml` or `.kaji/config.local.toml` fails config loading
+    with `ConfigLoadError` naming the file that defines it, for every
+    `kaji run` including headless runs; `--agent-runner headless` /
+    `--interactive-terminal-backend herdr` cannot override it.
+    `--interactive-terminal-backend tmux` is a usage error (exit 2). With
+    `agent_runner = "interactive_terminal"` and no backend set, kaji now
+    uses Herdr and raises `HerdrSessionRequiredError` when run outside a
+    Herdr pane (no fallback). `TmuxSessionRequiredError` is no longer
+    raised; past run artifacts with that type name are still classified as
+    `user_precondition_error`.
+  - **How to check whether you are affected**: run
+    `grep -nE 'interactive_terminal_backend|agent_runner' .kaji/config.toml .kaji/config.local.toml`
+    and search your scripts for `--interactive-terminal-backend` and
+    `--agent-runner interactive-terminal`. A representative `kaji run`
+    confirms it: an affected config fails at config loading and names the
+    file.
+  - **Migration**: set `interactive_terminal_backend = "herdr"` (or remove
+    the key) and run `kaji run` inside a Herdr pane, or use
+    `agent_runner = "headless"`. Change or remove `"tmux"` in **both**
+    `.kaji/config.toml` and `.kaji/config.local.toml`, and drop
+    `--interactive-terminal-backend tmux` from scripts. See
+    [Migrating from tmux](docs/cli-guides/interactive-terminal-runner.md#migrating-from-tmux).
+
+### Added
+
+- The Herdr backend now records `terminal.log` as raw PTY bytes through a
+  kaji-owned Python PTY recorder, including alternate-screen output from
+  Claude (fullscreen) and Codex, so abnormal-exit provider error diagnosis
+  works again (#515, #476). `pane-metadata.json` reports
+  `transcript_kind = "raw_pty_recording"`, `transcript_recorder_state`,
+  `transcript_truncated` (`false` / `true` / `null`), `transcript_error`,
+  and `transcript_bytes`; `transcript_revision` is `null`. The rendered
+  `pane read` snapshot is no longer captured. The log has no size limit and
+  contains everything printed to the agent's screen.
 
 ## [0.23.2] - 2026-10-18
 

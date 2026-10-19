@@ -45,7 +45,6 @@ def main() -> None:
             verdict_path=verdict_path,
             workdir=temp_path,
             timeout=30,
-            backend="herdr",
             close_on_verdict=not args.retain,
         )
 

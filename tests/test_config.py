@@ -1332,7 +1332,7 @@ class TestExecutionRunnerConfig:
     def test_defaults_when_runner_keys_absent(self, tmp_path: Path) -> None:
         config = KajiConfig._load(_write_config(tmp_path, execution_body="default_timeout = 1800"))
         assert config.execution.agent_runner == "headless"
-        assert config.execution.interactive_terminal_backend == "tmux"
+        assert config.execution.interactive_terminal_backend == "herdr"
         assert config.execution.interactive_terminal_close_on_verdict is True
 
     def test_explicit_interactive_terminal(self, tmp_path: Path) -> None:
@@ -1362,8 +1362,32 @@ class TestExecutionRunnerConfig:
         )
         assert config.execution.interactive_terminal_backend == "herdr"
 
+    @pytest.mark.parametrize("runner", ["headless", "interactive_terminal"])
+    def test_tmux_backend_is_rejected_with_migration_hint(
+        self, tmp_path: Path, runner: str
+    ) -> None:
+        # Issue #515: headless でも旧 tmux 設定を黙って無視しない
+        config_file = _write_config(
+            tmp_path,
+            execution_body=(
+                "default_timeout = 1800\n"
+                f'agent_runner = "{runner}"\n'
+                'interactive_terminal_backend = "tmux"'
+            ),
+        )
+        with pytest.raises(ConfigLoadError) as exc_info:
+            KajiConfig._load(config_file)
+        assert exc_info.value.path == config_file
+        reason = exc_info.value.reason
+        assert "no longer supported" in reason
+        assert '"herdr"' in reason
+        assert 'agent_runner = "headless"' in reason
+        assert ".kaji/config.toml and .kaji/config.local.toml" in reason
+        assert "cannot override" in reason
+        assert "docs/cli-guides/interactive-terminal-runner.md#migrating-from-tmux" in reason
+
     def test_invalid_interactive_terminal_backend_fails_fast(self, tmp_path: Path) -> None:
-        with pytest.raises(ConfigLoadError, match="interactive_terminal_backend must be"):
+        with pytest.raises(ConfigLoadError, match="interactive_terminal_backend must be 'herdr'"):
             KajiConfig._load(
                 _write_config(
                     tmp_path,
@@ -1445,7 +1469,8 @@ class TestExecutionOverlay:
         assert config.execution.agent_runner == "interactive_terminal"
         assert config.execution.interactive_terminal_close_on_verdict is False
 
-    def test_overlay_overrides_interactive_terminal_backend(self, tmp_path: Path) -> None:
+    def test_overlay_herdr_overrides_tracked_tmux(self, tmp_path: Path) -> None:
+        # per-key precedence: the merged value comes from the overlay.
         config = KajiConfig._load(
             _write_config(
                 tmp_path,
@@ -1455,40 +1480,28 @@ class TestExecutionOverlay:
         )
         assert config.execution.interactive_terminal_backend == "herdr"
 
-    def test_backend_source_tracked_only(self, tmp_path: Path) -> None:
-        # Issue #475: the file defining the merged backend is recorded for the warning.
+    def test_overlay_tmux_is_rejected_with_overlay_path(self, tmp_path: Path) -> None:
+        # Issue #515: tracked が herdr でも local の tmux で失敗し、local の path を示す。
         config_file = _write_config(
             tmp_path,
-            execution_body='default_timeout = 1800\ninteractive_terminal_backend = "tmux"',
-        )
-        config = KajiConfig._load(config_file)
-        assert config.execution.interactive_terminal_backend_source == config_file
-
-    def test_backend_source_overlay_only(self, tmp_path: Path) -> None:
-        config_file = _write_config(
-            tmp_path,
-            execution_body="default_timeout = 1800",
+            execution_body='default_timeout = 1800\ninteractive_terminal_backend = "herdr"',
             local_body='[execution]\ninteractive_terminal_backend = "tmux"\n',
         )
-        config = KajiConfig._load(config_file)
-        assert config.execution.interactive_terminal_backend == "tmux"
-        assert config.execution.interactive_terminal_backend_source == (
-            tmp_path / ".kaji" / "config.local.toml"
-        )
+        with pytest.raises(ConfigLoadError, match="no longer supported") as exc_info:
+            KajiConfig._load(config_file)
+        assert exc_info.value.path == tmp_path / ".kaji" / "config.local.toml"
 
-    def test_backend_source_overlay_wins_when_both_define(self, tmp_path: Path) -> None:
+    def test_overlay_tmux_rejected_even_with_headless_runner(self, tmp_path: Path) -> None:
         config_file = _write_config(
             tmp_path,
-            execution_body='default_timeout = 1800\ninteractive_terminal_backend = "tmux"',
-            local_body='[execution]\ninteractive_terminal_backend = "herdr"\n',
+            execution_body='default_timeout = 1800\nagent_runner = "headless"',
+            local_body='[execution]\ninteractive_terminal_backend = "tmux"\n',
         )
-        config = KajiConfig._load(config_file)
-        assert config.execution.interactive_terminal_backend == "herdr"
-        assert config.execution.interactive_terminal_backend_source == (
-            tmp_path / ".kaji" / "config.local.toml"
-        )
+        with pytest.raises(ConfigLoadError, match="no longer supported") as exc_info:
+            KajiConfig._load(config_file)
+        assert exc_info.value.path == tmp_path / ".kaji" / "config.local.toml"
 
-    def test_backend_source_none_when_undefined(self, tmp_path: Path) -> None:
+    def test_backend_defaults_to_herdr_when_undefined(self, tmp_path: Path) -> None:
         config = KajiConfig._load(
             _write_config(
                 tmp_path,
@@ -1496,8 +1509,7 @@ class TestExecutionOverlay:
                 local_body='[execution]\nagent_runner = "interactive_terminal"\n',
             )
         )
-        assert config.execution.interactive_terminal_backend == "tmux"
-        assert config.execution.interactive_terminal_backend_source is None
+        assert config.execution.interactive_terminal_backend == "herdr"
 
     def test_overlay_invalid_value_reports_overlay_path(self, tmp_path: Path) -> None:
         # An invalid runner value coming from the overlay should point at the

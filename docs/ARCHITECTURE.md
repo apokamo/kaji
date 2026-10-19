@@ -193,7 +193,7 @@ WorkflowRunner.run()
        │   │
        │   ├─ if config.execution.agent_runner == "interactive_terminal":
        │   │     execute_interactive_terminal(step, prompt_path, verdict_path, ...)
-       │   │       # tmux pane 上で通常 CLI を起動し verdict.yaml を polling（Issue #224 / #230）
+       │   │       # Herdr pane 上で通常 CLI を起動し verdict.yaml を polling（Issue #224 / #396 / #515）
        │   │   else:
        │   │     execute_cli(step, prompt)   # 既存 headless CLI をサブプロセスで実行
        │   │       └─ CLIEventAdapter         # stream-json → text/session_id/cost に変換
@@ -232,24 +232,23 @@ agent 経路の起動 backend は repository config の `[execution] agent_runne
   `codex exec --json` / `agy -p` を起動する。prompt は argv で渡し、子 CLI の stdin は
   `/dev/null` に固定する（kaji の stdin を継承しない。Issue #494）。
   Antigravity の stdout は JSONL decode せず plain text 全行を保持する。
-- **`interactive_terminal`**: `execute_interactive_terminal()` が
-  `[execution].interactive_terminal_backend` で `tmux`（既定）または `herdr` を明示選択し、pane上で通常の
-  対話 `claude` / `codex` / `agy -i` を起動する。tmuxでは初回を `split-window -h` でoriginの右、2枚目以降を右列内で
-  `-v` で上下分割し、kaji 管理 agent pane を右列に最大2枚まで維持 / Issue #238）、
-  stdout を読まずに attempt directory の `verdict.yaml` を polling する。完了判定は
-  artifact-primary 経路（Issue #220）に完全に乗る。Herdrでは `HERDR_ENV=1` / `HERDR_PANE_ID` と
-  Herdr >= 0.8.2を必須にし、CLI JSON response由来pane IDとsource-scoped ownership tokenを使う。
-  `interactive_terminal_close_on_verdict` はどちらのbackendでもverdict後の所有pane cleanupを制御する。
-  tmux transcriptは`pipe-pane`の連続記録、Herdr transcriptは`recent-unwrapped`のrendered snapshotで、
-  kind / truncation / revisionを`pane-metadata.json`へ記録する（Issue #396、
-  [ADR 007](./adr/007-interactive-terminal-runner.md) v4）。
+- **`interactive_terminal`**: `execute_interactive_terminal()` が Herdr pane 上で通常の対話 `claude` /
+  `codex` / `agy -i` を起動する（`[execution].interactive_terminal_backend` は `herdr` のみ受理。tmux backend は
+  Issue #515 で削除）。初回は origin の右、2枚目以降は右列内で下方向に分割し、kaji 管理 agent pane を右列に
+  最大2枚まで維持し（Issue #238）、stdout を読まずに attempt directory の `verdict.yaml` を polling する。
+  完了判定は artifact-primary 経路（Issue #220）に完全に乗る。`HERDR_ENV=1` / `HERDR_PANE_ID` と
+  Herdr >= 0.8.2 を必須にし、CLI JSON response 由来 pane ID と source-scoped ownership token を使う。
+  `interactive_terminal_close_on_verdict` は verdict 後の所有 pane cleanup を制御する。agent は kaji 所有の
+  PTY recorder（`interactive_terminal_recorder.py`）経由で起動し、`terminal.log` に raw PTY byte を記録する。
+  記録方式と記録状態（`transcript_kind` / `transcript_recorder_state` / `transcript_truncated` など）は
+  `pane-metadata.json` へ記録する（[ADR 007](./adr/007-interactive-terminal-runner.md) v5）。
 
-`interactive_terminal` のモジュール構成（Issue #474）: 公開入口 `execute_interactive_terminal()` は
-`interactive_terminal.py` に置いた backend dispatch だけを担い、`deadline_monotonic` を含む引数をそのまま
-`interactive_terminal_tmux.py`（tmux 実装）または `interactive_terminal_herdr.py`（Herdr 実装）へ渡す。
-wrapper の引数・環境変数組み立て、Codex session 解決、異常終了時の session 解決、terminal 診断は
-`interactive_terminal_common.py` に集約し、tmux / Herdr の双方が import する（依存方向は
-`interactive_terminal` → `_tmux` / `_herdr` → `_common`。`_common` と `_herdr` は dispatch・tmux 実装を import しない）。
+`interactive_terminal` のモジュール構成（Issue #474 / #515）: 公開入口 `execute_interactive_terminal()` は
+`interactive_terminal.py` に置き、`deadline_monotonic` を含む引数をそのまま `interactive_terminal_herdr.py`
+（Herdr 実装）へ渡す。wrapper の引数・環境変数組み立て、Codex session 解決、異常終了時の session 解決、
+terminal 診断は `interactive_terminal_common.py` に集約する（依存方向は `interactive_terminal` → `_herdr` →
+`_common`）。`interactive_terminal_recorder.py` は pane 内で `python -I <path>` として path 起動されるため
+標準ライブラリだけに依存し、kaji の module を import しない。
 
 設定方法と手動検証手順は
 [Interactive Terminal Runner ガイド](./cli-guides/interactive-terminal-runner.md) を参照。
@@ -476,7 +475,8 @@ member ごとの workflow / child PID / run ID / exit code / 成功ゲートを�
       attempt-001/
         prompt.txt                # agent step の build_prompt 結果（再現用）
         stdout.log / console.log / stderr.log
-        terminal.log              # tmux: pipe-pane transcript / Herdr: rendered recent-unwrapped snapshot
+        terminal.log              # PTY recorder による raw PTY byte の記録（Issue #515。旧 tmux run は pipe-pane の記録）
+        terminal.log.state        # recorder の記録状態（recording / complete / incomplete <ERRNO>。内部契約）
         pane-metadata.json        # interactive_terminal runner の pane 状態 snapshot（診断用。Issue #230）
         verdict.yaml              # resolve 後に harness が正規化保存
         result.json               # attempt 終了情報（Issue #222。下記参照）
@@ -512,8 +512,8 @@ runner は各 attempt の dispatch 前に、project root（`kaji run` では `co
 
 - 注入経路: `exec` / `exec_script` は context env に merge（`script_exec._run_argv` が親 env を上書き）、
   headless agent は `execute_cli(env=...)`（`Popen(env={**os.environ, **env})`）、interactive terminal は
-  wrapper command に `env K=V ... <wrapper> <10 args>` を前置する（tmux pane は kaji ではなく tmux server の
-  environment を継承するため。Herdr も同じ command を launcher の `exec env PATH=... <command>` に埋める）。
+  wrapper command に `env K=V ... <wrapper> <10 args>` を前置する（pane は kaji ではなく terminal 側の
+  environment を継承するため。Herdr はこの command を recorder 経由で launcher の `exec env PATH=... <command>` に埋める）。
   親環境から継承した同名変数は attempt 固有値で上書きされる。agent 経路へ渡すのはこの 4 変数のみ。
 - 作成に失敗した場合（`OSError`・不正な path component）は `TmpDirPreparationError` で
   dispatch せずに失敗する。

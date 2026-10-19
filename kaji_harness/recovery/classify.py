@@ -32,6 +32,8 @@ _DEFINITION_EXCEPTIONS = frozenset(
 
 #: 調査を要さない既知のユーザー前提エラー（Issue #322）。incident 記録の対象外になる。
 #: live class ではなく ``run.log`` に記録された型名文字列で判定する（既存 2 集合と同じ設計）。
+#: ``TmuxSessionRequiredError`` は Issue #515 で削除した tmux backend の型名で、過去 run の
+#: artifact を再 triage したときに分類が変わらないよう文字列として残す。
 _USER_PRECONDITION_EXCEPTIONS = frozenset({"HerdrSessionRequiredError", "TmuxSessionRequiredError"})
 
 #: verdict 解決失敗のうち、新セッションでの再実行に意味がある例外。

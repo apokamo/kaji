@@ -79,7 +79,7 @@ skill_dir = ".claude/skills"
 [execution]
 default_timeout = 1800
 # agent_runner = "headless"          # 任意。"headless"（既定） | "interactive_terminal"
-# interactive_terminal_backend = "tmux"  # 任意。"tmux"（既定） | "herdr"
+# interactive_terminal_backend = "herdr"  # 任意。"herdr" のみ（既定）。"tmux" はエラー
 # interactive_terminal_close_on_verdict = true   # 任意
 
 [provider]
@@ -91,7 +91,7 @@ default_branch = "main"             # 既定 "main"
 git_remote = "origin"               # 任意。既定 "origin"
 ```
 
-`agent_runner = "interactive_terminal"` は tmux pane 上で通常 `claude` / `codex` を起動する
+`agent_runner = "interactive_terminal"` は Herdr pane 上で通常 `claude` / `codex` を起動する
 runner backend。設定方法・CLI option・手動検証手順は
 [Interactive Terminal Runner ガイド](./interactive-terminal-runner.md) を参照。
 

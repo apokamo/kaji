@@ -81,7 +81,8 @@ and at least one agent CLI (the default configuration uses
 ### 2.1 Supported environments
 
 Linux / macOS / WSL2. Native Windows is not supported — the interactive
-terminal runner is tmux-based — so Windows users should work inside WSL2.
+terminal runner runs agents in Herdr panes through a Unix PTY recorder — so Windows users should
+work inside WSL2.
 
 ### 2.2 Provider
 
@@ -127,21 +128,21 @@ diff, and on any error no file is written.
 The selected CLI must be installed and authenticated on the machine that runs
 `kaji run`.
 
-### 2.5 Interactive terminal runner (tmux)
+### 2.5 Interactive terminal runner (Herdr)
 
-The default runner is `headless` and needs no tmux. If you switch
+The default runner is `headless` and needs no terminal multiplexer. If you switch
 `.kaji/config.toml` to `execution.agent_runner = "interactive_terminal"`
-(agent sessions rendered in visible panes), you must run kaji **inside a tmux
-session** with **tmux 3.1 or newer**. See the
+(agent sessions rendered in visible panes), you must run kaji **inside a Herdr
+pane** with **Herdr 0.8.2 or newer**. Herdr is the only interactive terminal backend
+(`interactive_terminal_backend = "herdr"`, the default). See the
 [Interactive Terminal Runner guide](../cli-guides/interactive-terminal-runner.md).
 
-> [!WARNING]
-> The tmux backend is deprecated and will be removed in a subsequent kaji release. Migrate to
-> Herdr (`interactive_terminal_backend = "herdr"`, run kaji inside a Herdr pane) or keep the
-> `headless` runner. Fix the `[execution]` table in **both** `.kaji/config.toml` and
-> `.kaji/config.local.toml`: remove `interactive_terminal_backend = "tmux"` from either file.
-> `kaji run` prints a deprecation warning to stderr while tmux is in use or explicitly configured.
-> See [tmux backend deprecation](../cli-guides/interactive-terminal-runner.md#tmux-backend-deprecation).
+> [!IMPORTANT]
+> The tmux backend was removed (deprecated in 0.23.0). `interactive_terminal_backend = "tmux"` now
+> fails config loading for every `kaji run`, including headless runs, and CLI options cannot
+> override it. Change it to `"herdr"` or remove it in the `[execution]` table of **both**
+> `.kaji/config.toml` and `.kaji/config.local.toml`.
+> See [Migrating from tmux](../cli-guides/interactive-terminal-runner.md#migrating-from-tmux).
 
 ## 3. Development flow
 
@@ -317,7 +318,8 @@ here.
 | Setup changes (config / rename / `uv.lock`) show up in your first feature PR | Initial setup was left uncommitted when the workflow ran, and skills self-repaired it inside the worktree | Rename → `uv sync` → `make check` → commit to `main` **before** the first run ([§ 1](#1-create-a-repository-from-the-starter) step 4) |
 | A step dies at agent launch, or the model is rejected | The agent CLI named in the YAML is not installed, or the model / effort does not match your environment | Install the CLI or convert with `uv run python scripts/set_agent.py <cli>` |
 | `review-poll` keeps polling and never progresses | You switched to the review-poll configuration but `chatgpt-codex-connector[bot]` is not installed on the repo | Install the Codex GitHub connector, or revert to the default `review` step (see § 5) |
-| Interactive terminal runner fails to start panes | Running outside a tmux session, or tmux is older than 3.1 | Start a tmux session first, upgrade tmux, or keep the default `headless` runner. tmux is deprecated: prefer migrating to Herdr or headless ([tmux backend deprecation](../cli-guides/interactive-terminal-runner.md#tmux-backend-deprecation)) |
+| Interactive terminal runner fails to start panes | Running outside a Herdr pane (`HerdrSessionRequiredError`), or Herdr is missing / older than 0.8.2 | Start kaji inside a Herdr pane, install or upgrade Herdr, or keep the default `headless` runner |
+| Config loading fails with `interactive_terminal_backend = 'tmux' is no longer supported` | A removed tmux setting remains in `.kaji/config.toml` or `.kaji/config.local.toml` | Change it to `"herdr"` or remove it in both files ([Migrating from tmux](../cli-guides/interactive-terminal-runner.md#migrating-from-tmux)) |
 | `issue-close` aborts, warning about untracked files | A stray log file sits in the repository root (e.g. a redirected `kaji run ... > run.log`) and trips the close safety guard | No redirect is needed — full logs are already in `.kaji/artifacts/<issue>/runs/<ts>/`. If you must keep stdout, write it outside the repo (or a gitignored `tmp/`) |
 
 ## Related documents

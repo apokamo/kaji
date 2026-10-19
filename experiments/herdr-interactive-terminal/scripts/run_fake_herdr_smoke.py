@@ -34,7 +34,6 @@ def main() -> None:
             verdict_path=verdict_path,
             workdir=temp_path,
             timeout=10,
-            backend="herdr",
         )
 
         state = json.loads(state_path.read_text(encoding="utf-8"))

@@ -3,25 +3,23 @@
 Language: English | [日本語](interactive-terminal-runner.ja.md)
 
 A runner that executes `kaji run` agent steps through normal `claude`, `codex`,
-or Antigravity (`agy`) interactive CLIs inside **tmux or Herdr panes**, instead of the headless CLI
-path (Issues 224, 230, and 396). When an agent writes
+or Antigravity (`agy`) interactive CLIs inside **Herdr panes**, instead of the headless CLI
+path (Issues 224, 230, 396, and 515). When an agent writes
 `verdict.yaml` in the attempt directory, kaji reads the verdict through the
 artifact-primary path ([ADR 005](../adr/005-artifact-primary-verdict.md)) and
 advances to the next step.
 
-`interactive_terminal_backend = "tmux"` remains the default, but the tmux backend is deprecated and
-will be removed in a subsequent release (see [tmux backend deprecation](#tmux-backend-deprecation)).
-Selecting `"herdr"` uses Herdr's
-release-matched CLI and explicit pane IDs. In either backend, kaji starts inside the selected
-terminal session and adds agent panes beside its origin pane. This lets you see
-`kaji run` output and the agent side by side even in displayless environments
-(WSL2 / SSH / headless). Pane placement is: first pane to the right of the
-origin pane, later panes split vertically within the right column. Kaji keeps at
-most **two** managed agent panes in the right column (Issue 238). Cleanup uses
-`tmux kill-pane`, transcripts use `tmux pipe-pane`, and there is no `/proc` scan
-or util-linux `script(1)` dependency, so the behavior is the same on Linux and
-macOS. The Herdr backend instead stores a rendered `recent-unwrapped` snapshot and explicit
-truncation metadata; it does not claim raw transcript parity with `tmux pipe-pane`.
+Herdr is the only interactive terminal backend. The tmux backend was removed in Issue 515 after its
+deprecation in 0.23.0 (see [Migrating from tmux](#migrating-from-tmux)). Kaji uses Herdr's
+release-matched CLI and explicit pane IDs, starts inside a Herdr pane, and adds agent panes beside
+its origin pane. This lets you see `kaji run` output and the agent side by side even in displayless
+environments (WSL2 / SSH to a host where Herdr runs). Pane placement is: first pane to the right of
+the origin pane, later panes split vertically within the right column. Kaji keeps at most **two**
+managed agent panes in the right column (Issue 238).
+
+Each agent is launched through a kaji-owned Python PTY recorder, so `terminal.log` holds the raw
+PTY bytes the agent wrote, including alternate-screen output (Issue 515). See
+[Terminal log (`terminal.log`)](#terminal-log-terminallog).
 
 For the technical selection rationale, see [ADR 007](../adr/007-interactive-terminal-runner.md).
 For runner dispatch placement, see [ARCHITECTURE](../ARCHITECTURE.md) section
@@ -32,7 +30,7 @@ Runner backend dispatch.
 - You want to advance a workflow in a shape closer to normal console use rather
   than the metered headless path.
 - You want to see `kaji run` output and the agent in the same screen even in a
-  displayless environment (WSL2 / SSH / headless).
+  displayless environment (WSL2 / SSH to a host where Herdr runs).
 - You want each step to continue Claude / Codex sessions through `--resume` /
   `codex resume`.
 - You want to run a single Antigravity step through `agy -i` while keeping
@@ -44,112 +42,79 @@ Runner backend dispatch.
 When `agent_runner` is unset, the existing `headless` runner is used. Existing
 workflows and CI behavior do not change.
 
-## tmux backend deprecation
+## Migrating from tmux
 
-The tmux backend is **deprecated** and will be removed in a subsequent kaji release (Issue 475,
-parent Issue 466). Herdr becomes the only interactive terminal backend; the headless runner stays.
-In the current release tmux still works unchanged.
+The tmux backend was **removed** (Issue 515, parent Issue 466; deprecated in 0.23.0, Issue 475).
+Herdr is the only interactive terminal backend; the headless runner stays.
+
+### What changed
+
+- `interactive_terminal_backend = "tmux"` in `.kaji/config.toml` or `.kaji/config.local.toml`
+  (after the per-key merge) fails config loading with `ConfigLoadError` and names the file that
+  defines the value. This happens for every `kaji run`, **including headless runs**.
+  `--agent-runner headless` / `--interactive-terminal-backend herdr` **cannot override it**; you
+  must edit the file.
+- `--interactive-terminal-backend tmux` is rejected as a usage error (exit 2) with migration
+  guidance. Other unknown values fail with argparse's `invalid choice`.
+- With `agent_runner = "interactive_terminal"` and no backend set, the default is now `herdr`, so
+  `kaji run` must run inside a Herdr pane. Running outside Herdr raises `HerdrSessionRequiredError`;
+  there is no fallback to headless and no terminal auto-detection.
 
 ### Am I affected?
 
-`kaji run` prints a one-line warning to stderr, once per process, that starts with
-`WARNING: the tmux interactive terminal backend is deprecated`, when any of the following holds:
-
-- After CLI overrides, the effective runner is `interactive_terminal` and the effective backend is
-  `tmux`, whether `tmux` is set explicitly or comes from the built-in default.
-- After the per-key merge of `.kaji/config.toml` and `.kaji/config.local.toml`,
-  `interactive_terminal_backend` is `"tmux"` and one of those files sets it explicitly. This warns
-  regardless of the runner and CLI overrides, because after removal that value fails config loading
-  even with `--agent-runner headless` or `--interactive-terminal-backend herdr`.
-- `--interactive-terminal-backend tmux` is given.
-
-There is no warning when you run headless without setting a backend anywhere, or when the effective
-backend is `herdr` and neither the merged config value nor the CLI says `tmux` (for example, a
-tracked `"tmux"` overridden by `"herdr"` in `config.local.toml`). stdout, exit codes, and run
-artifacts are unchanged. Other commands (`kaji issue`, `kaji pr`, `kaji config`, ...) do not warn.
-
-The warning names where tmux comes from: the config file that defines the merged value (the same
-file a config error would name), the CLI option, or the built-in default.
-
-```text
-WARNING: the tmux interactive terminal backend is deprecated and will be removed in a subsequent kaji release. tmux is selected by: interactive_terminal_backend = "tmux" in /path/repo/.kaji/config.toml. Migrate to Herdr (...) or to the headless runner (...). Remove or change the value in that file: ... See docs/cli-guides/interactive-terminal-runner.md#tmux-backend-deprecation
-```
-
-To identify candidates without running a workflow, search both config files and your scripts.
-These searches are only a heuristic: quoting, spacing, or dynamically built arguments may hide
-matches. No hits alone does not establish that you are unaffected. Use the warning from a
-representative `kaji run` that reaches config loading and CLI override application to confirm
-its effective settings:
+Search both config files and your scripts:
 
 ```bash
-grep -nE 'interactive_terminal_backend *= *"tmux"|agent_runner *= *"interactive_terminal"' \
-  .kaji/config.toml .kaji/config.local.toml
-grep -rnE -- '--interactive-terminal-backend[ =]+tmux|--agent-runner[ =]+interactive-terminal' <your-scripts>
+grep -nE 'interactive_terminal_backend|agent_runner' .kaji/config.toml .kaji/config.local.toml
+grep -rnE -- '--interactive-terminal-backend|--agent-runner' <your-scripts>
 ```
 
-### What changes at removal
-
-- `interactive_terminal_backend = "tmux"` in `.kaji/config.toml` or `.kaji/config.local.toml`
-  (after the per-key merge) fails config loading and names the defining file, even for headless
-  runs. `--agent-runner headless` / `--interactive-terminal-backend herdr` cannot bypass it.
-- `--interactive-terminal-backend tmux` is rejected.
-- With `agent_runner = "interactive_terminal"` and no backend set, the default becomes Herdr, so
-  `kaji run` must run inside a Herdr pane.
+These searches are a heuristic (quoting or dynamically built arguments may hide matches). A
+representative `kaji run` confirms the result: an affected config fails at config loading and names
+the file to edit.
 
 ### How to migrate
 
-- **Herdr**: install Herdr (see [Prerequisites > Herdr](#herdr)), set
-  `interactive_terminal_backend = "herdr"` in `[execution]`, and start `kaji run` inside a Herdr
+- **Herdr**: install Herdr (see [Prerequisites](#prerequisites)), set
+  `interactive_terminal_backend = "herdr"` (or remove the key), and start `kaji run` inside a Herdr
   pane.
-- **Headless**: set `agent_runner = "headless"` (or remove `agent_runner`). No terminal
-  multiplexer is needed.
-- In both cases, remove `interactive_terminal_backend = "tmux"` from **both**
-  `.kaji/config.toml` and `.kaji/config.local.toml` (the warning names the file that currently
-  wins the merge), and drop `--interactive-terminal-backend tmux` from scripts.
+- **Headless**: set `agent_runner = "headless"` (or remove `agent_runner`) and remove
+  `interactive_terminal_backend = "tmux"`. No terminal multiplexer is needed.
+- In both cases, remove or change `"tmux"` in **both** the tracked `.kaji/config.toml` **and** the
+  gitignored `.kaji/config.local.toml`, and drop `--interactive-terminal-backend tmux` from scripts.
+  The error names the file that currently defines the value; fixing only that file can reveal the
+  same value in the other file on the next run.
+
+Past tmux run artifacts stay readable for diagnosis: a historical `TmuxSessionRequiredError` in
+`run.log` is still classified as a user precondition error, and an old tmux `pane-metadata.json`
+(`pane_id: "%N"`) is still read for the orphan pane ID.
+
+## tmux backend deprecation
+
+The tmux backend was deprecated in 0.23.0 and has since been removed. See
+[Migrating from tmux](#migrating-from-tmux).
 
 ## Prerequisites
-
-Choose one terminal backend explicitly; there is no auto-detection or fallback.
-
-### tmux
-
-> [!WARNING]
-> The tmux backend is deprecated and will be removed in a subsequent release. Plan a move to
-> Herdr or headless; see [tmux backend deprecation](#tmux-backend-deprecation).
-
-- **Run `kaji run` inside a tmux session**. The runner checks `$TMUX` and fails
-  fast as a step failure when it is unset. There is no automatic fallback or
-  search for another terminal. Use `--agent-runner headless` if you want to run
-  outside tmux. This failure is treated as a known user precondition error and
-  never opens an incident Issue (the triage comment and run artifacts are kept;
-  Issue #322 / [failure-recovery.md](./failure-recovery.md) § Incident recording
-  exemption).
-- `$TMUX_PANE` must be set (it is used as the `split -t` target and is set
-  automatically inside a tmux pane).
-- `tmux` (**>= 3.1**) must be on PATH. Kaji identifies managed panes through
-  pane user options (`set-option -p @kaji_interactive_terminal`), added in tmux
-  3.1 (raised from 3.0 in Issue 238). Missing or older tmux fails fast.
-- The selected `claude`, `codex`, or `agy` CLI must be on PATH.
-- Transcripts (`terminal.log`) are **always recorded** with `tmux pipe-pane`
-  (no OS branch).
-- Before launching the agent, the wrapper unsets `NO_COLOR` and sets
-  `COLORTERM=truecolor`. Even if the parent shell has `NO_COLOR=1`, the agent
-  inside the interactive terminal runner can use truecolor output.
-
-### Herdr
 
 - Herdr **>= 0.8.2** must be on PATH and its client/server protocol must be compatible. When
   `HERDR_BIN_PATH` points to an executable, kaji prefers that release-matched CLI over PATH lookup.
 - Run `kaji run` inside Herdr. `HERDR_ENV=1` and `HERDR_PANE_ID` are required; an outside caller
   raises `HerdrSessionRequiredError` and never controls the UI-focused session. Preflight also runs
-  `herdr status` and requires `pane current --current` to match `HERDR_PANE_ID` exactly.
+  `herdr status` and requires `pane current --current` to match `HERDR_PANE_ID` exactly. This
+  failure is treated as a known user precondition error and never opens an incident Issue (the
+  triage comment and run artifacts are kept; [failure-recovery.md](./failure-recovery.md) §
+  Incident recording exemption).
+- The selected `claude`, `codex`, or `agy` CLI must be on PATH.
 - Kaji invokes the installed CLI with argv lists, parses JSON response IDs, and never predicts a
   pane ID. A raw socket client, plugin, and Herdr agent integration are not required.
 - Created panes carry `kaji_origin`, `kaji_run`, and `kaji_step` metadata tokens. Cleanup re-reads
   the exact pane and requires current origin/run ownership before closing it.
-- `terminal.log` is a rendered `recent-unwrapped` diagnostic snapshot. `pane-metadata.json` records
-  its kind, availability, and revision. Herdr 0.8.2's `pane read` CLI emits plain text without its
-  structured truncation flag, so `transcript_truncated` is `null` (unknown), not a guessed boolean.
+- Before launching the agent, the wrapper unsets `NO_COLOR` and sets
+  `COLORTERM=truecolor`. Even if the parent shell has `NO_COLOR=1`, the agent
+  inside the interactive terminal runner can use truecolor output.
+- The PTY recorder uses only the Python standard library (`pty`, `termios`, ...) and runs with kaji's
+  own interpreter in isolated mode (`-I`). It is Unix-only; Linux (including WSL2) is verified, and
+  real-machine verification on macOS is deferred.
 
 ## Configuration
 
@@ -165,12 +130,12 @@ switch, write the gitignored `.kaji/config.local.toml`.
 [execution]
 default_timeout = 2400
 agent_runner = "interactive_terminal"            # "headless" (default) | "interactive_terminal"
-interactive_terminal_backend = "herdr"           # "tmux" (default, deprecated) | "herdr"
+interactive_terminal_backend = "herdr"           # "herdr" only (default); "tmux" is an error
 interactive_terminal_close_on_verdict = true     # default true
 ```
 
-If `agent_runner` is not an allowed value, config loading fails fast with
-`ConfigLoadError`. The exhaustive specification for `[execution]` keys (type /
+If `agent_runner` or `interactive_terminal_backend` is not an allowed value, config loading fails
+fast with `ConfigLoadError`. The exhaustive specification for `[execution]` keys (type /
 default / validation) is the
 [Configuration Reference](../reference/configuration.md#execution).
 
@@ -217,7 +182,7 @@ agent_runner = "interactive_terminal"
 
 ```bash
 --agent-runner <headless|interactive-terminal>
---interactive-terminal-backend <tmux|herdr>
+--interactive-terminal-backend <herdr>
 --interactive-terminal-close-on-verdict
 --no-interactive-terminal-close-on-verdict
 ```
@@ -227,8 +192,8 @@ agent_runner = "interactive_terminal"
   CLI value is hyphen-separated only).
 - `--agent-runner headless`: use headless for this run only, even if config uses
   interactive terminal.
-- `--interactive-terminal-backend`: select the pane implementation for this run only. It does not
-  implicitly enable the interactive runner.
+- `--interactive-terminal-backend`: accepts only `herdr`. It does not implicitly enable the
+  interactive runner. `tmux` is rejected with migration guidance.
 - `--interactive-terminal-close-on-verdict` / `--no-...`: override
   close-on-verdict for this run only. If neither is specified, the config value
   is retained.
@@ -238,28 +203,25 @@ agent_runner = "interactive_terminal"
 1. `kaji run` CLI option
 2. `.kaji/config.local.toml` `[execution]`
 3. `.kaji/config.toml` `[execution]`
-4. Built-in default (`agent_runner = "headless"`, `interactive_terminal_backend = "tmux"`,
-   `interactive_terminal_close_on_verdict = true`). The `tmux` default is deprecated; see
-   [tmux backend deprecation](#tmux-backend-deprecation).
+4. Built-in default (`agent_runner = "headless"`, `interactive_terminal_backend = "herdr"`,
+   `interactive_terminal_close_on_verdict = true`)
+
+A `"tmux"` value in either config file fails config loading before CLI options are applied.
 
 ### Examples
 
 ```bash
-# Always run inside a tmux session ($TMUX missing fails fast)
-tmux new-session            # or use an existing tmux session
+# Run inside a Herdr pane (HERDR_ENV / HERDR_PANE_ID missing fails fast)
 
 # Use repository config where interactive_terminal is the default
 kaji run .kaji/wf/official/dev.yaml 224
 
 # Use interactive terminal for this run and keep panes open
-kaji run .kaji/wf/official/dev.yaml 224   --agent-runner interactive-terminal   --no-interactive-terminal-close-on-verdict
-
-# Use the Herdr backend from inside Herdr
-kaji run .kaji/wf/official/dev.yaml 396 \
+kaji run .kaji/wf/official/dev.yaml 224 \
   --agent-runner interactive-terminal \
-  --interactive-terminal-backend herdr
+  --no-interactive-terminal-close-on-verdict
 
-# Use headless for this run only (tmux not required)
+# Use headless for this run only (Herdr not required)
 kaji run .kaji/wf/official/dev.yaml 224 --agent-runner headless
 ```
 
@@ -273,7 +235,7 @@ launcher console through stdlib `logging`.
 ```text
 [2026-06-07T12:34:57] [kaji] workflow start: dev issue #224
 [2026-06-07T12:34:57] [kaji] step start: design attempt-001 dispatch=agent agent=claude model=opus
-[2026-06-07T12:35:02] [kaji] pane launched: step=design agent=claude pane=%12 timeout=1800s verdict=/.../steps/design/attempt-001/verdict.yaml
+[2026-06-07T12:35:02] [kaji] pane launched: step=design agent=claude pane=w1-3 timeout=1800s verdict=/.../steps/design/attempt-001/verdict.yaml
 [2026-06-07T12:42:10] [kaji] verdict detected: design source=artifact status=PASS
 [2026-06-07T12:42:10] [kaji] step end: design status=PASS duration=433000ms next=review-design
 [2026-06-07T12:42:10] [kaji] workflow end: status=COMPLETE duration=...ms
@@ -297,73 +259,9 @@ kaji run .kaji/wf/official/dev.yaml 224 --log-level WARNING
 
 ## Behavior
 
-The following numbered lifecycle describes the tmux implementation. Herdr uses the same wrapper,
-verdict, and session-state contracts with the backend-specific differences below.
-
-1. Before launch, the runner lists kaji-managed agent panes in the same window
-   using `tmux list-panes` and pane user option
-   `@kaji_interactive_terminal` matching `origin=<origin pane>`, then decides
-   placement (Issue 238):
-   - 0 managed panes: create a right column by splitting the origin pane with
-     `tmux split-window -d -h -t "$TMUX_PANE"`.
-   - 1 managed pane: split that agent pane vertically with `-d -v`, creating a
-     second pane in the right column.
-   - 2 or more managed panes: in ascending `pane_top` order, kill oldest panes
-     until one remains, then split the remaining newest pane with `-d -v`. The
-     right column is therefore always equivalent to the latest two panes, and
-     the width does not keep shrinking step after step.
-
-   Every split uses `-d` so focus is not stolen, and `-P -F '#{pane_id}'` returns
-   the created pane id for lifecycle handling. Immediately after creation, kaji
-   marks the pane with `tmux set-option -p -t <pane> @kaji_interactive_terminal
-   origin=<origin pane>`, so only panes created by kaji are later pruned (user
-   panes and panes from another origin are not closed by mistake). If marker
-   setup fails, kaji best-effort kills the created pane and then fails loud.
-   `list-panes` and pane lookup failures also fail loud to avoid unsafe cleanup
-   in broken tmux state. If a user manually activates an agent pane and that
-   pane is later pruned, tmux may move the active pane normally; kaji only
-   promises not to steal focus during automatic creation.
-2. The runner records pane output to `terminal.log` in the attempt directory via
-   `tmux pipe-pane -o -t %id 'cat >> terminal.log'`.
-3. The wrapper first runs `cd <workdir>` (trusted project worktree; not `/tmp` or
-   the attempt directory), then launches normal `claude` / `codex` / `agy`
-   (Codex also receives `--cd <workdir>`).
-4. The wrapper does not embed the full prompt. It only tells the agent to read
-   `prompt.txt` and write pure YAML to `verdict.yaml`.
-5. The runner polls `verdict.yaml`; once it appears, it resolves the verdict via
-   artifact-primary and continues the workflow. The **only completion trigger is
-   the appearance of `verdict.yaml`**. The runner does not wait for the agent
-   process to exit naturally. Pane liveness is checked with `#{pane_dead}`
-   (lookup failure also counts as dead).
-6. If `interactive_terminal_close_on_verdict = true`, verdict detection is
-   followed by best-effort pane cleanup with `tmux kill-pane`. This is cleanup,
-   not a latency contract such as "kill within <=N seconds after polling"; a
-   kill after the next step starts is allowed. Timeout paths also best-effort
-   kill the pane and then fail loud. An operator Ctrl-C (`KeyboardInterrupt`) is
-   the exception: the pane is **not** killed (Issue #403). The runner records the
-   orphan `pane_id` in `pane-metadata.json` and re-raises so the agent state stays
-   inspectable; clean it up manually with `tmux kill-pane -t <pane_id>`.
-7. If `interactive_terminal_close_on_verdict = false`, the runner sets
-   `tmux set-option -p -t %id remain-on-exit on` before polling and does not kill
-   the pane after the verdict. After the agent exits naturally, the pane remains
-   as `[dead]` (`#{pane_dead}=1`) so the user can inspect it later. On the next
-   step launch, that pane is still detected as a kaji-marked pane, and the right
-   column is pruned to at most two panes (compare the latest and previous agent
-   steps).
-
-> **Pane metadata (diagnostics)**: At verdict detection time, the runner snapshots
-> `#{pane_dead}` and related values to `pane-metadata.json` in the attempt
-> directory. Under the verdict-trigger contract, the agent CLI is usually still
-> alive when the verdict is detected, so the snapshot is normally
-> `#{pane_dead}=0`. The later transition to `[dead]` is the final state
-> guaranteed by `remain-on-exit on`, separate from the metadata snapshot. Since
-> Issue 238, the snapshot also records placement diagnostics:
-> `layout_target_pane`, `split_target_pane`, `split_direction` (`horizontal` /
-> `vertical`), `kaji_agent_panes_before`, and `kaji_agent_panes_pruned`.
-
-### Herdr behavior
-
-1. Preflight validates `HERDR_ENV=1` and `HERDR_PANE_ID` before resolving the binary, then validates Herdr >= 0.8.2 and an exact `pane current --current` match.
+1. Preflight validates `HERDR_ENV=1` and `HERDR_PANE_ID` before resolving the binary, then validates
+   Herdr >= 0.8.2 and an exact `pane current --current` match. It also checks that the packaged
+   wrapper, kaji's Python interpreter, and the recorder module exist before any pane is created.
 2. Kaji reads token-owned panes and origin layout. It opens the first pane to the right, later panes
    downward, and keeps at most two. Prune re-reads current origin/run tokens before closing. A stale
    candidate with a missing run token/layout or changed ownership is skipped; kaji logs a warning and
@@ -371,24 +269,71 @@ verdict, and session-state contracts with the backend-specific differences below
 3. Split uses explicit cwd and `--no-focus`. Kaji marks the response-derived pane, atomically publishes
    a private (`0700`) `herdr-launcher.sh` in the attempt directory, and sends only the short
    `<launcher path>` child command once. The shell remains the pane's shell process for liveness
-   checks, while the inherited PATH and long wrapper argv stay in the launcher. Correctness therefore
+   checks, while the inherited PATH and long argv stay in the launcher. Correctness therefore
    does not depend on a fresh shell's unobservable input mode. The launcher atomically publishes a
-   private start marker before the wrapper exec; kaji waits for it within a fixed bound and does not
-   count pre-marker shell-only observations as agent exit. Launcher creation, pane-run, or start
+   private start marker before it execs the recorder; kaji waits for it within a fixed bound and does
+   not count pre-marker shell-only observations as agent exit. Launcher creation, pane-run, or start
    confirmation failure cleans up the owned pane and fails loud. Ownership marker failure leaves the
    unowned pane untouched.
-4. `verdict.yaml` is the only completion trigger. Foreground process observations only detect a
-   command that returned to its shell early; output/status text never completes a step. Missing or
-   malformed optional process fields are treated as unknown and never count as a confirmed shell return.
-5. At verdict, pane-run failure, early exit, or timeout, kaji saves a best-effort rendered snapshot.
-   Verdict cleanup obeys `interactive_terminal_close_on_verdict`; failure cleanup remains
+4. The launcher runs `HERDR_AGENT=<claude|codex|agy> <python> -I <recorder> <terminal.log> --
+   <wrapper> <10 args>`. `HERDR_AGENT` is set on the recorder process only (kaji's `antigravity` maps
+   to Herdr's `agy` manifest), so Herdr's agent detection (idle / working / blocked / done) behaves
+   as with a direct launch. The recorder removes `HERDR_AGENT` from the child environment, so it does
+   not leak into nested kaji runs.
+5. The wrapper first runs `cd <workdir>` (trusted project worktree; not `/tmp` or
+   the attempt directory), then launches normal `claude` / `codex` / `agy`
+   (Codex also receives `--cd <workdir>`). The wrapper does not embed the full prompt. It only tells
+   the agent to read `prompt.txt` and write pure YAML to `verdict.yaml`.
+6. `verdict.yaml` is the only completion trigger. Foreground process observations only detect a
+   command that returned to its shell early; output/status text and the recorder's exit code never
+   complete a step. Missing or malformed optional process fields are treated as unknown and never
+   count as a confirmed shell return.
+7. Verdict cleanup obeys `interactive_terminal_close_on_verdict`; failure cleanup remains
    ownership-checked. A close failure is a warning recorded as `close_error` and never replaces the
-   verdict, the original failure/timeout, or its resolved session. Early-exit metadata also includes
-   the structured `terminal_diagnostic`; its message warns that a rendered snapshot may be incomplete.
-6. An operator Ctrl-C leaves the agent pane open, records its ownership and rendered snapshot in
-   `pane-metadata.json`, and re-raises `KeyboardInterrupt`. If snapshot persistence fails, the
-   original interrupt still wins. Close the orphan manually with `herdr pane close <pane_id>` after
-   inspection.
+   verdict, the original failure/timeout, or its resolved session. Early-exit and timeout metadata
+   also include the structured `terminal_diagnostic`, built from the recorder's `terminal.log`.
+8. An operator Ctrl-C in the kaji pane (`KeyboardInterrupt`) leaves the agent pane open, records its
+   ownership in `pane-metadata.json`, and re-raises. If metadata persistence fails, the original
+   interrupt still wins. Close the orphan manually with `herdr pane close <pane_id>` after
+   inspection. A Ctrl-C typed inside the agent pane is a separate path: the recorder forwards it as
+   `\x03` to the agent's PTY, so the agent receives SIGINT as with a direct launch.
+
+### Terminal log (`terminal.log`)
+
+- **Format**: the raw bytes the child (wrapper → agent) wrote to its PTY, appended unchanged. This
+  includes ANSI escapes, alternate-screen content (after `\e[?1049h`), and output after `\e[3J`. It
+  is the same shape as the former tmux `pipe-pane` log. The wrapper banner is recorded too.
+- **Writes**: each chunk is appended unbuffered (`O_APPEND`) before it is mirrored to the pane, so
+  chunks already read survive a forced close of the recorder or pane. The log is opened before the
+  agent starts; an agent exec failure is written to the log through the PTY (exit code 127).
+- **No size limit or rotation.** With `close_on_verdict = false`, the log keeps growing while the
+  agent stays alive after the step.
+- **Sensitive data**: a raw PTY recording contains everything the agent printed to the screen. The
+  file follows the process umask, as before. Treat attempt directories accordingly.
+- **Recorder state** (`terminal.log.state`, internal): the recorder writes `recording` before the
+  agent starts, `complete` after the child's EOF, and `incomplete <ERRNO>` (e.g. `ENOSPC`) when a
+  log write fails; it then stops recording and keeps relaying the pane. If it cannot overwrite the
+  state, it deletes the file so the harness reports `unknown`. Residual risk: if both the overwrite
+  and the delete fail, `recording` remains even though bytes were lost.
+
+### Pane metadata (diagnostics)
+
+`pane-metadata.json` in the attempt directory records ownership, placement diagnostics
+(`layout_target_pane`, `split_target_pane`, `split_direction`, `kaji_agent_panes_before`,
+`kaji_agent_panes_pruned`, `kaji_agent_panes_skipped`), and transcript metadata:
+
+| Key | Meaning |
+|-----|---------|
+| `transcript_kind` | `"raw_pty_recording"` |
+| `transcript_available` | `terminal.log` exists as a regular file when the metadata is written |
+| `transcript_recorder_state` | `"recording"` / `"complete"` / `"incomplete"` / `"unknown"` (state file missing, unreadable, or invalid) |
+| `transcript_truncated` | `false` for `recording` / `complete` (no known loss), `true` for `incomplete`, `null` for `unknown`. Omitted when no log exists |
+| `transcript_error` | Only for `incomplete`: the errno name (e.g. `ENOSPC`); never transcript content |
+| `transcript_revision` | Always `null` (the recorder has no revision concept). Omitted when no log exists |
+| `transcript_bytes` | Size of `terminal.log` in bytes at metadata time. Omitted when no log exists |
+
+When the recorder state is `incomplete` or `unknown`, the abnormal-exit error detail adds
+`; transcript may be incomplete (recorder state: <state>)`.
 
 ### Launch kaji from Codex or Claude Code
 
@@ -407,11 +352,8 @@ open. Plugins remain an optional human launcher UX, not a core dependency.
   `terminal.log`. If unavailable, it scans `CODEX_HOME/sessions/**/*.jsonl`, then
   `~/.codex/sessions/**/*.jsonl`, in descending mtime and adopts the UUID from a
   rollout file that contains the attempt's `prompt.txt` / `verdict.yaml` path.
-  Resume steps launch `codex resume <uuid>`. The tmux backend may wait through a
-  collection grace period (<=5s) and re-scan after cleanup. The Herdr backend deliberately performs
-  one rendered snapshot plus the session-store fallback without that grace: this avoids adding up to
-  five seconds to every Herdr verdict, and the real Herdr 0.8.2 Codex run resolved its session with
-  this path.
+  Resume steps launch `codex resume <uuid>`. There is no collection grace period: the verdict path
+  reads `terminal.log` once and then falls back to the session store.
 - **Antigravity**: no public session ID is collected. The result always carries
   `session_id=None`, and workflow `resume:` is rejected before launch.
 
@@ -420,9 +362,9 @@ open. Plugins remain an optional human launcher UX, not a core dependency.
 An attempt that ends without a verdict still records a session ID in
 `result.json` when one can be **verifiably** tied to that attempt (for diagnosis
 and manual resume decisions; nothing is auto-resumed). The rules differ from the
-verdict-detection path. These rules apply to both terminal backends; Herdr's confirmed return to
-the shell uses the `pane-dead` row because the launched agent process has ended even though the
-container pane remains available until ownership-checked cleanup.
+verdict-detection path. Herdr's confirmed return to the shell uses the `pane-dead` row because the
+launched agent process has ended even though the container pane remains available until
+ownership-checked cleanup.
 
 | Agent | Resume input | Path | Resolution |
 |---|---|---|---|
@@ -437,9 +379,8 @@ container pane remains available until ownership-checked cleanup.
   attempt marker (the absolute `prompt.txt` / `verdict.yaml` paths). On a `resume:`
   step the parent rollout also contains the marker but stopped being updated
   before the attempt started, so it is excluded.
-- Abnormal exit paths never read `terminal.log` (on timeout the Codex resume line
-  has not been printed yet, and the transcript can be very large) and add no grace
-  wait.
+- Abnormal exit paths do not read `terminal.log` for the session ID (on timeout the Codex resume
+  line has not been printed yet, and the transcript can be very large) and add no grace wait.
 - The **verdict-detection path keeps its existing rule** (first match in
   descending mtime). Codex `resume` creates a new rollout that inherits history,
   so the same marker can legitimately match more than once; forcing uniqueness
@@ -452,14 +393,15 @@ Codex `reasoning.effort = minimal` conflicts with the current tool configuration
 wrapper pass effort through; choosing the minimum value is the responsibility of
 workflow steps and manual verification.
 
-## Manual verification procedure (real tmux + real Claude / Codex / Antigravity)
+## Manual verification procedure (real Herdr + real Claude / Codex / Antigravity)
 
-> Automated tests cover behavior with fake binaries + real tmux at Large
-> (`large_local`) and fake tmux at Medium. Live connectivity with real `claude` /
-> `codex` / `agy` is **intentionally not automated** because it may incur API charges and
-> interactive CLIs are hard to automate. Verify it manually as follows.
+> Automated tests cover the recorder on a real PTY and the launcher → recorder → wrapper chain with
+> fake agents at Large (`large_local`), and the Herdr backend with a fake `herdr` CLI at Medium.
+> Live connectivity with real Herdr and real `claude` / `codex` / `agy` is **intentionally not
+> automated** because it needs a Herdr pane, agent authentication, and may incur API charges.
+> Verify it manually as follows.
 
-Run verification **inside a project worktree** and **inside a tmux session**. Do
+Run verification **inside a project worktree** and **inside a Herdr pane**. Do
 not use `/tmp` or an attempt directory as cwd.
 
 Verification models / effort (low-cost choices):
@@ -470,42 +412,39 @@ Verification models / effort (low-cost choices):
 
 Procedure:
 
-1. Start a tmux session (`tmux new-session`, or use an existing session).
+1. Start Herdr and open a pane (locally, under WSL2, or on a host reached over SSH).
 2. Set `[execution] agent_runner = "interactive_terminal"` in
    `.kaji/config.local.toml` (or pass `kaji run ... --agent-runner interactive-terminal`).
 3. Start a minimal workflow with `kaji run`, and confirm a pane opens on the
-   right side of the current window and launches normal `claude`.
+   right side of the origin pane and launches normal `claude`.
 4. Confirm kaji advances to the next step after the agent writes `verdict.yaml`
    (**Claude fresh**).
 5. Confirm the resume step starts with the same session id (`--resume <uuid>`)
    (**Claude resume**).
 6. Repeat for Codex: fresh writes `verdict.yaml` (**Codex fresh**), then resume
    starts with `codex resume` (**Codex resume**).
-7. Confirm panes disappear after verdict with
-   `interactive_terminal_close_on_verdict = true` (`kill-pane`), and remain as
-   `[dead]` with `false` (`--no-interactive-terminal-close-on-verdict`).
-8. Confirm `terminal.log` is recorded in the attempt directory (always recorded,
-   regardless of OS).
+7. Confirm panes close after verdict with `interactive_terminal_close_on_verdict = true`, and remain
+   with `false` (`--no-interactive-terminal-close-on-verdict`).
+8. Confirm `terminal.log` in the attempt directory contains the conversation (including
+   alternate-screen output) and `pane-metadata.json` shows `transcript_kind = "raw_pty_recording"`.
 9. With `--no-interactive-terminal-close-on-verdict`, run **three or more agent
    steps** consecutively and confirm kaji-managed panes in the right column stay
-   at **at most two**, and the `pane_width` of the origin pane and right-column
-   agent panes does not keep narrowing on every step. Also confirm manually
-   created unrelated panes are not closed by mistake.
+   at **at most two**. Also confirm manually created unrelated panes are not closed by mistake.
+
+Record the Herdr and agent versions with the result.
 
 ## Troubleshooting
 
 | Symptom | Cause / action |
 |---------|----------------|
-| Immediate exit with `CLI 'tmux' not found` | Add `tmux` to PATH or run with `--agent-runner headless` |
-| Immediate exit with `requires tmux. Run kaji run inside tmux` | You are outside a tmux session. Rerun inside `tmux new-session` or use `--agent-runner headless` |
-| Immediate exit with `requires tmux >= 3.1` | tmux is too old. Upgrade to 3.1 or newer (`set-option -p` pane user option is 3.1; `#{pane_dead}` / `split-window -P -F` require 3.0) |
-| Immediate exit with `TMUX_PANE is not set` | You are not inside a tmux pane. Normal tmux sessions set it automatically |
-| Immediate exit with `CLI 'herdr' not found` | Install Herdr >= 0.8.2 or select the tmux backend |
-| Immediate exit with `must run inside Herdr` | Start kaji inside a Herdr pane; external focused-session control is intentionally refused |
+| `config error (...): execution.interactive_terminal_backend = 'tmux' is no longer supported` | The tmux backend was removed. Edit the named file (and check the other config file); see [Migrating from tmux](#migrating-from-tmux). CLI options cannot override it |
+| `argument --interactive-terminal-backend: the tmux backend was removed` (exit 2) | Use `herdr`, or `--agent-runner headless` |
+| Immediate exit with `CLI 'herdr' not found` | Install Herdr >= 0.8.2 or use the headless runner |
+| Immediate exit with `must run inside Herdr` (`HerdrSessionRequiredError`) | Start kaji inside a Herdr pane, or set `agent_runner = "headless"`; external focused-session control is intentionally refused |
 | `HERDR_PANE_ID is not set` | Restart the command in a normal Herdr pane so caller identity is explicit |
-| Herdr `terminal.log` lacks older lines | It is a rendered snapshot, not a raw transcript. In Herdr 0.8.2 metadata, `transcript_truncated=null` means the plain-text CLI did not expose whether older rows were omitted; use the revision as snapshot identity, not completeness proof |
+| `transcript may be incomplete (recorder state: ...)` | The recorder could not write part of `terminal.log` (`incomplete`, see `transcript_error`, e.g. disk full) or its state could not be confirmed (`unknown`). The agent run itself is unaffected |
 | Step times out | The agent did not write `verdict.yaml`. Check the prompt's verdict-writing instruction and path |
-| Pane disappears before verdict / `tmux pane exited before writing verdict.yaml` | Agent launch failed. Check the tail of `terminal.log` attached to the error |
+| `Herdr pane returned to its shell before writing verdict.yaml` | Agent launch failed or the agent exited early. Check the tail of `terminal.log` attached to the error |
 | No color | The wrapper unsets `NO_COLOR` and sets `COLORTERM=truecolor`; also check terminal color support and agent-side settings |
 | Codex resume does not work | No resume line in `terminal.log`, and session-store fallback did not match markers. Check `CODEX_HOME` |
 | CLI stops at trust / permission confirmation | cwd is outside the project (`/tmp`, etc.). Pin workdir to the project worktree |

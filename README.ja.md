@@ -126,7 +126,7 @@ harnessは `verdict.yaml` などの構造化出力を読み、attempt artifact�
 
 - **Multi-agent workflow orchestration**: 1つのworkflow定義からClaude Code、Codex、Antigravity CLIを呼び分ける
 - **Closed review loops**: review -> fix -> verify の閉じたサイクルでレビュー指摘を収束させる
-- **Interactive tmux runner**: 通常のCLI agentをtmux paneで起動し、kajiがartifact-backed verdictを監視する
+- **Interactive terminal runner**: 通常のCLI agentをHerdr paneで起動し、kajiがartifact-backed verdictを監視してraw terminal logを記録する
 - **Headless runner**: CI的な非対話実行に向いた既存のheadless経路も維持する
 - **Deterministic exec steps**: LLMが不要なstepはsubprocessとして直接実行する
 - **Artifact-primary verdicts**: `verdict.yaml` を優先し、必要に応じてIssue commentやstdoutへfallbackする
@@ -149,7 +149,7 @@ kajiは現在、Claude Code、Codex、Antigravity CLIを中心に対応してい
 - `uv`
 - 使用したいagentのClaude Code、Codex、Antigravity CLI（`agy`）
 - GitHub Issue / PR連携を使う場合は認証済みの `gh` 2.50.0以上
-- interactive terminal runnerを使う場合は `tmux` 3.1以上
+- interactive terminal runnerを使う場合は [Herdr](https://herdr.dev/) 0.8.2以上
 - 対象リポジトリに `.claude/skills/` 配下のkaji skillがあること
 
 ### kajiをインストールする
@@ -260,32 +260,33 @@ source .venv/bin/activate
 kaji --help
 ```
 
-## tmux interactive terminal runner
+## Interactive terminal runner（Herdr）
 
-headless runnerではなく、通常のClaude Code、Codex、Antigravity CLI sessionをtmux pane内で
+headless runnerではなく、通常のClaude Code、Codex、Antigravity CLI sessionをHerdr pane内で
 起動したい場合に使います。Antigravity step は単発実行のみで、workflow の `resume:` は
 validation 時に拒否されます。
 
-> [!WARNING]
-> tmux backend は非推奨で、後続リリースで削除されます。使用中は `kaji run` が stderr に警告を出します。
-> Herdr または headless runner へ移行してください。詳細は
-> [tmux backend deprecation](docs/cli-guides/interactive-terminal-runner.ja.md#tmux-backend-deprecation)。
+> [!IMPORTANT]
+> tmux backend は削除されました（0.23.0 で非推奨化）。`interactive_terminal_backend = "tmux"` は
+> headless 実行でも config 読み込みエラーになります。`.kaji/config.toml` と `.kaji/config.local.toml` の
+> 両方で変更または削除してください。詳細は
+> [Migrating from tmux](docs/cli-guides/interactive-terminal-runner.ja.md#migrating-from-tmux)。
 
 ```toml
 [execution]
 default_timeout = 2400
 agent_runner = "interactive_terminal"
+interactive_terminal_backend = "herdr"   # 任意。herdr が既定かつ唯一の backend
 interactive_terminal_close_on_verdict = true
 ```
 
-tmux session内で実行します。
+Herdr pane内で実行します。
 
 ```bash
-tmux new-session
 kaji run .kaji/wf/official/dev.yaml <issue-id> --agent-runner interactive-terminal
 ```
 
-runnerは管理対象paneを開き、terminal transcriptを記録し、`verdict.yaml` を待ってworkflowを進めます。
+runnerは管理対象paneを開き、PTY recorderでraw terminal transcriptを記録し、`verdict.yaml` を待ってworkflowを進めます。
 ライブ観察、subscription CLI利用、agent挙動のデバッグに向いています。
 
 詳細:

@@ -1,7 +1,7 @@
 """Medium tests: WorkflowRunner runner-backend dispatch (Issue #224 / #230).
 
 Verifies that ``config.execution.agent_runner`` routes the agent step to either
-``execute_interactive_terminal`` (tmux/Herdr path) or ``execute_cli`` (headless),
+``execute_interactive_terminal`` (Herdr path) or ``execute_cli`` (headless),
 without changing the existing headless behavior, and that both backends receive
 the same ``effective_workdir`` (Issue #230 MF3 regression guard).
 """
@@ -24,7 +24,6 @@ from kaji_harness.errors import (
     HerdrSessionRequiredError,
     SessionResolution,
     StepTimeoutError,
-    TmuxSessionRequiredError,
 )
 from kaji_harness.models import CLIResult, Step, Workflow
 from kaji_harness.providers.github import GitHubProvider
@@ -110,12 +109,13 @@ class TestRunnerBackendDispatch:
         assert state.last_completed_step == "design"
         # close_on_verdict flag is threaded from config into the runner call.
         assert captured["close_on_verdict"] is False
-        assert captured["backend"] == "tmux"
+        # Issue #515: Herdr is the only backend, so no backend argument is threaded.
+        assert "backend" not in captured
         assert captured["execution_policy"] == "auto"
         assert captured["prompt_path"].name == "prompt.txt"
         assert captured["verdict_path"].name == "verdict.yaml"
 
-    def test_herdr_backend_is_threaded_to_interactive_runner(self, tmp_path: Path) -> None:
+    def test_explicit_herdr_backend_routes_to_interactive_runner(self, tmp_path: Path) -> None:
         config = _make_config(
             tmp_path,
             execution_extra=(
@@ -140,7 +140,7 @@ class TestRunnerBackendDispatch:
             state = runner.run()
 
         assert state.last_completed_step == "design"
-        assert captured["backend"] == "herdr"
+        assert "backend" not in captured
 
     def test_herdr_session_required_type_name_reaches_run_log(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -261,45 +261,6 @@ class TestRunnerBackendDispatch:
 
 
 @pytest.mark.medium
-class TestTmuxRunnerDispatch:
-    """tmux backend 固有の runner dispatch テスト（Issue #474: 子 Issue B で class ごと削除できる単位）。"""
-
-    def test_tmux_session_required_type_name_reaches_run_log(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Issue #322: 送出した例外型名が run.log の failure_event に載ることを固定する。
-
-        recovery classifier は live class ではなく artifact 上の型名文字列で判定する。
-        「送出した型名が artifact に正しく載る」ことを押さえないと、classify 側の Small
-        テストが実運用と乖離しうる。
-        """
-        config = _make_config(tmp_path, execution_extra='agent_runner = "interactive_terminal"')
-        artifacts_dir = tmp_path / "art-tmux"
-        runner = _make_runner(config, tmp_path, artifacts_dir=artifacts_dir)
-        plain_meta = SkillMetadata(name="plain", description="", exec_script=None)
-        monkeypatch.delenv("TMUX", raising=False)
-        monkeypatch.delenv("TMUX_PANE", raising=False)
-
-        with (
-            patch("kaji_harness.runner.validate_skill_exists"),
-            patch("kaji_harness.runner.load_skill_metadata", return_value=plain_meta),
-            patch(
-                "kaji_harness.interactive_terminal_tmux.shutil.which", return_value="/usr/bin/tmux"
-            ),
-        ):
-            with pytest.raises(TmuxSessionRequiredError):
-                runner.run()
-
-        run_logs = sorted(artifacts_dir.glob("*/runs/*/run.log"))
-        assert len(run_logs) == 1
-        events = [json.loads(line) for line in run_logs[0].read_text().splitlines()]
-        failure = [e for e in events if e["event"] == "failure_event"]
-        assert len(failure) == 1
-        assert failure[0]["kind"] == "dispatch_exception"
-        assert failure[0]["exception_type"] == "TmuxSessionRequiredError"
-
-
-@pytest.mark.medium
 class TestAbnormalExitSessionRecording:
     """Issue #403: 異常終了経路で確定した session ID の ``result.json`` への写し取り。"""
 
@@ -410,14 +371,13 @@ class TestAttemptDeadlineSingleClock:
     @pytest.mark.parametrize(
         ("execution_extra", "target"),
         [
-            ('agent_runner = "interactive_terminal"', "execute_interactive_terminal"),
             (
                 'agent_runner = "interactive_terminal"\ninteractive_terminal_backend = "herdr"',
                 "execute_interactive_terminal",
             ),
             ("", "execute_cli"),
         ],
-        ids=["tmux", "herdr", "headless"],
+        ids=["herdr", "headless"],
     )
     @pytest.mark.parametrize("step_timeout", [None, 123], ids=["fallback", "step"])
     def test_backend_prompt_and_result_share_one_start(

@@ -154,25 +154,16 @@ class CLINotFoundError(HarnessError):
     """CLI コマンドが見つからない（FileNotFoundError をラップ）。"""
 
 
-class TmuxSessionRequiredError(CLINotFoundError):
-    """interactive terminal runner を tmux セッション外から起動した（Issue #322）。
+class HerdrSessionRequiredError(CLINotFoundError):
+    """Herdr backendをHerdr session外から起動した（Issue #322 / #396）。
 
-    調査を要さない既知のユーザー前提エラーであり、failure triage の
-    ``user_precondition_error`` を経て incident 記録の対象外になる。判定は
+    Herdr公式agent skillのcaller-context guardrailに対応する既知のユーザー前提エラーであり、
+    failure triage の ``user_precondition_error`` を経て incident 記録の対象外になる。判定は
     ``run.log`` に載る **型名文字列** で行うため、クラス名は artifact 互換の契約面。
-    改名すると過去 run の再 triage で分類が変わる。
 
     基底は ``CLINotFoundError`` を維持する。runner の dispatch ``except`` タプル・
     cli 層の送出契約・exit code マッピングがいずれも ``CLINotFoundError`` を前提に
     しており、サブクラス化により fail-fast / retry / 終了コードの挙動が保存される。
-    """
-
-
-class HerdrSessionRequiredError(CLINotFoundError):
-    """Herdr backendをHerdr session外から起動した。
-
-    Herdr公式agent skillのcaller-context guardrailに対応する既知のユーザー前提エラー。
-    ``TmuxSessionRequiredError`` と同様にartifactへ残る型名は互換契約として扱う。
     """
 
 

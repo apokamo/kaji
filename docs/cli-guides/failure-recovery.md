@@ -25,8 +25,9 @@ Two layers exist and do not overlap:
 
 ### Interactive terminal: transient provider errors buried in the transcript (Issue #296)
 
-When `agent_runner = "interactive_terminal"` and a tmux pane dies before writing
-`verdict.yaml`, kaji scans the **entire** `terminal.log` transcript (not just the last 2000
+When `agent_runner = "interactive_terminal"` and the agent in a Herdr pane exits (its pane returns
+to the shell) before writing `verdict.yaml`, kaji scans the **entire** `terminal.log` transcript
+(the raw PTY recording written by kaji's recorder, including alternate-screen output) (not just the last 2000
 characters) for a known transient pattern (`"at capacity"`, `"rate limit"`, `"overloaded"`, …
 — the same list `execute_cli()` uses). TUI redraw can bury a one-line provider error deep in a
 transcript far larger than the old tail window, so a full-transcript scan is required to avoid
@@ -153,7 +154,7 @@ promoting them to incidents would drown out the real failure signal.
 
 | Cause | Case | Decision input |
 |---|---|---|
-| `user_precondition_error` | The interactive terminal runner was started outside its selected backend session (`TmuxSessionRequiredError` / `HerdrSessionRequiredError`) | `failure_event.exception_type` |
+| `user_precondition_error` | The interactive terminal runner was started outside a Herdr session (`HerdrSessionRequiredError`). `TmuxSessionRequiredError` is still classified here for past tmux run artifacts; the tmux backend itself was removed (Issue #515) | `failure_event.exception_type` |
 | `user_interrupted` | The operator interrupted `kaji run` with Ctrl-C | `failure_event.kind == "interrupted"` |
 | `agent_declared_abort` | The agent returned a legitimate ABORT verdict (safe stop / manual confirmation requested) | `failure_event.kind == "agent_abort"` |
 | `cycle_exhausted` | A cycle reached `max_iterations` (safety valve worked as designed) | `failure_event.kind == "cycle_exhausted"` |

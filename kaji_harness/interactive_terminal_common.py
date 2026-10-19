@@ -1,8 +1,8 @@
 """Terminal-backend independent helpers for the interactive terminal runner.
 
 Wrapper command assembly, Codex session resolution, abnormal-exit session resolution and
-terminal transcript diagnostics shared by the tmux and Herdr implementations. This module
-never touches a terminal multiplexer: it must not import the dispatch, tmux or Herdr
+terminal transcript diagnostics used by the Herdr backend. This module never touches a
+terminal multiplexer: it must not import the dispatch, Herdr or recorder
 modules (``tests/test_interactive_terminal_common.py`` checks the import boundary).
 """
 
@@ -111,9 +111,7 @@ def read_terminal_diagnostic(terminal_log: Path) -> TerminalDiagnostic:
     return extract_terminal_diagnostic(text)
 
 
-def _terminal_exit_detail(
-    terminal_log: Path, *, prefix: str = "tmux pane exited before writing verdict.yaml"
-) -> str:
+def _terminal_exit_detail(terminal_log: Path, *, prefix: str) -> str:
     """Build a diagnostic string for early pane exits from the transcript.
 
     Issue #296: ``kind`` で分岐する。``provider_error`` は transcript の部分文字列を
@@ -177,16 +175,16 @@ def _build_wrapper_command(
     env: Mapping[str, str] | None = None,
     skill_invocation: str = "",
 ) -> str:
-    """Build the single shell command tmux runs in the new pane.
+    """Build the single shell command that starts the wrapper in the new pane.
 
-    ``split-window`` takes one command argument, so the wrapper argv is
+    The pane launcher runs one command line, so the wrapper argv is
     shell-quoted with ``shlex.join``. The 10 wrapper arguments follow the
     Wrapper 契約 order exactly: ``agent prompt_path verdict_path workdir
     resume_session_id launch_session_id model effort execution_policy
     skill_invocation``. ``skill_invocation`` (Issue #408) is the codex ``$<skill>``
     line prepended to the agent's initial message; it is empty for other agents.
 
-    A tmux pane inherits the tmux server's environment, not kaji's, so ``env``
+    A terminal pane inherits the multiplexer's environment, not kaji's, so ``env``
     (Issue #407) is delivered by prefixing ``env K=V ...`` to the command. The
     ``env(1)`` form (rather than shell ``K=V cmd``) keeps values containing
     spaces intact after quoting. The wrapper's own argv is unchanged.

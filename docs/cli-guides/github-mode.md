@@ -83,7 +83,7 @@ skill_dir = ".claude/skills"
 [execution]
 default_timeout = 1800
 # agent_runner = "headless"          # Optional. "headless" (default) | "interactive_terminal"
-# interactive_terminal_backend = "tmux"  # Optional. "tmux" (default) | "herdr"
+# interactive_terminal_backend = "herdr"  # Optional. "herdr" only (default); "tmux" is an error
 # interactive_terminal_close_on_verdict = true   # Optional
 
 [provider]
@@ -96,7 +96,7 @@ git_remote = "origin"               # Optional. default "origin"
 ```
 
 `agent_runner = "interactive_terminal"` is a runner backend that launches normal
-`claude` / `codex` sessions inside tmux panes. See the
+`claude` / `codex` sessions inside Herdr panes. See the
 [Interactive Terminal Runner guide](./interactive-terminal-runner.md) for setup,
 CLI options, and manual verification.
 

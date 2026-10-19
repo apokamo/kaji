@@ -428,6 +428,30 @@ def test_collect_snapshot_ignores_broken_pane_metadata(tmp_path: Path) -> None:
     assert snap.artifact_read_errors == ()
 
 
+def test_collect_snapshot_reads_orphan_pane_from_legacy_tmux_metadata(tmp_path: Path) -> None:
+    # Issue #515: tmux backend 削除後も、過去 run の tmux 形式 pane-metadata.json を読める。
+    _seed_state(tmp_path, _git_repo(tmp_path))
+    run_dir = _build_run(tmp_path, "260710120016", events=_interrupted_events())
+    attempt = run_dir / "steps" / "review-code" / "attempt-001"
+    attempt.mkdir(parents=True, exist_ok=True)
+    (attempt / "pane-metadata.json").write_text(
+        json.dumps(
+            {
+                "pane_id": "%3",
+                "pane_dead": "0",
+                "tmux_version": "tmux 3.4",
+                "kaji_owner": "kaji",
+                "kaji_run": "run-legacy",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    snap = _collect(tmp_path, run_dir)
+
+    assert snap.orphan_pane_id == "%3"
+
+
 def test_collect_snapshot_skips_orphan_pane_for_completed_attempt(tmp_path: Path) -> None:
     # 割込みが新 attempt 作成前（in_flight_step_id 設定後）に入ると、最新 attempt は
     # 同 step の直前の完了済み attempt になる。完了済み attempt の pane は cleanup 済みなので
