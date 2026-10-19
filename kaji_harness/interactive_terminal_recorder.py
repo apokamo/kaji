@@ -234,6 +234,23 @@ def _read_stdin(fd: int) -> bytes:
         raise
 
 
+def _forward_input(master: int, pending: bytearray, write: Writer = os.write) -> bool:
+    """Write as much of ``pending`` to the nonblocking ``master`` as it accepts now.
+
+    Returns:
+        ``False`` when the master rejects input (forwarding should stop), else ``True``.
+    """
+    try:
+        written = write(master, bytes(pending))
+    except BlockingIOError:
+        return True
+    except OSError:
+        pending.clear()
+        return False
+    del pending[:written]
+    return True
+
+
 def _relay(
     master: int,
     stdin_fd: int,
@@ -241,26 +258,36 @@ def _relay(
     mirror: _Mirror,
     read_master: MasterReader,
 ) -> None:
-    fds = [master, stdin_fd]
+    # 入力を blocking で書くと、入力待ちの子と出力待ちの recorder が互いを待って詰まる（大きな paste で発生）。
+    # master を nonblocking にして未送信の入力を保持し、書ける分だけ送る間も出力の吸い出しを続ける
+    os.set_blocking(master, False)
+    pending = bytearray()
+    stdin_open = True
     while True:
+        # 未送信の入力が溜まっている間は stdin を読まず、外側の pane へ背圧をかける
+        rlist = [master, stdin_fd] if stdin_open and len(pending) < _READ_SIZE else [master]
+        wlist = [master] if pending else []
         try:
-            ready, _, _ = select.select(fds, [], [])
+            readable, writable, _ = select.select(rlist, wlist, [])
         except InterruptedError:
             continue
-        if master in ready:
-            data = read_master(master)
-            if not data:
-                return
-            _relay_output(data, sink, mirror)
-        if stdin_fd in ready:
-            data = _read_stdin(stdin_fd)
-            if not data:
-                fds.remove(stdin_fd)
-                continue
+        if master in readable:
             try:
-                _write_all(master, data)
-            except OSError:
-                fds.remove(stdin_fd)
+                data = read_master(master)
+            except BlockingIOError:
+                data = None
+            if data is not None:
+                if not data:
+                    return
+                _relay_output(data, sink, mirror)
+        if stdin_fd in readable:
+            data = _read_stdin(stdin_fd)
+            if data:
+                pending += data
+            else:
+                stdin_open = False
+        if master in writable and not _forward_input(master, pending):
+            stdin_open = False
 
 
 def run(

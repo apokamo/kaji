@@ -95,6 +95,16 @@ FAKE_AGENT = textwrap.dedent(
         sys.stdin.readline()
         out.write("AFTER-VERDICT\\n")
         out.flush()
+    elif mode == "flood":
+        import tty
+        total = int(sys.argv[2])
+        tty.setraw(0)
+        os.write(1, b"READY")
+        received = 0
+        while received < total:
+            received += len(os.read(0, 1))
+            os.write(1, b"x" * 512)
+        os.write(1, b"FLOOD-DONE")
     elif mode == "provider-error":
         out.write("\\x1b[?1049h")
         out.write("API Error: 529 {\\"type\\":\\"overloaded_error\\"}\\n")
@@ -128,6 +138,10 @@ class _Session:
             if ready and not self._read_once():
                 break
         return bytes(self.output)
+
+    def drain(self) -> None:
+        while select.select([self.master], [], [], 0)[0] and self._read_once():
+            pass
 
     def _read_once(self) -> bool:
         try:
@@ -178,11 +192,15 @@ def spawn(tmp_path: Path, agent_script: Path) -> Iterator[object]:
     sessions: list[_Session] = []
 
     def _spawn(
-        mode: str, *, env: dict[str, str] | None = None, argv: list[str] | None = None
+        mode: str,
+        *,
+        env: dict[str, str] | None = None,
+        argv: list[str] | None = None,
+        extra_args: list[str] | None = None,
     ) -> _Session:
         log = tmp_path / "terminal.log"
         pid_file = tmp_path / f"agent-{len(sessions)}.pid"
-        child_argv = argv or [sys.executable, "-I", str(agent_script), mode]
+        child_argv = argv or [sys.executable, "-I", str(agent_script), mode, *(extra_args or [])]
         child_env = {
             **os.environ,
             "FAKE_PID_FILE": str(pid_file),
@@ -300,6 +318,29 @@ class TestRecording:
         assert result.returncode == 7
         assert log.read_bytes().count(b"BULK-") == 3000
         assert recorder.read_recorder_state(log) == ("complete", None)
+
+    def test_large_paste_does_not_deadlock_while_child_floods_output(self, spawn) -> None:  # type: ignore[no-untyped-def]
+        # 子が入力 1 byte ごとに出力する TUI でも、大きな paste の転送中に出力の吸い出しが止まらない
+        size = 16384
+        session = spawn("flood", extra_args=[str(size)])
+        session.read_until(b"READY")
+        paste = memoryview(b"p" * size)
+        os.set_blocking(session.master, False)
+        end = time.monotonic() + DEADLINE_SECONDS
+        while paste:
+            assert time.monotonic() < end, "paste was not accepted before the deadline"
+            _, writable, _ = select.select([], [session.master], [], 0.05)
+            if writable:
+                try:
+                    paste = paste[os.write(session.master, paste[:4096]) :]
+                except BlockingIOError:
+                    pass
+            session.drain()
+        os.set_blocking(session.master, True)
+        assert session.wait() == 0
+        log = session.log.read_bytes()
+        assert log.count(b"x") == size * 512
+        assert log.endswith(b"FLOOD-DONE")
 
     def test_sigwinch_forwards_new_size(self, spawn) -> None:  # type: ignore[no-untyped-def]
         session = spawn("winsize")

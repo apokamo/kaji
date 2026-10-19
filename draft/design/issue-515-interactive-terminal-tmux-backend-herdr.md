@@ -265,8 +265,11 @@ command = shlex.join([
 2. `pty.fork()`。子は `_child_exec`。親は stdin が TTY なら winsize を master に複製し
    （`TIOCGWINSZ` → `TIOCSWINSZ`）、SIGWINCH handler で以後も転送し、stdin を raw mode にする。
 3. `select` で master と stdin を待つ。master の chunk は **log へ先に全量書き込み**、次に stdout へ全量
-   書き込む（partial write をループで処理）。stdin の chunk は master へ転送。stdin の EOF 後は stdin を
-   監視対象から外す。`EINTR` は PEP 475 の自動再試行に任せ、`InterruptedError` は再試行する。
+   書き込む（partial write をループで処理）。stdin の chunk は未送信バッファに積み、nonblocking にした
+   master が書き込み可能な間に書ける分だけ転送する（大きな paste で入力待ちの子と出力待ちの recorder が
+   互いを待つ deadlock を防ぐため、入力転送中も master の出力の吸い出しを止めない。PR #517 レビュー指摘）。
+   未送信バッファが `_READ_SIZE` 以上の間は stdin を読まず外側へ背圧をかける。master への書き込みが
+   `EAGAIN` 以外で失敗したら入力転送を止める。stdin の EOF 後は stdin を監視対象から外す。`EINTR` は PEP 475 の自動再試行に任せ、`InterruptedError` は再試行する。
 4. `_read_master` が EOF を返したら loop を抜け、`finally` で terminal 設定を復元し（relay 中の例外でも必ず復元）、log を閉じ、
    `waitpid` の結果を `_exit_code` で返す。
 5. 失敗の扱い（診断が本処理を壊さない）:
@@ -421,6 +424,8 @@ AI の仮定として上表に検査先を記録した。
     `\e[3J` 後の出力が、`terminal.log` に **byte 列として期待値どおり**すべて残る。
   - 子の終了コード 7 が recorder の終了コードになる。signal 終了は `128 + signum`。
   - master 側から書いた入力が子の stdin に届く（stdin relay）。
+  - 子が raw mode で入力 1 byte ごとに 512 byte を出力する状態で 16 KiB を paste しても deadlock せず、
+    全出力が記録されて正常終了する（PR #517 レビュー指摘の回帰テスト）。
   - recorder の環境に `HERDR_AGENT=codex` を付けて起動し、子が自分の環境に `HERDR_AGENT` が無いことを出力する。
   - recorder の stdin が TTY でない場合でも記録・終了コードが正しい（raw mode / winsize をスキップ）。
   - SIGWINCH: test 側 PTY の winsize を変えて recorder に SIGWINCH を送ると、子が新しいサイズを観測する。

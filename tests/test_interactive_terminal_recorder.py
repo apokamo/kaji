@@ -123,6 +123,32 @@ class TestLogSinkAndMirror:
         assert mirror.failed is True
 
 
+@pytest.mark.small
+class TestForwardInput:
+    def test_partial_write_keeps_the_rest_pending(self) -> None:
+        writer = _ChunkedWriter(limit=3)
+        pending = bytearray(b"abcdef")
+        assert recorder._forward_input(5, pending, writer) is True
+        assert bytes(writer.data) == b"abc"
+        assert pending == bytearray(b"def")
+
+    def test_would_block_keeps_everything_pending(self) -> None:
+        def full(_fd: int, _data: bytes) -> int:
+            raise BlockingIOError(errno.EAGAIN, "Resource temporarily unavailable")
+
+        pending = bytearray(b"abc")
+        assert recorder._forward_input(5, pending, full) is True
+        assert pending == bytearray(b"abc")
+
+    def test_write_error_drops_input_and_stops_forwarding(self) -> None:
+        def broken(_fd: int, _data: bytes) -> int:
+            raise OSError(errno.EIO, "child gone")
+
+        pending = bytearray(b"abc")
+        assert recorder._forward_input(5, pending, broken) is False
+        assert pending == bytearray()
+
+
 @pytest.mark.medium
 class TestStateFile:
     def test_created_as_recording_with_fixed_width(self, tmp_path: Path) -> None:
