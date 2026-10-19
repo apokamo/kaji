@@ -379,6 +379,8 @@ $ARGUMENTS = <issue_id>
 
 **優先順位**: コンテキスト変数 > `$ARGUMENTS`。ハーネスが変数を注入している場合はそちらを使い、手動実行時は従来通り `$ARGUMENTS` から取得する。
 
+**`$<数字>` 禁止**: Claude Code は skill を引数付きで手動起動すると、SKILL.md 本文中の `$0`、`$1` などを引数の値に置換する（code block 内も対象）。awk の `$1` / `$0` や shell の positional parameter を本文に書くと、手動実行時にコマンドが壊れる。`.claude/skills/**/*.md` には `$` の直後に数字が続く並びを書かず、`cut`、`grep -m 1`、`while IFS= read -r` などの同等の記述に置き換える。説明文でも同様。`tests/test_skill_placeholders.py` が混入を検出する。
+
 ### 手動専用スキル
 
 `issue-create`、`issue-start` のようにワークフロー開始前のフェーズを担うスキルは、ハーネス駆動の対象外。verdict 出力は追加するが、入力は既存の `$ARGUMENTS` を維持する。

@@ -30,7 +30,7 @@ PASS なら `/issue-close <issue_id>` を **手動で** 実行する運用とな
 
 - `$ARGUMENTS = <issue_id>`（Issue 番号のみ。PR ID は workflow 内の `review` skill が逆引きする）
 - `docs/dev/skill-authoring.md` § 手動実行 の規約に従い、slash command の引数は
-  `$ARGUMENTS` から取得する（shell の positional parameter `$1` は使わない）
+  `$ARGUMENTS` から取得する（shell の positional parameter は使わない）
 - 未指定（`$ARGUMENTS` が空）の場合は skill 側で `usage: /review-cycle <issue_id>` を
   stderr に出し、`kaji run` を実行せずに ABORT verdict を stdout に出力する
 

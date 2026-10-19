@@ -55,7 +55,7 @@ GitHub Actions + PyPI Trusted Publisher で実行する。
 #      `git remote -v` から URL に github.com を含む push remote を動的抽出する。
 #      `.kaji/config.toml` の `provider.github.git_remote` 値と整合する
 #      remote 名であることが前提（skill は config を直接読まない）。
-GITHUB_REMOTE=$(git remote -v | awk '/github\.com.*\(push\)/{print $1; exit}')
+GITHUB_REMOTE=$(git remote -v | grep -m 1 'github\.com.*(push)' | cut -f1)
 # 上記で見つからない場合、`origin` が GitHub を指していれば fallback
 if [ -z "$GITHUB_REMOTE" ]; then
     if git remote get-url origin 2>/dev/null | grep -q github; then

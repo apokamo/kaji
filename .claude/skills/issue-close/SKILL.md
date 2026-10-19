@@ -220,7 +220,7 @@ kaji issue view [issue_id] --json body -q '.body'
 `git worktree list` の最初の行が常に main worktree（bare repository のルート）を示す:
 
 ```bash
-MAIN_REPO=$(git worktree list | head -1 | awk '{print $1}')
+MAIN_REPO=$(git worktree list | head -1 | cut -d' ' -f1)
 ```
 
 > **注意**: `git rev-parse --show-toplevel` は現在の worktree のルートを返すため、
@@ -557,9 +557,12 @@ cleanup() {
     0 | 1) ;;
     *) RESULT="スキップ（CLOSE_VIA_HARNESS が 0 / 1 でない）"; return ;;
   esac
-  MAINS=$(git worktree list --porcelain 2>/dev/null | awk -v ref="branch refs/heads/$DEFAULT_BRANCH" '
-    /^worktree / { wt = substr($0, 10) }
-    $0 == ref { print wt }')
+  MAINS=$(git worktree list --porcelain 2>/dev/null | while IFS= read -r line || [ -n "$line" ]; do
+    case $line in
+      'worktree '*) wt=${line#worktree } ;;
+      "branch refs/heads/$DEFAULT_BRANCH") printf '%s\n' "$wt" ;;
+    esac
+  done)
   case $MAINS in
     '') RESULT="スキップ（$DEFAULT_BRANCH の checkout が見つからない）"; return ;;
     *"$NL"*) RESULT="スキップ（$DEFAULT_BRANCH の checkout が複数ある）"; return ;;
