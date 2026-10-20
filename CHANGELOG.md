@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-10-20
+
+This release finishes two removals that were announced in v0.23.0: the tmux
+interactive terminal backend and the legacy review-poll path, together with
+approval evidence `schema_version: 1`. The Herdr backend gets a PTY-based
+`terminal.log` again, `issue-close` now deletes the Issue's temporary
+directory, and attempt temp paths are shorter so Unix sockets fit.
+
 ### BREAKING CHANGE
 
 - **The review-poll legacy codex review markup path and approval evidence
@@ -75,6 +83,49 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `transcript_bytes`; `transcript_revision` is `null`. The rendered
   `pane read` snapshot is no longer captured. The log has no size limit and
   contains everything printed to the agent's screen.
+- **`issue-close` deletes the Issue's temporary directory** (#509). After
+  the Issue is closed, a new step removes `<main checkout>/tmp/kaji/<issue_id>/`.
+  When run through the harness it keeps the close step's own
+  `KAJI_TMP_DIR` and its parent directory. If a safety condition is not
+  met, the step skips the deletion. Either way the result goes into the
+  completion report, and the verdict does not change.
+
+### Fixed
+
+- **Attempt temp directories are short enough for AF_UNIX sockets** (#508).
+  Per-attempt temp directories are now numbered within the Issue:
+  `<project_root>/tmp/kaji/<issue_id>/<NNNN>/`. Before, the long path made
+  tools such as Chrome and Playwright fail to create Unix sockets
+  (`sun_path` limit exceeded). Each attempt's `tmp_dir` is recorded in
+  `run.log` (`step_start`) and `result.json` (`AttemptResult.tmp_dir`). If a
+  Chrome-style socket path could still exceed the platform limit (Linux 107 /
+  macOS 103 bytes), kaji emits a `tmp_dir_path_warning` and keeps
+  dispatching. The old layout is ignored, not migrated.
+- **`ScriptExecutionError` keeps the stderr cause line** (#516). The message
+  used to hold only the first 200 characters of stderr. That dropped the
+  failure cause, usually the last line, from `result.json`, `run.log`, and
+  incidents, and unrelated failures shared one incident fingerprint. For
+  `exec_script` and `exec:` failures, the message now carries a bounded
+  summary built from the last non-empty normalized stderr line. The full
+  stderr is still available.
+- **`issue-close` follow-up Issues contain only the template body** (#520).
+  The follow-up template file no longer has an explanatory heading, prose,
+  or a code fence around the body, so agents can no longer paste them into
+  the new Issue.
+- **Skill shell examples no longer break when Claude Code substitutes
+  arguments** (#524). Claude Code replaces `$0` / `$1` in `SKILL.md` with
+  slash command arguments, and that broke commands in `issue-close`,
+  `release`, and `review-cycle` when they were run by hand. These examples
+  now use equivalent forms without `$<digit>` tokens. The restriction is
+  documented in the skill authoring guide, and a static test enforces it.
+
+### Changed
+
+- Proposed ADR 012, which decides against adding a decision timestamp to
+  `verdict.yaml`, with an evaluation of how option C tolerates missing data
+  and of the limits of step scoping (#440).
+- The configuration reference now cites `config.py` by symbol instead of by
+  line number (#486).
 
 ## [0.23.2] - 2026-10-18
 
