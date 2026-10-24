@@ -12,9 +12,20 @@ PR マージ、worktree 削除、ブランチ削除、Issue クローズ、Issue
 
 | タイミング | このスキルを使用 |
 |-----------|-----------------|
-| PRがApproveされマージ可能 | ✅ 使用 |
+| PRが承認済みでマージ可能（承認の正本は下表） | ✅ 使用 |
 | PRレビュー待ち | ❌ 待機 |
 | 作業途中 | ❌ 不要 |
+
+承認の正本は起動経路で決まる。
+
+| 起動経路 | 承認の正本 | close 側の確認 |
+|---------|-----------|---------------|
+| ハーネス経由・review-poll が PASS | review-poll の PASS と構造化証跡 `review-poll-evidence.json` | Step 2.5 で照合する（`MODE=verify`） |
+| ハーネス経由・review-poll が PASS 以外 / attempt なし | workflow の遷移（`review` / `pr-verify` の PASS）。attempt なしでは close から再開した人間の判断 | 再判定しない（Step 2.5.1 の `MODE=skip`） |
+| 手動起動（`[verdict_path]` なし） | 起動した人間 | 再判定しない |
+
+self-PR では GitHub が自分の PR への承認レビューを受け付けないため、`reviewDecision` が空・`reviews` が 0 件に
+なるのは正常であり、未承認を意味しない。
 
 **ワークフロー内の位置**: implement → review-code → i-dev-final-check → i-pr → **close**
 
@@ -251,8 +262,8 @@ RESOLVE_EXIT=$?
 | 結果 | 扱い |
 |------|------|
 | exit 0 かつ `.source == "artifact"` かつ `.status == "PASS"` | **照合対象**。2.5.2 へ |
-| exit 0 で `.source == "artifact"` かつ `.status` が PASS 以外 | 照合対象外。承認は `review` / `pr-verify` 経路。Step 3 へ |
-| exit 4（現在の run と recovery 復旧元に review-poll の attempt がない） | 照合対象外。Step 3 へ |
+| exit 0 で `.source == "artifact"` かつ `.status` が PASS 以外 | 照合対象外（`MODE=skip`）。承認は workflow の `review` / `pr-verify` の PASS で、close は再判定しない。Step 3 へ |
+| exit 4（現在の run と recovery 復旧元に review-poll の attempt がない） | 照合対象外（`MODE=skip`）。close は承認を再判定しない。Step 3 へ |
 | exit 0 で `source` key がない（marker で解決された） | 矛盾。**ABORT** |
 | 上記以外の非 0（5 / 7 など） | **ABORT**（fail-closed） |
 
@@ -286,6 +297,10 @@ esac
 ```
 
 以降の 2.5.2〜2.5.5 は **`MODE=verify` のときだけ** 実行する。`skip` のときは何もせず Step 3 へ進む。
+
+**`MODE=skip` で close は承認を再判定しない**。workflow がこの step に到達したこと（`review` / `pr-verify` の
+PASS による遷移。exit 4 では close から再開した人間の判断）が承認の正本である。GitHub の `reviewDecision` / `reviews`、`kaji-review` マーカーは
+取得せず、merge 可否の根拠にも ABORT 理由にもしない。self-PR でこれらが空・0 件なのは正常である。
 
 #### 2.5.2 証跡の所在（`MODE=verify` のみ）
 
