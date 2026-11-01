@@ -129,10 +129,11 @@ $ARGUMENTS = <issue_id>
    ```bash
    kaji pr view [pr_id] --comments
    kaji pr reviews [pr_id] --jq '.[] | {user: .user.login, state: .state, body: .body}'
-   kaji pr review-comments [pr_id] --jq '.[] | {path: .path, line: .line, body: .body, user: .user.login}'
+   kaji pr review-comments [pr_id] --jq '.[] | {id: .id, in_reply_to_id: .in_reply_to_id, path: .path, line: .line, body: .body, user: .user.login}'
    ```
 
-   「レビュー指摘への対応報告」コメントを確認する。
+   「レビュー指摘への対応報告」コメントを確認する。インラインの指摘は `id` と `in_reply_to_id` を
+   控えておく（Step 3.5 でどの指摘がどのスレッドに属するかを対応付けるため）。
 
 4. **修正差分の確認**:
 
@@ -186,6 +187,51 @@ $ARGUMENTS = <issue_id>
 cd [worktree_dir] && source .venv/bin/activate && make check
 ```
 
+### Step 3.5: 確認済みスレッドの解決
+
+Step 2 の判定に従い、確認済みのインライン指摘のレビュースレッドを
+`kaji pr resolve-thread` で解決する。`resolveReviewThread` はコメント単体ではなく
+**スレッド全体**を解決するため、判定単位は指摘、副作用の単位はスレッドとし、
+指摘ごとの判定をスレッドごとに集約してから実行する。
+
+**集約手順**:
+
+1. 今回の verify 対象の既出指摘のうち、インラインレビューコメントに対応するものを列挙する。
+   インラインでない指摘（PR 会話欄のコメント・review 本文）はスレッドが存在しないため対象外。
+2. 各指摘を、そのコメントが属するスレッドの **根コメント ID** でグループ化する
+   （Step 1-3 で控えた `in_reply_to_id` が null ならその `id`、そうでなければ `in_reply_to_id`）。
+3. グループ内の **すべての** 指摘が「✅ OK（解消）」（Step 2.1）または「受け入れる」（Step 2.2）なら、
+   そのスレッドを解決対象とする。
+4. グループ内に 1 件でも「❌ 要再修正」「再反論する」「一部受け入れ」が残るなら、そのスレッドは
+   resolve を実行せず **開いたまま** にする（未解消の指摘まで閉じないため）。
+
+- verify で新規指摘を追加しない原則は変えない。集約の母集団は既出指摘だけである。
+- レビュアー（Codex bot / `/review` / 人間）で区別しない。
+- 判定全体が Approve でも Changes Requested でも、解決対象のスレッドは解決する（集約はスレッドごと）。
+
+**判定例**:
+
+| ケース | 既出指摘と判定 | resolve の実行 |
+|-------|---------------|----------------|
+| 同一スレッドで混在 | スレッド T の根の指摘 A = 解消、T の返信の指摘 B = 要再修正 | なし（T は開いたまま。表に「未解決のまま: B 要再修正」） |
+| 同一スレッドで全件 OK | T の A = 解消、B = 反論受理 | T の根コメント ID で 1 回 |
+| 別スレッドで混在 | スレッド T1 の A = 解消、スレッド T2 の B = 要再修正 | T1 の根コメント ID で 1 回だけ。T2 は開いたまま |
+| 一部受け入れ・再反論 | T の A = 一部受け入れ（または再反論） | なし |
+
+**実行**: 解決対象のスレッドごとに **1 回だけ**、根コメント ID で実行する。
+
+```bash
+if out=$(kaji pr resolve-thread [pr_id] --comment [root_comment_id] 2>"$err_file"); then
+  echo "[root_comment_id]: $(echo "$out" | jq -r .result)"   # resolved / already_resolved
+else
+  echo "[root_comment_id]: 失敗 (rc=$?): $(head -n 3 "$err_file")"
+fi
+```
+
+- 成功時の stdout は JSON 1 行（`result` が `resolved` = 今回解決 / `already_resolved` = 解決済みで書き込みなし）。
+- 失敗時（rc≠0。2 = コメントが PR のスレッドに無い、3 = 権限不足・API 失敗等）: verdict は変えない。
+  根コメント ID と stderr の要旨を控え、Step 4 の表と Step 5 の完了報告に転記する。再試行やループはしない。
+
 ### Step 4: 確認結果の投稿と PR レビュー状態の更新
 
 判定結果に応じて、GitHub の正式なレビュー状態を更新する。
@@ -207,6 +253,12 @@ kaji pr review [pr_id] --approve --body-file - <<'EOF'
 | 見送り項目 | 検討結果 | 理由 |
 |------------|----------|------|
 | (項目A) | ✅ 受け入れ | (なぜ反論を受け入れるか) |
+
+### レビュースレッドの解決
+
+| 根 comment ID | 含まれる指摘と判定 | 結果 |
+|---------------|--------------------|------|
+| (ID) | (項目1: ✅ OK) | resolved / already_resolved / 失敗: (理由) / 未解決のまま: (残っている指摘と判定) |
 
 ### 新規発見事項（参考情報）
 
@@ -242,6 +294,13 @@ kaji pr review [pr_id] --request-changes --body-file - <<'EOF'
 | (項目B) | ❌ 再修正を求める | (なぜ受け入れないか) |
 | (項目C) | ⚠️ 一部受け入れ | (妥協点) |
 
+### レビュースレッドの解決
+
+| 根 comment ID | 含まれる指摘と判定 | 結果 |
+|---------------|--------------------|------|
+| (ID) | (項目1: ✅ OK) | resolved / already_resolved / 失敗: (理由) |
+| (ID) | (項目2: ❌ 要再修正) | 未解決のまま: (残っている指摘と判定) |
+
 ### 品質チェック
 
 - `make check`: PASS / FAIL
@@ -260,6 +319,14 @@ EOF
 | PR | [pr_ref] |
 | Issue | [issue_ref] |
 | 判定 | Approve / Changes Requested |
+
+### 解決できなかったスレッド
+
+| 根 comment ID | 理由 |
+|---------------|------|
+| (ID) | (resolve-thread の失敗理由。stderr の要旨) |
+
+（失敗が無ければ「なし」と書く。開いたままにしたスレッドはここに含めない）
 
 ### 次のステップ
 
@@ -291,3 +358,6 @@ suggestion: |
 | PASS | Approve |
 | RETRY | 修正不十分 |
 | ABORT | 重大な問題 / Step 0 で provider mismatch |
+
+スレッド解決の成否は status に影響しない。status は修正確認の結果だけで決める
+（解決できなかったスレッドは Step 4 の確認結果コメントと Step 5 の完了報告に残し、workflow は進める）。

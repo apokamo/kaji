@@ -6,6 +6,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`kaji pr resolve-thread <pr> --comment <comment_id>`** resolves the GitHub
+  review thread that contains an inline review comment (#528). The comment ID
+  is the REST `id` that `kaji pr review-comments` returns and
+  `reply-to-comment --to` takes; the thread root or any reply works. kaji finds
+  the thread through GraphQL `reviewThreads` (all pages of threads and of each
+  thread's comments) and calls `resolveReviewThread`. It prints one JSON line
+  (`comment_id`, `thread_id`, `result`). An already-resolved thread succeeds
+  with `result: "already_resolved"` and writes nothing. A comment that is not
+  in any review thread of the PR exits 2; `viewerCanResolve: false`, `gh`
+  failures, and unexpected responses exit 3. GitHub only; there is no
+  unresolve command. `pr-verify` now resolves a thread when every earlier
+  finding in it is confirmed fixed or its rebuttal is accepted, and leaves
+  other threads open. A failed resolve is reported in the review comment and
+  the completion report and does not change the verdict. The starter
+  repositories get this `pr-verify` change through the next starter sync.
+
 ## [0.24.0] - 2026-10-20
 
 This release finishes two removals that were announced in v0.23.0: the tmux

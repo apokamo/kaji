@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import subprocess
 import sys
@@ -13,6 +14,12 @@ from ..providers.github import build_kaji_review_marker
 from .config import _load_config_for_dispatch
 from .exit_codes import EXIT_INVALID_INPUT, EXIT_OK, EXIT_RUNTIME_ERROR
 from .output import _compose_json_and_jq, _read_body_arg
+from .pr_review_thread import (
+    GitHubGraphQLRequestError,
+    ReviewThreadError,
+    ReviewThreadNotFound,
+    resolve_review_thread_for_comment,
+)
 
 _FORGE_METHOD_FLAGS = {"--merge", "--squash", "--rebase"}
 
@@ -86,7 +93,7 @@ def _forward_to_gh(group: str, raw_args: list[str], *, repo: str | None = None) 
     return result.returncode
 
 
-_PR_BUILTIN_SUBCOMMANDS = {"review-comments", "reviews", "reply-to-comment"}
+_PR_BUILTIN_SUBCOMMANDS = {"review-comments", "reviews", "reply-to-comment", "resolve-thread"}
 
 
 def _is_ascii_decimal(s: str) -> bool:
@@ -102,7 +109,7 @@ def _is_ascii_decimal(s: str) -> bool:
 _GH_MISSING_GUIDANCE = (
     "Error: 'gh' CLI not found in PATH. "
     "Install GitHub CLI to use 'kaji pr review-comments' / 'reviews' / "
-    "'reply-to-comment' / 'review-poll' (Phase 2).\n"
+    "'reply-to-comment' / 'resolve-thread' / 'review-poll' (Phase 2).\n"
 )
 
 
@@ -237,6 +244,53 @@ def _forward_pr_reply_to_comment(
         return EXIT_RUNTIME_ERROR
 
 
+def _forward_pr_resolve_thread(
+    pr_id: str,
+    *,
+    comment_id: str,
+    repo_override: str | None = None,
+) -> int:
+    """Resolve the review thread that contains inline review comment ``comment_id``.
+
+    成功時（解決した / 解決済みだった）は stdout に JSON 1 行を書いて rc=0。
+    コメントが PR のどのスレッドにも無い場合は rc=2、gh 不在・API 失敗・応答不正・
+    権限不足・mutation 不成立は rc=3（Issue #528 設計書 § 出力）。
+    """
+    if not _is_ascii_decimal(pr_id):
+        sys.stderr.write(f"Error: PR_ID must be ASCII decimal, got: {pr_id}\n")
+        return EXIT_INVALID_INPUT
+    if not _is_ascii_decimal(comment_id):
+        sys.stderr.write(f"Error: --comment COMMENT_ID must be ASCII decimal, got: {comment_id}\n")
+        return EXIT_INVALID_INPUT
+    if shutil.which("gh") is None:
+        sys.stderr.write(_GH_MISSING_GUIDANCE)
+        return EXIT_RUNTIME_ERROR
+    repo = _detect_repo(override=repo_override)
+    if repo is None:
+        sys.stderr.write(
+            "Error: failed to detect current repository.\n"
+            "Run 'gh repo view --json nameWithOwner' in a checked-out repo first.\n"
+        )
+        return EXIT_RUNTIME_ERROR
+    try:
+        outcome = resolve_review_thread_for_comment(repo, pr_id, comment_id)
+    except ReviewThreadNotFound as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_INVALID_INPUT
+    except GitHubGraphQLRequestError as exc:
+        if exc.gh_stderr:
+            sys.stderr.write(
+                exc.gh_stderr if exc.gh_stderr.endswith("\n") else f"{exc.gh_stderr}\n"
+            )
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+    except ReviewThreadError as exc:
+        sys.stderr.write(f"Error: {exc}\n")
+        return EXIT_RUNTIME_ERROR
+    sys.stdout.write(json.dumps(outcome.to_json_dict()) + "\n")
+    return EXIT_OK
+
+
 def _run_pr_review_poll(rest: list[str]) -> int:
     """Run the review-poll workflow helper through the installed kaji package."""
     p = argparse.ArgumentParser(prog="kaji pr review-poll", add_help=True)
@@ -251,7 +305,7 @@ def _dispatch_pr_builtin(sub: str, rest: list[str], *, repo_override: str | None
     """Parse ``rest`` with a sub-specific argparse and dispatch to the handler.
 
     ``gh api`` 直叩き builtin（``review-comments`` / ``reviews`` /
-    ``reply-to-comment``）専用。これらは ``repo_override``（config の
+    ``reply-to-comment`` / ``resolve-thread``）専用。これらは ``repo_override``（config の
     ``[provider.github] repo`` 由来）を尊重し、別 repo 運用を許す。
     review-poll は workflow 専用 step で repo を取らないため、``_handle_pr``
     側の独立分岐で処理し本関数には流さない（``_PR_BUILTIN_SUBCOMMANDS``
@@ -279,6 +333,23 @@ def _dispatch_pr_builtin(sub: str, rest: list[str], *, repo_override: str | None
     elif sub == "reply-to-comment":
         p.add_argument("--to", dest="comment_id", required=True, type=str, help="Review comment ID")
         p.add_argument("--body", required=True, type=str, help="Reply body")
+    elif sub == "resolve-thread":
+        p.description = (
+            "Resolve the GitHub review thread that contains the given inline review "
+            "comment. Idempotent: an already-resolved thread succeeds without writing. "
+            'Prints one JSON line: {"comment_id", "thread_id", "result": '
+            '"resolved"|"already_resolved"}. Exit codes: 0 success, 2 invalid input or '
+            "comment not found in the PR's review threads, 3 runtime error "
+            "(gh missing, API failure, unexpected response, viewerCanResolve false)."
+        )
+        p.add_argument(
+            "--comment",
+            dest="comment_id",
+            required=True,
+            type=str,
+            help="Inline review comment ID (REST id, as in 'kaji pr review-comments'); "
+            "the thread root or any reply",
+        )
     ns = p.parse_args(rest)
     raw_json = getattr(ns, "json_fields", None)
     fields: list[str] | None
@@ -300,6 +371,10 @@ def _dispatch_pr_builtin(sub: str, rest: list[str], *, repo_override: str | None
     if sub == "reviews":
         return _forward_pr_reviews(
             ns.pr_id, json_fields=fields, jq_expr=ns.jq_expr, repo_override=repo_override
+        )
+    if sub == "resolve-thread":
+        return _forward_pr_resolve_thread(
+            ns.pr_id, comment_id=ns.comment_id, repo_override=repo_override
         )
     return _forward_pr_reply_to_comment(
         ns.pr_id, comment_id=ns.comment_id, body=ns.body, repo_override=repo_override
@@ -495,7 +570,8 @@ def _github_pr_review(rest: list[str], *, repo_override: str | None) -> int:
 def _handle_pr(raw_args: list[str]) -> int:
     """Two-stage dispatch for ``kaji pr``.
 
-    builtin sub (``review-comments`` / ``reviews`` / ``reply-to-comment``) →
+    builtin sub (``review-comments`` / ``reviews`` / ``reply-to-comment`` /
+    ``resolve-thread``) →
     dedicated handler; otherwise fall back to ``gh pr`` passthrough.
 
     Note: ``kaji pr --help`` / ``-h`` は本関数に到達せず、argparse 上位の
