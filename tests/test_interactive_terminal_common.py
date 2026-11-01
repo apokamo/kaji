@@ -32,7 +32,13 @@ from kaji_harness.interactive_terminal_common import (
     read_terminal_diagnostic,
 )
 from kaji_harness.models import Step
-from kaji_harness.recovery import FailureEvent, FailureSnapshot, compute_signature
+from kaji_harness.recovery import (
+    FINGERPRINT_LIMIT,
+    FailureEvent,
+    FailureSnapshot,
+    compute_signature,
+    normalize_error_text,
+)
 from kaji_harness.recovery.handler import _sensitive_failure_text
 from kaji_harness.recovery.models import FailureClassification
 from kaji_harness.recovery.report import sanitize_evidence
@@ -1383,6 +1389,46 @@ class TestCauseSummaryCharacterBoundary:
             fixed = message[: message.index("last error line: ")]
             assert len(message) <= len(fixed) + len("last error line: ") + 2000
             assert "\n" not in message
+
+
+@pytest.mark.small
+class TestCauseSummaryGuardLengthBound:
+    """Issue #527 review-code R2: guard の ``<WS>`` 置換後も要約は ``FINGERPRINT_LIMIT`` 以下。"""
+
+    @staticmethod
+    def _repeated_guard_cause(path: str, repeats: int) -> str:
+        return f"Error: cannot load module file://{path}; " + "please try\tagain; " * repeats + "\n"
+
+    @pytest.mark.parametrize("repeats", [150, 2000])
+    def test_summary_and_message_are_bounded_after_guard(self, repeats: int) -> None:
+        cause = self._repeated_guard_cause("/home/aki/a/module.js", repeats)
+        transcript = _banner() + cause
+        # 正規化だけで上限に達し、guard の <WS> 置換で伸びる入力（review-code R2 の再現形）。
+        assert len(normalize_error_text(cause)) == FINGERPRINT_LIMIT
+
+        summary = _summary(transcript)
+        message = str(_herdr_error(transcript))
+
+        assert summary.startswith("last error line: Error: cannot load module file://<PATH>; ")
+        assert "please try<WS>again" in summary
+        assert len(summary) <= len("last error line: ") + FINGERPRINT_LIMIT
+        fixed = message[: message.index("last error line: ")]
+        assert len(message) <= len(fixed) + len("last error line: ") + FINGERPRINT_LIMIT
+        assert "\n" not in message
+        assert is_transient_error_text(_attempt_error(transcript)) is False
+
+    def test_run_specific_difference_shares_hash_after_bounded_guard(self) -> None:
+        banner = _banner()
+        first = banner + self._repeated_guard_cause("/home/aki/a/module.js", 150)
+        second = banner + self._repeated_guard_cause("/tmp/other/longer/dir/module.js", 150)
+        different = banner + self._repeated_guard_cause("/home/aki/a/module.js", 150).replace(
+            "cannot load module", "cannot open socket"
+        )
+
+        assert _hash(first) == _hash(second)
+        assert _hash(first) != _hash(different)
+        for transcript in (first, second, different):
+            assert is_transient_error_text(_attempt_error(transcript)) is False
 
 
 @pytest.mark.small

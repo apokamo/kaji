@@ -19,7 +19,7 @@ from .cli import find_high_confidence_sensitive_pattern, find_transient_pattern
 from .errors import SessionResolution
 from .models import Step
 from .prompt import skill_invocation_line
-from .recovery import normalize_error_text
+from .recovery import FINGERPRINT_LIMIT, normalize_error_text
 
 _CODEX_RESUME_RE = re.compile(
     r"\bcodex\s+resume\s+([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b"
@@ -150,8 +150,9 @@ def _transcript_cause_summary(clean: str) -> str:
     ``clean`` を完全な行に分け、wrapper banner より後の末尾 ``_CAUSE_TAIL_LINES`` 行を候補にし、
     後ろから見て最初のエラー行（無ければ最初の空でない出力行）を選ぶ。文字数の窓は使わないので、
     実行固有値の長さで候補や選ばれる行は変わらない。Rust panic の見出しは次行以降の本文を連結する。
-    選んだ行は実行固有値を除いて ``normalize_error_text`` に 1 回だけ通す（有界化もここだけ）ので、
-    同じ原因なら実行ごとの値の違いによらず同じ文字列になる。
+    選んだ行は実行固有値を除いて ``normalize_error_text`` に 1 回だけ通すので、同じ原因なら実行ごとの
+    値の違いによらず同じ文字列になる。有界化は正規化と、guard 後の最終出力への ``FINGERPRINT_LIMIT``
+    の適用だけで行い、raw の文字数では切らない。
 
     Args:
         clean: ANSI/制御文字を除去し前後の空白を落とした transcript 全文。transient pattern を
@@ -160,7 +161,7 @@ def _transcript_cause_summary(clean: str) -> str:
     Returns:
         ``"last error line: ..."`` / ``"last output line: ..."`` /
         ``"no agent output line in transcript tail"`` のいずれか。改行を含まず、transient pattern
-        を含まない。
+        を含まず、ラベルの後ろは ``FINGERPRINT_LIMIT`` 文字以下。
     """
     lines = clean.splitlines()
     banner_end = max(
@@ -189,7 +190,9 @@ def _transcript_cause_summary(clean: str) -> str:
     summary = normalize_error_text(
         _CAUSE_LINE_SEPARATOR.join(_strip_run_specific(line) for line in cause_lines)
     )
-    return f"{label}: {_break_transient_match(summary)}"
+    # guard の <WS> 置換は文字数を増やすので、最終出力にも上限を掛ける（review-code R2）。
+    # transient 判定は部分文字列一致なので、一致を含まない文字列の先頭部分も一致を含まない。
+    return f"{label}: {_break_transient_match(summary)[:FINGERPRINT_LIMIT]}"
 
 
 def _find_last_line(lines: list[str], predicate: Callable[[str], bool]) -> int | None:

@@ -199,7 +199,10 @@ Herdr の他の送出箇所はこれを使い続ける。`summary` を必須に�
    guard でも `S`（`P_f` 適用・正規化・有界化済み）を出発点にするので、`P_f` も正規化も省かない（review-code cycle 1 の
    指摘 R1: raw の `Ls` に戻すと file URI の path と 3 桁以下の thread ID が復活する。また review-design cycle 2 の指摘 DR1
    で、raw 行は有界化に raw の文字数切り詰めを要する問題も指摘された）。`B` は `S` だけの決定的関数。理由と証明は
-   § 制約・前提条件。
+   § 制約・前提条件。`B` は 1 文字の空白を 4 文字の `<WS>` にするので `S` より長くなりうる。最終の要約は
+   `G = B(S)[:FINGERPRINT_LIMIT]` とし、guard 後も `FINGERPRINT_LIMIT` 以下を保つ（review-code cycle 2 の指摘 R2:
+   正規化で 2000 文字になった要約が guard 後 2330 文字になった）。transient 判定は部分文字列一致なので、一致を含まない
+   `B(S)` の先頭部分も一致を含まない。切り詰めも `S` だけの決定的関数なので EB 4 の証明は変わらない。
 
 ### 使用例
 
@@ -357,7 +360,7 @@ def _transcript_cause_summary(clean: str) -> str:
             ls += <idx+1 から note:/stack backtrace:/正規化で空の行/終端 までの行>
         stripped = [_strip_run_specific(x) for x in ls]                 # R2: file URI path・thread ID
         summary = normalize_error_text(" | ".join(stripped))
-        summary = _break_transient(summary)       # transient 不変の guard: 一致箇所の空白を <WS> に（S の関数）
+        summary = _break_transient(summary)[:FINGERPRINT_LIMIT]  # guard: 一致箇所の空白を <WS> に。伸びた分も上限で切る（R2）
         return f"{label}: {summary}"
     return "no agent output line in transcript tail"
 
@@ -461,6 +464,10 @@ fingerprint の変化と再起票は人間決定で許容済み。
   component 数だけを変え、原因行の開始から末尾までが 2000 文字をまたぐ組（例: 70 / 80 個）の hash が一致し、要約は
   `Missing optional dependency` の行（`Node.js v` にならない）。いずれも `kind=no_pattern`、transient=False、
   `str(exc)` の長さは `FINGERPRINT_LIMIT` + 固定文以下。
+- **guard 後の長さ上限（review-code R2）**: 原因行が `Error: cannot load module file://<path>; ` の後に
+  `please try\tagain; ` を 150 / 2000 回続ける（正規化だけで `FINGERPRINT_LIMIT` に達し、guard の `<WS>` 置換で伸びる）
+  transcript で、要約のラベル後は `FINGERPRINT_LIMIT` 以下、`str(exc)` は固定文 + ラベル + `FINGERPRINT_LIMIT` 以下で
+  改行を含まず、transient=False。path だけが違う組は hash が一致し、原因文だけが違う組は hash が異なる。
 - **他分岐の不変**: `provider_error`（sensitive marker 併記あり / なし）・`no_log`・`empty` の `_terminal_exit_detail` の
   戻り値と、Herdr 送出時の `str(exc)` が修正前と同じ（`summary` を渡さない）。recorder state 付記は `no_pattern` の
   detail 末尾にも従来の文言で付き、メッセージにも残る。
