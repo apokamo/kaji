@@ -125,8 +125,29 @@ Under `provider.type = "github"`, `kaji issue` / `kaji pr` operate with the skil
 compatibility contract.
 
 - `kaji pr create`, `view`, `list`, `comment`, `review`, `merge`,
-  `review-comments`, `reviews`, `reply-to-comment`, and `review-poll` work with
-  the same invocation style on GitHub.
+  `review-comments`, `reviews`, `reply-to-comment`, `resolve-thread`, and
+  `review-poll` work with the same invocation style on GitHub.
+- `kaji pr resolve-thread <pr> --comment <comment_id>` resolves the review
+  thread that contains the inline review comment `<comment_id>` (the REST `id`
+  from `kaji pr review-comments`, the same ID `reply-to-comment --to` takes; the
+  thread root or any reply). kaji looks up the thread with GraphQL
+  `reviewThreads` (following every page of threads and of each thread's
+  comments) and calls `resolveReviewThread`. The repository comes from
+  `[provider.github] repo`; `--repo` is not accepted.
+  - **stdout** (success only): one JSON line such as
+    `{"comment_id": "4432690863", "thread_id": "PRRT_...", "result": "resolved"}`.
+    `result` is `resolved` (resolved now) or `already_resolved`.
+  - **Idempotent**: an already-resolved thread succeeds with
+    `already_resolved` and no mutation is sent.
+  - **Exit codes**: 0 = resolved or already resolved; 2 = `<pr>` / `--comment`
+    is not ASCII decimal, or the comment is not in any review thread of the PR
+    (`Error: review comment <id> was not found in any review thread of PR #<pr> (<repo>).`);
+    3 = `gh` missing, repository not detected, `gh api graphql` failed (gh's
+    stderr followed by `Error: GitHub GraphQL request failed (<phase>).`), an
+    unexpected GraphQL response, `viewerCanResolve` is false, or the mutation
+    did not resolve the thread.
+  - There is no unresolve command. To reopen a thread, use the GitHub UI or the
+    `unresolveReviewThread` mutation.
 - `kaji pr merge` silently strips `--squash` / `--rebase` on the kaji side and
   always invokes `gh pr merge --merge`, enforcing the `--no-ff`-only merge rule.
 - `kaji pr review <pr> --approve` / `--request-changes` detects self-PRs

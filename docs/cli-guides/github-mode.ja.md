@@ -110,7 +110,12 @@ kaji は GitHub project 直下の `.github/labels.yml` を label の正本とし
 
 `provider.type = "github"` 配下では `kaji issue` / `kaji pr` は skill 互換 contract で動作する。
 
-- `kaji pr create` / `view` / `list` / `comment` / `review` / `merge` / `review-comments` / `reviews` / `reply-to-comment` / `review-poll` は GitHub でも同じ呼び出し方が通る
+- `kaji pr create` / `view` / `list` / `comment` / `review` / `merge` / `review-comments` / `reviews` / `reply-to-comment` / `resolve-thread` / `review-poll` は GitHub でも同じ呼び出し方が通る
+- `kaji pr resolve-thread <pr> --comment <comment_id>` は、インラインレビューコメント `<comment_id>`（`kaji pr review-comments` の REST `id`。`reply-to-comment --to` と同じ ID。スレッドの根コメントでも返信でもよい）が属するレビュースレッドを解決する。GraphQL の `reviewThreads` でスレッドを特定し（スレッドと各スレッドのコメントの全ページを辿る）、`resolveReviewThread` を呼ぶ。repo は `[provider.github] repo` を使い、`--repo` は受け付けない
+  - **stdout**（成功時のみ）: `{"comment_id": "4432690863", "thread_id": "PRRT_...", "result": "resolved"}` のような JSON 1 行。`result` は `resolved`（今回解決した）か `already_resolved`
+  - **冪等**: 解決済みのスレッドは mutation を送らず `already_resolved` で成功する
+  - **終了コード**: 0 = 解決した / 解決済みだった。2 = `<pr>` / `--comment` が ASCII 10 進でない、またはコメントが PR のどのレビュースレッドにも無い（`Error: review comment <id> was not found in any review thread of PR #<pr> (<repo>).`）。3 = `gh` が無い、repo を特定できない、`gh api graphql` の失敗（gh の stderr に続けて `Error: GitHub GraphQL request failed (<phase>).`）、GraphQL 応答が想定外、`viewerCanResolve` が false、mutation でスレッドが解決にならなかった
+  - unresolve コマンドは無い。スレッドを開き直すときは GitHub の UI か `unresolveReviewThread` mutation を使う
 - `kaji pr merge` は `--squash` / `--rebase` flag を **kaji 側で silent に除去**し、常に `gh pr merge --merge` 固定で叩く（`--no-ff` only の merge 規約）
 - `kaji pr review <pr> --approve` / `kaji pr review <pr> --request-changes` は self-PR (PR author == authenticated user) を検知すると `<!-- kaji-review: state=APPROVED -->` / `<!-- kaji-review: state=CHANGES_REQUESTED -->` marker 付き comment を Issue comments API に投稿することで review シグナルを表現し rc=0 を返す。`gh pr review --approve` / `--request-changes` は GitHub API が author の APPROVE / REQUEST_CHANGES event を `Can not approve your own pull request` / `Can not request changes on your own pull request` で 422 拒否するため、self-PR では skip される。非 self-PR では従来通り `gh pr review --approve` / `--request-changes` を委譲する。`--comment` / flag 無しは routing 段で `_github_pr_review` に分岐せず従来通り `gh pr review` へ passthrough
   - **`--request-changes` の body 必須契約（self / 非 self 一貫）**: GitHub REST API の `event=REQUEST_CHANGES` は body parameter を必須とするため、kaji 側で `--body` / `--body-file` 未指定または空白のみは subprocess 呼び出し前に `EXIT_INVALID_INPUT` (rc=2) で fail-fast する。`--approve` は GitHub API 側で body optional のため空 body を許容（既存挙動を維持）
