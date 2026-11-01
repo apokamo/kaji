@@ -61,6 +61,13 @@ _FILE_URI_PATH_RE = re.compile(r"file://(?:/[\w.\-@+%~]+)+/?")
 _RUST_PANIC_THREAD_ID_RE = re.compile(r"(thread '[^']*') \(\d+\)( panicked at )")
 # 複数行の要約の区切り。transient pattern は ``|`` を含まないので、行をまたぐ一致を作らない。
 _CAUSE_LINE_SEPARATOR = " | "
+# 原因行の候補にする banner 後の末尾の行数（review-design DR1）。文字数の窓は path 長などの実行固有値で
+# どの行が候補に入るかが変わり原因行を落とすため、行の長さに依存しない行数で限定する。Node の uncaught
+# exception（原因行 + 既定 10 frame + 空行 + ``Node.js vX``）・Python traceback・Rust panic の原因行を含み、
+# 長い session の途中で表示された古い ``error:`` 行を最後の原因と誤認しにくい大きさ。
+_CAUSE_TAIL_LINES = 40
+# transient guard が一致箇所の空白に置く印。``<`` ``>`` は transient pattern に含まれない。
+_TRANSIENT_WHITESPACE_MARKER = "<WS>"
 _NO_AGENT_OUTPUT_SUMMARY = "no agent output line in transcript tail"
 # Issue #238: pane scoped user options (`set-option -p`) are used as the kaji
 
@@ -80,7 +87,8 @@ class TerminalDiagnostic:
     するケースで safety gate を構造的に迂回しないため、``_terminal_exit_detail`` が
     組み立てるメッセージにこの値を含める。
     ``cause_summary`` は ``kind == "no_pattern"`` のときのみ非 ``None``（Issue #527）。
-    末尾窓から選んだ失敗原因行を正規化した、例外メッセージ用の要約である。
+    banner 後の末尾 ``_CAUSE_TAIL_LINES`` 行から選んだ失敗原因行を正規化した、例外メッセージ用の
+    要約である。
     ``clean_excerpt`` / ``clean_tail`` と違いメッセージに載るが、``no_pattern`` の
     メッセージは transient / sensitive の分類で候補にならない（transcript 全文に transient
     pattern が無く、要約もそれを作らない）。``pane-metadata.json`` には書かない。
@@ -139,10 +147,11 @@ def extract_terminal_diagnostic(text: str) -> TerminalDiagnostic:
 def _transcript_cause_summary(clean: str) -> str:
     """``no_pattern`` の transcript から失敗原因行の要約を作る（Issue #527）。
 
-    末尾 ``_TERMINAL_LOG_TAIL_CHARS`` 文字の窓の完全な行のうち、wrapper banner より後を候補に
-    し、後ろから見て最初のエラー行（無ければ最初の空でない出力行）を選ぶ。Rust panic の見出しは
-    次行以降の本文を連結する。選んだ行は実行固有値を除いて ``normalize_error_text`` に 1 回だけ
-    通すので、同じ原因なら実行ごとの値の違いによらず同じ文字列になる。
+    ``clean`` を完全な行に分け、wrapper banner より後の末尾 ``_CAUSE_TAIL_LINES`` 行を候補にし、
+    後ろから見て最初のエラー行（無ければ最初の空でない出力行）を選ぶ。文字数の窓は使わないので、
+    実行固有値の長さで候補や選ばれる行は変わらない。Rust panic の見出しは次行以降の本文を連結する。
+    選んだ行は実行固有値を除いて ``normalize_error_text`` に 1 回だけ通す（有界化もここだけ）ので、
+    同じ原因なら実行ごとの値の違いによらず同じ文字列になる。
 
     Args:
         clean: ANSI/制御文字を除去し前後の空白を落とした transcript 全文。transient pattern を
@@ -150,18 +159,15 @@ def _transcript_cause_summary(clean: str) -> str:
 
     Returns:
         ``"last error line: ..."`` / ``"last output line: ..."`` /
-        ``"no agent output line in transcript tail"`` のいずれか。改行を含まない。
+        ``"no agent output line in transcript tail"`` のいずれか。改行を含まず、transient pattern
+        を含まない。
     """
-    window = clean[-_TERMINAL_LOG_TAIL_CHARS:]
-    lines = window.splitlines()
-    window_start = len(clean) - len(window)
-    if window_start > 0 and clean[window_start - 1] not in "\r\n":
-        lines = lines[1:]  # 窓が行の途中から始まる: 先頭の断片行は原因行の候補にしない
+    lines = clean.splitlines()
     banner_end = max(
         (index for index, line in enumerate(lines) if line.strip() == _WRAPPER_BANNER_END),
         default=-1,
     )
-    candidates = lines[banner_end + 1 :]
+    candidates = lines[banner_end + 1 :][-_CAUSE_TAIL_LINES:]
 
     selected = _find_last_line(candidates, lambda line: _ERROR_LINE_RE.match(line) is not None)
     label = "last error line"
@@ -183,10 +189,7 @@ def _transcript_cause_summary(clean: str) -> str:
     summary = normalize_error_text(
         _CAUSE_LINE_SEPARATOR.join(_strip_run_specific(line) for line in cause_lines)
     )
-    if find_transient_pattern(summary) is not None:
-        # 空白正規化で transient pattern が成立した場合だけ raw 行を使う（transient 判定を変えない）。
-        summary = _CAUSE_LINE_SEPARATOR.join(cause_lines)
-    return f"{label}: {summary}"
+    return f"{label}: {_break_transient_match(summary)}"
 
 
 def _find_last_line(lines: list[str], predicate: Callable[[str], bool]) -> int | None:
@@ -195,6 +198,32 @@ def _find_last_line(lines: list[str], predicate: Callable[[str], bool]) -> int |
         if predicate(lines[index]):
             return index
     return None
+
+
+def _break_transient_match(summary: str) -> str:
+    """正規化済み要約に成立した transient pattern の一致箇所の空白を ``<WS>`` にする（Issue #527）。
+
+    ``no_pattern`` の transcript は transient pattern を含まないが、空白正規化（TAB・連続空白・NBSP
+    を 1 空白にする）で一致が成立しうる。一致箇所の空白だけを印に置き換え、実行固有値の除去・
+    正規化・有界化を済ませた ``summary`` だけの決定的関数として transient 判定を変えない。
+    置換は空白を減らし英字同士を新たに隣接させないので、新しい一致を作らず有限回で止まる。
+
+    Args:
+        summary: ``normalize_error_text`` 済みの要約。
+
+    Returns:
+        transient pattern を含まない要約。一致が無ければ ``summary`` そのもの。
+    """
+    while (matched := find_transient_pattern(summary)) is not None:
+        words = matched.split()
+        if len(words) < 2:
+            # 空白を含まない pattern は空白正規化では成立しない（no_pattern の前提に反する）。
+            break
+        pattern = re.compile(r"\s+".join(re.escape(word) for word in words), re.IGNORECASE)
+        summary = pattern.sub(
+            lambda match: re.sub(r"\s+", _TRANSIENT_WHITESPACE_MARKER, match.group(0)), summary
+        )
+    return summary
 
 
 def _strip_run_specific(line: str) -> str:

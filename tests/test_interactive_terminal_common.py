@@ -1030,7 +1030,7 @@ class TestNoPatternFingerprint:
 
         assert _hash(first) == _hash(second)
 
-    def test_window_start_shift_shares_hash(self) -> None:
+    def test_long_leading_output_shares_hash(self) -> None:
         cause = _node_crash()
         first = "x" * 2500 + "\n" + _banner() + cause
         second = "progress line " * 300 + "\n" + _banner(run_id="261101093011") + cause
@@ -1163,7 +1163,7 @@ class TestCauseSummaryFileUri:
 
 @pytest.mark.small
 class TestCauseSummaryFallbackAndBoundaries:
-    """Issue #527: パターン不一致の fallback、banner・窓の境界、長さの上限。"""
+    """Issue #527: パターン不一致の fallback、banner・候補行数の境界、長さの上限。"""
 
     def test_fallback_is_last_output_line(self) -> None:
         assert _summary(_banner() + "Killed\n\n   \n") == "last output line: Killed"
@@ -1177,24 +1177,28 @@ class TestCauseSummaryFallbackAndBoundaries:
         assert _summary(transcript).startswith("last output line: ")
         assert "No such file or directory" in _summary(transcript)
 
-    def test_window_fragment_line_is_not_selected(self) -> None:
-        # 末尾 2000 文字の窓がちょうど ``error: fragment`` から始まる（行の途中）。
-        transcript = "z" * 50 + "error: fragment " + "x" * 1977 + "\nKilled\n"
-        assert transcript.strip()[-2000:].startswith("error: fragment")
-
-        assert _summary(transcript) == "last output line: Killed"
-
-    def test_window_fragment_only_has_no_agent_output_line(self) -> None:
-        transcript = "z" * 10 + "error: fragment " + "x" * 1984
-        assert transcript[-2000:].startswith("error: fragment")
-
-        assert _summary(transcript) == "no agent output line in transcript tail"
-
-    def test_window_starting_at_line_boundary_keeps_first_line(self) -> None:
-        transcript = "z" * 50 + "\n" + "error: whole line " + "x" * 1975 + "\nKilled\n"
-        assert transcript.strip()[-2000:].startswith("error: whole line")
+    def test_leading_output_beyond_old_window_does_not_hide_cause(self) -> None:
+        # 原因行が 1 行で 2000 文字を超え、その前に長い出力があっても完全な行として選ぶ（DR1）。
+        transcript = "z" * 5000 + "\nerror: whole line " + "x" * 2500 + "\n"
 
         assert _summary(transcript).startswith("last error line: error: whole line")
+
+    @pytest.mark.parametrize(
+        ("trailing", "label"), [(39, "last error line"), (40, "last output line")]
+    )
+    def test_candidates_are_last_cause_tail_lines(self, trailing: int, label: str) -> None:
+        # 候補は banner 後の末尾 40 行。原因行の後に 39 行なら候補内、40 行なら候補外。
+        assert interactive_terminal_common._CAUSE_TAIL_LINES == 40
+        after = "".join(f"progress output {index}\n" for index in range(trailing))
+        transcript = _banner() + "error: boom\n" + after
+
+        summary = _summary(transcript)
+
+        assert summary.startswith(f"{label}: ")
+        if label == "last error line":
+            assert summary == "last error line: error: boom"
+        else:
+            assert summary == f"last output line: progress output {trailing - 1}"
 
     @pytest.mark.parametrize("length", [1900, 100_000])
     def test_long_single_line_summary_is_bounded(self, length: int) -> None:
@@ -1221,6 +1225,7 @@ class TestCauseSummaryTransientInvariant:
             "again we failed\n",
             "Error: we will try\n",
             "thread 'main' panicked at src/main.rs:2:5:\nplease try\nagain\nnote: x\n",
+            "Error: try\tagain, then try  again\n",
         ],
     )
     def test_no_pattern_message_is_never_transient(self, tail: str) -> None:
@@ -1231,10 +1236,26 @@ class TestCauseSummaryTransientInvariant:
 
         assert is_transient_error_text(attempt_error) is False
 
-    def test_whitespace_normalization_falls_back_to_raw_line(self) -> None:
-        summary = _summary(_banner() + "Error: please try\tagain later\n")
-
-        assert summary == "last error line: Error: please try\tagain later"
+    @pytest.mark.parametrize(
+        ("tail", "expected"),
+        [
+            (
+                "Error: please try\tagain later\n",
+                "last error line: Error: please try<WS>again later",
+            ),
+            ("rate  limit reached\n", "last output line: rate<WS>limit reached"),
+            ("Error: please try\u00a0again\n", "last error line: Error: please try<WS>again"),
+            (
+                "Error: try\tagain, then try  again\n",
+                "last error line: Error: try<WS>again, then try<WS>again",
+            ),
+        ],
+    )
+    def test_whitespace_normalization_breaks_match_with_ws_marker(
+        self, tail: str, expected: str
+    ) -> None:
+        # guard B(S): 正規化済み要約の一致箇所の空白だけを <WS> に置き換える（review-design DR1）。
+        assert _summary(_banner() + tail) == expected
 
     def test_panic_body_lines_are_joined_with_separator(self) -> None:
         summary = _summary(
@@ -1242,6 +1263,126 @@ class TestCauseSummaryTransientInvariant:
         )
 
         assert summary.endswith("please try | again")
+
+
+_GUARD_TAIL = "please try\tagain"
+
+
+def _long_uri_cause(components: int, cause: str = "cannot load module") -> str:
+    """URI の component 数で原因行の長さだけを変える（review-design DR1 の反例の形）。"""
+    uri = "file:///tmp" + "/segment123" * components + "/module.js"
+    return f"Error: {cause} {uri}; {_GUARD_TAIL}\n"
+
+
+@pytest.mark.small
+class TestCauseSummaryGuardKeepsRunSpecificStripping:
+    """Issue #527 review-code R1: guard 分岐でも実行固有値で hash が分かれない（EB 4）。"""
+
+    def test_file_uri_path_difference_shares_hash(self) -> None:
+        banner = _banner()
+        first = banner + f"Error: cannot load module file:///home/aki/a/module.js; {_GUARD_TAIL}\n"
+        second = (
+            banner
+            + f"Error: cannot load module file:///tmp/other/longer/module.js; {_GUARD_TAIL}\n"
+        )
+
+        summary = _summary(first)
+
+        assert "file://<PATH>" in summary
+        assert "file:///" not in summary
+        assert "<WS>" in summary
+        assert _hash(first) == _hash(second)
+        assert is_transient_error_text(_attempt_error(first)) is False
+        assert is_transient_error_text(_attempt_error(second)) is False
+
+    def test_rust_panic_thread_id_difference_shares_hash(self) -> None:
+        banner = _banner()
+        first = banner + _rust_panic(_GUARD_TAIL, thread_id="123")
+        second = banner + _rust_panic(_GUARD_TAIL, thread_id="456")
+
+        summary = _summary(first)
+
+        assert "(123)" not in summary
+        assert "please try<WS>again" in summary
+        assert _hash(first) == _hash(second)
+        assert is_transient_error_text(_attempt_error(first)) is False
+        assert is_transient_error_text(_attempt_error(second)) is False
+
+    def test_absolute_path_and_timestamp_difference_shares_hash(self) -> None:
+        banner = _banner()
+        first = banner + (
+            f"Error: cannot open /home/aki/x/y.js at 2026-10-31T20:48:17Z; {_GUARD_TAIL}\n"
+        )
+        second = banner + (
+            f"Error: cannot open /tmp/other/longer/dir/y.js at 2026-11-01T01:02:03Z; {_GUARD_TAIL}\n"
+        )
+
+        assert _hash(first) == _hash(second)
+        assert is_transient_error_text(_attempt_error(first)) is False
+
+    def test_different_cause_under_guard_splits_hash(self) -> None:
+        banner = _banner()
+        first = banner + f"Error: cannot load module file:///home/aki/a/module.js; {_GUARD_TAIL}\n"
+        second = banner + f"Error: cannot open socket file:///home/aki/a/module.js; {_GUARD_TAIL}\n"
+
+        assert _hash(first) != _hash(second)
+
+
+@pytest.mark.small
+class TestCauseSummaryCharacterBoundary:
+    """Issue #527 review-design DR1: 実行固有値の長さで原因行が候補から落ちない（EB 2 / EB 4）。"""
+
+    def test_cause_line_length_across_old_window_shares_hash(self) -> None:
+        banner = _banner()
+        transcripts = [banner + _long_uri_cause(components) for components in (170, 180, 1000)]
+        lengths = [len(_long_uri_cause(components).rstrip("\n")) for components in (170, 180)]
+        assert lengths[0] < 2000 < lengths[1]
+
+        hashes = {_hash(transcript) for transcript in transcripts}
+
+        assert len(hashes) == 1
+        for transcript in transcripts:
+            diagnostic = extract_terminal_diagnostic(transcript)
+            assert diagnostic.kind == "no_pattern"
+            assert _summary(transcript) == (
+                "last error line: Error: cannot load module file://<PATH>; please try<WS>again"
+            )
+            assert is_transient_error_text(_attempt_error(transcript)) is False
+
+    def test_long_cause_line_with_different_cause_splits_hash(self) -> None:
+        banner = _banner()
+
+        assert _hash(banner + _long_uri_cause(180)) != _hash(
+            banner + _long_uri_cause(180, "cannot open socket")
+        )
+
+    def test_node_install_path_length_across_old_window_shares_hash(self) -> None:
+        homes = ["/tmp" + "/segment123" * components for components in (70, 80, 500)]
+        transcripts = [_banner() + _node_crash(node_home=home) for home in homes]
+        spans = [
+            len(transcript.strip()) - transcript.strip().index(_MISSING_DEP)
+            for transcript in transcripts[:2]
+        ]
+        assert spans[0] < 2000 < spans[1]
+
+        hashes = {_hash(transcript) for transcript in transcripts}
+
+        assert hashes == {_hash(_ob_transcript())}
+        for transcript in transcripts:
+            summary = _summary(transcript)
+            assert summary == f"last error line: {_MISSING_DEP}"
+            assert "Node.js v" not in summary
+            assert is_transient_error_text(_attempt_error(transcript)) is False
+
+    def test_message_length_is_bounded_for_long_cause_lines(self) -> None:
+        for components in (180, 10_000):
+            transcript = _banner() + _long_uri_cause(components)
+
+            message = str(_herdr_error(transcript))
+
+            fixed = message[: message.index("last error line: ")]
+            assert len(message) <= len(fixed) + len("last error line: ") + 2000
+            assert "\n" not in message
 
 
 @pytest.mark.small
