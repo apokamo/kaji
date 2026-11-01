@@ -444,7 +444,7 @@ Record the Herdr and agent versions with the result.
 | `HERDR_PANE_ID is not set` | Restart the command in a normal Herdr pane so caller identity is explicit |
 | `transcript may be incomplete (recorder state: ...)` | The recorder could not write part of `terminal.log` (`incomplete`, see `transcript_error`, e.g. disk full) or its state could not be confirmed (`unknown`). The agent run itself is unaffected |
 | Step times out | The agent did not write `verdict.yaml`. Check the prompt's verdict-writing instruction and path |
-| `Herdr pane returned to its shell before writing verdict.yaml` | Agent launch failed or the agent exited early. Check the tail of `terminal.log` attached to the error |
+| `Herdr pane returned to its shell before writing verdict.yaml` | Agent launch failed or the agent exited early. The error carries a normalized summary of the failure line from the end of `terminal.log` (`last error line: ...`, or `last output line: ...` when no error-shaped line is found; the wrapper banner is skipped). Read the full tail in `terminal_diagnostic.clean_tail` of `pane-metadata.json` or in `terminal.log` |
 | No color | The wrapper unsets `NO_COLOR` and sets `COLORTERM=truecolor`; also check terminal color support and agent-side settings |
 | Codex resume does not work | No resume line in `terminal.log`, and session-store fallback did not match markers. Check `CODEX_HOME` |
 | CLI stops at trust / permission confirmation | cwd is outside the project (`/tmp`, etc.). Pin workdir to the project worktree |

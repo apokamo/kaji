@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,6 +19,7 @@ from .cli import find_high_confidence_sensitive_pattern, find_transient_pattern
 from .errors import SessionResolution
 from .models import Step
 from .prompt import skill_invocation_line
+from .recovery import FINGERPRINT_LIMIT, normalize_error_text
 
 _CODEX_RESUME_RE = re.compile(
     r"\bcodex\s+resume\s+([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b"
@@ -37,6 +38,37 @@ _ANSI_OTHER_ESCAPE_RE = re.compile(r"\x1b[@-Z\\\]^_]")
 # 改行/タブ以外の C0 制御文字、DEL、C1 制御文字（Issue #137 の JSON エスケープ規約とは
 # 別目的: こちらは可読な診断テキストを作るための除去）。
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+# Issue #527: wrapper.sh が agent 起動前に出す banner の終端行（wrapper.sh と契約テストで固定）。
+# banner は ``model:`` 等の正規化で消えない実行ごとの値を含むため、原因行の候補から外す。
+_WRAPPER_BANNER_END = (
+    "The agent must read prompt_path and write a pure YAML verdict to verdict_path."
+)
+# Issue #527: 原因行とみなすエラー行（行頭 anchor）。Node / Python / Java の ``<Name>Error:`` /
+# ``Exception:``、Rust/clap の ``error:`` / ``error[E0433]:``、git の ``fatal:``、Go の ``panic:``、
+# Node heap OOM の ``FATAL ERROR:``、Rust の ``thread '<name>' [(<id>)] panicked at``。
+_RUST_PANIC_RE = re.compile(r"^\s*thread '[^']*'(?: \(\d+\))? panicked at ")
+_ERROR_LINE_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:[\w.]*(?:Error|Exception)|(?i:fatal\s+error|error|fatal|panic))(?:\s*\[[^\]]*\])?:"
+    r"|thread '[^']*'(?: \(\d+\))? panicked at "
+    r")"
+)
+# Rust panic の本文（見出しの次行以降）の連結を止める行頭。
+_RUST_PANIC_BODY_STOP = ("note: ", "stack backtrace:")
+# 要約前に除く実行固有値（signature.py の正規化が扱わない形）。``_ABS_PATH_RE`` は lookbehind の
+# ため ``file:///...`` の path を置換しない。thread ID は 3 桁以下だと ``_LONG_NUM_RE`` に掛からない。
+_FILE_URI_PATH_RE = re.compile(r"file://(?:/[\w.\-@+%~]+)+/?")
+_RUST_PANIC_THREAD_ID_RE = re.compile(r"(thread '[^']*') \(\d+\)( panicked at )")
+# 複数行の要約の区切り。transient pattern は ``|`` を含まないので、行をまたぐ一致を作らない。
+_CAUSE_LINE_SEPARATOR = " | "
+# 原因行の候補にする banner 後の末尾の行数（review-design DR1）。文字数の窓は path 長などの実行固有値で
+# どの行が候補に入るかが変わり原因行を落とすため、行の長さに依存しない行数で限定する。Node の uncaught
+# exception（原因行 + 既定 10 frame + 空行 + ``Node.js vX``）・Python traceback・Rust panic の原因行を含み、
+# 長い session の途中で表示された古い ``error:`` 行を最後の原因と誤認しにくい大きさ。
+_CAUSE_TAIL_LINES = 40
+# transient guard が一致箇所の空白に置く印。``<`` ``>`` は transient pattern に含まれない。
+_TRANSIENT_WHITESPACE_MARKER = "<WS>"
+_NO_AGENT_OUTPUT_SUMMARY = "no agent output line in transcript tail"
 # Issue #238: pane scoped user options (`set-option -p`) are used as the kaji
 
 
@@ -54,6 +86,12 @@ class TerminalDiagnostic:
     が同居する場合のみ非 ``None``。transient と sensitive が同一 transcript に共存
     するケースで safety gate を構造的に迂回しないため、``_terminal_exit_detail`` が
     組み立てるメッセージにこの値を含める。
+    ``cause_summary`` は ``kind == "no_pattern"`` のときのみ非 ``None``（Issue #527）。
+    banner 後の末尾 ``_CAUSE_TAIL_LINES`` 行から選んだ失敗原因行を正規化した、例外メッセージ用の
+    要約である。
+    ``clean_excerpt`` / ``clean_tail`` と違いメッセージに載るが、``no_pattern`` の
+    メッセージは transient / sensitive の分類で候補にならない（transcript 全文に transient
+    pattern が無く、要約もそれを作らない）。``pane-metadata.json`` には書かない。
     """
 
     kind: str
@@ -61,6 +99,7 @@ class TerminalDiagnostic:
     clean_excerpt: str | None
     clean_tail: str
     sensitive_marker: str | None = None
+    cause_summary: str | None = None
 
 
 def _strip_ansi(text: str) -> str:
@@ -87,7 +126,11 @@ def extract_terminal_diagnostic(text: str) -> TerminalDiagnostic:
     matched = find_transient_pattern(clean)
     if matched is None:
         return TerminalDiagnostic(
-            kind="no_pattern", matched_pattern=None, clean_excerpt=None, clean_tail=tail
+            kind="no_pattern",
+            matched_pattern=None,
+            clean_excerpt=None,
+            clean_tail=tail,
+            cause_summary=_transcript_cause_summary(clean),
         )
     idx = clean.lower().find(matched.lower())
     start = max(0, idx - _DIAGNOSTIC_EXCERPT_RADIUS)
@@ -99,6 +142,97 @@ def extract_terminal_diagnostic(text: str) -> TerminalDiagnostic:
         clean_tail=tail,
         sensitive_marker=find_high_confidence_sensitive_pattern(clean),
     )
+
+
+def _transcript_cause_summary(clean: str) -> str:
+    """``no_pattern`` の transcript から失敗原因行の要約を作る（Issue #527）。
+
+    ``clean`` を完全な行に分け、wrapper banner より後の末尾 ``_CAUSE_TAIL_LINES`` 行を候補にし、
+    後ろから見て最初のエラー行（無ければ最初の空でない出力行）を選ぶ。文字数の窓は使わないので、
+    実行固有値の長さで候補や選ばれる行は変わらない。Rust panic の見出しは次行以降の本文を連結する。
+    選んだ行は実行固有値を除いて ``normalize_error_text`` に 1 回だけ通すので、同じ原因なら実行ごとの
+    値の違いによらず同じ文字列になる。有界化は正規化と、guard 後の最終出力への ``FINGERPRINT_LIMIT``
+    の適用だけで行い、raw の文字数では切らない。
+
+    Args:
+        clean: ANSI/制御文字を除去し前後の空白を落とした transcript 全文。transient pattern を
+            含まないこと（``no_pattern`` の前提）。
+
+    Returns:
+        ``"last error line: ..."`` / ``"last output line: ..."`` /
+        ``"no agent output line in transcript tail"`` のいずれか。改行を含まず、transient pattern
+        を含まず、ラベルの後ろは ``FINGERPRINT_LIMIT`` 文字以下。
+    """
+    lines = clean.splitlines()
+    banner_end = max(
+        (index for index, line in enumerate(lines) if line.strip() == _WRAPPER_BANNER_END),
+        default=-1,
+    )
+    candidates = lines[banner_end + 1 :][-_CAUSE_TAIL_LINES:]
+
+    selected = _find_last_line(candidates, lambda line: _ERROR_LINE_RE.match(line) is not None)
+    label = "last error line"
+    if selected is None:
+        selected = _find_last_line(candidates, lambda line: bool(normalize_error_text(line)))
+        label = "last output line"
+    if selected is None:
+        return _NO_AGENT_OUTPUT_SUMMARY
+
+    cause_lines = [candidates[selected].strip()]
+    if label == "last error line" and _RUST_PANIC_RE.match(candidates[selected]):
+        # 現行の Rust は panic の原因本文を見出しの次行以降に出す。
+        for line in candidates[selected + 1 :]:
+            body = line.strip()
+            if body.startswith(_RUST_PANIC_BODY_STOP) or not normalize_error_text(body):
+                break
+            cause_lines.append(body)
+
+    summary = normalize_error_text(
+        _CAUSE_LINE_SEPARATOR.join(_strip_run_specific(line) for line in cause_lines)
+    )
+    # guard の <WS> 置換は文字数を増やすので、最終出力にも上限を掛ける（review-code R2）。
+    # transient 判定は部分文字列一致なので、一致を含まない文字列の先頭部分も一致を含まない。
+    return f"{label}: {_break_transient_match(summary)[:FINGERPRINT_LIMIT]}"
+
+
+def _find_last_line(lines: list[str], predicate: Callable[[str], bool]) -> int | None:
+    """``predicate`` を満たす最後の行の index を返す。無ければ ``None``。"""
+    for index in range(len(lines) - 1, -1, -1):
+        if predicate(lines[index]):
+            return index
+    return None
+
+
+def _break_transient_match(summary: str) -> str:
+    """正規化済み要約に成立した transient pattern の一致箇所の空白を ``<WS>`` にする（Issue #527）。
+
+    ``no_pattern`` の transcript は transient pattern を含まないが、空白正規化（TAB・連続空白・NBSP
+    を 1 空白にする）で一致が成立しうる。一致箇所の空白だけを印に置き換え、実行固有値の除去・
+    正規化・有界化を済ませた ``summary`` だけの決定的関数として transient 判定を変えない。
+    置換は空白を減らし英字同士を新たに隣接させないので、新しい一致を作らず有限回で止まる。
+
+    Args:
+        summary: ``normalize_error_text`` 済みの要約。
+
+    Returns:
+        transient pattern を含まない要約。一致が無ければ ``summary`` そのもの。
+    """
+    while (matched := find_transient_pattern(summary)) is not None:
+        words = matched.split()
+        if len(words) < 2:
+            # 空白を含まない pattern は空白正規化では成立しない（no_pattern の前提に反する）。
+            break
+        pattern = re.compile(r"\s+".join(re.escape(word) for word in words), re.IGNORECASE)
+        summary = pattern.sub(
+            lambda match: re.sub(r"\s+", _TRANSIENT_WHITESPACE_MARKER, match.group(0)), summary
+        )
+    return summary
+
+
+def _strip_run_specific(line: str) -> str:
+    """file URI の path と Rust panic の thread ID を除く（Issue #527 review-design R2/R1）。"""
+    line = _FILE_URI_PATH_RE.sub("file://<PATH>", line)
+    return _RUST_PANIC_THREAD_ID_RE.sub(r"\1\2", line)
 
 
 def read_terminal_diagnostic(terminal_log: Path) -> TerminalDiagnostic:
@@ -124,7 +258,27 @@ def _terminal_exit_detail(terminal_log: Path, *, prefix: str) -> str:
     生 transcript は読まないため、ここで literal を残さないと transient+sensitive
     混在 failure の gate が構造的に迂回されてしまう。
     """
-    diagnostic = read_terminal_diagnostic(terminal_log)
+    return _format_terminal_exit_detail(
+        read_terminal_diagnostic(terminal_log), log_name=terminal_log.name, prefix=prefix
+    )
+
+
+def _format_terminal_exit_detail(
+    diagnostic: TerminalDiagnostic, *, log_name: str, prefix: str
+) -> str:
+    """診断結果から早期終了の detail 文字列を組み立てる純関数。
+
+    Issue #527: ``no_pattern`` は端末ログ全体の tail ではなく ``cause_summary``（原因行の
+    要約）を載せる。他の ``kind`` の文言は変えない。
+
+    Args:
+        diagnostic: ``read_terminal_diagnostic`` / ``extract_terminal_diagnostic`` の結果。
+        log_name: ``no_log`` / ``empty`` の文言に入れる transcript のファイル名。
+        prefix: 早期終了の種類を表す先頭の固定文。
+
+    Returns:
+        ``CLIExecutionError`` に渡す detail（改行を含まない）。
+    """
     if diagnostic.kind == "provider_error":
         detail = (
             f"{prefix}; transient provider error detected (pattern: '{diagnostic.matched_pattern}')"
@@ -136,10 +290,11 @@ def _terminal_exit_detail(terminal_log: Path, *, prefix: str) -> str:
             )
         return detail
     if diagnostic.kind == "no_pattern":
-        return f"{prefix}; no known provider error pattern in transcript; log tail:\n{diagnostic.clean_tail}"
+        summary = diagnostic.cause_summary or _NO_AGENT_OUTPUT_SUMMARY
+        return f"{prefix}; no known provider error pattern in transcript; {summary}"
     if diagnostic.kind == "no_log":
-        return f"{prefix}; diagnostic unavailable: no {terminal_log.name}"
-    return f"{prefix}; diagnostic unavailable: {terminal_log.name} empty"
+        return f"{prefix}; diagnostic unavailable: no {log_name}"
+    return f"{prefix}; diagnostic unavailable: {log_name} empty"
 
 
 def _wrapper_path() -> Path:

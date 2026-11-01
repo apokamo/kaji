@@ -35,8 +35,8 @@ from .errors import (
 from .interactive_terminal_common import (
     _build_wrapper_command,
     _extract_codex_session_id,
+    _format_terminal_exit_detail,
     _resolve_abnormal_exit_session,
-    _terminal_exit_detail,
     _wrapper_path,
     _wrapper_skill_invocation,
     read_terminal_diagnostic,
@@ -348,14 +348,17 @@ def execute_interactive_terminal_herdr(
                         close_error=close_error,
                         layout=launch,
                     )
+                    detail, kind = _recorded_exit_detail(
+                        terminal_log,
+                        prefix="Herdr pane returned to its shell before writing verdict.yaml",
+                    )
+                    # Issue #527: no_pattern の detail は原因行の要約を含むので切らずに載せる。
                     raise CLIExecutionError(
                         step.id,
                         1,
-                        _recorded_exit_detail(
-                            terminal_log,
-                            prefix="Herdr pane returned to its shell before writing verdict.yaml",
-                        ),
+                        detail,
                         session_resolution=resolved,
+                        summary=detail if kind == "no_pattern" else None,
                     )
             else:
                 shell_only_observations = 0
@@ -1194,13 +1197,19 @@ def _build_recorded_command(
     return f"{prefix} {wrapper_command}"
 
 
-def _recorded_exit_detail(terminal_log: Path, *, prefix: str) -> str:
-    """Early-exit detail from the recording, flagging recordings of unknown completeness."""
-    detail = _terminal_exit_detail(terminal_log, prefix=prefix)
+def _recorded_exit_detail(terminal_log: Path, *, prefix: str) -> tuple[str, str]:
+    """Early-exit detail from the recording, flagging recordings of unknown completeness.
+
+    Returns:
+        ``(detail, kind)``. ``kind`` is the transcript diagnostic kind the detail was built
+        from (read once), so the caller can tell the ``no_pattern`` path (Issue #527).
+    """
+    diagnostic = read_terminal_diagnostic(terminal_log)
+    detail = _format_terminal_exit_detail(diagnostic, log_name=terminal_log.name, prefix=prefix)
     state, _error = interactive_terminal_recorder.read_recorder_state(terminal_log)
     if state in ("incomplete", "unknown"):
         detail += f"; transcript may be incomplete (recorder state: {state})"
-    return detail
+    return detail, diagnostic.kind
 
 
 def _transcript_metadata(terminal_log: Path) -> dict[str, object]:

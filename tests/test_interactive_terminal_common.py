@@ -19,10 +19,11 @@ import pytest
 
 from kaji_harness import interactive_terminal_common
 from kaji_harness.cli import _TRANSIENT_PATTERNS, is_transient_error_text
-from kaji_harness.errors import SessionResolution
+from kaji_harness.errors import CLIExecutionError, SessionResolution
 from kaji_harness.interactive_terminal_common import (
     _build_wrapper_command,
     _extract_codex_session_id,
+    _format_terminal_exit_detail,
     _resolve_abnormal_exit_session,
     _terminal_exit_detail,
     _unique_codex_session_id_from_store,
@@ -31,7 +32,16 @@ from kaji_harness.interactive_terminal_common import (
     read_terminal_diagnostic,
 )
 from kaji_harness.models import Step
+from kaji_harness.recovery import (
+    FINGERPRINT_LIMIT,
+    FailureEvent,
+    FailureSnapshot,
+    compute_signature,
+    normalize_error_text,
+)
 from kaji_harness.recovery.handler import _sensitive_failure_text
+from kaji_harness.recovery.models import FailureClassification
+from kaji_harness.recovery.report import sanitize_evidence
 
 _EXIT_PREFIX = "Herdr pane exited before writing verdict.yaml"
 
@@ -577,7 +587,9 @@ class TestFalsePositiveBoundary:
         benign = "let me proceed with the next step and finish up the review.\n" * 5
         diagnostic = extract_terminal_diagnostic(benign)
         assert diagnostic.kind == "no_pattern"
-        message = f"{_EXIT_PREFIX}; no known provider error pattern in transcript; log tail:\n{diagnostic.clean_tail}"
+        message = _format_terminal_exit_detail(
+            diagnostic, log_name="terminal.log", prefix=_EXIT_PREFIX
+        )
         assert is_transient_error_text(message) is False
 
     def test_generic_try_again_phrase_is_characterized_as_provider_error(self) -> None:
@@ -847,3 +859,619 @@ class TestInteractiveTerminalImportBoundary:
         assert "kaji_harness.interactive_terminal_recorder" in imports
         assert "kaji_harness.interactive_terminal" in imports
         assert "kaji_harness.interactive_terminal_herdr" not in imports
+
+
+# --- Issue #527: Herdr no_pattern の原因行要約 -------------------------------------------
+
+_HERDR_SHELL_PREFIX = "Herdr pane returned to its shell before writing verdict.yaml"
+_BANNER_END = "The agent must read prompt_path and write a pure YAML verdict to verdict_path."
+_MISSING_DEP = (
+    "Error: Missing optional dependency @openai/codex-linux-x64. "
+    "Reinstall Codex: npm install -g @openai/codex@latest"
+)
+_NODE_HOME = "/home/aki/.nvm/versions/node/v26.10.0"
+
+
+def _banner(
+    *,
+    run_id: str = "261031204817",
+    workdir: str = "/home/aki/dev/kamo2",
+    model: str = "gpt-6.1-sol",
+    effort: str = "high",
+) -> str:
+    """wrapper.sh が agent 起動前に出す banner（apokamo/kamo2#2018 の形）。"""
+    attempt = f"{workdir}/.kaji/artifacts/2017/runs/{run_id}/steps/review-ready/attempt-001"
+    return (
+        "kaji interactive terminal runner\n"
+        "agent: codex\n"
+        f"workdir: {workdir}\n"
+        f"prompt_path: {attempt}/prompt.txt\n"
+        f"verdict_path: {attempt}/verdict.yaml\n"
+        f"model: {model}\n"
+        f"effort: {effort}\n"
+        "execution_policy: auto\n"
+        "\n"
+        f"{_BANNER_END}\n"
+        "\n"
+    )
+
+
+def _node_crash(cause: str = _MISSING_DEP, *, node_home: str = _NODE_HOME) -> str:
+    """Node の uncaught exception（最終行は ``Node.js vX``）。"""
+    codex_js = f"file://{node_home}/lib/node_modules/@openai/codex/bin/codex.js"
+    return (
+        f"{codex_js}:108\n"
+        "  throw new Error(\n"
+        "        ^\n"
+        "\n"
+        f"{cause}\n"
+        f"    at findCodexExecutable ({codex_js}:108:9)\n"
+        f"    at {codex_js}:1:1\n"
+        "    at ModuleJob.run (node:internal/modules/esm/module_job:271:25)\n"
+        "    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:116:5)\n"
+        "\n"
+        "Node.js v26.10.0\n"
+    )
+
+
+def _ob_transcript(**banner: str) -> str:
+    return _banner(**banner) + _node_crash()
+
+
+def _herdr_error(transcript: str) -> CLIExecutionError:
+    """Herdr の no_pattern 送出と同じ組み立てで例外を作る。"""
+    detail = _format_terminal_exit_detail(
+        extract_terminal_diagnostic(transcript), log_name="terminal.log", prefix=_HERDR_SHELL_PREFIX
+    )
+    return CLIExecutionError("review-ready", 1, detail, summary=detail)
+
+
+def _attempt_error(transcript: str) -> str:
+    """runner が ``result.json.error`` に書く形（``runner.py``）。"""
+    exc = _herdr_error(transcript)
+    return f"{type(exc).__name__}: {exc}"
+
+
+def _hash(transcript: str) -> str:
+    snapshot = FailureSnapshot(
+        run_id="261031204817",
+        run_dir=Path("/nonexistent/runs/261031204817"),
+        attempt_error=_attempt_error(transcript),
+        failure_event=FailureEvent(kind="dispatch_exception", exception_type="CLIExecutionError"),
+    )
+    classification = FailureClassification(
+        cause="dispatch_failure", synthetic=True, source="runner", recoverability_hint="no"
+    )
+    return compute_signature(snapshot, classification).fingerprint_hash
+
+
+def _summary(transcript: str) -> str:
+    diagnostic = extract_terminal_diagnostic(transcript)
+    assert diagnostic.kind == "no_pattern"
+    assert diagnostic.cause_summary is not None
+    return diagnostic.cause_summary
+
+
+def _rust_panic(body: str, *, thread_id: str | None = None) -> str:
+    thread = "thread 'main'" if thread_id is None else f"thread 'main' ({thread_id})"
+    return (
+        f"{thread} panicked at src/main.rs:2:5:\n"
+        f"{body}\n"
+        "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    )
+
+
+@pytest.mark.small
+class TestNoPatternCauseLineInMessage:
+    """Issue #527 (a): 短い transcript の末尾の原因行がメッセージに入る（EB 1）。"""
+
+    def test_ob_cause_line_is_in_message_not_banner(self) -> None:
+        transcript = _ob_transcript()
+        assert len(transcript) < 2000
+
+        message = str(_herdr_error(transcript))
+
+        assert "Error: Missing optional dependency @openai/codex-linux-x64" in message
+        assert "last error line: " in message
+        assert "kaji interactive terminal runner" not in message
+        assert "Node.js v" not in message
+        assert "\n" not in message
+        assert message.startswith(
+            "Step 'review-ready' CLI exited with code 1: "
+            f"{_HERDR_SHELL_PREFIX}; no known provider error pattern in transcript; "
+        )
+
+    def test_crlf_transcript_keeps_cause_line(self) -> None:
+        transcript = _ob_transcript().replace("\n", "\r\n")
+
+        message = str(_herdr_error(transcript))
+
+        assert "Missing optional dependency @openai/codex-linux-x64" in message
+        assert "\r" not in message
+
+    def test_cause_line_survives_terminal_log_path(self, tmp_path: Path) -> None:
+        terminal_log = tmp_path / "terminal.log"
+        terminal_log.write_text(_ob_transcript(), encoding="utf-8")
+
+        detail = _terminal_exit_detail(terminal_log, prefix=_HERDR_SHELL_PREFIX)
+
+        assert "Missing optional dependency @openai/codex-linux-x64" in detail
+        assert "log tail" not in detail
+
+    def test_incident_evidence_keeps_cause_line(self) -> None:
+        attempt_error = _attempt_error(_ob_transcript())
+
+        evidence = sanitize_evidence(f"steps/review-ready/result.json error={attempt_error}")
+
+        assert "Missing optional dependency" in evidence
+
+
+@pytest.mark.small
+class TestNoPatternFingerprint:
+    """Issue #527 (b)(c): 別原因は別 hash、実行ごとの値だけの違いは同 hash（EB 2 / EB 4）。"""
+
+    def test_different_causes_have_different_hashes(self) -> None:
+        banner = _banner()
+        hashes = {
+            _hash(banner + _node_crash()),
+            _hash(banner + "Killed\n"),
+            _hash(banner + _node_crash("Error: other")),
+        }
+
+        assert len(hashes) == 3
+
+    def test_run_specific_values_share_hash(self) -> None:
+        first = _banner() + _node_crash(
+            "Error: Missing optional dependency at /home/aki/x/y.js (2026-10-31T20:48:17Z)"
+        )
+        second = _banner(
+            run_id="261101093011",
+            workdir="/srv/work/much/longer/workspace/kamo2",
+            model="claude-opus-5-5",
+            effort="max",
+        ) + _node_crash(
+            "Error: Missing optional dependency at /tmp/other/longer/dir/y.js (2026-11-01T01:02:03Z)",
+            node_home="/opt/node/v27.0.0",
+        )
+
+        assert _hash(first) == _hash(second)
+
+    def test_long_leading_output_shares_hash(self) -> None:
+        cause = _node_crash()
+        first = "x" * 2500 + "\n" + _banner() + cause
+        second = "progress line " * 300 + "\n" + _banner(run_id="261101093011") + cause
+        assert len(first) > 2000
+        assert len(second) > 2000
+
+        assert _hash(first) == _hash(second)
+
+
+@pytest.mark.small
+class TestCauseSummaryErrorLines:
+    """Issue #527: エラー行パターンの代表形と Rust panic 本文の連結。"""
+
+    def test_python_traceback_selects_exception_line(self) -> None:
+        transcript = (
+            _banner()
+            + "Traceback (most recent call last):\n"
+            + '  File "/usr/lib/python3/app.py", line 3, in <module>\n'
+            + "    import foo\n"
+            + "ModuleNotFoundError: No module named 'foo'\n"
+        )
+
+        assert _summary(transcript) == "last error line: ModuleNotFoundError: No module named 'foo'"
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "error: unexpected argument '--foo' found",
+            "error[E0433]: failed to resolve: use of undeclared type",
+            "fatal: not a git repository (or any of the parent directories): .git",
+            "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory",
+            "panic: runtime error: invalid memory address or nil pointer dereference",
+            "OSError: [Errno 30] Read-only file system",
+            "java.io.IOException: Broken pipe",
+            "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'x'",
+        ],
+    )
+    def test_representative_error_lines_match(self, line: str) -> None:
+        transcript = _banner() + line + "\n" + "    at something (node:internal/x:1:1)\n"
+
+        assert _summary(transcript).startswith("last error line: ")
+        assert line.split(":")[0].split("[")[0].strip() in _summary(transcript)
+
+    def test_last_of_multiple_error_lines_wins(self) -> None:
+        transcript = _banner() + "error: first problem\nsome output\nerror: second problem\n"
+
+        assert _summary(transcript) == "last error line: error: second problem"
+
+    def test_node_frames_and_version_line_are_not_error_lines(self) -> None:
+        transcript = _banner() + "    at findCodexExecutable (node:x:1:1)\nNode.js v26.10.0\n"
+
+        assert _summary(transcript).startswith("last output line: ")
+
+    def test_rust_panic_body_is_joined_and_note_excluded(self) -> None:
+        summary = _summary(_banner() + _rust_panic("failed to open config"))
+
+        assert summary == (
+            "last error line: thread 'main' panicked at src/main.rs:2:5: | failed to open config"
+        )
+        assert "RUST_BACKTRACE" not in summary
+
+    def test_rust_panic_bodies_have_different_hashes(self) -> None:
+        banner = _banner()
+
+        assert _hash(banner + _rust_panic("failed to open config")) != _hash(
+            banner + _rust_panic("failed to connect socket")
+        )
+
+    def test_rust_panic_thread_id_is_matched_and_ignored(self) -> None:
+        banner = _banner()
+        with_id = _summary(banner + _rust_panic("failed to open config", thread_id="6018279"))
+
+        assert "failed to open config" in with_id
+        assert "6018279" not in with_id
+        assert (
+            _hash(banner + _rust_panic("failed to open config", thread_id="6018279"))
+            == _hash(banner + _rust_panic("failed to open config", thread_id="123"))
+            == _hash(banner + _rust_panic("failed to open config"))
+        )
+
+    @pytest.mark.parametrize(
+        "stop", ["stack backtrace:\n   0: rust_begin_unwind\n", "\nunrelated trailing output\n"]
+    )
+    def test_rust_panic_body_stops_at_backtrace_or_blank_line(self, stop: str) -> None:
+        transcript = (
+            _banner() + "thread 'main' panicked at src/main.rs:2:5:\nfailed to open config\n" + stop
+        )
+
+        summary = _summary(transcript)
+
+        assert summary == (
+            "last error line: thread 'main' panicked at src/main.rs:2:5: | failed to open config"
+        )
+
+    def test_legacy_single_line_panic_keeps_heading_only(self) -> None:
+        transcript = (
+            _banner()
+            + "thread 'main' panicked at 'crash and burn', src/main.rs:2:5\n"
+            + "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        )
+
+        assert _summary(transcript) == (
+            "last error line: thread 'main' panicked at 'crash and burn', src/main.rs:2:5"
+        )
+
+
+@pytest.mark.small
+class TestCauseSummaryFileUri:
+    """Issue #527 review-design R2: file URI の path は実行ごとの値として除く（EB 4）。"""
+
+    def test_file_uri_path_difference_shares_hash(self) -> None:
+        banner = _banner()
+        first = banner + "Error: cannot load module file:///home/aki/a/module.js\n"
+        second = banner + "Error: cannot load module file:///tmp/other/longer/module.js\n"
+
+        assert "file://<PATH>" in _summary(first)
+        assert _hash(first) == _hash(second)
+
+    def test_file_uri_position_or_message_difference_splits_hash(self) -> None:
+        banner = _banner()
+        base = _hash(banner + "Error: cannot load module file:///home/aki/a/module.js:3:4\n")
+
+        assert base != _hash(
+            banner + "Error: cannot load module file:///home/aki/a/module.js:5:4\n"
+        )
+        assert base != _hash(
+            banner + "Error: cannot parse module file:///home/aki/a/module.js:3:4\n"
+        )
+
+
+@pytest.mark.small
+class TestCauseSummaryFallbackAndBoundaries:
+    """Issue #527: パターン不一致の fallback、banner・候補行数の境界、長さの上限。"""
+
+    def test_fallback_is_last_output_line(self) -> None:
+        assert _summary(_banner() + "Killed\n\n   \n") == "last output line: Killed"
+
+    def test_banner_only_has_no_agent_output_line(self) -> None:
+        assert _summary(_banner()) == "no agent output line in transcript tail"
+
+    def test_without_banner_all_lines_are_candidates(self) -> None:
+        transcript = "/path/to/wrapper.sh: line 3: cd: /missing: No such file or directory\n"
+
+        assert _summary(transcript).startswith("last output line: ")
+        assert "No such file or directory" in _summary(transcript)
+
+    def test_leading_output_beyond_old_window_does_not_hide_cause(self) -> None:
+        # 原因行が 1 行で 2000 文字を超え、その前に長い出力があっても完全な行として選ぶ（DR1）。
+        transcript = "z" * 5000 + "\nerror: whole line " + "x" * 2500 + "\n"
+
+        assert _summary(transcript).startswith("last error line: error: whole line")
+
+    @pytest.mark.parametrize(
+        ("trailing", "label"), [(39, "last error line"), (40, "last output line")]
+    )
+    def test_candidates_are_last_cause_tail_lines(self, trailing: int, label: str) -> None:
+        # 候補は banner 後の末尾 40 行。原因行の後に 39 行なら候補内、40 行なら候補外。
+        assert interactive_terminal_common._CAUSE_TAIL_LINES == 40
+        after = "".join(f"progress output {index}\n" for index in range(trailing))
+        transcript = _banner() + "error: boom\n" + after
+
+        summary = _summary(transcript)
+
+        assert summary.startswith(f"{label}: ")
+        if label == "last error line":
+            assert summary == "last error line: error: boom"
+        else:
+            assert summary == f"last output line: progress output {trailing - 1}"
+
+    @pytest.mark.parametrize("length", [1900, 100_000])
+    def test_long_single_line_summary_is_bounded(self, length: int) -> None:
+        transcript = _banner() + "Error: " + "y" * length + "\n"
+
+        message = str(_herdr_error(transcript))
+
+        assert len(_summary(transcript)) <= len("last error line: ") + 2000
+        assert "\n" not in message
+
+
+@pytest.mark.small
+class TestCauseSummaryTransientInvariant:
+    """Issue #527 完了条件 3: no_pattern 経路のメッセージは transient にならない。"""
+
+    @pytest.mark.parametrize(
+        "tail",
+        [
+            _node_crash(),
+            "Killed\n",
+            "Error: please try\tagain later\n",
+            "rate  limit reached\n",
+            "Error: please try again\n",
+            "again we failed\n",
+            "Error: we will try\n",
+            "thread 'main' panicked at src/main.rs:2:5:\nplease try\nagain\nnote: x\n",
+            "Error: try\tagain, then try  again\n",
+        ],
+    )
+    def test_no_pattern_message_is_never_transient(self, tail: str) -> None:
+        transcript = _banner() + tail
+        assert extract_terminal_diagnostic(transcript).kind == "no_pattern"
+
+        attempt_error = _attempt_error(transcript)
+
+        assert is_transient_error_text(attempt_error) is False
+
+    @pytest.mark.parametrize(
+        ("tail", "expected"),
+        [
+            (
+                "Error: please try\tagain later\n",
+                "last error line: Error: please try<WS>again later",
+            ),
+            ("rate  limit reached\n", "last output line: rate<WS>limit reached"),
+            ("Error: please try\u00a0again\n", "last error line: Error: please try<WS>again"),
+            (
+                "Error: try\tagain, then try  again\n",
+                "last error line: Error: try<WS>again, then try<WS>again",
+            ),
+        ],
+    )
+    def test_whitespace_normalization_breaks_match_with_ws_marker(
+        self, tail: str, expected: str
+    ) -> None:
+        # guard B(S): 正規化済み要約の一致箇所の空白だけを <WS> に置き換える（review-design DR1）。
+        assert _summary(_banner() + tail) == expected
+
+    def test_panic_body_lines_are_joined_with_separator(self) -> None:
+        summary = _summary(
+            _banner() + "thread 'main' panicked at src/main.rs:2:5:\nplease try\nagain\nnote: x\n"
+        )
+
+        assert summary.endswith("please try | again")
+
+
+_GUARD_TAIL = "please try\tagain"
+
+
+def _long_uri_cause(components: int, cause: str = "cannot load module") -> str:
+    """URI の component 数で原因行の長さだけを変える（review-design DR1 の反例の形）。"""
+    uri = "file:///tmp" + "/segment123" * components + "/module.js"
+    return f"Error: {cause} {uri}; {_GUARD_TAIL}\n"
+
+
+@pytest.mark.small
+class TestCauseSummaryGuardKeepsRunSpecificStripping:
+    """Issue #527 review-code R1: guard 分岐でも実行固有値で hash が分かれない（EB 4）。"""
+
+    def test_file_uri_path_difference_shares_hash(self) -> None:
+        banner = _banner()
+        first = banner + f"Error: cannot load module file:///home/aki/a/module.js; {_GUARD_TAIL}\n"
+        second = (
+            banner
+            + f"Error: cannot load module file:///tmp/other/longer/module.js; {_GUARD_TAIL}\n"
+        )
+
+        summary = _summary(first)
+
+        assert "file://<PATH>" in summary
+        assert "file:///" not in summary
+        assert "<WS>" in summary
+        assert _hash(first) == _hash(second)
+        assert is_transient_error_text(_attempt_error(first)) is False
+        assert is_transient_error_text(_attempt_error(second)) is False
+
+    def test_rust_panic_thread_id_difference_shares_hash(self) -> None:
+        banner = _banner()
+        first = banner + _rust_panic(_GUARD_TAIL, thread_id="123")
+        second = banner + _rust_panic(_GUARD_TAIL, thread_id="456")
+
+        summary = _summary(first)
+
+        assert "(123)" not in summary
+        assert "please try<WS>again" in summary
+        assert _hash(first) == _hash(second)
+        assert is_transient_error_text(_attempt_error(first)) is False
+        assert is_transient_error_text(_attempt_error(second)) is False
+
+    def test_absolute_path_and_timestamp_difference_shares_hash(self) -> None:
+        banner = _banner()
+        first = banner + (
+            f"Error: cannot open /home/aki/x/y.js at 2026-10-31T20:48:17Z; {_GUARD_TAIL}\n"
+        )
+        second = banner + (
+            f"Error: cannot open /tmp/other/longer/dir/y.js at 2026-11-01T01:02:03Z; {_GUARD_TAIL}\n"
+        )
+
+        assert _hash(first) == _hash(second)
+        assert is_transient_error_text(_attempt_error(first)) is False
+
+    def test_different_cause_under_guard_splits_hash(self) -> None:
+        banner = _banner()
+        first = banner + f"Error: cannot load module file:///home/aki/a/module.js; {_GUARD_TAIL}\n"
+        second = banner + f"Error: cannot open socket file:///home/aki/a/module.js; {_GUARD_TAIL}\n"
+
+        assert _hash(first) != _hash(second)
+
+
+@pytest.mark.small
+class TestCauseSummaryCharacterBoundary:
+    """Issue #527 review-design DR1: 実行固有値の長さで原因行が候補から落ちない（EB 2 / EB 4）。"""
+
+    def test_cause_line_length_across_old_window_shares_hash(self) -> None:
+        banner = _banner()
+        transcripts = [banner + _long_uri_cause(components) for components in (170, 180, 1000)]
+        lengths = [len(_long_uri_cause(components).rstrip("\n")) for components in (170, 180)]
+        assert lengths[0] < 2000 < lengths[1]
+
+        hashes = {_hash(transcript) for transcript in transcripts}
+
+        assert len(hashes) == 1
+        for transcript in transcripts:
+            diagnostic = extract_terminal_diagnostic(transcript)
+            assert diagnostic.kind == "no_pattern"
+            assert _summary(transcript) == (
+                "last error line: Error: cannot load module file://<PATH>; please try<WS>again"
+            )
+            assert is_transient_error_text(_attempt_error(transcript)) is False
+
+    def test_long_cause_line_with_different_cause_splits_hash(self) -> None:
+        banner = _banner()
+
+        assert _hash(banner + _long_uri_cause(180)) != _hash(
+            banner + _long_uri_cause(180, "cannot open socket")
+        )
+
+    def test_node_install_path_length_across_old_window_shares_hash(self) -> None:
+        homes = ["/tmp" + "/segment123" * components for components in (70, 80, 500)]
+        transcripts = [_banner() + _node_crash(node_home=home) for home in homes]
+        spans = [
+            len(transcript.strip()) - transcript.strip().index(_MISSING_DEP)
+            for transcript in transcripts[:2]
+        ]
+        assert spans[0] < 2000 < spans[1]
+
+        hashes = {_hash(transcript) for transcript in transcripts}
+
+        assert hashes == {_hash(_ob_transcript())}
+        for transcript in transcripts:
+            summary = _summary(transcript)
+            assert summary == f"last error line: {_MISSING_DEP}"
+            assert "Node.js v" not in summary
+            assert is_transient_error_text(_attempt_error(transcript)) is False
+
+    def test_message_length_is_bounded_for_long_cause_lines(self) -> None:
+        for components in (180, 10_000):
+            transcript = _banner() + _long_uri_cause(components)
+
+            message = str(_herdr_error(transcript))
+
+            fixed = message[: message.index("last error line: ")]
+            assert len(message) <= len(fixed) + len("last error line: ") + 2000
+            assert "\n" not in message
+
+
+@pytest.mark.small
+class TestCauseSummaryGuardLengthBound:
+    """Issue #527 review-code R2: guard の ``<WS>`` 置換後も要約は ``FINGERPRINT_LIMIT`` 以下。"""
+
+    @staticmethod
+    def _repeated_guard_cause(path: str, repeats: int) -> str:
+        return f"Error: cannot load module file://{path}; " + "please try\tagain; " * repeats + "\n"
+
+    @pytest.mark.parametrize("repeats", [150, 2000])
+    def test_summary_and_message_are_bounded_after_guard(self, repeats: int) -> None:
+        cause = self._repeated_guard_cause("/home/aki/a/module.js", repeats)
+        transcript = _banner() + cause
+        # 正規化だけで上限に達し、guard の <WS> 置換で伸びる入力（review-code R2 の再現形）。
+        assert len(normalize_error_text(cause)) == FINGERPRINT_LIMIT
+
+        summary = _summary(transcript)
+        message = str(_herdr_error(transcript))
+
+        assert summary.startswith("last error line: Error: cannot load module file://<PATH>; ")
+        assert "please try<WS>again" in summary
+        assert len(summary) <= len("last error line: ") + FINGERPRINT_LIMIT
+        fixed = message[: message.index("last error line: ")]
+        assert len(message) <= len(fixed) + len("last error line: ") + FINGERPRINT_LIMIT
+        assert "\n" not in message
+        assert is_transient_error_text(_attempt_error(transcript)) is False
+
+    def test_run_specific_difference_shares_hash_after_bounded_guard(self) -> None:
+        banner = _banner()
+        first = banner + self._repeated_guard_cause("/home/aki/a/module.js", 150)
+        second = banner + self._repeated_guard_cause("/tmp/other/longer/dir/module.js", 150)
+        different = banner + self._repeated_guard_cause("/home/aki/a/module.js", 150).replace(
+            "cannot load module", "cannot open socket"
+        )
+
+        assert _hash(first) == _hash(second)
+        assert _hash(first) != _hash(different)
+        for transcript in (first, second, different):
+            assert is_transient_error_text(_attempt_error(transcript)) is False
+
+
+@pytest.mark.small
+class TestOtherDiagnosticKindsUnchanged:
+    """Issue #527: provider_error / no_log / empty の detail は変えない。"""
+
+    def test_provider_error_detail_unchanged(self, tmp_path: Path) -> None:
+        terminal_log = tmp_path / "terminal.log"
+        terminal_log.write_text("upstream is at capacity\n", encoding="utf-8")
+
+        detail = _terminal_exit_detail(terminal_log, prefix=_HERDR_SHELL_PREFIX)
+
+        assert detail == (
+            f"{_HERDR_SHELL_PREFIX}; transient provider error detected (pattern: 'at capacity')"
+        )
+        assert extract_terminal_diagnostic("upstream is at capacity\n").cause_summary is None
+
+    def test_provider_error_with_sensitive_marker_unchanged(self, tmp_path: Path) -> None:
+        terminal_log = tmp_path / "terminal.log"
+        terminal_log.write_text("Please try again: invalid token\n", encoding="utf-8")
+
+        detail = _terminal_exit_detail(terminal_log, prefix=_HERDR_SHELL_PREFIX)
+
+        assert detail == (
+            f"{_HERDR_SHELL_PREFIX}; transient provider error detected (pattern: 'try again'); "
+            "sensitive marker also detected in transcript (pattern: 'invalid token')"
+        )
+
+    def test_no_log_and_empty_detail_unchanged(self, tmp_path: Path) -> None:
+        missing = tmp_path / "missing.log"
+        empty = tmp_path / "terminal.log"
+        empty.write_text("  \n", encoding="utf-8")
+
+        assert _terminal_exit_detail(missing, prefix=_HERDR_SHELL_PREFIX) == (
+            f"{_HERDR_SHELL_PREFIX}; diagnostic unavailable: no missing.log"
+        )
+        assert _terminal_exit_detail(empty, prefix=_HERDR_SHELL_PREFIX) == (
+            f"{_HERDR_SHELL_PREFIX}; diagnostic unavailable: terminal.log empty"
+        )
+
+
+@pytest.mark.small
+def test_wrapper_echoes_banner_end_constant() -> None:
+    """banner 終端行の文言は wrapper.sh と module 定数の契約（Issue #527）。"""
+    assert interactive_terminal_common._WRAPPER_BANNER_END == _BANNER_END
+    assert f'echo "{_BANNER_END}"' in WRAPPER.read_text(encoding="utf-8")
