@@ -185,8 +185,11 @@ Herdr の他の送出箇所はこれを使い続ける。`summary` を必須に�
    run_id 等を placeholder 化、redaction、空白正規化、`FINGERPRINT_LIMIT` で有界）。`cause_summary = f"{ラベル}: {S}"`。
    行の連結に空白ではなく ` | ` を使うのは、行をまたいで transient pattern（例: `try` / `again` の 2 行）が成立しない
    ようにするため（pattern に `|` は含まれない）。
-8. **transient 不変の guard**: `find_transient_pattern(S)` が一致した場合に限り、`S` の代わりに raw の
-   `" | ".join(Ls)`（窓内の行なので有界）を使う。理由と証明は § 制約・前提条件。
+8. **transient 不変の guard**: `find_transient_pattern(S)` が一致した場合に限り、`S` の代わりに
+   `G = " | ".join(P_f(行) for 行 in Ls)`（**規則 6 の `P_f` は適用済み**・`normalize_error_text` は通さない。窓内の行なので
+   有界）を使う。guard で省くのは空白正規化を含む `normalize_error_text` だけで、`P_f` は省かない
+   （review-code cycle 1 の指摘 R1: raw の `Ls` に戻すと file URI の path と 3 桁以下の thread ID が復活し、後段の
+   `compute_signature` の正規化では除去できないため EB 4 が崩れる）。理由と証明は § 制約・前提条件。
 
 ### 使用例
 
@@ -208,6 +211,9 @@ str(exc)
 
 # file URI を含む原因行の場合（path は実行ごとの値として除く）
 # "...; last error line: Error: cannot load module file://<PATH>"
+
+# 原因行の空白正規化で transient pattern が成立する場合（guard。P_f は適用、正規化だけ省く。\t は実際の TAB）
+# "...; last error line: Error: cannot load module file://<PATH>; please try\tagain"
 
 # agent が何も出さずに終わった場合
 # "...; no known provider error pattern in transcript; no agent output line in transcript tail"
@@ -233,7 +239,8 @@ CLIExecutionError("implement", 1, long_stderr)  # str(exc) は long_stderr[:200]
   - `S` が一致を新たに作りうる段は空白正規化（`\s+` → 1 空白。例: `try\tagain` /
     `try  again` / NBSP → `try again`）だけである（redaction と placeholder 置換は `<...>` / `***` / `Bearer ***` を挿入するだけで
     pattern を作れない。traceback フレーム行除去は行全体を消す。ANSI は `_strip_ansi` で除去済み）。この場合は guard で
-    raw の `" | ".join(Ls)` を使う。各行は `clean` の部分文字列で、区切り ` | ` をまたぐ一致も無いので `find_transient_pattern` は `None`。
+    `G = " | ".join(P_f(行) for 行 in Ls)` を使う。各行は `clean` の部分文字列（transient pattern を含まない）で、上記のとおり
+    `P_f` は pattern を作れず、区切り ` | ` をまたぐ一致も無いので `find_transient_pattern(G)` は `None`。
   - したがって `is_transient_error_text(attempt_error)` は修正前後とも `False`。safety gate（`handler.py:151`）は
     candidate の場合にしか評価されない（`handler.py:278` が先に `not candidate` を返す）ので、要約に sensitive 語が
     入っても回復判定は変わらない。
@@ -246,10 +253,18 @@ CLIExecutionError("implement", 1, long_stderr)  # str(exc) は long_stderr[:200]
 - **原因行はメッセージの前寄りに置く。** 要約の前は prefix（61 文字）+ 固定文で約 125 文字。incident 根拠欄
   （`steps/<step>/result.json error=CLIExecutionError: Step '<id>' CLI exited with code 1: ` の後）でも 500 文字の
   窓に OB の原因行（111 文字）全体が入る。
-- **要約は常に `N(L)`（長さで raw / 正規化を切り替えない）。** #516 の design review で示されたとおり、raw を文字数で
+- **要約は常に `N(L)`（長さで raw / 正規化を切り替えない。唯一の例外である transient guard の分岐は次項）。** #516 の design review で示されたとおり、raw を文字数で
   切ると可変値の長さで hash が分裂し、長さで表現を切り替えると正規化の文脈依存・非冪等性で分裂する。`N(L)` が等しい
   （= 同じ原因）なら fingerprint 算出への入力文字列 `P + N(L)` 自体が同一なので、hash は決定性だけで一致する。
-  例外は transient guard の分岐（極めて稀。§ 既知の限界）。
+- **transient guard の分岐でも EB 4 を保つ。** 証明:
+  - guard を使うかどうかは `S`（EB 4 の差では変わらない値）だけで決まるので、同じ原因の 2 つの失敗は必ず同じ分岐に入る。
+  - guard 分岐のメッセージは `P + G`。fingerprint は `compute_signature` が `normalize_error_text(P + G)` から作る。
+    実行ごとの値のうち `normalize_error_text` が除去できるもの（`<PATH>` 化される絶対 path・run_id・UUID・timestamp・
+    4 桁以上の数値等）はこの段で除去され、除去できないもの（file URI の path・3 桁以下の thread ID）は `G` の時点で `P_f`
+    が除去済み。したがって同じ原因なら `normalize_error_text(P + G)` が一致し hash も一致する。raw の文字数切り詰めは
+    しないので（`G` は窓内の行で有界、切り詰めは正規化後の `FINGERPRINT_LIMIT` だけ）、長さの違いによる分裂も起きない。
+  - 不変条件として、`P_f` は「`normalize_error_text` が除去できない実行固有値を補う前処理」であり、要約のどの分岐でも
+    省略しない。
 - **抜粋は行単位・末尾窓内で決める。** 末尾 N 文字の生の窓をそのまま使うと、窓の開始位置が path 長などでずれて
   EB 4 を壊す。行単位なら path 長は行の中だけの差になり正規化で消える。窓を `clean_tail` と同じ末尾 2000 文字に
   限るのは、長い session の途中で agent が表示した古い `error:` 行を最後の原因と誤認しにくくするためと、raw の `L`
@@ -287,8 +302,11 @@ CLIExecutionError("implement", 1, long_stderr)  # str(exc) は long_stderr[:200]
   足す（Herdr `no_pattern` の要約生成の中だけで閉じた変更）。
 - Rust panic の本文は `note:` / `stack backtrace:` / 空行 / 候補の終わりで止める。本文が空行を含む複数段落の場合は
   最初の段落だけが要約に入る（全文は `terminal.log`）。
-- transient guard の分岐（原因行の空白正規化で transient pattern が成立する場合のみ）では raw の行を使うため、
-  path 長等の可変値で hash が分かれうる。ただし transient 判定の不変性（完了条件）を優先する。
+- transient guard の分岐（原因行の空白正規化で transient pattern が成立する場合のみ）では、メッセージ上の要約は
+  `P_f` 適用済みだが正規化前の行になる。このため `result.json.error` 等の表示では絶対 path・timestamp 等が placeholder
+  にならず実値のまま、空白も TAB 等のまま残る（fingerprint は後段で正規化されるので EB 4 は保たれる。§ 制約・前提条件）。
+  credential の redaction も要約段では行わないが、incident 根拠欄は従来どおり `sanitize_evidence` で mask され、
+  `stderr` 属性・`terminal.log` には従来から raw の transcript がある。
 - メッセージ上の path・timestamp 等は `<PATH>` / `<TS>` 等の placeholder になる（実値は `terminal.log` で読む）。
 - 修正後、Herdr `no_pattern` 経路の fingerprint は変わり、既存 incident（apokamo/kamo2#2018 等）とは一致せず新しい
   incident が 1 回起票される（`## 決定事項` で許容済み）。
@@ -325,9 +343,10 @@ def _transcript_cause_summary(clean: str) -> str:
         ls = [candidates[idx]]
         if _RUST_PANIC_RE.match(candidates[idx]):      # R1: 本文は次行以降
             ls += <idx+1 から note:/stack backtrace:/正規化で空の行/終端 までの行>
-        summary = normalize_error_text(" | ".join(_strip_run_specific(x) for x in ls))  # R2: file URI path・thread ID
+        stripped = [_strip_run_specific(x) for x in ls]                 # R2: file URI path・thread ID
+        summary = normalize_error_text(" | ".join(stripped))
         if find_transient_pattern(summary) is not None:
-            summary = " | ".join(ls)              # transient 不変の guard
+            summary = " | ".join(stripped)        # transient 不変の guard（P_f は維持し、正規化だけ省く）
         return f"{label}: {summary}"
     return "no agent output line in transcript tail"
 
@@ -361,7 +380,7 @@ raise CLIExecutionError(step.id, 1, detail, session_resolution=resolved,
 | fingerprint の互換性 | 互換処理をせず、Herdr `no_pattern` の新 hash による 1 回の再起票を許容。`SIGNATURE_SCHEMA_VERSION` は上げない。既存 incident は操作しない | 人間決定: `## 決定事項` > 人間決定「fingerprint の互換性」（grill-me 質問 2）。既存方針 `signature.py:24-26`（#303 決定 E）、ADR 008 | `signature.py` を変更しない（入力だけが変わる）ことを方針に固定 |
 | EB 4 / 再現テスト観点 (c) | 同じ原因で実行ごとの値だけが違う失敗は同じ hash | 人間決定: `## 決定事項` > 人間決定「EB・完了条件の追加」（grill-me 質問 3） | banner（`model:` 等の非正規化値を含む）を候補から除外し、原因行は `normalize_error_text` に 1 回通した `N(L)` を使う。Small テストで run_id・path 長・model・effort・timestamp 違いの hash 一致を検証 |
 | 抜粋の作り方 | 末尾 2000 文字窓の完全な行から、banner 後のエラー行パターン一致の最後の行（無ければ最終出力行）を選び `N(L)` にする | AI の仮定（two-way door。`## 決定事項` > AI の仮定 1 行目が設計に委任）。根拠: OB の実 transcript は最終行が `Node.js v26.10.0` で原因行ではない（試作で最終行方式は Node / Rust のクラッシュを集約することを確認）、banner は `model:` 等の可変値を含む、#516 の review で raw 文字数の切り詰めは hash を分裂させると実証済み。試作: OB の transcript で要約に原因行全体が入り hash `c3d3edbaa3adc68c…`、`Killed` 版は `975c83f6c57ec8a6…`（別 hash）、run_id・model・workdir（長さ違い）を変えた版は同じ `c3d3edbaa3adc68c…`。後段の検査先: issue-review-design、Small テスト (a)(b)(c)。review-design cycle 1 の指摘 R1（Rust panic の本文が次行にあり見出しだけでは別原因が同 hash、thread ID 付き形式が非一致）・R2（file URI の path が正規化されず同原因が別 hash になり EB 4 を弱める）を受けて規則を修正。修正後の試作: panic 本文 `failed to open config` / `failed to connect socket` は `c99fe127f7e2d8f8…` / `ac5e3f981aee7eb4…`（別）、thread ID `(6018279)` / `(1234567)` は同じ `f64d941342fe877b…`、`file:///home/aki/a/module.js` / `file:///tmp/other/longer/module.js` は同じ `132f780eaf70a928…`、全ケース `is_transient_error_text=False` | エラー行パターンは Node / Python / Rust / Go / git / clap の代表形に限定し、Python の traceback フレーム（正規化で空）・Node の `at ...` 行は一致しない形にする。窓の先頭断片行を除外。banner 終端行は module 定数 + wrapper.sh との契約テスト。Rust panic は見出し + 次行以降の本文を ` | ` で連結。要約前に file URI の path と panic の thread ID を除去（`signature.py` は不変で、EB 4 を既知の限界で弱めない） |
-| transient 判定の不変性 | 修正前後で `is_transient_error_text(attempt_error)` は `no_pattern` 経路で常に `False` | AI の仮定（`## 決定事項` > AI の仮定 2 行目）。根拠と証明は § 制約・前提条件（`no_pattern` の前提、pattern と区切り文字、空白正規化だけが一致を作りうること）。後段の検査先: issue-review-design、既存 transient テスト + 空白境界テスト | 空白正規化で pattern が成立する場合に限り raw `L` を使う guard を追加（`L` は `clean` の部分文字列なので一致しない） |
+| transient 判定の不変性 | 修正前後で `is_transient_error_text(attempt_error)` は `no_pattern` 経路で常に `False`。かつ guard の分岐でも EB 4（人間決定）を弱めない | AI の仮定（`## 決定事項` > AI の仮定 2 行目）。根拠と証明は § 制約・前提条件（`no_pattern` の前提、pattern と区切り文字、空白正規化だけが一致を作りうること、guard 分岐の EB 4 証明）。review-code cycle 1 の指摘 R1（guard が raw 行に戻すため file URI path / thread ID だけが違う同原因が別 hash `6822b335…` / `e85ef09c…`、`aaff4acb…` / `4f6917da…` になる）を受けて guard を修正。修正後の試作（実装 commit `9573555` の guard 1 行だけを差し替え、テスト module の `_summary` / `_hash` / `_attempt_error` で算出）: URI path 違い（`please try\tagain` 付き）は同じ `f8ebe5f7e0b7a5bf…`、thread ID `(123)` / `(456)` は同じ `8eb26a550e829847…`、原因文違いは別 `a29b1362f4e0cb40…`、絶対 path・timestamp 違いは同じ `7d1377d08f42e0fc…`、guard 非発動の URI 違いは従来どおり同じ `9ea2dbc077d20ca1…`、全ケース `is_transient_error_text=False`。後段の検査先: issue-review-design、既存 transient テスト + 空白境界テスト + guard × 実行固有値の組合せテスト | 空白正規化で pattern が成立する場合に限り、`P_f` 適用済み・正規化前の `G` を使う guard（`P_f` は全分岐で省略しない）。旧設計の「guard 分岐では hash が分かれうる」既知の限界は削除 |
 | 他分岐・recorder 付記の不変 | provider_error / no_log / empty の detail とメッセージ、recorder state 付記の文言は変えない | AI の仮定（`## 決定事項` > AI の仮定 3 行目）。根拠: Issue 完了条件 3、#296 の safety gate 契約。後段の検査先: issue-review-code、既存テスト | `summary` を渡すのは `no_pattern` だけ。付記は従来どおり detail の末尾に付き、`no_pattern` では今回からメッセージにも残る（以前は 2000 文字の log tail の後ろにあり `[:200]` で必ず落ちていた。文言は不変） |
 | docs 更新 | `docs/cli-guides/interactive-terminal-runner.md` の Troubleshooting 行を更新する | AI の仮定（`## 決定事項` > AI の仮定 4 行目が設計に委任）。根拠: 同 docs の行 `Herdr pane returned to its shell before writing verdict.yaml` が「Check the tail of `terminal.log` attached to the error」と、エラーに log tail が付く現行挙動を書いている。後段の検査先: i-dev-final-check | エラーには原因行の要約が付き、全文の末尾は `pane-metadata.json` の `terminal_diagnostic.clean_tail` / `terminal.log` で読む、と書き換える |
 
@@ -413,10 +432,16 @@ fingerprint の変化と再起票は人間決定で許容済み。
   1 行が 10 万文字でも要約は有界（`FINGERPRINT_LIMIT` 以下）でメッセージに改行が入らない。
 - **transient 判定の不変（完了条件 3）**: `no_pattern` の各 transcript（上記すべて）で、`is_transient_error_text(attempt_error)`
   が `False`。空白正規化の境界: `please try\tagain later` / `rate  limit` / `try again` を原因行に持つ transcript は
-  `no_pattern` で、要約は raw 行（guard）になり、`is_transient_error_text(attempt_error)` は `False`。区切り境界: 原因行が
+  `no_pattern` で、要約は `P_f` 適用済み・正規化前の行（guard の `G`）になり、`is_transient_error_text(attempt_error)` は `False`。区切り境界: 原因行が
   `again` で始まる・`try` で終わる場合も `False`。Rust panic の本文が `please try` / `again` の 2 行に分かれる場合も
   ` | ` 連結のため `False`。既存の `tests/test_interactive_terminal_common.py` の transient /
   sensitive テスト（provider_error 経路）が変更なしで通る。
+- **guard 分岐でも実行固有値で分裂しない（review-code R1 / EB 4）**: guard が発動する（原因行に `please try\tagain` を含む）
+  transcript で、(i) 原因行の file URI の path・長さだけが違う（`file:///home/aki/a/module.js` / `file:///tmp/other/longer/module.js`）
+  2 つ、(ii) Rust panic 見出しの thread ID だけが違う（`(123)` / `(456)`、本文が `please try\tagain`）2 つ、(iii) 原因行の
+  絶対 path・ISO timestamp だけが違う 2 つ、のそれぞれで `fingerprint_hash` が一致する。要約は (i) で `file://<PATH>` を含み
+  `file:///` を含まない、(ii) で thread ID（`(123)`）を含まない。いずれも `is_transient_error_text(attempt_error)` は `False`。
+  対照として、guard 発動下で原因文だけが違う 2 つ（`cannot load module` / `cannot open socket`）は hash が異なる。
 - **他分岐の不変**: `provider_error`（sensitive marker 併記あり / なし）・`no_log`・`empty` の `_terminal_exit_detail` の
   戻り値と、Herdr 送出時の `str(exc)` が修正前と同じ（`summary` を渡さない）。recorder state 付記は `no_pattern` の
   detail 末尾にも従来の文言で付き、メッセージにも残る。
