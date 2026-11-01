@@ -837,6 +837,35 @@ class TestRunnerAbortBestEffort:
         assert "implement (attempt 1): ABORT" in progress
         assert "(exit 143, SIGTERM)" in progress
 
+    def test_herdr_no_pattern_summary_is_persisted_untruncated(self, tmp_path: Path) -> None:
+        """Issue #527: Herdr no_pattern の要約が result.json / run.log に 200 文字で切れずに残る。"""
+        workflow = _single_step_workflow()
+        detail = (
+            "Herdr pane returned to its shell before writing verdict.yaml; "
+            "no known provider error pattern in transcript; last error line: "
+            "Error: Missing optional dependency @openai/codex-linux-x64. "
+            "Reinstall Codex: npm install -g @openai/codex@latest"
+        )
+        assert len(detail) > 200
+
+        def mock_execute_cli(**kwargs: object) -> CLIResult:
+            raise CLIExecutionError("implement", 1, detail, summary=detail)
+
+        with (
+            patch("kaji_harness.runner.execute_cli", side_effect=mock_execute_cli),
+            patch("kaji_harness.runner.validate_skill_exists"),
+            pytest.raises(CLIExecutionError),
+        ):
+            _make_runner(tmp_path, workflow).run()
+
+        run_dir = _run_root(tmp_path)
+        expected = f"CLIExecutionError: Step 'implement' CLI exited with code 1: {detail}"
+        result = _result_json(run_dir, "implement", "attempt-001")
+        assert result["error"] == expected
+        ends = _events(run_dir, "workflow_end")
+        assert len(ends) == 1
+        assert ends[0]["error"] == expected
+
     def test_step_timeout_records_abort_result_and_reraises(self, tmp_path: Path) -> None:
         """StepTimeoutError(returncode=-15) → result.json(status=ABORT,
         signal=SIGTERM)、元例外 re-raise（crash semantics 維持）。"""

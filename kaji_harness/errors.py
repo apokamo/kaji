@@ -133,6 +133,18 @@ class CLIExecutionError(HarnessError):
     session 解決結果を ``session_resolution`` として運ぶ。runner はこれを
     ``result.json`` の ``session_id`` へ写す。解決を試みない経路では ``None``
     のままにし、runner 側の既存 fallback を維持する。
+
+    Issue #527: ``summary`` は Herdr pane 早期終了（transcript 診断 ``no_pattern``）で、
+    端末ログ末尾の原因行を含む要約を切らずにメッセージへ載せるためのもの。``None`` の
+    経路（headless・Herdr の他の送出）は従来どおり ``stderr`` の先頭 200 文字を載せる。
+    メッセージは ``result.json.error`` を経て incident の fingerprint 入力になる。
+
+    Attributes:
+        step_id: 失敗した step の ID。
+        returncode: CLI の終了コード。
+        stderr: CLI の stderr（または送出側が組み立てた診断文字列）の全文。
+        session_resolution: 異常終了経路で確定した session 解決結果。未試行は ``None``。
+        summary: メッセージに切らずに載せる要約。``None`` は ``stderr[:200]`` を使う。
     """
 
     def __init__(
@@ -142,12 +154,15 @@ class CLIExecutionError(HarnessError):
         stderr: str,
         *,
         session_resolution: SessionResolution | None = None,
+        summary: str | None = None,
     ):
         self.step_id = step_id
         self.returncode = returncode
         self.stderr = stderr
         self.session_resolution = session_resolution
-        super().__init__(f"Step '{step_id}' CLI exited with code {returncode}: {stderr[:200]}")
+        self.summary = summary
+        detail = summary if summary is not None else stderr[:200]
+        super().__init__(f"Step '{step_id}' CLI exited with code {returncode}: {detail}")
 
 
 class CLINotFoundError(HarnessError):

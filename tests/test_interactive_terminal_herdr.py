@@ -1549,6 +1549,7 @@ class TestExecuteHerdr:
 
         close.assert_called_once()
         assert exc_info.value.session_resolution == SessionResolution(None)
+        assert exc_info.value.summary is None
         assert "rendered snapshot" not in exc_info.value.stderr
         assert "transcript may be incomplete (recorder state: unknown)" in exc_info.value.stderr
         metadata = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
@@ -1557,6 +1558,86 @@ class TestExecuteHerdr:
         assert metadata["transcript_recorder_state"] == "unknown"
         assert "transcript_truncated" not in metadata
         assert "close was not confirmed" in metadata["close_error"]
+
+    @pytest.mark.parametrize(
+        ("state", "flagged"), [("complete", False), ("incomplete ENOSPC", True)]
+    )
+    def test_shell_return_no_pattern_passes_cause_summary(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str, flagged: bool
+    ) -> None:
+        """Issue #527: no_pattern の早期終了だけ ``summary`` を渡し、原因行がメッセージに残る。"""
+        prompt_path = tmp_path / "prompt.txt"
+        prompt_path.write_text("do work", encoding="utf-8")
+        terminal_log = tmp_path / "terminal.log"
+        terminal_log.write_bytes(
+            b"kaji interactive terminal runner\r\nagent: codex\r\n"
+            b"prompt_path: /home/aki/dev/kamo2/.kaji/artifacts/2017/runs/261031204817/"
+            b"steps/review-ready/attempt-001/prompt.txt\r\n\r\n"
+            b"The agent must read prompt_path and write a pure YAML verdict to verdict_path."
+            b"\r\n\r\n"
+            b"Error: Missing optional dependency @openai/codex-linux-x64. "
+            b"Reinstall Codex: npm install -g @openai/codex@latest\r\n"
+            b"    at findCodexExecutable (file:///x/codex.js:108:9)\r\n\r\n"
+            b"Node.js v26.10.0\r\n"
+        )
+        _write_state(terminal_log, state)
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "empty-codex-home"))
+        step = Step(id="review-ready", skill="review-ready", agent="codex")
+        launch = HerdrPaneLaunch(
+            pane_id="w1:p2",
+            split_target_pane="w1:p1",
+            direction="right",
+            panes_before=[],
+            panes_pruned=[],
+        )
+        shell_only = {
+            "shell_pid": 100,
+            "foreground_processes": [{"pid": 100, "name": "bash"}],
+        }
+
+        with (
+            patch(
+                "kaji_harness.interactive_terminal_herdr._preflight_herdr",
+                return_value=("/usr/bin/herdr", "w1:p1", "herdr 0.8.2"),
+            ),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._launch_herdr_pane",
+                return_value=launch,
+            ),
+            patch("kaji_harness.interactive_terminal_herdr._mark_herdr_pane"),
+            patch("kaji_harness.interactive_terminal_herdr._run_herdr_pane_command"),
+            patch(
+                "kaji_harness.interactive_terminal_herdr._get_herdr_process_info",
+                return_value=shell_only,
+            ),
+            patch("kaji_harness.interactive_terminal_herdr._close_owned_herdr_pane"),
+            patch(
+                "kaji_harness.interactive_terminal_herdr.time.monotonic",
+                side_effect=[0.0, 1.0, 2.0, 3.0],
+            ),
+            patch("kaji_harness.interactive_terminal_herdr.time.sleep"),
+        ):
+            with pytest.raises(CLIExecutionError, match="returned to its shell") as exc_info:
+                execute_interactive_terminal_herdr(
+                    step=step,
+                    prompt_path=prompt_path,
+                    verdict_path=tmp_path / "verdict.yaml",
+                    workdir=tmp_path,
+                    timeout=30,
+                )
+
+        exc = exc_info.value
+        assert exc.summary == exc.stderr
+        assert "last error line: Error: Missing optional dependency @openai/codex-linux-x64" in str(
+            exc
+        )
+        assert "kaji interactive terminal runner" not in str(exc)
+        marker = "; transcript may be incomplete (recorder state: incomplete)"
+        assert str(exc).endswith(marker) is flagged
+        metadata = json.loads((tmp_path / "pane-metadata.json").read_text(encoding="utf-8"))
+        assert metadata["terminal_diagnostic"]["kind"] == "no_pattern"
+        assert "cause_summary" not in metadata["terminal_diagnostic"]
+        assert "Node.js v26.10.0" in metadata["terminal_diagnostic"]["clean_tail"]
 
     def test_timeout_captures_metadata_and_closes_owned_pane(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2400,8 +2481,9 @@ class TestTranscriptMetadata:
         if state is not None:
             _write_state(terminal_log, state)
 
-        detail = _recorded_exit_detail(terminal_log, prefix="Herdr pane exited")
+        detail, kind = _recorded_exit_detail(terminal_log, prefix="Herdr pane exited")
 
+        assert kind == "provider_error"
         assert detail.startswith("Herdr pane exited; transient provider error detected")
         expected_state = "incomplete" if state and state.startswith("incomplete") else "unknown"
         marker = f"; transcript may be incomplete (recorder state: {expected_state})"
