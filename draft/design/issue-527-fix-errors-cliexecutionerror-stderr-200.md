@@ -157,20 +157,36 @@ Herdr の他の送出箇所はこれを使い続ける。`summary` を必須に�
    場合、先頭の断片行は候補から除く。
 2. **banner の除外**: 窓内に wrapper banner の終端行（`The agent must read prompt_path and write a pure YAML verdict to verdict_path.`。
    module 定数として持つ）があれば、その最後の出現行までを候補から除く。
-3. **失敗原因行（優先）**: 候補を後ろから見て、エラー行パターン `_ERROR_LINE_RE` に一致する最初の行を原因行 `L` とし、
-   ラベルを `last error line` とする。パターン（行頭の空白は許容、行頭 anchor）:
+3. **失敗原因（優先）**: 候補を後ろから見て、エラー行パターン `_ERROR_LINE_RE` に一致する最初の行を原因行とし、
+   ラベルを `last error line` とする。要約の元になる行の並び `Ls` は原則この 1 行（`Ls = [原因行]`）。パターン（行頭の空白は許容、行頭 anchor）:
    - `(<識別子>)?Error|Exception` の直後に（`[...]` を挟んでもよい）`:`（例: `Error:` / `TypeError:` /
      `OSError: [Errno 30]` / `ModuleNotFoundError:` / `java.io.IOException:`）
    - 大小文字無視の `error` / `fatal` / `fatal error` / `panic` の直後に（`[...]` を挟んでもよい）`:`
      （例: Rust/clap の `error: ...`、`error[E0433]:`、git の `fatal:`、Go の `panic:`、Node heap OOM の `FATAL ERROR:`）
-   - `thread '<name>' panicked at `（Rust の panic。codex は Rust native binary）
+   - `thread '<name>' panicked at ` および thread ID 付きの `thread '<name>' (<数字>) panicked at `
+     （Rust の panic。codex は Rust native binary。thread ID 付きは Rust 公式 Book の現行例の形式）
+   - **Rust panic の本文の連結（review-design R1）**: 原因行が panic 見出しの場合、現行の Rust（1.73 以降）は原因本文を
+     見出しの**次行以降**に出す（`thread 'main' panicked at src/main.rs:2:5:` の次行が `failed to open config`）。
+     このため見出しの直後から、`note: ` / `stack backtrace:` で始まる行、正規化で空になる行（空行等）、候補の終わり、
+     のいずれかに達するまでの行を本文として `Ls` に加える（`Ls = [見出し, 本文行...]`）。旧形式
+     （`thread 'main' panicked at 'msg', src/main.rs:2:5` の 1 行）は次行が `note:` なので見出し 1 行のまま。
 4. **最終出力行（fallback）**: 3 に一致する行が無ければ、候補を後ろから見て `normalize_error_text(行)` が空でない
-   最初の行を `L` とし、ラベルを `last output line` とする（#516 の規則と同じ）。
+   最初の行 1 行を `Ls` とし、ラベルを `last output line` とする（#516 の規則と同じ）。
 5. 候補が尽きたら `cause_summary = "no agent output line in transcript tail"`。
-6. 要約 `S = normalize_error_text(L)`（#516 と同じく常に 1 回正規化。path・timestamp・run_id 等を placeholder 化、
-   redaction、空白正規化、`FINGERPRINT_LIMIT` で有界）。`cause_summary = f"{ラベル}: {S}"`。
-7. **transient 不変の guard**: `find_transient_pattern(S)` が一致した場合に限り、`S` の代わりに raw の `L`
-   （窓内の 1 行なので 2000 文字以下）を使う。理由と証明は § 制約・前提条件。
+6. **要約前の実行固有値の除去（review-design R2）**: `Ls` の各行に、正規化の前に次の 2 つの置換だけを行う（`P_f`）。
+   どちらも Herdr `no_pattern` の要約生成の中だけで行い、`signature.py` の正規化は変えない。
+   - **file URI の path**: `file://` に続く絶対 path（`file://(?:/[\w.\-@+%~]+)+/?`）を `file://<PATH>` に置換する。
+     `normalize_error_text` の `_ABS_PATH_RE` は lookbehind `(?<![\w/])` のため `file:///home/...` の path を置換しない
+     （`signature.py:61`）。置換しないと、同じ原因でも worktree・一時ディレクトリ・home・install path の違いで hash が
+     分かれる（EB 4 違反）。path 直後の `:108:9` のような行・列番号は残す（原因箇所の識別に使う値）。
+   - **Rust panic の thread ID**: 見出しの `thread '<name>' (<数字>) panicked at` を `thread '<name>' panicked at` にする。
+     thread ID は実行ごとの値で、3 桁以下だと `_LONG_NUM_RE`（4 桁以上）で置換されない。
+7. 要約 `S = normalize_error_text(" | ".join(P_f(行) for 行 in Ls))`（#516 と同じく常に 1 回正規化。path・timestamp・
+   run_id 等を placeholder 化、redaction、空白正規化、`FINGERPRINT_LIMIT` で有界）。`cause_summary = f"{ラベル}: {S}"`。
+   行の連結に空白ではなく ` | ` を使うのは、行をまたいで transient pattern（例: `try` / `again` の 2 行）が成立しない
+   ようにするため（pattern に `|` は含まれない）。
+8. **transient 不変の guard**: `find_transient_pattern(S)` が一致した場合に限り、`S` の代わりに raw の
+   `" | ".join(Ls)`（窓内の行なので有界）を使う。理由と証明は § 制約・前提条件。
 
 ### 使用例
 
@@ -186,6 +202,12 @@ str(exc)
 
 # Python traceback で終わる場合
 # "...; last error line: ModuleNotFoundError: No module named 'foo'"
+
+# Rust panic（現行形式。本文は次行）の場合
+# "...; last error line: thread 'main' panicked at src/main.rs:2:5: | failed to open config"
+
+# file URI を含む原因行の場合（path は実行ごとの値として除く）
+# "...; last error line: Error: cannot load module file://<PATH>"
 
 # agent が何も出さずに終わった場合
 # "...; no known provider error pattern in transcript; no agent output line in transcript tail"
@@ -205,10 +227,13 @@ CLIExecutionError("implement", 1, long_stderr)  # str(exc) は long_stderr[:200]
     メッセージ中の要約の前は固定文 `...; last error line: ` / `last output line: ` で `: ` で終わり、後ろは `; transcript ...`
     または文字列末尾なので、要約と固定文をまたぐ一致は起きない。固定文自体（prefix・ラベル・`no known provider error
     pattern in transcript`）も pattern を含まない（現行メッセージにも同じ固定文があり非 transient）。
-  - `S = normalize_error_text(L)` が一致を新たに作りうる段は空白正規化（`\s+` → 1 空白。例: `try\tagain` /
+  - 複数行（Rust panic の本文）は ` | ` で連結するので、行境界をまたぐ一致は起きない。`P_f` は `file://<PATH>` と
+    thread ID の除去で、`<...>` の挿入と数字・括弧の削除だけなので pattern を作れない（pattern は英字・空白・バッククォート・`_` のみ）。
+    thread ID 除去は `' (123) panicked` → `' panicked` で、英字同士を新たに隣接させない。
+  - `S` が一致を新たに作りうる段は空白正規化（`\s+` → 1 空白。例: `try\tagain` /
     `try  again` / NBSP → `try again`）だけである（redaction と placeholder 置換は `<...>` / `***` / `Bearer ***` を挿入するだけで
     pattern を作れない。traceback フレーム行除去は行全体を消す。ANSI は `_strip_ansi` で除去済み）。この場合は guard で
-    raw の `L` を使う。`L` は `clean` の部分文字列なので `find_transient_pattern(L)` は `None`。
+    raw の `" | ".join(Ls)` を使う。各行は `clean` の部分文字列で、区切り ` | ` をまたぐ一致も無いので `find_transient_pattern` は `None`。
   - したがって `is_transient_error_text(attempt_error)` は修正前後とも `False`。safety gate（`handler.py:151`）は
     candidate の場合にしか評価されない（`handler.py:278` が先に `not candidate` を返す）ので、要約に sensitive 語が
     入っても回復判定は変わらない。
@@ -257,10 +282,12 @@ CLIExecutionError("implement", 1, long_stderr)  # str(exc) は long_stderr[:200]
   `clean_tail` の先頭（= メッセージに残る約 80 文字）が TUI 出力の途中になり実行ごとに変わっているので、退行ではない。
 - 窓内に agent が通常作業中に表示した `error:` 形式の行が残っていて、その後の終了原因がパターンに一致しない場合、
   その行が `last error line` として表示される。全文は `terminal.log` / `pane-metadata.json` で読む。
-- 原因行に含まれる `file:///...` 形式の path は `_ABS_PATH_RE` の lookbehind により正規化されない（signature.py の
-  既存の性質）。同じ machine・同じ install path なら同じ値なので EB 4 は保たれるが、machine 間では hash が分かれうる。
-  `signature.py` は変更しない（修正範囲外）。
-- transient guard の分岐（原因行の空白正規化で transient pattern が成立する場合のみ）では raw の `L` を使うため、
+- `file://` 以外の URI scheme（`http://host/...` 等）に含まれる path、`P_f` の文字クラスに無い文字（空白等）を含む
+  file URI の path は除去しない。原因行に実行ごとの値として現れる既知の実例は無い。発生した場合は `P_f` の置換対象を
+  足す（Herdr `no_pattern` の要約生成の中だけで閉じた変更）。
+- Rust panic の本文は `note:` / `stack backtrace:` / 空行 / 候補の終わりで止める。本文が空行を含む複数段落の場合は
+  最初の段落だけが要約に入る（全文は `terminal.log`）。
+- transient guard の分岐（原因行の空白正規化で transient pattern が成立する場合のみ）では raw の行を使うため、
   path 長等の可変値で hash が分かれうる。ただし transient 判定の不変性（完了条件）を優先する。
 - メッセージ上の path・timestamp 等は `<PATH>` / `<TS>` 等の placeholder になる（実値は `terminal.log` で読む）。
 - 修正後、Herdr `no_pattern` 経路の fingerprint は変わり、既存 incident（apokamo/kamo2#2018 等）とは一致せず新しい
@@ -293,11 +320,14 @@ def _transcript_cause_summary(clean: str) -> str:
         lines = lines[1:]                         # 先頭の断片行を除く
     banner_end = <lines 中で strip() == _WRAPPER_BANNER_END の最後の index>
     candidates = lines[banner_end + 1:] if 見つかった else lines
-    for label, line in (後ろから _ERROR_LINE_RE 一致 → "last error line",
-                        後ろから normalize_error_text(line) が空でない → "last output line"):
-        summary = normalize_error_text(line)
+    for label, idx in (後ろから _ERROR_LINE_RE 一致 → "last error line",
+                       後ろから normalize_error_text(line) が空でない → "last output line"):
+        ls = [candidates[idx]]
+        if _RUST_PANIC_RE.match(candidates[idx]):      # R1: 本文は次行以降
+            ls += <idx+1 から note:/stack backtrace:/正規化で空の行/終端 までの行>
+        summary = normalize_error_text(" | ".join(_strip_run_specific(x) for x in ls))  # R2: file URI path・thread ID
         if find_transient_pattern(summary) is not None:
-            summary = line                        # transient 不変の guard
+            summary = " | ".join(ls)              # transient 不変の guard
         return f"{label}: {summary}"
     return "no agent output line in transcript tail"
 
@@ -330,7 +360,7 @@ raise CLIExecutionError(step.id, 1, detail, session_resolution=resolved,
 | 修正の範囲 | Herdr の `no_pattern` 経路（`interactive_terminal_herdr.py:351` → `_recorded_exit_detail` → `_terminal_exit_detail`）だけを直す。headless（`cli.py:331,337`）と AI formatter（`verdict.py:555`）は調査結果の記録のみ | 人間決定: Issue 本文 `## 決定事項` > 人間決定「修正の範囲」（grill-me 質問 1、2026-11-01、`## grill-me provenance` コメント） | `CLIExecutionError` に keyword-only `summary`（既定 `None` = 現行挙動）を追加し、Herdr `no_pattern` の送出だけが渡す。provider_error / no_log / empty と Herdr の他の送出は `summary` を渡さず不変。調査結果は § 同じパターンの他の箇所 |
 | fingerprint の互換性 | 互換処理をせず、Herdr `no_pattern` の新 hash による 1 回の再起票を許容。`SIGNATURE_SCHEMA_VERSION` は上げない。既存 incident は操作しない | 人間決定: `## 決定事項` > 人間決定「fingerprint の互換性」（grill-me 質問 2）。既存方針 `signature.py:24-26`（#303 決定 E）、ADR 008 | `signature.py` を変更しない（入力だけが変わる）ことを方針に固定 |
 | EB 4 / 再現テスト観点 (c) | 同じ原因で実行ごとの値だけが違う失敗は同じ hash | 人間決定: `## 決定事項` > 人間決定「EB・完了条件の追加」（grill-me 質問 3） | banner（`model:` 等の非正規化値を含む）を候補から除外し、原因行は `normalize_error_text` に 1 回通した `N(L)` を使う。Small テストで run_id・path 長・model・effort・timestamp 違いの hash 一致を検証 |
-| 抜粋の作り方 | 末尾 2000 文字窓の完全な行から、banner 後のエラー行パターン一致の最後の行（無ければ最終出力行）を選び `N(L)` にする | AI の仮定（two-way door。`## 決定事項` > AI の仮定 1 行目が設計に委任）。根拠: OB の実 transcript は最終行が `Node.js v26.10.0` で原因行ではない（試作で最終行方式は Node / Rust のクラッシュを集約することを確認）、banner は `model:` 等の可変値を含む、#516 の review で raw 文字数の切り詰めは hash を分裂させると実証済み。試作: OB の transcript で要約に原因行全体が入り hash `c3d3edbaa3adc68c…`、`Killed` 版は `975c83f6c57ec8a6…`（別 hash）、run_id・model・workdir（長さ違い）を変えた版は同じ `c3d3edbaa3adc68c…`。後段の検査先: issue-review-design、Small テスト (a)(b)(c) | エラー行パターンは Node / Python / Rust / Go / git / clap の代表形に限定し、Python の traceback フレーム（正規化で空）・Node の `at ...` 行は一致しない形にする。窓の先頭断片行を除外。banner 終端行は module 定数 + wrapper.sh との契約テスト |
+| 抜粋の作り方 | 末尾 2000 文字窓の完全な行から、banner 後のエラー行パターン一致の最後の行（無ければ最終出力行）を選び `N(L)` にする | AI の仮定（two-way door。`## 決定事項` > AI の仮定 1 行目が設計に委任）。根拠: OB の実 transcript は最終行が `Node.js v26.10.0` で原因行ではない（試作で最終行方式は Node / Rust のクラッシュを集約することを確認）、banner は `model:` 等の可変値を含む、#516 の review で raw 文字数の切り詰めは hash を分裂させると実証済み。試作: OB の transcript で要約に原因行全体が入り hash `c3d3edbaa3adc68c…`、`Killed` 版は `975c83f6c57ec8a6…`（別 hash）、run_id・model・workdir（長さ違い）を変えた版は同じ `c3d3edbaa3adc68c…`。後段の検査先: issue-review-design、Small テスト (a)(b)(c)。review-design cycle 1 の指摘 R1（Rust panic の本文が次行にあり見出しだけでは別原因が同 hash、thread ID 付き形式が非一致）・R2（file URI の path が正規化されず同原因が別 hash になり EB 4 を弱める）を受けて規則を修正。修正後の試作: panic 本文 `failed to open config` / `failed to connect socket` は `c99fe127f7e2d8f8…` / `ac5e3f981aee7eb4…`（別）、thread ID `(6018279)` / `(1234567)` は同じ `f64d941342fe877b…`、`file:///home/aki/a/module.js` / `file:///tmp/other/longer/module.js` は同じ `132f780eaf70a928…`、全ケース `is_transient_error_text=False` | エラー行パターンは Node / Python / Rust / Go / git / clap の代表形に限定し、Python の traceback フレーム（正規化で空）・Node の `at ...` 行は一致しない形にする。窓の先頭断片行を除外。banner 終端行は module 定数 + wrapper.sh との契約テスト。Rust panic は見出し + 次行以降の本文を ` | ` で連結。要約前に file URI の path と panic の thread ID を除去（`signature.py` は不変で、EB 4 を既知の限界で弱めない） |
 | transient 判定の不変性 | 修正前後で `is_transient_error_text(attempt_error)` は `no_pattern` 経路で常に `False` | AI の仮定（`## 決定事項` > AI の仮定 2 行目）。根拠と証明は § 制約・前提条件（`no_pattern` の前提、pattern と区切り文字、空白正規化だけが一致を作りうること）。後段の検査先: issue-review-design、既存 transient テスト + 空白境界テスト | 空白正規化で pattern が成立する場合に限り raw `L` を使う guard を追加（`L` は `clean` の部分文字列なので一致しない） |
 | 他分岐・recorder 付記の不変 | provider_error / no_log / empty の detail とメッセージ、recorder state 付記の文言は変えない | AI の仮定（`## 決定事項` > AI の仮定 3 行目）。根拠: Issue 完了条件 3、#296 の safety gate 契約。後段の検査先: issue-review-code、既存テスト | `summary` を渡すのは `no_pattern` だけ。付記は従来どおり detail の末尾に付き、`no_pattern` では今回からメッセージにも残る（以前は 2000 文字の log tail の後ろにあり `[:200]` で必ず落ちていた。文言は不変） |
 | docs 更新 | `docs/cli-guides/interactive-terminal-runner.md` の Troubleshooting 行を更新する | AI の仮定（`## 決定事項` > AI の仮定 4 行目が設計に委任）。根拠: 同 docs の行 `Herdr pane returned to its shell before writing verdict.yaml` が「Check the tail of `terminal.log` attached to the error」と、エラーに log tail が付く現行挙動を書いている。後段の検査先: i-dev-final-check | エラーには原因行の要約が付き、全文の末尾は `pane-metadata.json` の `terminal_diagnostic.clean_tail` / `terminal.log` で読む、と書き換える |
@@ -366,9 +396,17 @@ fingerprint の変化と再起票は人間決定で許容済み。
   ISO timestamp が違う 2 つの transcript の `fingerprint_hash` が一致する。窓より長い transcript（先頭に 2000 文字超の
   出力があり窓の開始位置が変わる）でも一致する。
 - **エラー行パターンの代表形**: Python traceback（最終行 `ModuleNotFoundError: ...`、フレーム行は選ばれない）、
-  Rust panic（`thread 'main' panicked at ...:` が選ばれ、後続の `note: run with RUST_BACKTRACE=1` は選ばれない）、
+  Rust panic（見出し `thread 'main' panicked at ...:` と次行の本文が要約に入り、後続の `note: run with RUST_BACKTRACE=1` は
+  入らない。thread ID 付き `thread 'main' (6018279) panicked at ...:` も一致する。旧 1 行形式は見出し 1 行）、
   `error: ...` / `error[E0433]: ...` / `fatal: ...` / `FATAL ERROR: ...` / `panic: ...`、Node の `at ...(...)` 行と
   `Node.js vX` 行は一致しない。複数一致時は最後の行。
+- **Rust panic の本文で別原因を分離（review-design R1）**: 見出しが同じで次行の本文だけが `failed to open config` /
+  `failed to connect socket` と違う 2 つの transcript の `fingerprint_hash` が異なる。本文の要約に原因文が含まれる。
+  thread ID だけが違う（`(6018279)` / `(123)`）2 つの transcript は同じ hash。本文の連結は `note:` / `stack backtrace:` /
+  空行で止まる。
+- **file URI の path 違いで分裂しない（review-design R2 / EB 4）**: 原因行の `file:///home/aki/a/module.js` と
+  `file:///tmp/other/longer/module.js`（path・長さ違い）だけが違う 2 つの transcript の `fingerprint_hash` が一致し、要約は
+  `file://<PATH>` を含む。path 後の行・列番号（`:3:4`）が違う場合や、エラー文が違う場合は hash が異なる。
 - **fallback と境界**: パターン一致が無い場合は最終出力行（`last output line: Killed`）。banner だけで終わる
   transcript は `no agent output line in transcript tail`。banner 終端行が無い transcript（wrapper の `cd` 失敗など banner
   前の出力）は全行が候補。窓が行の途中から始まる場合に先頭断片行を選ばない。末尾の空行・空白行は飛ばす。
@@ -376,7 +414,8 @@ fingerprint の変化と再起票は人間決定で許容済み。
 - **transient 判定の不変（完了条件 3）**: `no_pattern` の各 transcript（上記すべて）で、`is_transient_error_text(attempt_error)`
   が `False`。空白正規化の境界: `please try\tagain later` / `rate  limit` / `try again` を原因行に持つ transcript は
   `no_pattern` で、要約は raw 行（guard）になり、`is_transient_error_text(attempt_error)` は `False`。区切り境界: 原因行が
-  `again` で始まる・`try` で終わる場合も `False`。既存の `tests/test_interactive_terminal_common.py` の transient /
+  `again` で始まる・`try` で終わる場合も `False`。Rust panic の本文が `please try` / `again` の 2 行に分かれる場合も
+  ` | ` 連結のため `False`。既存の `tests/test_interactive_terminal_common.py` の transient /
   sensitive テスト（provider_error 経路）が変更なしで通る。
 - **他分岐の不変**: `provider_error`（sensitive marker 併記あり / なし）・`no_log`・`empty` の `_terminal_exit_detail` の
   戻り値と、Herdr 送出時の `str(exc)` が修正前と同じ（`summary` を渡さない）。recorder state 付記は `no_pattern` の
@@ -443,6 +482,7 @@ Small / Medium で入力から永続化まで固定できる）。実世界の�
 | wrapper banner | `kaji_harness/assets/interactive-terminal/wrapper.sh:20-41` | agent 起動前に banner（`prompt_path` / `verdict_path` / `model` / `effort` 等）と終端行 `The agent must read prompt_path and write a pure YAML verdict to verdict_path.` を echo |
 | transient pattern | `kaji_harness/cli.py:36-64,111-129` | `_TRANSIENT_PATTERNS` は小文字化した部分文字列一致。`_is_transient` は `error.stderr` 全文（headless の attempt 内 retry） |
 | 回復判定 | `kaji_harness/recovery/classify.py:100-108`、`kaji_harness/recovery/handler.py:136-159,278,310` | `CLIExecutionError` は `is_transient_error_text(attempt_error)` で candidate 判定。safety gate は candidate の後にだけ評価 |
+| Rust の panic 出力形式 | https://doc.rust-lang.org/book/ch09-01-unrecoverable-errors-with-panic.html | panic の出力例は見出し `thread 'main' panicked at src/main.rs:2:5:` の次行に原因本文（`crash and burn`）、その後に `note: run with RUST_BACKTRACE=1 ...`。thread ID を含む見出し形式も掲載（review-design R1 の根拠） |
 | 署名の算出 | `kaji_harness/recovery/signature.py:24-29,61,110-176` | `attempt_error` を `normalize_error_text`（redaction → ANSI / frame 除去 → `_TAIL_RE` → 置換 → 空白正規化 → 2000 文字）して sha256。`_ABS_PATH_RE` の lookbehind で `file:///` path は置換されない。schema version に migration なし（#303 決定 E） |
 | redaction | `kaji_harness/recovery/report.py:25-33,81-102` | `_CREDENTIAL_RULES` は伏字の挿入のみ。`sanitize_evidence` は mask → 先頭 500 文字 |
 | result.json.error | `kaji_harness/runner.py:756,774` | `error=f"{type(exc).__name__}: {exc}"`、ABORT evidence は `str(exc)[:500]` |
