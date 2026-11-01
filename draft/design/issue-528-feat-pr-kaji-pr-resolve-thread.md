@@ -96,14 +96,14 @@ kaji pr resolve-thread --help
 
 ```bash
 # pr-fix が控えた inline comment ID でスレッドを解決する
-$ kaji pr resolve-thread 2047 --comment 4432690867
-{"comment_id": "4432690867", "thread_id": "PRRT_kwDOPlQLMc6yTJlI", "result": "resolved"}
+$ kaji pr resolve-thread 2047 --comment 4432690863
+{"comment_id": "4432690863", "thread_id": "PRRT_kwDOPlQLMc6yTJlI", "result": "resolved"}
 
 # もう一度実行しても書き込みはせず成功する（冪等）
-$ kaji pr resolve-thread 2047 --comment 4432690867
-{"comment_id": "4432690867", "thread_id": "PRRT_kwDOPlQLMc6yTJlI", "result": "already_resolved"}
+$ kaji pr resolve-thread 2047 --comment 4432690863
+{"comment_id": "4432690863", "thread_id": "PRRT_kwDOPlQLMc6yTJlI", "result": "already_resolved"}
 
-# 返信コメントの ID からでも同じスレッドを引ける
+# 返信コメント（4432690863 への返信 4434206283）の ID からでも同じスレッド TJlI を引ける
 $ kaji pr resolve-thread 2047 --comment 4434206283; echo "rc=$?"
 {"comment_id": "4434206283", "thread_id": "PRRT_kwDOPlQLMc6yTJlI", "result": "already_resolved"}
 rc=0
@@ -137,7 +137,7 @@ fi
   2026-11-01 に introspection で確認し、apokamo/kamo2#2047 で REST の `id` と `fullDatabaseId` が一致することを確認した。
 - ページ送り: `reviewThreads(first: 100)` と各スレッドの `comments(first: 100)` の両方で
   `pageInfo { hasNextPage endCursor }` を辿り、全件を照合する。100 件超でも「見つからない」と誤判定しない。
-  1 クエリのノード数は 100 × 100 = 10,000 で、GitHub GraphQL の 1 クエリ上限（500,000 ノード）に収まる。
+  1 クエリのノード数はスレッド 100 ＋ コメント 100 × 100 ≒ 10,100 で、GitHub GraphQL の 1 クエリ上限（500,000 ノード）に収まる。
 - GraphQL 応答は外部入力のため Pydantic v2 で検証する（AGENTS.md 常時適用ルール、
   `docs/reference/python/type-hints.md` § Pydantic と dataclass の使い分け）。
 - `resolveReviewThread` の任意入力 `resolutionReason`（`ADDRESSED` / `WONT_FIX` / `INVALID`）は渡さない。
@@ -208,18 +208,28 @@ _handle_pr(["resolve-thread", pr, "--comment", cid])
 1. **Step 1-3**: `kaji pr review-comments` の `--jq` に `id` と `in_reply_to_id` を加える
    （どの指摘がどのスレッドかを対応付けるため）。
 2. **新 Step 3.5「確認済みスレッドの解決」** を Step 3（品質チェック）と Step 4（確認結果の投稿）の間に置く。
-   - 対象: インラインレビューコメントに対応する指摘のうち、Step 2.1 で「✅ OK（解消）」と判定したもの、
-     Step 2.2 で「受け入れる」と判定した反論。
-   - 対象外（開いたまま）: 「❌ 要再修正」「再反論する」「一部受け入れ」、およびインラインでない指摘
-     （PR 会話欄・review 本文。スレッドが存在しない）。
+   - **判定単位は指摘、副作用の単位はスレッド**: `resolveReviewThread` はコメント単体ではなくスレッド全体を
+     解決するため、指摘ごとの判定をスレッドごとに集約してから実行する。
+   - **集約手順**:
+     1. 今回の verify 対象の既出指摘のうち、インラインレビューコメントに対応するものを列挙する
+        （インラインでない指摘 = PR 会話欄・review 本文はスレッドが存在しないため対象外）。
+     2. 各指摘を、そのコメントが属するスレッドの根コメント ID（`in_reply_to_id` が null ならその `id`、
+        そうでなければ `in_reply_to_id`）でグループ化する。
+     3. グループ内の **すべての** 指摘が「✅ OK（解消）」（Step 2.1）または「受け入れる」（Step 2.2）なら、
+        そのスレッドを解決対象とする。
+     4. グループ内に 1 件でも「❌ 要再修正」「再反論する」「一部受け入れ」が残るなら、そのスレッドは
+        resolve を実行せず開いたままにする（D5「それ以外は開いたまま」を、スレッドを解決すると未解消の指摘まで
+        閉じてしまう場合にも保つ）。
+   - verify で新規指摘を追加しない原則は変えない。集約の母集団は既出指摘だけである。
    - レビュアー（Codex bot / `/review` / 人間）で区別しない（D5）。
-   - 判定全体が Approve でも Changes Requested でも、対象のスレッドは解決する（判定は指摘ごと）。
-   - 実行: 各対象の根コメント ID で `kaji pr resolve-thread [pr_id] --comment [comment_id]`。
+   - 判定全体が Approve でも Changes Requested でも、解決対象のスレッドは解決する（集約はスレッドごと）。
+   - 実行: 解決対象のスレッドごとに **1 回だけ**、根コメント ID で
+     `kaji pr resolve-thread [pr_id] --comment [root_comment_id]` を実行する。
    - 失敗時（rc≠0）: verdict は変えない（D4）。comment ID と stderr の要旨を控え、Step 4 と Step 5 に転記する。
      再試行やループはしない。
 3. **Step 4**: 確認結果コメント（Approve / Changes Requested の両テンプレート）に
-   「### レビュースレッドの解決」表（comment ID / 判定 / 結果: `resolved` / `already_resolved` /
-   `失敗: <理由>` / `未解決のまま: <理由>`）を追加する。
+   「### レビュースレッドの解決」表を **スレッド 1 行** で追加する（根 comment ID / 含まれる指摘と各判定 /
+   結果: `resolved` / `already_resolved` / `失敗: <理由>` / `未解決のまま: <残っている指摘と判定>`）。
 4. **Step 5**: 完了報告に解決できなかったスレッドの comment ID と理由を書く欄を追加する。
 5. **status の選択基準**: 「スレッド解決の成否は status に影響しない」と明記する。
 
@@ -230,8 +240,8 @@ _handle_pr(["resolve-thread", pr, "--comment", cid])
 | 対象 forge | GitHub のみ。GitLab 分岐・未対応エラーは実装しない | Issue 本文 決定事項 D1（grill-me Q1、人間決定）。根拠 `docs/adr/004-remove-gitlab-forge.md` | 「制約・前提条件」に明記。provider 分岐を新設しない |
 | starter への反映 | kaji 本体の `.claude/skills/pr-verify/SKILL.md` のみ変更。starter は Release 後の starter-sync | Issue 本文 決定事項 D2（grill-me Q2、人間決定）。根拠 `docs/operations/release/starter-sync-runbook.md` | 変更スコープ表から starter repo を除外 |
 | unresolve | 追加しない | Issue 本文 決定事項 D3（grill-me Q3、人間決定） | スコープ外に記載 |
-| 解決失敗時の pr-verify verdict | verdict は変えず、comment ID と理由を確認結果コメントと完了報告に残す | Issue 本文 決定事項 D4（grill-me Q4、人間決定） | Step 3.5 で失敗を控え、Step 4 の表と Step 5 に転記。再試行しない。status 基準に「影響しない」と明記 |
-| 解決する対象 | レビュアーで区別せず、「解消」または「反論 OK」と判定したスレッドだけ解決 | Issue 本文 決定事項 D5（grill-me Q5、人間決定）と「到達したい状態」 | 「一部受け入れ」「要再修正」「再反論」、非インライン指摘は開いたままと具体化 |
+| 解決失敗時の pr-verify verdict | verdict は変えず、comment ID と理由を確認結果コメントと完了報告に残す | Issue 本文 決定事項 D4（grill-me Q4、人間決定） | Step 3.5 で失敗を控え、Step 4 の表（スレッド単位）と Step 5 に転記。再試行しない。status 基準に「影響しない」と明記 |
+| 解決する対象 | レビュアーで区別せず、「解消」または「反論 OK」と判定したスレッドだけ解決 | Issue 本文 決定事項 D5（grill-me Q5、人間決定）と「到達したい状態」 | 「一部受け入れ」「要再修正」「再反論」、非インライン指摘は開いたままと具体化。resolve はスレッド全体を閉じるため、既出指摘を根コメント ID でスレッドごとに集約し、全件が「解消」または「反論受理」のスレッドだけを 1 回解決する。1 件でも未解消・不受理が残るスレッドは開いたまま（review-design 指摘 MF1 で追加） |
 | コマンド名と引数 | `kaji pr resolve-thread <pr_id> --comment <comment_id>` | Issue 本文「設計に委ねること」（候補名の委任）、完了条件 1 | Issue の候補をそのまま採用。ID は既存 builtin と同じ ASCII 10 進検証。`--repo` は受けない（既存 builtin と同じ） |
 | 終了コードと stderr | 0 = 成功（解決済みを含む）、2 = 入力不正（形式不正・コメントが PR のスレッドに無い）、3 = 実行時エラー（gh 不在・API 失敗・応答不正・権限不足・mutation 不成立） | Issue 本文「設計に委ねること」（`exit_codes.py` の規約 2/3 に沿って設計で決める）、完了条件 3 | 状況ごとの rc と stderr 文面を「出力」表で固定。「見つからない」を 2 にした理由（同じ入力で再試行しても変わらない）を記載 |
 | stdout | 成功時のみ JSON 1 行（`comment_id` / `thread_id` / `result`） | AI の仮定。根拠: skill から機械判定しやすく、冪等成功（`already_resolved`）と新規解決を区別できる。公開 CLI 契約のため issue-review-design で検査 | フィールドと値域を定義 |
@@ -280,14 +290,31 @@ worktree 解決に届かない gh 転送境界の検証であり、`testing-conv
 
 - pr-verify SKILL.md に `kaji pr resolve-thread [pr_id] --comment` の呼出しがある。
 - 解決失敗で verdict を変えない旨（D4）と、確認結果コメントにスレッド解決の結果を書く欄がある。
-- `review-comments` の取得で `id` を含める。
+- `review-comments` の取得で `id` と `in_reply_to_id` を含める。
+- スレッド単位の集約規則（根コメント ID でのグループ化、1 件でも未解消・再反論・一部受け入れが残るスレッドは
+  resolve しない、解決対象スレッドごとに 1 回だけ実行）が記述されている。
+
+#### pr-verify の集約規則の検証観点
+
+集約は agent が SKILL.md に従って行う手順であり、kaji のコードではない（CLI に修正確認のポリシーを持たせない）。
+そのため静的検証で手順の存在を守り、規則の正しさは SKILL.md の手順に次の判定例を載せて review-code で確認する:
+
+| ケース | 既出指摘と判定 | 期待する resolve 呼出し |
+|-------|---------------|------------------------|
+| 同一スレッドで混在 | スレッド T の根の指摘 A = 解消、T の返信の指摘 B = 要再修正 | なし（T は開いたまま。表に「未解決のまま: B 要再修正」） |
+| 同一スレッドで全件 OK | T の A = 解消、B = 反論受理 | T の根 ID で 1 回 |
+| 別スレッドで混在 | スレッド T1 の A = 解消、スレッド T2 の B = 要再修正 | T1 の根 ID で 1 回だけ。T2 は開いたまま |
+| 一部受け入れ・再反論 | T の A = 一部受け入れ（または再反論） | なし |
 
 文面の言い回しに過度に依存しない最小限の assert に留める（キー文字列の存在確認）。
 
 ### Large テスト（`tests/test_pr_resolve_thread_large_local.py`、`large` + `large_local`）
 
 stub `gh`（Python スクリプト）を PATH の先頭に置き、`.kaji/config.toml` を持つ一時 project で
-実際の `kaji` CLI エントリポイントをサブプロセス起動する（`tests/test_recovery_incident_large_local.py` と同じ方式）。
+`python -m kaji_harness.cli_main pr resolve-thread ...` をサブプロセス起動する。stub `gh` を PATH に置く方式は
+`tests/test_recovery_incident_large_local.py`（provider を直接駆動）に倣う。CLI のサブプロセス起動では、共用 venv の
+editable install が別 worktree（main）の `kaji_harness` を読まないよう、`tests/test_verdict_artifact_e2e_large_local.py`
+と同じく対象 worktree の root を `PYTHONPATH` の先頭に置いて package 解決を固定する。
 
 - config の `[provider.github] repo` が GraphQL 変数 `owner` / `name` に届く（config 発見 → dispatch → gh 境界の結合）。
 - 正常系の stdout JSON と rc=0、stub に記録された argv が lookup → mutation の順。
@@ -326,12 +353,12 @@ stub はこの実応答の形をそのまま使う。
 
 | 情報源 | URL/パス | 根拠（引用/要約） |
 |--------|----------|-------------------|
-| GitHub GraphQL: `resolveReviewThread` mutation | https://docs.github.com/en/graphql/reference/mutations#resolvereviewthread | 入力 `threadId: ID!`（任意 `clientMutationId`）、戻り値 `thread: PullRequestReviewThread`。スレッド解決の唯一の API |
-| GitHub GraphQL: `PullRequestReviewThread` | https://docs.github.com/en/graphql/reference/objects#pullrequestreviewthread | `id` / `isResolved` / `viewerCanResolve` / `comments(first, after)` を持つ。冪等判定と権限判定に使う |
-| GitHub GraphQL: `PullRequestReviewComment` | https://docs.github.com/en/graphql/reference/objects#pullrequestreviewcomment | `fullDatabaseId: BigInt` を照合に使う。`databaseId` は deprecated |
-| GitHub GraphQL: `PullRequest.reviewThreads` | https://docs.github.com/en/graphql/reference/objects#pullrequest | `reviewThreads(first, after, ...)` の Connection。`pageInfo { hasNextPage endCursor }` で辿る |
+| GitHub GraphQL: `resolveReviewThread` mutation | https://docs.github.com/en/graphql/reference/pulls#resolvereviewthread | 入力 `threadId: ID!`（任意 `clientMutationId`）、戻り値 `thread: PullRequestReviewThread`。スレッド解決の唯一の API |
+| GitHub GraphQL: `PullRequestReviewThread` | https://docs.github.com/en/graphql/reference/pulls#pullrequestreviewthread | `id` / `isResolved` / `viewerCanResolve` / `comments(first, after)` を持つ。冪等判定と権限判定に使う |
+| GitHub GraphQL: `PullRequestReviewComment` | https://docs.github.com/en/graphql/reference/pulls#pullrequestreviewcomment | `fullDatabaseId: BigInt` を照合に使う。`databaseId` は deprecated |
+| GitHub GraphQL: `PullRequest.reviewThreads` | https://docs.github.com/en/graphql/reference/pulls#pullrequest | `reviewThreads(first, after, ...)` の Connection。`pageInfo { hasNextPage endCursor }` で辿る |
 | GitHub GraphQL: ページ送り | https://docs.github.com/en/graphql/guides/using-pagination-in-the-graphql-api | `first` は最大 100。`after: endCursor` で次ページ |
-| GitHub GraphQL: リソース制限 | https://docs.github.com/en/graphql/overview/rate-limits-and-node-limits-for-the-graphql-api | 1 クエリ 500,000 ノード上限。本設計の最大 100 × 100 = 10,000 は範囲内 |
+| GitHub GraphQL: リソース制限 | https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api | 1 クエリ 500,000 ノード上限。本設計の最大約 10,100（スレッド 100 ＋ コメント 10,000）は範囲内 |
 | GitHub GraphQL: グローバルノード ID | https://docs.github.com/en/graphql/guides/using-global-node-ids | `node(id:)` でスレッドを直接引き、コメントの続きのページを取る |
 | GitHub REST: Pull request review comments | https://docs.github.com/en/rest/pulls/comments | `kaji pr review-comments` / `reply-to-comment` が扱う `id` が入力の comment ID |
 | gh CLI: `gh api` | https://cli.github.com/manual/gh_api | `graphql` endpoint、`-f`（string）/ `-F`（型変換して Int 等）で変数を渡す |
@@ -344,4 +371,5 @@ stub はこの実応答の形をそのまま使う。
 | 対象 skill | `.claude/skills/pr-verify/SKILL.md`, `.claude/skills/pr-fix/SKILL.md` | pr-fix は inline comment の `id` を控え `reply-to-comment --to` で返信する。pr-verify Step 2.1 / 2.2 の判定が解決対象の条件になる |
 | Pydantic 規約 | `docs/reference/python/type-hints.md` § Pydantic と dataclass の使い分け | 外部入力は Pydantic v2 で検証。パース済みオブジェクトは `model_validate()` |
 | テスト patch 規約・large_local 方式 | `docs/dev/testing-convention.md` § patch スコープ、`tests/test_recovery_incident_large_local.py` | gh 転送境界の mock は許可。stub gh を PATH に置く large_local の既存方式。破壊的副作用で隔離 repo が無い場合 `large_forge` を置かない前例 |
+| CLI サブプロセス起動の package 解決 | `tests/test_verdict_artifact_e2e_large_local.py`（`PYTHONPATH` に worktree root を先頭追加） | 共用 venv で main の実装を読む混同を防ぐ既存方式 |
 | 関連 Issue | #368 | 「Codex review thread の Resolve は要求しない」。close 条件は変えない |
