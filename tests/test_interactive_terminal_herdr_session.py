@@ -685,6 +685,64 @@ class TestResumeSessionLifecycle:
         assert len(fake.calls_of("split")) == splits_before
         assert pane_id in fake.panes
 
+    @pytest.mark.parametrize("close_on_verdict", [False, True])
+    @pytest.mark.parametrize(
+        ("step_id", "agent", "session_id"),
+        [("codex-resume", "codex", _SESSION_S), ("claude-fresh", "claude", None)],
+    )
+    def test_known_session_ownership_change_blocks_next_resume(
+        self,
+        attempts: _Attempts,
+        fake: FakeHerdr,
+        step_id: str,
+        agent: str,
+        session_id: str | None,
+        close_on_verdict: bool,
+    ) -> None:
+        """PR #533 review point 1: a pane started with a known session can lose its token."""
+        foreign = {"kaji_origin": _OTHER_ORIGIN, "kaji_run": "foreign-run"}
+
+        def take_over(pane_id: str) -> None:
+            fake.panes[pane_id].tokens = dict(foreign)
+
+        attempts.before_verdict = take_over
+        session, meta = attempts.run(
+            step_id, agent, session_id=session_id, close_on_verdict=close_on_verdict
+        )
+        pane_id = str(meta["pane_id"])
+        assert session is not None
+        if session_id is not None:
+            assert session == session_id
+        assert fake.panes[pane_id].tokens == foreign
+        assert fake.calls_of("close") == []
+        marker = meta["session_marker"]
+        assert isinstance(marker, dict) and marker["status"] == "ownership_changed"
+        assert meta["untracked_session_recorded"] is True
+        entries = _load_untracked_sessions(attempts.registry).entries
+        assert [(e.session_id, e.pane_id, e.reason) for e in entries] == [
+            (session, pane_id, "ownership_changed")
+        ]
+
+        attempts.before_verdict = None
+        splits_before = len(fake.calls_of("split"))
+        with pytest.raises(CLIExecutionError, match=pane_id):
+            attempts.run(f"{agent}-resume-again", agent, session_id=session)
+        assert len(fake.calls_of("split")) == splits_before
+        assert pane_id in fake.panes
+
+    def test_known_session_owned_pane_keeps_token_without_record(
+        self, attempts: _Attempts, fake: FakeHerdr
+    ) -> None:
+        """Tracking a known session re-reports the same token and adds no record when owned."""
+        session, meta = attempts.run("codex-resume", "codex", session_id=_SESSION_S)
+        pane_id = str(meta["pane_id"])
+        assert session == _SESSION_S
+        assert fake.panes[pane_id].tokens["kaji_session"] == _SESSION_S
+        marker = meta["session_marker"]
+        assert isinstance(marker, dict) and marker["status"] == "marked"
+        assert meta["untracked_session_recorded"] is False
+        assert _load_untracked_sessions(attempts.registry).entries == []
+
     def test_double_failure_blocks_resume_until_pane_is_gone(
         self, attempts: _Attempts, fake: FakeHerdr, tmp_path: Path
     ) -> None:
@@ -748,6 +806,33 @@ class TestResumeSessionLifecycle:
         entries = _load_untracked_sessions(attempts.registry).entries
         assert [(e.session_id, e.reason) for e in entries] == [
             (_CODEX_SESSION, "abnormal_exit_close_failed")
+        ]
+        assert attempts.metadata()["untracked_session_recorded"] is True
+
+    @pytest.mark.parametrize(("agent", "session_id"), [("codex", _SESSION_S), ("claude", None)])
+    def test_timeout_known_session_ownership_change_is_recorded(
+        self, attempts: _Attempts, fake: FakeHerdr, agent: str, session_id: str | None
+    ) -> None:
+        """PR #533 review point 1: the abnormal-exit record is not limited to Codex fresh."""
+        foreign = {"kaji_origin": _OTHER_ORIGIN, "kaji_run": "foreign-run"}
+
+        def take_over(pane_id: str) -> None:
+            fake.panes[pane_id].tokens = dict(foreign)
+
+        fake.on_run = take_over
+        with (
+            patch(
+                f"{_HERDR}._resolve_abnormal_exit_session",
+                return_value=SessionResolution(_SESSION_S),
+            ),
+            pytest.raises(StepTimeoutError),
+        ):
+            attempts.run(f"{agent}-step", agent, session_id=session_id, timeout=0)
+        pane_id = str(attempts.metadata()["pane_id"])
+        assert fake.panes[pane_id].tokens == foreign
+        entries = _load_untracked_sessions(attempts.registry).entries
+        assert [(e.session_id, e.pane_id, e.reason) for e in entries] == [
+            (_SESSION_S, pane_id, "abnormal_exit_close_failed")
         ]
         assert attempts.metadata()["untracked_session_recorded"] is True
 

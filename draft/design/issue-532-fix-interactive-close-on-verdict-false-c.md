@@ -213,7 +213,9 @@ close it with `herdr pane close w9:p4` and rerun the step.
 
    ```text
    result_session_id = 既存の解決
-   needs_tracking = agent == codex and resume_session 未指定 and result_session_id
+   needs_tracking = bool(result_session_id)
+   # PR #533 review point 1: 起動時に kaji_session を付けた pane（resume step、Claude fresh）も
+   # ownership 変更で token を失いうるため、agent / resume 有無で絞らない。異常終了時の未追跡記録も同様
    if close_on_verdict:
        close_error = best-effort close（既存）
        if close_error and needs_tracking:

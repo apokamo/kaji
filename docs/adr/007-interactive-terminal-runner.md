@@ -123,7 +123,9 @@ authority、cleanup、Ctrl-C）は v5 でも維持する。
 
 - **ownership token に `kaji_session=<provider session ID>` を加える**。起動時に session ID が分かる pane
   （resume step、Claude fresh）は初回 marker で付ける。Codex fresh は verdict で session を回収した後、pane が
-  残る場合（`close_on_verdict = false`、または verdict 後の close 失敗）だけ付ける。`kaji_session` は resume 時の
+  残る場合（`close_on_verdict = false`、または verdict 後の close 失敗）だけ付ける。起動時に付けた token も
+  ownership の変更で消えうるため、verdict 後に pane が残る場合は session が分かる全 pane で同じ再付与・確認を行う
+  （PR #533 review）。`kaji_session` は resume 時の
   close 候補を選ぶ条件にだけ使い、ownership の判定には使わない（判定は v4 どおり exact pane の origin/run）。
 - **再付与の前に現在の ownership を確認する**。verdict 後の token 再付与は exact pane の現在の `kaji_origin` /
   `kaji_run` が自分と一致する場合だけ、4 token をまとめて再送して確認する。一致しなければ書かず、閉じない
@@ -136,8 +138,8 @@ authority、cleanup、Ctrl-C）は v5 でも維持する。
   作らずに pane ID・session ID・利用者の操作を含む `CLIExecutionError` にする。agent 非依存（Claude にも適用）。
   その後の prune・配置（右列最大 2 枚）は v3/v4 のまま。キー入力は送らない（#422）。
 - **未追跡 holder 記録**: token 付与と close がどちらも成功せず、session を開いたまま識別できない pane が
-  残りうる場合（ownership 変更、verdict 後の二重失敗、timeout / shell 復帰で Codex fresh の session を解決できて
-  close に失敗した場合）は、issue 単位の `<artifacts_dir>/<issue>/herdr-untracked-sessions.json`（session state と
+  残りうる場合（ownership 変更、verdict 後の二重失敗、timeout / shell 復帰で session を解決できて close に失敗
+  した場合。agent や起動時に session が分かっていたかによらない）は、issue 単位の `<artifacts_dir>/<issue>/herdr-untracked-sessions.json`（session state と
   同じディレクトリ。atomic replace、Pydantic で検証、壊れていれば fail-loud）に記録する。resume step は pane を
   作る前にこれを検査し、pane が消えていれば記録を消し、ownership を確認できれば閉じ、それ以外はエラーにする。
   記録は同じ run の後続 step にも別 run にも届く。いずれの分岐も verdict・解決済み session を置き換えない。

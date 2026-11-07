@@ -272,11 +272,13 @@ kaji run .kaji/wf/official/dev.yaml 224 --log-level WARNING
    records its ID in `kaji_agent_panes_skipped` instead of blocking every later step.
    Before that, a `resume:` step (Claude or Codex) handles panes that still have its provider session
    open (Issue 532). Panes carry a `kaji_session` token (set at the first marker when the session is
-   known, or after a Codex fresh verdict when the pane stays open and its origin/run are still kaji's).
+   known, or after a Codex fresh verdict when the pane stays open and its origin/run are still kaji's;
+   any pane with a known session that stays open gets the token re-reported after the same check).
    Same-origin holders are closed with the same ownership-checked close and recorded in
    `kaji_session_panes_closed`. A holder from another origin, the origin pane itself, or a holder that
    cannot be closed fails the step before any pane is created. Holders that may survive without the
-   token (token report and close both failed, ownership changed, or a timeout close failed) are
+   token (token report and close both failed, ownership changed, or a timeout close failed), for any
+   agent and whether or not the session was known at launch, are
    recorded in the issue-scoped `herdr-untracked-sessions.json` next to `session-state.json`; the
    resume step checks it too. Kaji never sends keys to the lock screen.
 3. Split uses explicit cwd and `--no-focus`. Kaji marks the response-derived pane, atomically publishes
@@ -338,7 +340,7 @@ kaji run .kaji/wf/official/dev.yaml 224 --log-level WARNING
 | Key | Meaning |
 |-----|---------|
 | `kaji_session_panes_closed` | Panes closed because they still had the resume session open. Empty for fresh steps |
-| `session_marker` | Codex fresh only, when the session token was re-reported after the verdict: `{"status": "marked" \| "absent" \| "ownership_changed" \| "failed", "error": ...}` |
+| `session_marker` | Only when the session is known and the session token was re-reported after the verdict: `{"status": "marked" \| "absent" \| "ownership_changed" \| "failed", "error": ...}` |
 | `untracked_session_recorded` | Whether this attempt added a possibly untracked holder to `herdr-untracked-sessions.json` |
 | `untracked_record_error` | Only when that record could not be written |
 | `transcript_kind` | `"raw_pty_recording"` |

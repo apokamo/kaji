@@ -356,9 +356,8 @@ def execute_interactive_terminal_herdr(
                         prompt_path=prompt_path,
                         verdict_path=verdict_path,
                     )
-                needs_tracking = (
-                    step.agent == "codex" and session_id is None and bool(result_session_id)
-                )
+                # 既知 session の pane も ownership 変更で kaji_session を失いうるため、
+                # session が分かる全 pane を追跡対象にする（PR #533 review point 1）。
                 close_error, marker, tracking = _finish_verdict_pane(
                     herdr,
                     pane_id=pane_id,
@@ -366,7 +365,7 @@ def execute_interactive_terminal_herdr(
                     run_id=run_id,
                     step_id=step.id,
                     close_on_verdict=close_on_verdict,
-                    tracked_session_id=result_session_id if needs_tracking else None,
+                    tracked_session_id=result_session_id,
                     untracked_sessions_path=untracked_sessions_path,
                 )
                 _write_herdr_metadata(
@@ -409,7 +408,6 @@ def execute_interactive_terminal_herdr(
                         pane_id=pane_id,
                         origin_pane=origin_pane,
                         run_id=run_id,
-                        session_id=session_id,
                         resolved=resolved,
                         close_error=close_error,
                         untracked_sessions_path=untracked_sessions_path,
@@ -497,12 +495,13 @@ def _finish_verdict_pane(
 ) -> tuple[str | None, SessionMarkerOutcome | None, UntrackedRecordOutcome | None]:
     """Close or keep the verdict pane and keep its provider session discoverable.
 
-    ``tracked_session_id`` is set only for a Codex fresh pane whose session was resolved
-    after the verdict: its initial marker could not carry ``kaji_session``. When the pane
-    stays alive (close disabled or close failed), the token is re-reported only after the
-    current ownership is confirmed (design review R1). A holder that may survive without
-    the token is recorded in the untracked registry (design review R2). No branch replaces
-    the verdict or the resolved session.
+    ``tracked_session_id`` is the provider session the pane holds, whenever it is known.
+    A Codex fresh pane's initial marker could not carry ``kaji_session``, and a pane started
+    with a known session can lose that token when its ownership changes, so every known
+    session is tracked. When the pane stays alive (close disabled or close failed), the
+    token is re-reported only after the current ownership is confirmed (design review R1).
+    A holder that may survive without the token is recorded in the untracked registry
+    (design review R2). No branch replaces the verdict or the resolved session.
 
     Returns:
         ``(close_error, session_marker, untracked)`` diagnostics for ``pane-metadata.json``.
@@ -574,22 +573,18 @@ def _track_abnormal_exit_holder(
     pane_id: str,
     origin_pane: str,
     run_id: str,
-    session_id: str | None,
     resolved: SessionResolution,
     close_error: str | None,
     untracked_sessions_path: Path | None,
 ) -> UntrackedRecordOutcome | None:
-    """Record a Codex fresh holder left by a timeout / shell-return close failure.
+    """Record a holder left by a timeout / shell-return close failure.
 
-    Panes started with a known session already carry ``kaji_session``; only a Codex fresh
-    pane has no token, so only that case needs the untracked registry.
+    A Codex fresh pane has no ``kaji_session`` token, and a pane started with a known
+    session may have lost it when its ownership changed (a likely reason the close failed),
+    so every resolved session is recorded. A record for a pane that still carries the
+    token is resolved by the token scan at the next resume.
     """
-    if (
-        close_error is None
-        or step.agent != "codex"
-        or session_id is not None
-        or not resolved.session_id
-    ):
+    if close_error is None or not resolved.session_id:
         return None
     return _record_untracked_session(
         untracked_sessions_path,
@@ -726,7 +721,6 @@ def _raise_step_timeout(
         pane_id=pane_id,
         origin_pane=origin_pane,
         run_id=run_id,
-        session_id=session_id,
         resolved=resolved,
         close_error=close_error,
         untracked_sessions_path=untracked_sessions_path,
