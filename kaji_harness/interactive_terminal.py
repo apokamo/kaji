@@ -14,6 +14,8 @@ from pathlib import Path
 from . import interactive_terminal_herdr
 from .models import CLIResult, Step
 
+HERDR_UNTRACKED_SESSIONS_FILENAME = interactive_terminal_herdr.HERDR_UNTRACKED_SESSIONS_FILENAME
+
 
 def execute_interactive_terminal(
     *,
@@ -27,6 +29,7 @@ def execute_interactive_terminal(
     execution_policy: str = "auto",
     env: Mapping[str, str] | None = None,
     deadline_monotonic: float | None = None,
+    untracked_sessions_path: Path | None = None,
 ) -> CLIResult:
     """Start a real interactive CLI in a Herdr pane and wait for ``verdict.yaml``.
 
@@ -49,6 +52,10 @@ def execute_interactive_terminal(
             attempt (Issue #421). The runner computes it once at attempt start so
             it matches the deadline shown in the prompt. ``None`` falls back to
             ``time.monotonic() + timeout`` measured after the launcher start.
+        untracked_sessions_path: Issue-scoped ``herdr-untracked-sessions.json``
+            (Issue #532). Records session holder panes that may survive without a
+            ``kaji_session`` token; resume steps check it before creating a pane.
+            ``None`` disables recording and checking (production runner always passes it).
 
     Returns:
         ``CLIResult(full_output="", session_id=<resolved id or None>)``.
@@ -57,8 +64,9 @@ def execute_interactive_terminal(
         CLINotFoundError: ``herdr`` is missing or older than the supported version.
         HerdrSessionRequiredError: kaji is not running inside an explicit Herdr pane
             (``HERDR_ENV=1`` and ``HERDR_PANE_ID``).
-        CLIExecutionError: A Herdr operation failed or the agent exited before
-            writing ``verdict.yaml``.
+        CLIExecutionError: A Herdr operation failed, the agent exited before
+            writing ``verdict.yaml``, or a resume step found a pane still holding its
+            provider session that kaji cannot close safely.
         StepTimeoutError: ``verdict.yaml`` did not appear before the deadline, or
             ``deadline_monotonic`` had already passed before the pane launch.
         ValueError: ``step.agent`` is missing or unsupported.
@@ -75,4 +83,5 @@ def execute_interactive_terminal(
         execution_policy=execution_policy,
         env=env,
         deadline_monotonic=deadline_monotonic,
+        untracked_sessions_path=untracked_sessions_path,
     )

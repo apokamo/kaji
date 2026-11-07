@@ -39,7 +39,9 @@ Runner backend dispatch.
   kaji's artifact completion contract. Antigravity does not support `resume:`.
 - You want to keep the agent's final state visible in the pane after the verdict
   (`close_on_verdict = false`). Even when panes remain, the right column is kept
-  to the latest two panes, so its width does not shrink on every step.
+  to the latest two panes, so its width does not shrink on every step. When a later
+  `resume:` step starts, the pane that still has the resume source session open is
+  closed first (Issue 532), and the conversation continues in the resume step's pane.
 
 When `agent_runner` is unset, the existing `headless` runner is used. Existing
 workflows and CI behavior do not change.
@@ -268,6 +270,17 @@ kaji run .kaji/wf/official/dev.yaml 224 --log-level WARNING
    downward, and keeps at most two. Prune re-reads current origin/run tokens before closing. A stale
    candidate with a missing run token/layout or changed ownership is skipped; kaji logs a warning and
    records its ID in `kaji_agent_panes_skipped` instead of blocking every later step.
+   Before that, a `resume:` step (Claude or Codex) handles panes that still have its provider session
+   open (Issue 532). Panes carry a `kaji_session` token (set at the first marker when the session is
+   known, or after a Codex fresh verdict when the pane stays open and its origin/run are still kaji's;
+   any pane with a known session that stays open gets the token re-reported after the same check).
+   Same-origin holders are closed with the same ownership-checked close and recorded in
+   `kaji_session_panes_closed`. A holder from another origin, the origin pane itself, or a holder that
+   cannot be closed fails the step before any pane is created. Holders that may survive without the
+   token (token report and close both failed, ownership changed, or a timeout close failed), for any
+   agent and whether or not the session was known at launch, are
+   recorded in the issue-scoped `herdr-untracked-sessions.json` next to `session-state.json`; the
+   resume step checks it too. Kaji never sends keys to the lock screen.
 3. Split uses explicit cwd and `--no-focus`. Kaji marks the response-derived pane, atomically publishes
    a private (`0700`) `herdr-launcher.sh` in the attempt directory, and sends only the short
    `<launcher path>` child command once. The shell remains the pane's shell process for liveness
@@ -326,6 +339,10 @@ kaji run .kaji/wf/official/dev.yaml 224 --log-level WARNING
 
 | Key | Meaning |
 |-----|---------|
+| `kaji_session_panes_closed` | Panes closed because they still had the resume session open. Empty for fresh steps |
+| `session_marker` | Only when the session is known and the session token was re-reported after the verdict: `{"status": "marked" \| "absent" \| "ownership_changed" \| "failed", "error": ...}` |
+| `untracked_session_recorded` | Whether this attempt added a possibly untracked holder to `herdr-untracked-sessions.json` |
+| `untracked_record_error` | Only when that record could not be written |
 | `transcript_kind` | `"raw_pty_recording"` |
 | `transcript_available` | `terminal.log` exists as a regular file when the metadata is written |
 | `transcript_recorder_state` | `"recording"` / `"complete"` / `"incomplete"` / `"unknown"` (state file missing, unreadable, or invalid) |
@@ -448,5 +465,6 @@ Record the Herdr and agent versions with the result.
 | Step times out | The agent did not write `verdict.yaml`. Check the prompt's verdict-writing instruction and path |
 | `Herdr pane returned to its shell before writing verdict.yaml` | Agent launch failed or the agent exited early. The error carries a normalized summary of the failure line from the end of `terminal.log` (`last error line: ...`, or `last output line: ...` when no error-shaped line is found; the wrapper banner is skipped). Read the full tail in `terminal_diagnostic.clean_tail` of `pane-metadata.json` or in `terminal.log` |
 | No color | The wrapper unsets `NO_COLOR` and sets `COLORTERM=truecolor`; also check terminal color support and agent-side settings |
+| `Herdr pane <id> may still have provider session <S> open ...` (resume step fails before a pane is created) | A pane kaji cannot close safely (another kaji origin, changed ownership, or a failed close) still has the resume session open. Inspect it, close it with `herdr pane close <id>`, and rerun the step. When the message names `herdr-untracked-sessions.json`, the record is removed automatically on the next check once the pane is gone; do not edit the file by hand. A malformed record fails loud: fix or delete it after checking that no listed pane is alive |
 | Codex resume does not work | No resume line in `terminal.log`, and session-store fallback did not match markers. Check `CODEX_HOME` |
 | CLI stops at trust / permission confirmation | cwd is outside the project (`/tmp`, etc.). Pin workdir to the project worktree |

@@ -30,7 +30,8 @@ raw PTY byte（alternate screen の出力を含む）が残る（Issue #515。
 - `agy -i` で Antigravity の単発 step を実行しつつ、kaji の artifact 完了契約を使いたいとき
   （Antigravity は `resume:` 非対応）。
 - verdict 後も agent の最終状態を pane で確認したいとき（`close_on_verdict = false`）。pane を残しても
-  右列は最新2枚に保たれるため、step ごとに幅が縮み続けない。
+  右列は最新2枚に保たれるため、step ごとに幅が縮み続けない。後続の `resume:` step が起動するときは、
+  resume 元の session を開いたままの pane を先に閉じる（Issue #532）。会話は resume step の pane に引き継がれる。
 
 `agent_runner` 未指定時は従来どおり `headless` runner が使われる。既存 workflow / CI の挙動は変わらない。
 
@@ -231,6 +232,16 @@ kaji run .kaji/wf/official/dev.yaml 224 --log-level WARNING
    残す。prune は閉じる前に現在の origin/run token を再読込する。run token / layout が欠けた、または
    ownership が変わった stale 候補は skip し、警告を log に出して `kaji_agent_panes_skipped` に ID を
    記録する（以後の step をすべて止めない）。
+   その前に、`resume:` step（Claude / Codex）は自分の provider session を開いたままの pane を処理する
+   （Issue #532）。pane には `kaji_session` token が付く（session ID が分かる場合は初回 marker で、Codex fresh は
+   verdict 後に pane が残り origin/run がまだ kaji のものである場合に付ける。session が分かる pane は、残る場合に
+   同じ確認のうえで再付与する）。同じ origin の holder は同じ
+   ownership 確認つき close で閉じ、`kaji_session_panes_closed` に記録する。別 origin の holder、origin pane
+   自身、閉じられなかった holder があれば、pane を作る前に step を失敗させる。token なしで生き残りうる holder
+   （token 付与と close の二重失敗、ownership の変更、timeout 時の close 失敗。agent や起動時に session が
+   分かっていたかによらない）は `session-state.json` と同じ
+   ディレクトリの issue 単位の `herdr-untracked-sessions.json` に記録し、resume step はこれも検査する。lock
+   画面にキー入力は送らない。
 3. split は明示 cwd と `--no-focus` を使う。kaji は応答から得た pane に marker を付け、attempt directory に
    private（`0700`）な `herdr-launcher.sh` を atomic に公開し、短い `<launcher path>` の child command を
    1 回だけ送る。shell は存命判定用に pane の shell process として残り、継承した PATH と長い argv は
@@ -282,6 +293,10 @@ attempt directory の `pane-metadata.json` には ownership、配置診断（`la
 
 | キー | 意味 |
 |------|------|
+| `kaji_session_panes_closed` | resume の session を開いていたため閉じた pane。fresh step では空 |
+| `session_marker` | session が分かり、verdict 後に session token を再付与したときだけ: `{"status": "marked" \| "absent" \| "ownership_changed" \| "failed", "error": ...}` |
+| `untracked_session_recorded` | この attempt が `herdr-untracked-sessions.json` に未追跡 holder を追加したか |
+| `untracked_record_error` | その記録を書けなかったときだけ |
 | `transcript_kind` | `"raw_pty_recording"` |
 | `transcript_available` | metadata 書き込み時点で `terminal.log` が通常ファイルとして存在するか |
 | `transcript_recorder_state` | `"recording"` / `"complete"` / `"incomplete"` / `"unknown"`（状態ファイルが無い・読めない・不正） |
@@ -391,5 +406,6 @@ Codex の `reasoning.effort = minimal` は現在の tool 構成（`image_gen` / 
 | step が timeout する | agent が `verdict.yaml` を書かなかった。prompt の verdict 書き込み指示と path を確認する |
 | `Herdr pane returned to its shell before writing verdict.yaml` | agent の起動失敗または早期終了。error に添付された `terminal.log` の末尾を確認する |
 | 色が出ない | wrapper は `NO_COLOR` を unset し `COLORTERM=truecolor` を設定する。端末の色対応と agent 側の設定も確認する |
+| `Herdr pane <id> may still have provider session <S> open ...`（resume step が pane を作る前に失敗） | kaji が安全に閉じられない pane（別の kaji origin、ownership の変更、close の失敗）が resume の session を開いたまま残っている。確認して `herdr pane close <id>` で閉じ、step を再実行する。メッセージに `herdr-untracked-sessions.json` が出ている場合も、pane が消えれば次の検査で記録は自動で消えるので手で編集しない。記録が壊れている場合は fail-loud になるので、記載の pane が生きていないことを確認してから修正または削除する |
 | Codex resume が効かない | `terminal.log` に resume 行がなく、session store の fallback も marker に一致しなかった。`CODEX_HOME` を確認する |
 | CLI が trust / permission の確認で止まる | cwd が project 外（`/tmp` など）。workdir を project worktree に固定する |
