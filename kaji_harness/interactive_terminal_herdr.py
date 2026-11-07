@@ -608,14 +608,15 @@ def _load_untracked_sessions(path: Path) -> UntrackedSessionRegistry:
     """Load the untracked holder registry, treating a missing file as empty.
 
     Raises:
-        CLIExecutionError: The file cannot be read or fails Pydantic validation. An
-            unreadable record must not be ignored, otherwise the lock wait can recur.
+        CLIExecutionError: The file cannot be read, is not UTF-8, or fails Pydantic
+            validation. An unreadable record must not be ignored, otherwise the lock
+            wait can recur.
     """
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return UntrackedSessionRegistry()
-    except OSError as error:
+    except (OSError, UnicodeDecodeError) as error:
         raise CLIExecutionError(
             "interactive_terminal",
             1,
@@ -1437,14 +1438,16 @@ def _report_session_token_if_owned(
     """
     try:
         pane = _get_herdr_pane(herdr, pane_id)
-    except CLIExecutionError as error:
+    except (CLIExecutionError, OSError) as error:
         try:
             listed = _list_all_herdr_panes(herdr)
-        except CLIExecutionError as list_error:
-            return SessionMarkerOutcome("failed", f"{error.stderr}; {list_error.stderr}")
+        except (CLIExecutionError, OSError) as list_error:
+            return SessionMarkerOutcome(
+                "failed", f"{_herdr_error_detail(error)}; {_herdr_error_detail(list_error)}"
+            )
         if pane_id not in listed:
             return SessionMarkerOutcome("absent")
-        return SessionMarkerOutcome("failed", error.stderr)
+        return SessionMarkerOutcome("failed", _herdr_error_detail(error))
     tokens = _pane_tokens(pane)
     if (
         pane.get("pane_id") != pane_id
@@ -1464,9 +1467,17 @@ def _report_session_token_if_owned(
             step_id=step_id,
             session_id=session_id,
         )
-    except CLIExecutionError as error:
-        return SessionMarkerOutcome("failed", error.stderr)
+    except (CLIExecutionError, OSError) as error:
+        # OSError (e.g. the Herdr executable vanished) must not replace the verdict either.
+        return SessionMarkerOutcome("failed", _herdr_error_detail(error))
     return SessionMarkerOutcome("marked")
+
+
+def _herdr_error_detail(error: CLIExecutionError | OSError) -> str:
+    """Return a diagnostic string for a failed Herdr call."""
+    if isinstance(error, CLIExecutionError):
+        return error.stderr
+    return str(error)
 
 
 def _run_herdr_pane_command(herdr: str, pane_id: str, command: str, *, workdir: Path) -> None:

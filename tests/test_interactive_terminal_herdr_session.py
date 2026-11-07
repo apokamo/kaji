@@ -338,6 +338,26 @@ class TestSessionMarkerContract:
         assert outcome.status == "failed"
         assert outcome.error is not None
 
+    @pytest.mark.parametrize("failing", [("report-metadata",), ("get", "list")])
+    def test_report_os_error_is_failed(self, fake: FakeHerdr, failing: tuple[str, ...]) -> None:
+        """Review C1: an OSError from any Herdr call becomes ``failed``, never propagates."""
+        fake.add("w1:p2", tokens={"kaji_origin": _ORIGIN, "kaji_run": "run"})
+
+        def run(
+            herdr: str, arguments: list[str], *, workdir: Path | None = None
+        ) -> subprocess.CompletedProcess[str]:
+            if arguments[0] == "pane" and arguments[1] in failing:
+                raise FileNotFoundError(2, "Herdr executable disappeared")
+            return fake(herdr, arguments, workdir=workdir)
+
+        with patch(f"{_HERDR}._run_herdr", side_effect=run):
+            outcome = _report_session_token_if_owned(
+                "herdr", "w1:p2", origin_pane=_ORIGIN, run_id="run", step_id="s", session_id="S"
+            )
+        assert outcome.status == "failed"
+        assert outcome.error is not None
+        assert "Herdr executable disappeared" in outcome.error
+
 
 @pytest.mark.small
 class TestResumeHolderSelection:
@@ -408,7 +428,7 @@ class TestResumeHolderSelection:
         assert "w1:p2" in fake.panes
 
 
-@pytest.mark.small
+@pytest.mark.medium
 class TestUntrackedRegistry:
     def _entry(self, **overrides: str) -> UntrackedSessionEntry:
         values = {
@@ -447,6 +467,32 @@ class TestUntrackedRegistry:
         outcome = _record_untracked_session(path, self._entry())
         assert outcome.recorded is False
         assert outcome.error is not None
+
+    def test_non_utf8_record_is_fail_loud(self, tmp_path: Path) -> None:
+        """Review C2: undecodable bytes are normalized to CLIExecutionError with the path."""
+        path = tmp_path / HERDR_UNTRACKED_SESSIONS_FILENAME
+        path.write_bytes(b"\xff\xfe")
+        with pytest.raises(CLIExecutionError) as error:
+            _load_untracked_sessions(path)
+        assert str(path) in error.value.stderr
+        outcome = _record_untracked_session(path, self._entry())
+        assert outcome.recorded is False
+        assert outcome.error is not None
+        assert path.read_bytes() == b"\xff\xfe"
+
+    def test_resume_fails_loud_for_non_utf8_record(self, fake: FakeHerdr, tmp_path: Path) -> None:
+        path = tmp_path / HERDR_UNTRACKED_SESSIONS_FILENAME
+        path.write_bytes(b"\xff\xfe")
+        with pytest.raises(CLIExecutionError) as error:
+            _launch_herdr_pane(
+                "herdr",
+                _ORIGIN,
+                workdir=tmp_path,
+                resume_session_id=_SESSION_S,
+                untracked_sessions_path=path,
+            )
+        assert str(path) in error.value.stderr
+        assert fake.calls_of("split") == []
 
     def _write(self, path: Path, *entries: UntrackedSessionEntry) -> None:
         path.write_text(
@@ -717,3 +763,64 @@ class TestResumeSessionLifecycle:
         assert "w9:p4" in fake.panes
         assert fake.calls_of("split") == []
         assert fake.calls_of("run") == []
+
+    def test_report_os_error_keeps_verdict_and_session(
+        self, attempts: _Attempts, fake: FakeHerdr
+    ) -> None:
+        """Review C1: an OSError on the post-verdict re-marker must not replace the result."""
+
+        def run(
+            herdr: str, arguments: list[str], *, workdir: Path | None = None
+        ) -> subprocess.CompletedProcess[str]:
+            if arguments[:2] == ["pane", "report-metadata"] and fake.calls_of("report-metadata"):
+                raise FileNotFoundError(2, "Herdr executable disappeared")
+            return fake(herdr, arguments, workdir=workdir)
+
+        with patch(f"{_HERDR}._run_herdr", side_effect=run):
+            session, meta = attempts.run("codex-fresh", "codex")
+        assert session == _CODEX_SESSION
+        marker = meta["session_marker"]
+        assert isinstance(marker, dict) and marker["status"] == "failed"
+        assert "Herdr executable disappeared" in str(marker["error"])
+        # marker failed -> ownership-checked close still runs, so no holder is left.
+        assert str(meta["pane_id"]) not in fake.panes
+        assert meta["untracked_session_recorded"] is False
+
+    def test_non_utf8_record_keeps_verdict_and_session(
+        self, attempts: _Attempts, fake: FakeHerdr
+    ) -> None:
+        """Review C2: an undecodable registry is a diagnostic, not a step failure."""
+
+        def break_pane(pane_id: str) -> None:
+            attempts.registry.write_bytes(b"\xff\xfe")
+            fake.fail_report_metadata.add(pane_id)
+            fake.refuse_close.add(pane_id)
+
+        attempts.before_verdict = break_pane
+        session, meta = attempts.run("codex-fresh", "codex")
+        assert session == _CODEX_SESSION
+        assert meta["untracked_session_recorded"] is False
+        assert str(attempts.registry) in str(meta["untracked_record_error"])
+        assert attempts.registry.read_bytes() == b"\xff\xfe"
+
+    def test_non_utf8_record_keeps_timeout_session(
+        self, attempts: _Attempts, fake: FakeHerdr
+    ) -> None:
+        def break_pane(pane_id: str) -> None:
+            attempts.registry.write_bytes(b"\xff\xfe")
+            fake.refuse_close.add(pane_id)
+
+        fake.on_run = break_pane
+        with (
+            patch(
+                f"{_HERDR}._resolve_abnormal_exit_session",
+                return_value=SessionResolution(_CODEX_SESSION),
+            ),
+            pytest.raises(StepTimeoutError) as error,
+        ):
+            attempts.run("codex-fresh", "codex", timeout=0)
+        resolution = error.value.session_resolution
+        assert resolution is not None and resolution.session_id == _CODEX_SESSION
+        meta = attempts.metadata()
+        assert meta["untracked_session_recorded"] is False
+        assert str(attempts.registry) in str(meta["untracked_record_error"])
