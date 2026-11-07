@@ -75,16 +75,23 @@ close-on-verdict=false と resume の組み合わせで session がどう扱わ�
 | **Claude の resume が同条件で成立する理由** | Claude Code は、同じ session を開いている別 process があっても `--resume <id>` で起動を止める確認画面を出さない。#466 結果 #5 で、resume 元の pane が生きたまま resume に成功したことを実測している。ただしこれは Claude Code の現行挙動に頼っているだけで、kaji が保証している契約ではない。同じ会話を 2 つの process が開いたままなので、利用者が古い pane に入力すると会話が分岐する危険もある。本設計は対処を agent 非依存にするので（§ 方針 3）、今後の Claude は「排他 lock を持たない」という前提に頼らなくなる |
 | **直前ではない過去の step を `resume:` する場合** | 同梱 workflow の Codex `resume:` step（`docs.yaml` の `doc-verify`、`docs-codex.yaml` の `doc-fix`、`docs-thorough-codex.yaml` の `doc-fix` / `doc-verify`、`dev-thorough-codex.yaml` の `fix-design`）は、どれも resume 元との間に別の step が入る。この場合は右列を 2 枚に保つ prune で、resume 元の pane が先に閉じられることが多い。ただしそれは prune 順序の副作用であって保証ではない。次のどれかで壊れる。(a) prune の close に失敗して `kaji_agent_panes_skipped` に回った。(b) resume 元の pane を作った後に session を継ぐ resume pane が別にある（同じ session を開く pane が 2 枚になる）。(c) 間の step が headless だったり Antigravity だったりして右列の枚数が変わる。本設計は位置ではなく session 一致で判定するので、resume 元がどれだけ前の step でも同じ規則で処理する |
 | **前の run が残した pane が、resume 元の session を開いている場合** | `kaji run --from` などで前の run の session state を引き継ぐと、前の run の pane（close-on-verdict=false の残置、Ctrl-C で残った pane、close 失敗で残った pane）が同じ session を開いたままのことがある。`_list_managed_herdr_panes` は `kaji_origin` が一致すれば前の run の pane も管理対象にする。それでも session を知らないので、閉じるかどうかは位置次第になる。origin が別の pane（別の Herdr pane から起動した kaji の pane）は管理対象にすら入らない。本設計では、同じ origin の pane は閉じる。別 origin の pane は閉じずに、起動前のエラーにする（§ 方針 4） |
-| **verdict 以外の終了経路** | timeout / shell 復帰の経路は今も best-effort で close するので、close に成功すれば影響はない。Ctrl-C は pane を残す（ADR 007 v4）。resume pane と Claude fresh pane は起動時点で session ID が分かるので、本設計で token を付けた後に残った pane は、後の resume で検出できる。Codex fresh が verdict 以外の経路で終わり、しかも close に失敗した場合だけは token が付かない（§ 制約・前提条件「残余リスク」） |
+| **verdict 以外の終了経路** | timeout / shell 復帰の経路は今も best-effort で close するので、close に成功すれば影響はない。Ctrl-C は pane を残す（ADR 007 v4）。resume pane と Claude fresh pane は起動時点で session ID が分かるので、本設計で token を付けた後に残った pane は、後の resume で検出できる。Codex fresh が verdict 以外の経路で終わり、しかも close に失敗した場合は token が付かない。この場合も、回収できた session は未追跡 holder 記録（§ 方針 5）に残すので、後の resume は pane を作る前に検出する |
+| **verdict 後の token 付与と close がどちらも失敗する場合（設計レビュー R2）** | close-on-verdict=false で Codex fresh の token 付与が失敗し、続く close も失敗すると、`kaji_session` のない生存 pane が残る。true で close に失敗し、その後の token 付与も失敗した場合も同じ。token 一致の探索には出てこないうえ最新の pane なので prune でも残り、直後の resume が lock 待ちになる。本設計では、この状態を issue 単位の未追跡 holder 記録に書き、後続の resume（同じ run でも別の run でも）が pane を作る前に検査する（§ 方針 5） |
+| **verdict 後の token 再付与が ownership を取り戻す経路（設計レビュー R1）** | 既存の `_mark_herdr_pane` は新規 pane 用で、token を書いた**後**に一致を確認する。verdict 後に別 owner に変わった pane へそのまま使うと、旧 origin/run の token を書き戻してしまい、後の close がその pane を自分のものとして閉じられるようになる。本設計では、再付与の前に exact pane の現在の origin/run を確認し、一致しなければ書かない（§ 方針 2） |
 
 ## インターフェース
 
-公開 CLI・設定・workflow YAML・`execute_interactive_terminal_herdr()` の signature は変えない。runner
-（`kaji_harness/runner.py`）は `session_id` をすでに渡しているので変更しない。
+公開 CLI・設定・workflow YAML は変えない。内部関数 `execute_interactive_terminal()` /
+`execute_interactive_terminal_herdr()` には、keyword 引数 `untracked_sessions_path: Path | None = None` を 1 つ足す
+（§ 方針 5）。runner（`kaji_harness/runner.py`）は、session state と同じ issue ディレクトリのパスを渡す。
+`None` のときは未追跡 holder の記録と検査を行わない（既存の単体テスト呼び出しとの互換のため。production の
+runner は必ず渡す）。
 
 ### 入力
 
 - `execute_interactive_terminal_herdr(..., session_id=<resume 元の provider session ID> | None, close_on_verdict=...)`（既存）
+- `untracked_sessions_path`（新規）: `<artifacts_dir>/<issue>/herdr-untracked-sessions.json`。
+  `SessionState` の `session-state.json` と同じディレクトリ（`kaji_harness/state.py` の `_state_dir`）
 - Herdr の `pane list`（workspace 指定なし。全 workspace の pane とその `tokens` を返す）、`pane get`、
   `pane close`、`pane report-metadata --token`（既存の Herdr CLI 契約の範囲）
 
@@ -93,16 +100,25 @@ close-on-verdict=false と resume の組み合わせで session がどう扱わ�
 1. **pane の ownership token に `kaji_session=<provider session ID>` を加える**
    - 起動時点で session ID が分かる pane（resume step の pane、Claude fresh pane）は、最初の marker で付ける
    - Codex fresh pane は、verdict 時に session ID を回収した後で、verdict 後も pane が残る場合
-     （close-on-verdict=false、または verdict 後の close に失敗した場合）だけ付ける
+     （close-on-verdict=false、または verdict 後の close に失敗した場合）だけ付ける。付ける前に、exact pane の
+     現在の `kaji_origin` / `kaji_run` が自分のものと一致することを確認する。一致しなければ書かない（§ 方針 2）
    - Antigravity と、session ID を回収できなかった Codex fresh pane には付けない
 2. **resume step（`session_id` が非 None）の pane を作る前に、session を開いている pane を処理する**
    - `kaji_session == session_id` の pane のうち、`kaji_origin == origin_pane` で `kaji_run` が有効なもの:
      既存の ownership 確認つき close（`_close_owned_herdr_pane`）で閉じ、一覧から消えたことを確認する
    - 閉じられなかった pane があるか、別 origin（または origin pane 自身）の pane が同じ session を開いている場合:
      新しい pane を作らずに `CLIExecutionError` を送出する（step は timeout ではなく即時の失敗になる）
-3. **`pane-metadata.json` に `kaji_session_panes_closed`（list[str]）を加える。** resume のために閉じた pane ID
-   を入れる。resume でない step では空リスト。既存の `kaji_agent_panes_pruned` / `_skipped` は意味を変えない
-4. close-on-verdict=false の挙動が変わる。resume step が起動するとき、resume 元の session を開いている
+3. **`pane-metadata.json` に診断キーを加える。** 既存の `kaji_agent_panes_pruned` / `_skipped` は意味を変えない
+   - `kaji_session_panes_closed`（list[str]）: resume のために閉じた pane ID。resume でない step では空リスト
+   - `session_marker`（Codex fresh の verdict 後に token 付与を試みた場合だけ）:
+     `{"status": "marked" | "absent" | "ownership_changed" | "failed", "error": str | null}`
+   - `untracked_session_recorded`（bool）と、記録に失敗した場合の `untracked_record_error`
+4. **未追跡 holder 記録（`herdr-untracked-sessions.json`）を読み書きする**（§ 方針 5）
+   - 書く: session を回収できたのに、その session を開いた pane が「`kaji_session` が確認できない状態」で
+     生き残りうるとき
+   - 読む: resume step が pane を作る前。該当 session の記録があり、その pane がまだ生きていれば、
+     ownership を確認できた場合だけ閉じる。閉じられなければ `CLIExecutionError`。pane が消えていれば記録を消す
+5. close-on-verdict=false の挙動が変わる。resume step が起動するとき、resume 元の session を開いている
    kaji 所有 pane は閉じられる。会話は resume 側の pane に引き継がれて表示される
 
 ### 使用例
@@ -140,15 +156,21 @@ close it with `herdr pane close w9:p4` and rerun the step.
 - **close-on-verdict=true の挙動を変えない。** verdict 後の close・timeout・shell 復帰時の cleanup は今のまま。
   true でも resume 時の session 検査は走るが、通常は該当する pane がないので副作用はない（Herdr の `pane list`
   が 1 回増えるだけ）
-- **token の付け直しは、全 token を再送して確認する。** Herdr の `pane report-metadata` は token ごとに
+- **token の付け直しは、書く前に現在の ownership を確認し、全 token を再送して確認する。** 書く前の確認は
+  設計レビュー R1 への対応で、§ 方針 2 で定める。そのうえで Herdr の `pane report-metadata` は token ごとに
   `--token` / `--clear-token` を持つ（`herdr pane report-metadata --help`、Herdr 0.9.5）。それでも、同じ
   source からの再報告が token を合成するのか置き換えるのかに依存しないよう、`kaji_origin` / `kaji_run` /
   `kaji_step` / `kaji_session` の 4 つをまとめて再送し、`pane get` で 4 つとも一致することを確認する
   （既存の `_mark_herdr_pane` と同じ確認方式）
 - **Codex fresh の token 付与に失敗した場合は pane を閉じる。** close-on-verdict=false でも、session を開いたまま
-  kaji から識別できない pane を残さない。失敗は warning として `pane-metadata.json` の
-  `session_marker_error` に記録する。verdict・session ID は置き換えない（ADR 007 v4 の「cleanup は
-  best-effort。元の結果を置き換えない」と同じ扱い）
+  kaji から識別できない pane を残さない。close も ownership 確認つきで行う。close まで失敗した場合は、
+  未追跡 holder 記録に残す（§ 方針 5）。失敗は warning として `pane-metadata.json` の `session_marker` に
+  記録する。verdict・session ID は置き換えない（ADR 007 v4 の「cleanup は best-effort。元の結果を置き換えない」
+  と同じ扱い）
+- **check と write の間の競合**: Herdr には token の compare-and-set がないので、「`pane get` で確認してから
+  `report-metadata` で書く」間に別 owner が token を書き換える可能性は残る。この時間幅は、既存の
+  `_close_owned_herdr_pane`（`pane get` で確認してから `pane close`）と同じ程度のもので、ADR 007 v4 が既に
+  受け入れている範囲にとどまる。書いた後の `pane get` 確認で 4 token すべてが一致しなければ `failed` として扱う
 - **session ID を Herdr の metadata に載せる。** session ID はすでに kaji の session state と
   `pane-metadata.json` にあり、Herdr 自身も `agent_session` として表示している（`herdr pane list` の実出力）。
   秘密情報ではない
@@ -156,10 +178,11 @@ close it with `herdr pane close w9:p4` and rerun the step.
   その後で prune・split・marker・launcher の起動を順に行う。close-on-verdict=true の既存経路も「verdict 後に
   close → 次の step の起動」の順で、Codex resume は成功している（結果 #4）。agent process の終了を待つ追加の
   待機は入れない。実機での確認は merge 後の確認項目で行う
-- **残余リスク**: Codex fresh が verdict 以外の経路（timeout / shell 復帰）で終わり、しかもその close に失敗した
-  場合、pane に `kaji_session` が付かない。後でこの session を resume すると lock 画面になりうる。発生には
-  Herdr 操作の失敗が重なる必要があるので、本 Issue では扱わない。shell 復帰の場合は agent process が終わって
-  いるので lock は起きない。実際に起きうるのは timeout と close 失敗が重なった場合だけ
+- **残余リスク**: Herdr 操作（token 付与と close）の失敗に加えて、ローカルの
+  `herdr-untracked-sessions.json` への書き込み（atomic replace）まで失敗した場合だけ、追跡できない holder が残る。
+  このとき `untracked_record_error` と warning を残し、verdict・session ID は置き換えない。issue 単位の記録なので、
+  別の issue の session state から同じ session を resume する経路（kaji の通常運用にはない）も対象外。
+  旧 kaji 版の pane は下記「後方互換」のとおり扱う
 - 後方互換: 本修正より前の kaji が残した pane には `kaji_session` がないので、検出されない。ADR 008 の
   「互換用の fallback を足さない」方針に従い、手当てしない。従来どおり prune の対象にはなる
 
@@ -169,19 +192,48 @@ close it with `herdr pane close w9:p4` and rerun the step.
    指定があれば `--token kaji_session=<id>` を加え、確認対象にも含める。`execute_interactive_terminal_herdr` は
    最初の marker に `session_id or launch_session_id or None` を渡す
 
-2. **Codex fresh の verdict 後処理**（verdict 経路だけ）:
+2. **Codex fresh の verdict 後処理**（verdict 経路だけ。設計レビュー R1 / R2 対応）:
+
+   token 付与は、新しい helper `_report_session_token_if_owned(herdr, pane_id, origin_pane, run_id, step_id,
+   session_id) -> SessionMarkerOutcome` で行う。既存の `_mark_herdr_pane` は新規 pane の初回 marker 専用のまま
+   にし、verdict 後には使わない。
+
+   ```text
+   _report_session_token_if_owned:
+       pane = pane get <pane_id>
+         pane get が失敗 → 全 workspace の pane list で存在を確かめる
+           一覧に pane_id がない     → "absent"（書かない。lock の原因になる process はない）
+           一覧も取れない / 一覧にある → "failed"（書かない）
+       tokens.kaji_origin != origin_pane or tokens.kaji_run != run_id
+                                     → "ownership_changed"（書かない・閉じない）
+       report-metadata で 4 token を再送 → pane get で 4 token の一致を確認
+         一致                        → "marked"
+         不一致 / Herdr エラー       → "failed"
+   ```
 
    ```text
    result_session_id = 既存の解決
+   needs_tracking = agent == codex and resume_session 未指定 and result_session_id
    if close_on_verdict:
-       close_error = best-effort close
-       if close_error and agent == codex and resume_session 未指定 and result_session_id:
-           best-effort で kaji_session を付ける（失敗は session_marker_error に記録）
-   else if agent == codex and resume_session 未指定 and result_session_id:
-       try: mark(..., session_id=result_session_id)
-       except CLIExecutionError/OSError:
-           session_marker_error を記録し、best-effort close（close_error も記録）
+       close_error = best-effort close（既存）
+       if close_error and needs_tracking:
+           outcome = _report_session_token_if_owned(...)
+           if outcome in ("failed", "ownership_changed"):
+               untracked 記録を追加（§ 方針 5）
+   else if needs_tracking:
+       outcome = _report_session_token_if_owned(...)
+       if outcome == "failed":
+           close_error = best-effort close（ownership 確認つき）
+           if close_error: untracked 記録を追加
+       elif outcome == "ownership_changed":
+           untracked 記録を追加（閉じない）
    ```
+
+   - `ownership_changed` のときは書かずに閉じない。既存 cleanup が ownership 不一致で close を拒んだ判断を、
+     再 marker で覆さない
+   - pane が別 owner に変わっていても、中の process は kaji が起動した Codex で、session を開いたままかもしれない。
+     そのため untracked 記録には残す。後の resume では閉じずにエラーにする（§ 方針 5）
+   - どの分岐も verdict と `CLIResult.session_id` は置き換えない
 
 3. **resume 前の session holder 処理**（`_launch_herdr_pane` に `resume_session_id` を追加し、既存の list /
    prune の前に行う）:
@@ -195,6 +247,7 @@ close it with `herdr pane close w9:p4` and rerun the step.
            if not _close_owned_herdr_pane(...):   # ownership 不一致 / close 未確認
                raise CLIExecutionError(close できない holder)
            closed.append(h.pane_id)
+   untracked 記録の検査（§ 方針 5）
    existing, skipped = _list_managed_herdr_panes(...)   # 以降は既存どおり
    ```
 
@@ -211,8 +264,43 @@ close it with `herdr pane close w9:p4` and rerun the step.
    管理している。ADR 007 の ownership は「自分の origin が作った pane だけを整理する」範囲で成り立っているので、
    それを越えて閉じない。かわりに pane を作る前に失敗させ、利用者が閉じれば再実行できるようにする
    （EB の「理由の分かるエラー」）
-5. **metadata**: `HerdrPaneLaunch` に `session_panes_closed: list[str]` を追加し、`_write_herdr_metadata` で
-   `kaji_session_panes_closed` として出力する。Codex fresh の token 付与に失敗したら `session_marker_error` を出力する
+5. **未追跡 holder 記録**（設計レビュー R2 対応）
+
+   - **場所**: `<artifacts_dir>/<issue>/herdr-untracked-sessions.json`。session state（`session-state.json`）と
+     同じ issue ディレクトリに置く。kaji の resume は issue 単位の session state から session ID を引くので
+     （`runner.py` の `self.state.get_session_id(step.resume)`）、同じ issue の後続 step にも、`kaji run --from`
+     などの別 run にも届く。前の run が残した pane もこの範囲に入る
+   - **形式**: `{"entries": [{"session_id", "pane_id", "origin_pane", "run_id", "step_id", "reason"}]}`。
+     `reason` は `marker_failed_close_failed` / `ownership_changed` / `close_failed_marker_failed` /
+     `abnormal_exit_close_failed` のどれか。書き込みは同じディレクトリの一時ファイルから `os.replace` で行う
+     。既存の `session-state.json` の保存は `write_text` だけだが、この記録は失敗時の fail-safe なので、途中まで書かれた状態を残さないようにする。内容は Pydantic で検証して読む。壊れていれば
+     `CLIExecutionError` にする（fail-loud。中身の分からない記録を無視して lock 待ちに進まない）
+   - **書く契機**: § 方針 2 の表のとおり。加えて、timeout / shell 復帰の経路で Codex fresh の session を解決でき、
+     close に失敗した場合（`abnormal_exit_close_failed`）。設計初版の残余リスクだった経路も、これで閉じる
+   - **resume での検査**（§ 方針 3 の session token による処理の後、既存の list / prune の前）:
+
+     ```text
+     for e in 記録のうち e.session_id == resume_session_id:
+         pane = pane list（全 workspace）から e.pane_id を探す
+         なし                                     → 記録を消す（process も消えている）
+         あり・token の origin/run が e と一致し、e.origin_pane == origin_pane
+                                                  → _close_owned_herdr_pane で close
+                                                     成功: 記録を消す / 失敗: CLIExecutionError
+         あり・それ以外（別 owner・別 origin・token 不明）
+                                                  → CLIExecutionError（閉じない）
+     ```
+
+     - エラーメッセージには pane ID・session ID・記録ファイルのパス・利用者がとる操作（`herdr pane close <id>`
+       で閉じて再実行する）を含める
+     - 利用者が手で pane を閉じれば、次の検査で「なし」になって記録が消えるので、記録ファイルを手で直す必要はない
+     - 記録の削除に失敗した場合は warning にとどめ、step は続ける（pane が消えていることは確認済みなので、
+       次回の検査でも同じ判定になる）
+   - これは旧版 pane 向けの互換 fallback ではない。本修正で新しく生まれる失敗経路のための fail-safe（ADR 008 の
+     対象外）
+
+6. **metadata**: `HerdrPaneLaunch` に `session_panes_closed: list[str]` を追加し、`_write_herdr_metadata` で
+   `kaji_session_panes_closed` として出力する。`session_marker` / `untracked_session_recorded` /
+   `untracked_record_error` も出力する（§ 出力・副作用 3）
 
 ### 却下した代替案
 
@@ -233,12 +321,15 @@ close it with `herdr pane close w9:p4` and rerun the step.
 | holder の識別方法 | kaji が書いて確認する `kaji_session` token を使う | AI の仮定。根拠: 既存の ownership token と同じ仕組み（ADR 007 v4）で書けて確認でき、step ID や位置よりも正確。review-design / review-code で検査する | 起動時に分かる session は最初の marker に入れる。Codex fresh は verdict 後に pane が残る場合だけ、全 token を再送して確認する |
 | 適用範囲（agent） | agent 非依存（Claude の resume にも適用） | AI の仮定。根拠: § 方針 3 の (a)〜(c)。Issue の完了条件「Claude の resume が成立する前提」の調査結果から導いた。review-design で検査する | close-on-verdict=false の Claude の挙動も変わるので、docs に書く |
 | 別 origin の holder | 閉じずに、起動前に `CLIExecutionError` にする | AI の仮定。根拠: ADR 007 の ownership の範囲（origin ごとの整理）と、EB の「両立できない組み合わせは理由の分かるエラー」 | エラーメッセージに pane ID・origin・session ID・利用者がとる操作を含める |
-| token 付与の失敗 | Codex fresh の token 付与に失敗したら、close-on-verdict=false でも pane を閉じる | AI の仮定。根拠: 識別できない holder を残すと、元の不具合（lock → timeout）が再発する。close-on-verdict=false の「残す」目的より、EB を優先する。review-design で検査する | 失敗は `session_marker_error` に記録し、verdict・session ID は置き換えない |
+| token 付与の失敗 | Codex fresh の token 付与に失敗したら、close-on-verdict=false でも pane を閉じる | AI の仮定。根拠: 識別できない holder を残すと、元の不具合（lock → timeout）が再発する。close-on-verdict=false の「残す」目的より、EB を優先する。review-design で検査する | 失敗は `session_marker` に記録し、verdict・session ID は置き換えない |
+| 再付与前の ownership 確認（設計レビュー R1） | verdict 後の token 再付与の前に exact pane の現在の origin/run を確認し、一致しなければ書かず、閉じない | 既存契約 ADR 007 v4「close/prune は exact pane を再取得し origin/run 一致を確認した場合だけ行う」「marker 設定失敗時は unowned pane を閉じない」を、token の書き込みにも広げた。設計レビュー R1 の要求 | 新しい helper `_report_session_token_if_owned` と結果 4 種（marked / absent / ownership_changed / failed）。既存の `_mark_herdr_pane` は初回 marker 専用のまま |
+| 二重失敗時の追跡（設計レビュー R2） | token 付与と close がどちらも成功しなかった生存 holder を、issue 単位の `herdr-untracked-sessions.json` に記録する。resume は pane を作る前にこれを検査し、閉じられなければ明示エラーにする | AI の仮定。根拠: Issue の EB「kaji 自身が残した pane による入力待ちを防ぐ」と、ADR 007 v4「cleanup は verdict・session を置き換えない」の両立。Herdr の token が使えない状態でも kaji が自分で持てる記録が要る。session state と同じ issue ディレクトリに置けば後続 step にも別 run にも届く。新しいファイルは診断・安全用の追加ファイルで、外部から読まれず、revert で消せる（two-way door）。review-design / review-code で検査する | 置き場所・形式・書く契機（4 種の reason）・resume での検査手順・壊れた記録は fail-loud・手で pane を閉じれば自動で記録が消える |
 | 確認画面への応答 | kaji はキー入力を送らない | Issue 本文「重要判断 > 確認画面への応答」（#422 と同じ安全方針）。Issue の EB にも明記されている | 送るのは従来どおり launcher の `pane run` 1 回だけ。テストで確認する |
-| scope | Codex の session lock につながる、kaji が残した pane だけを扱う。確認画面の一般的な検出は #422 で扱う | Issue 本文「重要判断 > scope」 | 残余リスク（Codex fresh が verdict 以外の経路で終わり、close にも失敗した場合）は扱わないことを明記した |
+| scope | Codex の session lock につながる、kaji が残した pane だけを扱う。確認画面の一般的な検出は #422 で扱う | Issue 本文「重要判断 > scope」 | 残余リスクは、Herdr 操作の失敗に加えて記録ファイルの書き込みまで失敗した場合だけ、と明記した |
 
 one-way door にあたる判断はない。どれも内部挙動と docs の変更で、revert で戻せる。公開 CLI・設定・
-workflow YAML・永続 state の schema は変えない（`pane-metadata.json` には診断用のキーを足すだけ）。
+workflow YAML・`session-state.json` の schema は変えない。`pane-metadata.json` には診断用のキーを足すだけ。
+新しい `herdr-untracked-sessions.json` は kaji 内部だけが読み書きする追加ファイルで、既存のデータを移行しない。
 
 ## テスト戦略
 
@@ -269,8 +360,19 @@ assert する。修正前のコードでも、resume 元の pane が閉じられ
     になり、split は呼ばれない
   - 同じ session の holder が複数あれば全部閉じる
   - `kaji_session` が別の値の pane や token のない pane は、session 処理の対象にならない（既存の prune には従う）
-- `_launch_herdr_pane(resume_session_id=None)`: 全 workspace の `pane list` を呼ばず、従来どおりの呼び出しになる
-  （fresh step の挙動は変わらない）
+- `_launch_herdr_pane(resume_session_id=None)`: 全 workspace の `pane list` を呼ばず、未追跡 holder 記録も
+  読まず、従来どおりの呼び出しになる（fresh step の挙動は変わらない）
+- `_report_session_token_if_owned`（設計レビュー R1）:
+  - 現在の token が別 origin / 別 run → `ownership_changed`。`report-metadata` は呼ばれない（呼び出し記録で確認）
+  - token が欠けている → `ownership_changed`。書かない
+  - pane が一覧にない → `absent`。書かない
+  - origin/run が一致 → 4 token を再送し、`pane get` で確認できれば `marked`。書いた後の確認が一致しなければ `failed`
+- 未追跡 holder 記録（設計レビュー R2）:
+  - 追加・削除・読み込みが atomic replace で行われ、壊れた JSON や schema 違反は `CLIExecutionError` になる
+  - `untracked_sessions_path=None` では読み書きしない
+  - 記録の pane が一覧にない → 記録を消して続行。ownership が一致 → close して記録を消す。close 失敗、
+    別 owner、別 origin → `CLIExecutionError` で split しない
+  - 別の session ID の記録は対象にしない
 
 #### Medium テスト（OB の再現テスト。`TestExecuteHerdr` と同じ medium 層）
 
@@ -295,7 +397,25 @@ assert する。修正前のコードでも、resume 元の pane が閉じられ
 - **キー入力を送らない**: fake への呼び出し記録で、pane への入力にあたる操作が各 pane の `pane run` 1 回だけ
   であることを assert する（Herdr 0.9.5 の入力系 subcommand `pane send-keys` / `pane send-text` が呼ばれない。`herdr pane --help` で確認）
 - **token 付与の失敗**: close_on_verdict=False で Codex fresh の再 marker が失敗すると、pane が閉じられ、
-  `session_marker_error` が記録され、`CLIResult.session_id` は回収した値のまま
+  `session_marker.status == "failed"` が記録され、`CLIResult.session_id` は回収した値のまま
+- **再付与が ownership を取り戻さない（R1）**: Codex fresh の verdict 前に、fake 上で pane の token を別
+  origin/run に書き換える。close_on_verdict=False と True（close が ownership 不一致で拒否される）の両方で、
+  次を assert する
+  - `report-metadata` が再送されず、pane の token は別 owner のまま
+  - pane は閉じられない
+  - `session_marker.status == "ownership_changed"`、untracked 記録に追加される
+  - 直後の resume が pane を作らずに `CLIExecutionError` になる
+- **二重失敗でも lock 待ちにならない（R2）**: close_on_verdict=False で、fake の `report-metadata` を失敗させ
+  （token は保存されない）、`pane close` も拒否させる。その後 `session_id=S` で resume を実行する。次を assert する
+  - `herdr-untracked-sessions.json` に S と pane ID が記録される
+  - resume は `pane split` も `pane run` も呼ばずに `CLIExecutionError` になり、メッセージに pane ID と S が入る
+  - 同じ記録ファイルを使う別の `execute_interactive_terminal_herdr` 呼び出し（別 run 相当）でも同じ結果になる
+  - その後 fake 上で pane を消して resume を再実行すると、記録が消え、resume は完了する
+  - true で close が失敗し、続く token 付与も失敗した場合も、同じく記録される
+- **timeout 経路**: Codex fresh が timeout し、session を解決でき、close が失敗した場合、記録に
+  `abnormal_exit_close_failed` が入る
+- **runner からの受け渡し**（`tests/test_runner_interactive_dispatch.py`）: interactive dispatch が
+  `untracked_sessions_path = <artifacts_dir>/<issue>/herdr-untracked-sessions.json` を backend に渡す
 - **別 origin の holder**: 別 origin の token を持つ holder がいると、resume step は pane を作らずに
   `CLIExecutionError` になり、その holder は生存したまま
 
@@ -320,9 +440,9 @@ assert する。修正前のコードでも、resume 元の pane が閉じられ
 
 | ドキュメント | 影響の有無 | 理由 |
 |-------------|-----------|------|
-| docs/adr/007-interactive-terminal-runner.md | あり | 改訂履歴に v6（Issue #532）を足し、決定を書く: ownership token に `kaji_session` を追加、resume 時の session holder の close、別 origin の holder を起動前にエラーにする。ownership の範囲は変えないことも明記する |
-| docs/cli-guides/interactive-terminal-runner.md / .ja.md | あり | § When to use it（close-on-verdict=false でも、resume 元の pane は resume step の起動時に閉じる）、§ Behavior 2（session 一致の close と別 origin のエラー）、§ Pane metadata（`kaji_session_panes_closed` / `session_marker_error`）、§ Troubleshooting（別 origin の holder によるエラーと対処） |
-| docs/ARCHITECTURE.md | なし | runner の dispatch 構造は変えない |
+| docs/adr/007-interactive-terminal-runner.md | あり | 改訂履歴に v6（Issue #532）を足し、決定を書く: ownership token に `kaji_session` を追加、再付与の前に ownership を確認する、resume 時の session holder の close、別 origin の holder を起動前にエラーにする、未追跡 holder 記録。ownership の範囲は変えないことも明記する |
+| docs/cli-guides/interactive-terminal-runner.md / .ja.md | あり | § When to use it（close-on-verdict=false でも、resume 元の pane は resume step の起動時に閉じる）、§ Behavior 2（session 一致の close、未追跡 holder 記録の検査、別 origin のエラー）、§ Pane metadata（`kaji_session_panes_closed` / `session_marker` / `untracked_session_recorded` / `untracked_record_error`）、§ Troubleshooting（holder によるエラーと対処: pane を閉じて再実行すれば記録は自動で消える） |
+| docs/ARCHITECTURE.md | なし | runner の dispatch 構造は変えない（内部引数を 1 つ渡すだけ） |
 | docs/dev/ | なし | workflow・開発手順は変えない |
 | docs/reference/ | なし | 設定キーは変えない |
 | AGENTS.md / CLAUDE.md | なし | 規約は変えない |
@@ -336,7 +456,9 @@ assert する。修正前のコードでも、resume 元の pane が閉じられ
 | ADR 007 v4 / v5 | `docs/adr/007-interactive-terminal-runner.md` | 「pane ownership は source-scoped token `kaji_origin` / `kaji_run` / `kaji_step` で表現する。token は `--ttl-ms` を省略し、置換・明示消去・pane close まで保持する Herdr 契約を利用する。close/prune は exact pane を再取得し origin/run 一致を確認した場合だけ行う」「cleanup は best-effort とし、close 失敗は … verdict や元の例外、解決済み session 情報を置換しない」 |
 | interactive terminal runner ガイド | `docs/cli-guides/interactive-terminal-runner.md` § When to use it / § Behavior 2・7 / § Session continuation | close-on-verdict=false の目的（verdict 後も最終状態を見られる。右列は最新 2 枚）。prune は origin/run token を再読してから close し、不確かな pane は skip する。Codex resume は `codex resume <uuid>` を起動する |
 | 現行実装 | `kaji_harness/interactive_terminal_herdr.py`（`_build_herdr_marker_argv` / `_mark_herdr_pane` / `_launch_herdr_pane` / `_list_managed_herdr_panes` / `_close_owned_herdr_pane` / `execute_interactive_terminal_herdr`） | token が 3 種類で session を持たないこと。prune が y 座標の古い順だけで決まること。verdict 後の close が `close_on_verdict` だけで決まること（§ 根本原因） |
-| runner の resume dispatch | `kaji_harness/runner.py`（`session_id = self.state.get_session_id(step.resume)` と `execute_interactive_terminal(..., session_id=session_id, close_on_verdict=...)`） | resume 元の session ID は既に Herdr backend に渡っているので、runner は変えなくてよい |
+| runner の resume dispatch | `kaji_harness/runner.py`（`session_id = self.state.get_session_id(step.resume)` と `execute_interactive_terminal(..., session_id=session_id, close_on_verdict=...)`） | resume 元の session ID は既に Herdr backend に渡っている。runner の変更は、未追跡 holder 記録のパスを渡すことだけ |
+| session state の置き場所 | `kaji_harness/state.py`（`SessionState.load_or_create` の `artifacts_dir / issue / STATE_FILE`、`_state_dir`） | session state は issue 単位で run をまたいで使われる。未追跡 holder 記録を同じディレクトリに置く根拠。既存の保存は `write_text`（atomic ではない） |
+| 設計レビュー（R1 / R2） | Issue #532 の review-design コメント（commit `6b7cbc9` 対象） | R1: 既存 `_mark_herdr_pane` は書いてから確認するので、verdict 後に使うと別 owner の token を書き戻せる。R2: token 付与と close が両方失敗すると、`kaji_session` のない生存 pane が残る |
 | agent capability | `kaji_harness/agents.py`（`supports_resume`） | Antigravity は resume に対応しない（`supports_resume=False`）。resume 時の session 処理は Claude / Codex にだけかかる |
 | Herdr CLI 0.9.5 の help | `herdr pane report-metadata --help`（ローカルの Herdr 0.9.5 で確認） | `--token <NAME=VALUE>` と `--clear-token <NAME>` が token ごとに用意されている。本設計は合成か置換かに依存しないよう、全 token を再送して `pane get` で確認する |
 | Herdr CLI 0.9.5 の `pane list` 実出力 | `herdr pane list`（workspace 指定なし。ローカルの Herdr 0.9.5 で確認） | 全 workspace（`w1` / `w2`）の pane が `tokens`（`kaji_origin` / `kaji_run` / `kaji_step`）付きで返る。Herdr 自身も `agent_session.value` に session ID を表示している（session ID は秘密情報として扱われていない） |
