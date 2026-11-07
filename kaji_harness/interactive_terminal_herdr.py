@@ -30,6 +30,7 @@ from .errors import (
     CLIExecutionError,
     CLINotFoundError,
     HerdrSessionRequiredError,
+    SessionResolution,
     StepTimeoutError,
 )
 from .interactive_terminal_common import (
@@ -59,6 +60,16 @@ _HERDR_COMMAND_TIMEOUT_SECONDS = 10
 _HERDR_LAUNCHER_START_TIMEOUT_SECONDS = 10
 _HERDR_LAUNCHER_START_POLL_INTERVAL_SECONDS = 0.1
 _HERDR_LAUNCHER_STARTED_FILENAME = "herdr-launcher-started"
+# Issue #532: issue 単位の未追跡 session holder 記録（session-state.json と同じディレクトリ）。
+HERDR_UNTRACKED_SESSIONS_FILENAME = "herdr-untracked-sessions.json"
+
+UntrackedSessionReason = Literal[
+    "marker_failed_close_failed",
+    "ownership_changed",
+    "close_failed_marker_failed",
+    "abnormal_exit_close_failed",
+]
+SessionMarkerStatus = Literal["marked", "absent", "ownership_changed", "failed"]
 
 
 class _AttemptDeadlineReachedError(Exception):
@@ -86,6 +97,43 @@ class _HerdrResponseEnvelope(BaseModel):
     result: _HerdrResultEnvelope
 
 
+class UntrackedSessionEntry(BaseModel):
+    """One provider session whose holder pane may survive without a ``kaji_session`` token."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    session_id: str = Field(min_length=1)
+    pane_id: str = Field(min_length=1)
+    origin_pane: str = Field(min_length=1)
+    run_id: str = Field(min_length=1)
+    step_id: str = Field(min_length=1)
+    reason: UntrackedSessionReason
+
+
+class UntrackedSessionRegistry(BaseModel):
+    """Persisted ``herdr-untracked-sessions.json`` content (Issue #532)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    entries: list[UntrackedSessionEntry] = Field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class SessionMarkerOutcome:
+    """Result of re-reporting the session token after a Codex fresh verdict (Issue #532)."""
+
+    status: SessionMarkerStatus
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class UntrackedRecordOutcome:
+    """Whether a possibly untracked session holder was persisted (Issue #532)."""
+
+    recorded: bool
+    error: str | None = None
+
+
 @dataclass(frozen=True)
 class HerdrManagedPane:
     """A kaji-owned Herdr pane ordered by its layout y-coordinate."""
@@ -105,6 +153,7 @@ class HerdrPaneLaunch:
     panes_before: list[str]
     panes_pruned: list[str]
     panes_skipped: list[str] = field(default_factory=list)
+    session_panes_closed: list[str] = field(default_factory=list)
 
 
 def execute_interactive_terminal_herdr(
@@ -119,6 +168,7 @@ def execute_interactive_terminal_herdr(
     execution_policy: str = "auto",
     env: Mapping[str, str] | None = None,
     deadline_monotonic: float | None = None,
+    untracked_sessions_path: Path | None = None,
 ) -> CLIResult:
     """Start an interactive agent in a Herdr pane and wait for ``verdict.yaml``.
 
@@ -137,6 +187,10 @@ def execute_interactive_terminal_herdr(
             (Issue #421), computed once by the runner so it matches the deadline shown in
             the prompt. ``None`` falls back to ``time.monotonic() + timeout`` measured
             after the launcher start confirmation.
+        untracked_sessions_path: Issue-scoped ``herdr-untracked-sessions.json`` (Issue
+            #532). Session holders that may survive without a ``kaji_session`` token are
+            recorded here, and a resume step checks it before creating a pane. ``None``
+            disables recording and checking.
 
     Returns:
         Empty-output CLI result with the resolved provider session ID.
@@ -144,7 +198,8 @@ def execute_interactive_terminal_herdr(
     Raises:
         CLINotFoundError: Herdr is missing or its version is unsupported.
         HerdrSessionRequiredError: Caller context is not an explicit Herdr pane.
-        CLIExecutionError: A Herdr operation fails or the agent exits early.
+        CLIExecutionError: A Herdr operation fails, the agent exits early, or a resume
+            step finds a pane holding its provider session that kaji cannot close.
         StepTimeoutError: The verdict artifact does not appear before timeout, or the
             attempt deadline was consumed before the pane launch / launcher start.
         ValueError: The step has no supported agent.
@@ -167,7 +222,13 @@ def execute_interactive_terminal_herdr(
 
     run_id = str(uuid.uuid4())
     launch_session_id = str(uuid.uuid4()) if step.agent == "claude" and session_id is None else ""
-    launch = _launch_herdr_pane(herdr, origin_pane, workdir=workdir)
+    launch = _launch_herdr_pane(
+        herdr,
+        origin_pane,
+        workdir=workdir,
+        resume_session_id=session_id,
+        untracked_sessions_path=untracked_sessions_path,
+    )
     pane_id = launch.pane_id
     metadata_path = prompt_path.parent / "pane-metadata.json"
     terminal_log = prompt_path.parent / "terminal.log"
@@ -179,6 +240,7 @@ def execute_interactive_terminal_herdr(
             origin_pane=origin_pane,
             run_id=run_id,
             step_id=step.id,
+            session_id=session_id or launch_session_id or None,
         )
     except CLIExecutionError:
         _write_herdr_metadata(
@@ -269,6 +331,7 @@ def execute_interactive_terminal_herdr(
             launch_session_id=launch_session_id,
             close_on_verdict=close_on_verdict,
             layout=launch,
+            untracked_sessions_path=untracked_sessions_path,
         )
 
     _console.info(
@@ -293,14 +356,19 @@ def execute_interactive_terminal_herdr(
                         prompt_path=prompt_path,
                         verdict_path=verdict_path,
                     )
-                close_error = None
-                if close_on_verdict:
-                    close_error = _close_owned_herdr_pane_best_effort(
-                        herdr,
-                        pane_id,
-                        origin_pane=origin_pane,
-                        run_id=run_id,
-                    )
+                needs_tracking = (
+                    step.agent == "codex" and session_id is None and bool(result_session_id)
+                )
+                close_error, marker, tracking = _finish_verdict_pane(
+                    herdr,
+                    pane_id=pane_id,
+                    origin_pane=origin_pane,
+                    run_id=run_id,
+                    step_id=step.id,
+                    close_on_verdict=close_on_verdict,
+                    tracked_session_id=result_session_id if needs_tracking else None,
+                    untracked_sessions_path=untracked_sessions_path,
+                )
                 _write_herdr_metadata(
                     metadata_path,
                     herdr_version=herdr_version,
@@ -312,6 +380,8 @@ def execute_interactive_terminal_herdr(
                     terminal_log=terminal_log,
                     close_error=close_error,
                     layout=launch,
+                    session_marker=marker,
+                    untracked=tracking,
                 )
                 return CLIResult(full_output="", session_id=result_session_id)
 
@@ -334,6 +404,16 @@ def execute_interactive_terminal_herdr(
                         origin_pane=origin_pane,
                         run_id=run_id,
                     )
+                    tracking = _track_abnormal_exit_holder(
+                        step=step,
+                        pane_id=pane_id,
+                        origin_pane=origin_pane,
+                        run_id=run_id,
+                        session_id=session_id,
+                        resolved=resolved,
+                        close_error=close_error,
+                        untracked_sessions_path=untracked_sessions_path,
+                    )
                     _write_herdr_metadata(
                         metadata_path,
                         herdr_version=herdr_version,
@@ -347,6 +427,7 @@ def execute_interactive_terminal_herdr(
                         include_diagnostic=True,
                         close_error=close_error,
                         layout=launch,
+                        untracked=tracking,
                     )
                     detail, kind = _recorded_exit_detail(
                         terminal_log,
@@ -399,7 +480,202 @@ def execute_interactive_terminal_herdr(
         launch_session_id=launch_session_id,
         close_on_verdict=close_on_verdict,
         layout=launch,
+        untracked_sessions_path=untracked_sessions_path,
     )
+
+
+def _finish_verdict_pane(
+    herdr: str,
+    *,
+    pane_id: str,
+    origin_pane: str,
+    run_id: str,
+    step_id: str,
+    close_on_verdict: bool,
+    tracked_session_id: str | None,
+    untracked_sessions_path: Path | None,
+) -> tuple[str | None, SessionMarkerOutcome | None, UntrackedRecordOutcome | None]:
+    """Close or keep the verdict pane and keep its provider session discoverable.
+
+    ``tracked_session_id`` is set only for a Codex fresh pane whose session was resolved
+    after the verdict: its initial marker could not carry ``kaji_session``. When the pane
+    stays alive (close disabled or close failed), the token is re-reported only after the
+    current ownership is confirmed (design review R1). A holder that may survive without
+    the token is recorded in the untracked registry (design review R2). No branch replaces
+    the verdict or the resolved session.
+
+    Returns:
+        ``(close_error, session_marker, untracked)`` diagnostics for ``pane-metadata.json``.
+    """
+    close_error: str | None = None
+    marker: SessionMarkerOutcome | None = None
+    reason: UntrackedSessionReason | None = None
+    if close_on_verdict:
+        close_error = _close_owned_herdr_pane_best_effort(
+            herdr, pane_id, origin_pane=origin_pane, run_id=run_id
+        )
+        if close_error is not None and tracked_session_id:
+            marker = _report_session_token_if_owned(
+                herdr,
+                pane_id,
+                origin_pane=origin_pane,
+                run_id=run_id,
+                step_id=step_id,
+                session_id=tracked_session_id,
+            )
+            if marker.status == "failed":
+                reason = "close_failed_marker_failed"
+            elif marker.status == "ownership_changed":
+                reason = "ownership_changed"
+    elif tracked_session_id:
+        marker = _report_session_token_if_owned(
+            herdr,
+            pane_id,
+            origin_pane=origin_pane,
+            run_id=run_id,
+            step_id=step_id,
+            session_id=tracked_session_id,
+        )
+        if marker.status == "failed":
+            # 識別できない holder を残すと lock 待ちが再発するため、false でも閉じる。
+            close_error = _close_owned_herdr_pane_best_effort(
+                herdr, pane_id, origin_pane=origin_pane, run_id=run_id
+            )
+            if close_error is not None:
+                reason = "marker_failed_close_failed"
+        elif marker.status == "ownership_changed":
+            reason = "ownership_changed"
+    if marker is not None and marker.status in ("failed", "ownership_changed"):
+        _console.warning(
+            "Herdr session token was not reported: pane=%s status=%s detail=%s",
+            pane_id,
+            marker.status,
+            marker.error,
+        )
+    untracked: UntrackedRecordOutcome | None = None
+    if reason is not None and tracked_session_id:
+        untracked = _record_untracked_session(
+            untracked_sessions_path,
+            UntrackedSessionEntry(
+                session_id=tracked_session_id,
+                pane_id=pane_id,
+                origin_pane=origin_pane,
+                run_id=run_id,
+                step_id=step_id,
+                reason=reason,
+            ),
+        )
+    return close_error, marker, untracked
+
+
+def _track_abnormal_exit_holder(
+    *,
+    step: Step,
+    pane_id: str,
+    origin_pane: str,
+    run_id: str,
+    session_id: str | None,
+    resolved: SessionResolution,
+    close_error: str | None,
+    untracked_sessions_path: Path | None,
+) -> UntrackedRecordOutcome | None:
+    """Record a Codex fresh holder left by a timeout / shell-return close failure.
+
+    Panes started with a known session already carry ``kaji_session``; only a Codex fresh
+    pane has no token, so only that case needs the untracked registry.
+    """
+    if (
+        close_error is None
+        or step.agent != "codex"
+        or session_id is not None
+        or not resolved.session_id
+    ):
+        return None
+    return _record_untracked_session(
+        untracked_sessions_path,
+        UntrackedSessionEntry(
+            session_id=resolved.session_id,
+            pane_id=pane_id,
+            origin_pane=origin_pane,
+            run_id=run_id,
+            step_id=step.id,
+            reason="abnormal_exit_close_failed",
+        ),
+    )
+
+
+def _load_untracked_sessions(path: Path) -> UntrackedSessionRegistry:
+    """Load the untracked holder registry, treating a missing file as empty.
+
+    Raises:
+        CLIExecutionError: The file cannot be read or fails Pydantic validation. An
+            unreadable record must not be ignored, otherwise the lock wait can recur.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return UntrackedSessionRegistry()
+    except OSError as error:
+        raise CLIExecutionError(
+            "interactive_terminal",
+            1,
+            f"Herdr untracked session record cannot be read: {path}: {error}",
+        ) from error
+    try:
+        return UntrackedSessionRegistry.model_validate_json(text)
+    except ValidationError as error:
+        raise CLIExecutionError(
+            "interactive_terminal",
+            1,
+            f"Herdr untracked session record is invalid: {path}: {error}",
+        ) from error
+
+
+def _save_untracked_sessions(path: Path, registry: UntrackedSessionRegistry) -> None:
+    """Atomically replace the untracked holder registry.
+
+    Raises:
+        OSError: The temporary file cannot be written or moved into place.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(
+            registry.model_dump_json(indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+    except OSError:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _record_untracked_session(
+    path: Path | None, entry: UntrackedSessionEntry
+) -> UntrackedRecordOutcome:
+    """Append one possibly untracked holder without replacing the step outcome."""
+    if path is None:
+        return UntrackedRecordOutcome(recorded=False)
+    try:
+        registry = _load_untracked_sessions(path)
+        _save_untracked_sessions(path, UntrackedSessionRegistry(entries=[*registry.entries, entry]))
+    except (CLIExecutionError, OSError) as error:
+        detail = str(error)
+        _console.warning(
+            "Herdr untracked session record failed: pane=%s session=%s detail=%s",
+            entry.pane_id,
+            entry.session_id,
+            detail,
+        )
+        return UntrackedRecordOutcome(recorded=False, error=detail)
+    _console.warning(
+        "Herdr pane may still hold provider session: pane=%s session=%s reason=%s record=%s",
+        entry.pane_id,
+        entry.session_id,
+        entry.reason,
+        path,
+    )
+    return UntrackedRecordOutcome(recorded=True)
 
 
 def _raise_step_timeout(
@@ -419,6 +695,7 @@ def _raise_step_timeout(
     launch_session_id: str,
     close_on_verdict: bool,
     layout: HerdrPaneLaunch,
+    untracked_sessions_path: Path | None = None,
 ) -> NoReturn:
     """Run the timeout cleanup (session resolution, pane close, metadata) and raise.
 
@@ -443,6 +720,16 @@ def _raise_step_timeout(
         origin_pane=origin_pane,
         run_id=run_id,
     )
+    tracking = _track_abnormal_exit_holder(
+        step=step,
+        pane_id=pane_id,
+        origin_pane=origin_pane,
+        run_id=run_id,
+        session_id=session_id,
+        resolved=resolved,
+        close_error=close_error,
+        untracked_sessions_path=untracked_sessions_path,
+    )
     _write_herdr_metadata(
         metadata_path,
         herdr_version=herdr_version,
@@ -455,6 +742,7 @@ def _raise_step_timeout(
         include_diagnostic=True,
         close_error=close_error,
         layout=layout,
+        untracked=tracking,
     )
     raise StepTimeoutError(step.id, timeout, session_resolution=resolved)
 
@@ -706,8 +994,36 @@ def _build_herdr_split_argv(
     return arguments
 
 
-def _launch_herdr_pane(herdr: str, origin_pane: str, *, workdir: Path) -> HerdrPaneLaunch:
-    """Prune owned panes, split the right column, and return launch metadata."""
+def _launch_herdr_pane(
+    herdr: str,
+    origin_pane: str,
+    *,
+    workdir: Path,
+    resume_session_id: str | None = None,
+    untracked_sessions_path: Path | None = None,
+) -> HerdrPaneLaunch:
+    """Close resume-session holders, prune owned panes, split, and return launch metadata.
+
+    Args:
+        herdr: Resolved executable path.
+        origin_pane: Caller pane that owns the managed panes.
+        workdir: cwd for the new pane.
+        resume_session_id: Provider session the new pane resumes (Issue #532). Panes
+            still holding it are handled before the existing list / prune.
+        untracked_sessions_path: Untracked holder registry checked for a resume step.
+
+    Raises:
+        CLIExecutionError: A Herdr operation fails, or a holder of
+            ``resume_session_id`` cannot be closed safely (no pane is split then).
+    """
+    session_panes_closed: list[str] = []
+    if resume_session_id:
+        session_panes_closed = _close_resume_session_holders(
+            herdr,
+            origin_pane,
+            resume_session_id=resume_session_id,
+            untracked_sessions_path=untracked_sessions_path,
+        )
     existing, skipped = _list_managed_herdr_panes(herdr, origin_pane)
     prune_count = max(0, len(existing) - (_MAX_VISIBLE_AGENT_PANES - 1))
     pruned = existing[:prune_count]
@@ -749,7 +1065,184 @@ def _launch_herdr_pane(herdr: str, origin_pane: str, *, workdir: Path) -> HerdrP
         panes_before=[pane.pane_id for pane in existing],
         panes_pruned=pruned_pane_ids,
         panes_skipped=skipped,
+        session_panes_closed=session_panes_closed,
     )
+
+
+def _list_all_herdr_panes(herdr: str) -> dict[str, dict[str, object]]:
+    """Return every Herdr pane across workspaces keyed by pane ID.
+
+    Raises:
+        CLIExecutionError: The request fails or returns malformed pane entries.
+    """
+    pane_list = _herdr_result(_run_herdr_json(herdr, ["pane", "list"]), "pane_list")
+    panes = pane_list.get("panes")
+    if not isinstance(panes, list):
+        raise CLIExecutionError("interactive_terminal", 1, "Herdr pane_list omitted panes")
+    listed: dict[str, dict[str, object]] = {}
+    for item in cast(list[object], panes):
+        if not isinstance(item, dict) or not isinstance(item.get("pane_id"), str):
+            raise CLIExecutionError(
+                "interactive_terminal", 1, "Herdr pane_list returned an invalid pane entry"
+            )
+        listed[cast(str, item["pane_id"])] = cast(dict[str, object], item)
+    return listed
+
+
+def _pane_tokens(pane: Mapping[str, object]) -> dict[str, object]:
+    """Return the pane's token mapping, or an empty mapping when absent."""
+    tokens = pane.get("tokens")
+    return cast(dict[str, object], tokens) if isinstance(tokens, dict) else {}
+
+
+def _session_holder_error(
+    *,
+    pane_id: str,
+    session_id: str,
+    detail: str,
+    record_path: Path | None = None,
+) -> CLIExecutionError:
+    """Build the actionable error for a holder kaji must not or could not close."""
+    record = f" (recorded in {record_path})" if record_path is not None else ""
+    return CLIExecutionError(
+        "interactive_terminal",
+        1,
+        (
+            f"Herdr pane {pane_id} may still have provider session {session_id} open"
+            f"{record}: {detail}; close it with `herdr pane close {pane_id}` and rerun "
+            "the step."
+        ),
+    )
+
+
+def _close_resume_session_holders(
+    herdr: str,
+    origin_pane: str,
+    *,
+    resume_session_id: str,
+    untracked_sessions_path: Path | None,
+) -> list[str]:
+    """Close kaji-owned panes holding the resume session before a new pane starts.
+
+    ``kaji_session`` only selects close candidates; ownership is still decided by
+    ``_close_owned_herdr_pane`` (exact pane, origin / run re-check, removal confirmed).
+    A holder from another origin, the origin pane itself, or one that cannot be closed
+    fails the step before any pane is split. The untracked registry is checked next.
+
+    Returns:
+        Pane IDs closed for the resume, in close order.
+
+    Raises:
+        CLIExecutionError: A holder cannot be closed safely, or Herdr / the registry fails.
+    """
+    panes = _list_all_herdr_panes(herdr)
+    closed: list[str] = []
+    for pane_id, pane in panes.items():
+        tokens = _pane_tokens(pane)
+        if tokens.get("kaji_session") != resume_session_id:
+            continue
+        holder_origin = tokens.get("kaji_origin")
+        holder_run = tokens.get("kaji_run")
+        if (
+            pane_id == origin_pane
+            or holder_origin != origin_pane
+            or not isinstance(holder_run, str)
+            or not holder_run
+        ):
+            raise _session_holder_error(
+                pane_id=pane_id,
+                session_id=resume_session_id,
+                detail=f"it is not owned by this kaji origin {origin_pane} "
+                f"(kaji origin {holder_origin})",
+            )
+        _close_session_holder(
+            herdr,
+            pane_id,
+            origin_pane=origin_pane,
+            run_id=holder_run,
+            session_id=resume_session_id,
+        )
+        closed.append(pane_id)
+
+    if untracked_sessions_path is None:
+        return closed
+    registry = _load_untracked_sessions(untracked_sessions_path)
+    matching = [entry for entry in registry.entries if entry.session_id == resume_session_id]
+    if not matching:
+        return closed
+    resolved: list[UntrackedSessionEntry] = []
+    for entry in matching:
+        holder = None if entry.pane_id in closed else panes.get(entry.pane_id)
+        if holder is None:
+            resolved.append(entry)
+            continue
+        tokens = _pane_tokens(holder)
+        if (
+            entry.origin_pane != origin_pane
+            or tokens.get("kaji_origin") != entry.origin_pane
+            or tokens.get("kaji_run") != entry.run_id
+        ):
+            raise _session_holder_error(
+                pane_id=entry.pane_id,
+                session_id=resume_session_id,
+                detail=f"its ownership could not be confirmed (reason: {entry.reason})",
+                record_path=untracked_sessions_path,
+            )
+        _close_session_holder(
+            herdr,
+            entry.pane_id,
+            origin_pane=origin_pane,
+            run_id=entry.run_id,
+            session_id=resume_session_id,
+            record_path=untracked_sessions_path,
+        )
+        closed.append(entry.pane_id)
+        resolved.append(entry)
+    remaining = [entry for entry in registry.entries if entry not in resolved]
+    try:
+        _save_untracked_sessions(
+            untracked_sessions_path, UntrackedSessionRegistry(entries=remaining)
+        )
+    except OSError as error:
+        # pane が消えていることは確認済み。次回の検査も同じ判定になるので step は続ける。
+        _console.warning(
+            "Herdr untracked session record cleanup failed: path=%s detail=%s",
+            untracked_sessions_path,
+            error,
+        )
+    return closed
+
+
+def _close_session_holder(
+    herdr: str,
+    pane_id: str,
+    *,
+    origin_pane: str,
+    run_id: str,
+    session_id: str,
+    record_path: Path | None = None,
+) -> None:
+    """Close one session holder with the ownership-safe close or raise an actionable error.
+
+    Raises:
+        CLIExecutionError: Ownership was not confirmed or the close was not confirmed.
+    """
+    try:
+        closed = _close_owned_herdr_pane(herdr, pane_id, origin_pane=origin_pane, run_id=run_id)
+    except CLIExecutionError as error:
+        raise _session_holder_error(
+            pane_id=pane_id,
+            session_id=session_id,
+            detail=f"closing it failed ({error.stderr})",
+            record_path=record_path,
+        ) from error
+    if not closed:
+        raise _session_holder_error(
+            pane_id=pane_id,
+            session_id=session_id,
+            detail="its ownership was not confirmed at close",
+            record_path=record_path,
+        )
 
 
 def _select_herdr_launch_placement(
@@ -845,13 +1338,16 @@ def _build_herdr_marker_argv(
     origin_pane: str,
     run_id: str,
     step_id: str,
+    session_id: str | None = None,
 ) -> list[str]:
     """Build the source-scoped metadata request marking kaji pane ownership.
 
     The request deliberately omits ``--ttl-ms``. Herdr then retains these
     ownership tokens until they are replaced, explicitly cleared, or the pane
-    closes, so a later cleanup request can re-read them safely.
+    closes, so a later cleanup request can re-read them safely. ``session_id`` adds
+    ``kaji_session`` (Issue #532), which only selects resume-time close candidates.
     """
+    session_tokens = ["--token", f"kaji_session={session_id}"] if session_id else []
     return [
         herdr,
         "pane",
@@ -865,7 +1361,18 @@ def _build_herdr_marker_argv(
         f"kaji_run={run_id}",
         "--token",
         f"kaji_step={step_id}",
+        *session_tokens,
     ]
+
+
+def _expected_marker_tokens(
+    *, origin_pane: str, run_id: str, step_id: str, session_id: str | None
+) -> dict[str, str]:
+    """Return the token values a confirmed marker must expose."""
+    expected = {"kaji_origin": origin_pane, "kaji_run": run_id, "kaji_step": step_id}
+    if session_id:
+        expected["kaji_session"] = session_id
+    return expected
 
 
 def _mark_herdr_pane(
@@ -875,23 +1382,27 @@ def _mark_herdr_pane(
     origin_pane: str,
     run_id: str,
     step_id: str,
+    session_id: str | None = None,
 ) -> None:
-    """Attach and independently confirm ownership of a newly created pane."""
+    """Attach and independently confirm ownership of a newly created pane.
+
+    Only for the initial marker; it writes before confirming, so it must not be reused
+    on a pane whose ownership may have changed (see ``_report_session_token_if_owned``).
+    """
     argv = _build_herdr_marker_argv(
         herdr,
         pane_id=pane_id,
         origin_pane=origin_pane,
         run_id=run_id,
         step_id=step_id,
+        session_id=session_id,
     )
     _run_herdr_optional_ok_json(herdr, argv[1:])
     pane = _get_herdr_pane(herdr, pane_id)
     tokens = pane.get("tokens")
-    expected_tokens = {
-        "kaji_origin": origin_pane,
-        "kaji_run": run_id,
-        "kaji_step": step_id,
-    }
+    expected_tokens = _expected_marker_tokens(
+        origin_pane=origin_pane, run_id=run_id, step_id=step_id, session_id=session_id
+    )
     if (
         pane.get("pane_id") != pane_id
         or not isinstance(tokens, dict)
@@ -902,6 +1413,60 @@ def _mark_herdr_pane(
             1,
             f"Herdr pane ownership metadata was not confirmed: {pane_id}",
         )
+
+
+def _report_session_token_if_owned(
+    herdr: str,
+    pane_id: str,
+    *,
+    origin_pane: str,
+    run_id: str,
+    step_id: str,
+    session_id: str,
+) -> SessionMarkerOutcome:
+    """Re-report all ownership tokens plus ``kaji_session`` only on a still-owned pane.
+
+    The current origin / run are checked before writing so a pane whose ownership
+    changed is never claimed back (design review R1). The check-then-write window is the
+    same one ``_close_owned_herdr_pane`` already accepts (Herdr has no compare-and-set).
+
+    Returns:
+        ``marked`` when all four tokens were confirmed, ``absent`` when the pane is gone,
+        ``ownership_changed`` when its tokens are not ours (nothing written), otherwise
+        ``failed`` (nothing confirmed).
+    """
+    try:
+        pane = _get_herdr_pane(herdr, pane_id)
+    except CLIExecutionError as error:
+        try:
+            listed = _list_all_herdr_panes(herdr)
+        except CLIExecutionError as list_error:
+            return SessionMarkerOutcome("failed", f"{error.stderr}; {list_error.stderr}")
+        if pane_id not in listed:
+            return SessionMarkerOutcome("absent")
+        return SessionMarkerOutcome("failed", error.stderr)
+    tokens = _pane_tokens(pane)
+    if (
+        pane.get("pane_id") != pane_id
+        or tokens.get("kaji_origin") != origin_pane
+        or tokens.get("kaji_run") != run_id
+    ):
+        return SessionMarkerOutcome(
+            "ownership_changed",
+            f"Herdr pane ownership changed before the session token was reported: {pane_id}",
+        )
+    try:
+        _mark_herdr_pane(
+            herdr,
+            pane_id,
+            origin_pane=origin_pane,
+            run_id=run_id,
+            step_id=step_id,
+            session_id=session_id,
+        )
+    except CLIExecutionError as error:
+        return SessionMarkerOutcome("failed", error.stderr)
+    return SessionMarkerOutcome("marked")
 
 
 def _run_herdr_pane_command(herdr: str, pane_id: str, command: str, *, workdir: Path) -> None:
@@ -1253,6 +1818,8 @@ def _write_herdr_metadata(
     terminal_log: Path | None = None,
     include_diagnostic: bool = False,
     close_error: str | None = None,
+    session_marker: SessionMarkerOutcome | None = None,
+    untracked: UntrackedRecordOutcome | None = None,
 ) -> None:
     """Write a structured Herdr pane diagnostic snapshot.
 
@@ -1268,7 +1835,15 @@ def _write_herdr_metadata(
         "kaji_run": run_id,
         "marker_confirmed": marker_confirmed,
         "close_on_verdict": close_on_verdict,
+        "untracked_session_recorded": untracked is not None and untracked.recorded,
     }
+    if untracked is not None and untracked.error is not None:
+        metadata["untracked_record_error"] = untracked.error
+    if session_marker is not None:
+        metadata["session_marker"] = {
+            "status": session_marker.status,
+            "error": session_marker.error,
+        }
     if terminal_log is not None:
         metadata.update(_transcript_metadata(terminal_log))
     if process_info is not None:
@@ -1290,5 +1865,6 @@ def _write_herdr_metadata(
         metadata["kaji_agent_panes_before"] = layout.panes_before
         metadata["kaji_agent_panes_pruned"] = layout.panes_pruned
         metadata["kaji_agent_panes_skipped"] = layout.panes_skipped
+        metadata["kaji_session_panes_closed"] = layout.session_panes_closed
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")

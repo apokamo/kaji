@@ -41,6 +41,7 @@ terminal backend = `tmux` 単一の実現性を確定し、本版を承認に確
 | v3 | 2026-06-08 | pane 配置を「初回右・以後右列内・最大2枚」に変更、最小 tmux を 3.1 に引き上げ | v2 の「毎 step で現在 pane の右に追加」は `close_on_verdict=false` で pane を残すと横幅が step ごとに狭くなる。Issue #238 で、初回のみ origin の右、2枚目以降は右列内の上下分割、右列の kaji 管理 pane を最大2枚に制限する配置へ更新。pane を kaji marker（pane user option）で識別するため最小 tmux を 3.1 に引き上げ |
 | v4 | 2026-08-21 | `tmux` \| `herdr`を明示選択可能にし、既定tmuxを維持 | Issue #396。Herdr 0.8.2 / protocol 20のCLI、caller-context guard、metadata ownership token、rendered snapshotを採用 |
 | v5 | 2026-10-19 | tmux backend を削除し Herdr 単一に。`terminal.log` を PTY recorder による raw 記録に | Issue #515（親 #466）。0.23.0 の非推奨告知（Issue #475）を経て削除。v2〜v4 の tmux 固有決定と v4 の rendered snapshot を supersede |
+| v6 | 2026-11-07 | resume step の起動前に、resume 元 session を開いている kaji 所有 pane を閉じる | Issue #532（#466 実機記録の結果 #5）。`close_on_verdict = false` で resume 元の Codex pane が残り、`codex resume` が session lock の確認画面で timeout まで止まった。v4 の ownership 範囲は変えない |
 
 v2 / v3 は v1 の **runner 抽象・verdict 解決経路・session 継続方針を維持**し、terminal backend の実体だけを
 `kitty` → `tmux` に差し替える。`agent_runner = "interactive_terminal"` という設定面・workflow 契約・
@@ -117,6 +118,32 @@ authority、cleanup、Ctrl-C）は v5 でも維持する。
   backend 非依存に `pane-metadata.json` の `pane_id` を読むため、旧 tmux 形式も読める。新たな互換読み取り
   処理は書かない（ADR 008）。
 - 正常完了の判定は引き続き filesystem の `verdict.yaml` のみ。recorder の終了コードは完了判定に使わない。
+
+### v6の決定（Issue #532）
+
+- **ownership token に `kaji_session=<provider session ID>` を加える**。起動時に session ID が分かる pane
+  （resume step、Claude fresh）は初回 marker で付ける。Codex fresh は verdict で session を回収した後、pane が
+  残る場合（`close_on_verdict = false`、または verdict 後の close 失敗）だけ付ける。`kaji_session` は resume 時の
+  close 候補を選ぶ条件にだけ使い、ownership の判定には使わない（判定は v4 どおり exact pane の origin/run）。
+- **再付与の前に現在の ownership を確認する**。verdict 後の token 再付与は exact pane の現在の `kaji_origin` /
+  `kaji_run` が自分と一致する場合だけ、4 token をまとめて再送して確認する。一致しなければ書かず、閉じない
+  （v4 の「close/prune は origin/run 一致を確認した場合だけ」を token の書き込みにも広げる）。既存 cleanup が
+  ownership 不一致で拒んだ判断を再 marker で覆さない。再付与に失敗した pane は `close_on_verdict = false` でも
+  ownership 確認つきで閉じる。
+- **resume step（session ID あり）は pane を作る前に session holder を処理する**。全 workspace の `pane list` で
+  `kaji_session` が一致する pane を探し、同じ origin・有効な run の pane は既存の ownership 確認つき close で
+  閉じる。別 origin の pane、origin pane 自身、run token のない pane、閉じられなかった pane があれば、pane を
+  作らずに pane ID・session ID・利用者の操作を含む `CLIExecutionError` にする。agent 非依存（Claude にも適用）。
+  その後の prune・配置（右列最大 2 枚）は v3/v4 のまま。キー入力は送らない（#422）。
+- **未追跡 holder 記録**: token 付与と close がどちらも成功せず、session を開いたまま識別できない pane が
+  残りうる場合（ownership 変更、verdict 後の二重失敗、timeout / shell 復帰で Codex fresh の session を解決できて
+  close に失敗した場合）は、issue 単位の `<artifacts_dir>/<issue>/herdr-untracked-sessions.json`（session state と
+  同じディレクトリ。atomic replace、Pydantic で検証、壊れていれば fail-loud）に記録する。resume step は pane を
+  作る前にこれを検査し、pane が消えていれば記録を消し、ownership を確認できれば閉じ、それ以外はエラーにする。
+  記録は同じ run の後続 step にも別 run にも届く。いずれの分岐も verdict・解決済み session を置き換えない。
+- 残余リスク: Herdr 操作の失敗に加えて記録ファイルの書き込みまで失敗した場合だけ、追跡できない holder が残る
+  （`untracked_record_error` と warning を残す）。本修正前の kaji が残した pane は `kaji_session` を持たず検出
+  しない（ADR 008。互換 fallback は書かない）。
 
 以下の「コンテキスト」「決定」「影響」「代替案」は v2〜v3（tmux backend）時点の記録であり、v5 で
 supersede された。経緯の参照用に残す。
@@ -262,5 +289,6 @@ runner backend `interactive_terminal` の既定terminal backendを **`tmux`** �
 - Issue #475: tmux backend の非推奨化（0.23.0）
 - Issue #476: 完全な端末ログの調査（`experiments/herdr-interactive-terminal/reports/2026-10-17-full-transcript-feasibility.md`）
 - Issue #515: tmux backend の削除と PTY recorder（v5）
+- Issue #532: resume 元 session を開いている pane の resume 前 close と未追跡 holder 記録（v6）
 - ADR 008: 後方互換レイヤを書かない（BREAKING の記載要件）
 - `docs/cli-guides/interactive-terminal-runner.md`: 設定・手動検証手順

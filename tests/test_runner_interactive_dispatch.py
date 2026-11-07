@@ -114,6 +114,10 @@ class TestRunnerBackendDispatch:
         assert captured["execution_policy"] == "auto"
         assert captured["prompt_path"].name == "prompt.txt"
         assert captured["verdict_path"].name == "verdict.yaml"
+        # Issue #532: issue 単位の未追跡 holder 記録（session-state.json と同じ場所）を渡す。
+        assert captured["untracked_sessions_path"] == (
+            tmp_path / ".kaji-artifacts" / "99" / "herdr-untracked-sessions.json"
+        )
 
     def test_explicit_herdr_backend_routes_to_interactive_runner(self, tmp_path: Path) -> None:
         config = _make_config(

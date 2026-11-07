@@ -1225,6 +1225,8 @@ class TestExecuteHerdr:
             origin_pane="w1:p1",
             run_id="11111111-1111-4111-8111-111111111111",
             step_id="design",
+            # Issue #532: Claude fresh の起動時 session ID を初回 marker に載せる。
+            session_id="11111111-1111-4111-8111-111111111111",
         )
         run.assert_called_once()
         pane_command = run.call_args.args[2]

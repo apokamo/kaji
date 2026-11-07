@@ -35,7 +35,7 @@ from .errors import (
     WorkdirNotFoundError,
     WorkflowValidationError,
 )
-from .interactive_terminal import execute_interactive_terminal
+from .interactive_terminal import HERDR_UNTRACKED_SESSIONS_FILENAME, execute_interactive_terminal
 from .logger import RunLogger
 from .models import CLIResult, CostInfo, CycleDefinition, Step, Verdict, Workflow
 from .preflight import preflight_workflow
@@ -626,6 +626,11 @@ class _StepExecutor:
                 execution_policy=self.workflow.execution_policy,
                 env=tmp_env,
                 deadline_monotonic=deadline.deadline_monotonic,
+                untracked_sessions_path=(
+                    self.state.artifacts_dir
+                    / self.state.issue_number
+                    / HERDR_UNTRACKED_SESSIONS_FILENAME
+                ),
             )
         else:
             result = execute_cli(
