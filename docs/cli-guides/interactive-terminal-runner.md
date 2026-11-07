@@ -13,7 +13,9 @@ Herdr is the only interactive terminal backend. The tmux backend was removed in 
 deprecation in 0.23.0 (see [Migrating from tmux](#migrating-from-tmux)). Kaji uses Herdr's
 release-matched CLI and explicit pane IDs, starts inside a Herdr pane, and adds agent panes beside
 its origin pane. This lets you see `kaji run` output and the agent side by side even in displayless
-environments (WSL2 / SSH to a host where Herdr runs). Pane placement is: first pane to the right of
+environments (WSL2 / SSH to a host where Herdr runs). Only WSL2 has been verified on real hardware.
+Over SSH, Kaji, Herdr and the agent all run on the remote host, so it takes the same path as a local
+run, but it has not been verified on real hardware (Issue 466). Pane placement is: first pane to the right of
 the origin pane, later panes split vertically within the right column. Kaji keeps at most **two**
 managed agent panes in the right column (Issue 238).
 

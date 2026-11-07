@@ -11,7 +11,8 @@ Herdr が唯一の interactive terminal backend である。tmux backend は 0.2
 Issue #515 で削除した（[Migrating from tmux](#migrating-from-tmux)）。kaji は release-matched Herdr CLI と
 明示 pane ID を使い、Herdr pane 内で起動した `kaji run` の origin pane の横に agent pane を追加する。
 ディスプレイ無し環境（WSL2 / SSH 先ホストで Herdr を起動する場合）でも `kaji run` の出力と agent を
-同一画面で並列に見られる。pane 配置は **初回のみ origin pane の右、2枚目以降は右列内の上下分割**で、
+同一画面で並列に見られる。実機で検証済みなのは WSL2 のみである。SSH 先ホストでは kaji・Herdr・agent が
+すべてそのホスト上で動くためローカル実行と同じ経路になるが、実機では検証していない（Issue #466）。pane 配置は **初回のみ origin pane の右、2枚目以降は右列内の上下分割**で、
 kaji が作成した agent pane は右列に**最大2枚**まで残す（Issue #238）。
 
 各 agent は kaji 所有の Python PTY recorder 経由で起動するため、`terminal.log` には agent が書いた
