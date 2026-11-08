@@ -1,0 +1,17 @@
+id: 535-skill-hardening
+parent_issue: 535
+strategy: sequential
+members:
+- issue: 536
+  workflow: .kaji/wf/official/dev.yaml
+- issue: 537
+  workflow: .kaji/wf/official/dev.yaml
+- issue: 538
+  workflow: .kaji/wf/official/dev.yaml
+- issue: 547
+  workflow: .kaji/wf/official/dev.yaml
+- issue: 548
+  workflow: .kaji/wf/official/dev.yaml
+- issue: 549
+  workflow: .kaji/wf/official/dev.yaml
+on_failure: stop
