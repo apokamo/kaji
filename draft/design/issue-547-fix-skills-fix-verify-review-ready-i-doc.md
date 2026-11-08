@@ -106,14 +106,18 @@ EOF
 #    状態や形が不正でも候補から外さない。
 # 2. 最新の候補を 1 件だけ取る（last）。
 # 3. 最新の候補の 1 行目全体を、markers.py の _VERDICT_MARKER_RE と同じ文法で検証する。
-#    文法に合わなければ state=malformed とし、それより古い正常な marker には遡らない。
+#    さらに parse_kaji_verdict_marker と同じく、meta キーの重複も不正とする。
+#    どちらかに当たれば state=malformed とし、それより古い正常な marker には遡らない。
 REVIEW_READY_JSON=$(kaji issue view [issue_id] --json comments | jq -c '
   [ .comments[]
     | select((.body | split("\n")[0]) | startswith("<!-- kaji-verdict: step=review-ready ")) ]
   | last
   | if . == null then {state: "not_found"}
     else (.body | split("\n")[0]) as $l
+      | ($l | sub("^<!-- kaji-verdict: step=review-ready status=[A-Z0-9_]+"; "")
+            | [scan(" (?<k>[a-z][a-z0-9_]*)=") | .[0]]) as $keys
       | if ($l | test("^<!-- kaji-verdict: step=review-ready status=(PASS|RETRY|ABORT|BACK|BACK_[A-Z0-9_]+)( [a-z][a-z0-9_]*=[A-Za-z0-9][A-Za-z0-9._/-]*)* -->$"))
+           and (($keys | length) == ($keys | unique | length))
         then {state: "ok",
               status: ($l | capture("status=(?<s>[A-Z0-9_]+)").s),
               body: .body}
@@ -153,9 +157,9 @@ REVIEW_READY_JSON=$(kaji issue view [issue_id] --json comments | jq -c '
 4. **issue-fix-ready の取得方法の置き換え**: Step 1-2 を「`step=review-ready` の marker を持つ最新コメントを取る」手順に改める。マッチは 1 行目だけにする（`test()` を `m` フラグなしで使う。`^` が文字列の先頭にだけ合うので、2 行目以降に引用された marker を誤って拾わない）。コメント単位でフィルタする。最新の候補の選び方と検証は、`kaji_harness/commands/issue.py::resolve_latest_verdict` と同じ停止契約にそろえる。
    - **候補**: 1 行目が `<!-- kaji-verdict: step=review-ready `（末尾の空白を含む）で始まるコメント。status の欠落、閉じの ` -->` の欠落、不正な meta があっても候補から外さない。
    - **選択**: 候補のうち最新の 1 件だけを見る。最新の RETRY を探すのではない。そうすると、後から出た PASS や不正な marker より前の古い RETRY を拾ってしまうからである。
-   - **検証**: 最新の候補の 1 行目全体を、`providers/markers.py` の `_VERDICT_MARKER_RE` と同じ文法（step / status の語彙、任意の meta、閉じの ` -->`、行末）で検証する。合わなければ `malformed` とし、より古い正常な marker には遡らない（fail-closed）。
+   - **検証**: 最新の候補の 1 行目全体を、`providers/markers.py` の `_VERDICT_MARKER_RE` と同じ文法（step / status の語彙、任意の meta、閉じの ` -->`、行末）で検証する。さらに `parse_kaji_verdict_marker` と同じく、meta キーの重複（例: `key=v key=w`）も不正とする。正規表現か重複検査のどちらかに当たれば `malformed` とし、より古い正常な marker には遡らない（fail-closed）。
    - **停止**: kaji / jq の失敗、marker が無い、最新の marker が不正、最新の status が RETRY でない。この 4 つは理由を分けて ABORT の verdict ブロックを stdout に出し、Issue 本文の修正には進まない（`issue-design` Step 1.6 の fail-loud handler、`shared_skill_rules.md` の「最新 marker 不正は fail-closed」と同じ考え方）。
-   - **文法の二重管理への対策**: jq の正規表現は `markers.py` の写しになる。食い違いは Medium テストの差分照合（後述）で検出する。
+   - **文法の二重管理への対策**: jq の正規表現は `markers.py` の写しになる。meta キーの重複検査のように、正規表現の外にある parser の検査もここで写す必要がある。食い違いは Medium テストの差分照合（後述）で検出する。
    - **使わない代案: `kaji issue resolve-verdict --step review-ready` で status を検証してから、別途 jq で本文を取る**。CLI を 2 回呼ぶことになり、その間に新しいコメントが投稿されると、検証した marker と本文が別のコメントになりうる。1 回の `kaji issue view` の結果の中で選択・検証・本文抽出を行う方が、決定的である。
    - **使わない代案: `kaji issue resolve-verdict --step review-ready`**。返すのは `step / status / meta / created_at` だけで、指摘の本文を含まない。marker が無いときは artifact に fallback して本文の無い status を返すので、fix-ready が欲しい「指摘の本文」は得られない。
 5. **docs と CHANGELOG**: `shared_skill_rules.md` の「現行 producer」一覧に 10 skill を足す。CHANGELOG の `[Unreleased]` に marker 付与の拡大を書く。issue-fix-ready の入力契約の変更は、ADR 008 決定 2 に従い **BREAKING** セクションに書き、次の 3 要素を明示する（`/release` Step 3 の確認対象）。
@@ -196,14 +200,15 @@ one-way door の未決は無い。Issue 本文「重要判断」も「該当な�
   - review-ready の RETRY → PASS → RETRY と並ぶとき、最後の RETRY を選ぶ。RETRY の後に PASS が来るときは、status として PASS を返す（古い RETRY は採らない）
   - 2 行目以降に引用された marker は無視する
   - 別 step の marker（`step=fix-ready` / `step=review-code` 等）は無視する
-  - marker の無いコメント（見出し `## レディネスレビュー` だけのもの）しか無いときは `null` を返す
+  - marker の無いコメント（見出し `## レディネスレビュー` だけのもの）しか無いときは `{state: "not_found"}` を返す
   - meta 付きの marker（`... status=RETRY key=v -->`）でも status を正しく取り出す
   - **不正な最新候補は fail-closed（Must Fix item 1 の回帰）**: 正常な RETRY の後に、次のどれかが最新の候補として来たとき、`state=malformed` を返し、古い RETRY を採らない
     - 閉じの無いもの: `<!-- kaji-verdict: step=review-ready status=RETRY`
     - status の欠落: `<!-- kaji-verdict: step=review-ready -->`
     - 不正な meta: `<!-- kaji-verdict: step=review-ready status=RETRY Key=v -->` など
+    - meta キーの重複: `<!-- kaji-verdict: step=review-ready status=RETRY key=v key=w -->`（正規表現には合うが、parser は重複キーで拒否する）
     - 語彙外の status: `<!-- kaji-verdict: step=review-ready status=retry -->`
-  - **`markers.py` との差分照合**: 上の正常 / 不正の 1 行目の fixture をそれぞれ `parse_kaji_verdict_marker` と jq に通し、受理 / 拒否の判定と status が一致することを確かめる（`tests/test_issue_close_evidence_jq.py` が producer model と jq を差分照合するのと同じ考え方）
+  - **`markers.py` との差分照合**: 上の正常 / 不正の 1 行目の fixture をそれぞれ `parse_kaji_verdict_marker` と jq に通し、受理 / 拒否の判定と status が一致することを確かめる。照合する fixture には、正規表現の外の検査に当たるケース（meta キーの重複）を必ず含める（`tests/test_issue_close_evidence_jq.py` が producer model と jq を差分照合するのと同じ考え方）
 
 ### Large テスト
 
