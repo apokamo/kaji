@@ -99,7 +99,7 @@ Issue #536 本文の EB を正とする:
 | `docs/dev/skill-authoring.md:246-248`（「YAML block scalar の利用」節の例） | `reason` のみ plain scalar | 同上 | 修正（`|` に統一） |
 | `docs/dev/skill-authoring.md:114`（SKILL.md テンプレート例の `suggestion`） | `suggestion: ""`（double-quoted の空文字） | 例の値自体は読めるが、追加する「常に `|`」規約と矛盾する | 修正（`suggestion: |` に統一。implement の Pre-Handoff Review 指摘 1 で追加） |
 | `.claude/skills/issue-implement/templates/implement-report.md:67,70` | `reason: "(判定理由)"` / `suggestion: "(…)"` | `"` / `\` / 改行で破損しうる | 修正（`|` に統一） |
-| `.claude/skills/*/SKILL.md` の verdict 例（計 138 フィールド） | すべて `|` block | 問題なし | 変更なし |
+| `.claude/skills/*/SKILL.md` の verdict 例（完全な delimiter block 内の計 129 フィールド） | すべて `|` block | 問題なし | 変更なし |
 | `docs/dev/skill-authoring.md:190-201`（verdict 出力規約のテンプレート） | `|` block | 問題なし | 変更なし（規約文を 1 行追加） |
 | `kaji_harness/scripts/*.py` / `runner.py` / `errors.py` | verdict を **生成** する側は `write_verdict_yaml`（`yaml.safe_dump`）経由、または例示なし | 問題なし | 変更なし |
 
