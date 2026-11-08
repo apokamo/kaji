@@ -93,11 +93,18 @@ kaji pr merge [branch_name] --match-head-commit "$REVIEWED_SHA"
 
 ## 同根箇所の調査
 
-**方法**: `.claude/skills/**/*.md` の全コードブロックについて、あるブロックで代入した大文字シェル変数を別のブロックが参照している箇所を機械的に列挙した（代入 `NAME=` / `for NAME` / `read NAME` と参照 `$NAME` / `${NAME` の照合。スクリプトは設計作業の一時ファイルで、恒久化しない）。検出は 3 skill のみ。各箇所で「値が空になったとき何が起きるか」を分類した。
+**方法**: `.claude/skills/**/*.md` のコードブロックについて、あるブロックで代入した大文字シェル変数を別のブロックが参照している箇所を、スクリプトで列挙した。
+スクリプトは設計作業の一時ファイルで、恒久化しない。各箇所で「値が空になったとき何が起きるか」を分類した。
+
+- 対象ブロック: 言語指定が `bash` / `sh` / `shell` / `console` / なしのフェンス（```` ``` ```` / `~~~`）。リスト項目内などの**字下げされたフェンスを含む**（初回の調査は行頭のフェンスだけを対象にしていたため、字下げされた `incident-investigate` のブロックを漏らした。review-design の指摘 1 で判明し、字下げを含めて再走査した）
+- 照合: 代入は `NAME=`（`export` / `local` / `readonly` 付きを含む）、`for NAME`、`read NAME`。参照は `$NAME` / `${NAME`。`HOME` / `PATH` / `PWD` / `USER` / `TMPDIR` などの環境変数は除外
+- 再走査の結果: 4 skill（issue-close 12 件、issue-start 10 件、release 3 件、incident-investigate 1 件）。下表はこれを変数ごとにまとめたもの
+- 限界: 小文字の変数、散文中の `$NAME`、ブロック内で `source` した先の変数は対象外。この範囲では全件を列挙したが、skill 全体で漏れがないことの証明ではない。結論は「この走査範囲で見つかった fail-open は 2 件」とする
 
 | 箇所 | 変数 | 空のときの結果 | 分類 | 本 Issue での扱い |
 |------|------|----------------|------|------------------|
 | issue-close 2.5.4 → Step 3（`SKILL.md:430` → `:445`） | `REVIEWED_SHA` | 照合なし merge、または `--match-head-commit ""` | **fail-open（本 Issue）** | 修正する |
+| issue-close 2.5.1 の resolve ブロック → 分類ブロック（`:257` → `:273`） | `RESOLVED` / `RESOLVE_EXIT` | `RESOLVE_EXIT` が空なので `case` の `*)` に入り、`ABORT: kaji issue resolve-verdict failed (exit )` で停止する。`RESOLVED` だけが空になる経路はない（同じブロックで代入するため、両方そろって消える） | fail-closed | 変えない |
 | issue-close 2.5.1 内の 2 ブロック（`:273` → `:290`） | `MODE` | `case` の `*)` で ABORT | fail-closed | 変えない。Step 3 の経路選択は `[review_poll_mode]` に移す |
 | issue-close 2.5.1 → 2.5.2（`:273` → `:307`） | `REVIEW_POLL_VERDICT_PATH` | `dirname ""` = `.` → `./review-poll-evidence.json` が無ければ ABORT | fail-closed（cwd に同名ファイルがある異常時のみ誤読の余地。その場合も 2.5.4 の PR 照合で不一致なら ABORT） | 変えない |
 | issue-close 2.5.2 → 2.5.3 / 2.5.4（`:307` → `:324` / `:420`） | `EVIDENCE` | `jq` が空パスで失敗 → ABORT | fail-closed | 変えない |
@@ -105,8 +112,9 @@ kaji pr merge [branch_name] --match-head-commit "$REVIEWED_SHA"
 | issue-close 「ワークフロー完了後の確認項目の移管」2 → 3 / 4（`:141` → `:171`、`:171` → `:194`） | `FOLLOW_UP_TITLE` / `FOLLOW_UP_ID` | `FOLLOW_UP_TITLE` 空は `kaji issue create --title ""` が失敗。**`FOLLOW_UP_ID` 空は親本文に値が空のマーカー `<!-- kaji-follow-up-issue:  -->` を書き、そのまま親 close に進みうる**（追跡先が失われる） | **fail-open（別の不具合）** | 本 Issue の完了条件外。別 Issue での修正を推奨（同じ直し方: `[follow_up_issue_id]` を文脈変数として使い、追記ブロック内で数値を検証）。#538 が同じ節を変更予定のため調整が必要 |
 | issue-start Step 1 → Step 2 / 2.5 / 2.6 / 4（`:52` → `:64`〜`:110`） | `BRANCH` / `WT` / `MAIN_REPO` | 最初に参照する `git worktree add -b "" "" main` が失敗 | fail-closed（Step 4 の `prepend-note` に空値が届くのは Step 2 以前を別経路で成功させた場合だけ） | 変えない |
 | release Step 1 → Step 6 / 復旧手順（`:53` → `:189` 等） | `GITHUB_REMOTE` | `git push --atomic "" …` などが失敗 | fail-closed | 変えない |
+| incident-investigate 共通ルール / Step 1 → 調査結果の投稿（`:51` / `:124` → `:173-176`） | `ART` | `--body-file "/[issue_id]/investigation/report.md"` になる。ファイルがないので `kaji issue comment` が失敗し、コメントを投稿しない | fail-closed（投稿の失敗で止まる。誤った内容を投稿する経路はない） | 変えない |
 
-結論: 承認ガードが黙って外れる fail-open は本 Issue の箇所だけ。別系統の fail-open が 1 件（follow-up マーカー）あり、別 Issue での対応を推奨する。
+結論: 上記の走査範囲では、承認ガードが黙って外れる fail-open は本 Issue の箇所だけ。別系統の fail-open が 1 件（follow-up マーカー）あり、別 Issue での対応を推奨する。他（`RESOLVED` / `RESOLVE_EXIT` / `MODE` / `REVIEW_POLL_VERDICT_PATH` / `EVIDENCE` / `MAIN_REPO` / `BRANCH` / `WT` / `GITHUB_REMOTE` / `ART`）は、値が空になるとコマンドが失敗するか ABORT する。
 
 ## 重要判断 provenance
 
@@ -129,25 +137,36 @@ kaji pr merge [branch_name] --match-head-commit "$REVIEWED_SHA"
 
 新規 `tests/test_issue_close_reviewed_sha.py` に置く。
 
-#### Small テスト（SKILL.md の静的検査）
+サイズは `docs/reference/testing-size-guide.md` の境界ケースに従って分ける。
+
+| 検査 | サイズ・マーカー | 根拠（testing-size-guide.md） |
+|------|-----------------|------------------------------|
+| 検査ロジック（コードブロック抽出、ブロックをまたぐ参照の検出）を、テスト内の文字列で検査する | `small` | 文字列だけの処理（「コマンド引数の組み立てロジックのみ」「TOML/YAML パース（文字列入力）」と同じ扱い） |
+| 実際の `SKILL.md` を読み込んで契約を検査する | `medium` | 「実ファイルからの設定読み込み」= Medium |
+| `SKILL.md` から抽出したブロックを `bash` で実行する | `large` + `large_local` | 「実際の CLI コマンドを subprocess で実行」= Large。外部ネットワークを使わないので `large_local` |
+
+既存の `tests/test_issue_close_approval_route.py` は実ファイルを読む検査に `small` を付けているが、この Issue では直さない（既存テストのマーカーの付け直しは本 Issue の範囲外）。新しく追加するテストは上の表に従う。
+
+#### Small テスト（検査ロジックの単体検査）
+
+- テスト内に置いた markdown 文字列を入力にして、bash ブロックの抽出と「別のブロックで代入した変数を参照しているか」の判定が正しいことを確かめる（修正前の形 = 別ブロックで代入した `$REVIEWED_SHA` を参照 → 検出する。修正後の形 = 同じブロックで代入 → 検出しない）。下の Medium テストが使う helper の誤りを、実ファイルに依存せず切り分けるため。
+
+#### Medium テスト（実際の SKILL.md の静的検査）
 
 - **ブロックをまたぐ参照がない**: `#### 2.5.4` から `### Step 4:` までの bash ブロックそれぞれについて、`$REVIEWED_SHA` / `${REVIEWED_SHA` を参照するブロックは同じブロック内で `REVIEWED_SHA=` を代入している。修正前は Step 3 のブロック（`SKILL.md:445`）が代入なしで参照するので FAIL。
 - **Step 3 の照合付きブロックが文脈変数を使う**: `--match-head-commit` を含むブロックがちょうど 1 つあり、`REVIEWED_SHA='[reviewed_sha]'` を代入し、`^[0-9a-f]{40}$` の検証と `exit 1` を持つ。修正前は FAIL。
 - **経路選択が文脈変数で決まる**: Step 3 本文が `[review_poll_mode]` の `verify` / `skip` / `manual` と、未記録・その他での ABORT を述べ、「`$REVIEWED_SHA` が設定されている場合」の表現を含まない。2.5.1 が `[review_poll_mode]` の記録を、2.5.4 が `[reviewed_sha]` の記録と `echo "REVIEWED_SHA=` を含む。修正前は FAIL。
 - **ABORT の記述**: 2.5.5 または Step 3 に「照合した SHA が空・40 桁の 16 進数でない場合は照合なしの merge に進まず ABORT」の記述があり、status の選択基準の ABORT 行に SHA 欠落・不正が含まれる。修正前は FAIL。
-- 既存 `tests/test_issue_close_approval_route.py::test_merge_commands_are_unchanged` は `"$REVIEWED_SHA"` の旧コマンド文字列を固定しているため、照合付きコマンドの期待値を `kaji pr merge [branch_name] --match-head-commit "$REVIEWED_SHA"`（ブロック内代入版）に合わせて更新し、照合なしコマンド `kaji pr merge [branch_name]` の不変は維持する。
+- 既存 `tests/test_issue_close_approval_route.py::test_merge_commands_are_unchanged` は `"$REVIEWED_SHA"` の旧コマンド文字列を固定しているため、照合付きコマンドの期待値を `kaji pr merge [branch_name] --match-head-commit "$REVIEWED_SHA"`（ブロック内代入版）に合わせて更新し、照合なしコマンド `kaji pr merge [branch_name]` の不変は維持する（マーカーは既存のまま）。
 
-#### Medium テスト（照合付き merge ブロックの実行）
+#### Large テスト（`large` + `large_local`: 照合付き merge ブロックの実行）
 
-- SKILL.md の Step 3 から `--match-head-commit` を含む bash ブロックを抽出し、`[branch_name]` → `fix/999`、`[reviewed_sha]` → 各ケースの値に置換して `bash` で実行する。`PATH` 先頭の一時ディレクトリに argv をファイルへ書く `kaji` スタブを置く（実 merge なし、`tmp_path` 内で完結）。
+- SKILL.md の Step 3 から `--match-head-commit` を含む bash ブロックを抽出し、`[branch_name]` → `fix/999`、`[reviewed_sha]` → 各ケースの値に置換して `bash` で実行する。`PATH` 先頭の一時ディレクトリに argv をファイルへ書く `kaji` スタブを置く（実 merge なし、外部ネットワークなし、`tmp_path` 内で完結）。
   - 40 桁の正しい SHA: exit 0、スタブの argv が `pr merge fix/999 --match-head-commit <sha>`。
-  - 空文字・39 桁・大文字混じり・`[reviewed_sha]` 未置換（置換しないケース）: 非 0 で終わり、スタブが呼ばれていない（argv ファイルなし）、stdout に `ABORT`。
+  - 空文字・39 桁・41 桁・大文字混じり・非 16 進文字（`g` を含む 40 桁）・`[reviewed_sha]` 未置換（置換しないケース）: 非 0 で終わり、スタブが呼ばれていない（argv ファイルなし）、stdout に `ABORT`。
 - 修正前のブロック（`kaji pr merge [branch_name] --match-head-commit "$REVIEWED_SHA"`）は、新しいシェルで実行すると `$REVIEWED_SHA` が空のままスタブを `--match-head-commit ""` で呼び exit 0 になるため、異常系ケースが FAIL する（Issue の OB をそのまま再現）。
-- Medium を選ぶ理由: サブプロセス（`bash`）とファイル I/O を使う（`docs/dev/testing-convention.md` のサイズ定義）。既存 `tests/test_issue_close_evidence_jq.py` が同じく SKILL.md から抽出したプログラムを subprocess で実行する前例。
-
-#### Large テスト
-
-- 追加しない。実 PR の merge は外部副作用があり、`gh pr merge --match-head-commit` の GitHub 側の拒否は gh / GitHub の既存機能（`https://cli.github.com/manual/gh_pr_merge`）で本 Issue の変更対象外。本 Issue の不具合は skill の手順が `gh` に正しい引数を渡すかで決まり、Medium のスタブで argv を直接検証できる。
+- 実行経路: `make test-large-local`（`pytest -m large_local`）で単独実行できる。`make check` の `test` ターゲットは `pytest` をマーカー指定なしで実行し、`pyproject.toml` の `addopts` もマーカーで除外しないため、`make check` にも含まれる。
+- 実 GitHub への merge（`large_forge` 相当）は追加しない。外部副作用があり、`gh pr merge --match-head-commit` で head が一致しないとき GitHub が拒否するのは gh / GitHub の既存機能（`https://cli.github.com/manual/gh_pr_merge`）で、本 Issue の変更対象外。本 Issue の不具合は skill の手順が `gh` に正しい引数を渡すかどうかで決まり、スタブで argv を直接確かめられる。
 
 ### 長時間 acceptance の配置
 
@@ -176,5 +195,8 @@ kaji pr merge [branch_name] --match-head-commit "$REVIEWED_SHA"
 | gh pr merge マニュアル | https://cli.github.com/manual/gh_pr_merge | "`--match-head-commit <SHA>`: Commit SHA that the pull request head must match to allow merge" |
 | 導入コミット | `c785436`（#429） | Step 2.5 と `$REVIEWED_SHA` の受け渡しを導入 |
 | 利用側の対処 | apokamo/kamo2 `.claude/skills/issue-close/SKILL.md`（2.5.5 の「結果を記録」と Step 3） | `reviewed_sha` を記録して Step 3 で `--match-head-commit [reviewed_sha]` を使う。経路選択は「`reviewed_sha` が記録されている場合」 |
-| 既存の skill 契約テスト | `tests/test_issue_close_approval_route.py`, `tests/test_issue_close_evidence_jq.py` | SKILL.md を読む静的検査と、SKILL.md から抽出したプログラムを subprocess で実行する Medium テストの前例 |
+| 既存の skill 契約テスト | `tests/test_issue_close_approval_route.py`, `tests/test_issue_close_evidence_jq.py` | SKILL.md を読む静的検査と、SKILL.md から抽出したプログラムを実行するテストの前例 |
 | テスト規約 | `docs/dev/testing-convention.md` | Small / Medium / Large のサイズ定義 |
+| テストサイズ判断ガイド | `docs/reference/testing-size-guide.md:24-30`, `:41-47`, `:68-76` | 「実際の CLI コマンドを subprocess で実行」= Large、「実ファイルからの設定読み込み」= Medium、`large_local` は「subprocess あり / 外部ネットワーク無し」 |
+| Makefile / pytest 設定 | `Makefile:6`, `:27-28`, `:39-40`、`pyproject.toml:78` | `check` は `test`（`pytest`）を含む。`test-large-local` は `pytest -m large_local`。`addopts` にマーカーでの除外はない |
+| 同根調査の追加箇所 | `.claude/skills/incident-investigate/SKILL.md:51`, `:124`, `:173-176`、`.claude/skills/issue-close/SKILL.md:257-281` | `ART` の代入と別ブロックでの参照、`RESOLVED` / `RESOLVE_EXIT` の代入と分類ブロックでの参照 |
