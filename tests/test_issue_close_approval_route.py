@@ -106,5 +106,6 @@ def test_no_code_block_fetches_github_review_state() -> None:
 @pytest.mark.small
 def test_merge_commands_are_unchanged() -> None:
     step_3 = _between(_skill_text(), "### Step 3: PRのマージ", "### Step 4:")
+    assert "REVIEWED_SHA='[reviewed_sha]'" in step_3
     assert 'kaji pr merge [branch_name] --match-head-commit "$REVIEWED_SHA"' in step_3
     assert re.search(r"^kaji pr merge \[branch_name\]$", step_3, re.MULTILINE)

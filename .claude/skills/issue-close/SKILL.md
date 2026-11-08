@@ -252,7 +252,7 @@ review-poll が PASS を返した run では、merge の前に「どの PR の�
 #### 2.5.1 適用判定
 
 プロンプトに `[verdict_path]` がある場合に限り、次を実行する。`[verdict_path]` がない手動起動は
-照合対象外（人間が承認者）で、Step 3 へ進む。
+照合対象外（人間が承認者）で、`[review_poll_mode]` = `manual` と記録して Step 3 へ進む。
 
 ```bash
 RESOLVED=$(kaji issue resolve-verdict [issue_id] --step review-poll --current-verdict-path [verdict_path])
@@ -283,7 +283,12 @@ case "$RESOLVE_EXIT" in
   4) MODE=skip ;;   # review-poll の attempt なし（人間の再開判断などは既存運用の範囲）
   *) echo "ABORT: kaji issue resolve-verdict failed (exit $RESOLVE_EXIT)"; exit 1 ;;
 esac
+echo "MODE=$MODE"
 ```
+
+> **結果を記録**: 出力された `MODE=` の値（`verify` / `skip` / `marker`）を `[review_poll_mode]` として記録する。
+> Bash tool は呼び出しごとに新しいシェルを起動するため、Step 3 の経路選択はシェル変数 `$MODE` ではなく
+> この記録値で行う。`marker` は次のブロックで ABORT する。
 
 `MODE` に応じた分岐（bash の `case` で明示する）:
 
@@ -428,26 +433,47 @@ jq -e -n --argjson pr "$PR_NOW" --slurpfile ev "$EVIDENCE" '
     and $pr.state == "OPEN"' >/dev/null \
   || { echo "ABORT: current PR does not match the approved evidence (number/url/head/state)"; exit 1; }
 REVIEWED_SHA=$(jq -r '.reviewed_head.sha' "$EVIDENCE")
+[[ "$REVIEWED_SHA" =~ ^[0-9a-f]{40}$ ]] \
+  || { echo "ABORT: reviewed SHA is missing or invalid: '$REVIEWED_SHA'"; exit 1; }
+echo "REVIEWED_SHA=$REVIEWED_SHA"
 ```
 
 `url` の一致で owner / repo / 番号の照合を兼ねる。食い違えば **ABORT**。
 
+> **結果を記録**: 出力された `REVIEWED_SHA=` の 40 桁を `[reviewed_sha]` として記録する。Step 3 はこの記録値を使い、
+> このブロックのシェル変数 `$REVIEWED_SHA` を後のブロックから参照しない（別の Bash 呼び出しでは値が消える）。
+
 #### 2.5.5 停止条件
 
 2.5.1〜2.5.4 のいずれかで停止した場合、承認証跡を推測で補ったり、PR の現状から作り直したりしない。
-`$REVIEWED_SHA` が設定された場合だけ、Step 3 は `--match-head-commit` 付きで実行する。
+`[review_poll_mode]` が `verify` なら、Step 3 は必ず `--match-head-commit [reviewed_sha]` 付きで merge する。
+`[reviewed_sha]` は Step 3 で文脈変数として使い、シェル変数を Step をまたいで参照しない。
+照合した SHA が空・40 桁の 16 進数でない（placeholder の置換漏れを含む）場合は、照合なしの merge に進まず **ABORT** する。
 
 ### Step 3: PRのマージ
 
-Step 2.5 で照合対象になった場合（`$REVIEWED_SHA` が設定されている場合）:
+経路は Step 2.5 で記録した `[review_poll_mode]` で選ぶ（シェル変数の有無では選ばない）:
+
+| `[review_poll_mode]` | 実行するコマンド |
+|----------------------|------------------|
+| `verify` | 照合付き merge（下記。`[reviewed_sha]` を使う） |
+| `skip`（`review` / `pr-verify` 経路）/ `manual`（`[verdict_path]` なしの手動起動） | 照合なし merge |
+| 未記録・その他の値 | merge せず **ABORT** |
+
+`verify` の場合は、`[reviewed_sha]` を 2.5.4 で記録した 40 桁に置き換え、次のブロックを 1 回の Bash 呼び出しで実行する:
 
 ```bash
+REVIEWED_SHA='[reviewed_sha]'
+[[ "$REVIEWED_SHA" =~ ^[0-9a-f]{40}$ ]] \
+  || { echo "ABORT: reviewed SHA is missing or invalid: '$REVIEWED_SHA'"; exit 1; }
 kaji pr merge [branch_name] --match-head-commit "$REVIEWED_SHA"
 ```
 
+SHA が空・40 桁の 16 進数でない・`[reviewed_sha]` が未置換の場合、このブロックは merge せずに非 0 で終わる。
+その場合は **ABORT**（照合なしの merge に切り替えない）。
 照合の後に head が動いても GitHub が merge を拒否する。拒否された場合は **ABORT**（merge を再試行しない）。
 
-照合対象外の場合（`review` / `pr-verify` 経路、`[verdict_path]` なしの手動起動）:
+`skip` / `manual` の場合:
 
 ```bash
 kaji pr merge [branch_name]
@@ -739,6 +765,6 @@ suggestion: |
 | status | 条件 |
 |--------|------|
 | PASS | クローズ完了 |
-| ABORT | review-poll 承認証跡の欠落・不変条件違反・現在の PR との不一致・`--match-head-commit` による merge 拒否、follow-up 作成・再利用・親マーカー追記の失敗（マーカー参照先が close 済みの場合を含む）、またはクローズ失敗（`kaji issue close` 失敗を含む） |
+| ABORT | review-poll 承認証跡の欠落・不変条件違反・現在の PR との不一致・照合した SHA の欠落・不正・`[review_poll_mode]` の未記録・`--match-head-commit` による merge 拒否、follow-up 作成・再利用・親マーカー追記の失敗（マーカー参照先が close 済みの場合を含む）、またはクローズ失敗（`kaji issue close` 失敗を含む） |
 
 Step 5.6 の一時ディレクトリ削除の結果（スキップ・一部削除失敗を含む）は status に影響しない。
