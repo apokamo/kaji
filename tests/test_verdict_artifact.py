@@ -14,11 +14,13 @@ from unittest.mock import patch
 
 import pytest
 
+from kaji_harness.artifact_verdict import resolve_artifact_verdict
 from kaji_harness.errors import InvalidVerdictValue, VerdictNotFound, VerdictParseError
 from kaji_harness.models import Verdict
 from kaji_harness.verdict import (
     ControlCharFinding,
     load_verdict_yaml,
+    load_verdict_yaml_for_marker_vocabulary,
     parse_verdict_block,
     resolve_verdict,
     write_verdict_yaml,
@@ -530,3 +532,67 @@ class TestLoadVerdictYamlFindingsSink:
         )
         verdict = load_verdict_yaml(path, VALID)
         assert verdict.status == "PASS"
+
+
+# ============================================================
+# Issue #536: 例の書き方（`|` block scalar）で書いた特殊文字入り verdict.yaml
+# ============================================================
+
+# 値に `: `・` #`・`"`・`'`・`\`・改行を含む
+SPECIAL_REASON = '設定値 "timeout" を修正: 根拠あり #12'
+SPECIAL_EVIDENCE = "C:\\work\\x を参照\n2 行目: pytest 3 failed # note\n'single' と \"double\""
+SPECIAL_SUGGESTION = '前提を人間が決めてから再実行する: 手順 #3 "quoted" \\w'
+
+
+def _write_block_scalar_verdict(path: Path, status: str) -> None:
+    """出力例と同じ書き方（`<key>: |` + 2 スペース字下げ）で verdict.yaml を書く。"""
+    lines = [f"status: {status}"]
+    for key, value in (
+        ("reason", SPECIAL_REASON),
+        ("evidence", SPECIAL_EVIDENCE),
+        ("suggestion", SPECIAL_SUGGESTION),
+    ):
+        lines.append(f"{key}: |")
+        lines.extend(f"  {line}" for line in value.splitlines())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _expected(status: str) -> Verdict:
+    return Verdict(
+        status=status,
+        reason=SPECIAL_REASON,
+        evidence=SPECIAL_EVIDENCE,
+        suggestion=SPECIAL_SUGGESTION,
+    )
+
+
+@pytest.mark.medium
+class TestBlockScalarVerdictFileRoundTrip:
+    """artifact ``verdict.yaml`` 経路でも特殊文字入りの値が失われない。"""
+
+    @pytest.mark.parametrize("status", ["PASS", "ABORT"])
+    def test_load_verdict_yaml_preserves_values(self, tmp_path: Path, status: str) -> None:
+        path = tmp_path / "verdict.yaml"
+        _write_block_scalar_verdict(path, status)
+
+        assert load_verdict_yaml(path, VALID) == _expected(status)
+
+    @pytest.mark.parametrize("status", ["PASS", "ABORT"])
+    def test_load_for_marker_vocabulary_preserves_values(self, tmp_path: Path, status: str) -> None:
+        path = tmp_path / "verdict.yaml"
+        _write_block_scalar_verdict(path, status)
+
+        assert load_verdict_yaml_for_marker_vocabulary(path) == _expected(status)
+
+    @pytest.mark.parametrize("status", ["PASS", "ABORT"])
+    def test_resolve_artifact_verdict_adopts_status(self, tmp_path: Path, status: str) -> None:
+        run_dir = tmp_path / "536" / "runs" / "261108152249"
+        path = run_dir / "steps" / "implement" / "attempt-001" / "verdict.yaml"
+        _write_block_scalar_verdict(path, status)
+
+        resolved = resolve_artifact_verdict(run_dir, step="implement")
+
+        assert resolved.status == status
+        assert resolved.attempt == 1
+        assert resolved.verdict_path == path.absolute()

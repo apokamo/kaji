@@ -21,6 +21,31 @@ def _format_utc(moment: datetime) -> str:
     return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _verdict_example_yaml(status_choices: str) -> str:
+    """出力要件に示す verdict の YAML 例を返す。
+
+    delimiter block と pure YAML の例はこの 1 つの文字列から作り、書き方の乖離を防ぐ。
+    reason / evidence / suggestion は literal block scalar（``|``）で示す。値に ``: ``・
+    ``#``・引用符・``\\``・改行を含んでもエスケープなしで内容が保持されるため（Issue #536）。
+    注記は YAML の値に混ぜず、呼び出し側で block の外に書く。
+
+    Args:
+        status_choices: ``PASS | ABORT`` 形式の status 候補。
+
+    Returns:
+        末尾改行なしの YAML 例。
+    """
+    return (
+        f"status: {status_choices}\n"
+        "reason: |\n"
+        "  判定理由\n"
+        "evidence: |\n"
+        "  具体的根拠（複数行可。抽象表現禁止）\n"
+        "suggestion: |\n"
+        "  次のアクション提案"
+    )
+
+
 def skill_invocation_line(step: Step) -> str:
     """step の skill を起動する指示行を返す。
 
@@ -124,6 +149,7 @@ def build_prompt(
     header = "\n".join(f"- {k}: {v}" for k, v in variables.items())
     status_choices = " | ".join(valid_statuses)
     verdict_target = verdict_path if verdict_path is not None else "[verdict_path]"
+    verdict_example = _verdict_example_yaml(status_choices)
     deadline_section = ""
     if attempt_deadline is not None:
         deadline_section = f"""## 実行期限
@@ -154,16 +180,15 @@ def build_prompt(
 2. 互換のため、同じ block を stdout にも出力する:
 
 ---VERDICT---
-status: {status_choices}
-reason: "判定理由"
-evidence: |
-  具体的根拠（複数行可。抽象表現禁止）
-suggestion: "次のアクション提案"（ABORT/BACK時必須）
+{verdict_example}
 ---END_VERDICT---
 
-3. 最後に、同じ内容の pure YAML を `{verdict_target}` に保存する（`---VERDICT---` delimiter は付けない）:
-   status: {status_choices} のいずれか
-   reason: 判定理由
-   evidence: 具体的根拠（複数行可。抽象表現禁止）
-   suggestion: 次のアクション提案（ABORT/BACK 時必須）
+書き方の規則（YAML の外の注記）:
+- status は {status_choices} のいずれか 1 つだけを書く
+- reason / evidence / suggestion は常に `|` の後で改行し、各行を同じ 2 スペースで字下げして書く。`: `・`#`・引用符・`\\`・改行を含んでもエスケープ不要
+- status が ABORT / BACK 系のときは suggestion が必須（空不可）。それ以外で不要なら `suggestion: |` の後を空にしてよい
+
+3. 最後に、上の block から `---VERDICT---` / `---END_VERDICT---` の 2 行を除いた同じ内容の pure YAML を `{verdict_target}` に保存する:
+
+{verdict_example}
 """

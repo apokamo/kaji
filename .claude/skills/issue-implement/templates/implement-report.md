@@ -64,10 +64,12 @@ kaji issue comment [issue_id] --commit \
 
 ---VERDICT---
 status: <STATUS>
-reason: "(判定理由)"
+reason: |
+  (判定理由)
 evidence: |
   (pytest、ruff/format/mypy、Pre-Handoff Review の具体的証跡)
-suggestion: "(BACK/ABORT 時の次アクション。不要なら空文字)"
+suggestion: |
+  (BACK/ABORT 時の次アクション。不要なら `suggestion: |` の後を空にする)
 ---END_VERDICT---
 COMMENT_EOF
 )"

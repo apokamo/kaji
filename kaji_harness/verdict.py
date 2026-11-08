@@ -51,10 +51,17 @@ FORMATTER_PROMPT = Template(
     "## 出力フォーマット（厳密に従ってください）\n"
     "---VERDICT---\n"
     "status: <$valid_statuses_str のいずれか1つ>\n"
-    'reason: "判定理由"\n'
-    'evidence: "判定根拠"\n'
-    'suggestion: "次のアクション提案"\n'
+    "reason: |\n"
+    "  判定理由\n"
+    "evidence: |\n"
+    "  判定根拠\n"
+    "suggestion: |\n"
+    "  次のアクション提案\n"
     "---END_VERDICT---\n"
+    "\n"
+    "reason / evidence / suggestion は必ず `|` ブロックで書き、各行を 2 スペースで字下げしてください。\n"
+    "入力の文言（引用符・バックスラッシュ・改行・コロン・# を含む）はエスケープせず、"
+    "そのまま写してください。\n"
     "\n"
     "重要: status 行は必ず $valid_statuses_str のいずれかを出力してください。それ以外の値は使用禁止です。\n"
     "\n"
