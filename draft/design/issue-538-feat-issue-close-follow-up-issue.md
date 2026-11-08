@@ -186,8 +186,8 @@ else: check_timing = [l if 正本の書き方に合う(l) else "- その他: 親
 
 ### 5. 契約テスト
 
-`tests/test_issue_close_follow_up_template.py` を拡張し、書式関連の検証を新規
-`tests/test_check_timing_format.py`（名前は実装時に調整可）に置く。詳細は「テスト戦略」。
+新規 `tests/test_check_timing_format.py`（名前は実装時に調整可）に置く。既存
+`tests/test_issue_close_follow_up_template.py` は変更せず、引き続き通ることだけを確認する。詳細は「テスト戦略」。
 
 ## 重要判断 provenance
 
@@ -215,57 +215,62 @@ one-way door の未決: なし（データ契約の中身は人間決定済み�
 
 ### Small / Medium の割り当て
 
-`docs/dev/testing-convention.md` の判定基準は「ファイル結合あり → Medium」。本 Issue では次のように割り当てる。
+`docs/dev/testing-convention.md` § 判定基準（「DB / ファイル / 内部サービス結合あり → Medium」「それ以外（純粋関数・モック完結） → Small」）に従い、
+純粋な解析部分とファイル結合部分を分けて次のように割り当てる。
 
-- **Small**: パターン変換の自己検査（観点 6。純粋関数のみ）と、単一の固定ファイルを読む構造検査（観点 1〜3・5）。
-  後者は同じ対象を検査する既存 `tests/test_issue_close_follow_up_template.py`（#520）が `small` で運用している前例に揃える
-- **Medium**: `.claude/skills/` と `docs/` を走査する「正本は 1 か所」の検査（観点 4）。repo 全体を走査する既存
-  `tests/test_skill_placeholders.py` が `medium` である前例に揃える
+- **Small（`@pytest.mark.small`）**: 観点 6。正本表の「書き方」セル文字列をパターンに変換する純粋関数と、その自己検査。
+  入力は表のセルを模した固定文字列と固定の正常行・異常行だけで、ファイルを読まない
+- **Medium（`@pytest.mark.medium`）**: 観点 1〜5。実ファイル（follow-up テンプレート、正本 docs、issue-close SKILL.md、
+  issue-create 4 テンプレート）を読む構造検査と、正本と複数テンプレートを照合する文書間検査、`.claude/skills/` と
+  `docs/` の走査。観点 3 は観点 6 と同じ純粋関数を使い、ファイルから取り出した表と例を入力にする
+- 既存 `tests/test_issue_close_follow_up_template.py`（`small`）は変更しない。既存マーカーの再分類は本 Issue の範囲外とし、
+  新規に追加する検査だけを上記の基準で分類する。`[check_timing]` placeholder の存在確認も新規ファイルの観点 1（Medium）で行う
 
 ### 契約テストの検証観点
 
 
-1. **follow-up テンプレートの節**: `## 確認できる時期` 見出しが 1 つだけあり、直下が `[check_timing]` であること。
-   `[check_timing]` を既存 placeholder 一覧に加え、既存の「1 行目が親マーカー」「説明見出し・フェンスなし」テストが
-   引き続き通ること。
-2. **正本の書式表が人間決定どおり**: `workflow_completion_criteria.md` の正本節の表から「書き方」列を抽出し、
+1. **follow-up テンプレートの節**（Medium）: `## 確認できる時期` 見出しが 1 つだけあり、直下が `[check_timing]` であること。
+   既存の「1 行目が親マーカー」「説明見出し・フェンスなし」「既存 placeholder 保持」テスト（既存ファイル）が引き続き通ること。
+2. **正本の書式表が人間決定どおり**（Medium）: `workflow_completion_criteria.md` の正本節の表から「書き方」列を抽出し、
    ちょうど `- 即時` / `- 日付: YYYY-MM-DD 以降` / `- close: #<n> の close の後` / `- release: vX.Y.Z の後` /
    `- その他: <自由記述>` の 5 種であること（`営業日:` / `deploy:` が無いこと、`release:` があること）。
-3. **例が正本と一致**: 正本表の「書き方」をパターンに変換し（`YYYY-MM-DD`→日付、`#<n>`→`#数字`、`vX.Y.Z`→
+3. **例が正本と一致**（Medium。文書間照合）: 正本表の「書き方」をパターンに変換し（`YYYY-MM-DD`→日付、`#<n>`→`#数字`、`vX.Y.Z`→
    `v数字.数字.数字`、`<自由記述>`→任意の非空文字列、行末の全角括弧注記を任意で許容）、次の例の各行がいずれかに合うこと:
    - 正本節の例
    - issue-create 4 テンプレートの例
    - `workflow_completion_criteria.md`「Issue 本文の形式」の例
    正本表からパターンを導出することで、テスト側に書式を二重定義しない（正本 1 か所の原則をテストでも守る）。
-4. **正本は 1 か所**: 書式表のヘッダ行（`| 書き方 | 時期が来た条件 |`）が repo の `.claude/skills/` と `docs/` の中で
+4. **正本は 1 か所**（Medium。走査）: 書式表のヘッダ行（`| 書き方 | 時期が来た条件 |`）が repo の `.claude/skills/` と `docs/` の中で
    正本ファイルにだけ存在すること。issue-close SKILL.md と issue-create 4 テンプレートが正本節へのリンク
    （`workflow_completion_criteria.md` を含む参照）を持つこと。
-5. **issue-close 手順**: SKILL.md の移管節に `[check_timing]` と `#### 確認できる時期` の扱い、親に記載がないときは
+5. **issue-close 手順**（Medium）: SKILL.md の移管節に `[check_timing]` と `#### 確認できる時期` の扱い、親に記載がないときは
    `- その他:` に倒すこと（`- 即時` を既定にしないこと）が書かれていること（キーワードの存在確認。#520 の既存テストと同じ粒度）。
-6. **パターン変換の自己検査**: 正常行（例: `- release: v0.25.0 の後`、`- 日付: 2026-12-01 以降（月次集計の後）`）が合い、
+6. **パターン変換の自己検査**（Small。純粋関数）: 表のセルを模した固定文字列から作ったパターンについて、 正常行（例: `- release: v0.25.0 の後`、`- 日付: 2026-12-01 以降（月次集計の後）`）が合い、
    異常行（例: `- 営業日: 2026-11-04 から 3 営業日の後`、`- release: 0.25.0 の後`、`- 日付: 2026/12/01 以降`）が合わないこと。
 
-### Medium テスト（観点 4 以外）
+### 追加の Medium テスト
 
-- 観点 4 以外の Medium は不要。理由: 対象はリポジトリ内 Markdown の静的構造のみで、DB・サブプロセス・ファイル書込・
-  内部サービス結合が存在しない。issue-close の移管処理は agent が手順に従って実行する instruction で、
-  harness に結合するコードパスがない。
+- 観点 1〜5 以外の Medium（DB・サブプロセス・ファイル書込・harness 内部サービスとの結合）は不要。理由: 変更対象は
+  リポジトリ内 Markdown だけで、issue-close の移管処理は agent が手順に従って実行する instruction であり、
+  harness に結合するコードパスがない。Markdown の実ファイル読込・文書間照合は観点 1〜5 の Medium で網羅する。
 
 ### Large テスト
 
 - 不要。理由: 実際に follow-up Issue を GitHub に起票する E2E は外部副作用を伴い、`issue-close` の移管処理は
-  agent が手順に従って実行する instruction であり、harness のコードパスではない。手順の内容は Small の契約テストで、
+  agent が手順に従って実行する instruction であり、harness のコードパスではない。手順と書式の内容は Medium の契約テスト（観点 1〜5）と Small の自己検査（観点 6）で、
   起票の実挙動は既存の #327 / #520 の運用経路で担保される。判定ロジック（時期が来たか）の検証は #546 の範囲。
 
 ### 実行コマンド
 
 - `source .venv/bin/activate && pytest tests/test_issue_close_follow_up_template.py tests/test_check_timing_format.py -q`
-- `make check`（ruff / mypy / pytest / verify-docs を含む品質ゲート）
+- `make check`（`Makefile` の依存は lint / format / typecheck / validate-workflows / test）。文書リンクの検証は
+  pytest 経由の既存 `tests/test_check_doc_links.py::TestRealRepo` で、今回変更する docs / skills を含めて実施される
+- `make verify-docs`（独立ターゲット。変更した docs のリンクを直接確認する）
 
 ### 長時間 acceptance の配置
 
 - 該当なし。根拠: nested workflow・外部 agent を含む dogfood・fresh 環境の反復 acceptance はない。
-  追加する検証は数秒で終わる Small テストと `make check` のみで、implement step の timeout の 25% を大きく下回る。
+  追加する検証は数秒で終わる Small / Medium の契約テストと `make check` / `make verify-docs` のみで、implement step の timeout の 25% を大きく下回る。
 
 ## 影響ドキュメント
 
@@ -297,5 +302,5 @@ one-way door の未決: なし（データ契約の中身は人間決定済み�
 | 現行 follow-up テンプレートと契約テスト | `.claude/skills/issue-close/templates/follow-up-issue.md`、`tests/test_issue_close_follow_up_template.py` | 節は 5 つで時期の節がない。1 行目親マーカー・説明見出し/フェンスなし・placeholder 保持をテスト済み |
 | GitHub CLI `gh release view` | https://cli.github.com/manual/gh_release_view | `gh release view [<tag>]`「View information about a GitHub Release」、`--json` で `isDraft` / `isPrerelease` 等のフィールドを出力できる。存在しない tag では失敗する |
 | GitHub REST API: Releases | https://docs.github.com/en/rest/releases/releases | Release は tag と別のリソースで `draft` / `prerelease` 属性を持つ。draft Release は push 権限のある利用者にしか見えない |
-| テスト規約 | `docs/dev/testing-convention.md` § 判定基準 | 「外部 API / 実サービス疎通あり → Large / DB / ファイル / 内部サービス結合あり → Medium / それ以外（純粋関数・モック完結） → Small」。単一ファイル読込の契約テストは既存 #520 テストの `small` 前例、repo 走査は `test_skill_placeholders.py` の `medium` 前例に揃えた |
+| テスト規約 | `docs/dev/testing-convention.md` § 判定基準 | 「外部 API / 実サービス疎通あり → Large / DB / ファイル / 内部サービス結合あり → Medium / それ以外（純粋関数・モック完結） → Small」。新規の実ファイル読込・文書間照合・走査は Medium、固定文字列だけのパターン変換は Small に分類した |
 | 重要判断チェックリスト | `.claude/skills/_shared/critical-decision-checklist.md` | 「公開 CLI / API とデータ契約」は one-way door になりやすい判断軸。本 Issue では人間決定済み |
