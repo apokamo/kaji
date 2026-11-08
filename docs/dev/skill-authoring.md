@@ -111,7 +111,7 @@ evidence: |
   - テストカバレッジ: 87%（目標80%以上）
   - ruff / mypy: エラーなし
   - 設計書の全要件が実装されている
-suggestion: ""
+suggestion: |
 ---END_VERDICT---
 ```
 
@@ -214,9 +214,11 @@ interactive terminal runner では `verdict.yaml` の出現が次 step への完
 
 ```yaml
 status: PASS
-reason: 設計書と整合し品質基準を満たす
-evidence: ruff / mypy / pytest すべて pass
-suggestion: ""
+reason: |
+  設計書と整合し品質基準を満たす
+evidence: |
+  ruff / mypy / pytest すべて pass
+suggestion: |
 ```
 
 **verdict 不在は fail-loud** (Issue #193 / #220): artifact `verdict.yaml` も、現在 attempt 以降の作業報告コメント末尾 block も、stdout の `---VERDICT---` delimiter も一切無いままセッションが終了した場合、ハーネスは AI formatter で穴埋めせず `VerdictNotFound` を `HarnessError` として raise する（`EXIT_RUNTIME_ERROR (= 3)` にマップ）。逆に `verdict.yaml` が「存在するが壊れている / 必須欠落 / invalid status」場合も fail-loud（comment / stdout へは fallthrough しない）。`ScheduleWakeup` 等で再起動を期待する場合でも、メインセッション終了時点で verdict を上記 3 経路に残す責務はスキル側にある。
@@ -240,12 +242,17 @@ suggestion: ""
 
 ### YAML block scalar の利用
 
-`evidence` / `suggestion` に複数行を書く場合は YAML block scalar (`|`) を使用する。
+`reason` / `evidence` / `suggestion` は、1 行で済む場合も含めて常に YAML literal block scalar（`|`）で書く
+（Issue #536）。`|` の後で改行し、各行を同じ 2 スペースで字下げする。block scalar では `: `・`#`・引用符・`\`・改行が
+エスケープなしで内容として保持される。plain scalar（引用符なし）は `: ` で `ScannerError`、` #` 以降はコメント扱いで
+黙って切り詰められ、double-quoted（`"..."`）は値中の `"` / `\` で壊れ、改行は空白に畳まれる。
+「ABORT / BACK 時は必須」等の注記は YAML の値に混ぜず、block の外に書く。不要な `suggestion` は `suggestion: |` の後を空にする。
 
 ```
 ---VERDICT---
 status: RETRY
-reason: テストが3件失敗している
+reason: |
+  テストが3件失敗している
 evidence: |
   FAILED tests/test_workflow_parser.py::TestValidationErrors::test_empty_steps
   FAILED tests/test_cli_args.py::TestBuildClaudeArgs::test_basic_args

@@ -97,6 +97,7 @@ Issue #536 本文の EB を正とする:
 | `kaji_harness/verdict.py:54-56`（`FORMATTER_PROMPT`） | `"…"` | `"` / `\` / 改行で破損 | 修正（`|` に統一） |
 | `docs/dev/skill-authoring.md:215-220`（`verdict.yaml` の例） | plain scalar | 例の値自体は読めるが、skill 作者に脆い書き方を教える | 修正（`|` に統一） |
 | `docs/dev/skill-authoring.md:246-248`（「YAML block scalar の利用」節の例） | `reason` のみ plain scalar | 同上 | 修正（`|` に統一） |
+| `docs/dev/skill-authoring.md:114`（SKILL.md テンプレート例の `suggestion`） | `suggestion: ""`（double-quoted の空文字） | 例の値自体は読めるが、追加する「常に `|`」規約と矛盾する | 修正（`suggestion: |` に統一。implement の Pre-Handoff Review 指摘 1 で追加） |
 | `.claude/skills/issue-implement/templates/implement-report.md:67,70` | `reason: "(判定理由)"` / `suggestion: "(…)"` | `"` / `\` / 改行で破損しうる | 修正（`|` に統一） |
 | `.claude/skills/*/SKILL.md` の verdict 例（計 138 フィールド） | すべて `|` block | 問題なし | 変更なし |
 | `docs/dev/skill-authoring.md:190-201`（verdict 出力規約のテンプレート） | `|` block | 問題なし | 変更なし（規約文を 1 行追加） |

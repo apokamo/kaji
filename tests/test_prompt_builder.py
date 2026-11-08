@@ -7,11 +7,13 @@ injection, and previous_verdict handling.
 
 from __future__ import annotations
 
+import textwrap
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import yaml
 
 from kaji_harness.cli import build_cli_args
 from kaji_harness.deadline import AttemptDeadline
@@ -19,6 +21,7 @@ from kaji_harness.models import CycleDefinition, Step, Verdict, Workflow
 from kaji_harness.prompt import build_prompt, skill_invocation_line
 from kaji_harness.providers import PRContext
 from kaji_harness.state import SessionState
+from kaji_harness.verdict import STRICT_PATTERN
 
 from .conftest import make_issue_context
 
@@ -491,6 +494,108 @@ class TestVerdictPathInjection:
         assert "- verdict_path:" not in prompt
         # placeholder で契約はレンダリングされる
         assert "[verdict_path]" in prompt
+
+
+# ============================================================
+# 12b. verdict 出力例が YAML として読める (Issue #536)
+# ============================================================
+
+_VERDICT_KEYS = {"status", "reason", "evidence", "suggestion"}
+_BLOCK_SCALAR_KEYS = ("reason", "evidence", "suggestion")
+_VERDICT_PATH = "/abs/.kaji-artifacts/42/runs/2606041200/steps/implement/attempt-001/verdict.yaml"
+
+
+def _prompt_for_example(on: dict[str, str], verdict_path: str | None) -> str:
+    step = _make_step(on=on)
+    return build_prompt(
+        step,
+        issue="42",
+        state=_make_state(issue="42"),
+        workflow=_make_workflow(steps=[step]),
+        issue_context=make_issue_context(issue_id="42"),
+        verdict_path=verdict_path,
+    )
+
+
+def _delimiter_example(prompt: str) -> str:
+    """出力要件の ``---VERDICT---`` block の本文を返す。"""
+    match = STRICT_PATTERN.search(prompt)
+    assert match is not None
+    return match.group(1)
+
+
+def _pure_yaml_example(prompt: str) -> str:
+    """出力要件の手順 3（pure YAML の保存指示）以降に示される YAML 例を返す。"""
+    lines = prompt.splitlines()
+    step3 = next(
+        i for i, line in enumerate(lines) if line.startswith("3. ") and "pure YAML" in line
+    )
+    rest = [line for line in lines[step3 + 1 :] if not line.lstrip().startswith("```")]
+    start = next(i for i, line in enumerate(rest) if line.lstrip().startswith("status:"))
+    example: list[str] = []
+    for line in rest[start:]:
+        if not line.strip():
+            break
+        example.append(line)
+    return textwrap.dedent("\n".join(example))
+
+
+_EXAMPLE_CASES = [
+    pytest.param({"PASS": "review", "ABORT": "__end__"}, _VERDICT_PATH, id="pass-abort-path"),
+    pytest.param({"PASS": "review", "ABORT": "__end__"}, None, id="pass-abort-placeholder"),
+    pytest.param(
+        {"PASS": "review", "RETRY": "implement", "BACK": "design"},
+        _VERDICT_PATH,
+        id="pass-retry-back-path",
+    ),
+    pytest.param(
+        {"PASS": "review", "RETRY": "implement", "BACK": "design"},
+        None,
+        id="pass-retry-back-placeholder",
+    ),
+]
+
+
+@pytest.mark.small
+class TestVerdictExampleIsValidYaml:
+    """Issue #536: 出力例をそのまま写しても ``yaml.safe_load`` で読める。"""
+
+    @pytest.mark.parametrize(("on", "verdict_path"), _EXAMPLE_CASES)
+    def test_delimiter_example_is_yaml_mapping(
+        self, on: dict[str, str], verdict_path: str | None
+    ) -> None:
+        data = yaml.safe_load(_delimiter_example(_prompt_for_example(on, verdict_path)))
+
+        assert isinstance(data, dict)
+        assert set(data) == _VERDICT_KEYS
+        assert "ABORT/BACK" not in str(data["suggestion"])
+
+    @pytest.mark.parametrize(("on", "verdict_path"), _EXAMPLE_CASES)
+    def test_pure_yaml_example_is_yaml_mapping(
+        self, on: dict[str, str], verdict_path: str | None
+    ) -> None:
+        data = yaml.safe_load(_pure_yaml_example(_prompt_for_example(on, verdict_path)))
+
+        assert isinstance(data, dict)
+        assert set(data) == _VERDICT_KEYS
+        assert "ABORT/BACK" not in str(data["suggestion"])
+
+    @pytest.mark.parametrize(("on", "verdict_path"), _EXAMPLE_CASES)
+    def test_examples_use_block_scalars(self, on: dict[str, str], verdict_path: str | None) -> None:
+        prompt = _prompt_for_example(on, verdict_path)
+
+        for example in (_delimiter_example(prompt), _pure_yaml_example(prompt)):
+            lines = example.splitlines()
+            for key in _BLOCK_SCALAR_KEYS:
+                assert f"{key}: |" in lines, f"{key} must be a literal block scalar"
+
+    @pytest.mark.parametrize(("on", "verdict_path"), _EXAMPLE_CASES)
+    def test_pure_yaml_example_matches_delimiter_example(
+        self, on: dict[str, str], verdict_path: str | None
+    ) -> None:
+        prompt = _prompt_for_example(on, verdict_path)
+
+        assert _pure_yaml_example(prompt) == _delimiter_example(prompt)
 
 
 # ============================================================

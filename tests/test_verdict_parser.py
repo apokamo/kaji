@@ -15,12 +15,15 @@ Covers the 3-stage fallback strategy:
 from __future__ import annotations
 
 import pytest
+import yaml
 
 from kaji_harness.adapters import CodexAdapter
 from kaji_harness.errors import InvalidVerdictValue, VerdictNotFound, VerdictParseError
 from kaji_harness.models import Verdict
 from kaji_harness.verdict import (
     AI_FORMATTER_MAX_INPUT_CHARS,
+    FORMATTER_PROMPT,
+    STRICT_PATTERN,
     ControlCharFinding,
     _build_relaxed_status_patterns,
     _extract_block_relaxed,
@@ -1449,3 +1452,80 @@ class TestFormatterSentinel:
         result = parse_verdict(output, VALID_STATUSES, ai_formatter=mock_formatter)
         assert result.status == "PASS"
         assert "---NO_VERDICT_FOUND---" in result.reason
+
+
+# ============================================================
+# Issue #536: 出力例の書き方（`|` block scalar）
+# ============================================================
+
+# 値に `: `・` #`・`"`・`'`・`\`・改行を含む（例の書き方で書けば失われないことを保証する）
+SPECIAL_REASON = '設定値 "timeout" を修正: 根拠あり #12'
+SPECIAL_EVIDENCE = "C:\\work\\x を参照\n2 行目: pytest 3 failed # note\n'single' と \"double\""
+SPECIAL_SUGGESTION = '前提を人間が決めてから再実行する: 手順 #3 "quoted" \\w'
+
+
+def _block_scalar_yaml(status: str, reason: str, evidence: str, suggestion: str) -> str:
+    """出力例と同じ書き方（`<key>: |` + 2 スペース字下げ）で verdict YAML を組む。"""
+    lines = [f"status: {status}"]
+    for key, value in (("reason", reason), ("evidence", evidence), ("suggestion", suggestion)):
+        lines.append(f"{key}: |")
+        lines.extend(f"  {line}" for line in value.splitlines())
+    return "\n".join(lines)
+
+
+def _formatter_example() -> str:
+    rendered = FORMATTER_PROMPT.safe_substitute(
+        raw_output="", valid_statuses_str="PASS | RETRY | ABORT"
+    )
+    match = STRICT_PATTERN.search(rendered)
+    assert match is not None
+    return match.group(1)
+
+
+@pytest.mark.small
+class TestFormatterPromptExampleFormat:
+    """FORMATTER_PROMPT の出力例が YAML として読め、`|` block scalar で書かれている。"""
+
+    def test_formatter_example_is_yaml_mapping(self) -> None:
+        data = yaml.safe_load(_formatter_example())
+
+        assert isinstance(data, dict)
+        assert set(data) == {"status", "reason", "evidence", "suggestion"}
+
+    def test_formatter_example_uses_block_scalars(self) -> None:
+        lines = _formatter_example().splitlines()
+
+        for key in ("reason", "evidence", "suggestion"):
+            assert f"{key}: |" in lines, f"{key} must be a literal block scalar"
+
+
+@pytest.mark.small
+class TestSpecialCharsInBlockScalarVerdict:
+    """例の書き方で書いた特殊文字入り verdict が文字列経路で値を失わない。"""
+
+    @pytest.mark.parametrize("status", ["PASS", "ABORT"])
+    def test_parse_verdict_preserves_values(self, status: str) -> None:
+        body = _block_scalar_yaml(status, SPECIAL_REASON, SPECIAL_EVIDENCE, SPECIAL_SUGGESTION)
+
+        result = parse_verdict(_wrap_verdict(body), VALID_STATUSES)
+
+        assert result == Verdict(
+            status=status,
+            reason=SPECIAL_REASON,
+            evidence=SPECIAL_EVIDENCE,
+            suggestion=SPECIAL_SUGGESTION,
+        )
+
+    @pytest.mark.parametrize("status", ["PASS", "ABORT"])
+    def test_parse_verdict_block_preserves_values(self, status: str) -> None:
+        body = _block_scalar_yaml(status, SPECIAL_REASON, SPECIAL_EVIDENCE, SPECIAL_SUGGESTION)
+        comment = f"## 作業報告\n\n本文\n\n{_wrap_verdict(body)}\n"
+
+        result = parse_verdict_block(comment, VALID_STATUSES)
+
+        assert result == Verdict(
+            status=status,
+            reason=SPECIAL_REASON,
+            evidence=SPECIAL_EVIDENCE,
+            suggestion=SPECIAL_SUGGESTION,
+        )
