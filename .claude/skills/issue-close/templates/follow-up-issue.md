@@ -8,6 +8,10 @@
 
 [unchecked_items]
 
+## 確認できる時期
+
+[check_timing]
+
 ## 参照 docs
 
 [reference_docs]

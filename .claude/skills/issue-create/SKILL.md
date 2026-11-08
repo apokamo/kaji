@@ -104,6 +104,8 @@ Step 1 で確定した `type` に応じて、以下のテンプレートファ�
 - `## 完了条件` の末尾に `### ワークフロー完了後の確認項目` を置く。workflow を RETRY して
   環境非依存で同じ結果を得られない merge 後・実機適用後・外部応答後の確認だけをここへ分離する
 - 事後確認がなければ同サブセクションは `- なし` とし、未チェックの placeholder を残さない
+- 事後確認を書くときは、確認項目の後に `#### 確認できる時期` を添えて確認がいつできるかを書く。
+  書式の正本は [`workflow_completion_criteria.md` § 確認できる時期の書き方](../../../docs/dev/workflow_completion_criteria.md#確認できる時期の書き方)
 - 分類の正本は `docs/dev/workflow_completion_criteria.md` § workflow 内完了条件と事後確認の分離
 
 ### Step 4: Issue 作成とラベル付与

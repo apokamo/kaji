@@ -79,8 +79,8 @@ Step 1〜6 を順に実行する（`kaji pr merge` / worktree 削除 / branch �
 親 Issue を close する直前に、provider に関係なく本手順を実行する。
 正本は
 [`docs/dev/workflow_completion_criteria.md`](../../../docs/dev/workflow_completion_criteria.md)
-§ follow-up Issue への移管、本文 template は
-[`templates/follow-up-issue.md`](templates/follow-up-issue.md) とする。
+§ follow-up Issue への移管、確認できる時期の書式の正本は同ファイル § 確認できる時期の書き方、
+本文 template は [`templates/follow-up-issue.md`](templates/follow-up-issue.md) とする。
 
 ### 1. 未完了項目の抽出
 
@@ -88,12 +88,16 @@ Step 1〜6 を順に実行する（`kaji pr merge` / worktree 削除 / branch �
 `### ワークフロー完了後の確認項目` だけを対象にし、次の `## ` 見出しまたは本文末尾までから
 `- [ ]` の項目を抽出する。
 
+同サブセクション内の小見出し `#### 確認できる時期` から次の見出し（または本文末尾）までの行は
+確認項目の抽出対象から除く。同ブロックの `- ` で始まる行を `TIMING_LINES` として取り出し、
+§ 3 の `[check_timing]` に使う。
+
 | 状態 | 処理 |
 |------|------|
 | セクションなし | follow-up なしで close 手順を続行 |
 | `- なし`、または未チェック項目 0 件 | follow-up なしで close 手順を続行 |
 | 未チェック項目 1 件以上 | 以降の検索・作成・マーカー追記を実行 |
-| 見出し重複、チェックリストとして解釈不能 | 項目喪失を避けるため `ABORT` |
+| 見出し重複（`#### 確認できる時期` の重複を含む）、チェックリストとして解釈不能 | 項目喪失を避けるため `ABORT` |
 
 `i-dev-final-check` / `i-doc-final-check` が同サブセクションを更新対象外としているため、
 ここに残る `[ ]` は未完了のまま follow-up へ移す。`[x]` は移さない。
@@ -165,8 +169,27 @@ jq -r --arg title "$FOLLOW_UP_TITLE" \
 
 - `[parent_issue_ref]` / `[parent_issue_title]`
 - `[unchecked_items]`: 抽出した未チェック項目だけ
+- `[check_timing]`: § 1 の `TIMING_LINES` から次の表で決める
 - `[reference_docs]`: 親本文の `docs/...` 参照。なければ正本
   `docs/dev/workflow_completion_criteria.md`
+
+`[check_timing]` の決め方（書式は
+[`workflow_completion_criteria.md`](../../../docs/dev/workflow_completion_criteria.md)
+§ 確認できる時期の書き方 の表を正本とし、ここに表を複製しない）:
+
+| `TIMING_LINES` の状態 | `[check_timing]` |
+|-----------------------|------------------|
+| 全行が正本の書き方に合う | 各行をそのまま（行末の注記ごと）転記 |
+| 一部の行が正本の書き方に合わない | 合う行はそのまま、合わない行は `- その他: 親の記載「<元の行の本文>」は標準の書き方ではない` に置き換えて転記 |
+| `#### 確認できる時期` がない、または `- ` 行が 0 行 | `- その他: 親 Issue [issue_ref] に確認できる時期の記載がない。未完了の確認項目から判断する` |
+
+- 「正本の書き方に合う」とは、正本表の書き方のパラメータ部分（`YYYY-MM-DD` / `#<n>` / `vX.Y.Z` /
+  `<自由記述>`）を値に置き換えた形と一致することをいう。行末の全角括弧注記はあってもなくてもよい
+- `- 即時` を既定値にしない。親に記載がないことは待つ条件がないことを意味せず、`即時` にすると
+  release 待ちの項目が見回りで時期が来たと誤判定される。`その他:` なら人の判断に倒れる
+- 親の記載から AI が時期を推測して `release:` / `close:` / `日付:` などの機械判定できる行を新たに作らない。
+  推測を書く場合は `その他:` の自由記述にする
+- 既存 follow-up を再利用する場合（§ 2）は本文を変更せず、時期の追記もしない
 
 ```bash
 CREATE_OUTPUT=$(kaji issue create \
