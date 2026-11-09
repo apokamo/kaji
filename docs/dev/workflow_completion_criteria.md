@@ -202,15 +202,21 @@ Issue 本文に `## 完了条件` セクションがあり、チェックボッ�
 `### ワークフロー完了後の確認項目` より前にある確認済み条件だけを更新する。同サブセクション内の
 チェックボックスは `[ ]` のまま維持する。
 
+一時ファイルは共有の固定パスではなく、`mktemp` で毎回一意に作る（同時に流れる別 Issue の作業と衝突しないため）。
+skill 内では [`_shared/skill-tmp-resolve.md`](../../.claude/skills/_shared/skill-tmp-resolve.md) で解決した
+`[skill_tmp_dir]` を使う。
+
 ```bash
 # 現在の本文を取得
-gh issue view [number] --json body -q '.body' > /tmp/issue-body.md
+BODY_FILE=$(mktemp "${TMPDIR:-/tmp}/issue-body.XXXXXX")
+gh issue view [number] --json body -q '.body' > "$BODY_FILE"
 
 # チェックボックスを更新（手動または sed）
 # - [ ] 条件A → - [x] 条件A
 
 # 更新を反映
-gh issue edit [number] --body-file /tmp/issue-body.md
+gh issue edit [number] --body-file "$BODY_FILE"
+rm -f -- "$BODY_FILE"
 ```
 
 ### 設計書の NOTE 直下添付

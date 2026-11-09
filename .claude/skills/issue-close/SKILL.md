@@ -102,6 +102,11 @@ Step 1〜6 を順に実行する（`kaji pr merge` / worktree 削除 / branch �
 `i-dev-final-check` / `i-doc-final-check` が同サブセクションを更新対象外としているため、
 ここに残る `[ ]` は未完了のまま follow-up へ移す。`[x]` は移さない。
 
+未チェック項目が 1 件以上ある場合は、§ 2 の検索より前に
+[`_shared/skill-tmp-resolve.md`](../_shared/skill-tmp-resolve.md) で一時ファイルの置き場
+`[skill_tmp_dir]` を 1 回だけ解決し、§ 2〜§ 4 の一時ファイルはすべてその配下に置く。
+解決に失敗した場合（終了コードが非 0、または出力が空）は `ABORT` とし、親 Issue の close を実行しない。
+
 ### 2. 親マーカーと既存 Issue の確認
 
 follow-up のタイトルは次の完全一致形式に固定する。
@@ -145,10 +150,10 @@ esac
 ```bash
 PARENT_TITLE=$(kaji issue view [issue_id] --json title -q '.title')
 FOLLOW_UP_TITLE="[follow-up] $PARENT_TITLE ([issue_ref])"
-kaji issue list --state open --limit 1000 --json number,title > /tmp/kaji-open-issues.json
+kaji issue list --state open --limit 1000 --json number,title > [skill_tmp_dir]/kaji-open-issues.json
 jq -r --arg title "$FOLLOW_UP_TITLE" \
   '.[] | select(.title == $title) | .number' \
-  /tmp/kaji-open-issues.json > /tmp/kaji-follow-up-candidates.txt
+  [skill_tmp_dir]/kaji-open-issues.json > [skill_tmp_dir]/kaji-follow-up-candidates.txt
 ```
 
 | 完全一致件数 | 処理 |
@@ -163,7 +168,7 @@ jq -r --arg title "$FOLLOW_UP_TITLE" \
 ### 3. follow-up Issue の作成
 
 完全一致候補がない場合だけ、`templates/follow-up-issue.md` を読み、以下を実値へ置換して
-`/tmp/kaji-follow-up-body.md` を作る。テンプレートはファイル全体がそのまま follow-up 本文であり
+`[skill_tmp_dir]/kaji-follow-up-body.md` を作る。テンプレートはファイル全体がそのまま follow-up 本文であり
 （1 行目は `<!-- kaji-follow-up-parent: [parent_issue_ref] -->`）、placeholder 以外の置換・追記・削除をしない。
 見出しや説明文、コードフェンスを本文に加えない。
 
@@ -194,7 +199,7 @@ jq -r --arg title "$FOLLOW_UP_TITLE" \
 ```bash
 CREATE_OUTPUT=$(kaji issue create \
   --title "$FOLLOW_UP_TITLE" \
-  --body-file /tmp/kaji-follow-up-body.md) || {
+  --body-file [skill_tmp_dir]/kaji-follow-up-body.md) || {
     echo "ABORT: follow-up Issue creation failed"
     exit 1
   }
@@ -202,7 +207,7 @@ FOLLOW_UP_ID=${CREATE_OUTPUT##*/}
 
 # github provider では --commit は無視される（CLI 互換のため付与を維持）。
 kaji issue edit "$FOLLOW_UP_ID" --commit \
-  --body-file /tmp/kaji-follow-up-body.md || {
+  --body-file [skill_tmp_dir]/kaji-follow-up-body.md || {
     echo "ABORT: follow-up Issue persistence failed"
     exit 1
   }
@@ -219,10 +224,10 @@ CURRENT_BODY=$(kaji issue view [issue_id] --json body -q '.body')
 {
   printf '%s\n\n' "$CURRENT_BODY"
   printf '<!-- kaji-follow-up-issue: %s -->\n' "$FOLLOW_UP_ID"
-} > /tmp/kaji-parent-body-with-follow-up.md
+} > [skill_tmp_dir]/kaji-parent-body-with-follow-up.md
 
 kaji issue edit [issue_id] --commit \
-  --body-file /tmp/kaji-parent-body-with-follow-up.md || {
+  --body-file [skill_tmp_dir]/kaji-parent-body-with-follow-up.md || {
     echo "ABORT: parent follow-up marker update failed; parent Issue remains open"
     exit 1
   }

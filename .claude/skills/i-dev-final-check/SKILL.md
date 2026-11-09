@@ -163,15 +163,19 @@ cd [worktree_dir] && source .venv/bin/activate && python -m kaji_harness.scripts
 Issue 本文の workflow 内完了条件のチェックボックスを `[x]` に更新する。
 `### ワークフロー完了後の確認項目` 内のチェックボックスは更新せず、`[ ]` のまま維持する。
 
+一時ファイルの置き場 `[skill_tmp_dir]` は、本文を取得する前に
+[`_shared/skill-tmp-resolve.md`](../_shared/skill-tmp-resolve.md) で 1 回だけ解決し、Step 7.5 でも使い回す。
+解決に失敗した場合（終了コードが非 0、または出力が空）は本文を編集せず `ABORT` とする。
+
 ```bash
 # 本文を取得
-kaji issue view [issue_id] --json body -q '.body' > /tmp/issue-body.md
+kaji issue view [issue_id] --json body -q '.body' > [skill_tmp_dir]/issue-body.md
 
 # チェックボックスを更新（事後確認より前にある確認済み条件だけを [x] に変更）
-# 例: sed -i 's/- \[ \] 条件A/- [x] 条件A/' /tmp/issue-body.md
+# 例: sed -i 's/- \[ \] 条件A/- [x] 条件A/' [skill_tmp_dir]/issue-body.md
 
 # 更新を反映
-kaji issue edit [issue_id] --commit --body-file /tmp/issue-body.md
+kaji issue edit [issue_id] --commit --body-file [skill_tmp_dir]/issue-body.md
 ```
 
 ### BACK の場合
@@ -243,7 +247,7 @@ BODY=$(kaji issue view [issue_id] --json body -q '.body')
 
 # NOTE ブロック終端位置を検出し、その次の空行の後に挿入
 # new_body = body[:insert_at] + 設計書セクション + body[insert_at:]
-kaji issue edit [issue_id] --commit --body-file /tmp/issue-body-updated.md
+kaji issue edit [issue_id] --commit --body-file [skill_tmp_dir]/issue-body-updated.md
 ```
 
 ### 7.5-6. フォールバック
