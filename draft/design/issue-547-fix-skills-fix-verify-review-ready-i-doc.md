@@ -108,7 +108,8 @@ EOF
 # 3. 最新の候補の 1 行目全体を、markers.py の _VERDICT_MARKER_RE と同じ文法で検証する。
 #    さらに parse_kaji_verdict_marker と同じく、meta キーの重複も不正とする。
 #    どちらかに当たれば state=malformed とし、それより古い正常な marker には遡らない。
-REVIEW_READY_JSON=$(kaji issue view [issue_id] --json comments | jq -c '
+# 4. 取得・解析の成否は出力の有無でなく終了コードで判定する（pipefail）。非 0 なら途中の出力を破棄する。
+REVIEW_READY_JSON=$(set -o pipefail; kaji issue view [issue_id] --json comments | jq -c '
   [ .comments[]
     | select((.body | split("\n")[0]) | startswith("<!-- kaji-verdict: step=review-ready ")) ]
   | last
@@ -123,7 +124,12 @@ REVIEW_READY_JSON=$(kaji issue view [issue_id] --json comments | jq -c '
               body: .body}
         else {state: "malformed", first_line: $l} end
     end')
-# 空文字（kaji / jq の失敗）       → ABORT（fail-loud）
+REVIEW_READY_RC=$?
+if [ "$REVIEW_READY_RC" -ne 0 ] || [ -z "$REVIEW_READY_JSON" ] \
+   || [ "$(printf '%s\n' "$REVIEW_READY_JSON" | wc -l)" -ne 1 ]; then
+  REVIEW_READY_JSON="{\"state\":\"fetch_failed\",\"exit_code\":$REVIEW_READY_RC}"
+fi
+# state=fetch_failed             → ABORT（kaji / jq が非 0 終了、または出力が 1 行の JSON でない。fail-loud）
 # state=not_found                → ABORT（review-ready の marker が無い。review-ready を再実行する）
 # state=malformed                → ABORT（最新の marker が不正。古い RETRY は使わない）
 # state=ok かつ status != RETRY   → ABORT（直すべき RETRY が無い）
@@ -209,6 +215,12 @@ one-way door の未決は無い。Issue 本文「重要判断」も「該当な�
     - meta キーの重複: `<!-- kaji-verdict: step=review-ready status=RETRY key=v key=w -->`（正規表現には合うが、parser は重複キーで拒否する）
     - 語彙外の status: `<!-- kaji-verdict: step=review-ready status=retry -->`
   - **`markers.py` との差分照合**: 上の正常 / 不正の 1 行目の fixture をそれぞれ `parse_kaji_verdict_marker` と jq に通し、受理 / 拒否の判定と status が一致することを確かめる。照合する fixture には、正規表現の外の検査に当たるケース（meta キーの重複）を必ず含める（`tests/test_issue_close_evidence_jq.py` が producer model と jq を差分照合するのと同じ考え方）
+  - **shell 経路の取得・解析失敗（code review Must Fix 1 の回帰）**: SKILL.md の bash ブロック全体（`REVIEW_READY_JSON=$(...)` から `echo "$REVIEW_READY_JSON"` まで）を抜き出し、`kaji` を stub に置き換えて bash で実行する。次のどれも `state=fetch_failed` になり、途中まで出力された `state=ok` / `status=RETRY` が残らないことを確かめる
+    - `kaji` が正常な comments JSON を出したあと exit 1（`exit_code` は 1）
+    - 正常な JSON の後に不正な文字列 `BROKEN` が続き、jq が parse error で exit 5（`exit_code` は 5）
+    - `kaji` が何も出さずに exit 0（出力が空）
+    - `kaji` が正常な JSON を 2 つ出す（出力が 1 行の JSON でない）
+    - 対照として、正常な JSON を出して exit 0 なら `state=ok` / `status=RETRY` になること
 
 ### Large テスト
 

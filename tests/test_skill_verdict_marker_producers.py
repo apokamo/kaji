@@ -10,6 +10,7 @@ review-ready / fix / verify / i-doc 系の判定コメントにも ``--verdict-s
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -45,9 +46,15 @@ _STEP_FLAG_RE = re.compile(r"--verdict-step (?P<step>\S+) --verdict-status (?P<s
 _STATUS_TOKEN_RE = re.compile(r"^(<STATUS>|PASS|RETRY|ABORT|BACK|BACK_[A-Z0-9_]+)$")
 
 _FIX_READY_JQ_RE = re.compile(
-    r"REVIEW_READY_JSON=\$\(kaji issue view \[issue_id\] --json comments \| jq -c '\n"
-    r"(?P<program>.*?)\n[ \t]*'\)",
+    r"REVIEW_READY_JSON=\$\(set -o pipefail; kaji issue view \[issue_id\] --json comments"
+    r" \| jq -c '\n(?P<program>.*?)\n[ \t]*'\)",
     re.DOTALL,
+)
+
+# 取得・解析・終了コード判定を含む bash ブロック全体（shell 経路の検証用）。
+_FIX_READY_SHELL_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<block>REVIEW_READY_JSON=\$\(.*?\n[ \t]*echo \"\$REVIEW_READY_JSON\")$",
+    re.DOTALL | re.MULTILINE,
 )
 
 _VALID_RETRY = "<!-- kaji-verdict: step=review-ready status=RETRY -->"
@@ -262,3 +269,77 @@ class TestFixReadyReviewReadySelection:
             assert result["state"] == "ok", name
             assert result["status"] == parsed.status, name
             assert result["body"].endswith("latest"), name
+
+
+def _fix_ready_shell_block() -> str:
+    match = _FIX_READY_SHELL_RE.search(_read_skill("issue-fix-ready"))
+    assert match, "issue-fix-ready SKILL.md の取得 bash ブロックを抽出できない"
+    indent = match.group("indent")
+    lines = match.group("block").split("\n")
+    return "\n".join(line.removeprefix(indent) for line in lines).replace("[issue_id]", "547")
+
+
+def _run_fix_ready_shell(tmp_path: Path, stdout: str, exit_code: int) -> dict[str, Any]:
+    """``kaji`` を stub に置き換え、SKILL.md の bash ブロックをそのまま実行する。"""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    out_file = tmp_path / "kaji-stdout"
+    out_file.write_text(stdout)
+    stub = bin_dir / "kaji"
+    stub.write_text(f'#!/bin/sh\ncat "{out_file}"\nexit {exit_code}\n')
+    stub.chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+    result = subprocess.run(
+        ["bash", "-c", _fix_ready_shell_block()],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    lines = result.stdout.strip().split("\n")
+    assert len(lines) == 1, result.stdout
+    parsed: dict[str, Any] = json.loads(lines[0])
+    return parsed
+
+
+def _comments_json(bodies: list[str]) -> str:
+    return json.dumps({"comments": [_comment(body) for body in bodies]})
+
+
+@pytest.mark.medium
+@pytest.mark.skipif(
+    shutil.which("jq") is None or shutil.which("bash") is None,
+    reason="jq or bash is not installed",
+)
+class TestFixReadyShellFailure:
+    """取得・解析が非 0 で終わったら、途中の出力を捨てて fetch_failed にする（Must Fix 1）。"""
+
+    def test_successful_fetch_yields_ok_retry(self, tmp_path: Path) -> None:
+        result = _run_fix_ready_shell(tmp_path, _comments_json([f"{_VALID_RETRY}\nfix"]), 0)
+        assert result["state"] == "ok"
+        assert result["status"] == "RETRY"
+
+    def test_kaji_nonzero_after_valid_json_is_fetch_failed(self, tmp_path: Path) -> None:
+        result = _run_fix_ready_shell(tmp_path, _comments_json([f"{_VALID_RETRY}\nfix"]), 1)
+        assert result == {"state": "fetch_failed", "exit_code": 1}
+
+    def test_jq_parse_error_after_valid_json_is_fetch_failed(self, tmp_path: Path) -> None:
+        stdout = _comments_json([f"{_VALID_RETRY}\nfix"]) + "\nBROKEN\n"
+        result = _run_fix_ready_shell(tmp_path, stdout, 0)
+        assert result["state"] == "fetch_failed"
+        assert result["exit_code"] != 0
+
+    def test_empty_output_is_fetch_failed(self, tmp_path: Path) -> None:
+        result = _run_fix_ready_shell(tmp_path, "", 0)
+        assert result == {"state": "fetch_failed", "exit_code": 0}
+
+    def test_multiple_json_documents_are_fetch_failed(self, tmp_path: Path) -> None:
+        doc = _comments_json([f"{_VALID_RETRY}\nfix"])
+        result = _run_fix_ready_shell(tmp_path, f"{doc}\n{doc}\n", 0)
+        assert result == {"state": "fetch_failed", "exit_code": 0}
+
+    def test_fetch_failed_row_aborts(self) -> None:
+        text = _read_skill("issue-fix-ready")
+        assert re.search(r'^[ \t]*\| `state: "fetch_failed"` \| ABORT。', text, re.MULTILINE)
+        assert "空文字（`kaji` / `jq` の失敗）" not in text

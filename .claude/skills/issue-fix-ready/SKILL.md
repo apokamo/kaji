@@ -65,7 +65,7 @@ $ARGUMENTS = <issue_id>
    その間に投稿されたコメントで検証対象と本文が食い違いうるため）。
 
    ```bash
-   REVIEW_READY_JSON=$(kaji issue view [issue_id] --json comments | jq -c '
+   REVIEW_READY_JSON=$(set -o pipefail; kaji issue view [issue_id] --json comments | jq -c '
      [ .comments[]
        | select((.body | split("\n")[0]) | startswith("<!-- kaji-verdict: step=review-ready ")) ]
      | last
@@ -81,15 +81,26 @@ $ARGUMENTS = <issue_id>
            else {state: "malformed", first_line: $l} end
        end
    ')
+   REVIEW_READY_RC=$?
+   if [ "$REVIEW_READY_RC" -ne 0 ] || [ -z "$REVIEW_READY_JSON" ] \
+      || [ "$(printf '%s\n' "$REVIEW_READY_JSON" | wc -l)" -ne 1 ]; then
+     REVIEW_READY_JSON="{\"state\":\"fetch_failed\",\"exit_code\":$REVIEW_READY_RC}"
+   fi
    echo "$REVIEW_READY_JSON"
    ```
+
+   取得・解析の成否は出力の有無ではなく終了コードで判定する。`set -o pipefail` により `kaji` と
+   `jq` のどちらかが非 0 で終われば `REVIEW_READY_RC` が非 0 になる。そのときは、途中まで出力された
+   JSON（例: `kaji` が正常な JSON を出したあと exit 1、jq が 1 件目を処理したあと 2 件目の不正入力で
+   exit 5）が残っていても破棄し、`state: "fetch_failed"` に置き換える。出力が空、または 1 行の
+   JSON でない場合も同じく `fetch_failed` とする。この判定ブロックを省略・改変して実行しない。
 
    結果に応じて次のように扱う。ABORT の場合は Issue 本文の修正・コメント投稿に進まず、理由を書いた
    `status: ABORT` の verdict ブロックを stdout に出して終了する（fail-loud）。
 
    | 結果 | 扱い |
    |------|------|
-   | 空文字（`kaji` / `jq` の失敗） | ABORT。コメント一覧を取得・解析できない |
+   | `state: "fetch_failed"` | ABORT。`kaji` / `jq` が非 0 で終了した、または出力が 1 行の JSON でない。コメント一覧を取得・解析できない。`exit_code` を理由に記載する（途中まで出力された内容は使わない） |
    | `state: "not_found"` | ABORT。`step=review-ready` marker 付きの判定コメントが無い（marker の無い旧形式の「## レディネスレビュー」コメントは入力にしない）。`/issue-review-ready [issue_id]` の再実行を案内する |
    | `state: "malformed"` | ABORT。最新の review-ready marker が不正。古い RETRY は使わない。`first_line` を理由に記載し、review-ready の再実行を案内する |
    | `state: "ok"` かつ `status` が `RETRY` 以外 | ABORT。直すべき RETRY が無い（最新の判定が PASS / ABORT 等） |
