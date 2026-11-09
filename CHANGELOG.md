@@ -6,6 +6,52 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### BREAKING CHANGE
+
+- **`issue-fix-ready` reads the review-ready verdict only from the
+  `step=review-ready` verdict marker** (#547). It used to search the Issue
+  comments for the latest `## レディネスレビュー` heading. It now takes the
+  latest comment whose first line starts with
+  `<!-- kaji-verdict: step=review-ready `, checks the whole line against the
+  marker grammar of `kaji_harness/providers/markers.py` (including duplicate
+  meta keys), and continues only when that latest marker is valid and its
+  status is `RETRY`. There is no fallback to the heading search.
+  - **Broken contract**: a review-ready comment without the marker is no
+    longer accepted as input; `issue-fix-ready` stops with `ABORT` and does
+    not edit the Issue body. It also stops with `ABORT` when the latest
+    `step=review-ready` marker is malformed, and does not fall back to an
+    older valid `RETRY`.
+  - **How to check whether you are affected**: (a) for an Issue in progress,
+    look at the first line of the latest review-ready comment; if it is not
+    `<!-- kaji-verdict: step=review-ready status=... -->`, the Issue is
+    affected. (b) In a repository with customized skills, you are affected if
+    your `issue-review-ready` posts its comment without
+    `--verdict-step review-ready --verdict-status`, or your `issue-fix-ready`
+    still searches for the heading.
+  - **Migration**: add `--verdict-step review-ready --verdict-status <STATUS>`
+    to every `kaji issue comment` in your `issue-review-ready`, and replace
+    Step 1 of your `issue-fix-ready` with the upstream version. To port the
+    change, see the diffs of commit `892d136` (markers in the producers and
+    the marker-based Step 1) and commit `ec2e685` (Step 1 stops with `ABORT`
+    when `kaji` or `jq` exits non-zero, and discards partial output). For
+    an Issue in progress, re-run `issue-review-ready` so that a marked
+    review-ready comment exists. No compatibility fallback is provided.
+
+### Fixed
+
+- **The judgment comments of ten more skills carry the verdict marker**
+  (#547). `issue-review-ready`, `issue-fix-ready`, `issue-fix-design`,
+  `issue-verify-design`, `issue-fix-code`, `issue-verify-code`,
+  `i-doc-update`, `i-doc-review`, `i-doc-fix`, and `i-doc-verify` now always
+  pass `--verdict-step <step id> --verdict-status <STATUS>` to
+  `kaji issue comment`, including for `PASS`, so the first line of the comment
+  is `<!-- kaji-verdict: step=<step id> status=<STATUS> -->`. Without it,
+  the runner's comment fallback kept these work reports as candidates for
+  every step, and `kaji issue resolve-verdict --step <step id>` could not find
+  them. `i-doc-review`, `i-doc-fix`, and `i-doc-verify` now have an explicit
+  comment command and template instead of a prose instruction. The starter
+  repositories get these skill changes through the next starter sync.
+
 ### Added
 
 - **`kaji pr resolve-thread <pr> --comment <comment_id>`** resolves the GitHub

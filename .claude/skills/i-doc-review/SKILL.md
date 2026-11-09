@@ -87,6 +87,42 @@ cd [worktree_dir] && python3 scripts/check_doc_links.py [changed-markdown-files.
 
 Must Fix / Should Fix を整理して Issue にコメントする。
 
+**verdict マーカーの無条件付与（必須）**: 判定コメントには **常に** `--verdict-step doc-review --verdict-status <STATUS>` を付ける。`<STATUS>` は本 skill が「Verdict 出力」で返す status（`PASS` / `RETRY` / `ABORT`）に置き換える。CLI が body 1 行目に `<!-- kaji-verdict: step=doc-review status=<STATUS> -->` を付け、`kaji issue resolve-verdict --step doc-review` と runner の comment fallback はこの marker で発行元 step を特定する。PASS でも省略しない（条件付きの付与は禁止。[docs/dev/shared_skill_rules.md § verdict マーカー契約](../../../docs/dev/shared_skill_rules.md#verdict-マーカー契約producer-consumer)）。投稿前に判定を確定してから status を決める。末尾の `---VERDICT---` ブロックの status も `<STATUS>` と同じ値にする。
+
+```bash
+kaji issue comment [issue_id] --commit \
+  --verdict-step doc-review --verdict-status <STATUS> \
+  --body-file - <<'EOF'
+# docs レビュー結果
+
+## 概要
+
+(一言で言うとどうだったか)
+
+## 指摘事項 (Must Fix)
+
+- [ ] **[対象ファイル:行]**: (指摘内容と根拠)
+
+## 改善提案 (Should Fix)
+
+- (任意の改善提案。なければ「なし」)
+
+## リンクチェック結果
+
+(Step 3 の `check_doc_links.py` の出力)
+
+---VERDICT---
+status: <STATUS>
+reason: |
+  (判定理由)
+evidence: |
+  (具体的根拠)
+suggestion: |
+  (次のアクション)
+---END_VERDICT---
+EOF
+```
+
 ## Verdict 出力
 
 ```text

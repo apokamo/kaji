@@ -61,6 +61,40 @@ $ARGUMENTS = <issue_id>
 5. 新規発見事項があっても今回の判定には含めない
 6. 結果を Issue にコメント
 
+   **verdict マーカーの無条件付与（必須）**: 判定コメントには **常に** `--verdict-step doc-verify --verdict-status <STATUS>` を付ける。`<STATUS>` は本 skill が「Verdict 出力」で返す status（`PASS` / `RETRY` / `ABORT`）に置き換える。CLI が body 1 行目に `<!-- kaji-verdict: step=doc-verify status=<STATUS> -->` を付け、`kaji issue resolve-verdict --step doc-verify` と runner の comment fallback はこの marker で発行元 step を特定する。PASS でも省略しない（条件付きの付与は禁止。[docs/dev/shared_skill_rules.md § verdict マーカー契約](../../../docs/dev/shared_skill_rules.md#verdict-マーカー契約producer-consumer)）。投稿前に判定を確定してから status を決める。末尾の `---VERDICT---` ブロックの status も `<STATUS>` と同じ値にする。
+
+   ```bash
+   kaji issue comment [issue_id] --commit \
+     --verdict-step doc-verify --verdict-status <STATUS> \
+     --body-file - <<'EOF'
+   # docs 修正確認結果
+
+   ## 修正項目の確認
+
+   | 指摘項目 | 状態 | 理由・根拠 |
+   |----------|------|------------|
+   | [指摘項目] | ✅ OK / ❌ NG | (確認した根拠) |
+
+   ## リンクチェック結果
+
+   (手順 4 の `check_doc_links.py` の出力)
+
+   ## 新規発見事項（参考情報。判定には含めない）
+
+   - (なければ「なし」)
+
+   ---VERDICT---
+   status: <STATUS>
+   reason: |
+     (判定理由)
+   evidence: |
+     (具体的根拠)
+   suggestion: |
+     (次のアクション)
+   ---END_VERDICT---
+   EOF
+   ```
+
 ## Verdict 出力
 
 ```text

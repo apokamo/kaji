@@ -217,10 +217,14 @@ Step 1 で取得した labels から type を判定し（上記「ラベル取�
 
 Verdict に応じて以下の形式で Issue コメントに投稿する。
 
+**verdict マーカーの無条件付与（必須）**: 3 つのテンプレートはどれも `--verdict-step review-ready --verdict-status <STATUS>` を持ち、status はテンプレートごとに `PASS` / `RETRY` / `ABORT` に固定している。判定した status のテンプレートをそのまま使い、フラグを消したり別の status に書き換えたりしない。CLI が body 1 行目に `<!-- kaji-verdict: step=review-ready status=<STATUS> -->` を付け、`issue-fix-ready` はこの marker だけで review-ready の判定を取得する（[docs/dev/shared_skill_rules.md § verdict マーカー契約](../../../docs/dev/shared_skill_rules.md#verdict-マーカー契約producer-consumer)）。
+
 **PASS の場合:**
 
 ```bash
-kaji issue comment [issue_id] --commit --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit \
+  --verdict-step review-ready --verdict-status PASS \
+  --body-file - <<'EOF'
 ## レディネスレビュー
 
 全観点クリア。作業着手に進行可。
@@ -230,7 +234,9 @@ EOF
 **RETRY の場合:**
 
 ```bash
-kaji issue comment [issue_id] --commit --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit \
+  --verdict-step review-ready --verdict-status RETRY \
+  --body-file - <<'EOF'
 ## レディネスレビュー
 
 ### 指摘事項
@@ -247,7 +253,9 @@ EOF
 **ABORT の場合:**
 
 ```bash
-kaji issue comment [issue_id] --commit --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit \
+  --verdict-step review-ready --verdict-status ABORT \
+  --body-file - <<'EOF'
 ## レディネスレビュー
 
 ### 理由
