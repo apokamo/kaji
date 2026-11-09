@@ -30,9 +30,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     still searches for the heading.
   - **Migration**: add `--verdict-step review-ready --verdict-status <STATUS>`
     to every `kaji issue comment` in your `issue-review-ready`, and replace
-    Step 1 of your `issue-fix-ready` with the version from #547. For an Issue
-    in progress, re-run `issue-review-ready` so that a marked review-ready
-    comment exists. No compatibility fallback is provided.
+    Step 1 of your `issue-fix-ready` with the upstream version. To port the
+    change, see the diffs of commit `892d136` (markers in the producers and
+    the marker-based Step 1) and commit `ec2e685` (Step 1 stops with `ABORT`
+    when `kaji` or `jq` exits non-zero, and discards partial output). For
+    an Issue in progress, re-run `issue-review-ready` so that a marked
+    review-ready comment exists. No compatibility fallback is provided.
 
 ### Fixed
 
