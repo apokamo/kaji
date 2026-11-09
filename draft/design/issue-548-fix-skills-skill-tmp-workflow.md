@@ -99,12 +99,18 @@ skill 手順の利用者（agent）から見た入力:
 ISSUE_ID='[issue_id]' DEFAULT_BRANCH='[default_branch]' sh -s <<'KAJI_SKILL_TMP_EOF'
 set -eu
 if [ -n "${KAJI_TMP_DIR:-}" ]; then          # harness 経由: attempt 固有 dir をそのまま使う
-  CDPATH= cd -P -- "$KAJI_TMP_DIR" && pwd -P
-  exit 0
+  # `cd ... && pwd` の形は AND リストの左辺の失敗を set -e が拾わず exit 0 で成功扱いになるため使わない
+  RESOLVED=$(CDPATH= cd -P -- "$KAJI_TMP_DIR" && pwd -P) || {
+    echo "skill-tmp-resolve: KAJI_TMP_DIR を解決できない: $KAJI_TMP_DIR" >&2; exit 1
+  }
+  [ -n "$RESOLVED" ] || { echo "skill-tmp-resolve: KAJI_TMP_DIR の解決結果が空" >&2; exit 1; }
+  printf '%s\n' "$RESOLVED"
+  exit 0                                     # 手動経路へは fallback しない
 fi
 case $ISSUE_ID in ''|*[!0123456789]*) echo "skill-tmp-resolve: issue_id が数字でない: $ISSUE_ID" >&2; exit 1 ;; esac
 # default branch の checkout をちょうど 1 件特定する（issue-close Step 5.6 と同じ方式。bare 構成対応）
 MAIN=...（git worktree list --porcelain を while read で走査）
+# 0 件 / 複数件は明示的に判定して exit 1（パイプラインの終了状態には頼らない）
 mkdir -p "$MAIN/tmp/kaji/$ISSUE_ID"
 [ -e "$MAIN/tmp/kaji/.gitignore" ] || printf '*\n' > "$MAIN/tmp/kaji/.gitignore"
 mktemp -d "$MAIN/tmp/kaji/$ISSUE_ID/manual-XXXXXX"
@@ -137,6 +143,13 @@ EOF
 - 解決に失敗した場合（default branch の checkout が 0 件 / 複数、issue_id が数字でない等）は `/tmp` へ fallback しない
   （fallback すると衝突が再発する）。その skill の失敗時規則に従い停止する（final-check / issue-design は `ABORT`、
   issue-close の follow-up 移管は既存どおり `ABORT` で親 Issue を close しない）
+- **失敗の伝播（共通ブロックの契約）**: 解決できないときは必ず非 0 で終了し、標準出力に何も出さない。
+  `cmd1 && cmd2` の左辺や、パイプライン・`if` 条件内のコマンドの失敗は `set -e` で止まらないため、
+  失敗しうる手順（`KAJI_TMP_DIR` の `cd` / `pwd`、default branch checkout の特定）は `|| { ...; exit 1; }` または
+  明示的な件数・空文字判定で exit 1 にする。`mkdir` / `printf` / `mktemp` は単純コマンドなので `set -e` で止まる
+- **利用側の契約**: 各 skill は解決ブロックの終了コードが非 0、または標準出力が空のとき、一時ファイルを使う後続コマンド
+  （Issue 本文の取得・編集、follow-up 作成など）に進まず、その skill の失敗時規則で停止する。これを
+  `_shared/skill-tmp-resolve.md` の利用規則に明記する
 - POSIX sh で書く（GNU / BSD 両対応。`realpath` / `readlink -f` / `mktemp --tmpdir` を使わない。
   `mktemp -d <template>` は両対応）
 - skill markdown に `$<数字>` を書かない（`tests/test_skill_placeholders.py` の Issue #524 契約。awk の `$1` も不可）
@@ -223,6 +236,9 @@ EOF
 実 repo を返しうるため）。
 
 - `KAJI_TMP_DIR` が設定されているとき: その物理パスを出力し、main checkout に何も作らない
+- `KAJI_TMP_DIR` が存在しない dir を指すとき（review-design MF-1 の回帰テスト）: 非 0 で終了し、標準出力が空で、
+  手動経路の `<main>/tmp/kaji/<id>/` や `manual-*` を作らない（fallback しない）。修正前の `cd ... && pwd -P; exit 0`
+  形では exit 0・stdout 空になり FAIL する
 - `KAJI_TMP_DIR` が未設定のとき: `<main>/tmp/kaji/<id>/manual-*` を作ってその絶対パスを出力し、
   `<main>/tmp/kaji/.gitignore`（内容 `*`）を作る。2 回実行すると別々の dir になる（同時実行でも衝突しない）
 - linked worktree から実行しても、default branch の checkout 配下に作る（bare + linked worktree 構成を含む）
@@ -233,7 +249,10 @@ EOF
 ### 変更固有検証
 
 - `make check`（ruff / mypy / pytest 全体。新規テストを含む）
-- `grep -rn "/tmp/" .claude/skills --include=*.md` で、残るのが `incident-review` の `[issue_id]` 付き 2 行だけであることを目視確認
+- `grep -rn "/tmp/" .claude/skills --include=*.md` で、残るのが次だけであることを目視確認する。
+  絶対パスは `incident-review` の `[issue_id]` 付き 2 行だけ。ほかは既存の相対表記で、意図して残す安全な行:
+  `issue-close/SKILL.md` の `<main checkout>/tmp/kaji/[issue_id]/`（590 行）と `$BASE/tmp/...`（638・640 行）、
+  新設する `_shared/skill-tmp-resolve.md` の `$MAIN/tmp/kaji/...`。判定基準は契約テストの絶対パス規則と同じ
 
 ### 長時間 acceptance の配置
 
