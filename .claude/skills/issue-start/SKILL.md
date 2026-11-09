@@ -53,18 +53,53 @@ system `jq` バイナリ依存を持ち込まないため、`kaji issue context`
 PREFIX=$(kaji issue context [issue_id] -q '.branch_prefix')
 BRANCH=$(kaji issue context [issue_id] -q '.branch_name')
 WT=$(kaji issue context [issue_id] -q '.worktree_dir')
+REMOTE=$(kaji issue context [issue_id] -q '.git_remote')
+BASE=$(kaji issue context [issue_id] -q '.default_branch')
 ```
 
-`worktree_dir` は絶対パスで返ります。以降の手順では上記 3 変数を使います。
+`worktree_dir` は絶対パスで返ります。`git_remote` / `default_branch` は provider 設定
+（`provider.<type>.git_remote` / `provider.<type>.default_branch`）から解決された値です。
+以降の手順では上記 5 変数を使います。
 
 ### Step 2: ブランチとWorktreeの作成
 
-メインリポジトリのルートから実行:
+worktree の基点は **fetch した直後の `$REMOTE/$BASE`**（PR の base である remote 側の default branch）。
+ローカルの `$BASE` は remote のキャッシュにすぎず、kaji の外（GitHub UI での merge、別 machine の push 等）で
+remote が進んでいると古いため、基点にしない。
+
+メインリポジトリのルートから、次の block をそのまま 1 回で実行:
 
 ```bash
-MAIN_REPO=$(git rev-parse --show-toplevel)
-git worktree add -b "$BRANCH" "$WT" main
+# kaji-issue-start-worktree
+MAIN_REPO=$(git rev-parse --show-toplevel) || exit 1
+git -C "$MAIN_REPO" fetch "$REMOTE" "$BASE" || { echo "error: git fetch $REMOTE $BASE failed" >&2; exit 1; }
+FETCHED=$(git -C "$MAIN_REPO" rev-parse --verify --quiet "FETCH_HEAD^{commit}") || { echo "error: FETCH_HEAD is not resolvable after fetch" >&2; exit 1; }
+TRACKING=$(git -C "$MAIN_REPO" rev-parse --verify --quiet "refs/remotes/$REMOTE/$BASE^{commit}") || { echo "error: $REMOTE/$BASE is not resolvable after fetch" >&2; exit 1; }
+[ "$FETCHED" = "$TRACKING" ] || { echo "error: $REMOTE/$BASE ($TRACKING) does not match fetched $BASE ($FETCHED)" >&2; exit 1; }
+git -C "$MAIN_REPO" worktree add --no-track -b "$BRANCH" "$WT" "$REMOTE/$BASE"
 ```
+
+- **fetch → 照合 → 作成の順を崩さない**。`FETCH_HEAD` との照合は、fetch refspec が `$REMOTE/$BASE` を
+  更新しない設定（非標準の `remote.<name>.fetch`）で古い remote-tracking ref から作ることを防ぐ。
+- `--no-track`: 新しい branch に upstream を設定しない（現行どおり。upstream は `/i-pr` の
+  `git push -u [git_remote] HEAD` で設定する）。`$REMOTE/$BASE` を upstream にすると、素の `git push` が
+  default branch へ向かいうる。
+- ローカルの `$BASE` は更新しない（main checkout は作業中でありうる）。追随は `/issue-close` の
+  `git pull` か保守者の操作に任せる。
+- **block が非ゼロで終了した場合（fetch 失敗、`$REMOTE/$BASE` 未解決・不一致、worktree 作成失敗）は
+  ABORT**: ローカルの `$BASE` など古い基点で再試行・続行せず、以降の Step を実行しない。
+  verdict の evidence に失敗したコマンド・終了コード・stderr を書いて stdout に出力し、終了する。
+  worktree 作成前に止まるため半端な branch / worktree は残らず、原因を解消した後の再実行は安全。
+
+成功したら、完了報告用に基点の SHA と、ローカル `$BASE` にある未 push の commit 数を取得する:
+
+```bash
+BASE_SHA=$(git -C "$MAIN_REPO" rev-parse --short "$REMOTE/$BASE")
+LOCAL_AHEAD=$(git -C "$MAIN_REPO" rev-list --count "$REMOTE/$BASE..refs/heads/$BASE" 2>/dev/null || echo 0)
+```
+
+`LOCAL_AHEAD` が 0 でない場合、ローカル `$BASE` の未 push commit は基点に **含まれない**（PR の base は
+remote 側のため）。停止はせず、Step 5 の完了報告に注意として記載する。
 
 ### Step 2.5: venv シンボリックリンク作成
 
@@ -119,7 +154,7 @@ heading が密着しない（Issue #200）。`--commit` は github provider で�
 
 ### Step 5: セットアップ完了報告
 
-以下の形式で報告してください（`$PREFIX` / `$BRANCH` / `$WT` の値で埋めること）:
+以下の形式で報告してください（`$PREFIX` / `$BRANCH` / `$WT` / `$REMOTE` / `$BASE` / `$BASE_SHA` / `$LOCAL_AHEAD` の値で埋めること）:
 
 ```
 ## Worktree セットアップ完了
@@ -129,10 +164,14 @@ heading が密着しない（Issue #200）。`--commit` は github provider で�
 | Issue | [issue_ref] |
 | ブランチ | $BRANCH |
 | ディレクトリ | ../$(basename "$WT") |
-| 基点ブランチ | main |
+| 基点 | $REMOTE/$BASE（$BASE_SHA） |
 | venv | シンボリックリンク作成済み |
 | config overlay | シンボリックリンク作成済み / 不要（main に未配置） |
 | メタ情報 | Issue本文に追記済み |
+
+（`LOCAL_AHEAD` が 0 でない場合のみ追記）
+> 注意: ローカル `$BASE` に `$REMOTE/$BASE` へ未 push の commit が $LOCAL_AHEAD 件あります。
+> これらは worktree の基点に含まれていません。
 
 ### 次のステップ
 
@@ -155,7 +194,7 @@ status: PASS
 reason: |
   Worktree 構築成功
 evidence: |
-  worktree 作成、venv symlink 済み
+  fetch 後の $REMOTE/$BASE（$BASE_SHA）を基点に worktree 作成、venv symlink 済み
 suggestion: |
 ---END_VERDICT---
 ```
@@ -167,4 +206,4 @@ suggestion: |
 | status | 条件 |
 |--------|------|
 | PASS | Worktree 構築成功 |
-| ABORT | 構築失敗 / 第 2 引数（旧 `prefix`）が渡された |
+| ABORT | 構築失敗（Step 2 の `# kaji-issue-start-worktree` block の非ゼロ終了: `git fetch` 失敗、`$REMOTE/$BASE` の未解決・FETCH_HEAD との不一致を含む） / 第 2 引数（旧 `prefix`）が渡された |

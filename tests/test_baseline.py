@@ -68,6 +68,8 @@ def _init_baseline_repo(tmp_path: Path, *, failure_count: int = 0) -> Path:
     _git_run(project, "config", "user.name", "Baseline Test")
     _git_run(project, "add", ".")
     _git_run(project, "commit", "-m", "chore: initialize fixture")
+    # 実装 commit 判定の基点は remote 側の default branch（#549）
+    _git_run(project, "update-ref", "refs/remotes/origin/main", "HEAD")
     _git_run(project, "switch", "-c", "feat/346")
     return project
 
@@ -251,6 +253,7 @@ def test_entrypoint_measure_compare_and_post_implementation_reuse(
     monkeypatch.setenv("KAJI_ISSUE_ID", "346")
     monkeypatch.setenv("KAJI_BRANCH_NAME", "feat/346")
     monkeypatch.setenv("KAJI_DEFAULT_BRANCH", "main")
+    monkeypatch.setenv("KAJI_GIT_REMOTE", "origin")
     monkeypatch.setenv("KAJI_VERDICT_PATH", str(verdict_path))
 
     assert baseline_precheck.main([]) == 0
@@ -310,6 +313,7 @@ def test_entrypoint_classifies_non_clean_baseline_and_posts_evidence(
     monkeypatch.setenv("KAJI_ISSUE_ID", "346")
     monkeypatch.setenv("KAJI_BRANCH_NAME", "feat/346")
     monkeypatch.setenv("KAJI_DEFAULT_BRANCH", "main")
+    monkeypatch.setenv("KAJI_GIT_REMOTE", "origin")
     monkeypatch.setenv("KAJI_VERDICT_PATH", str(verdict_path))
     monkeypatch.setattr(
         baseline_precheck,
@@ -345,6 +349,7 @@ def test_entrypoint_maps_pytest_launch_failure_to_invalid_abort(
     monkeypatch.setenv("KAJI_ISSUE_ID", "346")
     monkeypatch.setenv("KAJI_BRANCH_NAME", "feat/346")
     monkeypatch.setenv("KAJI_DEFAULT_BRANCH", "main")
+    monkeypatch.setenv("KAJI_GIT_REMOTE", "origin")
     monkeypatch.setenv("KAJI_VERDICT_PATH", str(verdict_path))
     monkeypatch.setattr(baseline_precheck.subprocess, "run", launch_spy)
     monkeypatch.setattr(baseline_precheck, "_post_comment", lambda *_: None)
@@ -403,6 +408,7 @@ def test_compare_detects_stale_baseline_after_history_rewrite(
     monkeypatch.setenv("KAJI_ISSUE_ID", "346")
     monkeypatch.setenv("KAJI_BRANCH_NAME", "feat/346")
     monkeypatch.setenv("KAJI_DEFAULT_BRANCH", "main")
+    monkeypatch.setenv("KAJI_GIT_REMOTE", "origin")
     monkeypatch.delenv("KAJI_VERDICT_PATH", raising=False)
     assert baseline_precheck.main([]) == 0
     capsys.readouterr()
@@ -427,6 +433,7 @@ def test_measure_refuses_dirty_worktree_without_writing_baseline(
     monkeypatch.setenv("KAJI_ISSUE_ID", "346")
     monkeypatch.setenv("KAJI_BRANCH_NAME", "feat/346")
     monkeypatch.setenv("KAJI_DEFAULT_BRANCH", "main")
+    monkeypatch.setenv("KAJI_GIT_REMOTE", "origin")
     monkeypatch.setenv("KAJI_VERDICT_PATH", str(verdict_path))
     assert baseline_precheck.main([]) == 0
     verdict = yaml.safe_load(verdict_path.read_text(encoding="utf-8"))
@@ -447,8 +454,9 @@ def _commit_design_dir_config(project: Path, design_dir: str) -> None:
     )
     _git_run(project, "add", ".kaji")
     _git_run(project, "commit", "-m", "chore: add kaji config")
-    # the config commit itself is a non-design commit; keep it out of main..HEAD
+    # the config commit itself is a non-design commit; keep it out of origin/main..HEAD
     _git_run(project, "branch", "-f", "main", "HEAD")
+    _git_run(project, "update-ref", "refs/remotes/origin/main", "HEAD")
 
 
 def _commit_design_doc(project: Path, design_dir: str) -> None:
@@ -472,7 +480,7 @@ def test_design_only_commit_is_not_implementation_commit(
     if configured is not None:
         _commit_design_dir_config(project, configured)
     _commit_design_doc(project, design_dir)
-    assert baseline_precheck._has_implementation_commit(project, "main") is False
+    assert baseline_precheck._has_implementation_commit(project, "origin/main") is False
 
 
 @pytest.mark.medium
@@ -482,7 +490,7 @@ def test_legacy_design_commit_is_implementation_commit_when_design_dir_configure
     project = _init_baseline_repo(tmp_path)
     _commit_design_dir_config(project, "designs/issues")
     _commit_design_doc(project, "draft/design")
-    assert baseline_precheck._has_implementation_commit(project, "main") is True
+    assert baseline_precheck._has_implementation_commit(project, "origin/main") is True
 
 
 def _write_overlay_repo(tmp_path: Path) -> tuple[Path, Path]:
@@ -694,3 +702,86 @@ def test_chained_exception():
         for entry in collection_payload["failures"]
     ]
     assert collection == [("tests/test_collection_error.py", "ERROR", "ModuleNotFoundError")]
+
+
+@pytest.mark.medium
+def test_outside_commit_on_remote_base_is_not_implementation_commit(tmp_path: Path) -> None:
+    """ローカル main が古くても、remote 側で入った commit を実装 commit と数えない（#549）。"""
+    project = _init_baseline_repo(tmp_path)
+    # kaji の外で remote の main に実行時ファイルの変更が入り、feature branch はその先端から作られた
+    _git_run(project, "switch", "-q", "--detach", "main")
+    (project / "outside.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _git_run(project, "add", "outside.py")
+    _git_run(project, "commit", "-m", "feat: change merged outside kaji")
+    _git_run(project, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git_run(project, "switch", "-q", "-C", "feat/346", "origin/main")
+    _commit_design_doc(project, "draft/design")
+
+    assert _git_run(project, "rev-list", "--count", "main..origin/main") == "1"
+    assert baseline_precheck._has_implementation_commit(project, "origin/main") is False
+
+
+class _PytestReached(Exception):
+    """baseline 計測（pytest 起動）まで進んだことを示す sentinel。"""
+
+
+@pytest.mark.medium
+def test_measure_with_stale_local_main_proceeds_to_first_measurement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ローカル main が古くても初回 baseline を計測に進め、post-implement ABORT にしない（#549）。"""
+    project = _init_baseline_repo(tmp_path)
+    _git_run(project, "switch", "-q", "--detach", "main")
+    (project / "outside.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _git_run(project, "add", "outside.py")
+    _git_run(project, "commit", "-m", "feat: change merged outside kaji")
+    _git_run(project, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git_run(project, "switch", "-q", "-C", "feat/346", "origin/main")
+    _commit_design_doc(project, "draft/design")
+    verdict_path = tmp_path / "verdict.yaml"
+    monkeypatch.setenv("KAJI_WORKTREE_DIR", str(project))
+    monkeypatch.setenv("KAJI_ISSUE_ID", "346")
+    monkeypatch.setenv("KAJI_BRANCH_NAME", "feat/346")
+    monkeypatch.setenv("KAJI_DEFAULT_BRANCH", "main")
+    monkeypatch.setenv("KAJI_GIT_REMOTE", "origin")
+    monkeypatch.setenv("KAJI_VERDICT_PATH", str(verdict_path))
+
+    def reached(*_args: object) -> int:
+        raise _PytestReached
+
+    monkeypatch.setattr(baseline_precheck, "_run_pytest", reached)
+
+    with pytest.raises(_PytestReached):
+        baseline_precheck.main([])
+    assert not verdict_path.exists()
+
+
+@pytest.mark.medium
+def test_measure_aborts_when_remote_base_ref_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """基点 ref が解決できなければ初回扱いで計測せず、理由付きの ABORT を出す（#549）。"""
+    project = _init_baseline_repo(tmp_path)
+    _git_run(project, "update-ref", "-d", "refs/remotes/origin/main")
+    verdict_path = tmp_path / "verdict.yaml"
+    monkeypatch.setenv("KAJI_WORKTREE_DIR", str(project))
+    monkeypatch.setenv("KAJI_ISSUE_ID", "346")
+    monkeypatch.setenv("KAJI_BRANCH_NAME", "feat/346")
+    monkeypatch.setenv("KAJI_DEFAULT_BRANCH", "main")
+    monkeypatch.setenv("KAJI_GIT_REMOTE", "origin")
+    monkeypatch.setenv("KAJI_VERDICT_PATH", str(verdict_path))
+    monkeypatch.setattr(
+        baseline_precheck,
+        "_run_pytest",
+        lambda *_: pytest.fail("pytest must not run when the base ref is missing"),
+    )
+
+    assert baseline_precheck.main([]) == 0
+    verdict = yaml.safe_load(verdict_path.read_text(encoding="utf-8"))
+    assert verdict["status"] == "ABORT"
+    assert verdict["reason"] == "baseline_base_ref_unresolvable"
+    assert "origin/main" in verdict["evidence"]
+    assert "git fetch origin main" in verdict["suggestion"]
+    assert not (project / ".kaji-artifacts" / "baseline" / "baseline.json").exists()

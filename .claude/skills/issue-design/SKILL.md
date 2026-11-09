@@ -28,6 +28,8 @@ name: issue-design
 | `issue_id` | str | 正規化済み Issue ID（GitHub 数値） |
 | `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`） |
 | `step_id` | str | 現在のステップ ID |
+| `git_remote` | str | git remote 名（`provider.<type>.git_remote` config から解決）。差分範囲の基点 `[git_remote]/[default_branch]` に使用 |
+| `default_branch` | str | default branch 名（`provider.<type>.default_branch` config から解決）。差分範囲の基点に使用 |
 
 ### 手動実行（スラッシュコマンド）
 
@@ -172,14 +174,14 @@ type ラベルの cardinality / canonical 判定（複数付与 / 未付与 / `t
 ls [worktree_dir]/draft/design/issue-[issue_id]-*.md 2>/dev/null
 
 # 2. 設計後コミット（実装または skill/doc 改修）の有無
-#    fix/[issue_id] ブランチが [default_branch] から枝分かれ後、commit が
+#    fix/[issue_id] ブランチが [git_remote]/[default_branch] から枝分かれ後、commit が
 #    2 件以上ある（最初は設計書作成 commit、それ以外に implementation /
 #    skill / doc 改修 commit が存在）。Python 実装範囲（kaji_harness/ tests/
 #    Makefile pyproject.toml）に pathspec を固定すると instruction-only
 #    （.claude/skills/ 改修）/ docs-only Issue を取りこぼすため、
 #    リポジトリ全体 commit から draft/design/ を除外する方式とする。
-TOTAL=$(git -C [worktree_dir] log --oneline [default_branch]..HEAD | wc -l)
-NON_DESIGN=$(git -C [worktree_dir] log --oneline [default_branch]..HEAD -- ':(exclude)draft/design/' | wc -l)
+TOTAL=$(git -C [worktree_dir] log --oneline [git_remote]/[default_branch]..HEAD | wc -l)
+NON_DESIGN=$(git -C [worktree_dir] log --oneline [git_remote]/[default_branch]..HEAD -- ':(exclude)draft/design/' | wc -l)
 # 該当条件: TOTAL >= 2 かつ NON_DESIGN >= 1
 
 # 3. 直近の戻し先 `design` の `BACK` verdict マーカーコメントの有無

@@ -27,7 +27,7 @@ PR 前提と完了条件を確認して判定する。修正が必要なら実�
 | 変数 | 用途 |
 |------|------|
 | `issue_id` / `issue_ref` / `step_id` / `verdict_path` | 対象 Issue、phase（`review-change` / `verify-change`）、verdict 保存先 |
-| `worktree_dir` / `branch_name` / `default_branch` | レビュー対象 |
+| `worktree_dir` / `branch_name` / `default_branch` / `git_remote` | レビュー対象（差分範囲の基点は `[git_remote]/[default_branch]`） |
 | `cycle_count` / `max_iterations` | 参照可 |
 
 `design_path` は注入されても使わない。
@@ -53,7 +53,7 @@ marker が欠落して `source: "artifact"` で返った場合は
 | 通常 | Issue 本文・labels（`kaji issue view [issue_id] --json title,body,labels`） | 常時 |
 | 通常 | 最新の `change` `PASS` 報告 | review-change |
 | 通常 | 最新の `fix-change` `PASS` 報告と、それが対応した直前の最新 review 系 `RETRY` 報告 | verify-change |
-| 通常 | `git diff [default_branch]...HEAD` と変更ファイル実体 | review-change |
+| 通常 | `git diff [git_remote]/[default_branch]...HEAD` と変更ファイル実体 | review-change |
 | 通常 | `git diff <全体レビュー済み SHA>..HEAD` と変更ファイル実体 | verify-change（起点は下記） |
 | 通常 | 自身の検証出力（成功時は終了状態・集計・JSON） | 常時 |
 | 例外 | `docs/dev/baseline-check.md` | `known_failures` / baseline 不整合 |
@@ -90,10 +90,10 @@ kaji issue view [issue_id] --json comments \
 - HEAD full SHA を記録する。入力報告の SHA と一致しなければ、追加 commit の範囲を指摘に含める。
 - `git status --porcelain` が空でなければ、path ごとの差分を読んで原因（レビュー前停止中の未 commit 変更 / 原因不明 等）を
   指摘に記載する。ファイルは触らない。
-- どちらの場合もレビューを打ち切らず、Step 3 の全体レビューを commit 済みの `[default_branch]...HEAD` に対して行う
+- どちらの場合もレビューを打ち切らず、Step 3 の全体レビューを commit 済みの `[git_remote]/[default_branch]...HEAD` に対して行う
   （未 commit 変更はレビュー対象外として指摘に残す）。
 
-### Step 3: レビュー観点（`[default_branch]...HEAD` の全体）
+### Step 3: レビュー観点（`[git_remote]/[default_branch]...HEAD` の全体）
 
 | 観点 | 確認内容 |
 |------|----------|
@@ -110,7 +110,7 @@ kaji issue view [issue_id] --json comments \
 hazard pattern の機械確認例:
 
 ```bash
-cd [worktree_dir] && git log [default_branch]..HEAD --format='%B' | \
+cd [worktree_dir] && git log [git_remote]/[default_branch]..HEAD --format='%B' | \
   grep -iE '\b(clos(e[sd]?|ing)|fix(e[sd]|ing)?|resolv(e[sd]?|ing)|implement(s|ing|ed)?)\s*:?\s*#[0-9]'
 ```
 
@@ -119,7 +119,7 @@ cd [worktree_dir] && git log [default_branch]..HEAD --format='%B' | \
 Step 2 で working tree が dirty だった場合は、結果が HEAD に対応しないため実行せず「未実施（dirty tree）」と記録する
 （PASS にはならない。次の verify-change が HEAD で実行する）。
 
-1. scope 評価: `git diff --name-only [default_branch]...HEAD` の各 path を `--scope` に繰り返し渡す。`--worktree` を必ず渡す。
+1. scope 評価: `git diff --name-only [git_remote]/[default_branch]...HEAD` の各 path を `--scope` に繰り返し渡す。`--worktree` を必ず渡す。
 
    ```bash
    cd [worktree_dir] && source .venv/bin/activate && \
@@ -178,7 +178,7 @@ review-change との差分だけを示す。Step 1 の入力報告は最新の `
 
 - 確認範囲の起点: 直近の review 系報告に記録された **全体レビュー済み SHA** を使う。
   記録が無い（初回の全体レビューが未完了）、またはその SHA が HEAD の ancestor でない
-  （`git merge-base --is-ancestor <SHA> HEAD` が非 0）場合は、Step 3 の全体レビューを `[default_branch]...HEAD` に対して
+  （`git merge-base --is-ancestor <SHA> HEAD` が非 0）場合は、Step 3 の全体レビューを `[git_remote]/[default_branch]...HEAD` に対して
   review-change と同じ規則（新規指摘可）で行い、完了を報告に記録する。
 - 全体レビュー済み SHA がある場合の確認範囲は、直前 RETRY 報告の各指摘の解消（または反論の妥当性）と、
   `git diff <全体レビュー済み SHA>..HEAD` の修正影響（回帰・scope・auto-close 規約）。解消済み指摘を再開しない。
@@ -240,6 +240,6 @@ suggestion: |
 
 | status | 条件（review-change / verify-change 共通） |
 |--------|------|
-| PASS | `[default_branch]...HEAD` の全体レビューが完了済み、finding なし、working tree clean、HEAD で自身の検証が成功、完了条件を全件確認し本文更新済み、PR 前提を満たす |
+| PASS | `[git_remote]/[default_branch]...HEAD` の全体レビューが完了済み、finding なし、working tree clean、HEAD で自身の検証が成功、完了条件を全件確認し本文更新済み、PR 前提を満たす |
 | RETRY | 具体的な修正を要する blocking finding（未 commit 変更・SHA 不一致・検証失敗・検証による tracked file の変化・軽量経路で満たせる未充足の完了条件を含む） |
 | ABORT | 適用外、軽量経路で満たせない完了条件（blocking finding の有無に関係なく RETRY より優先）、入力報告の欠落、baseline 停止基準、type ラベル不正、Issue 本文更新・コメント投稿の失敗 |

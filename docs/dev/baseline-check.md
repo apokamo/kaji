@@ -69,7 +69,7 @@ python -m kaji_harness.scripts.baseline_precheck --worktree [worktree_dir] \
 dev-small では設計書を持たないため、scope の入力は次のとおりとする。
 
 - `issue-small-change-execute`: 編集前に方針として確定した変更対象 path
-- `issue-small-change-review`: `git diff --name-only [default_branch]...HEAD` の実 diff の path
+- `issue-small-change-review`: `git diff --name-only [git_remote]/[default_branch]...HEAD` の実 diff の path
 
 ```bash
 python -m kaji_harness.scripts.baseline_precheck --worktree [worktree_dir] \
@@ -98,8 +98,13 @@ Issue コメントの検索、pytest text の再パース、手動 3 タプル�
 ## 再測定・resume
 
 measure が artifact を書けるのは、非 design の実装 commit がなく、working tree が clean な
-場合だけ。実装 commit がある場合は再測定しない。
+場合だけ。実装 commit がある場合は再測定しない。実装 commit の有無は
+`<KAJI_GIT_REMOTE>/<KAJI_DEFAULT_BRANCH>..HEAD`（remote 側の default branch 基準。既定 `origin/main`）で
+判定する。ローカルの default branch は remote より古いことがあり、kaji の外で入った commit を
+実装 commit と誤判定するため使わない（#549）。
 
+- 基点 ref（`<git_remote>/<default_branch>`）が解決できない: `baseline_base_ref_unresolvable` で ABORT
+  （初回扱いで計測に進まない）
 - valid artifact の `measured_commit` が HEAD の ancestor: artifact をそのまま reuse
 - artifact 不在・不正・非 ancestor: `baseline_unrecoverable_post_implement` で ABORT
 - 実装前でも dirty tree: `dirty_worktree` で ABORT

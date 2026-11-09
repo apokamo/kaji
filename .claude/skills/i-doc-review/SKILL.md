@@ -28,6 +28,8 @@ docs-only の変更をレビューする。新規指摘を行ってよい。
 | `issue_id` | str | 正規化済み Issue ID（GitHub 数値） |
 | `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`） |
 | `step_id` | str | 現在のステップ ID |
+| `git_remote` | str | git remote 名（`provider.<type>.git_remote` config から解決）。差分範囲の基点 `[git_remote]/[default_branch]` に使用 |
+| `default_branch` | str | default branch 名（`provider.<type>.default_branch` config から解決）。差分範囲の基点に使用 |
 | `cycle_count` | int | 現在のイテレーション |
 | `max_iterations` | int | サイクルの上限回数 |
 
@@ -61,7 +63,7 @@ $ARGUMENTS = <issue_id>
    ```
 4. 差分を確認:
    ```bash
-   cd [worktree_dir] && git diff main...HEAD
+   cd [worktree_dir] && git diff [git_remote]/[default_branch]...HEAD
    ```
 
 ### Step 2: レビュー

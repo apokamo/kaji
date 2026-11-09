@@ -40,7 +40,7 @@ main session が以下を prompt 内のセクションとして渡します:
 
 - **設計書のパス**: `<worktree_dir>/draft/design/issue-<id>-*.md`
   - `Read` ツールで参照してください
-- **`## Diff`**: `git diff main...HEAD` の全文（main session が事前取得して貼付）
+- **`## Diff`**: `git diff <git_remote>/<default_branch>...HEAD` の全文（main session が `[git_remote]/[default_branch]` を解決して事前取得・貼付。`issue-implement/references/pre-handoff-review.md` の差分範囲と同じ）
 - **`## Test Output`**: 直近 `pytest` の出力。Step 7 を `make check` で実行した場合はその出力の pytest 部分、baseline failure により 7a / 7b へ分離実行した場合は Step 7b の出力をそのまま貼付
 - **`## Quality Check`**: 直近 `ruff check` / `ruff format --check` / `mypy` の出力。Step 7 を `make check` で実行した場合はその出力の該当部分、7a / 7b へ分離実行した場合は Step 7a の出力をそのまま貼付
 - **`## Baseline Failures`**: `baseline.json` は常に必須。`status: known_failures` の場合は

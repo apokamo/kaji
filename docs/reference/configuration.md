@@ -280,7 +280,9 @@ local provider was removed after its deprecation in kaji v0.21.0. Set `provider.
 
 - `repo` is passed to `gh --repo <owner>/<name>` / `gh api repos/<owner>/<name>/...`. Setting it keeps
   the write target stable even when the worktree's git remote points at a fork.
-- `git_remote` is the git remote name targeted by `git push` / `git fetch` inside skills. In release
+- `git_remote` is the git remote name targeted by `git push` / `git fetch` inside skills. Together with
+  `default_branch`, `<git_remote>/<default_branch>` (after `git fetch`) is the base of `issue-start` worktrees
+  and of feature-branch diff ranges in review skills and the baseline check. In release
   operation, `provider.github.git_remote` is used to verify the remote name pointing at GitHub (see
   [Release Runbook](../operations/release/runbook.md)).
 
