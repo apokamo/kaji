@@ -241,7 +241,9 @@ provider 解決経路では `[provider]` は必須（未設定は exit 2。
 
 - `repo` は `gh --repo <owner>/<name>` / `gh api repos/<owner>/<name>/...` に渡される。設定すると
   worktree の git remote が fork を指していても書き先がズレない。
-- `git_remote` は skill 内の `git push` / `git fetch` が対象とする git remote 名。release 運用では
+- `git_remote` は skill 内の `git push` / `git fetch` が対象とする git remote 名。`default_branch` と組み合わせた
+  fetch 後の `<git_remote>/<default_branch>` が、`issue-start` の worktree 基点と、review 系 skill・baseline check の
+  feature branch 差分範囲の基点になる。release 運用では
   `provider.github.git_remote` が GitHub を指す remote 名の整合確認に使われる
   （[Release Runbook](../operations/release/runbook.md) 参照）。
 

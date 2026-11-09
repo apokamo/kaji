@@ -59,19 +59,35 @@ def _effective_design_dir(worktree: Path) -> str:
     return config.paths.design_dir or LEGACY_DESIGN_DIR
 
 
-def _has_implementation_commit(worktree: Path, default_branch: str) -> bool:
-    """Return whether HEAD contains a non-design commit beyond the default branch."""
+def _has_implementation_commit(worktree: Path, base_ref: str) -> bool:
+    """Return whether HEAD contains a non-design commit beyond ``base_ref``.
+
+    Args:
+        worktree: Feature worktree whose HEAD is inspected.
+        base_ref: Remote-side default branch ref (``<git_remote>/<default_branch>``).
+            The local default branch is not used because it can lag behind the
+            remote, which would count commits merged outside kaji as implementation.
+
+    Returns:
+        True when ``base_ref..HEAD`` has a commit touching paths outside the design dir.
+    """
     design_dir = _effective_design_dir(worktree)
     result = _git(
         worktree,
         "log",
         "--format=%H",
-        f"{default_branch}..HEAD",
+        f"{base_ref}..HEAD",
         "--",
         ".",
         f":(exclude){design_dir}/**",
     )
     return bool(result.stdout.strip())
+
+
+def _resolves_to_commit(worktree: Path, ref: str) -> bool:
+    """Return whether ``ref`` resolves to a commit in the worktree."""
+    result = _git(worktree, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}", check=False)
+    return result.returncode == 0
 
 
 def _is_ancestor(worktree: Path, ancestor: str) -> bool:
@@ -266,17 +282,25 @@ def _emit_verdict(fields: dict[str, str], verdict_path: Path | None) -> None:
     sys.stdout.write("---VERDICT---\n" + pure_yaml + "---END_VERDICT---\n")
 
 
-def _emit_guard_abort(reason: str, evidence: str, verdict_path: Path | None) -> int:
+_DEFAULT_GUARD_SUGGESTION = (
+    "working tree を clean にして再実行する。実装 commit 後に変更前 baseline が"
+    "復元不能なら、commit を退避して再測定するか人間判断を行う。"
+)
+
+
+def _emit_guard_abort(
+    reason: str,
+    evidence: str,
+    verdict_path: Path | None,
+    suggestion: str = _DEFAULT_GUARD_SUGGESTION,
+) -> int:
     """Emit a policy ABORT without creating or overwriting the baseline artifact."""
     _emit_verdict(
         {
             "status": "ABORT",
             "reason": reason,
             "evidence": evidence,
-            "suggestion": (
-                "working tree を clean にして再実行する。実装 commit 後に変更前 baseline が"
-                "復元不能なら、commit を退避して再測定するか人間判断を行う。"
-            ),
+            "suggestion": suggestion,
         },
         verdict_path,
     )
@@ -288,12 +312,25 @@ def _measure(
     worktree: Path,
     issue_id: str,
     branch: str,
+    git_remote: str,
     default_branch: str,
     verdict_path: Path | None,
 ) -> int:
     """Measure or safely reuse the pre-implementation baseline."""
     artifact_path = _artifact_path(worktree)
-    if _has_implementation_commit(worktree, default_branch):
+    base_ref = f"{git_remote}/{default_branch}"
+    if not _resolves_to_commit(worktree, base_ref):
+        return _emit_guard_abort(
+            "baseline_base_ref_unresolvable",
+            f"{base_ref} does not resolve to a commit in {worktree}",
+            verdict_path,
+            suggestion=(
+                f"git fetch {git_remote} {default_branch} で {base_ref} を取得してから再実行する。"
+                "remote 名・default branch が異なる場合は provider.<type>.git_remote / "
+                "default_branch の設定を確認する。"
+            ),
+        )
+    if _has_implementation_commit(worktree, base_ref):
         try:
             artifact = load_artifact(artifact_path)
         except (FileNotFoundError, ValidationError, ValueError):
@@ -452,10 +489,12 @@ def main(argv: list[str] | None = None) -> int:
         or _git(worktree, "branch", "--show-current").stdout.strip()
     )
     default_branch = os.environ.get("KAJI_DEFAULT_BRANCH", "main")
+    git_remote = os.environ.get("KAJI_GIT_REMOTE", "origin")
     return _measure(
         worktree=worktree,
         issue_id=str(args.issue),
         branch=branch,
+        git_remote=git_remote,
         default_branch=default_branch,
         verdict_path=verdict_path,
     )

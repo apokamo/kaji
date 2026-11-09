@@ -26,7 +26,7 @@ Issue 本文と人間の決定事項を要件の正本とし、短い方針 → 
 | 変数 | 用途 |
 |------|------|
 | `issue_id` / `issue_ref` / `step_id` / `verdict_path` | 対象 Issue、phase（`change` / `fix-change`）、verdict 保存先 |
-| `worktree_dir` / `branch_name` / `default_branch` | 作業対象 |
+| `worktree_dir` / `branch_name` / `default_branch` / `git_remote` | 作業対象（差分範囲の基点は `[git_remote]/[default_branch]`） |
 | `cycle_count` / `max_iterations` | 参照可 |
 
 `design_path` は注入されても使わない。
@@ -51,7 +51,7 @@ marker が欠落して `source: "artifact"` で返った場合は
 | 区分 | 読むもの | 条件 |
 |------|----------|------|
 | 通常 | Issue 本文・labels（`kaji issue view [issue_id] --json title,body,labels`） | 常時 |
-| 通常 | `git status --porcelain` / `git log --oneline [default_branch]..HEAD` | 常時 |
+| 通常 | `git status --porcelain` / `git log --oneline [git_remote]/[default_branch]..HEAD` | 常時 |
 | 通常 | 直近の review 系 `RETRY` 報告 1 件 | `fix-change` |
 | 通常 | 直近の自 step `RETRY` 報告 1 件 | `change` の RETRY 再入 |
 | 条件付き | `docs/reference/python/*.md` | Python コードを書く場合 |

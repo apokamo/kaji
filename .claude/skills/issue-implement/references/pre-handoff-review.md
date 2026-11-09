@@ -3,7 +3,7 @@
 > 読込タイミング: `/issue-implement` のコミット後。開始時には読まない。
 > Baseline Check / Pre-Handoff Review の責務変更や削除は行わず、遅延読込のために本文を分離した。
 
-この reference は `/issue-implement` Step 8.5（`/issue-review-code` への handoff 直前）に「設計書整合・テスト証跡・Scope 混在・auto-close 規約」を第三者視点で検査する。Step 8（コミット）の後に配置されるため、入力に必要な `git diff main...HEAD` と対象 commit hash がいずれも取得可能である。**重複チェックリストは作成しない**。`/issue-review-code` SKILL.md を rubric の単一情報源として参照しつつ、capability に応じて subagent / self-check に分岐する。
+この reference は `/issue-implement` Step 8.5（`/issue-review-code` への handoff 直前）に「設計書整合・テスト証跡・Scope 混在・auto-close 規約」を第三者視点で検査する。Step 8（コミット）の後に配置されるため、入力に必要な `git diff [git_remote]/[default_branch]...HEAD` と対象 commit hash がいずれも取得可能である。**重複チェックリストは作成しない**。`/issue-review-code` SKILL.md を rubric の単一情報源として参照しつつ、capability に応じて subagent / self-check に分岐する。
 
 #### Step 8.5.1: capability 判定と分岐（1 方式に固定）
 
@@ -18,7 +18,7 @@ main session は以下のフローを実行する。**Agent tool 利用可否の
 ##### 経路 A: subagent（Claude Code セッション）
 
 1. main session が以下を **事前取得** する（subagent は Bash を持たないため、テキストとして prompt 注入する）:
-   - `git diff main...HEAD` の全文
+   - `git diff [git_remote]/[default_branch]...HEAD` の全文
    - 直近 `pytest` の出力（Step 7 を `make check` で実行した場合はその出力の pytest 部分、7a / 7b へ分離実行した場合は 7b の出力）
    - 直近 `ruff check` / `ruff format --check` / `mypy` の出力（Step 7 を `make check` で実行した場合はその出力の該当部分、7a / 7b へ分離実行した場合は 7a の出力）
 
@@ -42,7 +42,7 @@ main session は以下のフローを実行する。**Agent tool 利用可否の
    ## Diff
 
    ```
-   (git diff main...HEAD の全文)
+   (git diff [git_remote]/[default_branch]...HEAD の全文)
    ```
 
    ## Test Output
@@ -83,7 +83,7 @@ subagent / self-check が返す verdict は **pre-handoff の自己評価** で�
 | `No` | 大幅な修正が必要。main session が修正 → Step 7 の品質チェックを再実行（同上）→ `git add` で修正をステージ → `git commit --amend --no-edit` で実装コミットを更新 → 本 Step 8.5 を再実行 |
 | verdict 行が出力されない / parse 不能 | subagent が `maxTurns` 打ち切り等で `Pre-Handoff Review Verdict` セクション、または `Yes` / `No` / `With fixes` のいずれも返さなかった場合。**一度だけ** 経路 B（self-check）に fallback して再実行する。経路情報は `self-check (subagent unparseable, fallback)` と明記。fallback でも parse 不能なら main session 出力の全文を Issue コメントに転記し verdict 欄を `No`（修正必須）扱いとして次のループに進める。**無限再起動を避けるため、subagent 経路への再 fallback はしない** |
 
-> **`--amend` を採る理由**: 実装を単一の実装コミット（Issue type に対応する prefix）に保ち、ループのたびに `git diff main...HEAD` と対象 commit hash が「修正反映後の現在状態」を表すようにする。worktree は未 push の feature branch なので amend は安全。**`--amend` 前の `git add` 必須**: amend はデフォルトで index の内容を使うため、修正を `git add` でステージしないと amend 後のコミットに反映されず、`git diff main...HEAD` と対象 commit hash が修正前を指したまま同じ指摘が再発する。
+> **`--amend` を採る理由**: 実装を単一の実装コミット（Issue type に対応する prefix）に保ち、ループのたびに `git diff [git_remote]/[default_branch]...HEAD` と対象 commit hash が「修正反映後の現在状態」を表すようにする。worktree は未 push の feature branch なので amend は安全。**`--amend` 前の `git add` 必須**: amend はデフォルトで index の内容を使うため、修正を `git add` でステージしないと amend 後のコミットに反映されず、`git diff [git_remote]/[default_branch]...HEAD` と対象 commit hash が修正前を指したまま同じ指摘が再発する。
 
 **ループ制限**: `With fixes` / `No` を 3 回連続で返した場合は abort せず、main session が修正方針を Issue コメントに整理して `/issue-review-code` 側で BACK 相当の判定に委ねる（pre-handoff の自己評価ループでは正式 verdict を出さない）。
 

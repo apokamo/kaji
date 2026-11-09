@@ -30,6 +30,8 @@ name: issue-review-code
 | `issue_id` | str | 正規化済み Issue ID（GitHub 数値） |
 | `issue_ref` | str | 人間可読の Issue 参照（GitHub では `#<issue_id>`） |
 | `step_id` | str | 現在のステップ ID |
+| `git_remote` | str | git remote 名（`provider.<type>.git_remote` config から解決）。差分範囲の基点 `[git_remote]/[default_branch]` に使用 |
+| `default_branch` | str | default branch 名（`provider.<type>.default_branch` config から解決）。差分範囲の基点に使用 |
 
 **条件付きで注入される変数:**
 
@@ -82,7 +84,7 @@ $ARGUMENTS = <issue_id>
 
 4. **実装差分の取得**:
    ```bash
-   cd [worktree_dir] && git diff main...HEAD
+   cd [worktree_dir] && git diff [git_remote]/[default_branch]...HEAD
    ```
    変更内容を把握。差分が大きい場合は主要ファイルを個別に確認。
 
