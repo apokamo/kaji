@@ -90,7 +90,14 @@ cross-skill 契約（BACK 再入検出など）は SKILL.md の散文ではな�
   - 現行 producer: `issue-review-code` / `i-dev-final-check` / `issue-implement` /
     `issue-review-design` / `issue-design` / `update-starter` /
     `review-starter-update` / `release-starter` / `issue-small-change-execute` /
-    `issue-small-change-review`
+    `issue-small-change-review` / `issue-review-ready` / `issue-fix-ready` /
+    `issue-fix-design` / `issue-verify-design` / `issue-fix-code` /
+    `issue-verify-code` / `i-doc-update` / `i-doc-review` / `i-doc-fix` /
+    `i-doc-verify`
+  - `issue-fix-ready` は producer であると同時に review-ready 判定の consumer でもある。
+    1 行目が `<!-- kaji-verdict: step=review-ready ` で始まる最新コメント 1 件だけを選び、
+    行全体を marker 文法（meta キー重複の拒否を含む）で検証する。marker 無し・最新 marker 不正・
+    最新 status が RETRY 以外は ABORT し、古い RETRY や見出し検索には遡らない
   - `update-starter` / `review-starter-update` は `--verdict-meta key=value` を繰り返し指定し、
     target / base / candidate を marker へ埋め込む。`release-starter` は resolver の consumer であり、
     自身の verdict marker へ meta を付けない。key は `^[a-z][a-z0-9_]*$`、value は

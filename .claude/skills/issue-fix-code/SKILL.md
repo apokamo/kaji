@@ -137,8 +137,12 @@ cd [worktree_dir] && git add . && git commit -m "fix: address review feedback fo
 
 Issueにコメントします:
 
+**verdict マーカーの無条件付与（必須）**: 判定コメントには **常に** `--verdict-step fix-code --verdict-status <STATUS>` を付ける。`<STATUS>` は本 skill が「Verdict 出力」で返す status（`PASS` / `ABORT`）に置き換える。CLI が body 1 行目に `<!-- kaji-verdict: step=fix-code status=<STATUS> -->` を付け、`kaji issue resolve-verdict --step fix-code` と runner の comment fallback はこの marker で発行元 step を特定する。PASS でも省略しない（条件付きの付与は禁止。[docs/dev/shared_skill_rules.md § verdict マーカー契約](../../../docs/dev/shared_skill_rules.md#verdict-マーカー契約producer-consumer)）。投稿前に判定を確定してから status を決める。
+
 ```bash
-kaji issue comment [issue_id] --commit --body "$(cat <<'EOF'
+kaji issue comment [issue_id] --commit \
+  --verdict-step fix-code --verdict-status <STATUS> \
+  --body "$(cat <<'EOF'
 # レビュー指摘への対応報告
 
 レビューありがとうございます。以下の通り検討・対応を行いました。

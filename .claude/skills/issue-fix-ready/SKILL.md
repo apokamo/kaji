@@ -45,11 +45,55 @@ $ARGUMENTS = <issue_id>
    kaji issue view [issue_id] --json title,body,labels --jq '{title: .title, body: .body, labels: [.labels[].name]}'
    ```
 
-2. **レビュー指摘の取得**:
+2. **レビュー指摘の取得（`step=review-ready` marker で特定する）**:
+
+   review-ready の判定コメントは、1 行目の `<!-- kaji-verdict: step=review-ready status=<STATUS> -->`
+   marker だけで特定する。見出しの文字列では探さない（見出しは PASS / RETRY / ABORT で共通であり、
+   本文に引用されたコメントとも区別できないため）。手順は `kaji issue resolve-verdict` の
+   `resolve_latest_verdict` と同じ停止契約にそろえる。
+
+   - **候補**: 1 行目が `<!-- kaji-verdict: step=review-ready `（末尾の空白を含む）で始まるコメント。
+     1 行目だけに合わせ（`split("\n")[0]`）、2 行目以降に引用された marker は拾わない。
+     status の欠落・閉じの ` -->` の欠落・不正な meta があっても候補から外さない
+   - **選択**: 候補のうち最新の 1 件だけを見る（最新の RETRY を探すのではない。後から出た PASS や
+     不正な marker より前の古い RETRY を拾わないため）
+   - **検証**: 最新候補の 1 行目全体を `kaji_harness/providers/markers.py` の `_VERDICT_MARKER_RE` と
+     同じ文法で検証し、`parse_kaji_verdict_marker` と同じく meta キーの重複も不正とする。不正なら
+     `malformed` とし、それより古い正常な marker には遡らない（fail-closed）
+
+   取得・選択・検証・本文抽出は、1 回の `kaji issue view` の結果の中で行う（CLI を 2 回呼ぶと、
+   その間に投稿されたコメントで検証対象と本文が食い違いうるため）。
+
    ```bash
-   kaji issue view [issue_id] --comments
+   REVIEW_READY_JSON=$(kaji issue view [issue_id] --json comments | jq -c '
+     [ .comments[]
+       | select((.body | split("\n")[0]) | startswith("<!-- kaji-verdict: step=review-ready ")) ]
+     | last
+     | if . == null then {state: "not_found"}
+       else (.body | split("\n")[0]) as $l
+         | ($l | sub("^<!-- kaji-verdict: step=review-ready status=[A-Z0-9_]+"; "")
+               | [scan(" (?<k>[a-z][a-z0-9_]*)=") | .[0]]) as $keys
+         | if ($l | test("^<!-- kaji-verdict: step=review-ready status=(PASS|RETRY|ABORT|BACK|BACK_[A-Z0-9_]+)( [a-z][a-z0-9_]*=[A-Za-z0-9][A-Za-z0-9._/-]*)* -->$"))
+              and (($keys | length) == ($keys | unique | length))
+           then {state: "ok",
+                 status: ($l | capture("status=(?<s>[A-Z0-9_]+)").s),
+                 body: .body}
+           else {state: "malformed", first_line: $l} end
+       end
+   ')
+   echo "$REVIEW_READY_JSON"
    ```
-   最新の「レディネスレビュー」コメントから RETRY の指摘事項を抽出する。
+
+   結果に応じて次のように扱う。ABORT の場合は Issue 本文の修正・コメント投稿に進まず、理由を書いた
+   `status: ABORT` の verdict ブロックを stdout に出して終了する（fail-loud）。
+
+   | 結果 | 扱い |
+   |------|------|
+   | 空文字（`kaji` / `jq` の失敗） | ABORT。コメント一覧を取得・解析できない |
+   | `state: "not_found"` | ABORT。`step=review-ready` marker 付きの判定コメントが無い（marker の無い旧形式の「## レディネスレビュー」コメントは入力にしない）。`/issue-review-ready [issue_id]` の再実行を案内する |
+   | `state: "malformed"` | ABORT。最新の review-ready marker が不正。古い RETRY は使わない。`first_line` を理由に記載し、review-ready の再実行を案内する |
+   | `state: "ok"` かつ `status` が `RETRY` 以外 | ABORT。直すべき RETRY が無い（最新の判定が PASS / ABORT 等） |
+   | `state: "ok"` かつ `status` が `RETRY` | `body` の 2 行目以降から RETRY の指摘事項を抽出し、Step 2 へ進む |
 
 ### Step 2: 対応方針の検討
 
@@ -95,8 +139,12 @@ kaji issue edit [issue_id] --commit --body "[updated-body]"
 
 修正内容と反論を Issue コメントに記録する。
 
+**verdict マーカーの無条件付与（必須）**: 判定コメントには **常に** `--verdict-step fix-ready --verdict-status <STATUS>` を付ける。`<STATUS>` は本 skill が「Verdict 出力」で返す status（`PASS` / `ABORT`）に置き換える。CLI が body 1 行目に `<!-- kaji-verdict: step=fix-ready status=<STATUS> -->` を付け、`kaji issue resolve-verdict --step fix-ready` と runner の comment fallback はこの marker で発行元 step を特定する。PASS でも省略しない（条件付きの付与は禁止。[docs/dev/shared_skill_rules.md § verdict マーカー契約](../../../docs/dev/shared_skill_rules.md#verdict-マーカー契約producer-consumer)）。投稿前に判定を確定してから status を決める。
+
 ```bash
-kaji issue comment [issue_id] --commit --body-file - <<'EOF'
+kaji issue comment [issue_id] --commit \
+  --verdict-step fix-ready --verdict-status <STATUS> \
+  --body-file - <<'EOF'
 ## レディネス指摘への対応報告
 
 ### 対応済み
