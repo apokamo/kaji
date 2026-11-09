@@ -266,16 +266,19 @@ managed starter ごとに、公開した version を追随タスクとして tra
 `kaji starter tracking-plan` の判定を経由する
 （[starter sync runbook](../../../docs/operations/release/starter-sync-runbook.md)）:
 
+観測はファイルを経由せずシェル変数で渡す（共有の一時ファイルは同時に流れる別の作業と衝突しうるため）。
+変数は Bash 呼び出しをまたいで残らないので、次のブロックは 1 回の Bash 呼び出しで実行する:
+
 ```bash
 # starter-sync label の open Issue 全件（他 starter 分も含む）を観測として渡す
-kaji issue list --label starter-sync --state open --json number,body \
-  | jq '[.[] | {issue_id: .number, body: .body}]' > /tmp/open-tracking.json
+OPEN_TRACKING_JSON=$(kaji issue list --label starter-sync --state open --json number,body \
+  | jq '[.[] | {issue_id: .number, body: .body}]')
 
 kaji starter tracking-plan <<EOF
 {
   "starter_repo": "apokamo/kaji-starter-python",
   "new_target": "vX.Y.Z",
-  "open_tracking_issues": $(cat /tmp/open-tracking.json),
+  "open_tracking_issues": ${OPEN_TRACKING_JSON},
   "selected_issue_id": null
 }
 EOF

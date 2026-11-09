@@ -76,10 +76,14 @@ Issue 本文に `## 完了条件` セクション（チェックボックス形�
 同サブセクションより前にある workflow 内完了条件のチェックボックスだけを `[x]` に更新する。
 事後確認のチェックボックスは `[ ]` のまま維持する。
 
+一時ファイルの置き場 `[skill_tmp_dir]` は、本文を取得する前に
+[`_shared/skill-tmp-resolve.md`](../_shared/skill-tmp-resolve.md) で 1 回だけ解決する。
+解決に失敗した場合（終了コードが非 0、または出力が空）は本文を編集せず `ABORT` とする。
+
 ```bash
-kaji issue view [issue_id] --json body -q '.body' > /tmp/issue-body.md
+kaji issue view [issue_id] --json body -q '.body' > "[skill_tmp_dir]/issue-body.md"
 # 確認済み条件を [x] に変更
-kaji issue edit [issue_id] --commit --body-file /tmp/issue-body.md
+kaji issue edit [issue_id] --commit --body-file "[skill_tmp_dir]/issue-body.md"
 ```
 
 ### BACK の場合

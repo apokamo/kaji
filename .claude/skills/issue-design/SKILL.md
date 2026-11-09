@@ -559,9 +559,11 @@ Step 1.55 の「スコープ変更」軸として `ABORT` し、人間に分離�
 4. **workflow 内 / workflow 外の分離確認**:
    `docs/dev/workflow_completion_criteria.md` § workflow 内完了条件と事後確認の分離に従い、
    workflow を RETRY して環境非依存で同じ結果を得られない項目が通常完了条件へ混在していないか確認する。
-   誤分類を見つけた場合は、現在の Issue 本文を取得し、項目の文言とチェック状態を維持したまま
+   誤分類を見つけた場合は、[`_shared/skill-tmp-resolve.md`](../_shared/skill-tmp-resolve.md) で
+   一時ファイルの置き場 `[skill_tmp_dir]` を 1 回だけ解決し（失敗したら本文を編集せず `ABORT`）、
+   現在の Issue 本文を `[skill_tmp_dir]/issue-body.md` に取得する。項目の文言とチェック状態を維持したまま
    `## 完了条件` の末尾サブセクション `### ワークフロー完了後の確認項目` との間で移動し、
-   `kaji issue edit [issue_id] --commit --body-file /tmp/issue-body.md` で反映する。
+   `kaji issue edit [issue_id] --commit --body-file "[skill_tmp_dir]/issue-body.md"` で反映する。
    事後確認がなければ同サブセクションを削除するか `- なし` とする。
 
 不足がある場合は設計書を補完してからコミットする。この段階で確認した条件は、Step 4 の Issue コメントに含めて後段への証跡とする。

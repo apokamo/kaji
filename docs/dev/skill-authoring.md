@@ -168,8 +168,17 @@ exec_script: kaji_harness.scripts.review_poll_entry
 （headless / interactive terminal / `exec` / `exec_script`）のプロセス環境に入る（agent 経路へはこの 4 変数のみ。
 他の `KAJI_*` は script-like 専用）。実体は project root 直下の `tmp/kaji/<issue_id>/<NNNN>/`（Issue 内の通し番号。Issue #508）
 で、親環境の同名変数は上書きされる。kaji 固有の処理は `$KAJI_TMP_DIR` を明示参照してよい
-（例: `git diff > "$KAJI_TMP_DIR/diff.txt"`）。明示的な `/tmp` 書き込みは禁止しない（環境変数を尊重する処理だけを
-誘導する）。runner は作成した dir を削除しない。Issue 単位の `tmp/kaji/<issue_id>/` は `issue-close` が Issue close 後に
+（例: `git diff > "$KAJI_TMP_DIR/diff.txt"`）。runner 自体は環境変数を設定するだけで、プロセスの明示的な
+`/tmp` 書き込みを禁止・強制しない。ただし本 repo の skill 手順（`.claude/skills/`）では、Issue 番号を含まない
+絶対パスの `/tmp` 配下のファイルを書かない（同時に流れる別 Issue の workflow と衝突するため。Issue #548）。
+skill の一時ファイルは [`_shared/skill-tmp-resolve.md`](../../.claude/skills/_shared/skill-tmp-resolve.md) で
+1 回だけ解決した置き場（harness 経由は `KAJI_TMP_DIR`、手動起動は main checkout の
+`tmp/kaji/<issue_id>/manual-XXXXXX/`）に置く。解決は Bash 呼び出しをまたいで残らないため、各コマンドで
+`$KAJI_TMP_DIR` を直接参照せず、解決した絶対パスを使い回す。解決したパスは空白を含みうるため、コマンドでは
+`"[skill_tmp_dir]/<ファイル名>"` のようにパス全体を二重引用符で囲む。例外は Issue 番号を含むパス
+（`incident-review` の `git worktree add` 先。main checkout の `tmp/` 配下に置くと nested worktree になり、
+`issue-close` の削除で stale な worktree 登録が残るため）で、`tests/test_skill_tmp_paths.py` が
+`.claude/skills/` 全体を検査する。runner は作成した dir を削除しない。Issue 単位の `tmp/kaji/<issue_id>/` は `issue-close` が Issue close 後に
 削除する（harness 経由では close step 自身の attempt dir とその親 dir を残す）。詳細は
 [ARCHITECTURE.md](../ARCHITECTURE.md) § 実行アーティファクトの layout。
 
