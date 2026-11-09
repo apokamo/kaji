@@ -24,7 +24,7 @@
 Step R5 でも使い回す（解決に失敗したら計測へ進まず停止する）:
 
 ```bash
-cd [worktree_dir] && source .venv/bin/activate && <計測コマンド> | tee [skill_tmp_dir]/baseline.txt
+cd [worktree_dir] && source .venv/bin/activate && <計測コマンド> | tee "[skill_tmp_dir]/baseline.txt"
 ```
 
 ### Step R2: safety net（既存テストの強化）
@@ -61,7 +61,7 @@ cd [worktree_dir] && source .venv/bin/activate && pytest tests/<path>
 Step R1 と同じコマンドで改修後の値を計測:
 
 ```bash
-cd [worktree_dir] && source .venv/bin/activate && <計測コマンド> | tee [skill_tmp_dir]/after.txt
+cd [worktree_dir] && source .venv/bin/activate && <計測コマンド> | tee "[skill_tmp_dir]/after.txt"
 ```
 
 - 設計書「改善指標」の目標値を達成しているか確認

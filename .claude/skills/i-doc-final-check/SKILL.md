@@ -81,9 +81,9 @@ Issue 本文に `## 完了条件` セクション（チェックボックス形�
 解決に失敗した場合（終了コードが非 0、または出力が空）は本文を編集せず `ABORT` とする。
 
 ```bash
-kaji issue view [issue_id] --json body -q '.body' > [skill_tmp_dir]/issue-body.md
+kaji issue view [issue_id] --json body -q '.body' > "[skill_tmp_dir]/issue-body.md"
 # 確認済み条件を [x] に変更
-kaji issue edit [issue_id] --commit --body-file [skill_tmp_dir]/issue-body.md
+kaji issue edit [issue_id] --commit --body-file "[skill_tmp_dir]/issue-body.md"
 ```
 
 ### BACK の場合

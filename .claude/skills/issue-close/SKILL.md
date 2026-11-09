@@ -150,10 +150,10 @@ esac
 ```bash
 PARENT_TITLE=$(kaji issue view [issue_id] --json title -q '.title')
 FOLLOW_UP_TITLE="[follow-up] $PARENT_TITLE ([issue_ref])"
-kaji issue list --state open --limit 1000 --json number,title > [skill_tmp_dir]/kaji-open-issues.json
+kaji issue list --state open --limit 1000 --json number,title > "[skill_tmp_dir]/kaji-open-issues.json"
 jq -r --arg title "$FOLLOW_UP_TITLE" \
   '.[] | select(.title == $title) | .number' \
-  [skill_tmp_dir]/kaji-open-issues.json > [skill_tmp_dir]/kaji-follow-up-candidates.txt
+  "[skill_tmp_dir]/kaji-open-issues.json" > "[skill_tmp_dir]/kaji-follow-up-candidates.txt"
 ```
 
 | 完全一致件数 | 処理 |
@@ -199,7 +199,7 @@ jq -r --arg title "$FOLLOW_UP_TITLE" \
 ```bash
 CREATE_OUTPUT=$(kaji issue create \
   --title "$FOLLOW_UP_TITLE" \
-  --body-file [skill_tmp_dir]/kaji-follow-up-body.md) || {
+  --body-file "[skill_tmp_dir]/kaji-follow-up-body.md") || {
     echo "ABORT: follow-up Issue creation failed"
     exit 1
   }
@@ -207,7 +207,7 @@ FOLLOW_UP_ID=${CREATE_OUTPUT##*/}
 
 # github provider では --commit は無視される（CLI 互換のため付与を維持）。
 kaji issue edit "$FOLLOW_UP_ID" --commit \
-  --body-file [skill_tmp_dir]/kaji-follow-up-body.md || {
+  --body-file "[skill_tmp_dir]/kaji-follow-up-body.md" || {
     echo "ABORT: follow-up Issue persistence failed"
     exit 1
   }
@@ -224,10 +224,10 @@ CURRENT_BODY=$(kaji issue view [issue_id] --json body -q '.body')
 {
   printf '%s\n\n' "$CURRENT_BODY"
   printf '<!-- kaji-follow-up-issue: %s -->\n' "$FOLLOW_UP_ID"
-} > [skill_tmp_dir]/kaji-parent-body-with-follow-up.md
+} > "[skill_tmp_dir]/kaji-parent-body-with-follow-up.md"
 
 kaji issue edit [issue_id] --commit \
-  --body-file [skill_tmp_dir]/kaji-parent-body-with-follow-up.md || {
+  --body-file "[skill_tmp_dir]/kaji-parent-body-with-follow-up.md" || {
     echo "ABORT: parent follow-up marker update failed; parent Issue remains open"
     exit 1
   }

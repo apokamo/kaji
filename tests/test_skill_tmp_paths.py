@@ -1,9 +1,11 @@
 """skill の一時ファイル置き場を Issue / attempt ごとに分ける契約を検証する（Issue #548）。
 
 - small: 共通手順 ``_shared/skill-tmp-resolve.md`` の静的構造と、利用側 skill の参照・置換
-- medium: ``.claude/skills/**/*.md`` 全件を走査し、``[issue_id]`` を含まない絶対 ``/tmp/`` パスを禁止する
+- medium: ``.claude/skills/**/*.md`` 全件を走査し、``[issue_id]`` を含まない絶対 ``/tmp/`` パスと、
+  コマンド中の未引用の ``[skill_tmp_dir]`` を禁止する
 - large (large_local): 共通手順のブロックを実 ``sh`` で実行し、実 ``git`` で作った
-  bare + linked worktree 構成の fixture に対する解決結果を検証する
+  bare + linked worktree 構成の fixture に対する解決結果を検証する。空白を含む checkout では、
+  解決した値を埋め込んだ利用側コマンドを実 ``bash`` で実行し、意図したファイルを読み書きすることを検証する
 
 fixture は ``outside_project_tmp_path`` に作る。workflow 内の ``tmp_path`` は kaji repo 内になり、
 fixture 構築に失敗すると subprocess の ``git worktree list`` が実 repo を返しうるため。
@@ -35,6 +37,10 @@ _TMP_USERS = [
     "_shared/implement-by-type/refactor.md",
 ]
 _ISSUE = "548"
+_FENCE_RE = re.compile(r"^\s*```")
+_INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
+# 直前が `"` でない `[skill_tmp_dir]`。checkout パスは空白を含みうるため、コマンド中では必ず引用する
+_UNQUOTED_TMP_DIR_RE = re.compile(r'(?<!")\[skill_tmp_dir\]')
 
 
 def _resolve_block() -> str:
@@ -50,6 +56,27 @@ def _fixed_tmp_paths(text: str) -> list[tuple[int, str]]:
         for match in _ABSOLUTE_TMP_RE.finditer(line):
             if "[issue_id]" not in match.group(0):
                 found.append((lineno, match.group(0)))
+    return found
+
+
+def _unquoted_tmp_dir_uses(text: str) -> list[tuple[int, str]]:
+    """コマンド中で引用されていない ``[skill_tmp_dir]`` を含む行を (行番号, 行) で返す。
+
+    コマンドとみなすのは fenced code block の行と、空白を含む inline code span。
+    空白を含まない inline code（例: `` `[skill_tmp_dir]/issue-body.md` ``）は文中のパス言及として扱う。
+    """
+    found: list[tuple[int, str]] = []
+    in_fence = False
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if _FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            commands = [line]
+        else:
+            commands = [s for s in _INLINE_CODE_RE.findall(line) if re.search(r"\s", s)]
+        if any(_UNQUOTED_TMP_DIR_RE.search(command) for command in commands):
+            found.append((lineno, line))
     return found
 
 
@@ -109,6 +136,24 @@ def test_fixed_tmp_path_detection(text: str, expected: list[str]) -> None:
     assert [path for _, path in _fixed_tmp_paths(text)] == expected
 
 
+@pytest.mark.small
+@pytest.mark.parametrize(
+    ("text", "expected_lines"),
+    [
+        ("```bash\nkaji issue view 1 > [skill_tmp_dir]/a.md\n```", [2]),
+        ('```bash\nkaji issue view 1 > "[skill_tmp_dir]/a.md"\n```', []),
+        ('```bash\n  [skill_tmp_dir]/a.json > "[skill_tmp_dir]/b.txt"\n```', [2]),
+        ("`kaji issue edit 1 --body-file [skill_tmp_dir]/a.md` で反映", [1]),
+        ('`kaji issue edit 1 --body-file "[skill_tmp_dir]/a.md"` で反映', []),
+        ("本文を `[skill_tmp_dir]/a.md` に取得する", []),
+        ("置き場 `[skill_tmp_dir]` を解決する", []),
+        ("文中の [skill_tmp_dir]/a.md は対象外", []),
+    ],
+)
+def test_unquoted_tmp_dir_detection(text: str, expected_lines: list[int]) -> None:
+    assert [lineno for lineno, _ in _unquoted_tmp_dir_uses(text)] == expected_lines
+
+
 # ============================================================
 # Medium: .claude/skills 全体の固定 /tmp パス禁止（Red → Green の再現テスト）
 # ============================================================
@@ -123,6 +168,17 @@ def test_no_fixed_tmp_paths_in_skills() -> None:
         for lineno, fixed in _fixed_tmp_paths(path.read_text(encoding="utf-8")):
             violations.append(f"{rel}:{lineno}: {fixed}")
     assert not violations, "fixed /tmp paths found:\n  " + "\n  ".join(violations)
+
+
+@pytest.mark.medium
+def test_tmp_dir_is_quoted_in_skill_commands() -> None:
+    """コマンド中の ``[skill_tmp_dir]`` がすべて二重引用符で囲まれている（空白を含む checkout で分割しない）。"""
+    violations: list[str] = []
+    for path in sorted(_SKILL_DIR.rglob("*.md")):
+        rel = path.relative_to(_REPO_ROOT)
+        for lineno, line in _unquoted_tmp_dir_uses(path.read_text(encoding="utf-8")):
+            violations.append(f"{rel}:{lineno}: {line.strip()}")
+    assert not violations, "unquoted [skill_tmp_dir] found:\n  " + "\n  ".join(violations)
 
 
 # ============================================================
@@ -169,9 +225,8 @@ def _git(cwd: Path, *args: str) -> str:
     return proc.stdout
 
 
-@pytest.fixture()
-def repo(outside_project_tmp_path: Path) -> _Repo:
-    root = outside_project_tmp_path
+def _make_repo(root: Path) -> _Repo:
+    root.mkdir(parents=True, exist_ok=True)
     seed = root / "seed"
     seed.mkdir()
     _git(seed, "init", "-q", "-b", "main")
@@ -186,6 +241,17 @@ def repo(outside_project_tmp_path: Path) -> _Repo:
     _git(bare, "worktree", "add", "-q", "-b", "feat/1", str(feat))
     (root / "systmp").mkdir()
     return _Repo(root=root, bare=bare, main=main, feat=feat)
+
+
+@pytest.fixture()
+def repo(outside_project_tmp_path: Path) -> _Repo:
+    return _make_repo(outside_project_tmp_path)
+
+
+@pytest.fixture()
+def spaced_repo(outside_project_tmp_path: Path) -> _Repo:
+    """checkout の絶対パスが空白を含む fixture（レビュー MF-1 の再現条件）。"""
+    return _make_repo(outside_project_tmp_path / "repo with spaces")
 
 
 def _tree(path: Path) -> list[str]:
@@ -347,3 +413,69 @@ def test_manual_fails_outside_git_repository(repo: _Repo) -> None:
     assert result.returncode != 0
     assert result.stdout == ""
     assert _tree(repo.root) == before
+
+
+# `kaji issue view` は固定本文を出力し、`kaji issue edit --body-file <path>` は <path> の内容を
+# KAJI_TEST_EDITED へ写す無副作用の stub。引数の分割を観測するため、受け取った引数もそのまま記録する。
+_KAJI_STUB = """\
+kaji() {
+  printf '%s\\n' "$@" > "$KAJI_TEST_ARGS"
+  case $2 in
+    view) printf 'issue body\\n' ;;
+    edit)
+      while [ $# -gt 0 ]; do
+        if [ "$1" = --body-file ]; then cat -- "$2" > "$KAJI_TEST_EDITED"; return; fi
+        shift
+      done
+      return 1 ;;
+  esac
+}
+"""
+
+
+def _issue_body_block(rel: str) -> str:
+    """利用側 skill から本文の取得・編集を行う bash block を 1 つ取り出す。"""
+    text = (_SKILL_DIR / rel).read_text(encoding="utf-8")
+    blocks = [
+        block
+        for block in re.findall(r"```bash\n(.*?)\n```", text, re.DOTALL)
+        if "[skill_tmp_dir]/issue-body.md" in block and "--body-file" in block
+    ]
+    assert len(blocks) == 1, f"{rel}: expected one issue-body block, got {len(blocks)}"
+    return str(blocks[0])
+
+
+@pytest.mark.large
+@pytest.mark.large_local
+@pytest.mark.parametrize("rel", ["i-dev-final-check/SKILL.md", "i-doc-final-check/SKILL.md"])
+def test_issue_body_commands_use_resolved_dir_with_spaces(spaced_repo: _Repo, rel: str) -> None:
+    """空白を含む checkout で、解決した値を埋め込んだ本文の取得・編集が意図したファイルを使う。"""
+    tmp_dir = _single_line(_run(spaced_repo))
+    assert " " in str(tmp_dir)
+    before = _tree(spaced_repo.root)
+    edited = spaced_repo.root / "systmp" / "edited.md"
+    args = spaced_repo.root / "systmp" / "args.txt"
+    script = (
+        _issue_body_block(rel)
+        .replace("[issue_id]", _ISSUE)
+        .replace("[skill_tmp_dir]", str(tmp_dir))
+    )
+    env = _git_env()
+    env["KAJI_TEST_EDITED"] = str(edited)
+    env["KAJI_TEST_ARGS"] = str(args)
+
+    proc = subprocess.run(
+        ["bash", "-c", _KAJI_STUB + script],
+        cwd=spaced_repo.feat,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_dir / "issue-body.md").read_text(encoding="utf-8") == "issue body\n"
+    assert edited.read_text(encoding="utf-8") == "issue body\n"
+    assert args.read_text(encoding="utf-8").splitlines()[-1] == f"{tmp_dir}/issue-body.md"
+    created = set(_tree(spaced_repo.root)) - set(before)
+    tmp_rel = str(tmp_dir.relative_to(spaced_repo.root.resolve()))
+    assert created == {f"{tmp_rel}/issue-body.md", "systmp/edited.md", "systmp/args.txt"}

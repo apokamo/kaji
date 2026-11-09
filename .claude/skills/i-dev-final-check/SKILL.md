@@ -169,13 +169,13 @@ Issue 本文の workflow 内完了条件のチェックボックスを `[x]` に
 
 ```bash
 # 本文を取得
-kaji issue view [issue_id] --json body -q '.body' > [skill_tmp_dir]/issue-body.md
+kaji issue view [issue_id] --json body -q '.body' > "[skill_tmp_dir]/issue-body.md"
 
 # チェックボックスを更新（事後確認より前にある確認済み条件だけを [x] に変更）
-# 例: sed -i 's/- \[ \] 条件A/- [x] 条件A/' [skill_tmp_dir]/issue-body.md
+# 例: sed -i 's/- \[ \] 条件A/- [x] 条件A/' "[skill_tmp_dir]/issue-body.md"
 
 # 更新を反映
-kaji issue edit [issue_id] --commit --body-file [skill_tmp_dir]/issue-body.md
+kaji issue edit [issue_id] --commit --body-file "[skill_tmp_dir]/issue-body.md"
 ```
 
 ### BACK の場合
@@ -247,7 +247,7 @@ BODY=$(kaji issue view [issue_id] --json body -q '.body')
 
 # NOTE ブロック終端位置を検出し、その次の空行の後に挿入
 # new_body = body[:insert_at] + 設計書セクション + body[insert_at:]
-kaji issue edit [issue_id] --commit --body-file [skill_tmp_dir]/issue-body-updated.md
+kaji issue edit [issue_id] --commit --body-file "[skill_tmp_dir]/issue-body-updated.md"
 ```
 
 ### 7.5-6. フォールバック
