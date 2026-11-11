@@ -11,6 +11,7 @@ tmp fs + stub dispatch で検証する。
 from __future__ import annotations
 
 import json
+import os
 import subprocess as _sp
 from pathlib import Path
 from unittest.mock import patch
@@ -383,7 +384,46 @@ def test_recovery_chain_json_written_for_child_run(tmp_path: Path) -> None:
         runner.run()
 
     chain = json.loads((_run_dir(tmp_path) / "recovery-chain.json").read_text(encoding="utf-8"))
-    assert chain == {"root_run_id": "260710110000", "parent_run_id": "260710110000"}
+    # Issue #540: chain_index（親が root なら 1）と trigger（既定 auto_recover）を追記する。
+    assert chain == {
+        "root_run_id": "260710110000",
+        "parent_run_id": "260710110000",
+        "chain_index": 1,
+        "trigger": "auto_recover",
+    }
+
+
+def test_process_json_and_chain_trigger_for_retry_child(tmp_path: Path) -> None:
+    """Issue #540: run dir 採番直後に process.json を書き、trigger / chain_index を記録する。"""
+    parent = tmp_path / ".kaji-artifacts" / _CANONICAL / "runs" / "260710110000"
+    parent.mkdir(parents=True, exist_ok=True)
+    (parent / "recovery-chain.json").write_text(
+        json.dumps(
+            {"root_run_id": "260710100000", "parent_run_id": "260710100000", "chain_index": 1}
+        ),
+        encoding="utf-8",
+    )
+    runner = _make_runner(
+        tmp_path,
+        _single_step_workflow(),
+        recovery_root="260710100000",
+        recovery_parent="260710110000",
+        recovery_trigger="retry_failed_step",
+    )
+    with (
+        patch("kaji_harness.runner.execute_cli", return_value=_cli_result(_verdict_block("PASS"))),
+        patch("kaji_harness.runner.validate_skill_exists"),
+    ):
+        runner.run()
+    run_dir = runner.last_run_dir
+    assert run_dir is not None
+    chain = json.loads((run_dir / "recovery-chain.json").read_text(encoding="utf-8"))
+    assert chain["chain_index"] == 2
+    assert chain["trigger"] == "retry_failed_step"
+    process = json.loads((run_dir / "process.json").read_text(encoding="utf-8"))
+    assert process["role"] == "run"
+    assert process["pid"] == os.getpid()
+    assert process["run_id"] == run_dir.name
 
 
 def test_no_recovery_chain_json_without_flags(tmp_path: Path) -> None:

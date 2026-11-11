@@ -26,6 +26,7 @@ from .errors import (
     InvalidTransition,
     InvalidVerdictValue,
     IssueContextResolutionError,
+    LaunchRecordError,
     MissingResumeSessionError,
     ScriptExecutionError,
     StepTimeoutError,
@@ -42,8 +43,21 @@ from .preflight import preflight_workflow
 from .prompt import build_prompt
 from .providers import IssueContext, IssueProvider, PRContext, get_provider, normalize_id
 from .providers.github import GitHubProviderError
-from .recovery.models import RECOVERY_CHAIN_FILE, write_recovery_chain
+from .recovery.models import (
+    RECOVERY_CHAIN_FILE,
+    RecoveryChainError,
+    read_recovery_chain_info,
+    write_recovery_chain,
+)
 from .result import RESULT_FILE, AttemptResult, derive_signal, write_result_json
+from .runstate import (
+    PROCESS_FILE,
+    ProcessRecordError,
+    current_process_record,
+    set_launch_run_id,
+    write_launch_record,
+    write_process_record,
+)
 from .script_exec import execute_exec, execute_script
 from .skill import SkillMetadata, load_skill_metadata, validate_skill_exists
 from .state import SessionState
@@ -84,6 +98,17 @@ def allocate_run_dir(runs_dir: Path, timestamp: datetime | None = None) -> Path:
         return candidate
 
     raise RuntimeError("unreachable: itertools.count is infinite")
+
+
+def _next_chain_index(parent_run_dir: Path) -> int | None:
+    """親 run の ``chain_index`` + 1（親が root なら 1、親の index が不明なら ``None``）。"""
+    try:
+        parent = read_recovery_chain_info(parent_run_dir / RECOVERY_CHAIN_FILE)
+    except RecoveryChainError:
+        return None
+    if parent is None:
+        return 1
+    return parent.chain_index + 1 if parent.chain_index is not None else None
 
 
 def allocate_attempt_dir(run_dir: Path, step_id: str) -> Path:
@@ -804,6 +829,11 @@ class WorkflowRunner:
     # budget guard で無条件 ``exhausted`` になる。
     recovery_root: str | None = None
     recovery_parent: str | None = None
+    # Issue #540: recovery child を起動した経路（``recovery-chain.json`` の ``trigger``）。
+    recovery_trigger: str | None = None
+    # Issue #540: ``cmd_run`` が provider 解決前に書いた launch record のパス。run dir 採番後に
+    # ``run_id`` を設定する。canonical id 側に追加で書いた記録もここへ追記される。
+    launch_records: list[Path] = field(default_factory=list)
     # Phase 3-d preflight: ``run()`` 完了後に外部から参照される canonical id。
     # ``cmd_run()`` の成功表示などが利用する。``run()`` 起動前は ``None``。
     canonical_issue_id: str | None = field(default=None, init=False)
@@ -1063,6 +1093,44 @@ class WorkflowRunner:
         _console.info("workflow end: status=ABORT duration=%dms", duration_ms)
         return state
 
+    def _ensure_canonical_launch_record(self, canonical_id: str) -> None:
+        """canonical id が launch record の Issue key と異なれば canonical 側にも書く。
+
+        GitHub provider では ``normalize_id`` と canonical id は一致するため発生しない。
+
+        Raises:
+            LaunchRecordError: 記録を書けない場合（run dir 採番に進まない）。
+        """
+        if not self.launch_records:
+            return
+        if self.launch_records[0].parent.parent.name == canonical_id:
+            return
+        try:
+            path = write_launch_record(
+                self.artifacts_dir, canonical_id, current_process_record("run")
+            )
+        except OSError as exc:
+            raise LaunchRecordError(f"cannot write launch record: {exc}") from exc
+        self.launch_records.append(path)
+
+    def _record_process(self, run_dir: Path) -> None:
+        """Issue #540: run dir 採番直後に ``process.json`` と launch record の run_id を記録する。
+
+        どちらも既に launch record が生存を示している状態での追記のため、失敗は warning で
+        続行する（設計書「記録の書き込み失敗の規則」）。
+        """
+        try:
+            write_process_record(
+                run_dir / PROCESS_FILE, current_process_record("run", run_id=run_dir.name)
+            )
+        except OSError as exc:
+            _console.warning("cannot write %s: %s", PROCESS_FILE, exc)
+        for path in self.launch_records:
+            try:
+                set_launch_run_id(path, run_dir.name)
+            except (OSError, ProcessRecordError) as exc:
+                _console.warning("cannot set run_id on launch record %s: %s", path.name, exc)
+
     def run(self) -> SessionState:
         """ワークフローを実行し、最終状態を返す。
 
@@ -1093,17 +1161,23 @@ class WorkflowRunner:
         state, issue_context, ambiguous_abort = self._load_session_state(run_ctx)
         current_step: Step | None = self._resolve_start_step()
 
+        self._ensure_canonical_launch_record(run_ctx.canonical_id)
+
         # 5. run ログディレクトリを作成（canonical id ベース）
         run_dir = allocate_run_dir(self.artifacts_dir / run_ctx.canonical_id / "runs")
         self.last_run_dir = run_dir
+        self._record_process(run_dir)
         # Issue #288: recovery child は起動直後に chain identity を artifact 化する。
         # 親 handler はこれを見て child run を特定し、child 自身の handler は
         # budget guard の入力にする。
         if self.recovery_root:
+            parent_run_id = self.recovery_parent or self.recovery_root
             write_recovery_chain(
                 run_dir / RECOVERY_CHAIN_FILE,
                 root_run_id=self.recovery_root,
-                parent_run_id=self.recovery_parent or self.recovery_root,
+                parent_run_id=parent_run_id,
+                chain_index=_next_chain_index(run_dir.parent / parent_run_id),
+                trigger=self.recovery_trigger or "auto_recover",
             )
         total_cost = 0.0
         end_status = "COMPLETE"

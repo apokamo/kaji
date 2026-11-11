@@ -232,6 +232,16 @@ def _add_recovery_arguments(p: argparse.ArgumentParser) -> None:
         help="Root run_id of the recovery chain this run belongs to.",
     )
     p.add_argument(
+        "--recovery-trigger",
+        dest="recovery_trigger",
+        choices=("auto_recover", "retry_failed_step", "series_resume"),
+        default=None,
+        help=(
+            "What started this recovery child (recorded in recovery-chain.json; "
+            "default auto_recover; requires --recovery-root)."
+        ),
+    )
+    p.add_argument(
         "--recovery-parent",
         dest="recovery_parent",
         default=None,
@@ -254,12 +264,23 @@ def _register_recover(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         default=None,
         help="Target run_id (default: the newest run for the issue).",
     )
-    p.add_argument(
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument(
         "--auto-recover",
         dest="auto_recover",
         action="store_true",
         default=False,
         help="Allow the handler to start a child run when the decision is 'resume'.",
+    )
+    mode.add_argument(
+        "--retry-failed-step",
+        dest="retry_failed_step",
+        action="store_true",
+        default=False,
+        help=(
+            "Retry the target run once from its failed step after kaji's safety gates pass "
+            "(no triage decision, no recovery budget, no GitHub writes; exit 4 when refused)."
+        ),
     )
     p.add_argument(
         "--workdir",
