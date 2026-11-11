@@ -73,6 +73,9 @@ kaji の外のツールが内部ファイルを読まずに済むよう、(1) ru
    - retry / series の launcher は child を `Popen` する**前**に `role=launcher` で書き、child 終了後に削除する（best-effort）。
      これで series の `Popen` → `child_pid` 保存 → child の Python 起動 → child の launch record 書き込みの区間も、
      親の記録で「Issue に生きたプロセスがいる」と判定できる。
+   - **作成成功を続行の前提とする**（下の「記録の書き込み失敗の規則」）。`kaji run` は provider 解決前の launch record を
+     書けなければ provider 解決へ進まず終了する。launcher は launcher record を書けなければ child を起動しない。
+     これにより「生きているのに列挙対象の記録が 1 件もないプロセス」は、記録を書く前の Python 起動区間を除いて存在しない。
 2. **process.json**: `runs/<run_id>/process.json`（`role=run`）。run dir 採番直後に書き、削除しない（run ごとの恒久記録）。
 
 `process.json` と launch record は、自動復旧 handler（`workflow_end` 後の triage・10 分待機・child 起動）を
@@ -92,6 +95,26 @@ child を起動する。
 
 **D7 との整合**: launch record と lock file は全 `kaji run` が書く生存・排他の協調用ローカル artifact であり、
 GitHub への書き込みを伴わない。retry の結果の記録は D7 どおり対象 run の `recovery.json` と `run.log` だけに残す。
+
+#### 記録の書き込み失敗の規則
+
+「列挙対象を作る書き込み」は失敗したら先へ進まない（fail-closed）。「既に列挙対象がある状態での追記」は
+warning で続行する。後者でも、生きている間は既存の launch record が生存を示し、死後は `no_record` として
+`liveness_unknown` / `issue_liveness_unknown`（または `finished_by_log`）で判定されるため、見落としは生じない。
+
+| 書き込み | 時点 | 失敗時 | 理由 |
+|----------|------|--------|------|
+| `kaji run` の launch record（`run_id=null`） | config 探索・artifacts 解決の直後、provider 解決より前 | **provider 解決・state 読み込み・run dir 採番に進まず exit 3**（`Error: cannot write launch record: ...`）。Issue コメント等の副作用なし | 失敗して続行すると、run dir ができるまで生存が列挙できない（R1 の反例） |
+| canonical id 側の launch record（canonical id が `normalize_id` と異なる場合のみ。GitHub では発生しない） | provider 解決後、run dir 採番前 | run dir 採番に進まず exit 3 | 同上 |
+| launch record への `run_id` 設定 | run dir 採番後 | warning で続行 | `run_id=null` の記録が生きている間 `launching: true` と `issue_run_alive` を返し続ける（安全側） |
+| `process.json` | run dir 採番後 | warning で続行 | 生存中は launch record が示す。死後は `no_record` → null（`finished_by_log` を除く）で拒否 |
+| 自分の launch record の削除 | 終了時 | warning のみ | 残った記録はプロセス終了後に生存判定で false |
+| LaunchLock の lock file を開けない（`EWOULDBLOCK` 以外の `OSError`） | planner の手順 1 | ゲート判定に進まず retry は exit 3、series は stopped + exit 3。child を起動しない | 排他なしで判定すると二重起動を防げない |
+| launcher record | planner の手順 3（lock 内） | lock を解放し、child を起動せず retry は exit 3、series は stopped + exit 3 | 記録なしで lock を解放して起動すると、後続の planner が同じ run を通過できる |
+| `recovery.json` / `run.log` への `outcome=launched` | planner の手順 5（起動直前） | launcher record を削除し、child を起動せず exit 3（series は stopped + exit 3） | D5 / D7 の記録を残せないまま起動しない |
+| child 終了後の結果記録・launcher record の削除 | 手順 6 | warning で続行し、retry は child の exit code を返す（D5） | child は既に動いた。残った launcher record は launcher 終了後に false |
+
+起動前に失敗した場合（exit 3）は、`recovery.json` / `run.log` への `outcome=launch_failed` の記録を best-effort で試みる。
 
 #### 生存判定 `probe_liveness(record) -> Liveness(alive: bool | None, basis: str)`
 
@@ -284,13 +307,15 @@ kaji recover <workflow> <issue> --retry-failed-step [--run-id <id>] [--workdir D
 6. child 終了後に結果を記録し、launcher record を削除する
 
 拒否時は 3〜6 を行わず（child を起動しない）、`outcome=refused` を記録して lock を解放する。
+手順 1・3・5 の書き込み失敗は「記録の書き込み失敗の規則」に従い、child を起動せず exit 3 とする。
 
 **終了コード（D5）**:
 
 | 状況 | exit |
 |------|------|
 | workflow 不在・定義エラー・config なし・provider 解決不能・`--run-id` の run dir 不在・引数排他違反 | 既存 2 |
-| 予期しない内部エラー（artifact 書き込み失敗等） | 既存 3 |
+| 起動前の書き込み失敗（LaunchLock の lock file・launcher record・起動直前の `recovery.json` / `run.log`）。child を起動していない | 既存 3 |
+| child 起動の `OSError`、その他の予期しない内部エラー | 既存 3 |
 | ゲートで拒否（child を起動していない） | **新規 4**（`EXIT_RETRY_REFUSED`） |
 | child run を起動した | child の exit code をそのまま返す |
 
@@ -343,6 +368,9 @@ decision を基に作成し `retries` を付ける。
 series runner は `pending` member の通常起動も含むすべての member 起動で、`Popen` の前に `role=launcher` の
 launch record を書き、child 終了後に削除する（`child_pid` の保存前・child の launch record 書き込み前の区間を塞ぐ）。
 failed / interrupted member の resume は retry と同じ `RetryPlanner` の手順 1〜6（LaunchLock を含む）を使う。
+launcher record（通常起動・resume とも）、LaunchLock、起動直前の記録の書き込みに失敗した場合は `Popen` せず、
+member の status を変えずに series を `stopped`（`stop_reason`=`member <issue> could not start: <書き込み失敗の内容>`）とし、
+既存の `SeriesRuntimeError` として exit 3 を返す（`Popen` 自体の `OSError` は既存どおり member `failed` + exit 3）。
 
 `--dry-run` / `validate-series` の出力・終了コードは変えない（A8）。
 
@@ -404,6 +432,7 @@ kaji status --json --series lane-a | jq '.series.stop_reason'
 | 同時要求 | 判定中の lock 競合は `concurrent_launch`、lock 解放後は先行 launcher の記録で `issue_run_alive` |
 | Herdr 照会失敗 | status は Herdr を呼ばない。retry / series は `agent_pane_unverifiable` で拒否 |
 | child 起動の OSError | retry: exit 3（`retries[].outcome="launch_failed"`）。series: 既存どおり member `failed` + `SeriesRuntimeError`（exit 3） |
+| 生存記録・lock の書き込み失敗 | 「記録の書き込み失敗の規則」の表のとおり。列挙対象を作る書き込みの失敗は先へ進まない（`kaji run` は provider 解決前に exit 3、retry / series は child 未起動で exit 3） |
 
 ## 制約・前提条件
 
@@ -416,7 +445,8 @@ kaji status --json --series lane-a | jq '.series.stop_reason'
 - 既存の triage 経路（`kaji recover` の `--retry-failed-step` なし、`kaji run` 終了時の handler）の判定順・
   decision・Issue コメント・`select_target_run_dir` の挙動は変えない（`_safety_gates` の戻り値型の内部変更のみ）。
 - `SeriesState` / `MemberState` の永続 schema と `Literal` は変えない（D9: 新 status なし）。
-- `process.json` / launch record の書き込み失敗は run を止めない（warning のみ）。その run は `no_record` になり、retry / resume では `liveness_unknown` / `issue_liveness_unknown` で拒否される（安全側）。
+- 記録の書き込み失敗は「記録の書き込み失敗の規則」に従う。列挙対象を作る書き込み（`kaji run` の provider 解決前の launch record、launcher record、LaunchLock）は失敗したら先へ進まない（exit 3、child 未起動）。既に launch record がある状態での追記（`run_id` 設定・`process.json`・削除）は warning で続行する。
+- このため artifacts dir に書けない環境では、`kaji run` は provider 解決前に exit 3 で止まる（従来も run dir 採番で失敗していた条件。失敗の時点が provider 解決より前に移る）。
 - launch record は正常終了時に削除し、kill で残った記録は生存判定で false になる。別ホストで書かれた記録（artifacts を共有する構成）は `other_host`（null）となり、run は終端 event があれば `finished_by_log` で false になるが、kill で残った別ホストの launch record や未終端の run は retry / resume を拒否し続ける。artifacts をホスト間で共有する構成は対象外とし docs に明記する。
 - LaunchLock（`flock`）はローカルファイルシステムを前提とする（NFS 上の `flock` の挙動は保証しない）。
 - 依存追加なし（psutil 等は使わない）。
@@ -435,7 +465,7 @@ kaji status --json --series lane-a | jq '.series.stop_reason'
 | `kaji_harness/recovery/snapshot.py` | `allow_unterminated` / `probe_git` 引数（既定は現状どおり）。未終了 step と必須 artifact の判定は `runstate.facts` を呼ぶ。`chain_index` / `trigger` の読み取り |
 | `kaji_harness/recovery/classify.py` | `workflow_end` も `failure_event` も無い snapshot → `process_vanished`（`allow_unterminated` の経路でのみ到達） |
 | `kaji_harness/recovery/models.py` | `FailureCause` / `FAILURE_CAUSES` に `process_vanished`、`RecoveryDecision.retries`（optional）、`write_recovery_chain` に `chain_index` / `trigger` |
-| `kaji_harness/commands/run.py` | config 探索と artifacts 解決の直後（provider 解決より前）に `role=run` の launch record を書き、終了時に削除 |
+| `kaji_harness/commands/run.py` | config 探索と artifacts 解決の直後（provider 解決より前）に `role=run` の launch record を書き（失敗したら exit 3 で provider 解決へ進まない）、終了時に削除 |
 | `kaji_harness/runner.py` | run dir 採番直後に `process.json` を書き、launch record に `run_id` を設定。chain 書き込みに `chain_index` / `trigger` |
 | `kaji_harness/commands/status.py`（新規）/ `parser.py` / `main.py` | `kaji status` |
 | `kaji_harness/commands/recover.py` / `parser.py` | `--retry-failed-step`、exit 4 |
@@ -517,7 +547,7 @@ artifacts ─┤ latest_run_dir / collect_run_facts(run_dir) → RunFacts(termin
 | A10（設計で追加・改訂）: series state の欠落と引数の誤りの境界 | series id の形式違反だけ exit 2。形式が正しければ state.json の欠落（dir ごとの欠落を含む）・破損・一部不正はすべて exit 0 + null / `[]` + `read_errors` | D3 の適用（保守者の決定「artifact が壊れている・ないときは読めない項目だけ null、exit 0」）。形式違反の判定は既存 `SeriesConfig.id` の正規表現。検査先: issue-review-design | state.json の状態ごとの出力表 |
 | A11（設計で追加）: run のない failed member | `no_target_run` で停止（最初からやり直さない） | AI の仮定。根拠: D8「旧挙動を残さない」、安全側。検査先: issue-review-design | — |
 | A12（設計で追加）: `workflow_mismatch` ゲート | 対象 run の workflow 名と指定 workflow が違えば拒否 | AI の仮定。根拠: 別 workflow の同名 step から再開する誤りを防ぐ。検査先: issue-review-design | — |
-| A14（設計で追加）: 起動前区間と同時要求の閉じ方 | launch record（`kaji run` は provider 解決前、launcher は `Popen` 前）と Issue 単位の LaunchLock（`flock`）。lock 競合は `concurrent_launch` | AI の仮定。根拠: `runner.py` は provider 解決・state 読み込みの後に run dir を作るため run dir 内の記録だけでは起動直後を観測できない（review-design R1 の実測）。`SeriesLock` は series 単位で recover と排他しない。D7 の「記録」は retry の結果記録で、launch record / lock は全 `kaji run` が書く協調用ローカル artifact（GitHub 書き込みなし）と解釈。検査先: issue-review-design | 手順 1〜6、手動 `kaji run` は lock を取らない（従来どおりゲートなし） |
+| A14（設計で追加）: 起動前区間と同時要求の閉じ方 | launch record（`kaji run` は provider 解決前、launcher は `Popen` 前）と Issue 単位の LaunchLock（`flock`）。lock 競合は `concurrent_launch` | AI の仮定。根拠: `runner.py` は provider 解決・state 読み込みの後に run dir を作るため run dir 内の記録だけでは起動直後を観測できない（review-design R1 の実測）。`SeriesLock` は series 単位で recover と排他しない。D7 の「記録」は retry の結果記録で、launch record / lock は全 `kaji run` が書く協調用ローカル artifact（GitHub 書き込みなし）と解釈。検査先: issue-review-design | 手順 1〜6、記録の書き込み失敗の規則（列挙対象を作る書き込みは成功を続行の前提とする）、手動 `kaji run` は lock を取らない（従来どおりゲートなし） |
 | A15（設計で追加）: 記録で判定できない run の生存 | 記録なし（旧 run）・別ホスト・検証不能で null になる run のうち、run.log 上で以降の動作が終わったもの（COMPLETE、非 resume の `recovery_decision`、`recovery_attempt_end`）は `finished_by_log`（false）。それ以外は null で、retry / resume を拒否する | AI の仮定。根拠: 旧 run の handler はこれらの event の後に worktree 操作や run 起動をしない（`handler.py` の `_resume` は `recovery_attempt_end` 後に結果コメントだけを投稿）。閾値を使わない決定的な条件。検査先: issue-review-design | 未終了の旧 run が残る Issue は、旧 run が終わるか再起動（`rebooted`）までゲートで止まる。その間は従来どおり手動 `kaji run --from` が使える |
 | A16（設計で追加）: vanished run の分類 | 新 cause `process_vanished`（source `external`、hint `unknown`）。triage 外の経路でのみ出る | AI の仮定。根拠: 既存 `FailureCause` に kill / OOM 推定の値がなく、`unknown_external_error` 等で代用すると status の `failure.cause` が誤読される。v1 schema の初版に含めるので D2 の enum 変更に当たらない。検査先: issue-review-design | 必須 artifact 表、`allow_unterminated` |
 | A13（設計で追加）: series の `interrupted` member と `user_interrupted` ゲート | series resume にも同じゲートを適用するため、直近 run の cause が `user_interrupted`（Ctrl-C）の member は resume で停止する | AI の仮定。根拠: Issue 完了条件「`failed` / `interrupted` の member を resume したとき、上の安全ゲートを通したうえで」と、ゲート一覧の「中断（`KeyboardInterrupt`）」の字義どおりの適用。series 側だけ緩める例外は Issue に根拠がないため作らない。緩める変更は後から互換に足せる（拒否 → 通過）。検査先: issue-review-design | docs に「Ctrl-C で止めた member は `user_interrupted` で停止する」と明記 |
@@ -557,6 +587,7 @@ D1〜D10 で保守者が決定済み。本設計の追加分（A9〜A16、項目
 - R4: tmp の git repo + `git worktree add` の feature worktree、相対 `paths.artifacts_dir` の config で、main worktree と feature worktree の双方から `kaji status --json <issue>` / `--series <id>` を実行し、同じ main 側 artifacts を読んで同じ出力（`generated_at` を除く）になること。上の不変性も両方で確認する
 - R1（起動前区間）: `cmd_run` の provider による Issue 解決を `threading.Event` で止める同期点を注入し、止まっている間に status が `any_run_alive: true` / `launching: true` / `latest_run: null`（run なし）を返し、retry が `issue_run_alive` で拒否されること。series runner の `member_launcher` を同期点で止め、`Popen` 前の launcher record により同じ結果になること（`child_pid` 未保存の区間）
 - R1（同時要求）: `RetryPlanner` のゲート判定直後に同期点を置き、1 件目が lock を保持している間の 2 件目が `concurrent_launch`、1 件目が launcher record を書いて lock を解放した後の 3 件目が `issue_run_alive` になること。retry / retry と retry / series resume の両方の組合せで、child の起動が 1 回だけであること
+- R1（記録の書き込み失敗の注入）: 書き込み関数に `OSError` を注入して次を固定する。(a) `kaji run` の provider 解決前の launch record 失敗 → exit 3、provider 解決の注入点が呼ばれない、run dir と `session-state.json` が作られない。(b) `run_id` 設定失敗・`process.json` 失敗 → run は続行し、実行中の status が `any_run_alive: true`、retry が `issue_run_alive` で拒否、終了後は `process.json` 欠落の run が `liveness_unknown`（終端条件なし）または `finished_by_log` になる。(c) retry の LaunchLock の lock file 失敗・launcher record 失敗・起動直前の `recovery.json` 記録失敗 → exit 3、`child_launcher` が呼ばれない、lock が解放されて次の planner が lock を取れる、launcher record が残らない。(d) series の通常起動と resume で launcher record 失敗 → `member_launcher` が呼ばれない、member の status が変わらない、series が `stopped` で exit 3。(e) child 終了後の記録失敗 → warning で child の exit code を返す
 - R2（Issue 全体の不明）: 対象 run は vanished で、他の run の `process.json` が `other_host` / `record_unreadable`（いずれも run.log が終端条件を満たさない）、または記録なし・`workflow_end` なしの旧 run、または判定不能な launch record がある場合に、status は `any_run_alive: null`、retry は `issue_liveness_unknown`、series resume は stopped + `gates=issue_liveness_unknown` になること。他の run が `finished_by_log` だけなら通過すること
 - R3（kill 相当）: 生存していない pid の `process.json`、run.log が `[workflow_start, step_start(implement, attempt 1)]`、`attempt-001/` に result.json なし、worktree / branch が一致する session-state.json の fixture で、status は `termination: vanished` / `failure.cause: process_vanished` / `read_errors: []`、retry と series resume は `--from implement` で起動すること。同じ fixture で `step_end` がある attempt の result.json を消すと `artifact_unreadable` になること。`--retry-failed-step` なしの `kaji recover` は同じ fixture で従来どおり exit 2（未終了 run の拒否）であること
 - R5（series state）: 形式が正しい id で、state.json だけ欠落・`_series/<id>/` ごと欠落・JSON 構文破損・`members` が配列でない・1 member の `status` が enum 外、の各 fixture で「state.json の状態ごとの出力」表どおりの値と exit 0。形式違反の id（例 `Bad_ID`）は exit 2
@@ -612,6 +643,7 @@ D1〜D10 で保守者が決定済み。本設計の追加分（A9〜A16、項目
 | series | `kaji_harness/series/runner.py` / `state.py` / `models.py` | `_execute_member` は `--from` なし、`_reconcile_resume`、`evaluate_member_gate`、`MemberState.status` / `SeriesState.status` の `Literal` |
 | run dir / logger | `kaji_harness/runner.py` `allocate_run_dir`（`RUN_ID_FORMAT="%y%m%d%H%M%S"`）、`kaji_harness/logger.py`（`ts` は UTC、`step_start` に agent / session_id / attempt） | 最新 run の順序と status 項目の出所 |
 | exit code | `kaji_harness/commands/exit_codes.py` | 既存 0 / 1 / 2 / 3。4 は未使用 |
+| series の例外と exit code | `kaji_harness/errors.py`（`SeriesAbortedError` / `SeriesRuntimeError` はともに `HarnessError`）、`kaji_harness/commands/series.py` `cmd_run_series` | `SeriesAbortedError` は先に捕捉されて exit 1、`SeriesRuntimeError` は `HarnessError` として exit 3。series の書き込み失敗時の exit 3 の根拠 |
 | Herdr 照会 | `kaji_harness/interactive_terminal_herdr.py` `_get_herdr_pane` / `_get_herdr_process_info` / `_classify_herdr_process_liveness`、`pane-metadata.json`（`pane_id` / `origin_pane` / `kaji_run`） | agent pane の生存を active / confirmed_shell_only / unknown で分類済み |
 | Linux `/proc/<pid>/stat` | https://man7.org/linux/man-pages/man5/proc_pid_stat.5.html | 第 22 欄 `starttime`: boot 後のプロセス開始時刻（clock ticks）。pid 再利用の検知に使う |
 | Linux `boot_id` | https://man7.org/linux/man-pages/man4/random.4.html（/proc interfaces）、https://man7.org/linux/man-pages/man5/proc_sys_kernel.5.html | `/proc/sys/kernel/random/boot_id` は boot ごとに新しく生成される UUID（random(4) の /proc interfaces 節） |
