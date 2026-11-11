@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import patch
@@ -58,6 +59,20 @@ def _config() -> SeriesConfig:
             "on_failure": "stop",
         }
     )
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _install_workflows(root: Path, config: SeriesConfig) -> None:
+    """Copy the member workflows so ``--resume`` can load them (Issue #540 safety gates)."""
+    for member in config.members:
+        source = REPO_ROOT / member.workflow
+        if not source.is_file():  # fixture-only custom workflows are never resumed here
+            continue
+        target = root / member.workflow
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
 
 
 def _issue(issue: int, state: str = "open", reason: str = "") -> Issue:
@@ -358,16 +373,23 @@ def test_resume_reconciles_dead_child_that_completed(tmp_path: Path) -> None:
     assert [argv[3] for argv in calls] == ["11"]
 
 
-def test_resume_reexecutes_dead_child_that_did_not_complete(tmp_path: Path) -> None:
+def test_resume_dead_child_without_run_stops_instead_of_restarting(tmp_path: Path) -> None:
+    # Issue #540 D8 / A11: a dead child becomes ``interrupted`` and resumes from its failed
+    # step; without any run to resume from it stops (``no_target_run``) instead of restarting.
     provider = FakeProvider({10: _issue(10), 11: _issue(11)})
     calls: list[list[str]] = []
     runner = _runner(tmp_path, provider, calls)
+    _install_workflows(tmp_path, _config())
     state = SeriesState.create(_config())
     state.members[0].status = "running"
     state.members[0].child_pid = 1234
     state.save(runner.state_path)
-    assert runner.run(resume=True) == 0
-    assert [argv[3] for argv in calls] == ["10", "11"]
+    with pytest.raises(SeriesAbortedError, match="gates=no_target_run"):
+        runner.run(resume=True)
+    assert calls == []
+    stopped = SeriesState.load(runner.state_path)
+    assert stopped.members[0].status == "interrupted"
+    assert stopped.status == "stopped"
 
 
 @pytest.mark.parametrize("fixture_name", ["epic-291.yaml", "standalone.yaml"])
@@ -455,8 +477,12 @@ def test_epic_and_standalone_fixtures_stop_and_resume_from_failure(
         provider=provider,  # type: ignore[arg-type]
         member_launcher=complete_remaining,
     )
-    assert resumed.run(resume=True) == 0
-    assert resume_calls == expected_argv[2:]
+    # Issue #540 D8 / A11: the failed member resumes from its failed step only; with no run
+    # recorded for it, resume stops at the safety gate instead of restarting from the top.
+    _install_workflows(tmp_path, config)
+    with pytest.raises(SeriesAbortedError, match="member 285 resume refused.*gates=no_target_run"):
+        resumed.run(resume=True)
+    assert resume_calls == []
     final = SeriesState.load(resumed.state_path)
-    assert final.status == "completed"
-    assert all(member.status == "completed" for member in final.members)
+    assert final.status == "stopped"
+    assert [member.status for member in final.members][2:] == ["failed", "pending", "pending"]

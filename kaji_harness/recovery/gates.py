@@ -19,12 +19,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from ..errors import LaunchRecordError
 from ..logger import RunLogger
 from ..models import Workflow
-from ..runstate.facts import IssueFacts, PaneRef, RunFacts, collect_issue_facts
+from ..runstate import facts as runstate_facts
 from ..runstate.launch import (
     LaunchLock,
     list_launch_records,
@@ -41,6 +41,11 @@ from .models import (
     write_recovery_json,
 )
 from .snapshot import FailureSnapshot, collect_snapshot, find_child_run_id
+
+if TYPE_CHECKING:
+    # runstate.facts imports recovery.classify, which initialises this package; importing
+    # its names eagerly would fail when runstate.facts is the first module imported.
+    from ..runstate.facts import IssueFacts, PaneRef, RunFacts
 
 #: 自動再開を禁止する auth / secret / permission 形跡。
 #: 単語境界を使うのは、``rate limit ... tokens per minute`` のような quota 文言で
@@ -65,7 +70,7 @@ REFUSING_CAUSES = (
 
 RetryTrigger = Literal["retry_failed_step", "series_resume"]
 AgentPaneState = Literal["active", "shell_only", "absent", "not_owned", "unknown"]
-PaneInspector = Callable[[PaneRef], AgentPaneState]
+PaneInspector = Callable[["PaneRef"], AgentPaneState]
 
 
 @dataclass(frozen=True)
@@ -269,7 +274,7 @@ class RetryPlanner:
 
     def plan(self, target_run_id: str | None = None) -> RetryPlan:
         """ゲートを評価する。拒否ゲートは評価順にすべて列挙する。"""
-        issue = collect_issue_facts(
+        issue = runstate_facts.collect_issue_facts(
             self.artifacts_dir,
             self.issue_id,
             probe=self.probe,
