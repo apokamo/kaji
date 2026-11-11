@@ -14,9 +14,12 @@ import pytest
 
 from kaji_harness.errors import SeriesAbortedError, SeriesRuntimeError
 from kaji_harness.providers import Issue
+from kaji_harness.recovery.gates import RetryPlanner, prepare_retry, release_launcher_record
 from kaji_harness.runstate.facts import collect_issue_facts
+from kaji_harness.runstate.launch import LaunchLock
 from kaji_harness.runstate.process import ProcessRecord, current_process_record
 from kaji_harness.series import SeriesConfig, SeriesRunner, SeriesState, series_fingerprint
+from kaji_harness.workflow import load_workflow
 from tests.runstate_helpers import end, ev, start, step_end, step_start, write_run, write_state
 
 pytestmark = pytest.mark.medium
@@ -230,6 +233,7 @@ def test_member_closed_not_planned_stops(repo: Path) -> None:
         ("no_run", "no_target_run"),
         ("interrupted", "user_interrupted"),
         ("broken", "artifact_unreadable"),
+        ("unknown", "issue_liveness_unknown"),
     ],
 )
 def test_gate_refusal_stops_without_launch(
@@ -242,6 +246,10 @@ def test_gate_refusal_stops_without_launch(
     elif setup == "broken":
         run_dir = _failed_run(repo)
         (run_dir / "steps" / "implement" / "attempt-001" / "result.json").unlink()
+    elif setup == "unknown":
+        # R2: an older run with neither a liveness record nor ``workflow_end`` is undecidable
+        _failed_run(repo)
+        write_run(_artifacts(repo), "10", "261111000000", [start(), step_start("implement")])
     _failed_member_state(repo)
     calls: list[list[str]] = []
     provider = FakeProvider({10: _issue(10), 11: _issue(11)})
@@ -300,3 +308,68 @@ def test_issue_is_alive_before_child_pid_is_saved(repo: Path) -> None:
     runner = _runner(repo, provider, [], member_launcher=launch)
     assert runner.run() == 0
     assert observed == [(True, True), (True, True)]
+
+
+def _retry_planner(repo: Path) -> RetryPlanner:
+    return RetryPlanner(
+        workflow=load_workflow(repo / WORKFLOW_PATH),
+        artifacts_dir=_artifacts(repo),
+        issue_id="10",
+        pane_inspector=lambda _pane: "absent",
+    )
+
+
+def test_resume_is_refused_while_a_retry_holds_the_launch_lock(repo: Path) -> None:
+    # R1 (concurrent requests, retry x series resume): the lock holder wins
+    _failed_run(repo)
+    _failed_member_state(repo)
+    calls: list[list[str]] = []
+    provider = FakeProvider({10: _issue(10), 11: _issue(11)})
+    lock = LaunchLock(_artifacts(repo), "10")
+    assert lock.acquire() is True
+    try:
+        with pytest.raises(SeriesAbortedError, match="gates=concurrent_launch"):
+            _runner(repo, provider, calls).run(resume=True)
+    finally:
+        lock.release()
+    assert calls == []
+    assert _saved(repo).members[0].status == "failed"
+
+
+def test_resume_is_refused_after_a_retry_wrote_its_launcher_record(repo: Path) -> None:
+    # R1: once the retry launcher is recorded, the series resume sees the Issue as alive and
+    # launches nothing, so only one child (the retry's) can start.
+    _failed_run(repo)
+    _failed_member_state(repo)
+    prepared = prepare_retry(_retry_planner(repo), None)
+    assert prepared.plan.gates == [] and prepared.launcher_record is not None
+    calls: list[list[str]] = []
+    provider = FakeProvider({10: _issue(10), 11: _issue(11)})
+    try:
+        with pytest.raises(SeriesAbortedError, match="gates=issue_run_alive"):
+            _runner(repo, provider, calls).run(resume=True)
+    finally:
+        release_launcher_record(prepared.launcher_record)
+    assert calls == []
+
+
+def test_retry_is_refused_while_a_series_resume_launcher_is_recorded(repo: Path) -> None:
+    # R1 (the other order): a series resume child in flight blocks a retry request
+    _failed_run(repo)
+    _failed_member_state(repo)
+    observed: list[list[str]] = []
+    provider = FakeProvider({10: _issue(10), 11: _issue(11)})
+    calls: list[list[str]] = []
+
+    def launch(argv: list[str], cwd: Path) -> FakeProcess:
+        calls.append(argv)
+        issue = int(argv[3])
+        if issue == 10:
+            plan = prepare_retry(_retry_planner(repo), None).plan
+            observed.append([gate.name for gate in plan.gates])
+        provider.issues[issue] = _issue(issue, "closed", "completed")
+        return FakeProcess(pid=4_000_000 + issue)
+
+    assert _runner(repo, provider, calls, member_launcher=launch).run(resume=True) == 0
+    assert observed == [["issue_run_alive"]]
+    assert len(calls) == 2  # the resumed member and the next member; the retry launched nothing
