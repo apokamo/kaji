@@ -49,6 +49,10 @@ FailureCause = Literal[
     # 予約値。セッション異常の機械判定は pure code では不可能なため初期 classifier は
     # emit しない（将来の深掘り調査 agent 導入時に使用）。
     "external_upstream_anomaly",
+    # Issue #540: ``workflow_end`` も ``failure_event`` も無いまま ``kaji run`` プロセスが
+    # 消えた run（kill / OOM 等の推定）。triage 外の経路（status / retry / series resume）
+    # でのみ出る。
+    "process_vanished",
 ]
 
 FailureSource = Literal["runner", "agent", "external", "config"]
@@ -78,6 +82,7 @@ FAILURE_CAUSES: frozenset[str] = frozenset(
         "user_precondition_error",
         "user_interrupted",
         "external_upstream_anomaly",
+        "process_vanished",
     }
 )
 
@@ -207,6 +212,9 @@ class RecoveryDecision:
     # Issue #322: incident 記録を抑止した事実と理由（additive・optional）。
     incident_suppressed: bool = False
     incident_suppression_reason: str | None = None
+    # Issue #540: ``--retry-failed-step`` / series resume の記録（additive・optional）。
+    # 値は JSON の dict（requested_at / trigger / outcome / gates / ...）。
+    retries: list[dict[str, Any]] = field(default_factory=list)
     schema_version: int = RECOVERY_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -243,6 +251,7 @@ class RecoveryDecision:
             "incident_transient_closed": self.incident_transient_closed,
             "incident_suppressed": self.incident_suppressed,
             "incident_suppression_reason": self.incident_suppression_reason,
+            **({"retries": [dict(entry) for entry in self.retries]} if self.retries else {}),
         }
 
     @classmethod
@@ -275,6 +284,7 @@ class RecoveryDecision:
             incident_transient_closed=bool(data.get("incident_transient_closed", False)),
             incident_suppressed=bool(data.get("incident_suppressed", False)),
             incident_suppression_reason=data.get("incident_suppression_reason"),
+            retries=[dict(entry) for entry in data.get("retries", []) if isinstance(entry, dict)],
             schema_version=int(data.get("schema_version", RECOVERY_SCHEMA_VERSION)),
         )
 
@@ -311,13 +321,76 @@ def read_recovery_json(path: Path) -> RecoveryDecision:
     return RecoveryDecision.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
 
-def write_recovery_chain(path: Path, *, root_run_id: str, parent_run_id: str) -> None:
-    """child run の chain identity を ``recovery-chain.json`` に書き出す。"""
+RecoveryTrigger = Literal["auto_recover", "retry_failed_step", "series_resume"]
+RECOVERY_TRIGGERS: frozenset[str] = frozenset(
+    {"auto_recover", "retry_failed_step", "series_resume"}
+)
+
+
+def write_recovery_chain(
+    path: Path,
+    *,
+    root_run_id: str,
+    parent_run_id: str,
+    chain_index: int | None = None,
+    trigger: str | None = None,
+) -> None:
+    """child run の chain identity を ``recovery-chain.json`` に書き出す。
+
+    Issue #540: ``chain_index``（chain 内で何回目の child か）と ``trigger``
+    （``auto_recover`` / ``retry_failed_step`` / ``series_resume``）は optional。
+    """
+    data: dict[str, Any] = {"root_run_id": root_run_id, "parent_run_id": parent_run_id}
+    if chain_index is not None:
+        data["chain_index"] = chain_index
+    if trigger is not None:
+        data["trigger"] = trigger
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps({"root_run_id": root_run_id, "parent_run_id": parent_run_id}, indent=2) + "\n",
-        encoding="utf-8",
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+@dataclass(frozen=True)
+class RecoveryChainInfo:
+    """``recovery-chain.json`` の内容（Issue #540 の optional 項目を含む）。"""
+
+    root_run_id: str
+    parent_run_id: str
+    chain_index: int | None = None
+    trigger: str | None = None
+
+
+class RecoveryChainError(ValueError):
+    """``recovery-chain.json`` が存在するが読めない・不正な場合。"""
+
+
+def read_recovery_chain_info(path: Path) -> RecoveryChainInfo | None:
+    """``recovery-chain.json`` を読み、``chain_index`` / ``trigger`` まで返す。
+
+    Returns:
+        chain 情報。ファイルが無ければ ``None``（root run）。
+
+    Raises:
+        RecoveryChainError: 存在するが読めない・JSON 不正・必須 key 欠落の場合。
+    """
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RecoveryChainError(f"{path.name}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RecoveryChainError(f"{path.name}: top-level is not an object")
+    root = data.get("root_run_id")
+    parent = data.get("parent_run_id")
+    if not isinstance(root, str) or not isinstance(parent, str):
+        raise RecoveryChainError(f"{path.name}: root_run_id / parent_run_id missing")
+    raw_index = data.get("chain_index")
+    chain_index = (
+        raw_index if isinstance(raw_index, int) and not isinstance(raw_index, bool) else None
     )
+    raw_trigger = data.get("trigger")
+    trigger = raw_trigger if isinstance(raw_trigger, str) else None
+    return RecoveryChainInfo(root, parent, chain_index, trigger)
 
 
 def read_recovery_chain(path: Path) -> tuple[str, str] | None:
@@ -331,6 +404,8 @@ def read_recovery_chain(path: Path) -> tuple[str, str] | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
         return None
     root = data.get("root_run_id")
     parent = data.get("parent_run_id")

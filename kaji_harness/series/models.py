@@ -13,6 +13,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 _SERIES_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
 
+def is_valid_series_id(value: str) -> bool:
+    """series id が filesystem-safe な形式（``^[a-z0-9][a-z0-9-]{0,63}$``）かを返す。"""
+    return _SERIES_ID_PATTERN.fullmatch(value) is not None
+
+
 class SeriesMember(BaseModel):
     """One ordered issue/workflow pair in a series."""
 

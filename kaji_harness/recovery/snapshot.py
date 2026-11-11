@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..runstate.runlog import find_unterminated_step, required_result_problems
 from ..state import STATE_FILE
 from .models import (
     RECOVERY_CHAIN_FILE,
@@ -99,6 +100,8 @@ class FailureSnapshot:
     prior_incident_ref: str | None = None
     #: Issue #304: 過去の handler 実行で記録済みの incident action（再入スキップ時に復元）。
     prior_incident_action: str | None = None
+    #: Issue #540: ``allow_unterminated=True`` で収集し、``workflow_end`` の無い run だった。
+    unterminated: bool = False
 
     @property
     def failure_error_text(self) -> str:
@@ -338,6 +341,8 @@ def collect_snapshot(
     artifacts_dir: Path,
     issue_id: str,
     provider_available: bool,
+    allow_unterminated: bool = False,
+    probe_git: bool = True,
 ) -> FailureSnapshot:
     """失敗 run の artifact / state / git state を収集して ``FailureSnapshot`` を返す。
 
@@ -346,6 +351,11 @@ def collect_snapshot(
         artifacts_dir: ``paths.artifacts_dir`` の resolve 値。
         issue_id: canonical Issue ID（``session-state.json`` の所在）。
         provider_available: handler 起動時点で provider / Issue context が解決できたか。
+        allow_unterminated: Issue #540。``workflow_end`` の無い run（kill / OOM 推定）を
+            read error にせず、未終了 step を失敗 step とする。必須 artifact の判定は
+            ``runstate.runlog`` の規則に従い、``session-state.json`` の欠落は正常とする。
+            既定（``False``）は従来どおりの triage 経路。
+        probe_git: ``False`` なら git を照会しない（読み取り専用の ``kaji status``）。
 
     Returns:
         分類・判定に必要な入力を持つ不変 snapshot。読めない artifact は
@@ -368,11 +378,18 @@ def collect_snapshot(
     end_entry = _last_event(events, "workflow_end")
     end_status = end_entry.get("status") if end_entry else None
     end_error = end_entry.get("error") if end_entry else None
-    if end_entry is None and not read_errors:
+    unterminated = allow_unterminated and end_entry is None and bool(events)
+    if end_entry is None and not read_errors and not unterminated:
         read_errors.append("run.log: workflow_end event missing")
+    if allow_unterminated:
+        for problem in required_result_problems(run_dir, events):
+            read_errors.append(f"{problem.path}: {problem.error} ({problem.message})")
 
     failure_event = _parse_failure_event(_last_event(events, "failure_event"))
     failed_step = failure_event.step_id if failure_event else None
+    if unterminated and failure_event is None:
+        pending = find_unterminated_step(events)
+        failed_step = pending[0] if pending else None
 
     attempt_dir = _latest_attempt_dir(run_dir, failed_step)
     result = _latest_attempt_result(run_dir, failed_step)
@@ -383,14 +400,16 @@ def collect_snapshot(
     interrupted = failure_event is not None and failure_event.kind == "interrupted"
     orphan_pane_id = _orphan_pane_id(attempt_dir) if interrupted else None
 
-    state = _load_state(artifacts_dir / issue_id / STATE_FILE)
+    state_path = artifacts_dir / issue_id / STATE_FILE
+    state = _load_state(state_path)
     state_loaded = state is not None
     worktree_dir = state.get("worktree_dir") if state else None
     branch_name = state.get("branch_name") if state else None
-    if not state_loaded:
+    # Issue #540: triage 外の経路では、初回 step で kill された run の state 未作成を正常とする。
+    if not state_loaded and not (allow_unterminated and not state_path.exists()):
         read_errors.append(f"{STATE_FILE}: missing or unreadable")
 
-    git = probe_git_state(Path(worktree_dir)) if worktree_dir else GitStateSummary()
+    git = probe_git_state(Path(worktree_dir)) if worktree_dir and probe_git else GitStateSummary()
 
     chain = read_recovery_chain(run_dir / RECOVERY_CHAIN_FILE)
     root_run_id, parent_run_id = chain if chain else (None, None)
@@ -483,6 +502,7 @@ def collect_snapshot(
         evidence=tuple(evidence),
         prior_incident_ref=prior_incident_ref,
         prior_incident_action=prior_incident_action,
+        unterminated=unterminated,
     )
 
 

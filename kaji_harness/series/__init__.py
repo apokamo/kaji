@@ -10,6 +10,7 @@ from .models import (
     SeriesConfig,
     SeriesMember,
     evaluate_member_gate,
+    is_valid_series_id,
     series_fingerprint,
 )
 from .runner import SeriesRunner
@@ -25,6 +26,7 @@ __all__ = [
     "MemberState",
     "evaluate_member_gate",
     "generate_series_yaml",
+    "is_valid_series_id",
     "load_series",
     "series_fingerprint",
 ]

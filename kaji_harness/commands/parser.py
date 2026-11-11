@@ -41,6 +41,7 @@ def create_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     _register_run(subparsers)
     _register_recover(subparsers)
+    _register_status(subparsers)
     _register_validate(subparsers)
     _register_series(subparsers)
     _register_issue(subparsers)
@@ -260,6 +261,22 @@ def _register_recover(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         default=False,
         help="Allow the handler to start a child run when the decision is 'resume'.",
     )
+    p.add_argument(
+        "--workdir",
+        type=Path,
+        default=Path.cwd(),
+        help="Starting directory for config discovery (default: current directory)",
+    )
+
+
+def _register_status(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Register the read-only ``status`` subcommand (Issue #540)."""
+    p = subparsers.add_parser(
+        "status", help="Show run / series state (read-only; --json for the schema v1 output)"
+    )
+    p.add_argument("issues", nargs="*", help="Issue ID(s) (GitHub number or gh:<number>)")
+    p.add_argument("--series", dest="series", default=None, help="Series id (_series/<id>)")
+    p.add_argument("--json", action="store_true", help="Print the JSON document (schema v1)")
     p.add_argument(
         "--workdir",
         type=Path,

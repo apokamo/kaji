@@ -132,7 +132,21 @@ def classify_failure(snapshot: FailureSnapshot) -> FailureClassification:
     5. それ以外 → ``unknown_external_error``（opaque）
 
     予約値 ``external_upstream_anomaly`` は emit しない。
+
+    Issue #540: ``allow_unterminated`` で収集した ``workflow_end`` も ``failure_event`` も
+    無い snapshot は、必須 artifact の破損が無ければ ``process_vanished``（kill / OOM 等の
+    推定）に分類する。既定の triage 経路の snapshot はこの分岐に到達しない。
     """
+    if snapshot.unterminated and snapshot.failure_event is None:
+        if snapshot.artifact_read_errors:
+            return _bug_suspected()
+        return FailureClassification(
+            cause="process_vanished",
+            synthetic=True,
+            source="external",
+            recoverability_hint="unknown",
+        )
+
     if _detect_contradiction(snapshot):
         return _bug_suspected()
 
