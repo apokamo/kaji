@@ -138,6 +138,21 @@ kaji run-series .kaji/series/<id>.yaml
 の変更や生存中の遺留 child は安全側に拒否する。実行 state と lock は
 `<artifacts_dir>/_series/<id>/` に保存される。
 
+`--resume` では、`failed` / `interrupted` の member を次のとおり扱う（#540）。
+
+| member の Issue | 挙動 |
+|-----------------|------|
+| `completed` で closed（series の外で直した） | member を `completed`（`gate=closed_completed`）にして次へ進む |
+| `not_planned` / `duplicate` で closed | series を止める（exit 1）: `member <issue> is already closed before its resumed run: mismatch:closed/<reason>` |
+| open | member の最新の run に対し、`kaji recover --retry-failed-step` と同じ安全ゲート（[Failure Triage / Recovery](failure-recovery.ja.md)）を判定する。通れば、その run の失敗した step から再開する（`kaji run ... --from <step> --recovery-root ... --recovery-parent ... --recovery-trigger series_resume`）。ゲートで拒否すれば何も起動せず series を止め（exit 1）、`stop_reason` を `member <issue> resume refused by safety gate: gates=<name>[,<name>...]`（機械で読む形: `gates=(?P<gates>[a-z_]+(?:,[a-z_]+)*)$`）にする。stderr にも `retry-gate:` 行を出す |
+
+Ctrl-C で止めた member は triage の cause が `user_interrupted` になるため、resume はそのゲートで止まる。
+手でやり直すか、新しい series を作る。run が 1 件も無い failed member は `no_target_run` で止まる
+（最初の step からはやり直さない）。series は各 member の起動前に launcher record を書き、child 自身の
+記録ができる前でも `kaji status` が Issue を生存中と判定できるようにする。この記録・launch lock・起動直前の
+`recovery.json` の記録を書けない場合は、member を起動せず status も変えずに exit 3 で止まる。
+`--dry-run` と `validate-series` の出力と exit code は変えない。
+
 `validate-series` と `--dry-run` は現在の plan の全 member workflow に対し、YAML schema、
 workflow 内参照、skill metadata の完全 preflight を行う。通常実行も開始時に同じ preflight を
 再実行し、過去の dry-run 結果には依存しない。invalid member が 1 件でもあれば member process、

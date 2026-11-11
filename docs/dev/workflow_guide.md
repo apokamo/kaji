@@ -72,6 +72,12 @@ kaji run-series .kaji/series/maintenance-2026-07.yaml --resume
 `closed/completed` が揃った場合だけ次へ進む。失敗・close reason 不一致・外部状態の巻き戻りは
 後続を起動せず停止する。
 
+`--resume` は failed / interrupted member を最初の step からではなく失敗 step から再開する
+（Issue #540）。再開前に `kaji recover --retry-failed-step` と同じ安全ゲートを通し、拒否されたら
+member を起動せず `stop_reason` に `gates=<名前>` を残して停止する。series の外で
+`closed/completed` になった member は完了として次へ進む。状態の確認は `kaji status --series <id>`
+（[Run Status](../cli-guides/run-status.ja.md)）。
+
 `validate-series` と `--dry-run` は、現在の plan が参照する全 member workflow を読み取り、
 L1（parse/schema）/ L2（step・cycle の参照整合）/ L3（skill metadata）を完全検証する。
 通常実行も開始時に同じ検証を再実行し、過去の dry-run 成功を信用しない。invalid member が

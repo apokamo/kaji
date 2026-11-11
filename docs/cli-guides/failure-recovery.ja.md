@@ -96,6 +96,79 @@ kaji recover .kaji/wf/official/dev.yaml 288
 kaji recover .kaji/wf/official/dev.yaml 288 --run-id 260710120000
 ```
 
+## `kaji recover --retry-failed-step`（Issue #540）
+
+失敗した run を、kaji 自身が安全ゲートを判定したうえで、失敗した step から 1 回やり直す。
+triage の decision は使わないため、triage が `resume` と判定しない失敗（step の timeout より長い
+usage limit、OOM kill、provider の一時的なエラー等）もやり直せる。呼び出し側が `kaji run --from` を
+組み立てたりゲートを確かめたりする必要はない。
+
+```
+kaji recover <workflow.yaml> <issue> --retry-failed-step [--run-id <run_id>] [--workdir <dir>]
+```
+
+- `--retry-failed-step` と `--auto-recover` は排他。
+- `--run-id` を省くと最新の run を対象にする。`workflow_end` の無い run も、プロセスが生きていないと
+  判定できれば（`termination: vanished`。[Run status](run-status.ja.md)）対象になる。その場合の失敗 step は
+  開始して終了していない最後の step。
+- recovery budget（chain ごとに自動再開 1 回）は適用しない。指定した run が最新の run であることを
+  ゲートで求めるため、同じ run のやり直しは 1 回に限られる。recovery child が失敗した run も対象にできる。
+- ゲートを通れば、待機なしで child run を前面で起動する:
+  `kaji run <workflow> <issue> --from <step> --recovery-root <root> --recovery-parent <run_id>
+  --recovery-trigger retry_failed_step`。`resume:` を持つ step は triage と同じく session 生成元の step から
+  再開する（保存済み session は破棄）。
+- GitHub には書き込まない（Issue コメント・bug Issue・incident なし）。記録は対象 run の `recovery.json`
+  （`retries[]`）と `run.log`（`retry_requested` / `retry_refused` / `retry_child_end`）だけ。child run 自体が
+  失敗したときの triage は通常の `kaji run` と同じ設定で動き、child は recovery chain の一員なので自動再開は
+  `exhausted` になる。
+
+exit code:
+
+| 状況 | exit code |
+|------|-----------|
+| workflow 不在・不正、config なし、Issue を解決できない、`--run-id` の run dir 不在、flag の同時指定 | `2` |
+| 起動前の記録（launch lock・launcher record・`recovery.json` / `run.log`）を書けない、または child を起動できない。何も起動していない | `3` |
+| 安全ゲートで拒否。何も起動していない | `4` |
+| child run を起動した | child の exit code |
+
+拒否時は stderr に要約 1 行と、拒否したゲートごとの `retry-gate:` 行
+（`^retry-gate: (?P<name>[a-z_]+)(?: (?P<detail>.*))?$`）を出す:
+
+```
+Error: retry refused by safety gate(s): run_alive, branch_mismatch
+retry-gate: run_alive pid=12345 basis=pid_verified
+retry-gate: branch_mismatch worktree=feat/9 state=feat/540
+```
+
+### 安全ゲート
+
+全ゲートを評価し、拒否したゲートを次の順ですべて列挙する（`concurrent_launch` のときは他を評価せず
+それだけを返す）。名前は公開の契約で、`kaji run-series --resume` も同じゲートを使う。
+
+| 名前 | 拒否する条件 |
+|------|--------------|
+| `concurrent_launch` | 同じ Issue で他の retry / series resume が判定中（Issue の launch lock を取れない） |
+| `no_target_run` | Issue に run が無い |
+| `newer_run_detected` | 対象 run が最新の run ではない |
+| `run_alive` | 対象 run のプロセス（または対象 run を指す launch record）が生きている |
+| `liveness_unknown` | 対象 run の生存を判定できない（記録なし・別ホスト・`/proc` なし） |
+| `issue_run_alive` | Issue の他の run、または対象 run を指さない launch record が生きている |
+| `issue_liveness_unknown` | 上のいずれも生きていないが、判定できないものがある |
+| `run_not_failed` | `ERROR` / `ABORT` 以外で終了した |
+| `artifact_unreadable` | 必須の artifact が欠落・破損（run.log、`step_end` のある attempt の `result.json`、`session-state.json`、`recovery-chain.json`、`recovery.json`） |
+| `workflow_mismatch` | run の workflow 名が `<workflow.yaml>` と異なる |
+| `unknown_failed_step` | 失敗 step を特定できない、または workflow に無い |
+| `non_resumable_skill` | 失敗 step か実際の再開先が `issue-start` / `i-pr` / `issue-close` を実行する |
+| `agent_declared_abort` / `cycle_exhausted` / `user_interrupted` / `ambiguous_worktree_abort` | triage の cause がこれら |
+| `sensitive_failure_pattern` | エラー文字列が認証・権限の pattern に一致する |
+| `worktree_unavailable` / `branch_mismatch` | `session-state.json` の worktree が無い / branch が異なる |
+| `provider_unavailable` | provider を解決できない（triage と共有。retry では通常ゲート前の exit 2 になる） |
+| `agent_pane_alive` | 失敗 step の最新 attempt の Herdr pane が kaji 所有で、前景に agent プロセスが残る |
+| `agent_pane_unverifiable` | その pane を確認できない（`pane-metadata.json` の破損、Herdr 照会の失敗、生存不明） |
+
+triage の `recoverability_hint` ではやり直しを拒否しない。`kaji_bug_suspected` や `dispatch_failure`
+などの cause は通過する。
+
 ## exit code
 
 既存の map（`0 = OK` / `1 = ABORT` / `2 = 定義エラー` / `3 = ランタイムエラー`）は不変。
@@ -107,6 +180,9 @@ kaji recover .kaji/wf/official/dev.yaml 288 --run-id 260710120000
 | `kaji recover` で triage 完了（decision 問わず） | `0` |
 | `kaji recover` で対象 run 不在 / 進行中 run / flag 不整合 / `requires_provider` 不一致 | `2` |
 | `kaji recover` で handler 内部エラー | `3` |
+| `kaji recover --retry-failed-step` が安全ゲートで拒否 | `4` |
+| `kaji recover --retry-failed-step` が child run を起動した | child の exit code |
+| `kaji run` で launch record を書けない（Issue 解決前） | `3` |
 
 ## artifact
 

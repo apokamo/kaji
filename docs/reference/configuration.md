@@ -145,6 +145,11 @@ A relative `artifacts_dir` is resolved against the main worktree (the worktree t
 exclusion. These runtime files are separate from the tracked `.kaji/series/<series-id>.yaml`
 definition. `validate-series` and `run-series --dry-run` do not create the directory.
 
+`kaji run` also writes `<artifacts_dir>/<issue>/runs/<run_id>/process.json` (the run's pid, process
+start ticks, boot id, and hostname) and a launch record under `<artifacts_dir>/<issue>/launches/`
+while it is running (Issue #540). `kaji status` reads them to tell a live run from a killed one; see
+[Run Status](../cli-guides/run-status.md).
+
 ### `[execution]`
 
 | key | Required/Optional | Type | Default | Validation | Source |

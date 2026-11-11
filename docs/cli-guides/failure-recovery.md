@@ -118,6 +118,92 @@ kaji recover .kaji/wf/official/dev.yaml 288
 kaji recover .kaji/wf/official/dev.yaml 288 --run-id 260710120000
 ```
 
+## `kaji recover --retry-failed-step` (Issue #540)
+
+Retries one failed run once, from its failed step, after kaji itself checks the safety
+gates. It does not use the triage decision: a failure that triage does not mark `resume`
+(a usage limit longer than the step timeout, an OOM kill, a transient provider error) can
+be retried. The caller does not rebuild `kaji run --from` or check the gates.
+
+```
+kaji recover <workflow.yaml> <issue> --retry-failed-step [--run-id <run_id>] [--workdir <dir>]
+```
+
+- `--retry-failed-step` and `--auto-recover` are mutually exclusive.
+- `--run-id` defaults to the newest run. A run without `workflow_end` can be retried when
+  kaji can tell its process is gone (`termination: vanished`, see
+  [Run status](run-status.md)); the failed step is then the last step that started and
+  did not end.
+- The recovery budget (one auto resume per chain) does not apply. The run you name must be
+  the newest run, so each run can be retried at most once. A recovery child that failed
+  can itself be retried.
+- When the gates pass, kaji starts the child run in the foreground without waiting:
+  `kaji run <workflow> <issue> --from <step> --recovery-root <root> --recovery-parent <run_id>
+  --recovery-trigger retry_failed_step`. A step with `resume:` restarts from the step that
+  created the session (the stored session is discarded), as in triage.
+- kaji writes nothing to GitHub (no Issue comment, no bug Issue, no incident). It records the
+  request in the target run's `recovery.json` (`retries[]`) and `run.log`
+  (`retry_requested` / `retry_refused` / `retry_child_end`). The child run's own triage on
+  failure follows the usual `kaji run` settings; because the child belongs to the recovery
+  chain, its auto recovery is `exhausted`.
+
+Exit codes:
+
+| Situation | Exit code |
+|-----------|-----------|
+| Workflow missing / invalid, no config, Issue cannot be resolved, `--run-id` dir missing, both flags given | `2` |
+| A record could not be written before launch (launch lock, launcher record, `recovery.json` / `run.log`), or the child could not be started. Nothing was started | `3` |
+| Refused by a safety gate. Nothing was started | `4` |
+| The child run was started | the child's exit code |
+
+On refusal, stderr has one summary line and one `retry-gate:` line per refusing gate
+(`^retry-gate: (?P<name>[a-z_]+)(?: (?P<detail>.*))?$`):
+
+```
+Error: retry refused by safety gate(s): run_alive, branch_mismatch
+retry-gate: run_alive pid=12345 basis=pid_verified
+retry-gate: branch_mismatch worktree=feat/9 state=feat/540
+```
+
+### Safety gates
+
+kaji evaluates every gate and lists all that refuse, in this order (`concurrent_launch`
+alone is reported without evaluating the others). The names are part of the public
+contract; `kaji run-series --resume` uses the same gates.
+
+| Name | Refuses when |
+|------|--------------|
+| `concurrent_launch` | Another retry / series resume is deciding for the same Issue (the Issue's launch lock is held) |
+| `no_target_run` | The Issue has no run |
+| `newer_run_detected` | The target run is not the newest run |
+| `run_alive` | The target run's process (or a launch record pointing at it) is alive |
+| `liveness_unknown` | The target run's liveness cannot be judged (no record, other host, no `/proc`) |
+| `issue_run_alive` | Another run of the Issue, or a launch record not pointing at the target run, is alive |
+| `issue_liveness_unknown` | None of those is alive but at least one cannot be judged |
+| `run_not_failed` | The run ended with a status other than `ERROR` / `ABORT` |
+| `artifact_unreadable` | A required artifact is missing or broken (run.log, `result.json` of an attempt that has `step_end`, `session-state.json`, `recovery-chain.json`, `recovery.json`) |
+| `workflow_mismatch` | The run's workflow name differs from `<workflow.yaml>` |
+| `unknown_failed_step` | The failed step cannot be determined or is not in the workflow |
+| `non_resumable_skill` | The failed step or the actual restart step runs `issue-start` / `i-pr` / `issue-close` |
+| `agent_declared_abort` / `cycle_exhausted` / `user_interrupted` / `ambiguous_worktree_abort` | The triage cause is one of these |
+| `sensitive_failure_pattern` | The error text matches an auth / permission pattern |
+| `worktree_unavailable` / `branch_mismatch` | The worktree in `session-state.json` is missing / its branch differs |
+| `provider_unavailable` | The provider cannot be resolved (shared with triage; for retry this is normally an exit 2 before the gates) |
+| `agent_pane_alive` | The failed step's latest Herdr pane is owned by kaji and still has a foreground agent process |
+| `agent_pane_unverifiable` | That pane cannot be checked (`pane-metadata.json` broken, Herdr query failed, or liveness unknown) |
+
+The triage `recoverability_hint` never refuses a retry; causes such as
+`kaji_bug_suspected` or `dispatch_failure` pass.
+
+```bash
+kaji recover .kaji/wf/official/dev.yaml 540 --retry-failed-step
+case $? in
+  4) echo "refused by a gate: read the retry-gate: lines" ;;
+  0) echo "child completed" ;;
+  *) echo "child failed or input error" ;;
+esac
+```
+
 ## Exit codes
 
 The existing map (`0 = OK`, `1 = ABORT`, `2 = definition error`, `3 = runtime error`) is unchanged.
@@ -129,6 +215,9 @@ The existing map (`0 = OK`, `1 = ABORT`, `2 = definition error`, `3 = runtime er
 | `kaji recover`, triage completed (any decision) | `0` |
 | `kaji recover`, run not found / still in progress / flag mismatch / `requires_provider` mismatch | `2` |
 | `kaji recover`, handler internal error | `3` |
+| `kaji recover --retry-failed-step`, refused by a safety gate | `4` |
+| `kaji recover --retry-failed-step`, child run started | the child's exit code |
+| `kaji run`, launch record cannot be written (before the Issue is resolved) | `3` |
 
 ## Artifacts
 
