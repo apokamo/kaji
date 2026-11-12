@@ -284,12 +284,15 @@ def _pr_object(head: str = HEAD, state: str = "open") -> dict[str, Any]:
 
 
 class _FakeGh:
-    """`_gh_api` / `_gh_api_object` の fake。path の末尾で取得対象を判別する。
+    """`_gh_api` / `_gh_api_object` / `_gh_graphql` の fake。path の末尾で取得対象を判別する。
 
     `snapshots` は poll ごとの reactions / reviews / comments（reactions 取得で次へ進み、
     尽きたら最後を繰り返す）。`pull_heads` は `pulls/{n}` を取得する呼び出しごとの head
     （poll 中・確定直前・確定直後の順。尽きたら最後を繰り返す）。`fail_pull_calls` は
     失敗させる `pulls/{n}` 取得の通し番号（0 始まり、失敗した呼び出しも数える）。
+    `comment_responses` は comments 取得の通し番号ごとの応答（尽きたら最後を繰り返す。
+    None なら snapshot の comments）。`fail_comment_calls` は失敗させる comments 取得の通し番号。
+    `review_thread_pages` は GraphQL `reviewThreads` のページ（cursor ``c<n>`` で n ページ目）。
     """
 
     def __init__(
@@ -300,15 +303,25 @@ class _FakeGh:
         pull_state: str = "open",
         fail_first: dict[str, int] | None = None,
         fail_pull_calls: Iterable[int] = (),
+        comment_responses: list[list[dict[str, Any]]] | None = None,
+        fail_comment_calls: Iterable[int] = (),
+        review_thread_pages: list[list[dict[str, Any]]] | None = None,
+        stuck_cursor: bool = False,
     ) -> None:
         self.snapshots = snapshots
         self.pull_heads = pull_heads or [HEAD]
         self.pull_state = pull_state
         self.fail_first = dict(fail_first or {})
         self.fail_pull_calls = set(fail_pull_calls)
+        self.comment_responses = comment_responses
+        self.fail_comment_calls = set(fail_comment_calls)
+        self.review_thread_pages = review_thread_pages or [[]]
+        self.stuck_cursor = stuck_cursor
         self.snapshot_idx = -1
         self.pull_calls = 0
         self.pull_attempts = 0
+        self.comment_attempts = 0
+        self.graphql_variables: list[dict[str, str | int | None]] = []
         self.calls: list[str] = []
 
     def _maybe_fail(self, kind: str, path: str) -> None:
@@ -319,17 +332,27 @@ class _FakeGh:
     def _snapshot(self) -> dict[str, list[dict[str, Any]]]:
         return self.snapshots[min(max(self.snapshot_idx, 0), len(self.snapshots) - 1)]
 
+    def _comments(self, path: str) -> list[dict[str, Any]]:
+        attempt = self.comment_attempts
+        self.comment_attempts += 1
+        if attempt in self.fail_comment_calls:
+            raise subprocess.CalledProcessError(1, ["gh", "api", path])
+        self._maybe_fail("comments", path)
+        if self.comment_responses is None:
+            return self._snapshot()["comments"]
+        return self.comment_responses[min(attempt, len(self.comment_responses) - 1)]
+
     def api(self, path: str) -> list[dict[str, Any]]:
         kind = path.rsplit("/", 1)[1]
         self.calls.append(kind)
+        if kind == "comments":
+            return self._comments(path)
         self._maybe_fail(kind, path)
         if kind == "reactions":
             self.snapshot_idx += 1
             return self._snapshot()["reactions"]
         if kind == "reviews":
             return self._snapshot()["reviews"]
-        if kind == "comments":
-            return self._snapshot()["comments"]
         raise AssertionError(f"unexpected list path: {path}")
 
     def api_object(self, path: str) -> dict[str, Any]:
@@ -344,10 +367,41 @@ class _FakeGh:
         self.pull_calls += 1
         return _pr_object(head, self.pull_state)
 
+    def graphql(self, query: str, variables: dict[str, str | int | None]) -> dict[str, Any]:
+        assert "reviewThreads" in query
+        self.calls.append("graphql")
+        self.graphql_variables.append(dict(variables))
+        self._maybe_fail("graphql", "graphql")
+        if self.stuck_cursor:
+            # 毎回同じ endCursor を返し、ページ送りが進まない応答
+            return _review_threads_data([], True, "c1")
+        cursor = variables.get("cursor")
+        page = 0 if cursor is None else int(str(cursor).removeprefix("c"))
+        has_next = page + 1 < len(self.review_thread_pages)
+        end_cursor = f"c{page + 1}" if has_next else None
+        return _review_threads_data(self.review_thread_pages[page], has_next, end_cursor)
+
+
+def _review_threads_data(
+    nodes: list[dict[str, Any]], has_next: bool = False, end_cursor: str | None = None
+) -> dict[str, Any]:
+    """GraphQL 応答の ``data``（``repository.pullRequest.reviewThreads`` の 1 ページ）。"""
+    return {
+        "repository": {
+            "pullRequest": {
+                "reviewThreads": {
+                    "pageInfo": {"hasNextPage": has_next, "endCursor": end_cursor},
+                    "nodes": nodes,
+                }
+            }
+        }
+    }
+
 
 def _install(monkeypatch: pytest.MonkeyPatch, fake: _FakeGh) -> _FakeGh:
     monkeypatch.setattr(mod, "_gh_api", fake.api)
     monkeypatch.setattr(mod, "_gh_api_object", fake.api_object)
+    monkeypatch.setattr(mod, "_gh_graphql", fake.graphql)
     return fake
 
 
@@ -435,7 +489,7 @@ class TestRunPolling:
         assert evidence["approval"]["reaction"]["api_path"] == (
             f"repos/{OWNER}/{REPO}/issues/{PR}/reactions"
         )
-        assert evidence["schema_version"] == 2
+        assert evidence["schema_version"] == 3
         assert evidence["approval"]["review_state"]["comment_id"] == 501
         assert evidence["approval"]["review_state"]["comment_updated_at"] == STATE_UPDATED_AT
         assert evidence["checks"] == {
@@ -443,6 +497,7 @@ class TestRunPolling:
             "head_sha_before_decision": HEAD,
             "head_sha_after_decision": HEAD,
             "current_head_bot_reviews": 0,
+            "security_null_checks": None,
         }
         assert evidence["fetched_at"] == evidence["decided_at"] == "2026-05-24T09:00:00Z"
         # producer の model と同じ不変条件で再読込できる
@@ -1273,6 +1328,9 @@ class TestParseReviewState:
             _state_marker(_entry("ABC")),
             _state_marker(_entry(findings=1)),  # type: ignore[arg-type]
             "<!-- codex-review-state:v1-->",
+            _state_marker(security=_entry(None, findings=None)),
+            _state_marker(security=_entry(None)),
+            _state_marker(security=_entry(findings=1)),  # type: ignore[arg-type]
         ],
         ids=[
             "unknown_version",
@@ -1284,6 +1342,9 @@ class TestParseReviewState:
             "sha_not_hex",
             "findings_not_bool",
             "malformed_marker",
+            "security_completed_null_without_sha",
+            "security_completed_without_sha",
+            "security_findings_not_bool",
         ],
     )
     def test_unusable_state_is_invalid(self, marker: str) -> None:
@@ -1459,14 +1520,16 @@ class TestRunPollingStatePath:
         )
         return result, fake
 
-    def test_state_pass_writes_v2_evidence_without_commits_lookup(
+    def test_state_pass_writes_v3_evidence_without_commits_lookup(
         self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
     ) -> None:
         result, fake = self._polling(monkeypatch, evidence_path, [_state_pass_snap()])
         assert result.state == "done_pass"
         assert "commits" not in fake.calls
+        # security の null 経路でないので reviewThreads は引かない
+        assert "graphql" not in fake.calls
         evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-        assert evidence["schema_version"] == 2
+        assert evidence["schema_version"] == 3
         assert evidence["approval"]["review_state"] == {
             "comment_id": 601,
             "url": f"{PR_URL}#issuecomment-601",
@@ -1476,7 +1539,8 @@ class TestRunPollingStatePath:
             "security_review": {"commit_sha": None, "status": None, "has_any_findings": None},
         }
         assert "short_sha_matching_pr_commits" not in evidence["checks"]
-        assert load_evidence(evidence_path).schema_version == 2
+        assert evidence["checks"]["security_null_checks"] is None
+        assert load_evidence(evidence_path).schema_version == 3
 
     def test_stateless_summary_falls_back_after_no_reaction_timeout(
         self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
@@ -1504,13 +1568,13 @@ class TestRunPollingStatePath:
         assert "IN_PROGRESS_TIMEOUT_SEC" in result.reason
         assert not evidence_path.exists()
 
-    def test_state_added_later_passes_with_v2_evidence(
+    def test_state_added_later_passes_with_v3_evidence(
         self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
     ) -> None:
         stateless = _snap(_fresh_plus_one(), comments=[_summary_comment()])
         result, _ = self._polling(monkeypatch, evidence_path, [stateless, _state_pass_snap()])
         assert result.state == "done_pass"
-        assert load_evidence(evidence_path).schema_version == 2
+        assert load_evidence(evidence_path).schema_version == 3
 
     def test_state_retry_is_immediate(
         self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
@@ -1543,3 +1607,799 @@ class TestRunPollingStatePath:
         result = _run(evidence_path, head_sha=KAMO2_HEAD)
         assert fake.snapshot_idx == 1
         assert (result.state, result.signal) == ("done_retry", "state")
+
+
+# --- Issue #557: security_review の completed / has_any_findings=null ------------
+
+# 実 payload（kaji の PR summary comment と bot の +1）の head と committedDate
+KAJI_PR550_HEAD = "8971eda85e304265201ed672f2fa7bce6cafbd66"
+KAJI_PR550_HEAD_AT = "2026-11-08T15:40:38Z"
+KAJI_PR552_HEAD = "eb159264fee25b39e68b5009139a65ec2b5e8766"
+KAJI_PR552_HEAD_AT = "2026-11-08T17:06:58Z"
+# PR #559: summary と bot review の時点の head（その後 a52f66e が push された）
+KAJI_PR559_HEAD = "e144b2be38dbf78f75eea8d4d5aa461454fed713"
+KAJI_PR559_HEAD_AT = "2026-11-12T07:49:58Z"
+# PR #559 の reviewThreads 取得時（2026-11-12）の head。bot comment の `commit` が付け替わっている
+KAJI_PR559_THREAD_HEAD = "a52f66e7aa88e7db15d53a6cd257dc471b044663"
+
+_SECURITY_NULL = _entry(HEAD, findings=None)
+_BOT_AUTHOR: dict[str, Any] = {"__typename": "Bot", "databaseId": BOT_ID}
+_USAGE_LIMIT_BODY = "You have reached your Codex usage limits for code reviews."
+_NO_ISSUES_BODY = "Codex Review: Didn't find any major issues. No security issues were found."
+
+
+def _null_summary() -> dict[str, Any]:
+    """security が head の completed/null、code が head の completed/false の summary（id=601）。"""
+    return _state_comment(_state_marker(security=_SECURITY_NULL))
+
+
+def _issue_comment(body: object, *, comment_id: int = 701, user_id: int = BOT_ID) -> dict[str, Any]:
+    login = "chatgpt-codex-connector[bot]" if user_id == BOT_ID else "someone"
+    return {
+        "id": comment_id,
+        "html_url": f"{PR_URL}#issuecomment-{comment_id}",
+        "user": {"id": user_id, "login": login},
+        "created_at": "2026-05-24T08:26:00Z",
+        "updated_at": "2026-05-24T08:26:00Z",
+        "body": body,
+    }
+
+
+def _thread_comment(
+    commit: str | None = HEAD,
+    original: str | None = HEAD,
+    *,
+    author: dict[str, Any] | None = _BOT_AUTHOR,
+) -> dict[str, Any]:
+    return {
+        "author": author,
+        "commit": None if commit is None else {"oid": commit},
+        "originalCommit": None if original is None else {"oid": original},
+    }
+
+
+def _thread(
+    *comments: dict[str, Any], resolved: bool = False, more_comments: bool = False
+) -> dict[str, Any]:
+    return {
+        "isResolved": resolved,
+        "comments": {"pageInfo": {"hasNextPage": more_comments}, "nodes": list(comments)},
+    }
+
+
+@pytest.mark.small
+class TestKajiSecurityNullReproduction:
+    """Issue #557 の再現: 修正前は security の completed/null で parse に失敗し done_fallback になる。"""
+
+    @pytest.mark.parametrize(("pr", "head"), [(550, KAJI_PR550_HEAD), (552, KAJI_PR552_HEAD)])
+    def test_real_summary_is_parsed(self, pr: int, head: str) -> None:
+        comment = _load(f"kaji_pr{pr}_comments.json")[0]
+        state = mod._parse_state_body(comment)
+        assert isinstance(state, mod.ReviewState), state
+        assert state.security_review.commit_sha == head
+        assert state.security_review.completed
+        assert state.security_review.has_any_findings is None
+
+    @pytest.mark.parametrize(
+        ("pr", "head", "head_at", "reaction_id"),
+        [
+            (550, KAJI_PR550_HEAD, KAJI_PR550_HEAD_AT, 636248773),
+            (552, KAJI_PR552_HEAD, KAJI_PR552_HEAD_AT, 636370349),
+        ],
+    )
+    def test_real_summary_with_later_plus_one_is_pass(
+        self, pr: int, head: str, head_at: str, reaction_id: int
+    ) -> None:
+        result = classify(
+            _load(f"kaji_pr{pr}_reactions.json"),
+            [],
+            head,
+            head_at,
+            comments=_load(f"kaji_pr{pr}_comments.json"),
+        )
+        assert (result.state, result.signal) == ("done_pass", "state"), result.reason
+        assert result.approval is not None
+        assert result.approval.reaction_id == reaction_id
+        assert result.approval.review_state.security_review.has_any_findings is None
+
+    def test_pr559_code_findings_with_security_null_is_retry(self) -> None:
+        # 修正前は security の null で先に parse に失敗し、code の true の RETRY にも届かなかった
+        result = classify(
+            [],
+            _load("kaji_pr559_reviews.json"),
+            KAJI_PR559_HEAD,
+            KAJI_PR559_HEAD_AT,
+            comments=_load("kaji_pr559_comments.json"),
+        )
+        assert (result.state, result.signal) == ("done_retry", "state"), result.reason
+        assert "code review found issues" in result.reason
+
+
+@pytest.mark.small
+class TestSecurityNullPath:
+    """security が head の completed/null のときの条件付き受け入れ（fail-closed）。"""
+
+    def _classify(
+        self,
+        comments: list[dict[str, Any]] | None = None,
+        *,
+        reactions: list[dict[str, Any]] | None = None,
+        reviews: list[dict[str, Any]] | None = None,
+    ) -> PollResult:
+        return classify(
+            _fresh_plus_one() if reactions is None else reactions,
+            reviews or [],
+            HEAD,
+            HEAD_AT,
+            comments=[_null_summary()] if comments is None else comments,
+        )
+
+    def test_null_on_head_with_later_plus_one_is_pass(self) -> None:
+        result = self._classify()
+        assert (result.state, result.signal) == ("done_pass", "state")
+        assert result.approval is not None
+        assert result.approval.review_state.security_review.has_any_findings is None
+
+    @pytest.mark.parametrize(
+        "reactions",
+        [[], [_plus_one(STATE_UPDATED_AT)], [_plus_one("2026-05-24T08:25:20Z")]],
+        ids=["no_plus_one", "same_second", "before_update"],
+    )
+    def test_null_without_fresh_plus_one_is_not_terminal(
+        self, reactions: list[dict[str, Any]]
+    ) -> None:
+        assert self._classify(reactions=reactions).state == "init"
+
+    def test_null_with_head_bot_review_is_not_terminal(self) -> None:
+        assert self._classify(reviews=[_bot_review(_RECEIPT_BODY)]).state == "init"
+
+    @pytest.mark.parametrize(
+        "body",
+        [_USAGE_LIMIT_BODY, _NO_ISSUES_BODY, None, 123],
+        ids=["usage_limit", "receipt_like", "body_null", "body_not_str"],
+    )
+    @pytest.mark.parametrize("with_plus_one", [True, False])
+    def test_bot_non_summary_comment_is_immediate_fallback(
+        self, body: object, with_plus_one: bool
+    ) -> None:
+        # 文面では判定しない。trusted bot の summary 以外の comment が 1 件でもあれば 👍 を待たない
+        reactions = _fresh_plus_one() if with_plus_one else []
+        result = self._classify([_null_summary(), _issue_comment(body)], reactions=reactions)
+        assert (result.state, result.signal) == ("done_fallback", "state")
+        assert "summary" in result.reason
+
+    def test_untrusted_comment_does_not_block_null_path(self) -> None:
+        comments = [_null_summary(), _issue_comment(_USAGE_LIMIT_BODY, user_id=1)]
+        assert self._classify(comments).state == "done_pass"
+
+    def test_older_bot_summary_is_not_counted(self) -> None:
+        older = _state_comment(comment_id=500, updated_at="2026-05-24T08:10:00Z")
+        assert self._classify([older, _null_summary()]).state == "done_pass"
+
+    def test_null_without_commit_sha_is_immediate_fallback(self) -> None:
+        # PR #519 型（commit_sha も null）は従来どおり parse で拒否する
+        marker = _state_marker(security=_entry(None, findings=None))
+        result = self._classify([_state_comment(marker)])
+        assert (result.state, result.signal) == ("done_fallback", "state")
+
+    @pytest.mark.parametrize("code_head", [HEAD, OTHER_HEAD])
+    def test_null_on_other_head_is_immediate_fallback(self, code_head: str) -> None:
+        marker = _state_marker(_entry(code_head), _entry(OTHER_HEAD, findings=None))
+        result = self._classify([_state_comment(marker)])
+        assert (result.state, result.signal) == ("done_fallback", "state")
+        assert "security review" in result.reason
+
+    def test_code_null_is_immediate_fallback(self) -> None:
+        marker = _state_marker(_entry(findings=None), _SECURITY_NULL)
+        result = self._classify([_state_comment(marker)])
+        assert (result.state, result.signal) == ("done_fallback", "state")
+
+    def test_code_findings_with_security_null_is_retry(self) -> None:
+        marker = _state_marker(_entry(findings=True), _SECURITY_NULL)
+        result = self._classify([_state_comment(marker)], reactions=[])
+        assert (result.state, result.signal) == ("done_retry", "state")
+
+    def test_code_findings_beat_bot_non_summary_comment(self) -> None:
+        marker = _state_marker(_entry(findings=True), _SECURITY_NULL)
+        comments = [_state_comment(marker), _issue_comment(_USAGE_LIMIT_BODY)]
+        assert self._classify(comments, reactions=[]).state == "done_retry"
+
+    def test_code_pending_with_security_null_is_not_terminal(self) -> None:
+        marker = _state_marker(_entry(findings=None, status="in_progress"), _SECURITY_NULL)
+        assert self._classify([_state_comment(marker)]).state == "init"
+
+    @pytest.mark.parametrize(
+        "security",
+        [_entry(), _NULL_ENTRY, _entry(OTHER_HEAD, findings=False)],
+        ids=["false_on_head", "not_observed", "other_head"],
+    )
+    def test_false_path_ignores_bot_non_summary_comment(self, security: dict[str, Any]) -> None:
+        # (a)(b) は null 経路だけに課す
+        comments = [_state_comment(_state_marker(security=security)), _issue_comment("note")]
+        assert self._classify(comments).state == "done_pass"
+
+
+@pytest.mark.small
+class TestCountBotNonSummaryComments:
+    def test_counts_only_trusted_bot_non_summary_comments(self) -> None:
+        comments = [
+            _null_summary(),
+            _state_comment(comment_id=500, updated_at="2026-05-24T08:10:00Z"),
+            _issue_comment("error", comment_id=1),
+            _issue_comment(None, comment_id=2),
+            _issue_comment("  " + mod.SUMMARY_MARKER + "\nbody", comment_id=3),
+            _issue_comment("human", comment_id=4, user_id=1),
+            {"id": 5, "user": None, "body": "ghost"},
+        ]
+        assert mod._count_bot_non_summary_comments(comments, BOT_ID) == 2
+
+
+@pytest.mark.small
+class TestCountUnresolvedHeadBotThreads:
+    @pytest.mark.parametrize(
+        ("threads", "expected"),
+        [
+            ([_thread(_thread_comment(HEAD, OTHER_HEAD))], 1),
+            ([_thread(_thread_comment(OTHER_HEAD, HEAD))], 1),
+            ([_thread(_thread_comment(None, OTHER_HEAD))], 1),
+            ([_thread(_thread_comment(OTHER_HEAD, None))], 1),
+            ([_thread(_thread_comment(OTHER_HEAD, OTHER_HEAD))], 0),
+            ([_thread(_thread_comment(), resolved=True)], 0),
+            ([_thread(_thread_comment(author={"__typename": "User"}))], 0),
+            ([_thread(_thread_comment(author={"__typename": "Bot", "databaseId": 1}))], 0),
+            ([_thread(_thread_comment(author={"__typename": "User", "databaseId": BOT_ID}))], 0),
+            ([_thread(_thread_comment(author=None))], 0),
+            ([_thread(_thread_comment(author={"__typename": "User"}), more_comments=True)], 1),
+            ([_thread(more_comments=True, resolved=True)], 0),
+            (
+                [
+                    _thread(_thread_comment(author={"__typename": "User"}), _thread_comment()),
+                    _thread(_thread_comment(OTHER_HEAD, HEAD)),
+                    _thread(_thread_comment(OTHER_HEAD, OTHER_HEAD)),
+                ],
+                2,
+            ),
+            ([], 0),
+        ],
+        ids=[
+            "commit_on_head",
+            "original_commit_on_head",
+            "commit_null",
+            "original_commit_null",
+            "outdated_both_old",
+            "resolved",
+            "human_only",
+            "other_bot",
+            "user_with_bot_id",
+            "author_null",
+            "comments_truncated",
+            "resolved_truncated",
+            "multiple_threads",
+            "empty",
+        ],
+    )
+    def test_counts(self, threads: list[dict[str, Any]], expected: int) -> None:
+        assert mod._count_unresolved_head_bot_threads(threads, HEAD, BOT_ID) == expected
+
+    def test_real_pr559_threads(self) -> None:
+        # 未解決 1 件（bot comment の commit が head に付け替わっている）と解決済み 1 件
+        nodes = json.loads((FIXTURES / "kaji_pr559_review_threads.json").read_text())["data"][
+            "repository"
+        ]["pullRequest"]["reviewThreads"]["nodes"]
+        count = mod._count_unresolved_head_bot_threads
+        assert count(nodes, KAJI_PR559_THREAD_HEAD, BOT_ID) == 1
+        assert count(nodes, KAJI_PR559_HEAD, BOT_ID) == 1
+        assert count(nodes, OTHER_HEAD, BOT_ID) == 0
+
+    @pytest.mark.parametrize(
+        "threads",
+        [
+            [
+                {
+                    "isResolved": "false",
+                    "comments": {"pageInfo": {"hasNextPage": False}, "nodes": []},
+                }
+            ],
+            [{"isResolved": None, "comments": {"pageInfo": {"hasNextPage": False}, "nodes": []}}],
+            [{"comments": {"pageInfo": {"hasNextPage": False}, "nodes": []}}],
+            ["thread"],
+            [{"isResolved": False}],
+            [{"isResolved": False, "comments": {"pageInfo": {"hasNextPage": False}, "nodes": {}}}],
+            [{"isResolved": False, "comments": {"pageInfo": {}, "nodes": []}}],
+            [{"isResolved": False, "comments": {"nodes": []}}],
+            [{"isResolved": False, "comments": {"pageInfo": {"hasNextPage": False}, "nodes": [1]}}],
+        ],
+        ids=[
+            "is_resolved_str",
+            "is_resolved_null",
+            "is_resolved_missing",
+            "thread_not_object",
+            "comments_missing",
+            "comment_nodes_not_list",
+            "has_next_missing",
+            "page_info_missing",
+            "comment_not_object",
+        ],
+    )
+    def test_unexpected_shape_raises(self, threads: list[Any]) -> None:
+        with pytest.raises(ValueError):
+            mod._count_unresolved_head_bot_threads(threads, HEAD, BOT_ID)
+
+    @pytest.mark.parametrize(
+        "comment",
+        [
+            _thread_comment(author={"__typename": "Bot", "databaseId": str(BOT_ID)}),
+            _thread_comment(author={"__typename": "Bot", "databaseId": True}),
+            _thread_comment(author={"__typename": "Bot", "databaseId": None}),
+            _thread_comment(author={"__typename": "Bot"}),
+            _thread_comment(author={"databaseId": BOT_ID}),
+            _thread_comment(author={"__typename": 1, "databaseId": BOT_ID}),
+            _thread_comment(author="bot"),
+            _thread_comment("not-a-sha", "not-a-sha"),
+            _thread_comment(OTHER_HEAD, "not-a-sha"),
+            _thread_comment(OTHER_HEAD.upper(), OTHER_HEAD),
+            _thread_comment(OTHER_HEAD, OTHER_HEAD[:39]),
+            {**_thread_comment(OTHER_HEAD, OTHER_HEAD), "commit": {"oid": 1}},
+            {**_thread_comment(OTHER_HEAD, OTHER_HEAD), "commit": {}},
+            {**_thread_comment(OTHER_HEAD, OTHER_HEAD), "originalCommit": "sha"},
+            {k: v for k, v in _thread_comment(OTHER_HEAD, OTHER_HEAD).items() if k != "commit"},
+            {k: v for k, v in _thread_comment().items() if k != "author"},
+        ],
+        ids=[
+            "bot_database_id_str",
+            "bot_database_id_bool",
+            "bot_database_id_null",
+            "bot_database_id_missing",
+            "typename_missing",
+            "typename_not_str",
+            "author_not_object",
+            "both_oids_not_sha",
+            "original_oid_not_sha",
+            "commit_oid_uppercase",
+            "original_oid_short",
+            "commit_oid_not_str",
+            "commit_oid_missing",
+            "original_commit_not_object",
+            "commit_key_missing",
+            "author_key_missing",
+        ],
+    )
+    def test_malformed_comment_raises_instead_of_counting_zero(
+        self, comment: dict[str, Any]
+    ) -> None:
+        # Issue #557 review MF2: 形・型・SHA 形式の不正を「指摘なし（0 件）」へ変換しない
+        with pytest.raises(ValueError):
+            mod._count_unresolved_head_bot_threads([_thread(comment)], HEAD, BOT_ID)
+
+    def test_malformed_comment_in_resolved_thread_raises(self) -> None:
+        threads = [_thread(_thread_comment("not-a-sha", "not-a-sha"), resolved=True)]
+        with pytest.raises(ValueError):
+            mod._count_unresolved_head_bot_threads(threads, HEAD, BOT_ID)
+
+
+@pytest.mark.medium
+class TestGhGraphql:
+    def _fake_run(
+        self, stdout: str, calls: list[list[str]]
+    ) -> Callable[..., subprocess.CompletedProcess[str]]:
+        def _fake(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            calls.append(args)
+            assert kwargs.get("check") is True
+            return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+
+        return _fake
+
+    def test_argv_carries_query_and_typed_variables(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[list[str]] = []
+        data = _review_threads_data([])
+        monkeypatch.setattr(
+            mod.subprocess, "run", self._fake_run(json.dumps({"data": data}), calls)
+        )
+        variables: dict[str, str | int | None] = {
+            "owner": OWNER,
+            "name": REPO,
+            "number": PR,
+            "cursor": None,
+        }
+        assert mod._gh_graphql("query { x }", variables) == data
+        assert calls[0][:3] == ["gh", "api", "graphql"]
+        assert calls[0][3:] == [
+            "-f",
+            "query=query { x }",
+            "-f",
+            f"owner={OWNER}",
+            "-f",
+            f"name={REPO}",
+            "-F",
+            f"number={PR}",
+        ]
+
+        calls.clear()
+        mod._gh_graphql("query { x }", {**variables, "cursor": "abc"})
+        assert calls[0][-2:] == ["-f", "cursor=abc"]
+
+    @pytest.mark.parametrize(
+        "response",
+        [
+            {"data": _review_threads_data([]), "errors": [{"message": "boom"}]},
+            {"errors": [{"message": "boom"}]},
+            [],
+            {"data": None},
+            {"data": []},
+        ],
+        ids=["errors_with_data", "errors_only", "not_object", "data_null", "data_not_object"],
+    )
+    def test_unexpected_response_raises(
+        self, monkeypatch: pytest.MonkeyPatch, response: object
+    ) -> None:
+        monkeypatch.setattr(mod.subprocess, "run", self._fake_run(json.dumps(response), []))
+        with pytest.raises(ValueError):
+            mod._gh_graphql("query { x }", {"owner": OWNER})
+
+
+@pytest.mark.medium
+class TestFetchReviewThreads:
+    def _install_pages(
+        self, monkeypatch: pytest.MonkeyPatch, pages: list[dict[str, Any]]
+    ) -> list[dict[str, str | int | None]]:
+        seen: list[dict[str, str | int | None]] = []
+
+        def _fake(query: str, variables: dict[str, str | int | None]) -> dict[str, Any]:
+            seen.append(dict(variables))
+            return pages[len(seen) - 1]
+
+        monkeypatch.setattr(mod, "_gh_graphql", _fake)
+        return seen
+
+    def test_follows_cursor_across_pages(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        first, second = _thread(_thread_comment()), _thread(_thread_comment(), resolved=True)
+        seen = self._install_pages(
+            monkeypatch,
+            [_review_threads_data([first], True, "c1"), _review_threads_data([second])],
+        )
+        assert mod._fetch_review_threads(OWNER, REPO, PR) == [first, second]
+        assert seen == [
+            {"owner": OWNER, "name": REPO, "number": PR, "cursor": None},
+            {"owner": OWNER, "name": REPO, "number": PR, "cursor": "c1"},
+        ]
+
+    @pytest.mark.parametrize(
+        "pages",
+        [
+            [_review_threads_data([], True, None)],
+            [_review_threads_data([], True, "")],
+            [_review_threads_data([], True, "c1"), _review_threads_data([], True, "c1")],
+            [{"repository": {"pullRequest": None}}],
+            [{"repository": None}],
+            [{"repository": {"pullRequest": {"reviewThreads": {"nodes": []}}}}],
+            [
+                {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewThreads": {
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                "nodes": {},
+                            }
+                        }
+                    }
+                }
+            ],
+            [
+                {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewThreads": {
+                                "pageInfo": {"hasNextPage": "no", "endCursor": None},
+                                "nodes": [],
+                            }
+                        }
+                    }
+                }
+            ],
+        ],
+        ids=[
+            "next_without_cursor",
+            "next_with_empty_cursor",
+            "cursor_not_advancing",
+            "pull_request_null",
+            "repository_null",
+            "page_info_missing",
+            "nodes_not_list",
+            "has_next_not_bool",
+        ],
+    )
+    def test_unexpected_pages_raise(
+        self, monkeypatch: pytest.MonkeyPatch, pages: list[dict[str, Any]]
+    ) -> None:
+        self._install_pages(monkeypatch, pages)
+        with pytest.raises(ValueError):
+            mod._fetch_review_threads(OWNER, REPO, PR)
+
+
+def _null_pass_snap() -> dict[str, list[dict[str, Any]]]:
+    return _snap(_fresh_plus_one(), comments=[_null_summary()])
+
+
+@pytest.mark.medium
+class TestRunPollingSecurityNull:
+    def _polling(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path, fake: _FakeGh, **kwargs: Any
+    ) -> PollResult:
+        _install(monkeypatch, fake)
+        return _run(evidence_path, emit_progress=[].append, **kwargs)
+
+    def test_null_pass_writes_v3_evidence_with_checks(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        fake = _FakeGh([_null_pass_snap()])
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert result.state == "done_pass", result.reason
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        assert evidence["schema_version"] == 3
+        assert evidence["approval"]["review_state"]["security_review"] == {
+            "commit_sha": HEAD,
+            "status": "completed",
+            "has_any_findings": None,
+        }
+        assert evidence["checks"]["security_null_checks"] == {
+            "unresolved_head_bot_threads": 0,
+            "bot_non_summary_issue_comments": 0,
+        }
+        assert load_evidence(evidence_path).schema_version == 3
+        # 追加取得は判定直前と直後の pulls 確認の間で行う
+        assert fake.calls == [
+            "pulls",
+            "reactions",
+            "reviews",
+            "comments",
+            "pulls",
+            "comments",
+            "graphql",
+            "pulls",
+        ]
+        assert fake.graphql_variables == [
+            {"owner": OWNER, "name": REPO, "number": PR, "cursor": None}
+        ]
+
+    def test_graphql_is_called_only_for_null_pass_candidate(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        waiting = _snap([], comments=[_null_summary()])
+        fake = _FakeGh([waiting, waiting, _null_pass_snap()])
+        assert self._polling(monkeypatch, evidence_path, fake).state == "done_pass"
+        assert fake.calls.count("graphql") == 1
+
+    def test_real_pr552_payload_passes(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        snap = _snap(_load("kaji_pr552_reactions.json"), comments=_load("kaji_pr552_comments.json"))
+        fake = _FakeGh([snap], pull_heads=[KAJI_PR552_HEAD])
+        result = self._polling(
+            monkeypatch,
+            evidence_path,
+            fake,
+            head_sha=KAJI_PR552_HEAD,
+            head_committed_at=KAJI_PR552_HEAD_AT,
+            utcnow=lambda: datetime(2026, 11, 8, 17, 25, 0, tzinfo=UTC),
+        )
+        assert result.state == "done_pass", result.reason
+        evidence = load_evidence(evidence_path)
+        assert evidence.schema_version == 3
+        assert evidence.approval.reaction.id == 636370349
+
+    @pytest.mark.parametrize(
+        "threads",
+        [
+            [_thread(_thread_comment())],
+            [_thread(_thread_comment(OTHER_HEAD, HEAD))],
+            [_thread(_thread_comment(author={"__typename": "User"}), more_comments=True)],
+        ],
+        ids=["bot_on_head", "original_on_head", "truncated"],
+    )
+    def test_unresolved_head_bot_thread_falls_back_without_evidence(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path, threads: list[dict[str, Any]]
+    ) -> None:
+        fake = _FakeGh([_null_pass_snap()], review_thread_pages=[threads])
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert (result.state, result.signal) == ("done_fallback", "state")
+        assert "unresolved_head_bot_threads=1" in result.reason
+        assert not evidence_path.exists()
+
+    def test_thread_on_second_page_is_detected(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        pages = [[_thread(_thread_comment(OTHER_HEAD, OTHER_HEAD))], [_thread(_thread_comment())]]
+        fake = _FakeGh([_null_pass_snap()], review_thread_pages=pages)
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert result.state == "done_fallback"
+        assert [v["cursor"] for v in fake.graphql_variables] == [None, "c1"]
+        assert not evidence_path.exists()
+
+    def test_resolved_and_outdated_threads_do_not_block(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        threads = [
+            _thread(_thread_comment(), resolved=True),
+            _thread(_thread_comment(OTHER_HEAD, OTHER_HEAD)),
+            _thread(_thread_comment(author={"__typename": "User"})),
+        ]
+        fake = _FakeGh([_null_pass_snap()], review_thread_pages=[threads])
+        assert self._polling(monkeypatch, evidence_path, fake).state == "done_pass"
+
+    def test_bot_comment_posted_before_finalization_falls_back(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        # poll では summary だけだったが、確定時の再取得で bot のエラー comment が見つかった
+        refetched = [_null_summary(), _issue_comment(_USAGE_LIMIT_BODY)]
+        fake = _FakeGh([_null_pass_snap()], comment_responses=[[_null_summary()], refetched])
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert (result.state, result.signal) == ("done_fallback", "state")
+        assert "bot_non_summary_issue_comments=1" in result.reason
+        assert not evidence_path.exists()
+
+    def test_false_path_does_not_refetch_comments(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        fake = _FakeGh([_state_pass_snap()])
+        assert self._polling(monkeypatch, evidence_path, fake).state == "done_pass"
+        assert fake.calls.count("comments") == 1
+        assert "graphql" not in fake.calls
+
+    def test_two_graphql_failures_recover(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        fake = _FakeGh([_null_pass_snap()], fail_first={"graphql": 2})
+        assert self._polling(monkeypatch, evidence_path, fake).state == "done_pass"
+
+    def test_three_graphql_failures_abort(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        fake = _FakeGh([_null_pass_snap()], fail_first={"graphql": 3})
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert result.state == "done_abort"
+        assert "gh api failed 3 times" in result.reason
+        assert not evidence_path.exists()
+
+    def test_comments_refetch_failure_recovers(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        # comments 取得の通し番号: 0 poll / 1 確定（失敗）/ 2 poll / 3 確定（失敗）/ 4 poll / 5 確定
+        fake = _FakeGh([_null_pass_snap()], fail_comment_calls={1, 3})
+        assert self._polling(monkeypatch, evidence_path, fake).state == "done_pass"
+        assert fake.comment_attempts == 6
+
+    def test_persistent_comments_refetch_failure_aborts(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        fake = _FakeGh([_null_pass_snap()], fail_comment_calls=range(1, 99, 2))
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert result.state == "done_abort"
+        assert "gh api failed 3 times" in result.reason
+        assert not evidence_path.exists()
+
+    def test_stuck_cursor_is_a_fetch_failure(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        fake = _FakeGh([_null_pass_snap()], stuck_cursor=True)
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert result.state == "done_abort"
+        assert not evidence_path.exists()
+
+    def test_bot_non_summary_comment_falls_back_on_first_poll(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        snap = _snap([], comments=[_null_summary(), _issue_comment(_USAGE_LIMIT_BODY)])
+        fake = _FakeGh([snap])
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert result.state == "done_fallback"
+        assert fake.snapshot_idx == 0
+        assert "graphql" not in fake.calls
+        assert not evidence_path.exists()
+
+    @pytest.mark.parametrize(
+        "comment",
+        [
+            _thread_comment(author={"__typename": "Bot", "databaseId": str(BOT_ID)}),
+            _thread_comment("not-a-sha", "not-a-sha"),
+        ],
+        ids=["bot_database_id_str", "commit_oids_not_sha"],
+    )
+    def test_malformed_review_thread_never_passes(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path, comment: dict[str, Any]
+    ) -> None:
+        # Issue #557 review MF2: 不正な GraphQL 応答は取得失敗として扱い、PASS・証跡にしない
+        fake = _FakeGh([_null_pass_snap()], review_thread_pages=[[_thread(comment)]])
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert result.state == "done_abort"
+        assert "gh api failed 3 times" in result.reason
+        assert not evidence_path.exists()
+
+    def test_summary_changed_to_code_findings_at_finalization_retries(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        # Issue #557 review MF1: 確定時の再取得で code review が true に更新されていたら RETRY
+        updated = _state_comment(
+            _state_marker(_entry(findings=True), _SECURITY_NULL),
+            updated_at="2026-05-24T08:30:00Z",
+        )
+        fake = _FakeGh([_null_pass_snap()], comment_responses=[[_null_summary()], [updated]])
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert (result.state, result.signal) == ("done_retry", "state")
+        assert "changed before finalization" in result.reason
+        assert "graphql" not in fake.calls
+        assert not evidence_path.exists()
+
+    def test_summary_changed_to_security_findings_at_finalization_retries(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        updated = _state_comment(
+            _state_marker(security=_entry(HEAD, findings=True)),
+            updated_at="2026-05-24T08:30:00Z",
+        )
+        fake = _FakeGh([_null_pass_snap()], comment_responses=[[_null_summary()], [updated]])
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert result.state == "done_retry"
+        assert not evidence_path.exists()
+
+    def test_summary_updated_after_plus_one_does_not_pass(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        # state は同じでも summary の updated_at が 👍 より後へ変わったら、古い 👍 で確定しない
+        updated = _state_comment(
+            _state_marker(security=_SECURITY_NULL), updated_at="2026-05-24T08:30:00Z"
+        )
+        assert mod.parse_review_state([updated], BOT_ID) != mod.parse_review_state(
+            [_null_summary()], BOT_ID
+        )
+        fake = _FakeGh([_null_pass_snap()], comment_responses=[[_null_summary()], [updated]])
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert result.state != "done_pass"
+        assert "graphql" not in fake.calls
+        assert not evidence_path.exists()
+
+    @pytest.mark.parametrize(
+        "refetched",
+        [
+            [],
+            [_stateless(_null_summary())],
+            [_state_comment(_state_marker(payload="{broken"))],
+        ],
+        ids=["summary_missing", "state_removed", "state_invalid"],
+    )
+    def test_summary_changed_otherwise_does_not_pass(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        evidence_path: Path,
+        refetched: list[dict[str, Any]],
+    ) -> None:
+        fake = _FakeGh([_null_pass_snap()], comment_responses=[[_null_summary()], refetched])
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert result.state != "done_pass"
+        assert "graphql" not in fake.calls
+        assert not evidence_path.exists()
+
+    def test_changed_summary_is_reevaluated_on_next_poll(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        # 確定時に一時的に summary が見えなくても、次の poll で同じ候補を確定できる
+        fake = _FakeGh(
+            [_null_pass_snap()],
+            comment_responses=[[_null_summary()], [], [_null_summary()]],
+        )
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert result.state == "done_pass", result.reason
+        assert fake.comment_attempts == 4
+        assert evidence_path.exists()
+
+    def test_other_summary_comment_is_finalized_only_after_reevaluation(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        # 確定時に別 comment の summary へ替わったら古い候補（601）では確定せず、次の poll で
+        # 新しい候補（602）として判定し直してから確定する
+        other = _state_comment(_state_marker(security=_SECURITY_NULL), comment_id=602)
+        fake = _FakeGh([_null_pass_snap()], comment_responses=[[_null_summary()], [other]])
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert result.state == "done_pass", result.reason
+        assert fake.comment_attempts == 4
+        assert fake.calls.count("graphql") == 1
+        assert load_evidence(evidence_path).approval.review_state.comment_id == 602

@@ -349,8 +349,12 @@ suggestion は「`kaji run <workflow> [issue_id] --from review-poll` で再確�
 
 不変条件 I1〜I9（正本: `docs/ARCHITECTURE.md` の「review-poll の承認証跡」節、
 producer は `kaji_harness/review_poll_evidence.py`）を 1 本の jq プログラムで検証する。
-受け付ける版は `schema_version: 2`（`codex-review-state:v1` で承認した証跡、Issue #473）だけで、
-`2` 以外は I1 違反（Issue #478）。
+受け付ける版は `schema_version: 2` と `3`（`codex-review-state:v1` で承認した証跡、Issue #473 / #557）だけで、
+それ以外は I1 違反（Issue #478）。producer が書くのは v3 だけで、v2 は upgrade 前に作られた attempt の証跡を
+close するために受け付ける。v3 は `checks.security_null_checks` を持ち、security_review が head の
+`completed`・`has_any_findings: null` のときだけ、review-poll が確定時に数えた追加確認（未解決の head bot thread・
+trusted bot の summary 以外の Issue comment）がともに 0 件であることを I6 で要求する。v2 は従来どおりこの null を拒否する。
+close は追加確認を再取得しない（証跡の記録だけを照合する）。
 出力は、すべて満たせば `OK` の 1 語、違反があれば違反した不変条件 ID のカンマ区切りになる。
 `OK` 以外（jq エラーや JSON 破損を含む）はすべて **ABORT** とし、違反した ID を報告する。
 
@@ -407,34 +411,67 @@ VERIFIED=$(jq -r '
       and (.commit_sha == null or (.commit_sha | sha40))
       and (.status == null or (.status | str1))
       and (.has_any_findings == null or (.has_any_findings | type == "boolean"));
-    (try .schema_version catch null) as $v
-  | if $v == 2 then [
-      chk("I1"; top_keys and .schema_version == 2),
-      chk("I1.sections";
-        common_sections
-        and (.approval | keys_eq(["bot","reaction","review_state"]))
-        and (.approval.review_state | keys_eq(["comment_id","url","comment_updated_at","state_version","code_review","security_review"]))
-        and (.approval.review_state.code_review | entry_ok)
-        and (.approval.review_state.security_review | entry_ok)
-        and (.checks | keys_eq(["head_sha_at_start","head_sha_before_decision","head_sha_after_decision","current_head_bot_reviews"]))),
-      common_checks[],
-      chk("I6";
-        (.approval.review_state.comment_id | posint)
-        and (.approval.review_state.url | type == "string"
-             and endswith("#issuecomment-\($e.approval.review_state.comment_id)"))
-        and .approval.review_state.state_version == "v1"
-        and (.approval.review_state.comment_updated_at | ists) and (.approval.review_state.comment_updated_at | ts | . > 0)
-        and (.approval.review_state.code_review
-             | .commit_sha == $e.reviewed_head.sha and .status == "completed" and .has_any_findings == false)
-        and (.approval.review_state.security_review
-             | .status == null
-               or (.commit_sha != null and .commit_sha != $e.reviewed_head.sha)
+    def nonneg_int: type == "number" and . == floor and . >= 0;
+    def state_sections:
+      (.approval | keys_eq(["bot","reaction","review_state"]))
+      and (.approval.review_state | keys_eq(["comment_id","url","comment_updated_at","state_version","code_review","security_review"]))
+      and (.approval.review_state.code_review | entry_ok)
+      and (.approval.review_state.security_review | entry_ok);
+    def checks_keys_v2: ["head_sha_at_start","head_sha_before_decision","head_sha_after_decision","current_head_bot_reviews"];
+    def null_checks_ok: . == null
+      or (keys_eq(["unresolved_head_bot_threads","bot_non_summary_issue_comments"])
+          and (.unresolved_head_bot_threads | nonneg_int)
+          and (.bot_non_summary_issue_comments | nonneg_int));
+    def state_base:
+      (.approval.review_state.comment_id | posint)
+      and (.approval.review_state.url | type == "string"
+           and endswith("#issuecomment-\($e.approval.review_state.comment_id)"))
+      and .approval.review_state.state_version == "v1"
+      and (.approval.review_state.comment_updated_at | ists) and (.approval.review_state.comment_updated_at | ts | . > 0)
+      and (.approval.review_state.code_review
+           | .commit_sha == $e.reviewed_head.sha and .status == "completed" and .has_any_findings == false);
+    def security_v2:
+      .approval.review_state.security_review
+      | .status == null
+        or (.commit_sha != null and .commit_sha != $e.reviewed_head.sha)
+        or (.status == "completed" and .has_any_findings == false
+            and .commit_sha == $e.reviewed_head.sha);
+    def security_v3:
+      .checks.security_null_checks as $n
+      | .approval.review_state.security_review
+      | if .commit_sha == $e.reviewed_head.sha and .status == "completed" and .has_any_findings == null
+        then $n == {"unresolved_head_bot_threads": 0, "bot_non_summary_issue_comments": 0}
+        else $n == null
+          and (.status == null
+               or (.commit_sha != null and .commit_sha != $e.reviewed_head.sha
+                   and ((.status == "completed" and .has_any_findings == null) | not))
                or (.status == "completed" and .has_any_findings == false
-                   and .commit_sha == $e.reviewed_head.sha))),
+                   and .commit_sha == $e.reviewed_head.sha))
+        end;
+    def state_checks: [
       chk("I7";
         (.approval.reaction.created_at | ts) >= ((.approval.review_state.comment_updated_at | ts | sec) + 1000000)
         and (.approval.reaction.created_at | ts) >= (.reviewed_head.committed_at | ts)),
       chk("I8"; head_checks and .checks.current_head_bot_reviews == 0)
+    ];
+    (try .schema_version catch null) as $v
+  | if $v == 2 then [
+      chk("I1"; top_keys and .schema_version == 2),
+      chk("I1.sections";
+        common_sections and state_sections and (.checks | keys_eq(checks_keys_v2))),
+      common_checks[],
+      chk("I6"; state_base and security_v2),
+      state_checks[]
+    ]
+    elif $v == 3 then [
+      chk("I1"; top_keys and .schema_version == 3),
+      chk("I1.sections";
+        common_sections and state_sections
+        and (.checks | keys_eq(checks_keys_v2 + ["security_null_checks"]))
+        and (.checks.security_null_checks | null_checks_ok)),
+      common_checks[],
+      chk("I6"; state_base and security_v3),
+      state_checks[]
     ]
     else ["I1"] end
   | if length == 0 then "OK" else join(",") end

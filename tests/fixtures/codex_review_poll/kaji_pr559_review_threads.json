@@ -1,0 +1,82 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "reviewThreads": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMS0xMlQwODowNzoyM1rOtoYXbw=="
+          },
+          "nodes": [
+            {
+              "isResolved": false,
+              "comments": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "author": {
+                      "__typename": "Bot",
+                      "databaseId": 199175422
+                    },
+                    "commit": {
+                      "oid": "a52f66e7aa88e7db15d53a6cd257dc471b044663"
+                    },
+                    "originalCommit": {
+                      "oid": "e144b2be38dbf78f75eea8d4d5aa461454fed713"
+                    }
+                  },
+                  {
+                    "author": {
+                      "__typename": "User"
+                    },
+                    "commit": {
+                      "oid": "a52f66e7aa88e7db15d53a6cd257dc471b044663"
+                    },
+                    "originalCommit": {
+                      "oid": "e144b2be38dbf78f75eea8d4d5aa461454fed713"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "isResolved": true,
+              "comments": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "author": {
+                      "__typename": "Bot",
+                      "databaseId": 199175422
+                    },
+                    "commit": {
+                      "oid": "a52f66e7aa88e7db15d53a6cd257dc471b044663"
+                    },
+                    "originalCommit": {
+                      "oid": "e144b2be38dbf78f75eea8d4d5aa461454fed713"
+                    }
+                  },
+                  {
+                    "author": {
+                      "__typename": "User"
+                    },
+                    "commit": {
+                      "oid": "a52f66e7aa88e7db15d53a6cd257dc471b044663"
+                    },
+                    "originalCommit": {
+                      "oid": "e144b2be38dbf78f75eea8d4d5aa461454fed713"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

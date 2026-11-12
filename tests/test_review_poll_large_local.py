@@ -38,6 +38,13 @@ data = json.load(open(os.environ["STUB_DATA"]))
 args = sys.argv[1:]
 if args[:1] != ["api"]:
     sys.exit("unexpected gh invocation: %r" % (args,))
+if args[:2] == ["api", "graphql"]:
+    if "graphql" not in data:
+        sys.exit("unexpected graphql call: %r" % (args,))
+    if "number=163" not in args or "owner=owner" not in args or "name=repo" not in args:
+        sys.exit("unexpected graphql variables: %r" % (args,))
+    print(json.dumps(data["graphql"]))
+    sys.exit(0)
 path = args[-1]
 paginated = "--paginate" in args and "--slurp" in args
 if path.endswith("/pulls/163"):
@@ -88,12 +95,19 @@ _REVIEW_STATE = (
     '"security_review":{"commit_sha":null,"has_any_findings":null,'
     '"has_unresolved_findings":null,"status":null}} -->\n'
 )
+# Issue #557: security_review が head の completed / has_any_findings=null
+_REVIEW_STATE_SECURITY_NULL = (
+    '<!-- codex-review-state:v1 {"code_review":{"commit_sha":"' + HEAD + '",'
+    '"has_any_findings":false,"has_unresolved_findings":false,"status":"completed"},'
+    '"security_review":{"commit_sha":"' + HEAD + '","has_any_findings":null,'
+    '"has_unresolved_findings":null,"status":"completed"}} -->\n'
+)
 
 
-def _summary_comment() -> dict[str, Any]:
+def _summary_comment(review_state: str = _REVIEW_STATE) -> dict[str, Any]:
     body = (
         "<!-- codex-pull-request-review-summary -->\n"
-        + _REVIEW_STATE
+        + review_state
         + "\n## Codex Review Summary\n\n"
         "| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n"
         "| 📝 **Code Review** | ✅ **Completed** "
@@ -114,7 +128,7 @@ def _plus_one() -> dict[str, Any]:
     return {"id": 4242, "user": BOT, "content": "+1", "created_at": "2026-09-08T01:33:35Z"}
 
 
-def _data(*, pr_head: str = HEAD) -> dict[str, Any]:
+def _data(*, pr_head: str = HEAD, review_state: str = _REVIEW_STATE) -> dict[str, Any]:
     return {
         "pulls": {"head": {"sha": pr_head}, "state": "open", "html_url": PR_URL},
         "pr_view": {"headRefOid": HEAD, "committedDate": HEAD_AT},
@@ -122,9 +136,28 @@ def _data(*, pr_head: str = HEAD) -> dict[str, Any]:
         "pages": {
             "reactions": [[], [_plus_one()]],
             "reviews": [[], []],
-            "comments": [[], [_summary_comment()]],
+            "comments": [[], [_summary_comment(review_state)]],
         },
     }
+
+
+def _review_threads(nodes: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "data": {
+            "repository": {
+                "pullRequest": {
+                    "reviewThreads": {
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                        "nodes": nodes,
+                    }
+                }
+            }
+        }
+    }
+
+
+def _security_null_data(threads: list[dict[str, Any]]) -> dict[str, Any]:
+    return {**_data(review_state=_REVIEW_STATE_SECURITY_NULL), "graphql": _review_threads(threads)}
 
 
 def _run_entry(
@@ -187,7 +220,8 @@ class TestReviewPollEntryEndToEnd:
         assert evidence.approval.reaction.id == 4242
         assert evidence.approval.review_state.comment_id == 5577710898
 
-    def test_state_pass_saves_v2_evidence_without_deprecation(self, tmp_path: Path) -> None:
+    def test_state_pass_saves_v3_evidence_without_deprecation(self, tmp_path: Path) -> None:
+        # stub は graphql を持たない: security の null 経路でなければ reviewThreads を引かない
         proc, evidence_path = _run_entry(tmp_path, _data())
         assert proc.returncode == 0, proc.stderr
 
@@ -196,7 +230,8 @@ class TestReviewPollEntryEndToEnd:
         assert f"head_sha={HEAD}" in verdict.evidence
 
         evidence = load_evidence(evidence_path)
-        assert evidence.schema_version == 2
+        assert evidence.schema_version == 3
+        assert evidence.checks.security_null_checks is None
         assert evidence.reviewed_head.sha == HEAD
         assert evidence.approval.reaction.id == 4242
         assert "deprecation" not in proc.stderr
@@ -217,3 +252,43 @@ class TestReviewPollEntryEndToEnd:
         assert verdict is not None and verdict.status == "ABORT", proc.stdout
         assert "evidence unavailable" in verdict.evidence
         assert not list(tmp_path.rglob(EVIDENCE_FILENAME))
+
+
+class TestReviewPollEntrySecurityNull:
+    """Issue #557: security_review の completed/null を条件付きで受け入れる経路を実プロセスで通す。"""
+
+    def test_null_without_unresolved_bot_thread_passes_with_v3_evidence(
+        self, tmp_path: Path
+    ) -> None:
+        proc, evidence_path = _run_entry(tmp_path, _security_null_data([]))
+        assert proc.returncode == 0, proc.stderr
+        verdict = parse_verdict_block(proc.stdout, VALID_STATUSES)
+        assert verdict is not None and verdict.status == "PASS", proc.stdout
+
+        evidence = load_evidence(evidence_path)
+        assert evidence.schema_version == 3
+        assert evidence.approval.review_state.security_review.has_any_findings is None
+        checks = evidence.checks.security_null_checks
+        assert checks is not None
+        assert (checks.unresolved_head_bot_threads, checks.bot_non_summary_issue_comments) == (0, 0)
+
+    def test_unresolved_head_bot_thread_falls_back_without_evidence(self, tmp_path: Path) -> None:
+        thread = {
+            "isResolved": False,
+            "comments": {
+                "pageInfo": {"hasNextPage": False},
+                "nodes": [
+                    {
+                        "author": {"__typename": "Bot", "databaseId": BOT["id"]},
+                        "commit": {"oid": HEAD},
+                        "originalCommit": {"oid": HEAD},
+                    }
+                ],
+            },
+        }
+        proc, evidence_path = _run_entry(tmp_path, _security_null_data([thread]))
+        assert proc.returncode == 0, proc.stderr
+        verdict = parse_verdict_block(proc.stdout, VALID_STATUSES)
+        assert verdict is not None and verdict.status == "BACK_FALLBACK", proc.stdout
+        assert "unresolved_head_bot_threads=1" in verdict.evidence
+        assert not evidence_path.exists()
