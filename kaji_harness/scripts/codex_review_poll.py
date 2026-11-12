@@ -9,8 +9,16 @@ summary without that state is not a terminal signal: the legacy markup path (rev
 heading / summary table) was removed in Issue #478. PASS always requires the state's full
 SHA *and* a `+1` reaction created after it; a `+1` alone carries no commit SHA and is never
 an approval (Issue #429). On PASS the approving PR / full head SHA / signal IDs are saved as
-`review_poll_evidence` JSON before the verdict is emitted, so a later close step can
-verify them against the current PR head.
+`review_poll_evidence` JSON (schema v3) before the verdict is emitted, so a later close step
+can verify them against the current PR head.
+
+Since 2026-11 the bot reports `security_review` as `completed` with `has_any_findings: null`.
+The meaning of that null is not documented upstream, so it is accepted only conditionally
+(maintainer decision, Issue #557): on top of the regular PASS conditions, no trusted bot
+Issue comment other than the summary may exist, and at finalization no unresolved review
+thread with a trusted bot comment on the head may exist (GraphQL `reviewThreads`). Any other
+null stays fail-closed. This relies on undocumented bot behaviour and must be revisited once
+upstream defines or changes the meaning of the null.
 
 Since #234 the workflow runner (`script_exec.py`) launches review-poll as an
 exec step (`exec: [kaji, pr, review-poll]`), which dispatches to
@@ -36,9 +44,10 @@ from pydantic import BaseModel, ConfigDict, StringConstraints, ValidationError, 
 
 from kaji_harness.review_poll_evidence import (
     EVIDENCE_KIND,
-    EVIDENCE_SCHEMA_VERSION_V2,
-    ReviewPollEvidenceV2,
+    EVIDENCE_SCHEMA_VERSION_V3,
+    ReviewPollEvidenceV3,
     format_timestamp,
+    is_security_null_on_head,
     next_second_after,
     parse_timestamp,
     save_evidence,
@@ -85,10 +94,9 @@ class ReviewStateEntry(BaseModel):
 
     @model_validator(mode="after")
     def _validate_completed(self) -> ReviewStateEntry:
-        if self.status == "completed" and (
-            self.commit_sha is None or self.has_any_findings is None
-        ):
-            raise ValueError("completed review state requires commit_sha and has_any_findings")
+        # has_any_findings の必須性は review ごとに違うので `_ReviewStatePayload` で検査する
+        if self.status == "completed" and self.commit_sha is None:
+            raise ValueError("completed review state requires commit_sha")
         return self
 
     @property
@@ -97,10 +105,23 @@ class ReviewStateEntry(BaseModel):
 
 
 class _ReviewStatePayload(BaseModel):
+    """`codex-review-state:v1` の payload。
+
+    code_review は `completed` なら `has_any_findings` が bool でなければならない。
+    security_review の `completed` / `has_any_findings: null` は parse では拒否せず、
+    `_classify_state` が条件付きで扱う（Issue #557）。
+    """
+
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     code_review: ReviewStateEntry
     security_review: ReviewStateEntry
+
+    @model_validator(mode="after")
+    def _validate_code_findings(self) -> _ReviewStatePayload:
+        if self.code_review.completed and self.code_review.has_any_findings is None:
+            raise ValueError("completed code_review requires has_any_findings")
+        return self
 
 
 @dataclass(frozen=True)
@@ -201,8 +222,7 @@ def _latest_summary_comments(
         comment
         for comment in comments
         if _is_bot(comment.get("user") or {}, bot_id)
-        and isinstance(comment.get("body"), str)
-        and comment["body"].lstrip().startswith(SUMMARY_MARKER)
+        and _is_summary_body(comment.get("body"))
         and _is_positive_int(comment.get("id"))
         and isinstance(comment.get("html_url"), str)
         and comment["html_url"]
@@ -213,6 +233,23 @@ def _latest_summary_comments(
         return []
     latest = max(comment["updated_at"] for comment in candidates)
     return [comment for comment in candidates if comment["updated_at"] == latest]
+
+
+def _is_summary_body(body: object) -> bool:
+    return isinstance(body, str) and body.lstrip().startswith(SUMMARY_MARKER)
+
+
+def _count_bot_non_summary_comments(comments: Iterable[dict[str, Any]], bot_id: int) -> int:
+    """trusted bot による summary 以外の Issue comment を数える（Issue #557 重要判断 (b)）。
+
+    エラー文面に機械可読な仕様がないので文面では判定しない。`body` が文字列でないものも
+    summary ではないとして数える（fail-closed）。古い summary（最新でない summary）は数えない。
+    """
+    return sum(
+        1
+        for comment in comments
+        if _is_bot(comment.get("user") or {}, bot_id) and not _is_summary_body(comment.get("body"))
+    )
 
 
 def _parse_state_body(comment: dict[str, Any]) -> ReviewState | InvalidReviewState | None:
@@ -305,18 +342,32 @@ def _classify_state(
     head_committed_at: str,
     *,
     head_review_exists: bool,
+    bot_non_summary_comments: int,
     bot_id: int,
 ) -> PollResult | None:
-    """`codex-review-state:v1` で RETRY / PASS を判定する。terminal でなければ None。
+    """`codex-review-state:v1` で RETRY / PASS / FALLBACK を判定する。terminal でなければ None。
 
     full SHA が head と一致する `completed` の state だけを head の完了として扱う。
     PASS には、summary comment の `updated_at` より後の秒（`>= floor(updated_at) + 1s`）かつ
     head commit 以降の trusted bot `+1` が要る（state は comment 本文の一部なので、遅くとも
     `updated_at` には書かれている）。
+
+    評価順（Issue #557。RETRY を最優先にする）:
+      1. code が head で completed / 指摘あり -> done_retry
+      2. security が head 向けで completed / 指摘あり -> done_retry
+      3. security が completed / null で head 以外 -> done_fallback（即時）
+      4. code が head で completed / 指摘なしでない -> None
+      5. security が head 向けで未完了 -> None
+      6. security が head の completed / null（null 経路）で、trusted bot の summary 以外の
+         Issue comment が 1 件以上 -> done_fallback（即時。👍 を待たない）
+      7. head に bot review がある -> None
+      8. fresh な bot `+1` がない -> None
+      9. PASS 候補。null 経路の追加確認（未解決の head bot thread）は `_finalize_pass` が行う
     """
     code, security = state.code_review, state.security_review
     code_for_head = code.commit_sha == head_sha
     security_applies = security.status is not None and security.commit_sha in (head_sha, None)
+    security_null = security.completed and security.has_any_findings is None
     short = head_sha[:7]
 
     if code_for_head and code.completed and code.has_any_findings:
@@ -331,10 +382,25 @@ def _classify_state(
             f"codex-review-state: security review found issues on head {short}",
             signal="state",
         )
+    if security_null and security.commit_sha != head_sha:
+        return PollResult(
+            "done_fallback",
+            "codex-review-state: security review completed without a findings result "
+            f"for {str(security.commit_sha)[:7]}, not head {short}",
+            signal="state",
+        )
     if not (code_for_head and code.completed) or code.has_any_findings:
         return None
-    if security_applies and not (security.completed and security.has_any_findings is False):
+    if security_applies and not security.completed:
         return None
+    if security_null and bot_non_summary_comments:
+        return PollResult(
+            "done_fallback",
+            "codex-review-state: security review completed without a findings result on head "
+            f"{short}, and the trusted bot posted {bot_non_summary_comments} non-summary "
+            "comment(s)",
+            signal="state",
+        )
     if head_review_exists:
         return None
     try:
@@ -378,7 +444,10 @@ def classify(
       2. state present: code / security review completed with findings on the current
          head -> done_retry; code review completed without findings (and the head's
          security review, if any, likewise) + later bot `+1` + no bot review on the head
-         -> done_pass (a `+1` alone, or one that is stale / from another head, never passes)
+         -> done_pass (a `+1` alone, or one that is stale / from another head, never passes).
+         A security review `completed` with `has_any_findings: null` is accepted only on the
+         head and only without trusted bot non-summary comments; otherwise -> done_fallback
+         (Issue #557, see `_classify_state`)
       3. bot `eyes` reaction -> in_progress
       4. otherwise -> prev_state unchanged
 
@@ -408,6 +477,7 @@ def classify(
             head_sha,
             head_committed_at,
             head_review_exists=bool(head_reviews),
+            bot_non_summary_comments=_count_bot_non_summary_comments(comments, bot_id),
             bot_id=bot_id,
         )
         if decided is not None:
@@ -466,6 +536,171 @@ def _gh_api_object(path: str) -> dict[str, Any]:
     return parsed
 
 
+REVIEW_THREADS_QUERY = """
+query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          isResolved
+          comments(first: 100) {
+            pageInfo { hasNextPage }
+            nodes {
+              author { __typename ... on Bot { databaseId } }
+              commit { oid }
+              originalCommit { oid }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def _gh_graphql(query: str, variables: dict[str, str | int | None]) -> dict[str, Any]:
+    """Invoke `gh api graphql` and return the response's `data` object.
+
+    String variables are passed with `-f` and integers with `-F` (typed). A None variable is
+    omitted so GraphQL sees it as null. Raises subprocess.CalledProcessError on non-zero exit
+    (gh exits 1 when the response carries `errors`) and ValueError when the response has
+    `errors` or no `data` object, propagated to the caller's consecutive failure counter.
+    """
+    args = ["gh", "api", "graphql", "-f", f"query={query}"]
+    for name, value in variables.items():
+        if value is None:
+            continue
+        flag = "-F" if isinstance(value, int) and not isinstance(value, bool) else "-f"
+        args += [flag, f"{name}={value}"]
+    proc = subprocess.run(args, capture_output=True, text=True, check=True)
+    parsed = json.loads(proc.stdout)
+    if not isinstance(parsed, dict):
+        raise ValueError(f"expected object from gh api graphql, got {type(parsed).__name__}")
+    if parsed.get("errors"):
+        raise ValueError(f"gh api graphql returned errors: {parsed['errors']!r}")
+    data = parsed.get("data")
+    if not isinstance(data, dict):
+        raise ValueError("gh api graphql returned no data object")
+    return data
+
+
+def _object_at(value: object, *keys: str) -> dict[str, Any]:
+    """`value[keys[0]][keys[1]]...` を辿り、各段が object であることを確かめて返す。
+
+    Raises:
+        ValueError: 途中の段が object でない（null・欠落を含む）場合。
+    """
+    node = value
+    for depth in range(len(keys) + 1):
+        if not isinstance(node, dict):
+            path = ".".join(keys[:depth]) or "<root>"
+            raise ValueError(f"expected object at {path}, got {type(node).__name__}")
+        if depth < len(keys):
+            node = node.get(keys[depth])
+    assert isinstance(node, dict)
+    return node
+
+
+def _fetch_review_threads(owner: str, repo: str, pr_number: int) -> list[dict[str, Any]]:
+    """GraphQL `reviewThreads` を全ページ取得し、thread node の list を返す。
+
+    `gh --paginate` は nested な `pageInfo` を持つ query で cursor を取り違えうるので使わず、
+    ここで `endCursor` を回す。
+
+    Raises:
+        ValueError: 応答の形が想定外、または `hasNextPage` なのに `endCursor` が無い・進まない場合。
+        subprocess.CalledProcessError: `gh` が失敗した場合。
+    """
+    threads: list[dict[str, Any]] = []
+    cursor: str | None = None
+    while True:
+        data = _gh_graphql(
+            REVIEW_THREADS_QUERY,
+            {"owner": owner, "name": repo, "number": pr_number, "cursor": cursor},
+        )
+        connection = _object_at(data, "repository", "pullRequest", "reviewThreads")
+        page_info = _object_at(connection, "pageInfo")
+        nodes = connection.get("nodes")
+        if not isinstance(nodes, list):
+            raise ValueError("reviewThreads.nodes is not a list")
+        threads.extend(nodes)
+        has_next = page_info.get("hasNextPage")
+        if not isinstance(has_next, bool):
+            raise ValueError("reviewThreads.pageInfo.hasNextPage is not a bool")
+        if not has_next:
+            return threads
+        end_cursor = page_info.get("endCursor")
+        if not isinstance(end_cursor, str) or not end_cursor or end_cursor == cursor:
+            raise ValueError("reviewThreads.pageInfo.endCursor does not advance")
+        cursor = end_cursor
+
+
+def _commit_oid(value: object) -> str | None:
+    oid = value.get("oid") if isinstance(value, dict) else None
+    return oid if isinstance(oid, str) and oid else None
+
+
+def _is_trusted_bot_author(author: object, bot_id: int) -> bool:
+    if not isinstance(author, dict) or author.get("__typename") != "Bot":
+        return False
+    database_id = author.get("databaseId")
+    return (
+        isinstance(database_id, int) and not isinstance(database_id, bool) and database_id == bot_id
+    )
+
+
+def _count_unresolved_head_bot_threads(
+    threads: Iterable[object], head_sha: str, bot_id: int
+) -> int:
+    """未解決で head に当たる trusted bot の指摘 thread を数える（Issue #557 重要判断 (a)）。
+
+    `isResolved == false` の thread のうち、次のいずれかを数える。
+
+    - trusted bot（`Bot.databaseId == bot_id`）の comment で、`commit.oid` と
+      `originalCommit.oid` が「ともに非 null かつ head 以外」と言えないものがある
+      （head に付いている、または付いていないと証明できない）
+    - thread 内の comment を全件見られない（`comments.pageInfo.hasNextPage`、fail-closed）
+
+    `isOutdated` 単独では除外しない（GitHub は outdated でない comment の `commit` を head に
+    付け替えるので、古い commit で付いた指摘でも head に当たっていれば数える）。
+
+    Raises:
+        ValueError: thread / comment の形が想定外（`isResolved` が bool でない等）の場合。
+    """
+    count = 0
+    for thread in threads:
+        if not isinstance(thread, dict):
+            raise ValueError(f"review thread is not an object: {type(thread).__name__}")
+        resolved = thread.get("isResolved")
+        if not isinstance(resolved, bool):
+            raise ValueError("reviewThread.isResolved is not a bool")
+        comments = _object_at(thread, "comments")
+        comment_nodes = comments.get("nodes")
+        if not isinstance(comment_nodes, list):
+            raise ValueError("reviewThread.comments.nodes is not a list")
+        truncated = _object_at(comments, "pageInfo").get("hasNextPage")
+        if not isinstance(truncated, bool):
+            raise ValueError("reviewThread.comments.pageInfo.hasNextPage is not a bool")
+        if resolved:
+            continue
+        if truncated:
+            count += 1
+            continue
+        for comment in comment_nodes:
+            if not isinstance(comment, dict):
+                raise ValueError("reviewThread comment is not an object")
+            if not _is_trusted_bot_author(comment.get("author"), bot_id):
+                continue
+            commit = _commit_oid(comment.get("commit"))
+            original = _commit_oid(comment.get("originalCommit"))
+            if commit is None or original is None or head_sha in (commit, original):
+                count += 1
+                break
+    return count
+
+
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -513,11 +748,18 @@ def _finalize_pass(
     utcnow: Callable[[], datetime],
     bot_id: int,
 ) -> PollResult:
-    """PASS 候補を確定する: head 再確認（判定の直前・直後）→ 証跡（schema v2）の保存。
+    """PASS 候補を確定する: head 再確認（判定の直前・直後）→ 証跡（schema v3）の保存。
 
-    state の full SHA の完全一致で承認しているので PR commits は引かない。証跡を atomic write してから `done_pass` を返すので、PASS verdict が出た時点で証跡は
-    必ず存在する。どこかで失敗したら PASS ではなく ABORT にする。取得失敗は呼び出し側の
-    連続失敗カウンタへ伝播させる（例外のまま送出）。
+    state の full SHA の完全一致で承認しているので PR commits は引かない。証跡を atomic write
+    してから `done_pass` を返すので、PASS verdict が出た時点で証跡は必ず存在する。どこかで
+    失敗したら PASS ではなく ABORT にする。取得失敗は呼び出し側の連続失敗カウンタへ伝播させる
+    （例外のまま送出）。
+
+    security_review が head の `completed` / `has_any_findings: null`（null 経路、Issue #557）の
+    ときだけ、判定直前と直後の head 確認の間で Issue comment を再取得し、GraphQL
+    `reviewThreads` を全ページ取得する。trusted bot の summary 以外の comment、または未解決の
+    head bot thread が 1 件でもあれば `done_fallback`（証跡は書かない）、ともに 0 件ならその件数を
+    証跡の `checks.security_null_checks` に残す。
     """
     approval = result.approval
     if approval is None:
@@ -532,6 +774,25 @@ def _finalize_pass(
     if stop is not None:
         return stop
 
+    review_state = approval.review_state
+    security_null_checks: dict[str, int] | None = None
+    if is_security_null_on_head(review_state.security_review, head_sha):
+        comments = _gh_api(f"repos/{owner}/{repo}/issues/{pr_number}/comments")
+        security_null_checks = {
+            "unresolved_head_bot_threads": _count_unresolved_head_bot_threads(
+                _fetch_review_threads(owner, repo, pr_number), head_sha, bot_id
+            ),
+            "bot_non_summary_issue_comments": _count_bot_non_summary_comments(comments, bot_id),
+        }
+        if any(security_null_checks.values()):
+            counts = ", ".join(f"{key}={value}" for key, value in security_null_checks.items())
+            return PollResult(
+                "done_fallback",
+                "codex-review-state: security review completed without a findings result on "
+                f"head {head_sha[:7]} and the conditions to accept it are not met: {counts}",
+                signal="state",
+            )
+
     after = _gh_api_object(pulls_path)
     stop = _check_pull(after, head_sha, "after decision")
     if stop is not None:
@@ -544,11 +805,10 @@ def _finalize_pass(
         "created_at": approval.reaction_created_at,
         "api_path": f"repos/{owner}/{repo}/issues/{pr_number}/reactions",
     }
-    review_state = approval.review_state
     try:
-        evidence = ReviewPollEvidenceV2.model_validate(
+        evidence = ReviewPollEvidenceV3.model_validate(
             {
-                "schema_version": EVIDENCE_SCHEMA_VERSION_V2,
+                "schema_version": EVIDENCE_SCHEMA_VERSION_V3,
                 "kind": EVIDENCE_KIND,
                 "result": "PASS",
                 "provider": "github",
@@ -572,6 +832,7 @@ def _finalize_pass(
                     "head_sha_before_decision": _pull_head(before),
                     "head_sha_after_decision": _pull_head(after),
                     "current_head_bot_reviews": current_head_bot_reviews,
+                    "security_null_checks": security_null_checks,
                 },
                 "fetched_at": fetched_at,
                 "decided_at": decided_at,
@@ -646,8 +907,9 @@ def run_polling(
     the verdict state machine stays unchanged (Issue #235, heartbeat is
     observation only).
 
-    A `done_fallback` from an unusable `codex-review-state` returns immediately without
-    waiting for `NO_REACTION_TIMEOUT_SEC`. A summary without the state is not terminal, so
+    A `done_fallback` from an unusable `codex-review-state` (or from a security review null
+    that cannot be accepted, Issue #557) returns immediately without waiting for
+    `NO_REACTION_TIMEOUT_SEC`. A summary without the state is not terminal, so
     it ends through the existing timeouts (`done_fallback` from init, `done_abort` after
     `eyes`).
     """
@@ -789,7 +1051,8 @@ _VERDICT_MAP: dict[State, tuple[str, str]] = {
     "done_fallback": (
         "BACK_FALLBACK",
         "codex auto-review シグナルを判定できない"
-        "（NO_REACTION_TIMEOUT_SEC 経過、または codex-review-state を解析できない）",
+        "（NO_REACTION_TIMEOUT_SEC 経過、codex-review-state を解析できない、"
+        "または security_review の null を受け入れる条件を満たさない）",
     ),
     "done_abort": ("ABORT", "codex auto-review polling failed"),
 }

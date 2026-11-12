@@ -1,7 +1,8 @@
-"""issue-close SKILL.md の jq 検証が producer model（schema v2 の I1〜I9）と同じ判定をすることを確認する。
+"""issue-close SKILL.md の jq 検証が証跡 model（schema v2 / v3 の I1〜I9）と同じ判定をすることを確認する。
 
-consumer（SKILL.md の jq）と producer（``ReviewPollEvidenceV2``）は別実装のため、
-時刻不変条件（小数秒・暦日）の境界で判定が乖離しないことを差分で固定する。
+consumer（SKILL.md の jq）と producer（``ReviewPollEvidenceV2`` / ``V3``）は別実装のため、
+時刻不変条件（小数秒・暦日）と security_review の null 経路（Issue #557）の境界で判定が
+乖離しないことを差分で固定する。
 """
 
 from __future__ import annotations
@@ -16,16 +17,24 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from kaji_harness.review_poll_evidence import ReviewPollEvidenceV2
+from kaji_harness.review_poll_evidence import ReviewPollEvidenceV2, ReviewPollEvidenceV3
 from tests.test_review_poll_evidence import (
+    _NULL_CHECKS,
     _SECURITY,
     _STATE,
     _VALID_SECURITY_V2,
+    _VALID_SECURITY_V3,
     _VIOLATIONS,
     _VIOLATIONS_V2,
+    _VIOLATIONS_V3,
+    _VIOLATIONS_V3_COMMON,
     _set,
+    _to_v3,
     _v1_payload,
+    _v3_with,
     _valid_payload_v2,
+    _valid_payload_v3,
+    _valid_payload_v3_null,
 )
 
 _SKILL = Path(__file__).resolve().parent.parent / ".claude/skills/issue-close/SKILL.md"
@@ -108,6 +117,20 @@ _AGREEMENT_V2: list[tuple[str, dict[str, Any]]] = [
 ]
 
 
+# producer と consumer の判定が一致すべき v3 の境界（受理・拒否の両方を含む）。
+_AGREEMENT_V3: list[tuple[str, dict[str, Any]]] = [
+    ("v3_false_path", _valid_payload_v3()),
+    ("v3_null_path", _valid_payload_v3_null()),
+    *[
+        (f"v3_security_{name}", _v3_with(security, checks))
+        for name, security, checks in _VALID_SECURITY_V3
+    ],
+    *[(f"v3_{name}", _to_v3(payload)) for name, payload in [*_TIME_CASES, *_TIME_CASES_V2]],
+    *_VIOLATIONS_V3,
+    *_VIOLATIONS_V3_COMMON,
+]
+
+
 def _jq_program() -> str:
     match = _JQ_RE.search(_SKILL.read_text(encoding="utf-8"))
     assert match, "issue-close SKILL.md の jq プログラムを抽出できない"
@@ -130,6 +153,16 @@ def _consumer_verdict(payload: dict[str, Any], tmp_path: Path) -> str:
 def _producer_accepts_v2(payload: dict[str, Any]) -> bool:
     try:
         ReviewPollEvidenceV2.model_validate(payload)
+    except ValidationError:
+        return False
+    return True
+
+
+def _producer_accepts(payload: dict[str, Any]) -> bool:
+    """``load_evidence`` と同じく版で v2 / v3 の model を選んで検証する。"""
+    model = ReviewPollEvidenceV3 if payload.get("schema_version") == 3 else ReviewPollEvidenceV2
+    try:
+        model.model_validate(payload)
     except ValidationError:
         return False
     return True
@@ -159,9 +192,55 @@ class TestIssueCloseJqMatchesModelV2:
         assert consumer_ok == _producer_accepts_v2(payload)
 
     def test_unknown_schema_version_is_i1(self, tmp_path: Path) -> None:
-        payload = _set(_valid_payload_v2(), ("schema_version",), 3)
+        # 3 は v3 として受理されるため、未知の版は 4 で確かめる
+        payload = _set(_valid_payload_v2(), ("schema_version",), 4)
         assert _consumer_verdict(payload, tmp_path) == "I1"
 
     def test_removed_v1_is_i1(self, tmp_path: Path) -> None:
         # schema v1 は Issue #478 で撤去した。撤去前に妥当だった v1 の証跡も I1 違反になる
         assert _consumer_verdict(_v1_payload(), tmp_path) == "I1"
+
+
+@pytest.mark.medium
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is not installed")
+class TestIssueCloseJqMatchesModelV3:
+    @pytest.mark.parametrize(
+        "payload", [_valid_payload_v3(), _valid_payload_v3_null()], ids=["false_path", "null_path"]
+    )
+    def test_valid_payload_is_ok(self, payload: dict[str, Any], tmp_path: Path) -> None:
+        assert _consumer_verdict(payload, tmp_path) == "OK"
+
+    @pytest.mark.parametrize(
+        "payload",
+        [p for _, p in [*_VIOLATIONS_V3, *_VIOLATIONS_V3_COMMON]],
+        ids=[n for n, _ in [*_VIOLATIONS_V3, *_VIOLATIONS_V3_COMMON]],
+    )
+    def test_model_violations_are_rejected_by_jq(
+        self, payload: dict[str, Any], tmp_path: Path
+    ) -> None:
+        assert _consumer_verdict(payload, tmp_path) != "OK"
+
+    @pytest.mark.parametrize(
+        "payload", [p for _, p in _AGREEMENT_V3], ids=[n for n, _ in _AGREEMENT_V3]
+    )
+    def test_boundaries_agree_with_model(self, payload: dict[str, Any], tmp_path: Path) -> None:
+        consumer_ok = _consumer_verdict(payload, tmp_path) == "OK"
+        assert consumer_ok == _producer_accepts(payload)
+
+    def test_null_evidence_without_checks_is_i6(self, tmp_path: Path) -> None:
+        # null 経路の証跡から追加確認の結果を消す改変は I6 違反になる
+        payload = _set(_valid_payload_v3_null(), _NULL_CHECKS, None)
+        assert _consumer_verdict(payload, tmp_path) == "I6"
+
+    def test_v2_null_evidence_is_i6(self, tmp_path: Path) -> None:
+        # v2 の I6 は従来どおり security の completed/null を拒否する
+        payload = _set(
+            _valid_payload_v2(),
+            _SECURITY,
+            {
+                "commit_sha": _valid_payload_v2()["reviewed_head"]["sha"],
+                "status": "completed",
+                "has_any_findings": None,
+            },
+        )
+        assert _consumer_verdict(payload, tmp_path) == "I6"

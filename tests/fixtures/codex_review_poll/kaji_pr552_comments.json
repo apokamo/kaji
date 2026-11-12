@@ -1,0 +1,13 @@
+[
+  {
+    "body": "<!-- codex-pull-request-review-summary -->\n<!-- codex-review-state:v1 {\"code_review\":{\"commit_sha\":\"eb159264fee25b39e68b5009139a65ec2b5e8766\",\"has_any_findings\":false,\"has_unresolved_findings\":false,\"status\":\"completed\"},\"security_review\":{\"commit_sha\":\"eb159264fee25b39e68b5009139a65ec2b5e8766\",\"has_any_findings\":null,\"has_unresolved_findings\":null,\"status\":\"completed\"}} -->\n<!-- codex-security-review:v1 {\"blockingSeverityThreshold\":\"P0\",\"headSha\":\"eb159264fee25b39e68b5009139a65ec2b5e8766\",\"mergeGateEnabled\":false,\"pullRequestNumber\":552,\"repository\":\"apokamo/kaji\",\"status\":\"completed\"} -->\n<details>\n<summary><strong>Codex Review Summary</strong>: ✅ Completed</summary>\n\nThis comment shows the latest Codex review activity on this pull request.\n\n| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n| 📝 **Code Review** | ✅ **Completed** <relative-time datetime=\"2026-11-08T17:21:45.589508Z\">2026-11-08T17:21:45.589508Z</relative-time> | `eb15926` | PR opened |\n| 🔒 **Security Review** | ✅ **Completed** <relative-time datetime=\"2026-11-08T17:24:05.551502Z\">2026-11-08T17:24:05.551502Z</relative-time> | `eb15926` | PR opened |\n\n\n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\n[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you\n- Open a pull request for review\n- Mark a draft as ready\n- Comment \"@codex review\" or \"@codex security review\".\n\nCodex reacts with 👀 while any review is running, comments if it has suggestions, and reacts with 👍 once all reviews finish with no findings.\n\n</details>\n\n</details>",
+    "created_at": "2026-11-08T17:20:09Z",
+    "html_url": "https://github.com/apokamo/kaji/pull/552#issuecomment-6724593064",
+    "id": 6724593064,
+    "updated_at": "2026-11-08T17:24:07Z",
+    "user": {
+      "id": 199175422,
+      "login": "chatgpt-codex-connector[bot]"
+    }
+  }
+]

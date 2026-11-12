@@ -66,14 +66,29 @@ SHA を持つ bot シグナルの主は、trusted bot の review summary comment
 
 | 観測 | verdict |
 |------|---------|
-| state marker はあるが、版が `v1` でない / 2 個以上ある / JSON が壊れている / 検証に失敗（`completed` なのに `commit_sha` か `has_any_findings` が null 等）/ 最新の summary が複数で選べない | **即時** `BACK_FALLBACK`（timeout を待たない） |
-| `code_review.commit_sha == head_sha`（full SHA 一致）・`status == "completed"`・`has_any_findings == true` | `RETRY` |
+| state marker はあるが、版が `v1` でない / 2 個以上ある / JSON が壊れている / 検証に失敗（`completed` なのに `commit_sha` が null、`code_review` が `completed` なのに `has_any_findings` が null 等）/ 最新の summary が複数で選べない | **即時** `BACK_FALLBACK`（timeout を待たない） |
+| `code_review.commit_sha == head_sha`（full SHA 一致）・`status == "completed"`・`has_any_findings == true`（`security_review` が null でも） | `RETRY` |
 | head 向けの `security_review`（`status` が null でなく、`commit_sha` が head か null）が `completed`・`has_any_findings == true` | `RETRY` |
-| `code_review` が head で `completed`・指摘なし、head 向けの `security_review` があればそれも `completed`・指摘なし、head 上に bot review がない、かつ bot の `+1` が `created_at >= head_committed_at` **かつ** `created_at >= floor(summary comment の updated_at) + 1 秒` | `PASS` 候補（下記「確定確認」を通れば `PASS`） |
-| `commit_sha` が head と異なる、`status` が `completed` でない（未観測の値を含む）、head 向け `security_review` が未完了、`+1` がない / stale、head 上に bot review がある | terminal にしない（`eyes` → in_progress、なければ前の状態のまま） |
+| `security_review` が `completed`・`has_any_findings == null` で、`commit_sha` が head 以外 | **即時** `BACK_FALLBACK` |
+| `security_review` が head の `completed`・`has_any_findings == null`（null 経路）で、trusted bot による summary 以外の Issue comment が 1 件以上ある | **即時** `BACK_FALLBACK`（`+1` を待たない） |
+| `code_review` が head で `completed`・指摘なし、head 向けの `security_review` があればそれも `completed`・指摘なし（`has_any_findings == false`、または null 経路で上の行に当たらない）、head 上に bot review がない、かつ bot の `+1` が `created_at >= head_committed_at` **かつ** `created_at >= floor(summary comment の updated_at) + 1 秒` | `PASS` 候補（下記「確定確認」を通れば `PASS`。null 経路は確定時に追加確認あり） |
+| `commit_sha` が head と異なる、`status` が `completed` でない（未観測の値を含む）、head 向け `security_review` が未完了、`+1` がない / stale、head 上に bot review がある（null 経路も同じ） | terminal にしない（`eyes` → in_progress、なければ前の状態のまま） |
 
 - 指摘の有無は `has_any_findings` で判定し、`has_unresolved_findings` は使わない（`pr-fix` は thread を resolve しないため）
 - `security_review` の `status` が null（未実行）、または `commit_sha` が head 以外の commit の場合は判定に影響しない
+  （ただし head 以外の commit の `completed`・`has_any_findings == null` は即時 `BACK_FALLBACK`）
+- **security_review の null 経路（Issue #557）**: 2026-11 以降、bot は `security_review` を `completed`・`has_any_findings: null`
+  で返す。null の意味は公式に定義されていないため、保守者決定（2026-11-09 / 11-12）に従い、上記の PASS 条件に加えて
+  (a) 未解決の head bot thread がない、(b) trusted bot による summary 以外の Issue comment がない、をすべて満たすときだけ
+  「security の指摘なし」として扱う。それ以外の null は PASS にしない（fail-closed）
+  - (b) は PR の Issue comment（全ページ）で、trusted bot の comment のうち本文が summary marker で始まらないもの（本文が
+    文字列でないものを含む）を数える。エラー文面に機械可読な仕様がないので文面では判定しない。正常な受領 comment が
+    将来追加された場合も fallback する（上流の仕様が分かった時点で絞り込む）
+  - (a) は確定時に GraphQL `reviewThreads` を全ページ取得し、`isResolved == false` で、trusted bot（`Bot.databaseId == 199175422`）の
+    comment の `commit.oid` / `originalCommit.oid` の少なくとも一方が head か null の thread、および thread 内の comment を
+    全件見られない（`comments.pageInfo.hasNextPage`）thread を数える。`isOutdated` だけでは除外しない
+  - この受け入れは文書化されていない bot 挙動（👍 の意味、指摘時に `true` と inline review が出ること）に依存する。上流が
+    null の意味を定義・修正したら見直す
 - review 本文・summary の表は見ない（review 投稿から state 更新までの数秒は次の poll で拾う）
 - 同じ head の再 review で指摘なしになっても、head 上に bot review が残るので PASS しない。`eyes` を観測した後なら
   `IN_PROGRESS_TIMEOUT_SEC` で `ABORT`、観測しないままなら `NO_REACTION_TIMEOUT_SEC` で `BACK_FALLBACK` になる
@@ -115,22 +130,27 @@ bot 識別は **id 一致**（`199175422`）を主、login を副チェックに
 `PASS` 候補を得たら、次の順で確定する。どこかで失敗したら `PASS` ではなく `ABORT`。
 
 1. `pulls/{n}` を再取得して head が固定 head のままであることを確認する（判定直前）
-2. `pulls/{n}` をもう一度取得して head を確認する（判定直後）。full SHA の完全一致で承認しているので
+2. security_review の null 経路のときだけ、PR の Issue comment（全ページ）を再取得して (b) を、GraphQL
+   `reviewThreads`（全ページ）を取得して (a) を数える。どちらかが 1 以上なら `BACK_FALLBACK`（証跡は書かない）。
+   取得失敗・応答の形が想定外（`errors`・`hasNextPage` なのに cursor が進まない等）は API 失敗として連続失敗カウンタに数える
+3. `pulls/{n}` をもう一度取得して head を確認する（判定直後）。full SHA の完全一致で承認しているので
    PR commits は引かない
-3. 証跡を検証して `dirname(KAJI_VERDICT_PATH)/review-poll-evidence.json` へ atomic write する
-4. その後で `PASS` verdict を stdout へ出力する（`verdict.yaml` が PASS なら同じ attempt に証跡が必ずある）
+4. 証跡を検証して `dirname(KAJI_VERDICT_PATH)/review-poll-evidence.json` へ atomic write する
+5. その後で `PASS` verdict を stdout へ出力する（`verdict.yaml` が PASS なら同じ attempt に証跡が必ずある）
 
 `PASS` 以外では証跡を書かない。証跡は `kaji_harness/review_poll_evidence.py` の model で検証した JSON で、
 `schema_version` / `kind` / `result` / `provider` / `repository` / `pull_request`（番号・URL）/
 `reviewed_head`（40 桁 SHA・commit 時刻）/ `approval` / `checks` / `fetched_at` / `decided_at` を持つ。
 
-`schema_version` は `2`（`ReviewPollEvidenceV2`）。`approval` は bot identity・`+1` reaction の ID と時刻・
+`schema_version` は `3`（`ReviewPollEvidenceV3`。producer は v3 だけを書く）。`approval` は bot identity・`+1` reaction の ID と時刻・
 `review_state`（summary comment の ID / URL / `updated_at`・`state_version: "v1"`・観測した `code_review` /
-`security_review` の `commit_sha` / `status` / `has_any_findings`）。`checks` は head SHA の 3 回の確認結果と
-現在 head への bot review 件数。
+`security_review` の `commit_sha` / `status` / `has_any_findings`）。`checks` は head SHA の 3 回の確認結果、
+現在 head への bot review 件数、`security_null_checks`。`security_null_checks` は null 経路のときだけ
+`{"unresolved_head_bot_threads": 0, "bot_non_summary_issue_comments": 0}`（確定時に数えた (a)(b) の件数）で、それ以外は null。
 
-整合不変条件 I1〜I9 は producer（Pydantic）と consumer（`issue-close` の jq。`schema_version` が `2` 以外なら拒否）の
-共通契約で、正本は `docs/ARCHITECTURE.md` の「review-poll の承認証跡」節。
+整合不変条件 I1〜I9 は producer（Pydantic）と consumer（`issue-close` の jq。`schema_version` が `2` / `3` 以外なら拒否。
+`2` は upgrade 前に作られた attempt の証跡で、null 経路を受け入れない）の共通契約で、正本は `docs/ARCHITECTURE.md` の
+「review-poll の承認証跡」節。
 
 PASS 確定後に head が動く隙間は、`issue-close` が証跡を現在の PR と照合し、
 `--match-head-commit` 付きで merge することで閉じる。
