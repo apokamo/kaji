@@ -1636,6 +1636,10 @@ def _classify_herdr_process_liveness(
 AgentPaneState = Literal["active", "shell_only", "absent", "not_owned", "unknown"]
 
 
+def _is_nonempty_str(value: object) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
 def inspect_agent_pane(
     pane_id: str, *, origin_pane: str | None, run_id: str | None
 ) -> AgentPaneState:
@@ -1651,7 +1655,11 @@ def inspect_agent_pane(
     Returns:
         ``active``（kaji 所有で前景に agent プロセス）/ ``shell_only`` / ``absent``（pane が
         無い）/ ``not_owned``（tokens が一致しない別の pane）/ ``unknown``（照会不能・判定不能）。
+        ``not_owned`` は metadata 側と照会結果側の所有情報がともに有効な文字列で、
+        それらが一致しないと確認できた場合だけ返す。どちらかの欠落・型不正は ``unknown``。
     """
+    if not _is_nonempty_str(origin_pane) or not _is_nonempty_str(run_id):
+        return "unknown"
     try:
         herdr = _resolve_herdr()
     except CLINotFoundError:
@@ -1663,9 +1671,14 @@ def inspect_agent_pane(
     except OSError:
         return "unknown"
     tokens = pane.get("tokens")
-    if pane.get("pane_id") != pane_id or not isinstance(tokens, dict):
-        return "not_owned"
-    if tokens.get("kaji_origin") != origin_pane or tokens.get("kaji_run") != run_id:
+    actual_pane_id = pane.get("pane_id")
+    if not _is_nonempty_str(actual_pane_id) or not isinstance(tokens, dict):
+        return "unknown"
+    actual_origin = tokens.get("kaji_origin")
+    actual_run = tokens.get("kaji_run")
+    if not _is_nonempty_str(actual_origin) or not _is_nonempty_str(actual_run):
+        return "unknown"
+    if actual_pane_id != pane_id or actual_origin != origin_pane or actual_run != run_id:
         return "not_owned"
     try:
         process_info = _get_herdr_process_info(herdr, pane_id)

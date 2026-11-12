@@ -13,10 +13,45 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt, StrictStr, ValidationError
+
 RUN_LOG_FILE = "run.log"
 RESULT_FILE = "result.json"
 
 ReadErrorKind = Literal["missing", "unreadable", "invalid"]
+
+
+class ResultRecord(BaseModel):
+    """``result.json`` の検証 schema（``kaji_harness.result.AttemptResult`` と対応）。
+
+    ``AttemptResult`` 導入時（#222）からある項目は必須。後から default 付きで足された
+    ``error`` / ``synthetic`` / ``tmp_dir`` は旧形式との互換のため省略可能。
+    未知の項目は無視する。
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    step_id: StrictStr
+    attempt: StrictInt
+    status: StrictStr
+    exit_code: StrictInt | None
+    signal: StrictStr | None
+    started_at: StrictStr
+    ended_at: StrictStr
+    duration_ms: StrictInt
+    session_id: StrictStr | None
+    dispatch: StrictStr
+    error: StrictStr | None = None
+    synthetic: StrictBool = False
+    tmp_dir: StrictStr | None = None
+
+
+def _validation_summary(exc: ValidationError) -> str:
+    parts = []
+    for item in exc.errors():
+        loc = ".".join(str(part) for part in item["loc"]) or "<root>"
+        parts.append(f"{loc}: {item['msg']}")
+    return "; ".join(parts)
 
 
 @dataclass(frozen=True)
@@ -113,6 +148,8 @@ def attempt_dir_name(attempt: int) -> str:
 def required_result_problems(run_dir: Path, events: list[dict[str, Any]]) -> list[ArtifactProblem]:
     """``step_end`` がある attempt の ``result.json`` の欠落・破損を列挙する。
 
+    破損には JSON 構文エラーに加え、``ResultRecord`` の必須 key 欠落・型不正を含む。
+
     ``step_end`` の無い attempt（実行中・kill された in-flight attempt）は対象外。
     """
     problems: list[ArtifactProblem] = []
@@ -140,4 +177,9 @@ def required_result_problems(run_dir: Path, events: list[dict[str, Any]]) -> lis
             continue
         if not isinstance(data, dict):
             problems.append(ArtifactProblem(relative, "invalid", "top-level is not an object"))
+            continue
+        try:
+            ResultRecord.model_validate(data)
+        except ValidationError as exc:
+            problems.append(ArtifactProblem(relative, "invalid", _validation_summary(exc)))
     return problems

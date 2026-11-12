@@ -281,7 +281,7 @@ def _latest_attempt_result(run_dir: Path, step_id: str | None) -> dict[str, Any]
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     return data if isinstance(data, dict) else None
 
@@ -309,7 +309,7 @@ def _orphan_pane_id(attempt_dir: Path | None) -> str | None:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     if not isinstance(data, dict):
         return None
@@ -322,7 +322,7 @@ def _load_state(state_path: Path) -> dict[str, Any] | None:
         return None
     try:
         data = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     if not isinstance(data, dict) or "step_history" not in data:
         return None
@@ -370,7 +370,7 @@ def collect_snapshot(
     run_log = run_dir / "run.log"
     try:
         events = read_run_log_events(run_log)
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         read_errors.append(f"run.log: unreadable ({exc})")
     if not events and not read_errors:
         read_errors.append("run.log: no parsable events")

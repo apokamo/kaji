@@ -258,8 +258,8 @@ series）にする。「未完了なので未作成」は欠落として扱わ�
 |----------|----------------|-----------|-----------------------------------------------|
 | `runs/<id>/run.log` | run dir があれば常に（`workflow_start` を含む） | `missing` → 破損と同じ | `artifact_unreadable` |
 | `runs/<id>/process.json` | なし（旧 run には無い） | `no_record`（生存判定で扱う。read error にしない） | `record_unreadable`（read error） |
-| `steps/<s>/attempt-<n>/result.json` | run.log にその step・attempt の `step_end` がある attempt だけ | `step_end` あり → `artifact_unreadable`。`step_end` なし（実行中・kill された in-flight attempt）→ 正常 | `artifact_unreadable` |
-| `steps/<s>/attempt-<n>/pane-metadata.json` | なし（Herdr backend のみ） | 正常（`pane: null`） | read error。retry では `agent_pane_unverifiable` |
+| `steps/<s>/attempt-<n>/result.json` | run.log にその step・attempt の `step_end` がある attempt だけ | `step_end` あり → `artifact_unreadable`。`step_end` なし（実行中・kill された in-flight attempt）→ 正常 | `artifact_unreadable`。必須 key は `AttemptResult` 導入時（#222）からの 10 項目（`step_id` / `attempt` / `status` / `exit_code` / `signal` / `started_at` / `ended_at` / `duration_ms` / `session_id` / `dispatch`）で型も検証する（`runstate.runlog.ResultRecord`）。後から追加された `error` / `synthetic` / `tmp_dir` は省略可（旧形式互換） |
+| `steps/<s>/attempt-<n>/pane-metadata.json` | なし（Herdr backend のみ） | 正常（`pane: null`） | read error。retry では `agent_pane_unverifiable`。所有確認に使う `pane_id` / `origin_pane` / `kaji_run` のいずれかが欠落・空・非文字列なら破損扱い |
 | `<issue>/session-state.json` | なし（初回 step で kill された run では未作成のことがある） | 正常（worktree / branch は null。retry では `worktree_unavailable`） | `artifact_unreadable` |
 | `runs/<id>/recovery-chain.json` | なし（root run には無い） | 正常（root） | read error（status）。retry では `artifact_unreadable` |
 | `runs/<id>/recovery.json` | なし | 正常 | `artifact_unreadable`（retry は記録を追記できないため） |
@@ -336,12 +336,16 @@ decision を基に作成し `retries` を付ける。
 
 ```jsonc
 "retries": [
-  {"requested_at": "...", "trigger": "retry_failed_step" /* or "series_resume" */,
+  {"request_id": "<uuid hex>", "requested_at": "...", "trigger": "retry_failed_step" /* or "series_resume" */,
    "outcome": "launched" /* "refused" | "launch_failed" */, "gates": [{"name": "run_alive", "detail": "pid=..."}],
    "resume_from": "implement", "discarded_resume_session": false,
    "child_run_id": "261112...", "child_exit_code": 0}
 ]
 ```
+
+`request_id` は要求ごとの識別子。child 終了・起動失敗の更新は同じ `request_id` の entry だけを置き換え
+（無ければ追記）、その間に他の要求が追記した entry は保持する。read-modify-write は run dir の
+`.recovery.lock`（`fcntl.flock`、ブロッキング）で排他する。
 
 `run.log` には `retry_requested` / `retry_refused` / `retry_child_end` event を追記する。GitHub へは
 書き込まない（Issue コメント・bug Issue・incident なし）。child 自身の終了時 triage は通常の `kaji run` と
@@ -398,7 +402,7 @@ member の status を変えずに series を `stopped`（`stop_reason`=`member <
 | 13 | `worktree_unavailable` / `branch_mismatch` | worktree がない / branch が state と不一致 | 既存 |
 | 14 | `provider_unavailable` | provider を解決できない（retry / series では provider 解決失敗が起動前の exit 2 / 3 になるため通常は発火しない。triage と共有する `_safety_gates` の一部として残す） | 既存 |
 | 15 | `agent_pane_alive` | 失敗 step の最新 attempt の Herdr pane が kaji 所有で、前景に agent プロセスが残る | 新規（A7） |
-| 16 | `agent_pane_unverifiable` | pane-metadata はあるが Herdr を照会できない / liveness が `unknown` | 新規（A7、安全側） |
+| 16 | `agent_pane_unverifiable` | pane-metadata はあるが Herdr を照会できない / liveness が `unknown` / 所有確認の情報（metadata 側 `origin_pane`・`kaji_run`、照会結果側 `pane_id`・`tokens.kaji_origin`・`tokens.kaji_run`）が欠落・型不正。`not_owned`（通過）は両側が有効な文字列で不一致と確認できた場合だけ | 新規（A7、安全側） |
 
 triage の `recoverability_hint` では拒否しない（D4）。`kaji_bug_suspected` / `dispatch_failure` 等の
 その他の cause は通過させる。budget（`RECOVERY_BUDGET`）は適用しない（D6）。

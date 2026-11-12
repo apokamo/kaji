@@ -155,7 +155,7 @@ retry-gate: branch_mismatch worktree=feat/9 state=feat/540
 | `issue_run_alive` | Issue の他の run、または対象 run を指さない launch record が生きている |
 | `issue_liveness_unknown` | 上のいずれも生きていないが、判定できないものがある |
 | `run_not_failed` | `ERROR` / `ABORT` 以外で終了した |
-| `artifact_unreadable` | 必須の artifact が欠落・破損（run.log、`step_end` のある attempt の `result.json`、`session-state.json`、`recovery-chain.json`、`recovery.json`） |
+| `artifact_unreadable` | 必須の artifact が欠落・破損（読めない・非 UTF-8・JSON 不正、`result.json` は必須 key 欠落・型不正も含む）（run.log、`step_end` のある attempt の `result.json`、`session-state.json`、`recovery-chain.json`、`recovery.json`） |
 | `workflow_mismatch` | run の workflow 名が `<workflow.yaml>` と異なる |
 | `unknown_failed_step` | 失敗 step を特定できない、または workflow に無い |
 | `non_resumable_skill` | 失敗 step か実際の再開先が `issue-start` / `i-pr` / `issue-close` を実行する |
@@ -164,7 +164,7 @@ retry-gate: branch_mismatch worktree=feat/9 state=feat/540
 | `worktree_unavailable` / `branch_mismatch` | `session-state.json` の worktree が無い / branch が異なる |
 | `provider_unavailable` | provider を解決できない（triage と共有。retry では通常ゲート前の exit 2 になる） |
 | `agent_pane_alive` | 失敗 step の最新 attempt の Herdr pane が kaji 所有で、前景に agent プロセスが残る |
-| `agent_pane_unverifiable` | その pane を確認できない（`pane-metadata.json` の破損、Herdr 照会の失敗、生存不明） |
+| `agent_pane_unverifiable` | その pane を確認できない（`pane-metadata.json` の破損や `pane_id` / `origin_pane` / `kaji_run` の欠落、Herdr 照会の失敗や所有 token の欠落、生存不明） |
 
 triage の `recoverability_hint` ではやり直しを拒否しない。`kaji_bug_suspected` や `dispatch_failure`
 などの cause は通過する。

@@ -490,3 +490,283 @@ class TestRecoverCommand:
 
 def test_hostname_fixture_matches_real_host() -> None:
     assert current_process_record("run").hostname == socket.gethostname()
+
+
+# --- Issue #540 review R1〜R4 の回帰テスト ---
+
+_HERDR = "kaji_harness.interactive_terminal_herdr"
+_OWNED_TOKENS = {"kaji_origin": "o", "kaji_run": RUN}
+
+
+def _patch_herdr(pane: dict[str, object], process_info: dict[str, object] | None = None):  # type: ignore[no-untyped-def]
+    """Herdr の照会境界だけを差し替え、``inspect_agent_pane`` 本体は実物を通す。"""
+    return (
+        patch(f"{_HERDR}._resolve_herdr", return_value="herdr"),
+        patch(f"{_HERDR}._get_herdr_pane", return_value=pane),
+        patch(
+            f"{_HERDR}._get_herdr_process_info",
+            return_value=process_info or {"shell_pid": 100, "foreground_processes": [{"pid": 200}]},
+        ),
+    )
+
+
+class TestInspectAgentPaneOwnership:
+    """R1: 所有情報の欠落・型不正を ``not_owned`` と解釈しない。"""
+
+    @pytest.mark.parametrize(("origin", "run_id"), [(None, RUN), ("o", None), ("", RUN), ("o", "")])
+    def test_missing_metadata_ownership_is_unknown_without_querying(
+        self, origin: str | None, run_id: str | None
+    ) -> None:
+        from kaji_harness.interactive_terminal_herdr import inspect_agent_pane
+
+        resolve, get_pane, process = _patch_herdr({"pane_id": "p1", "tokens": _OWNED_TOKENS})
+        with resolve as resolve_mock, get_pane, process as process_mock:
+            assert inspect_agent_pane("p1", origin_pane=origin, run_id=run_id) == "unknown"
+        resolve_mock.assert_not_called()
+        process_mock.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "pane",
+        [
+            {"pane_id": "p1"},
+            {"pane_id": "p1", "tokens": "x"},
+            {"pane_id": "p1", "tokens": {"kaji_origin": "o"}},
+            {"pane_id": "p1", "tokens": {"kaji_origin": "o", "kaji_run": 1}},
+            {"tokens": _OWNED_TOKENS},
+        ],
+    )
+    def test_incomplete_query_result_is_unknown(self, pane: dict[str, object]) -> None:
+        from kaji_harness.interactive_terminal_herdr import inspect_agent_pane
+
+        resolve, get_pane, process = _patch_herdr(pane)
+        with resolve, get_pane, process as process_mock:
+            assert inspect_agent_pane("p1", origin_pane="o", run_id=RUN) == "unknown"
+        process_mock.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "pane",
+        [
+            {"pane_id": "p1", "tokens": {"kaji_origin": "o", "kaji_run": "other-run"}},
+            {"pane_id": "p1", "tokens": {"kaji_origin": "other", "kaji_run": RUN}},
+            {"pane_id": "p2", "tokens": _OWNED_TOKENS},
+        ],
+    )
+    def test_valid_mismatch_is_not_owned(self, pane: dict[str, object]) -> None:
+        from kaji_harness.interactive_terminal_herdr import inspect_agent_pane
+
+        resolve, get_pane, process = _patch_herdr(pane)
+        with resolve, get_pane, process as process_mock:
+            assert inspect_agent_pane("p1", origin_pane="o", run_id=RUN) == "not_owned"
+        process_mock.assert_not_called()
+
+    def test_owned_pane_with_foreground_process_is_active(self) -> None:
+        from kaji_harness.interactive_terminal_herdr import inspect_agent_pane
+
+        resolve, get_pane, process = _patch_herdr({"pane_id": "p1", "tokens": _OWNED_TOKENS})
+        with resolve, get_pane, process as process_mock:
+            assert inspect_agent_pane("p1", origin_pane="o", run_id=RUN) == "active"
+        process_mock.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "metadata",
+        [
+            {"pane_id": "p1"},
+            {"pane_id": "p1", "origin_pane": "o"},
+            {"pane_id": "p1", "kaji_run": RUN},
+            {"pane_id": "p1", "origin_pane": 1, "kaji_run": RUN},
+            {"pane_id": "p1", "origin_pane": "o", "kaji_run": None},
+        ],
+    )
+    def test_planner_with_real_inspector_refuses_incomplete_metadata(
+        self, repo: Path, metadata: dict[str, object]
+    ) -> None:
+        from kaji_harness.commands.recover import inspect_pane
+
+        run_dir = _failed_run(repo)
+        pane = run_dir / "steps" / "implement" / "attempt-001" / "pane-metadata.json"
+        pane.write_text(json.dumps(metadata))
+        planner = _planner(repo)
+        planner.pane_inspector = inspect_pane
+        resolve, get_pane, process = _patch_herdr({"pane_id": "p1", "tokens": _OWNED_TOKENS})
+        with resolve, get_pane, process as process_mock:
+            plan = planner.plan()
+        assert plan.gate_names() == ["agent_pane_unverifiable"]
+        assert plan.facts is not None
+        assert [e.path for e in plan.facts.read_errors] == [
+            f"{ISSUE}/runs/{RUN}/steps/implement/attempt-001/pane-metadata.json"
+        ]
+        process_mock.assert_not_called()
+
+    def test_planner_with_real_inspector_refuses_owned_active_pane(self, repo: Path) -> None:
+        from kaji_harness.commands.recover import inspect_pane
+
+        run_dir = _failed_run(repo)
+        pane = run_dir / "steps" / "implement" / "attempt-001" / "pane-metadata.json"
+        pane.write_text(json.dumps({"pane_id": "p1", "origin_pane": "o", "kaji_run": RUN}))
+        planner = _planner(repo)
+        planner.pane_inspector = inspect_pane
+        resolve, get_pane, process = _patch_herdr({"pane_id": "p1", "tokens": _OWNED_TOKENS})
+        with resolve, get_pane, process:
+            assert planner.plan().gate_names() == ["agent_pane_alive"]
+
+
+def _corrupt(repo: Path, run_dir: Path, artifact: str) -> Path:
+    path = {
+        "result": run_dir / "steps" / "implement" / "attempt-001" / "result.json",
+        "state": _artifacts(repo) / ISSUE / "session-state.json",
+        "chain": run_dir / "recovery-chain.json",
+    }[artifact]
+    path.write_bytes(b"\xff")
+    return path
+
+
+class TestCorruptArtifactsAcrossEntries:
+    """R2 / R3: 破損 artifact を例外で漏らさず、status は read_errors、retry は拒否。"""
+
+    @pytest.mark.parametrize("artifact", ["result", "state", "chain"])
+    def test_non_utf8_status_reports_read_errors_and_keeps_other_issues(
+        self, repo: Path, artifact: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        path = _corrupt(repo, _failed_run(repo), artifact)
+        capsys.readouterr()
+        code = main(["status", "--json", "--workdir", str(repo), ISSUE, "541"])
+        out = capsys.readouterr().out
+        assert code == 0
+        doc = json.loads(out)
+        issues = {entry["issue"]: entry for entry in doc["issues"]}
+        assert set(issues) == {ISSUE, "541"}
+        relative = str(path.relative_to(_artifacts(repo)))
+        assert relative in [error["path"] for error in issues[ISSUE]["read_errors"]]
+
+    @pytest.mark.parametrize("artifact", ["result", "state", "chain"])
+    def test_non_utf8_retry_exits_4_with_artifact_unreadable(
+        self, repo: Path, artifact: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _corrupt(repo, _failed_run(repo), artifact)
+        assert "artifact_unreadable" in _planner(repo).plan().gate_names()
+        with patch("kaji_harness.commands.recover.default_child_popen") as popen:
+            rc = main(_recover_argv(repo))
+        assert rc == EXIT_RETRY_REFUSED
+        popen.assert_not_called()
+        err = capsys.readouterr().err.splitlines()
+        names = [m.group("name") for line in err[1:] if (m := GATE_LINE.match(line))]
+        assert "artifact_unreadable" in names
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            {},
+            {"step_id": "implement"},
+            {"attempt": "1"},
+            {"duration_ms": "1000"},
+            {"synthetic": "yes"},
+            {"exit_code": 1.5},
+        ],
+        ids=["empty", "only-step-id", "attempt-str", "duration-str", "synthetic-str", "float"],
+    )
+    def test_result_missing_required_key_or_bad_type_is_unreadable(
+        self, repo: Path, content: dict[str, object], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from tests.runstate_helpers import result_record
+
+        run_dir = _failed_run(repo)
+        path = run_dir / "steps" / "implement" / "attempt-001" / "result.json"
+        data = content if set(content) <= {"step_id"} else {**result_record("implement"), **content}
+        path.write_text(json.dumps(data))
+        plan = _planner(repo).plan()
+        assert plan.gate_names() == ["artifact_unreadable"]
+        capsys.readouterr()
+        assert main(["status", "--json", "--workdir", str(repo), ISSUE]) == 0
+        errors = json.loads(capsys.readouterr().out)["issues"][0]["read_errors"]
+        assert [(e["path"], e["error"]) for e in errors] == [
+            (f"{ISSUE}/runs/{RUN}/steps/implement/attempt-001/result.json", "invalid")
+        ]
+
+    def test_legacy_result_without_optional_keys_is_accepted(self, repo: Path) -> None:
+        from tests.runstate_helpers import result_record
+
+        run_dir = _failed_run(repo)
+        path = run_dir / "steps" / "implement" / "attempt-001" / "result.json"
+        legacy = result_record("implement", status="ABORT")
+        path.write_text(json.dumps(legacy))  # error / synthetic / tmp_dir なし（旧形式）
+        plan = _planner(repo).plan()
+        assert plan.gates == []
+        assert plan.resume_from == "implement"
+
+
+class TestRetryRecordInterleaving:
+    """R4: child 終了時は自分の entry だけを更新し、他要求の記録を保持する。"""
+
+    @staticmethod
+    def _recorder(plan: object, trigger: str) -> object:
+        from kaji_harness.recovery.gates import RetryRecorder
+
+        def _no_base(_snapshot: object) -> object:
+            raise AssertionError("recovery.json already exists")
+
+        return RetryRecorder(
+            plan=plan,  # type: ignore[arg-type]
+            trigger=trigger,  # type: ignore[arg-type]
+            artifacts_dir=Path("unused"),
+            base_decision=_no_base,  # type: ignore[arg-type]
+        )
+
+    def _seed(self, run_dir: Path) -> None:
+        triage = {
+            "run_id": RUN,
+            "recoverable": False,
+            "decision": "comment_only",
+            "classification": {
+                "cause": "dispatch_failure",
+                "synthetic": True,
+                "source": "external",
+                "recoverability_hint": "no",
+            },
+            "failed_step": "implement",
+        }
+        (run_dir / "recovery.json").write_text(json.dumps(triage))
+
+    @pytest.mark.parametrize("finish", ["child_end", "launch_failed"])
+    def test_refusal_between_launch_and_finish_is_kept(self, repo: Path, finish: str) -> None:
+        from kaji_harness.recovery.gates import release_launcher_record
+
+        run_dir = _failed_run(repo)
+        self._seed(run_dir)
+        planner = _planner(repo)
+        first = prepare_retry(planner, None)
+        assert first.plan.gates == []
+        a = self._recorder(first.plan, "series_resume")
+        a.record_launched()  # type: ignore[attr-defined]
+        second = prepare_retry(planner, None)
+        assert second.plan.gate_names() == ["issue_run_alive"]
+        b = self._recorder(second.plan, "retry_failed_step")
+        b.record_refused()  # type: ignore[attr-defined]
+        if finish == "child_end":
+            a.record_child_end(child_run_id="child-1", exit_code=0)  # type: ignore[attr-defined]
+        else:
+            a.record_launch_failed()  # type: ignore[attr-defined]
+        release_launcher_record(first.launcher_record)
+
+        retries = json.loads((run_dir / "recovery.json").read_text())["retries"]
+        assert [(r["trigger"], r["outcome"]) for r in retries] == [
+            ("series_resume", "launched" if finish == "child_end" else "launch_failed"),
+            ("retry_failed_step", "refused"),
+        ]
+        assert retries[0]["request_id"] == a.request_id  # type: ignore[attr-defined]
+        assert retries[1]["request_id"] == b.request_id  # type: ignore[attr-defined]
+        assert [g["name"] for g in retries[1]["gates"]] == ["issue_run_alive"]
+        assert retries[1]["requested_at"] == b.requested_at  # type: ignore[attr-defined]
+        if finish == "child_end":
+            assert retries[0]["child_run_id"] == "child-1"
+            assert retries[0]["child_exit_code"] == 0
+
+    def test_launch_failed_without_own_entry_appends(self, repo: Path) -> None:
+        run_dir = _failed_run(repo)
+        self._seed(run_dir)
+        planner = _planner(repo)
+        other = self._recorder(planner.plan(), "retry_failed_step")
+        other.record_refused()  # type: ignore[attr-defined]
+        mine = self._recorder(planner.plan(), "series_resume")
+        mine.record_launch_failed()  # type: ignore[attr-defined]
+        retries = json.loads((run_dir / "recovery.json").read_text())["retries"]
+        assert [r["outcome"] for r in retries] == ["refused", "launch_failed"]

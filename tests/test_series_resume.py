@@ -373,3 +373,80 @@ def test_retry_is_refused_while_a_series_resume_launcher_is_recorded(repo: Path)
     assert _runner(repo, provider, calls, member_launcher=launch).run(resume=True) == 0
     assert observed == [["issue_run_alive"]]
     assert len(calls) == 2  # the resumed member and the next member; the retry launched nothing
+
+
+# --- Issue #540 review R2 / R3 / R4 の回帰テスト ---
+
+
+@pytest.mark.parametrize("artifact", ["result", "state", "chain", "empty-result"])
+def test_corrupt_artifact_stops_series_without_launch(
+    repo: Path, artifact: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_dir = _failed_run(repo)
+    if artifact == "empty-result":
+        (run_dir / "steps" / "implement" / "attempt-001" / "result.json").write_text("{}")
+    else:
+        path = {
+            "result": run_dir / "steps" / "implement" / "attempt-001" / "result.json",
+            "state": _artifacts(repo) / "10" / "session-state.json",
+            "chain": run_dir / "recovery-chain.json",
+        }[artifact]
+        path.write_bytes(b"\xff")
+    _failed_member_state(repo)
+    calls: list[list[str]] = []
+    provider = FakeProvider({10: _issue(10), 11: _issue(11)})
+    with pytest.raises(SeriesAbortedError):
+        _runner(repo, provider, calls).run(resume=True)
+    assert calls == []
+    state = _saved(repo)
+    assert state.status == "stopped"
+    assert state.members[0].status == "failed"
+    assert state.stop_reason is not None
+    match = STOP_GATES.search(state.stop_reason)
+    assert match is not None and "artifact_unreadable" in match.group("gates").split(",")
+
+
+def test_retry_refused_during_series_resume_keeps_both_records(repo: Path) -> None:
+    from kaji_harness.recovery.gates import RetryRecorder
+
+    run_dir = _failed_run(repo)
+    _failed_member_state(repo)
+    provider = FakeProvider({10: _issue(10), 11: _issue(11)})
+    calls: list[list[str]] = []
+    refused: list[list[str]] = []
+
+    def _no_base(_snapshot: object) -> object:
+        raise AssertionError("recovery.json already exists")
+
+    def launch(argv: list[str], cwd: Path) -> FakeProcess:
+        calls.append(argv)
+        issue = int(argv[3])
+        if issue == 10:
+            # series の child 実行中に別の --retry-failed-step 要求が来て拒否される
+            planner = RetryPlanner(
+                workflow=load_workflow(repo / WORKFLOW_PATH),
+                artifacts_dir=_artifacts(repo),
+                issue_id="10",
+                pane_inspector=lambda _pane: "absent",
+            )
+            prepared = prepare_retry(planner, None)
+            refused.append(prepared.plan.gate_names())
+            RetryRecorder(
+                plan=prepared.plan,
+                trigger="retry_failed_step",
+                artifacts_dir=_artifacts(repo),
+                base_decision=_no_base,  # type: ignore[arg-type]
+            ).record_refused()
+        provider.issues[issue] = _issue(issue, "closed", "completed")
+        return FakeProcess(pid=4_000_000 + issue)
+
+    assert _runner(repo, provider, calls, member_launcher=launch).run(resume=True) == 0
+    assert refused == [["issue_run_alive"]]
+    retries = json.loads((run_dir / "recovery.json").read_text())["retries"]
+    assert [(r["trigger"], r["outcome"]) for r in retries] == [
+        ("series_resume", "launched"),
+        ("retry_failed_step", "refused"),
+    ]
+    assert retries[0]["child_exit_code"] == 0
+    assert [g["name"] for g in retries[1]["gates"]] == ["issue_run_alive"]
+    assert retries[0]["request_id"] != retries[1]["request_id"]

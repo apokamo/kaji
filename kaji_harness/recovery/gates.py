@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import fcntl
+import os
 import re
 import subprocess
 import sys
@@ -20,6 +22,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol
+from uuid import uuid4
 
 from ..errors import LaunchRecordError
 from ..logger import RunLogger
@@ -452,6 +455,35 @@ def _base_snapshot(plan: RetryPlan, artifacts_dir: Path) -> FailureSnapshot | No
     )
 
 
+RECOVERY_WRITE_LOCK_FILE = ".recovery.lock"
+
+
+class _RecoveryWriteLock:
+    """run dir 単位の ``recovery.json`` 更新用ブロッキング lock（``fcntl.flock``）。"""
+
+    def __init__(self, run_dir: Path) -> None:
+        self.path = run_dir / RECOVERY_WRITE_LOCK_FILE
+        self._fd: int | None = None
+
+    def __enter__(self) -> None:
+        fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError:
+            os.close(fd)
+            raise
+        self._fd = fd
+
+    def __exit__(self, *_exc: object) -> None:
+        fd, self._fd = self._fd, None
+        if fd is None:
+            return
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
 @dataclass
 class RetryRecorder:
     """対象 run の ``recovery.json`` の ``retries`` と ``run.log`` へ記録する。"""
@@ -462,9 +494,12 @@ class RetryRecorder:
     #: ``recovery.json`` が無い run の土台 decision（triage と同じ ``plan_recovery``）を作る。
     base_decision: BaseDecisionFactory
     requested_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    #: この要求の entry を識別する ID（child 終了時に自分の entry だけを更新するため）。
+    request_id: str = field(default_factory=lambda: uuid4().hex)
 
     def _entry(self, outcome: str, **extra: Any) -> dict[str, Any]:
         return {
+            "request_id": self.request_id,
             "requested_at": self.requested_at,
             "trigger": self.trigger,
             "outcome": outcome,
@@ -475,24 +510,38 @@ class RetryRecorder:
             "child_exit_code": extra.get("child_exit_code"),
         }
 
-    def _write(self, entry: dict[str, Any], *, replace_last: bool) -> None:
+    def _write(self, entry: dict[str, Any], *, replace_own: bool) -> None:
+        """``retries`` を排他下で read-modify-write する。
+
+        ``replace_own`` なら同じ ``request_id`` の entry を置き換え（無ければ追記）、
+        他の要求が追記した entry は保持する。
+        """
         run_dir = self.plan.run_dir
         if run_dir is None:
             return
         path = run_dir / RECOVERY_FILE
-        if path.is_file():
-            decision = read_recovery_json(path)
-        else:
-            snapshot = _base_snapshot(self.plan, self.artifacts_dir)
-            if snapshot is None:
-                return
-            decision = self.base_decision(snapshot)
-        retries = list(decision.retries)
-        if replace_last and retries:
-            retries[-1] = entry
-        else:
-            retries.append(entry)
-        write_recovery_json(path, replace(decision, retries=retries))
+        with _RecoveryWriteLock(run_dir):
+            if path.is_file():
+                decision = read_recovery_json(path)
+            else:
+                snapshot = _base_snapshot(self.plan, self.artifacts_dir)
+                if snapshot is None:
+                    return
+                decision = self.base_decision(snapshot)
+            retries = list(decision.retries)
+            index = next(
+                (
+                    i
+                    for i in range(len(retries) - 1, -1, -1)
+                    if retries[i].get("request_id") == self.request_id
+                ),
+                None,
+            )
+            if replace_own and index is not None:
+                retries[index] = entry
+            else:
+                retries.append(entry)
+            write_recovery_json(path, replace(decision, retries=retries))
 
     def _logger(self) -> RunLogger | None:
         run_dir = self.plan.run_dir
@@ -502,7 +551,7 @@ class RetryRecorder:
         """拒否を記録する（best-effort。読めない artifact があっても例外にしない）。"""
         logger = self._logger()
         try:
-            self._write(self._entry("refused"), replace_last=False)
+            self._write(self._entry("refused"), replace_own=False)
         except (OSError, ValueError, KeyError, TypeError):
             pass  # 拒否の結果（exit 4 + stderr）は記録の成否で変わらない
         if logger is not None and self.plan.run_id is not None:
@@ -522,7 +571,7 @@ class RetryRecorder:
             OSError: ``recovery.json`` / ``run.log`` を書けない場合。
             ValueError: ``recovery.json`` が読めない場合。
         """
-        self._write(self._entry("launched"), replace_last=False)
+        self._write(self._entry("launched"), replace_own=False)
         logger = self._logger()
         assert logger is not None and self.plan.run_id is not None
         logger.log_retry_requested(
@@ -535,7 +584,7 @@ class RetryRecorder:
     def record_launch_failed(self) -> None:
         """起動前の失敗を best-effort で記録する。"""
         try:
-            self._write(self._entry("launch_failed"), replace_last=True)
+            self._write(self._entry("launch_failed"), replace_own=True)
         except (OSError, ValueError, KeyError, TypeError):
             pass  # 起動失敗の exit 3 は記録の成否で変わらない
 
@@ -547,7 +596,7 @@ class RetryRecorder:
         """
         self._write(
             self._entry("launched", child_run_id=child_run_id, child_exit_code=exit_code),
-            replace_last=True,
+            replace_own=True,
         )
         logger = self._logger()
         if logger is not None:

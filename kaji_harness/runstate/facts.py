@@ -305,14 +305,26 @@ def collect_run_facts(
     if events is not None and (
         _ended_failed(facts.termination, facts.end_status) or facts.termination == "vanished"
     ):
-        snapshot = collect_snapshot(
-            run_dir=run_dir,
-            artifacts_dir=artifacts_dir,
-            issue_id=issue_id,
-            provider_available=True,
-            allow_unterminated=facts.termination == "vanished",
-            probe_git=probe_git,
-        )
+        try:
+            snapshot = collect_snapshot(
+                run_dir=run_dir,
+                artifacts_dir=artifacts_dir,
+                issue_id=issue_id,
+                provider_available=True,
+                allow_unterminated=facts.termination == "vanished",
+                probe_git=probe_git,
+            )
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            # 防御: snapshot 側の読み取り失敗（非 UTF-8 等）を例外として漏らさず、
+            # status は read_errors、retry / series は artifact_unreadable に変換する。
+            error = ReadError(
+                _relative(artifacts_dir, run_dir),
+                "unreadable",
+                f"failure snapshot: {type(exc).__name__}: {exc}",
+            )
+            facts.read_errors.append(error)
+            facts.blocking_errors.append(error)
+            return facts
         facts.snapshot = snapshot
         facts.failure = classify_failure(snapshot)
         if facts.termination == "vanished":
@@ -348,20 +360,24 @@ def _collect_pane(facts: RunFacts, *, artifacts_dir: Path) -> None:
         return
     path = attempt_dir / PANE_METADATA_FILE
     data, kind, message = _read_json_object(path)
-    if kind is None and data is not None and not isinstance(data.get("pane_id"), str):
-        kind, message = "invalid", "pane_id missing"
+    if kind is None and data is not None:
+        # 所有確認（agent_pane ゲート）に必要な 3 項目。欠落・型不正は照会せず
+        # agent_pane_unverifiable にする（不足情報を「非所有」と解釈しない）。
+        for key in ("pane_id", "origin_pane", "kaji_run"):
+            value = data.get(key)
+            if not isinstance(value, str) or not value:
+                kind, message = "invalid", f"{key} missing or not a non-empty string"
+                break
     if kind is not None:
         facts.read_errors.append(ReadError(_relative(artifacts_dir, path), kind, message))
         facts.pane_unreadable = True
         return
     if data is None:
         return
-    origin = data.get("origin_pane")
-    run_id = data.get("kaji_run")
     facts.pane = PaneRef(
         pane_id=data["pane_id"],
-        origin_pane=origin if isinstance(origin, str) else None,
-        run_id=run_id if isinstance(run_id, str) else None,
+        origin_pane=data["origin_pane"],
+        run_id=data["kaji_run"],
     )
 
 

@@ -181,7 +181,7 @@ contract; `kaji run-series --resume` uses the same gates.
 | `issue_run_alive` | Another run of the Issue, or a launch record not pointing at the target run, is alive |
 | `issue_liveness_unknown` | None of those is alive but at least one cannot be judged |
 | `run_not_failed` | The run ended with a status other than `ERROR` / `ABORT` |
-| `artifact_unreadable` | A required artifact is missing or broken (run.log, `result.json` of an attempt that has `step_end`, `session-state.json`, `recovery-chain.json`, `recovery.json`) |
+| `artifact_unreadable` | A required artifact is missing or broken — unreadable, not UTF-8, invalid JSON, or (for `result.json`) a missing required key / wrong type (run.log, `result.json` of an attempt that has `step_end`, `session-state.json`, `recovery-chain.json`, `recovery.json`) |
 | `workflow_mismatch` | The run's workflow name differs from `<workflow.yaml>` |
 | `unknown_failed_step` | The failed step cannot be determined or is not in the workflow |
 | `non_resumable_skill` | The failed step or the actual restart step runs `issue-start` / `i-pr` / `issue-close` |
@@ -190,7 +190,7 @@ contract; `kaji run-series --resume` uses the same gates.
 | `worktree_unavailable` / `branch_mismatch` | The worktree in `session-state.json` is missing / its branch differs |
 | `provider_unavailable` | The provider cannot be resolved (shared with triage; for retry this is normally an exit 2 before the gates) |
 | `agent_pane_alive` | The failed step's latest Herdr pane is owned by kaji and still has a foreground agent process |
-| `agent_pane_unverifiable` | That pane cannot be checked (`pane-metadata.json` broken, Herdr query failed, or liveness unknown) |
+| `agent_pane_unverifiable` | That pane cannot be checked (`pane-metadata.json` broken or missing `pane_id` / `origin_pane` / `kaji_run`, Herdr query failed or returned incomplete ownership tokens, or liveness unknown) |
 
 The triage `recoverability_hint` never refuses a retry; causes such as
 `kaji_bug_suspected` or `dispatch_failure` pass.

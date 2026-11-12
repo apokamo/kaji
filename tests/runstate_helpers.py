@@ -110,6 +110,24 @@ def end(status: str, error: str | None = None) -> dict[str, Any]:
     return ev("workflow_end", **fields)
 
 
+def result_record(step: str, attempt: int = 1, **overrides: Any) -> dict[str, Any]:
+    """``AttemptResult`` 形式の完全な ``result.json`` を返す（``overrides`` で上書き）。"""
+    data: dict[str, Any] = {
+        "step_id": step,
+        "attempt": attempt,
+        "status": "ABORT" if overrides.get("error") else "PASS",
+        "exit_code": 0,
+        "signal": None,
+        "started_at": "2026-11-12T00:00:00+00:00",
+        "ended_at": "2026-11-12T00:00:01+00:00",
+        "duration_ms": 1000,
+        "session_id": None,
+        "dispatch": "agent",
+    }
+    data.update(overrides)
+    return data
+
+
 def write_run(
     artifacts: Path,
     issue: str,
@@ -135,7 +153,7 @@ def write_run(
     for (step, attempt), data in (results or {}).items():
         path = run_dir / "steps" / step / f"attempt-{attempt:03d}" / "result.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data), encoding="utf-8")
+        path.write_text(json.dumps(result_record(step, attempt, **data)), encoding="utf-8")
     for (step, attempt), data in (panes or {}).items():
         path = run_dir / "steps" / step / f"attempt-{attempt:03d}" / "pane-metadata.json"
         path.parent.mkdir(parents=True, exist_ok=True)
