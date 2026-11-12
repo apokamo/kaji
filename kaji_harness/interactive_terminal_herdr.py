@@ -605,26 +605,21 @@ def _load_untracked_sessions(path: Path) -> UntrackedSessionRegistry:
     Raises:
         CLIExecutionError: The file cannot be read, is not UTF-8, or fails Pydantic
             validation. An unreadable record must not be ignored, otherwise the lock
-            wait can recur.
+            wait can recur. The full message is passed as ``summary`` so a long path
+            does not cut off the cause (Issue #560).
     """
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return UntrackedSessionRegistry()
     except (OSError, UnicodeDecodeError) as error:
-        raise CLIExecutionError(
-            "interactive_terminal",
-            1,
-            f"Herdr untracked session record cannot be read: {path}: {error}",
-        ) from error
+        message = f"Herdr untracked session record cannot be read: {path}: {error}"
+        raise CLIExecutionError("interactive_terminal", 1, message, summary=message) from error
     try:
         return UntrackedSessionRegistry.model_validate_json(text)
     except ValidationError as error:
-        raise CLIExecutionError(
-            "interactive_terminal",
-            1,
-            f"Herdr untracked session record is invalid: {path}: {error}",
-        ) from error
+        message = f"Herdr untracked session record is invalid: {path}: {error}"
+        raise CLIExecutionError("interactive_terminal", 1, message, summary=message) from error
 
 
 def _save_untracked_sessions(path: Path, registry: UntrackedSessionRegistry) -> None:

@@ -480,6 +480,35 @@ class TestUntrackedRegistry:
         assert outcome.error is not None
         assert path.read_bytes() == b"\xff\xfe"
 
+    @staticmethod
+    def _long_record_path(tmp_path: Path) -> Path:
+        """Return a record path longer than the 200-char ``stderr`` truncation limit."""
+        path = tmp_path / ("d" * 220) / HERDR_UNTRACKED_SESSIONS_FILENAME
+        path.parent.mkdir()
+        assert len(str(path)) > 200
+        return path
+
+    def test_non_utf8_record_message_keeps_long_path_and_cause(self, tmp_path: Path) -> None:
+        """Issue #560: the message must not be cut at 200 chars regardless of path length."""
+        path = self._long_record_path(tmp_path)
+        path.write_bytes(b"\xff\xfe")
+        with pytest.raises(CLIExecutionError) as error:
+            _load_untracked_sessions(path)
+        message = str(error.value)
+        assert str(path) in message
+        assert "can't decode byte" in message
+
+    def test_invalid_record_message_keeps_long_path_and_cause(self, tmp_path: Path) -> None:
+        """Issue #560: the validation detail must survive a path longer than 200 chars."""
+        path = self._long_record_path(tmp_path)
+        path.write_text('{"entries": [], "extra": 1}', encoding="utf-8")
+        with pytest.raises(CLIExecutionError) as error:
+            _load_untracked_sessions(path)
+        message = str(error.value)
+        assert str(path) in message
+        assert "validation error for UntrackedSessionRegistry" in message
+        assert "Extra inputs are not permitted" in message
+
     def test_resume_fails_loud_for_non_utf8_record(self, fake: FakeHerdr, tmp_path: Path) -> None:
         path = tmp_path / HERDR_UNTRACKED_SESSIONS_FILENAME
         path.write_bytes(b"\xff\xfe")
