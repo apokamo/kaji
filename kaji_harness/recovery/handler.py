@@ -19,7 +19,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import subprocess
 import sys
 import time
@@ -34,6 +33,13 @@ from ..logger import RunLogger
 from ..models import Workflow
 from ..providers.base import IncidentSearchCapable
 from .classify import classify_failure
+from .gates import (
+    build_child_argv,
+    is_sensitive_failure_text,
+    non_resumable_skill_hits,
+    resume_point,
+    safety_gate_hits,
+)
 from .incident import (
     OCCURRENCE_SCHEMA_VERSION,
     IncidentContext,
@@ -48,7 +54,6 @@ from .incident import (
 from .models import (
     INCIDENT_EXEMPT_CAUSES,
     INCIDENT_SUPPRESSION_REASONS,
-    NON_RESUMABLE_SKILLS,
     RECOVERY_BUDGET,
     RECOVERY_FILE,
     RECOVERY_WAIT_SECONDS,
@@ -56,7 +61,7 @@ from .models import (
     RecoveryDecision,
     RecoveryDecisionValue,
     derive_child_final_status,
-    write_recovery_json,
+    write_recovery_decision_preserving_retries,
 )
 from .report import (
     render_child_result_comment,
@@ -72,19 +77,6 @@ if TYPE_CHECKING:  # pragma: no cover
     from ..providers import IssueProvider
 
 _logger = logging.getLogger(__name__)
-
-#: 自動再開を禁止する auth / secret / permission 形跡。
-#: 単語境界を使うのは、``rate limit ... tokens per minute`` のような quota 文言で
-#: 唯一の recovery budget を潰さないため（``tokens`` は ``\btoken\b`` に一致しない）。
-_SENSITIVE_FAILURE_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"(?i)credential"),
-    re.compile(r"(?i)permission denied"),
-    re.compile(r"(?i)unauthorized"),
-    re.compile(r"(?i)authentication failed"),
-    re.compile(r"(?i)\btoken\b"),
-    re.compile(r"\b401\b"),
-    re.compile(r"\b403\b"),
-]
 
 #: 非 candidate cause の decision mapping。列挙外は ``not_resumable``。
 #: Issue #403: ``user_interrupted`` は手動再開が正当なので ``comment_only`` に置く
@@ -113,76 +105,29 @@ class RecoveryResult:
 
 
 def _resume_point(workflow: Workflow, failed_step: str | None) -> tuple[str | None, bool]:
-    """再開 step と session 破棄フラグを返す。
-
-    ``resume:`` を持つ step は保存済み session を引き継がずに再開すると
-    ``MissingResumeSessionError`` で即死するため、session 生成元 step へ巻き戻す
-    （決定 13）。未知 step は ``(None, False)``。
-    """
-    if not failed_step:
-        return None, False
-    step = workflow.find_step(failed_step)
-    if step is None:
-        return None, False
-    if step.resume:
-        return step.resume, True
-    return step.id, False
+    """再開 step と session 破棄フラグを返す（実装は ``gates.resume_point``）。"""
+    return resume_point(workflow, failed_step)
 
 
 def _sensitive_failure_text(text: str) -> bool:
-    return any(pattern.search(text) for pattern in _SENSITIVE_FAILURE_PATTERNS)
+    """auth / secret / permission 形跡の判定（実装は ``gates.is_sensitive_failure_text``）。"""
+    return is_sensitive_failure_text(text)
 
 
 def _safety_gates(snapshot: FailureSnapshot, resume_from: str | None) -> list[str]:
-    """自動再開を止める gate 名を列挙する（空なら通過）。
+    """自動再開を止める gate を triage の従来表記で列挙する（空なら通過）。
 
-    副作用 skill の判定は ``_non_resumable_skill_hits()`` が gate 0 として最優先で
-    行うため、ここには含めない（Issue #349）。
+    判定は Issue #540 で ``gates.safety_gate_hits`` に移設し、retry / series resume と共有する。
+    副作用 skill の判定は ``_non_resumable_skill_hits()`` が gate 0 として最優先で行う。
     """
-    gates: list[str] = []
-    if not snapshot.state_worktree_dir or not snapshot.git.available:
-        gates.append("worktree_unavailable")
-    elif snapshot.git.branch != snapshot.state_branch_name:
-        gates.append(
-            f"branch_mismatch (worktree={snapshot.git.branch}, state={snapshot.state_branch_name})"
-        )
-    if not snapshot.provider_available:
-        gates.append("provider_unavailable")
-    if _sensitive_failure_text(snapshot.failure_error_text):
-        gates.append("sensitive_failure_pattern")
-    if snapshot.artifact_read_errors:
-        gates.append("artifact_unreadable")
-    if resume_from is None:
-        gates.append("unknown_failed_step")
-    if snapshot.newer_run_ids:
-        gates.append(f"newer_run_detected ({', '.join(snapshot.newer_run_ids)})")
-    return gates
-
-
-def _step_skill(workflow: Workflow, step_id: str | None) -> str | None:
-    """step ID から ``Step.skill`` を解決する（未知 step / exec-step は ``None``）。"""
-    if not step_id:
-        return None
-    step = workflow.find_step(step_id)
-    return step.skill if step is not None else None
+    return [hit.triage_text for hit in safety_gate_hits(snapshot, resume_from)]
 
 
 def _non_resumable_skill_hits(
     workflow: Workflow, failed_step: str | None, resume_from: str | None
 ) -> list[str]:
-    """failed step と実再開先のうち、再開禁止 skill を実行するものを列挙する。
-
-    両方が同一 step を指す場合は二重計上しない。
-    """
-    targets = [("failed_step", failed_step)]
-    if resume_from is not None and resume_from != failed_step:
-        targets.append(("resume_from", resume_from))
-    hits: list[str] = []
-    for label, step_id in targets:
-        skill = _step_skill(workflow, step_id)
-        if skill in NON_RESUMABLE_SKILLS:
-            hits.append(f"non_resumable_skill ({label}={step_id}, skill={skill})")
-    return hits
+    """failed step と実再開先のうち、再開禁止 skill を実行するものを従来表記で列挙する。"""
+    return [hit.triage_text for hit in non_resumable_skill_hits(workflow, failed_step, resume_from)]
 
 
 def _build_resume_command(
@@ -427,7 +372,7 @@ class RecoveryHandler:
     def _record(self, decision: RecoveryDecision) -> None:
         """``recovery.json`` を上書きし、``run.log`` に ``recovery_decision`` を追記する。"""
         try:
-            write_recovery_json(self.run_dir / RECOVERY_FILE, decision)
+            write_recovery_decision_preserving_retries(self.run_dir / RECOVERY_FILE, decision)
         except OSError as exc:
             _logger.warning("recovery.json write failed (%s): %s", self.run_dir, exc)
         self._run_logger.log_recovery_decision(decision)
@@ -728,19 +673,11 @@ class RecoveryHandler:
         """child run の argv。``kaji`` entry point ではなく module 実行で PATH 非依存にする。"""
         assert decision.resume_from is not None
         assert decision.recovery_root_run_id is not None
-        return [
-            sys.executable,
-            "-m",
-            "kaji_harness.cli_main",
-            "run",
-            str(self.workflow_path),
-            self.issue_id,
-            "--from",
-            decision.resume_from,
-            "--recovery-root",
-            decision.recovery_root_run_id,
-            "--recovery-parent",
-            decision.run_id,
-            "--workdir",
-            str(self.workdir),
-        ]
+        return build_child_argv(
+            workflow_path=self.workflow_path,
+            issue_id=self.issue_id,
+            resume_from=decision.resume_from,
+            root_run_id=decision.recovery_root_run_id,
+            parent_run_id=decision.run_id,
+            workdir=self.workdir,
+        )

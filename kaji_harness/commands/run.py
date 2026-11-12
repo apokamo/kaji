@@ -20,10 +20,11 @@ from ..errors import (
     WorkflowValidationError,
 )
 from ..models import Workflow
-from ..providers import IssueProvider, actual_provider_type, get_provider
+from ..providers import IssueProvider, actual_provider_type, get_provider, normalize_id
 from ..providers.context import format_issue_ref
 from ..recovery.handler import RecoveryHandler
 from ..runner import WorkflowRunner
+from ..runstate import current_process_record, remove_launch_record, write_launch_record
 from ..workflow import load_workflow
 from .config import _emit_provider_overlay_divergence_warning
 from .exit_codes import (
@@ -125,6 +126,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return EXIT_DEFINITION_ERROR
+    if getattr(args, "recovery_trigger", None) and not args.recovery_root:
+        print("Error: --recovery-trigger requires --recovery-root", file=sys.stderr)
+        return EXIT_DEFINITION_ERROR
 
     # Config discovery: --workdir overrides the start directory
     start_dir = args.workdir.resolve()
@@ -159,8 +163,6 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     _emit_provider_overlay_divergence_warning(config)
 
-    project_root = config.repo_root
-
     # Load and validate workflow
     workflow_path = args.workflow
     if not workflow_path.exists():
@@ -188,6 +190,51 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     # Run workflow
     artifacts_dir = resolve_artifacts_dir(config)
+    # Issue #540: provider による Issue 解決・state 読み込み・run dir 採番より前に、この
+    # プロセスの生存を launch record として残す。書けなければ先へ進まない（fail-closed）。
+    launch_records: list[Path] = []
+    try:
+        launch_issue = normalize_id(str(args.issue))
+    except ValueError:
+        launch_issue = None  # 不正な Issue ID は runner が run dir 採番前に拒否する
+    if launch_issue is not None:
+        try:
+            launch_records.append(
+                write_launch_record(artifacts_dir, launch_issue, current_process_record("run"))
+            )
+        except OSError as e:
+            print(f"Error: cannot write launch record: {e}", file=sys.stderr)
+            return EXIT_RUNTIME_ERROR
+    try:
+        return _run_with_launch_records(
+            args,
+            config=config,
+            workflow=workflow,
+            workflow_path=workflow_path,
+            artifacts_dir=artifacts_dir,
+            start_dir=start_dir,
+            launch_records=launch_records,
+        )
+    finally:
+        for path in launch_records:
+            try:
+                remove_launch_record(path)
+            except OSError as e:
+                print(f"WARNING: cannot remove launch record {path}: {e}", file=sys.stderr)
+
+
+def _run_with_launch_records(
+    args: argparse.Namespace,
+    *,
+    config: KajiConfig,
+    workflow: Workflow,
+    workflow_path: Path,
+    artifacts_dir: Path,
+    start_dir: Path,
+    launch_records: list[Path],
+) -> int:
+    """workflow を実行し、失敗時は triage まで行って exit code を返す。"""
+    project_root = config.repo_root
     runner = WorkflowRunner(
         workflow=workflow,
         issue_number=args.issue,
@@ -201,6 +248,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         verbose=not args.quiet,
         recovery_root=args.recovery_root,
         recovery_parent=args.recovery_parent,
+        recovery_trigger=getattr(args, "recovery_trigger", None),
+        launch_records=launch_records,
     )
     try:
         state = runner.run()

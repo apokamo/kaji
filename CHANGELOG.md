@@ -54,6 +54,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`kaji status [--json] <issue>...` / `kaji status [--json] --series <id>`**
+  reports run and series state from local artifacts (#540): the latest run, whether
+  it is running, ended (with the `workflow_end` status) or vanished (no
+  `workflow_end` and no live process), the failed step and attempt, the failure
+  cause, worktree / branch, the step's Herdr pane, and the series top-level and
+  member status. `--json` emits schema v1 (see `docs/cli-guides/run-status.md`);
+  unreadable artifacts become `null` fields plus `read_errors`, still with exit 0.
+  The command is read-only. To tell a live run from a killed one, `kaji run` now
+  writes `runs/<run_id>/process.json` and a launch record under
+  `<artifacts>/<issue>/launches/` (written before the Issue is resolved; if it
+  cannot be written, `kaji run` exits 3 before resolving the Issue).
+- **`kaji recover <workflow> <issue> --retry-failed-step [--run-id <id>]`**
+  retries a failed run once from its failed step after kaji checks the safety
+  gates (#540). Refusal exits 4 with one `retry-gate: <name> ...` line per gate;
+  otherwise the child's exit code is returned. No recovery budget, no GitHub
+  writes; the request is recorded in the run's `recovery.json` (`retries`) and
+  `run.log`. `recovery-chain.json` gains `chain_index` and `trigger`.
 - **`kaji pr resolve-thread <pr> --comment <comment_id>`** resolves the GitHub
   review thread that contains an inline review comment (#528). The comment ID
   is the REST `id` that `kaji pr review-comments` returns and
@@ -69,6 +86,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   other threads open. A failed resolve is reported in the review comment and
   the completion report and does not change the verdict. The starter
   repositories get this `pr-verify` change through the next starter sync.
+
+### Changed
+
+- **Breaking: `kaji run-series --resume` restarts failed / interrupted members
+  from their failed step** (#540). A member whose Issue was closed as completed
+  outside the series is marked completed and the series continues; other closed
+  states stop the series as before. The member resume goes through the same
+  safety gates as `--retry-failed-step`; a refusal stops the series (exit 1) with
+  `stop_reason` `member <issue> resume refused by safety gate: gates=<names>`.
+  The old behavior (restarting the member from its first step) is removed.
 
 ## [0.24.0] - 2026-10-20
 

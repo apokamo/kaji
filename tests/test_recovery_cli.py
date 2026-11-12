@@ -533,3 +533,108 @@ class TestIncidentConfigWiring:
         assert rc == EXIT_OK
         handler.assert_called_once()
         assert handler.call_args.kwargs["incident"] == expected
+
+
+# ============================================================
+# Issue #540: launch record / process.json（生存記録）の書き込み規則
+# ============================================================
+
+
+@pytest.mark.medium
+class TestRunLaunchRecords:
+    def _artifacts(self, repo: Path) -> Path:
+        return repo / ".kaji-artifacts"
+
+    def test_launch_record_failure_exits_3_before_issue_resolution(self, tmp_path: Path) -> None:
+        repo = _repo(tmp_path)
+        with (
+            patch(
+                "kaji_harness.commands.run.write_launch_record",
+                side_effect=OSError("read-only file system"),
+            ),
+            patch("kaji_harness.runner.WorkflowRunner._resolve_run_issue_context") as resolve,
+        ):
+            rc = main(["run", str(repo / "wf.yaml"), _ISSUE, "--workdir", str(repo)])
+        assert rc == EXIT_RUNTIME_ERROR
+        resolve.assert_not_called()
+        assert not (self._artifacts(repo) / _ISSUE / "runs").exists()
+
+    def test_issue_is_alive_and_launching_during_issue_resolution(self, tmp_path: Path) -> None:
+        from kaji_harness.runner import WorkflowRunner
+        from kaji_harness.runstate.facts import collect_issue_facts
+
+        repo = _repo(tmp_path)
+        observed: list[tuple[bool | None, bool | None, object]] = []
+        original = WorkflowRunner._resolve_run_issue_context
+
+        def _observe(self: WorkflowRunner) -> object:
+            facts = collect_issue_facts(self.artifacts_dir, _ISSUE)
+            observed.append((facts.any_run_alive, facts.launching, facts.latest_run))
+            return original(self)
+
+        with (
+            patch.object(WorkflowRunner, "_resolve_run_issue_context", _observe),
+            patch(
+                "kaji_harness.runner.execute_cli",
+                return_value=_cli_result_pass(),
+            ),
+            patch("kaji_harness.runner.validate_skill_exists"),
+        ):
+            rc = main(["run", str(repo / "wf.yaml"), _ISSUE, "--workdir", str(repo)])
+        assert rc == EXIT_OK
+        assert observed == [(True, True, None)]
+        # 正常終了で launch record は削除され、run dir には process.json が残る
+        launches = self._artifacts(repo) / _ISSUE / "launches"
+        assert list(launches.glob("*.json")) == []
+        run_dirs = sorted((self._artifacts(repo) / _ISSUE / "runs").iterdir())
+        assert (run_dirs[-1] / "process.json").is_file()
+
+    def test_process_json_failure_keeps_run_alive_via_launch_record(self, tmp_path: Path) -> None:
+        from kaji_harness.runstate.facts import collect_issue_facts
+
+        repo = _repo(tmp_path)
+        observed: list[tuple[bool | None, bool | None]] = []
+
+        def _dispatch(*_args: object, **_kwargs: object) -> object:
+            facts = collect_issue_facts(self._artifacts(repo), _ISSUE)
+            observed.append((facts.any_run_alive, facts.launching))
+            return _cli_result_pass()
+
+        with (
+            patch("kaji_harness.runner.write_process_record", side_effect=OSError("no space")),
+            patch("kaji_harness.runner.execute_cli", side_effect=_dispatch),
+            patch("kaji_harness.runner.validate_skill_exists"),
+        ):
+            rc = main(["run", str(repo / "wf.yaml"), _ISSUE, "--workdir", str(repo)])
+        assert rc == EXIT_OK
+        assert observed == [(True, False)]
+        run_dirs = sorted((self._artifacts(repo) / _ISSUE / "runs").iterdir())
+        assert not (run_dirs[-1] / "process.json").exists()
+        # 記録なしの終了済み run は run.log の COMPLETE で finished_by_log
+        after = collect_issue_facts(self._artifacts(repo), _ISSUE)
+        assert after.latest_run is not None
+        assert after.latest_run.liveness.basis == "finished_by_log"
+
+    def test_recovery_trigger_requires_root(self, tmp_path: Path) -> None:
+        repo = _repo(tmp_path)
+        rc = main(
+            [
+                "run",
+                str(repo / "wf.yaml"),
+                _ISSUE,
+                "--workdir",
+                str(repo),
+                "--recovery-trigger",
+                "retry_failed_step",
+            ]
+        )
+        assert rc == EXIT_DEFINITION_ERROR
+
+
+def _cli_result_pass() -> object:
+    from kaji_harness.models import CLIResult
+
+    return CLIResult(
+        full_output="---VERDICT---\nstatus: PASS\nreason: ok\nevidence: ok\n---END_VERDICT---\n",
+        stderr="",
+    )

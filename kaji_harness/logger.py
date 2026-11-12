@@ -245,6 +245,30 @@ class RunLogger:
             resume_started_at=resume_started_at,
         )
 
+    def log_retry_requested(
+        self, *, trigger: str, run_id: str, resume_from: str | None, outcome: str
+    ) -> None:
+        """Issue #540: ``--retry-failed-step`` / series resume のやり直しを記録する。"""
+        self._write(
+            "retry_requested",
+            trigger=trigger,
+            run_id=run_id,
+            resume_from=resume_from,
+            outcome=outcome,
+        )
+
+    def log_retry_refused(self, *, trigger: str, run_id: str, gates: list[dict[str, str]]) -> None:
+        """Issue #540: 安全ゲートでやり直しを拒否したことを記録する。"""
+        self._write("retry_refused", trigger=trigger, run_id=run_id, gates=gates)
+
+    def log_retry_child_end(
+        self, *, trigger: str, child_run_id: str | None, exit_code: int | None
+    ) -> None:
+        """Issue #540: やり直しで起動した child run の終了を記録する。"""
+        self._write(
+            "retry_child_end", trigger=trigger, child_run_id=child_run_id, exit_code=exit_code
+        )
+
     def log_recovery_attempt_end(
         self,
         *,

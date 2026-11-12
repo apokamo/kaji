@@ -15,6 +15,7 @@ from .recover import cmd_recover
 from .run import cmd_run
 from .series import cmd_run_series, cmd_validate_series
 from .starter import cmd_starter_release_plan, cmd_starter_task_plan, cmd_starter_tracking_plan
+from .status import cmd_status
 from .validate import cmd_validate
 
 
@@ -27,6 +28,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_recover(args)
     if args.command == "run":
         return cmd_run(args)
+    if args.command == "status":
+        return cmd_status(args)
     if args.command == "validate":
         return cmd_validate(args)
     if args.command == "validate-series":

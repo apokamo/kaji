@@ -11,8 +11,10 @@ recovery budget / wait は運用上の安全弁であり config 化しない（I
 
 from __future__ import annotations
 
+import fcntl
 import json
-from dataclasses import dataclass, field
+import os
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -49,6 +51,10 @@ FailureCause = Literal[
     # 予約値。セッション異常の機械判定は pure code では不可能なため初期 classifier は
     # emit しない（将来の深掘り調査 agent 導入時に使用）。
     "external_upstream_anomaly",
+    # Issue #540: ``workflow_end`` も ``failure_event`` も無いまま ``kaji run`` プロセスが
+    # 消えた run（kill / OOM 等の推定）。triage 外の経路（status / retry / series resume）
+    # でのみ出る。
+    "process_vanished",
 ]
 
 FailureSource = Literal["runner", "agent", "external", "config"]
@@ -78,6 +84,7 @@ FAILURE_CAUSES: frozenset[str] = frozenset(
         "user_precondition_error",
         "user_interrupted",
         "external_upstream_anomaly",
+        "process_vanished",
     }
 )
 
@@ -207,6 +214,9 @@ class RecoveryDecision:
     # Issue #322: incident 記録を抑止した事実と理由（additive・optional）。
     incident_suppressed: bool = False
     incident_suppression_reason: str | None = None
+    # Issue #540: ``--retry-failed-step`` / series resume の記録（additive・optional）。
+    # 値は JSON の dict（requested_at / trigger / outcome / gates / ...）。
+    retries: list[dict[str, Any]] = field(default_factory=list)
     schema_version: int = RECOVERY_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -243,6 +253,7 @@ class RecoveryDecision:
             "incident_transient_closed": self.incident_transient_closed,
             "incident_suppressed": self.incident_suppressed,
             "incident_suppression_reason": self.incident_suppression_reason,
+            **({"retries": [dict(entry) for entry in self.retries]} if self.retries else {}),
         }
 
     @classmethod
@@ -275,6 +286,7 @@ class RecoveryDecision:
             incident_transient_closed=bool(data.get("incident_transient_closed", False)),
             incident_suppressed=bool(data.get("incident_suppressed", False)),
             incident_suppression_reason=data.get("incident_suppression_reason"),
+            retries=[dict(entry) for entry in data.get("retries", []) if isinstance(entry, dict)],
             schema_version=int(data.get("schema_version", RECOVERY_SCHEMA_VERSION)),
         )
 
@@ -311,13 +323,146 @@ def read_recovery_json(path: Path) -> RecoveryDecision:
     return RecoveryDecision.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
 
-def write_recovery_chain(path: Path, *, root_run_id: str, parent_run_id: str) -> None:
-    """child run の chain identity を ``recovery-chain.json`` に書き出す。"""
+RECOVERY_WRITE_LOCK_FILE = ".recovery.lock"
+
+
+class RecoveryWriteLock:
+    """run dir 単位の ``recovery.json`` 更新用ブロッキング lock（``fcntl.flock``）。
+
+    retry 記録（``RetryRecorder``）と triage の decision 上書き（``RecoveryHandler``）が
+    同じ lock で read-modify-write を直列化し、互いの更新を失わないようにする。
+    """
+
+    def __init__(self, run_dir: Path) -> None:
+        self.path = run_dir / RECOVERY_WRITE_LOCK_FILE
+        self._fd: int | None = None
+
+    def __enter__(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError:
+            os.close(fd)
+            raise
+        self._fd = fd
+
+    def __exit__(self, *_exc: object) -> None:
+        fd, self._fd = self._fd, None
+        if fd is None:
+            return
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def _merge_retries(
+    on_disk: list[dict[str, Any]], in_memory: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """保存済み ``retries`` を正とし、未保存の in-memory entry（``request_id`` 単位）を追記する。"""
+    merged = [dict(entry) for entry in on_disk]
+    known = {entry.get("request_id") for entry in merged if entry.get("request_id") is not None}
+    for entry in in_memory:
+        request_id = entry.get("request_id")
+        if request_id is not None and request_id in known:
+            continue
+        if request_id is None and entry in merged:
+            continue
+        merged.append(dict(entry))
+    return merged
+
+
+def write_recovery_decision_preserving_retries(path: Path, decision: RecoveryDecision) -> None:
+    """triage の decision で ``recovery.json`` を上書きする。既存の ``retries`` は保持する。
+
+    ``plan_recovery`` は ``retries`` を空で組み立てるため、単純な上書きでは
+    ``--retry-failed-step`` / series resume の記録が消える（Issue #540）。
+    ``RecoveryWriteLock`` の下で既存ファイルの ``retries`` を読み戻してマージする。
+    既存ファイルが読めない場合は従来どおり decision をそのまま書く。
+    """
+    with RecoveryWriteLock(path.parent):
+        retries = list(decision.retries)
+        if path.is_file():
+            try:
+                existing = read_recovery_json(path)
+            except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError):
+                existing = None
+            if existing is not None:
+                retries = _merge_retries(existing.retries, decision.retries)
+        write_recovery_json(path, replace(decision, retries=retries))
+
+
+RecoveryTrigger = Literal["auto_recover", "retry_failed_step", "series_resume"]
+RECOVERY_TRIGGERS: frozenset[str] = frozenset(
+    {"auto_recover", "retry_failed_step", "series_resume"}
+)
+
+
+def write_recovery_chain(
+    path: Path,
+    *,
+    root_run_id: str,
+    parent_run_id: str,
+    chain_index: int | None = None,
+    trigger: str | None = None,
+) -> None:
+    """child run の chain identity を ``recovery-chain.json`` に書き出す。
+
+    Issue #540: ``chain_index``（chain 内で何回目の child か）と ``trigger``
+    （``auto_recover`` / ``retry_failed_step`` / ``series_resume``）は optional。
+    """
+    data: dict[str, Any] = {"root_run_id": root_run_id, "parent_run_id": parent_run_id}
+    if chain_index is not None:
+        data["chain_index"] = chain_index
+    if trigger is not None:
+        data["trigger"] = trigger
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps({"root_run_id": root_run_id, "parent_run_id": parent_run_id}, indent=2) + "\n",
-        encoding="utf-8",
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+@dataclass(frozen=True)
+class RecoveryChainInfo:
+    """``recovery-chain.json`` の内容（Issue #540 の optional 項目を含む）。"""
+
+    root_run_id: str
+    parent_run_id: str
+    chain_index: int | None = None
+    trigger: str | None = None
+
+
+class RecoveryChainError(ValueError):
+    """``recovery-chain.json`` が存在するが読めない・不正な場合。"""
+
+
+def read_recovery_chain_info(path: Path) -> RecoveryChainInfo | None:
+    """``recovery-chain.json`` を読み、``chain_index`` / ``trigger`` まで返す。
+
+    Returns:
+        chain 情報。ファイルが無ければ ``None``（root run）。
+
+    Raises:
+        RecoveryChainError: 存在するが読めない・JSON 不正・必須 key 欠落の場合。
+    """
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RecoveryChainError(f"{path.name}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RecoveryChainError(f"{path.name}: top-level is not an object")
+    root = data.get("root_run_id")
+    parent = data.get("parent_run_id")
+    if not isinstance(root, str) or not isinstance(parent, str):
+        raise RecoveryChainError(f"{path.name}: root_run_id / parent_run_id missing")
+    raw_index = data.get("chain_index")
+    chain_index = (
+        raw_index if isinstance(raw_index, int) and not isinstance(raw_index, bool) else None
     )
+    raw_trigger = data.get("trigger")
+    trigger = raw_trigger if isinstance(raw_trigger, str) else None
+    return RecoveryChainInfo(root, parent, chain_index, trigger)
 
 
 def read_recovery_chain(path: Path) -> tuple[str, str] | None:
@@ -330,7 +475,9 @@ def read_recovery_chain(path: Path) -> tuple[str, str] | None:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
         return None
     root = data.get("root_run_id")
     parent = data.get("parent_run_id")

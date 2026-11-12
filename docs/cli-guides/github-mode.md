@@ -190,6 +190,22 @@ exits zero and `gh issue view` reports `closed` with state reason `completed`. R
 or stopped series with `--resume`; a changed definition fingerprint or a live orphan child is
 rejected. Runtime state and the advisory lock live under `<artifacts_dir>/_series/<id>/`.
 
+On `--resume`, a `failed` or `interrupted` member is handled as follows (#540):
+
+| Member's Issue | Behavior |
+|----------------|----------|
+| closed as `completed` (fixed outside the series) | The member becomes `completed` (`gate=closed_completed`) and the series continues |
+| closed as `not_planned` / `duplicate` | The series stops (exit 1): `member <issue> is already closed before its resumed run: mismatch:closed/<reason>` |
+| open | kaji checks the same safety gates as `kaji recover --retry-failed-step` ([Failure Triage / Recovery](failure-recovery.md)) on the member's latest run. If they pass, the member restarts from that run's failed step (`kaji run ... --from <step> --recovery-root ... --recovery-parent ... --recovery-trigger series_resume`). If a gate refuses, nothing starts and the series stops (exit 1) with `stop_reason` `member <issue> resume refused by safety gate: gates=<name>[,<name>...]` (machine-readable: `gates=(?P<gates>[a-z_]+(?:,[a-z_]+)*)$`); stderr also has the `retry-gate:` lines |
+
+A member stopped with Ctrl-C has the triage cause `user_interrupted`, so its resume stops at that
+gate; retry it manually or start a new series. A failed member with no run at all stops with
+`no_target_run` (kaji does not restart it from the first step). Before every member start the
+series writes a launcher record so that `kaji status` sees the Issue as alive before the child's
+own records exist. If that record, the launch lock, or the pre-launch `recovery.json` entry cannot
+be written, the series stops with exit 3 without starting the member and without changing its
+status. `--dry-run` and `validate-series` output and exit codes are unchanged.
+
 `validate-series` and `--dry-run` fully preflight every member workflow in the current plan: YAML
 schema, workflow references, and skill metadata. A normal run repeats the same preflight at startup
 instead of trusting an earlier dry-run. If any member is invalid, no member process, series state, or

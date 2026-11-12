@@ -112,10 +112,12 @@ kaji_harness/
     _worktree.py  # main worktree 解決 (private。facade 経由で公開)
   commands/       # kaji CLI subcommand dispatcher の実体 (Issue #283/#286 で分割・分離)
   cli_main.py     # console entry point `kaji` / `python -m` 専用 (#284 で互換 shim 撤去)
+  runstate/       # run の生存・最新 run・失敗 step・必須 artifact の事実 (Issue #540)
   recovery/       # failure triage / recovery handler (Issue #288)
     models.py     # RecoveryDecision / FailureClassification / 定数 (budget, wait, denylist)
     snapshot.py   # 失敗 run の artifact / state / git state 収集
     classify.py   # cause 軸の分類 (純関数)
+    gates.py      # retry / series resume の安全ゲート・RetryPlanner・RetryRecorder (Issue #540)
     report.py     # triage コメント / stderr サマリ生成 (純関数)
     handler.py    # decision planner (純関数) + orchestrator
     target.py     # recover 対象 IssueContext / run の選択・検証
@@ -467,10 +469,12 @@ member ごとの workflow / child PID / run ID / exit code / 成功ゲートを�
 <artifacts_dir>/<issue>/
   session-state.json
   progress.md
+  launches/                       # 起動中 process の launch record と .lock（Issue #540）
   runs/<run_id>/
     run.log                       # workflow 全体ログ
     recovery.json                 # failure triage の判定結果（失敗 run のみ。Issue #288）
-    recovery-chain.json           # recovery child run の chain identity（自動再開で作られた run のみ）
+    recovery-chain.json           # recovery child run の chain identity（自動再開・retry・series resume で作られた run のみ）
+    process.json                  # run の生存記録（pid・開始 ticks・boot id・hostname。Issue #540）
     steps/<step_id>/
       attempt-001/
         prompt.txt                # agent step の build_prompt 結果（再現用）
@@ -576,6 +580,28 @@ runner は各 attempt の dispatch 前に、project root（`kaji run` では `co
 `recovery-chain.json` は自動再開で作られた child run が起動直後に書く `{root_run_id, parent_run_id}`。
 そのファイルの存在だけで「この run は recovery child である」= budget 消費済みが決まるため、
 chain をまたいだ retry storm が構造的に起きない。
+Issue #540 以降は `chain_index`（chain 内の通番）と `trigger`（`auto_recover` /
+`retry_failed_step` / `series_resume`）も持つ。`--retry-failed-step` / series resume の要求と結果は
+`recovery.json` の `retries` と run.log の `retry_requested` / `retry_refused` / `retry_child_end` に残る。
+
+#### run の状態の事実と安全ゲート（Issue #540）
+
+`kaji_harness/runstate/` は「run の生存・最新の run・失敗 step・必須 artifact」の判定の唯一の実装で、
+`kaji status`（読み取り専用）、`kaji recover --retry-failed-step`、`kaji run-series --resume` が共有する。
+
+- `runstate.process`: 生存記録 `ProcessRecord`（pid・`/proc/<pid>/stat` 第 22 欄の開始 ticks・boot id・
+  hostname）と `probe_liveness`（pid 再利用・zombie・reboot を判定し、判定不能は `None`）。記録で判定
+  できない run は run.log の終端条件で補完する（`finished_by_log`）
+- `runstate.launch`: Issue 単位の launch record（`<artifacts>/<issue>/launches/`）と `LaunchLock`（`flock`）。
+  `kaji run` は provider による Issue 解決の前に、launcher（retry / series）は child 起動の前に書く
+- `runstate.runlog`: run.log の解釈（未終了 step）と必須 artifact の判定。recovery の snapshot からも使う
+- `runstate.facts`: `collect_issue_facts` / `collect_run_facts`（読めない項目は `read_errors`）
+- `runstate.schema`: `kaji status --json` の schema v1
+- `recovery.gates`: triage と共有する安全ゲート（`GateHit`）、`RetryPlanner`、`prepare_retry`
+  （LaunchLock の中でゲート判定 → launcher record）、`RetryRecorder`（`recovery.json` の `retries` と run.log）
+
+triage（`kaji run` 終了時の handler と `--retry-failed-step` なしの `kaji recover`）の判定順・decision は
+変えていない。
 
 #### `kaji issue resolve-verdict` の解決規則（Issue #426）
 

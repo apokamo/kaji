@@ -258,8 +258,17 @@ Run an explicitly ordered series of GitHub Issues:
 kaji validate-series .kaji/series/my-series.yaml
 kaji run-series .kaji/series/my-series.yaml --dry-run
 kaji run-series .kaji/series/my-series.yaml
-# after a stopped or interrupted run
+# after a stopped or interrupted run (failed members restart from their failed step)
 kaji run-series .kaji/series/my-series.yaml --resume
+```
+
+Check run and series state without reading kaji's internal files, and retry a failed run from its
+failed step behind safety gates:
+
+```bash
+kaji status --json <issue-id>
+kaji status --json --series my-series
+kaji recover .kaji/wf/official/dev.yaml <issue-id> --retry-failed-step
 ```
 
 Use `/series-create <issue>... --id <series-id>` to generate a validated definition without

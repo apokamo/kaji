@@ -137,6 +137,11 @@ worktree）基準で解決される（Issue #177、[ワークフロー作成](..
 これらは tracked な `.kaji/series/<series-id>.yaml` 定義とは分離される。
 `validate-series` と `run-series --dry-run` はこのディレクトリを作成しない。
 
+`kaji run` は実行中、`<artifacts_dir>/<issue>/runs/<run_id>/process.json`（pid・プロセス開始 ticks・
+boot id・hostname）と `<artifacts_dir>/<issue>/launches/` の launch record も書く（Issue #540）。
+`kaji status` はこれを読んで実行中の run と kill された run を区別する
+（[Run Status](../cli-guides/run-status.ja.md)）。
+
 ### `[execution]`
 
 | key | 必須/任意 | 型 | 既定 | 検証規則 | 一次情報 |

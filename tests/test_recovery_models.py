@@ -91,6 +91,8 @@ def test_failure_cause_domain() -> None:
             "user_precondition_error",
             "user_interrupted",
             "external_upstream_anomaly",
+            # Issue #540: triage 外の経路（status / retry / series resume）でのみ出る。
+            "process_vanished",
         }
     )
 

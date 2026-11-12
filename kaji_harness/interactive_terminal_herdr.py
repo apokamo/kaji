@@ -1633,6 +1633,65 @@ def _classify_herdr_process_liveness(
     return "confirmed_shell_only"
 
 
+AgentPaneState = Literal["active", "shell_only", "absent", "not_owned", "unknown"]
+
+
+def _is_nonempty_str(value: object) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+def inspect_agent_pane(
+    pane_id: str, *, origin_pane: str | None, run_id: str | None
+) -> AgentPaneState:
+    """Issue #540: 失敗 step の pane に agent が残っているかを読み取り専用で照会する。
+
+    ``pane get`` と ``pane process-info`` だけを呼び、pane を閉じたり印を付けたりしない。
+
+    Args:
+        pane_id: ``pane-metadata.json`` の ``pane_id``。
+        origin_pane: 同 ``origin_pane``（所有確認に使う）。
+        run_id: 同 ``kaji_run``（所有確認に使う）。
+
+    Returns:
+        ``active``（kaji 所有で前景に agent プロセス）/ ``shell_only`` / ``absent``（pane が
+        無い）/ ``not_owned``（tokens が一致しない別の pane）/ ``unknown``（照会不能・判定不能）。
+        ``not_owned`` は metadata 側と照会結果側の所有情報がともに有効な文字列で、
+        それらが一致しないと確認できた場合だけ返す。どちらかの欠落・型不正は ``unknown``。
+    """
+    if not _is_nonempty_str(origin_pane) or not _is_nonempty_str(run_id):
+        return "unknown"
+    try:
+        herdr = _resolve_herdr()
+    except CLINotFoundError:
+        return "unknown"
+    try:
+        pane = _get_herdr_pane(herdr, pane_id)
+    except CLIExecutionError as exc:
+        return "absent" if "not found" in str(exc).lower() else "unknown"
+    except OSError:
+        return "unknown"
+    tokens = pane.get("tokens")
+    actual_pane_id = pane.get("pane_id")
+    if not _is_nonempty_str(actual_pane_id) or not isinstance(tokens, dict):
+        return "unknown"
+    actual_origin = tokens.get("kaji_origin")
+    actual_run = tokens.get("kaji_run")
+    if not _is_nonempty_str(actual_origin) or not _is_nonempty_str(actual_run):
+        return "unknown"
+    if actual_pane_id != pane_id or actual_origin != origin_pane or actual_run != run_id:
+        return "not_owned"
+    try:
+        process_info = _get_herdr_process_info(herdr, pane_id)
+    except (CLIExecutionError, OSError):
+        return "unknown"
+    liveness = _classify_herdr_process_liveness(process_info)
+    if liveness == "active":
+        return "active"
+    if liveness == "confirmed_shell_only":
+        return "shell_only"
+    return "unknown"
+
+
 def _close_owned_herdr_pane(
     herdr: str,
     pane_id: str,

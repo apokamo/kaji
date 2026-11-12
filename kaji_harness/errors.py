@@ -303,6 +303,10 @@ class RecoveryTargetError(HarnessError):
     """A requested recovery run is absent or not eligible for failure triage."""
 
 
+class LaunchRecordError(HarnessError):
+    """Issue #540: 生存記録（launch record 等）を書けず、先へ進めない。"""
+
+
 class MissingResumeSessionError(HarnessError):
     """resume 指定ステップで継続元のセッション ID が見つからない。"""
 
