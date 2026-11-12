@@ -181,7 +181,7 @@ contract; `kaji run-series --resume` uses the same gates.
 | `issue_run_alive` | Another run of the Issue, or a launch record not pointing at the target run, is alive |
 | `issue_liveness_unknown` | None of those is alive but at least one cannot be judged |
 | `run_not_failed` | The run ended with a status other than `ERROR` / `ABORT` |
-| `artifact_unreadable` | A required artifact is missing or broken — unreadable, not UTF-8, invalid JSON, or (for `result.json`) a missing required key / wrong type (run.log, `result.json` of an attempt that has `step_end`, `session-state.json`, `recovery-chain.json`, `recovery.json`) |
+| `artifact_unreadable` | A required artifact is missing or broken — unreadable, not UTF-8, invalid JSON, or (for `result.json`) a missing required key / wrong type, including a wrongly typed optional `error` / `synthetic`; a wrongly typed string field of run.log's `workflow_end` / `failure_event` or of `session-state.json` counts too (run.log, `result.json` of an attempt that has `step_end`, `session-state.json`, `recovery-chain.json`, `recovery.json`) |
 | `workflow_mismatch` | The run's workflow name differs from `<workflow.yaml>` |
 | `unknown_failed_step` | The failed step cannot be determined or is not in the workflow |
 | `non_resumable_skill` | The failed step or the actual restart step runs `issue-start` / `i-pr` / `issue-close` |

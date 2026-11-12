@@ -314,9 +314,10 @@ def collect_run_facts(
                 allow_unterminated=facts.termination == "vanished",
                 probe_git=probe_git,
             )
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            # 防御: snapshot 側の読み取り失敗（非 UTF-8 等）を例外として漏らさず、
-            # status は read_errors、retry / series は artifact_unreadable に変換する。
+            failure = classify_failure(snapshot)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            # 防御: snapshot / 失敗分類の読み取り失敗（非 UTF-8・型不正等）を例外として
+            # 漏らさず、status は read_errors、retry / series は artifact_unreadable に変換する。
             error = ReadError(
                 _relative(artifacts_dir, run_dir),
                 "unreadable",
@@ -325,8 +326,19 @@ def collect_run_facts(
             facts.read_errors.append(error)
             facts.blocking_errors.append(error)
             return facts
+        # snapshot が型不正として値を捨てた artifact は、破損として retry / series を拒否する
+        # （分類は捨てた後の値で行われるため、ここで止めないと破損入力で再開しうる）。
+        known = {error.path for error in facts.read_errors}
+        for path, message in snapshot.artifact_type_errors:
+            relative = _relative(artifacts_dir, path)
+            if relative in known:
+                continue
+            known.add(relative)
+            error = ReadError(relative, "invalid", message)
+            facts.read_errors.append(error)
+            facts.blocking_errors.append(error)
         facts.snapshot = snapshot
-        facts.failure = classify_failure(snapshot)
+        facts.failure = failure
         if facts.termination == "vanished":
             pending = find_unterminated_step(events)
             facts.failed_step = pending[0] if pending else None
@@ -347,6 +359,17 @@ def _collect_session_state(facts: RunFacts, *, artifacts_dir: Path, issue_id: st
         return
     worktree = data.get("worktree_dir")
     branch = data.get("branch_name")
+    bad = [
+        key
+        for key, value in (("worktree_dir", worktree), ("branch_name", branch))
+        if value is not None and not isinstance(value, str)
+    ]
+    if bad:
+        error = ReadError(
+            _relative(artifacts_dir, path), "invalid", f"{', '.join(bad)} not a string"
+        )
+        facts.read_errors.append(error)
+        facts.blocking_errors.append(error)
     facts.worktree_dir = worktree if isinstance(worktree, str) and worktree else None
     facts.branch_name = branch if isinstance(branch, str) and branch else None
 

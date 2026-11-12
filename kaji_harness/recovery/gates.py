@@ -317,7 +317,16 @@ class RetryPlanner:
             plan.gates.append(
                 GateHit("workflow_mismatch", f"run={run.workflow} requested={self.workflow.name}")
             )
-        self._failure_gates(plan, run)
+        try:
+            self._failure_gates(plan, run)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            # 防御: 破損 artifact に由来する値でゲート評価が失敗しても例外を漏らさず、
+            # 拒否（artifact_unreadable）に倒す。resume 地点は信頼できないので捨てる。
+            plan.resume_from = None
+            if not any(g.name == "artifact_unreadable" for g in plan.gates):
+                plan.gates.append(
+                    GateHit("artifact_unreadable", f"failure gates: {type(exc).__name__}")
+                )
         pane_hit = _pane_gate(run, self.pane_inspector)
         if pane_hit is not None:
             plan.gates.append(pane_hit)

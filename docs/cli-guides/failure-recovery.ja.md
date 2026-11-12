@@ -155,7 +155,7 @@ retry-gate: branch_mismatch worktree=feat/9 state=feat/540
 | `issue_run_alive` | Issue の他の run、または対象 run を指さない launch record が生きている |
 | `issue_liveness_unknown` | 上のいずれも生きていないが、判定できないものがある |
 | `run_not_failed` | `ERROR` / `ABORT` 以外で終了した |
-| `artifact_unreadable` | 必須の artifact が欠落・破損（読めない・非 UTF-8・JSON 不正、`result.json` は必須 key 欠落・型不正も含む）（run.log、`step_end` のある attempt の `result.json`、`session-state.json`、`recovery-chain.json`、`recovery.json`） |
+| `artifact_unreadable` | 必須の artifact が欠落・破損（読めない・非 UTF-8・JSON 不正、`result.json` は必須 key 欠落・型不正、省略可能な `error` / `synthetic` の型不正も含む。run.log の `workflow_end` / `failure_event` と `session-state.json` の文字列項目の型不正も同様）（run.log、`step_end` のある attempt の `result.json`、`session-state.json`、`recovery-chain.json`、`recovery.json`） |
 | `workflow_mismatch` | run の workflow 名が `<workflow.yaml>` と異なる |
 | `unknown_failed_step` | 失敗 step を特定できない、または workflow に無い |
 | `non_resumable_skill` | 失敗 step か実際の再開先が `issue-start` / `i-pr` / `issue-close` を実行する |

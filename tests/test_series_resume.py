@@ -378,13 +378,20 @@ def test_retry_is_refused_while_a_series_resume_launcher_is_recorded(repo: Path)
 # --- Issue #540 review R2 / R3 / R4 の回帰テスト ---
 
 
-@pytest.mark.parametrize("artifact", ["result", "state", "chain", "empty-result"])
+@pytest.mark.parametrize(
+    "artifact", ["result", "state", "chain", "empty-result", "error-int", "error-list"]
+)
 def test_corrupt_artifact_stops_series_without_launch(
     repo: Path, artifact: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
     run_dir = _failed_run(repo)
+    result_path = run_dir / "steps" / "implement" / "attempt-001" / "result.json"
     if artifact == "empty-result":
-        (run_dir / "steps" / "implement" / "attempt-001" / "result.json").write_text("{}")
+        result_path.write_text("{}")
+    elif artifact in ("error-int", "error-list"):
+        data = json.loads(result_path.read_text())
+        data["error"] = 7 if artifact == "error-int" else ["invalid"]
+        result_path.write_text(json.dumps(data))
     else:
         path = {
             "result": run_dir / "steps" / "implement" / "attempt-001" / "result.json",

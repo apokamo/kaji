@@ -682,6 +682,101 @@ class TestCorruptArtifactsAcrossEntries:
             (f"{ISSUE}/runs/{RUN}/steps/implement/attempt-001/result.json", "invalid")
         ]
 
+    @pytest.mark.parametrize(
+        ("exception", "value"),
+        [
+            ("StepTimeoutError", 7),
+            ("StepTimeoutError", ["invalid"]),
+            ("CLIExecutionError", 7),
+        ],
+        ids=["timeout-int", "timeout-list", "cli-int"],
+    )
+    def test_result_error_bad_type_is_refused_across_entries(
+        self,
+        repo: Path,
+        exception: str,
+        value: object,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """verify R3: 省略可能な ``error`` の型不正も分類・ゲート評価で例外を漏らさない。"""
+        run_dir = _failed_run(repo, exception=exception)
+        path = run_dir / "steps" / "implement" / "attempt-001" / "result.json"
+        data = json.loads(path.read_text())
+        data["error"] = value
+        path.write_text(json.dumps(data))
+        relative = f"{ISSUE}/runs/{RUN}/steps/implement/attempt-001/result.json"
+
+        assert _planner(repo).plan().gate_names() == ["artifact_unreadable"]
+
+        capsys.readouterr()
+        assert main(["status", "--json", "--workdir", str(repo), ISSUE, "541"]) == 0
+        issues = {e["issue"]: e for e in json.loads(capsys.readouterr().out)["issues"]}
+        assert set(issues) == {ISSUE, "541"}
+        assert (relative, "invalid") in [
+            (e["path"], e["error"]) for e in issues[ISSUE]["read_errors"]
+        ]
+
+        with patch("kaji_harness.commands.recover.default_child_popen") as popen:
+            rc = main(_recover_argv(repo))
+        assert rc == EXIT_RETRY_REFUSED
+        popen.assert_not_called()
+        err = capsys.readouterr().err.splitlines()
+        names = [m.group("name") for line in err[1:] if (m := GATE_LINE.match(line))]
+        assert "artifact_unreadable" in names
+
+    @pytest.mark.parametrize(
+        "corruption",
+        ["end-error-int", "failure-step-int", "state-worktree-int"],
+    )
+    def test_bad_typed_run_log_or_state_values_are_refused(
+        self, repo: Path, corruption: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """verify R3: run.log / state の文字列項目の型不正も例外にせず拒否する。"""
+        if corruption == "end-error-int":
+            run_dir = _failed_run(repo)
+            log = run_dir / "run.log"
+            lines = log.read_text().splitlines()
+            entries = [json.loads(line) for line in lines]
+            for entry in entries:
+                if entry.get("event") == "workflow_end":
+                    entry["error"] = 7
+            log.write_text("".join(json.dumps(e) + "\n" for e in entries))
+        elif corruption == "failure-step-int":
+            run_dir = _failed_run(repo)
+            log = run_dir / "run.log"
+            entries = [json.loads(line) for line in log.read_text().splitlines()]
+            for entry in entries:
+                if entry.get("event") == "failure_event":
+                    entry["step_id"] = 7
+            log.write_text("".join(json.dumps(e) + "\n" for e in entries))
+        else:
+            _failed_run(repo)
+            state = _artifacts(repo) / ISSUE / "session-state.json"
+            data = json.loads(state.read_text())
+            data["worktree_dir"] = 7
+            state.write_text(json.dumps(data))
+
+        assert "artifact_unreadable" in _planner(repo).plan().gate_names()
+        capsys.readouterr()
+        assert main(["status", "--json", "--workdir", str(repo), ISSUE]) == 0
+        errors = json.loads(capsys.readouterr().out)["issues"][0]["read_errors"]
+        assert "invalid" in [e["error"] for e in errors]
+        with patch("kaji_harness.commands.recover.default_child_popen") as popen:
+            rc = main(_recover_argv(repo))
+        assert rc == EXIT_RETRY_REFUSED
+        popen.assert_not_called()
+
+    def test_failure_gate_exception_is_refused_as_artifact_unreadable(self, repo: Path) -> None:
+        """verify R3 防御: ゲート評価中の例外は漏らさず artifact_unreadable で拒否する。"""
+        _failed_run(repo)
+        with patch(
+            "kaji_harness.recovery.gates.is_sensitive_failure_text",
+            side_effect=TypeError("bad value"),
+        ):
+            plan = _planner(repo).plan()
+        assert plan.gate_names() == ["artifact_unreadable"]
+        assert plan.resume_from is None
+
     def test_legacy_result_without_optional_keys_is_accepted(self, repo: Path) -> None:
         from tests.runstate_helpers import result_record
 

@@ -94,6 +94,9 @@ class FailureSnapshot:
     prior_recovery_child_run_id: str | None = None
     provider_available: bool = True
     artifact_read_errors: tuple[str, ...] = ()
+    #: Issue #540: 文字列 / 真偽値であるべき artifact 項目の型不正 ``(path, message)``。
+    #: 値は ``None`` に倒して snapshot に入れ、``runstate.facts`` が blocking read error にする。
+    artifact_type_errors: tuple[tuple[Path, str], ...] = ()
     newer_run_ids: tuple[str, ...] = ()
     evidence: tuple[str, ...] = ()
     #: Issue #304: 過去の handler 実行で記録済みの incident 参照（再入ガード）。
@@ -249,17 +252,44 @@ def _prior_incident_state(run_dir: Path) -> tuple[str | None, str | None]:
     return prior.incident_ref, prior.incident_action
 
 
-def _parse_failure_event(entry: dict[str, Any] | None) -> FailureEvent | None:
+def _typed_str(
+    data: dict[str, Any] | None,
+    key: str,
+    path: Path,
+    type_errors: list[tuple[Path, str]],
+) -> str | None:
+    """``data[key]`` を ``str | None`` に絞る（Issue #540）。
+
+    artifact の値は外部入力であり、型不正の値を分類・ゲート評価へ渡すと例外になる。
+    ``None`` / 欠落はそのまま ``None``、``str`` 以外は ``None`` に倒し ``type_errors`` に
+    ``(artifact path, message)`` を記録する（破損を黙って正常扱いにしない）。
+    """
+    if data is None:
+        return None
+    value = data.get(key)
+    if value is None or isinstance(value, str):
+        return value
+    type_errors.append((path, f"{key} is not a string ({type(value).__name__})"))
+    return None
+
+
+def _parse_failure_event(
+    entry: dict[str, Any] | None,
+    path: Path | None = None,
+    type_errors: list[tuple[Path, str]] | None = None,
+) -> FailureEvent | None:
     if entry is None:
         return None
     kind = entry.get("kind")
     if not isinstance(kind, str):
         return None
+    errors = type_errors if type_errors is not None else []
+    source = path if path is not None else Path("run.log")
     return FailureEvent(
         kind=kind,
-        step_id=entry.get("step_id"),
-        exception_type=entry.get("exception_type"),
-        cycle_name=entry.get("cycle_name"),
+        step_id=_typed_str(entry, "step_id", source, errors),
+        exception_type=_typed_str(entry, "exception_type", source, errors),
+        cycle_name=_typed_str(entry, "cycle_name", source, errors),
         synthetic=bool(entry.get("synthetic", True)),
     )
 
@@ -364,6 +394,7 @@ def collect_snapshot(
     run_id = run_dir.name
     runs_dir = run_dir.parent
     read_errors: list[str] = []
+    type_errors: list[tuple[Path, str]] = []
     evidence: list[str] = []
 
     events: list[dict[str, Any]] = []
@@ -376,8 +407,8 @@ def collect_snapshot(
         read_errors.append("run.log: no parsable events")
 
     end_entry = _last_event(events, "workflow_end")
-    end_status = end_entry.get("status") if end_entry else None
-    end_error = end_entry.get("error") if end_entry else None
+    end_status = _typed_str(end_entry, "status", run_log, type_errors)
+    end_error = _typed_str(end_entry, "error", run_log, type_errors)
     unterminated = allow_unterminated and end_entry is None and bool(events)
     if end_entry is None and not read_errors and not unterminated:
         read_errors.append("run.log: workflow_end event missing")
@@ -385,7 +416,7 @@ def collect_snapshot(
         for problem in required_result_problems(run_dir, events):
             read_errors.append(f"{problem.path}: {problem.error} ({problem.message})")
 
-    failure_event = _parse_failure_event(_last_event(events, "failure_event"))
+    failure_event = _parse_failure_event(_last_event(events, "failure_event"), run_log, type_errors)
     failed_step = failure_event.step_id if failure_event else None
     if unterminated and failure_event is None:
         pending = find_unterminated_step(events)
@@ -393,8 +424,16 @@ def collect_snapshot(
 
     attempt_dir = _latest_attempt_dir(run_dir, failed_step)
     result = _latest_attempt_result(run_dir, failed_step)
-    attempt_error = result.get("error") if result else None
-    attempt_synthetic = bool(result["synthetic"]) if result and "synthetic" in result else None
+    result_path = (attempt_dir if attempt_dir is not None else run_dir) / "result.json"
+    attempt_error = _typed_str(result, "error", result_path, type_errors)
+    raw_synthetic = result.get("synthetic") if result else None
+    attempt_synthetic: bool | None = None
+    if isinstance(raw_synthetic, bool):
+        attempt_synthetic = raw_synthetic
+    elif raw_synthetic is not None:
+        type_errors.append(
+            (result_path, f"synthetic is not a boolean ({type(raw_synthetic).__name__})")
+        )
     raw_session_id = result.get("session_id") if result else None
     attempt_session_id = raw_session_id if isinstance(raw_session_id, str) else None
     interrupted = failure_event is not None and failure_event.kind == "interrupted"
@@ -403,8 +442,9 @@ def collect_snapshot(
     state_path = artifacts_dir / issue_id / STATE_FILE
     state = _load_state(state_path)
     state_loaded = state is not None
-    worktree_dir = state.get("worktree_dir") if state else None
-    branch_name = state.get("branch_name") if state else None
+    worktree_dir = _typed_str(state, "worktree_dir", state_path, type_errors)
+    branch_name = _typed_str(state, "branch_name", state_path, type_errors)
+    last_completed_step = _typed_str(state, "last_completed_step", state_path, type_errors)
     # Issue #540: triage 外の経路では、初回 step で kill された run の state 未作成を正常とする。
     if not state_loaded and not (allow_unterminated and not state_path.exists()):
         read_errors.append(f"{STATE_FILE}: missing or unreadable")
@@ -425,6 +465,10 @@ def collect_snapshot(
         budget_evidence.append(f"runs/: recovery child run already launched: {launched_child}")
 
     newer = select_newer_run_ids(_list_run_ids(runs_dir), run_id)
+
+    for path, message in type_errors:
+        label = path.relative_to(run_dir) if path.is_relative_to(run_dir) else path.name
+        read_errors.append(f"{label}: invalid ({message})")
 
     # --- evidence（すべて sanitize 済み。credential 形跡を伏字化し 500 文字で切る） ---
     evidence.append(
@@ -455,8 +499,7 @@ def collect_snapshot(
     if state is not None:
         evidence.append(
             sanitize_evidence(
-                f"{STATE_FILE}: last_completed_step={state.get('last_completed_step')} "
-                f"branch_name={branch_name}"
+                f"{STATE_FILE}: last_completed_step={last_completed_step} branch_name={branch_name}"
             )
         )
     if git.available:
@@ -487,7 +530,7 @@ def collect_snapshot(
         attempt_session_id=attempt_session_id,
         orphan_pane_id=orphan_pane_id,
         state_loaded=state_loaded,
-        state_last_completed_step=state.get("last_completed_step") if state else None,
+        state_last_completed_step=last_completed_step,
         state_worktree_dir=worktree_dir,
         state_branch_name=branch_name,
         git=git,
@@ -498,6 +541,7 @@ def collect_snapshot(
         prior_recovery_child_run_id=prior_child,
         provider_available=provider_available,
         artifact_read_errors=tuple(read_errors),
+        artifact_type_errors=tuple(type_errors),
         newer_run_ids=tuple(newer),
         evidence=tuple(evidence),
         prior_incident_ref=prior_incident_ref,

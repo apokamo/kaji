@@ -258,9 +258,9 @@ series）にする。「未完了なので未作成」は欠落として扱わ�
 |----------|----------------|-----------|-----------------------------------------------|
 | `runs/<id>/run.log` | run dir があれば常に（`workflow_start` を含む） | `missing` → 破損と同じ | `artifact_unreadable` |
 | `runs/<id>/process.json` | なし（旧 run には無い） | `no_record`（生存判定で扱う。read error にしない） | `record_unreadable`（read error） |
-| `steps/<s>/attempt-<n>/result.json` | run.log にその step・attempt の `step_end` がある attempt だけ | `step_end` あり → `artifact_unreadable`。`step_end` なし（実行中・kill された in-flight attempt）→ 正常 | `artifact_unreadable`。必須 key は `AttemptResult` 導入時（#222）からの 10 項目（`step_id` / `attempt` / `status` / `exit_code` / `signal` / `started_at` / `ended_at` / `duration_ms` / `session_id` / `dispatch`）で型も検証する（`runstate.runlog.ResultRecord`）。後から追加された `error` / `synthetic` / `tmp_dir` は省略可（旧形式互換） |
+| `steps/<s>/attempt-<n>/result.json` | run.log にその step・attempt の `step_end` がある attempt だけ | `step_end` あり → `artifact_unreadable`。`step_end` なし（実行中・kill された in-flight attempt）→ 正常 | `artifact_unreadable`。必須 key は `AttemptResult` 導入時（#222）からの 10 項目（`step_id` / `attempt` / `status` / `exit_code` / `signal` / `started_at` / `ended_at` / `duration_ms` / `session_id` / `dispatch`）で型も検証する（`runstate.runlog.ResultRecord`）。後から追加された `error` / `synthetic` / `tmp_dir` は省略可（旧形式互換）だが、存在する場合の型不正は `artifact_unreadable`。失敗分類用の snapshot も型不正の値を `None` に倒して `artifact_type_errors` に記録し、facts が blocking read error にする（分類・ゲート評価へ型不正の値を渡さない。評価中の例外も `artifact_unreadable` に倒す） |
 | `steps/<s>/attempt-<n>/pane-metadata.json` | なし（Herdr backend のみ） | 正常（`pane: null`） | read error。retry では `agent_pane_unverifiable`。所有確認に使う `pane_id` / `origin_pane` / `kaji_run` のいずれかが欠落・空・非文字列なら破損扱い |
-| `<issue>/session-state.json` | なし（初回 step で kill された run では未作成のことがある） | 正常（worktree / branch は null。retry では `worktree_unavailable`） | `artifact_unreadable` |
+| `<issue>/session-state.json` | なし（初回 step で kill された run では未作成のことがある） | 正常（worktree / branch は null。retry では `worktree_unavailable`） | `artifact_unreadable`（`worktree_dir` / `branch_name` / `last_completed_step` の型不正も含む） |
 | `runs/<id>/recovery-chain.json` | なし（root run には無い） | 正常（root） | read error（status）。retry では `artifact_unreadable` |
 | `runs/<id>/recovery.json` | なし | 正常 | `artifact_unreadable`（retry は記録を追記できないため） |
 
