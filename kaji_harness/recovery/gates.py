@@ -11,8 +11,6 @@
 
 from __future__ import annotations
 
-import fcntl
-import os
 import re
 import subprocess
 import sys
@@ -40,6 +38,7 @@ from .models import (
     NON_RESUMABLE_SKILLS,
     RECOVERY_FILE,
     RecoveryDecision,
+    RecoveryWriteLock,
     read_recovery_json,
     write_recovery_json,
 )
@@ -343,8 +342,18 @@ class RetryPlanner:
         for entry, liveness in issue.launches:
             pointed = entry.record.run_id if entry.record is not None else None
             if pointed is not None and pointed == target:
-                if liveness.alive is True and not any(g.name == "run_alive" for g in plan.gates):
+                names = {g.name for g in plan.gates}
+                if liveness.alive is True and "run_alive" not in names:
                     plan.gates.append(GateHit("run_alive", f"launch={entry.path.name}"))
+                elif liveness.alive is None and not names & {"run_alive", "liveness_unknown"}:
+                    # 対象 run を指す launcher の生存を確認できない（別ホスト / 照合不能）。
+                    # 対象 run 自身の死亡確認だけで再起動せず、拒否に倒す。
+                    plan.gates.append(
+                        GateHit(
+                            "liveness_unknown",
+                            f"launch={entry.path.name} basis={liveness.basis}",
+                        )
+                    )
                 continue
             others.append((entry.path.name, liveness.alive, liveness.basis))
         alive = [name for name, value, _ in others if value is True]
@@ -464,35 +473,6 @@ def _base_snapshot(plan: RetryPlan, artifacts_dir: Path) -> FailureSnapshot | No
     )
 
 
-RECOVERY_WRITE_LOCK_FILE = ".recovery.lock"
-
-
-class _RecoveryWriteLock:
-    """run dir 単位の ``recovery.json`` 更新用ブロッキング lock（``fcntl.flock``）。"""
-
-    def __init__(self, run_dir: Path) -> None:
-        self.path = run_dir / RECOVERY_WRITE_LOCK_FILE
-        self._fd: int | None = None
-
-    def __enter__(self) -> None:
-        fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        except OSError:
-            os.close(fd)
-            raise
-        self._fd = fd
-
-    def __exit__(self, *_exc: object) -> None:
-        fd, self._fd = self._fd, None
-        if fd is None:
-            return
-        try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
-
-
 @dataclass
 class RetryRecorder:
     """対象 run の ``recovery.json`` の ``retries`` と ``run.log`` へ記録する。"""
@@ -529,7 +509,7 @@ class RetryRecorder:
         if run_dir is None:
             return
         path = run_dir / RECOVERY_FILE
-        with _RecoveryWriteLock(run_dir):
+        with RecoveryWriteLock(run_dir):
             if path.is_file():
                 decision = read_recovery_json(path)
             else:

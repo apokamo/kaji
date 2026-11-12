@@ -61,7 +61,7 @@ from .models import (
     RecoveryDecision,
     RecoveryDecisionValue,
     derive_child_final_status,
-    write_recovery_json,
+    write_recovery_decision_preserving_retries,
 )
 from .report import (
     render_child_result_comment,
@@ -372,7 +372,7 @@ class RecoveryHandler:
     def _record(self, decision: RecoveryDecision) -> None:
         """``recovery.json`` を上書きし、``run.log`` に ``recovery_decision`` を追記する。"""
         try:
-            write_recovery_json(self.run_dir / RECOVERY_FILE, decision)
+            write_recovery_decision_preserving_retries(self.run_dir / RECOVERY_FILE, decision)
         except OSError as exc:
             _logger.warning("recovery.json write failed (%s): %s", self.run_dir, exc)
         self._run_logger.log_recovery_decision(decision)

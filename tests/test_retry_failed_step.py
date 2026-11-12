@@ -216,6 +216,19 @@ class TestPlannerGates:
         write_launch_record(_artifacts(repo), ISSUE, current_process_record("run"))
         assert _names(_planner(repo).plan().gates) == ["issue_run_alive"]
 
+    def test_target_linked_launch_with_unknown_liveness_refuses(self, repo: Path) -> None:
+        # 対象 run は死亡確認済みでも、対象 run を指す launcher の生存が確認できなければ拒否する
+        _failed_run(repo)
+        write_launch_record(_artifacts(repo), ISSUE, record(1, host="elsewhere", run_id=RUN))
+        gates = _planner(repo).plan().gates
+        assert _names(gates) == ["liveness_unknown"]
+        assert gates[0].detail.startswith("launch=")
+
+    def test_target_linked_launch_dead_does_not_refuse(self, repo: Path) -> None:
+        _failed_run(repo)
+        write_launch_record(_artifacts(repo), ISSUE, _dead_record(RUN))
+        assert _planner(repo).plan().gates == []
+
     def test_issue_liveness_unknown(self, repo: Path) -> None:
         _failed_run(repo, run_id="261112010000")
         write_run(
@@ -854,6 +867,29 @@ class TestRetryRecordInterleaving:
         if finish == "child_end":
             assert retries[0]["child_run_id"] == "child-1"
             assert retries[0]["child_exit_code"] == 0
+
+    def test_triage_rewrite_preserves_retry_history(self, repo: Path) -> None:
+        # 通常の triage（RecoveryHandler._record）が decision を上書きしても retries は消えない
+        from kaji_harness.recovery.models import (
+            read_recovery_json,
+            write_recovery_decision_preserving_retries,
+        )
+
+        run_dir = _failed_run(repo)
+        self._seed(run_dir)
+        planner = _planner(repo)
+        refused = self._recorder(planner.plan(), "retry_failed_step")
+        refused.record_refused()  # type: ignore[attr-defined]
+        path = run_dir / "recovery.json"
+        fresh = read_recovery_json(path)
+        fresh.retries = []
+        fresh.triage_comment_ref = "https://example/2"
+        write_recovery_decision_preserving_retries(path, fresh)
+        saved = json.loads(path.read_text())
+        assert saved["triage_comment_ref"] == "https://example/2"
+        assert [r["request_id"] for r in saved["retries"]] == [
+            refused.request_id  # type: ignore[attr-defined]
+        ]
 
     def test_launch_failed_without_own_entry_appends(self, repo: Path) -> None:
         run_dir = _failed_run(repo)

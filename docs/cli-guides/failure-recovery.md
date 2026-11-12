@@ -177,7 +177,7 @@ contract; `kaji run-series --resume` uses the same gates.
 | `no_target_run` | The Issue has no run |
 | `newer_run_detected` | The target run is not the newest run |
 | `run_alive` | The target run's process (or a launch record pointing at it) is alive |
-| `liveness_unknown` | The target run's liveness cannot be judged (no record, other host, no `/proc`) |
+| `liveness_unknown` | The liveness of the target run (or of a launch record pointing at it) cannot be judged (no record, other host, no `/proc`) |
 | `issue_run_alive` | Another run of the Issue, or a launch record not pointing at the target run, is alive |
 | `issue_liveness_unknown` | None of those is alive but at least one cannot be judged |
 | `run_not_failed` | The run ended with a status other than `ERROR` / `ABORT` |

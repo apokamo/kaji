@@ -330,7 +330,7 @@ retry-gate: branch_mismatch worktree=feat/9 state=feat/540
 契約: `^retry-gate: (?P<name>[a-z_]+)(?: (?P<detail>.*))?$` の行が拒否ゲート 1 件ずつ（順序は下表の評価順）。
 
 **recovery.json への記録（D5 / D6 / D7）**: 対象 run の `recovery.json` に additive optional な
-`retries` 配列を追記する（`RECOVERY_SCHEMA_VERSION` は据え置き。既存 triage 記録は上書きしない）。
+`retries` 配列を追記する（`RECOVERY_SCHEMA_VERSION` は据え置き。既存 triage 記録は上書きしない）。逆に triage（`RecoveryHandler`）が decision を上書きする際も、同じ run dir 単位の write lock の下で既存の `retries` を読み戻して保持する。
 `recovery.json` が存在しない run では、同じ snapshot から `plan_recovery(auto_recover=False)` で得た
 decision を基に作成し `retries` を付ける。
 
@@ -389,7 +389,7 @@ member の status を変えずに series を `stopped`（`stop_reason`=`member <
 | 1 | `no_target_run` | `--run-id` 省略時に run が 1 件もない | 新規 |
 | 2 | `newer_run_detected` | 対象 run より新しい run がある（指定 run が最新でない） | 既存 |
 | 3 | `run_alive` | 対象 run の `process.json` または `run_id` が対象 run の launch record の `alive == true` | 新規 |
-| 4 | `liveness_unknown` | 対象 run の `process.alive == null`（A1: 安全側） | 新規 |
+| 4 | `liveness_unknown` | 対象 run の `process.alive == null`、または対象 run を指す launch record の `alive == null`（A1: 安全側） | 新規 |
 | 5 | `issue_run_alive` | 対象 run 以外の run の `process.json`、または対象 run 以外を指す launch record（`run_id` null を含む）の `alive == true` | 新規 |
 | 5b | `issue_liveness_unknown` | 5 の対象のいずれかが `alive == null`（true は無い）。= `any_run_alive` が null のときの対象 run 以外の分 | 新規（R2） |
 | 6 | `run_not_failed` | `termination == ended` かつ `end_status` が ERROR / ABORT 以外 | 新規（既存 target の拒否を移設） |

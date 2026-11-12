@@ -425,6 +425,38 @@ def test_comment_only_triage_does_not_consume_budget(tmp_path: Path) -> None:
     assert len(launched) == 1
 
 
+def test_triage_keeps_existing_retry_history(tmp_path: Path) -> None:
+    # Issue #540: retry 要求の記録（retries）は通常の triage 上書きで消えない
+    wt = _git_repo(tmp_path)
+    _seed_state(tmp_path, wt)
+    run_dir = _build_run(tmp_path)
+    entry = {"request_id": "req-1", "trigger": "retry_failed_step", "outcome": "refused"}
+    (run_dir / RECOVERY_FILE).write_text(
+        json.dumps(
+            {
+                "run_id": run_dir.name,
+                "recoverable": False,
+                "decision": "comment_only",
+                "classification": {
+                    "cause": "dispatch_failure",
+                    "synthetic": True,
+                    "source": "external",
+                    "recoverability_hint": "no",
+                },
+                "failed_step": "implement",
+                "retries": [entry],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _handler(tmp_path, run_dir, provider=_FakeProvider(), auto_recover=False).run()
+
+    saved = read_recovery_json(run_dir / RECOVERY_FILE)
+    assert saved.triage_comment_ref == "https://x.invalid/c/1"
+    assert saved.retries == [entry]
+
+
 # --- legacy artifact（failure_event 契約以前の run） ---
 
 

@@ -151,7 +151,7 @@ retry-gate: branch_mismatch worktree=feat/9 state=feat/540
 | `no_target_run` | Issue に run が無い |
 | `newer_run_detected` | 対象 run が最新の run ではない |
 | `run_alive` | 対象 run のプロセス（または対象 run を指す launch record）が生きている |
-| `liveness_unknown` | 対象 run の生存を判定できない（記録なし・別ホスト・`/proc` なし） |
+| `liveness_unknown` | 対象 run（または対象 run を指す launch record）の生存を判定できない（記録なし・別ホスト・`/proc` なし） |
 | `issue_run_alive` | Issue の他の run、または対象 run を指さない launch record が生きている |
 | `issue_liveness_unknown` | 上のいずれも生きていないが、判定できないものがある |
 | `run_not_failed` | `ERROR` / `ABORT` 以外で終了した |

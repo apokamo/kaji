@@ -11,8 +11,10 @@ recovery budget / wait は運用上の安全弁であり config 化しない（I
 
 from __future__ import annotations
 
+import fcntl
 import json
-from dataclasses import dataclass, field
+import os
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -319,6 +321,76 @@ def write_recovery_json(path: Path, decision: RecoveryDecision) -> None:
 def read_recovery_json(path: Path) -> RecoveryDecision:
     """``recovery.json`` を読み戻す。"""
     return RecoveryDecision.from_dict(json.loads(path.read_text(encoding="utf-8")))
+
+
+RECOVERY_WRITE_LOCK_FILE = ".recovery.lock"
+
+
+class RecoveryWriteLock:
+    """run dir 単位の ``recovery.json`` 更新用ブロッキング lock（``fcntl.flock``）。
+
+    retry 記録（``RetryRecorder``）と triage の decision 上書き（``RecoveryHandler``）が
+    同じ lock で read-modify-write を直列化し、互いの更新を失わないようにする。
+    """
+
+    def __init__(self, run_dir: Path) -> None:
+        self.path = run_dir / RECOVERY_WRITE_LOCK_FILE
+        self._fd: int | None = None
+
+    def __enter__(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError:
+            os.close(fd)
+            raise
+        self._fd = fd
+
+    def __exit__(self, *_exc: object) -> None:
+        fd, self._fd = self._fd, None
+        if fd is None:
+            return
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def _merge_retries(
+    on_disk: list[dict[str, Any]], in_memory: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """保存済み ``retries`` を正とし、未保存の in-memory entry（``request_id`` 単位）を追記する。"""
+    merged = [dict(entry) for entry in on_disk]
+    known = {entry.get("request_id") for entry in merged if entry.get("request_id") is not None}
+    for entry in in_memory:
+        request_id = entry.get("request_id")
+        if request_id is not None and request_id in known:
+            continue
+        if request_id is None and entry in merged:
+            continue
+        merged.append(dict(entry))
+    return merged
+
+
+def write_recovery_decision_preserving_retries(path: Path, decision: RecoveryDecision) -> None:
+    """triage の decision で ``recovery.json`` を上書きする。既存の ``retries`` は保持する。
+
+    ``plan_recovery`` は ``retries`` を空で組み立てるため、単純な上書きでは
+    ``--retry-failed-step`` / series resume の記録が消える（Issue #540）。
+    ``RecoveryWriteLock`` の下で既存ファイルの ``retries`` を読み戻してマージする。
+    既存ファイルが読めない場合は従来どおり decision をそのまま書く。
+    """
+    with RecoveryWriteLock(path.parent):
+        retries = list(decision.retries)
+        if path.is_file():
+            try:
+                existing = read_recovery_json(path)
+            except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError):
+                existing = None
+            if existing is not None:
+                retries = _merge_retries(existing.retries, decision.retries)
+        write_recovery_json(path, replace(decision, retries=retries))
 
 
 RecoveryTrigger = Literal["auto_recover", "retry_failed_step", "series_resume"]
