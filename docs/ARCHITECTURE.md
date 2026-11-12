@@ -659,7 +659,9 @@ triage（`kaji run` 終了時の handler と `--retry-failed-step` なしの `ka
   承認は full SHA の完全一致なので PR commits は引かない。head が動いた場合は `ABORT`（fail-closed）。
   security_review の null 経路では、この 2 回の head 確認の間で Issue comment の再取得と GraphQL `reviewThreads` の
   全ページ取得を行い、(a)(b) の件数を `checks.security_null_checks` に記録する（どちらかが 1 以上なら `BACK_FALLBACK`。
-  取得失敗・形状違反は API 失敗として連続失敗カウンタに数え、3 回連続で `ABORT`）。close はこの追加確認を再取得しない
+  取得失敗・形状違反（GraphQL thread は Pydantic strict model で検証）は API 失敗として連続失敗カウンタに数え、3 回連続で
+  `ABORT`）。再取得した summary の state が PASS 候補と異なれば古い候補では確定せず、判定し直して `RETRY` /
+  `BACK_FALLBACK` を返すか次の poll で再評価する。close はこの追加確認を再取得しない
 - **書き込み順序**: 証跡の atomic write → stdout へ `PASS` verdict → runner が `verdict.yaml` を書く。
   `verdict.yaml` が PASS なら同じ attempt に証跡が必ず存在する。`PASS` 以外では証跡を書かない
 - **consumer**: `issue-close`（GitHub 経路）が `kaji issue resolve-verdict --step review-poll --current-verdict-path ...`

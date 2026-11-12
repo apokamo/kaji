@@ -40,7 +40,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypeGuard
 
-from pydantic import BaseModel, ConfigDict, StringConstraints, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    TypeAdapter,
+    ValidationError,
+    model_validator,
+)
 
 from kaji_harness.review_poll_evidence import (
     EVIDENCE_KIND,
@@ -637,18 +645,69 @@ def _fetch_review_threads(owner: str, repo: str, pr_number: int) -> list[dict[st
         cursor = end_cursor
 
 
-def _commit_oid(value: object) -> str | None:
-    oid = value.get("oid") if isinstance(value, dict) else None
-    return oid if isinstance(oid, str) and oid else None
+class _GqlCommit(BaseModel):
+    """GraphQL `Commit`（`oid` だけを読む）。`oid` は 40 桁小文字 hex でなければならない。"""
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    oid: _StateSha
 
 
-def _is_trusted_bot_author(author: object, bot_id: int) -> bool:
-    if not isinstance(author, dict) or author.get("__typename") != "Bot":
-        return False
-    database_id = author.get("databaseId")
-    return (
-        isinstance(database_id, int) and not isinstance(database_id, bool) and database_id == bot_id
-    )
+class _GqlAuthor(BaseModel):
+    """GraphQL `Actor`。`Bot` のときだけ `databaseId`（int）を必須にする。"""
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    typename: Annotated[str, StringConstraints(min_length=1)] = Field(alias="__typename")
+    database_id: int | None = Field(default=None, alias="databaseId")
+
+    @model_validator(mode="after")
+    def _validate_bot_id(self) -> _GqlAuthor:
+        if self.typename == "Bot" and self.database_id is None:
+            raise ValueError("Bot author requires an integer databaseId")
+        return self
+
+
+class _GqlThreadComment(BaseModel):
+    """`reviewThread.comments.nodes[]`。query で要求した key は null 可でも欠落させない。"""
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    author: _GqlAuthor | None
+    commit: _GqlCommit | None
+    original_commit: _GqlCommit | None = Field(alias="originalCommit")
+
+
+class _GqlPageInfo(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    has_next_page: bool = Field(alias="hasNextPage")
+
+
+class _GqlThreadComments(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    page_info: _GqlPageInfo = Field(alias="pageInfo")
+    nodes: list[_GqlThreadComment]
+
+
+class _GqlReviewThread(BaseModel):
+    """GraphQL `PullRequestReviewThread` の判定に使う部分（Issue #557 review MF2）。
+
+    外部入力なので strict に検証し、形・型・SHA 形式の不正を「指摘なし」へ変換させない。
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    is_resolved: bool = Field(alias="isResolved")
+    comments: _GqlThreadComments
+
+
+_REVIEW_THREADS_ADAPTER: TypeAdapter[list[_GqlReviewThread]] = TypeAdapter(list[_GqlReviewThread])
+
+
+def _is_trusted_bot_author(author: _GqlAuthor | None, bot_id: int) -> bool:
+    return author is not None and author.typename == "Bot" and author.database_id == bot_id
 
 
 def _count_unresolved_head_bot_threads(
@@ -666,36 +725,25 @@ def _count_unresolved_head_bot_threads(
     `isOutdated` 単独では除外しない（GitHub は outdated でない comment の `commit` を head に
     付け替えるので、古い commit で付いた指摘でも head に当たっていれば数える）。
 
+    全 thread を `_GqlReviewThread` で strict に検証してから数える。`Bot` の `databaseId` が
+    int でない、`oid` が 40 桁 hex でない等の不正は 0 件扱いにせず例外にする。
+
     Raises:
-        ValueError: thread / comment の形が想定外（`isResolved` が bool でない等）の場合。
+        ValueError: thread / comment の形・型・値が想定外の場合（`ValidationError` を含む）。
     """
+    validated = _REVIEW_THREADS_ADAPTER.validate_python(list(threads))
     count = 0
-    for thread in threads:
-        if not isinstance(thread, dict):
-            raise ValueError(f"review thread is not an object: {type(thread).__name__}")
-        resolved = thread.get("isResolved")
-        if not isinstance(resolved, bool):
-            raise ValueError("reviewThread.isResolved is not a bool")
-        comments = _object_at(thread, "comments")
-        comment_nodes = comments.get("nodes")
-        if not isinstance(comment_nodes, list):
-            raise ValueError("reviewThread.comments.nodes is not a list")
-        truncated = _object_at(comments, "pageInfo").get("hasNextPage")
-        if not isinstance(truncated, bool):
-            raise ValueError("reviewThread.comments.pageInfo.hasNextPage is not a bool")
-        if resolved:
+    for thread in validated:
+        if thread.is_resolved:
             continue
-        if truncated:
+        if thread.comments.page_info.has_next_page:
             count += 1
             continue
-        for comment in comment_nodes:
-            if not isinstance(comment, dict):
-                raise ValueError("reviewThread comment is not an object")
-            if not _is_trusted_bot_author(comment.get("author"), bot_id):
+        for comment in thread.comments.nodes:
+            if not _is_trusted_bot_author(comment.author, bot_id):
                 continue
-            commit = _commit_oid(comment.get("commit"))
-            original = _commit_oid(comment.get("originalCommit"))
-            if commit is None or original is None or head_sha in (commit, original):
+            commit, original = comment.commit, comment.original_commit
+            if commit is None or original is None or head_sha in (commit.oid, original.oid):
                 count += 1
                 break
     return count
@@ -735,6 +783,49 @@ def _state_entry_evidence(entry: ReviewStateEntry) -> dict[str, Any]:
     }
 
 
+def _recheck_review_state(
+    review_state: ReviewState,
+    comments: list[dict[str, Any]],
+    reactions_json: list[dict[str, Any]],
+    reviews_json: list[dict[str, Any]],
+    head_sha: str,
+    head_committed_at: str,
+    *,
+    prev_state: Literal["init", "in_progress"],
+    bot_id: int,
+) -> PollResult | None:
+    """確定時に再取得した comments の summary が PASS 候補の state のままか確かめる。
+
+    Returns:
+        一致すれば None（確定を続けてよい）。一致しなければ PASS 以外の `PollResult`:
+        再取得した comments での `classify` が RETRY / FALLBACK ならそれ、それ以外は
+        非 terminal（`prev_state` か `in_progress`）。
+    """
+    if parse_review_state(comments, bot_id) == review_state:
+        return None
+    recheck = classify(
+        reactions_json,
+        reviews_json,
+        head_sha,
+        head_committed_at,
+        comments=comments,
+        bot_id=bot_id,
+        prev_state=prev_state,
+    )
+    if recheck.state in ("done_retry", "done_fallback"):
+        return PollResult(
+            recheck.state,
+            f"codex-review-state changed before finalization: {recheck.reason}",
+            signal=recheck.signal,
+        )
+    if recheck.state == "in_progress":
+        return recheck
+    return PollResult(
+        prev_state,
+        f"codex-review-state changed before finalization for head {head_sha[:7]}; re-evaluating",
+    )
+
+
 def _finalize_pass(
     result: PollResult,
     *,
@@ -743,7 +834,9 @@ def _finalize_pass(
     pr_number: int,
     head_sha: str,
     head_committed_at: str,
-    current_head_bot_reviews: int,
+    reactions_json: list[dict[str, Any]],
+    reviews_json: list[dict[str, Any]],
+    prev_state: Literal["init", "in_progress"],
     evidence_path: Path | None,
     utcnow: Callable[[], datetime],
     bot_id: int,
@@ -760,6 +853,12 @@ def _finalize_pass(
     `reviewThreads` を全ページ取得する。trusted bot の summary 以外の comment、または未解決の
     head bot thread が 1 件でもあれば `done_fallback`（証跡は書かない）、ともに 0 件ならその件数を
     証跡の `checks.security_null_checks` に残す。
+
+    再取得した comments の最新 summary の state が PASS 候補の state（comment ID・URL・
+    `updated_at`・code / security の各値）と一致しなければ、古い候補では確定しない
+    （Issue #557 review MF1）。再取得した comments で `classify` をやり直し、RETRY / FALLBACK なら
+    それを返し、それ以外（state の更新・欠落・別候補）は非 terminal（`prev_state`）として次の poll で
+    再評価させる。
     """
     approval = result.approval
     if approval is None:
@@ -778,6 +877,18 @@ def _finalize_pass(
     security_null_checks: dict[str, int] | None = None
     if is_security_null_on_head(review_state.security_review, head_sha):
         comments = _gh_api(f"repos/{owner}/{repo}/issues/{pr_number}/comments")
+        changed = _recheck_review_state(
+            review_state,
+            comments,
+            reactions_json,
+            reviews_json,
+            head_sha,
+            head_committed_at,
+            prev_state=prev_state,
+            bot_id=bot_id,
+        )
+        if changed is not None:
+            return changed
         security_null_checks = {
             "unresolved_head_bot_threads": _count_unresolved_head_bot_threads(
                 _fetch_review_threads(owner, repo, pr_number), head_sha, bot_id
@@ -831,7 +942,9 @@ def _finalize_pass(
                     "head_sha_at_start": head_sha,
                     "head_sha_before_decision": _pull_head(before),
                     "head_sha_after_decision": _pull_head(after),
-                    "current_head_bot_reviews": current_head_bot_reviews,
+                    "current_head_bot_reviews": _count_bot_reviews_on_head(
+                        reviews_json, head_sha, bot_id
+                    ),
                     "security_null_checks": security_null_checks,
                 },
                 "fetched_at": fetched_at,
@@ -974,7 +1087,9 @@ def run_polling(
                     pr_number=pr_number,
                     head_sha=head_sha,
                     head_committed_at=head_committed_at,
-                    current_head_bot_reviews=_count_bot_reviews_on_head(reviews, head_sha, bot_id),
+                    reactions_json=reactions,
+                    reviews_json=reviews,
+                    prev_state=state,
                     evidence_path=evidence_path,
                     utcnow=utcnow,
                     bot_id=bot_id,

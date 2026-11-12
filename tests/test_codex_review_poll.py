@@ -1925,6 +1925,57 @@ class TestCountUnresolvedHeadBotThreads:
         with pytest.raises(ValueError):
             mod._count_unresolved_head_bot_threads(threads, HEAD, BOT_ID)
 
+    @pytest.mark.parametrize(
+        "comment",
+        [
+            _thread_comment(author={"__typename": "Bot", "databaseId": str(BOT_ID)}),
+            _thread_comment(author={"__typename": "Bot", "databaseId": True}),
+            _thread_comment(author={"__typename": "Bot", "databaseId": None}),
+            _thread_comment(author={"__typename": "Bot"}),
+            _thread_comment(author={"databaseId": BOT_ID}),
+            _thread_comment(author={"__typename": 1, "databaseId": BOT_ID}),
+            _thread_comment(author="bot"),
+            _thread_comment("not-a-sha", "not-a-sha"),
+            _thread_comment(OTHER_HEAD, "not-a-sha"),
+            _thread_comment(OTHER_HEAD.upper(), OTHER_HEAD),
+            _thread_comment(OTHER_HEAD, OTHER_HEAD[:39]),
+            {**_thread_comment(OTHER_HEAD, OTHER_HEAD), "commit": {"oid": 1}},
+            {**_thread_comment(OTHER_HEAD, OTHER_HEAD), "commit": {}},
+            {**_thread_comment(OTHER_HEAD, OTHER_HEAD), "originalCommit": "sha"},
+            {k: v for k, v in _thread_comment(OTHER_HEAD, OTHER_HEAD).items() if k != "commit"},
+            {k: v for k, v in _thread_comment().items() if k != "author"},
+        ],
+        ids=[
+            "bot_database_id_str",
+            "bot_database_id_bool",
+            "bot_database_id_null",
+            "bot_database_id_missing",
+            "typename_missing",
+            "typename_not_str",
+            "author_not_object",
+            "both_oids_not_sha",
+            "original_oid_not_sha",
+            "commit_oid_uppercase",
+            "original_oid_short",
+            "commit_oid_not_str",
+            "commit_oid_missing",
+            "original_commit_not_object",
+            "commit_key_missing",
+            "author_key_missing",
+        ],
+    )
+    def test_malformed_comment_raises_instead_of_counting_zero(
+        self, comment: dict[str, Any]
+    ) -> None:
+        # Issue #557 review MF2: 形・型・SHA 形式の不正を「指摘なし（0 件）」へ変換しない
+        with pytest.raises(ValueError):
+            mod._count_unresolved_head_bot_threads([_thread(comment)], HEAD, BOT_ID)
+
+    def test_malformed_comment_in_resolved_thread_raises(self) -> None:
+        threads = [_thread(_thread_comment("not-a-sha", "not-a-sha"), resolved=True)]
+        with pytest.raises(ValueError):
+            mod._count_unresolved_head_bot_threads(threads, HEAD, BOT_ID)
+
 
 @pytest.mark.medium
 class TestGhGraphql:
@@ -2244,3 +2295,111 @@ class TestRunPollingSecurityNull:
         assert fake.snapshot_idx == 0
         assert "graphql" not in fake.calls
         assert not evidence_path.exists()
+
+    @pytest.mark.parametrize(
+        "comment",
+        [
+            _thread_comment(author={"__typename": "Bot", "databaseId": str(BOT_ID)}),
+            _thread_comment("not-a-sha", "not-a-sha"),
+        ],
+        ids=["bot_database_id_str", "commit_oids_not_sha"],
+    )
+    def test_malformed_review_thread_never_passes(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path, comment: dict[str, Any]
+    ) -> None:
+        # Issue #557 review MF2: 不正な GraphQL 応答は取得失敗として扱い、PASS・証跡にしない
+        fake = _FakeGh([_null_pass_snap()], review_thread_pages=[[_thread(comment)]])
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert result.state == "done_abort"
+        assert "gh api failed 3 times" in result.reason
+        assert not evidence_path.exists()
+
+    def test_summary_changed_to_code_findings_at_finalization_retries(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        # Issue #557 review MF1: 確定時の再取得で code review が true に更新されていたら RETRY
+        updated = _state_comment(
+            _state_marker(_entry(findings=True), _SECURITY_NULL),
+            updated_at="2026-05-24T08:30:00Z",
+        )
+        fake = _FakeGh([_null_pass_snap()], comment_responses=[[_null_summary()], [updated]])
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert (result.state, result.signal) == ("done_retry", "state")
+        assert "changed before finalization" in result.reason
+        assert "graphql" not in fake.calls
+        assert not evidence_path.exists()
+
+    def test_summary_changed_to_security_findings_at_finalization_retries(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        updated = _state_comment(
+            _state_marker(security=_entry(HEAD, findings=True)),
+            updated_at="2026-05-24T08:30:00Z",
+        )
+        fake = _FakeGh([_null_pass_snap()], comment_responses=[[_null_summary()], [updated]])
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert result.state == "done_retry"
+        assert not evidence_path.exists()
+
+    def test_summary_updated_after_plus_one_does_not_pass(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        # state は同じでも summary の updated_at が 👍 より後へ変わったら、古い 👍 で確定しない
+        updated = _state_comment(
+            _state_marker(security=_SECURITY_NULL), updated_at="2026-05-24T08:30:00Z"
+        )
+        assert mod.parse_review_state([updated], BOT_ID) != mod.parse_review_state(
+            [_null_summary()], BOT_ID
+        )
+        fake = _FakeGh([_null_pass_snap()], comment_responses=[[_null_summary()], [updated]])
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert result.state != "done_pass"
+        assert "graphql" not in fake.calls
+        assert not evidence_path.exists()
+
+    @pytest.mark.parametrize(
+        "refetched",
+        [
+            [],
+            [_stateless(_null_summary())],
+            [_state_comment(_state_marker(payload="{broken"))],
+        ],
+        ids=["summary_missing", "state_removed", "state_invalid"],
+    )
+    def test_summary_changed_otherwise_does_not_pass(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        evidence_path: Path,
+        refetched: list[dict[str, Any]],
+    ) -> None:
+        fake = _FakeGh([_null_pass_snap()], comment_responses=[[_null_summary()], refetched])
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert result.state != "done_pass"
+        assert "graphql" not in fake.calls
+        assert not evidence_path.exists()
+
+    def test_changed_summary_is_reevaluated_on_next_poll(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        # 確定時に一時的に summary が見えなくても、次の poll で同じ候補を確定できる
+        fake = _FakeGh(
+            [_null_pass_snap()],
+            comment_responses=[[_null_summary()], [], [_null_summary()]],
+        )
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert result.state == "done_pass", result.reason
+        assert fake.comment_attempts == 4
+        assert evidence_path.exists()
+
+    def test_other_summary_comment_is_finalized_only_after_reevaluation(
+        self, monkeypatch: pytest.MonkeyPatch, evidence_path: Path
+    ) -> None:
+        # 確定時に別 comment の summary へ替わったら古い候補（601）では確定せず、次の poll で
+        # 新しい候補（602）として判定し直してから確定する
+        other = _state_comment(_state_marker(security=_SECURITY_NULL), comment_id=602)
+        fake = _FakeGh([_null_pass_snap()], comment_responses=[[_null_summary()], [other]])
+        result = self._polling(monkeypatch, evidence_path, fake)
+        assert result.state == "done_pass", result.reason
+        assert fake.comment_attempts == 4
+        assert fake.calls.count("graphql") == 1
+        assert load_evidence(evidence_path).approval.review_state.comment_id == 602

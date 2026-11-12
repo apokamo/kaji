@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from kaji_harness.review_poll_evidence import ReviewPollEvidenceV2, ReviewPollEvidenceV3
+from kaji_harness.review_poll_evidence import ReviewPollEvidenceV2, load_evidence
 from tests.test_review_poll_evidence import (
     _NULL_CHECKS,
     _SECURITY,
@@ -158,11 +158,12 @@ def _producer_accepts_v2(payload: dict[str, Any]) -> bool:
     return True
 
 
-def _producer_accepts(payload: dict[str, Any]) -> bool:
-    """``load_evidence`` と同じく版で v2 / v3 の model を選んで検証する。"""
-    model = ReviewPollEvidenceV3 if payload.get("schema_version") == 3 else ReviewPollEvidenceV2
+def _producer_accepts(payload: dict[str, Any], tmp_path: Path) -> bool:
+    """公開 loader ``load_evidence`` 自体で検証する（版の振り分けも本番と同じにする）。"""
+    evidence = tmp_path / "producer-evidence.json"
+    evidence.write_text(json.dumps(payload), encoding="utf-8")
     try:
-        model.model_validate(payload)
+        load_evidence(evidence)
     except ValidationError:
         return False
     return True
@@ -225,7 +226,7 @@ class TestIssueCloseJqMatchesModelV3:
     )
     def test_boundaries_agree_with_model(self, payload: dict[str, Any], tmp_path: Path) -> None:
         consumer_ok = _consumer_verdict(payload, tmp_path) == "OK"
-        assert consumer_ok == _producer_accepts(payload)
+        assert consumer_ok == _producer_accepts(payload, tmp_path)
 
     def test_null_evidence_without_checks_is_i6(self, tmp_path: Path) -> None:
         # null 経路の証跡から追加確認の結果を消す改変は I6 違反になる

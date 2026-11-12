@@ -130,9 +130,13 @@ bot 識別は **id 一致**（`199175422`）を主、login を副チェックに
 `PASS` 候補を得たら、次の順で確定する。どこかで失敗したら `PASS` ではなく `ABORT`。
 
 1. `pulls/{n}` を再取得して head が固定 head のままであることを確認する（判定直前）
-2. security_review の null 経路のときだけ、PR の Issue comment（全ページ）を再取得して (b) を、GraphQL
-   `reviewThreads`（全ページ）を取得して (a) を数える。どちらかが 1 以上なら `BACK_FALLBACK`（証跡は書かない）。
-   取得失敗・応答の形が想定外（`errors`・`hasNextPage` なのに cursor が進まない等）は API 失敗として連続失敗カウンタに数える
+2. security_review の null 経路のときだけ、PR の Issue comment（全ページ）を再取得する。再取得した最新 summary の
+   `codex-review-state` が PASS 候補（comment ID・URL・`updated_at`・code / security の値）と一致しなければ古い候補では
+   確定しない: 再取得した comment で判定し直して `RETRY`（指摘あり）/ `BACK_FALLBACK` ならそれを返し、それ以外（更新・
+   欠落）は次の poll で再評価する。一致すれば (b) を、GraphQL `reviewThreads`（全ページ）を取得して (a) を数える。
+   どちらかが 1 以上なら `BACK_FALLBACK`（証跡は書かない）。取得失敗・応答の形が想定外（`errors`・`hasNextPage` なのに
+   cursor が進まない・`Bot.databaseId` が整数でない・`oid` が 40 桁 hex でない等。thread は Pydantic の strict model で
+   検証する）は API 失敗として連続失敗カウンタに数える
 3. `pulls/{n}` をもう一度取得して head を確認する（判定直後）。full SHA の完全一致で承認しているので
    PR commits は引かない
 4. 証跡を検証して `dirname(KAJI_VERDICT_PATH)/review-poll-evidence.json` へ atomic write する
