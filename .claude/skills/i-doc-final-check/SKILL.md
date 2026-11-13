@@ -55,7 +55,7 @@ $ARGUMENTS = <issue_id>
 2. docs / workflow / skill 参照の整合を確認する
 3. links、コマンド例、導線の整合を確認する（`make verify-docs`）
 4. Issue 本文の完了条件を照合し、`### ワークフロー完了後の確認項目` を除く充足状態を更新する
-5. Issue に最終チェック結果をコメントする
+5. Issue に最終チェック結果をコメントする（verdict marker 付き。下記 Step 5 詳細）
 
 ## Step 3 詳細: リンク整合性
 
@@ -93,6 +93,34 @@ kaji issue edit [issue_id] --commit --body-file "[skill_tmp_dir]/issue-body.md"
 ### RETRY の場合
 
 本文更新は行わない（軽微修正後に再実行するため）。
+
+## Step 5 詳細: 最終チェック結果のコメント
+
+status に関わらず（PASS / RETRY / BACK / ABORT のいずれでも）1 コメントにまとめて投稿する。
+`--verdict-step final-check --verdict-status <STATUS>` は常に付ける（`<STATUS>` は下記 Verdict 出力で返す
+status と一致させる）。1 行目の verdict marker は `kaji issue comment` が付与する
+（[shared_skill_rules.md](../../../docs/dev/shared_skill_rules.md) § verdict マーカー契約）。
+
+```bash
+kaji issue comment [issue_id] --commit \
+  --verdict-step final-check --verdict-status <STATUS> \
+  --body-file - <<'EOF'
+## docs 最終チェック結果
+
+### 確認結果
+
+- docs / workflow / skill 参照の整合: (結果)
+- `make verify-docs`: (終了状態)
+- 完了条件: (充足状況。`### ワークフロー完了後の確認項目` は対象外)
+- Issue 本文更新: (PASS: 更新済み / それ以外: 未更新)
+
+### 未充足条件・戻し先
+
+(BACK / RETRY / ABORT の場合のみ。未充足条件と戻し先・再実行条件を明示する)
+
+(末尾に、下記「Verdict 出力」で返す内容と同じ verdict block を `---VERDICT---` / `---END_VERDICT---` で囲んで付ける)
+EOF
+```
 
 ## Verdict 出力
 

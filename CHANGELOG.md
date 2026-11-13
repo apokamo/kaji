@@ -51,6 +51,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   them. `i-doc-review`, `i-doc-fix`, and `i-doc-verify` now have an explicit
   comment command and template instead of a prose instruction. The starter
   repositories get these skill changes through the next starter sync.
+- **The comments of `i-doc-final-check`, `issue-start`, and `issue-close`
+  carry the verdict marker** (#554). `i-doc-final-check` (the `final-check`
+  step of the docs workflows) now posts its result with an explicit
+  `kaji issue comment --verdict-step final-check --verdict-status <STATUS>`
+  for every status, including `BACK`. `issue-start` and `issue-close` post
+  their report only on success, with `--verdict-step start` /
+  `--verdict-step close` and `--verdict-status PASS`. `issue-start` now has an
+  explicit comment command instead of a report template only. Without the
+  marker, these comments stayed candidates for every step in the runner's
+  comment fallback, and `kaji issue resolve-verdict --step final-check`
+  could not find the final-check judgment.
 
 ### Added
 

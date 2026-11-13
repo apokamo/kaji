@@ -154,9 +154,18 @@ heading が密着しない（Issue #200）。`--commit` は github provider で�
 
 ### Step 5: セットアップ完了報告
 
-以下の形式で報告してください（`$PREFIX` / `$BRANCH` / `$WT` / `$REMOTE` / `$BASE` / `$BASE_SHA` / `$LOCAL_AHEAD` の値で埋めること）:
+Worktree 構築に成功した場合だけ、以下の形式で Issue にコメントを投稿し、同じ内容を stdout にも報告してください
+（`$PREFIX` / `$BRANCH` / `$WT` / `$REMOTE` / `$BASE` / `$BASE_SHA` / `$LOCAL_AHEAD` の値で埋めること）。
+このコメントは PASS のときだけ投稿するため、`--verdict-step start --verdict-status PASS` を常に付ける
+（1 行目の verdict marker は `kaji issue comment` が付与する。
+[shared_skill_rules.md](../../../docs/dev/shared_skill_rules.md) § verdict マーカー契約）。
+ABORT のときはコメントを投稿せず、verdict を stdout に出力して終了する。
+heredoc は quote しているため `$...` は展開されない。値に置き換えてから投稿すること。
 
-```
+```bash
+kaji issue comment [issue_id] --commit \
+  --verdict-step start --verdict-status PASS \
+  --body-file - <<'EOF'
 ## Worktree セットアップ完了
 
 | 項目 | 値 |
@@ -182,6 +191,9 @@ cd ../$(basename "$WT")
 ### クリーンアップ（作業完了後）
 
 作業が完了したら `/issue-close [issue_id]` を実行してください。
+
+(末尾に、下記「Verdict 出力」で返す内容と同じ verdict block を `---VERDICT---` / `---END_VERDICT---` で囲んで付ける)
+EOF
 ```
 
 ## Verdict 出力

@@ -1,8 +1,8 @@
-"""判定コメントを投稿する skill が verdict marker を常に付けることを確認する（#547）。
+"""判定コメントを投稿する skill が verdict marker を常に付けることを確認する（#547, #554）。
 
 marker の無い作業報告は runner の comment fallback で全 step の候補に残るため、
-review-ready / fix / verify / i-doc 系の判定コメントにも ``--verdict-step`` /
-``--verdict-status`` を付ける。issue-fix-ready は見出し検索ではなく
+review-ready / fix / verify / i-doc 系の判定コメントと、final-check（docs 系）/
+start / close の報告コメントにも ``--verdict-step`` / ``--verdict-status`` を付ける。issue-fix-ready は見出し検索ではなく
 ``step=review-ready`` marker で review-ready の判定を取得し、最新候補が不正なら
 古い RETRY に遡らず停止する（``resolve_latest_verdict`` と同じ停止契約）。
 """
@@ -38,7 +38,13 @@ _PRODUCER_STEP_IDS: dict[str, str] = {
     "i-doc-review": "doc-review",
     "i-doc-fix": "doc-fix",
     "i-doc-verify": "doc-verify",
+    "i-doc-final-check": "final-check",
+    "issue-start": "start",
+    "issue-close": "close",
 }
+
+# 成功時だけ報告コメントを投稿する skill。marker の status は返却 status と一致させるため PASS 固定。
+_PASS_ONLY_REPORTERS: tuple[str, ...] = ("issue-close", "issue-start")
 
 _COMMENT_START_RE = re.compile(r"^[ \t]*kaji issue comment\b", re.MULTILINE)
 _BODY_ARG_RE = re.compile(r"--body(?:-file)?\b")
@@ -116,7 +122,7 @@ def _workflow_step_ids() -> dict[str, set[str]]:
 
 @pytest.mark.small
 class TestProducerSkillsAttachVerdictMarker:
-    """10 skill の判定コメントが常に marker を付ける（OB の回帰）。"""
+    """判定・報告コメントを投稿する skill が常に marker を付ける（OB の回帰）。"""
 
     @pytest.mark.parametrize(("skill", "step_id"), sorted(_PRODUCER_STEP_IDS.items()))
     def test_every_comment_command_has_verdict_flags(self, skill: str, step_id: str) -> None:
@@ -133,6 +139,12 @@ class TestProducerSkillsAttachVerdictMarker:
         commands = _comment_commands(_read_skill("issue-review-ready"))
         statuses = sorted(flags[1] for c in commands if (flags := _verdict_flags(c)))
         assert statuses == ["ABORT", "PASS", "RETRY"]
+
+    @pytest.mark.parametrize("skill", _PASS_ONLY_REPORTERS)
+    def test_success_only_reports_fix_pass(self, skill: str) -> None:
+        commands = _comment_commands(_read_skill(skill))
+        statuses = [flags[1] for c in commands if (flags := _verdict_flags(c))]
+        assert statuses == ["PASS"], f"{skill}: --verdict-status {statuses}"
 
     def test_fix_ready_uses_marker_instead_of_heading_search(self) -> None:
         text = _read_skill("issue-fix-ready")
