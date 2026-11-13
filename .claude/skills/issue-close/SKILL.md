@@ -121,7 +121,13 @@ follow-up のタイトルは次の完全一致形式に固定する。
 <!-- kaji-follow-up-issue: [follow_up_issue_id] -->
 ```
 
-- マーカーが 1 件ある場合: 値を `FOLLOW_UP_ID` に設定して `kaji issue view` で確認し、
+follow-up の Issue ID は Bash 呼び出しをまたいで使う。Bash tool は呼び出しごとに別の shell
+プロセスで実行するため、前の呼び出しで設定したシェル変数（`FOLLOW_UP_ID` 等）は次の呼び出しに残らない。
+ID を得たら文脈変数 `follow_up_issue_id` に記録し、後続ブロック冒頭の `[follow_up_issue_id]` を
+その実値に置き換えて実行する。各ブロックは ID が空・非数値（placeholder 未置換を含む）なら
+副作用の前に `ABORT` する。
+
+- マーカーが 1 件ある場合: 値を文脈変数 `follow_up_issue_id` に記録して `kaji issue view` で確認し、
   次の 3 点をすべて満たすときだけ再利用する
   1. `state` が `open` である
   2. title が完全一致形式である
@@ -136,6 +142,13 @@ follow-up のタイトルは次の完全一致形式に固定する。
 - マーカーがない場合: open Issue を完全一致タイトルで検索する
 
 ```bash
+FOLLOW_UP_ID='[follow_up_issue_id]'
+case $FOLLOW_UP_ID in
+  '' | *[!0123456789]*)
+    echo "ABORT: follow-up Issue ID is empty or not numeric: [$FOLLOW_UP_ID]"
+    exit 1
+    ;;
+esac
 FOLLOW_UP_STATE=$(kaji issue view "$FOLLOW_UP_ID" --json state -q '.state')
 # 大文字小文字の揺れに依存しないよう小文字化して比較する
 case "$(printf '%s' "$FOLLOW_UP_STATE" | tr '[:upper:]' '[:lower:]')" in
@@ -159,7 +172,7 @@ jq -r --arg title "$FOLLOW_UP_TITLE" \
 | 完全一致件数 | 処理 |
 |-------------|------|
 | 0 | 新規作成 |
-| 1 | 候補の `.number` を `FOLLOW_UP_ID` に設定し、既存 open Issue を再利用 |
+| 1 | 候補の `.number` を文脈変数 `follow_up_issue_id` に記録し、既存 open Issue を再利用 |
 | 2 以上 | 対象を一意に決められないため `ABORT` |
 
 作成後にマーカー追記だけが失敗した場合も、再実行時は完全一致検索で作成済み Issue を
@@ -196,14 +209,32 @@ jq -r --arg title "$FOLLOW_UP_TITLE" \
   推測を書く場合は `その他:` の自由記述にする
 - 既存 follow-up を再利用する場合（§ 2）は本文を変更せず、時期の追記もしない
 
+§ 2 のシェル変数はこのブロックに残らないため、タイトルはブロック内で組み立て直す。
+作成後に出力される `follow_up_issue_id=<ID>` の値を文脈変数 `follow_up_issue_id` に記録し、§ 4 で使う。
+
 ```bash
+PARENT_TITLE=$(kaji issue view [issue_id] --json title -q '.title')
+[ -n "$PARENT_TITLE" ] || {
+  echo "ABORT: parent Issue title is empty"
+  exit 1
+}
+FOLLOW_UP_TITLE="[follow-up] $PARENT_TITLE ([issue_ref])"
 CREATE_OUTPUT=$(kaji issue create \
   --title "$FOLLOW_UP_TITLE" \
   --body-file "[skill_tmp_dir]/kaji-follow-up-body.md") || {
     echo "ABORT: follow-up Issue creation failed"
     exit 1
   }
+CREATE_OUTPUT=$(printf '%s' "$CREATE_OUTPUT" | tr -d '[:space:]')
 FOLLOW_UP_ID=${CREATE_OUTPUT##*/}
+case $FOLLOW_UP_ID in
+  '' | *[!0123456789]*)
+    # 作成済みの Issue は再実行時に § 2 の完全一致検索で再利用される
+    echo "ABORT: cannot parse follow-up Issue ID from create output: [$CREATE_OUTPUT]"
+    exit 1
+    ;;
+esac
+echo "follow_up_issue_id=$FOLLOW_UP_ID"
 
 # github provider では --commit は無視される（CLI 互換のため付与を維持）。
 kaji issue edit "$FOLLOW_UP_ID" --commit \
@@ -219,11 +250,26 @@ kaji issue edit "$FOLLOW_UP_ID" --commit \
 マーカーを親本文末尾へ 1 件追記する。Step 2 で有効なマーカーを確認済みの場合は追記を
 スキップし、既存の 1 件を維持する。
 
+ブロック冒頭の `[follow_up_issue_id]` は § 2 / § 3 で記録した文脈変数の実値に置き換える
+（前の Bash 呼び出しの `FOLLOW_UP_ID` は残っていない）。
+
 ```bash
-CURRENT_BODY=$(kaji issue view [issue_id] --json body -q '.body')
+FOLLOW_UP_ID='[follow_up_issue_id]'
+case $FOLLOW_UP_ID in
+  '' | *[!0123456789]*)
+    echo "ABORT: follow-up Issue ID is empty or not numeric: [$FOLLOW_UP_ID]; parent Issue remains open"
+    exit 1
+    ;;
+esac
+FOLLOW_UP_MARKER="<!-- kaji-follow-up-issue: $FOLLOW_UP_ID -->"
+
+CURRENT_BODY=$(kaji issue view [issue_id] --json body -q '.body') || {
+  echo "ABORT: parent Issue body fetch failed; parent Issue remains open"
+  exit 1
+}
 {
   printf '%s\n\n' "$CURRENT_BODY"
-  printf '<!-- kaji-follow-up-issue: %s -->\n' "$FOLLOW_UP_ID"
+  printf '%s\n' "$FOLLOW_UP_MARKER"
 } > "[skill_tmp_dir]/kaji-parent-body-with-follow-up.md"
 
 kaji issue edit [issue_id] --commit \
@@ -231,11 +277,22 @@ kaji issue edit [issue_id] --commit \
     echo "ABORT: parent follow-up marker update failed; parent Issue remains open"
     exit 1
   }
+
+# 追記後確認: マーカーは全体で 1 件、かつ有効な ID を持つ同じマーカーであること
+UPDATED_BODY=$(kaji issue view [issue_id] --json body -q '.body') || {
+  echo "ABORT: parent Issue body re-fetch failed; parent Issue remains open"
+  exit 1
+}
+MARKER_COUNT=$(printf '%s\n' "$UPDATED_BODY" | grep -cF '<!-- kaji-follow-up-issue:' || true)
+MATCH_COUNT=$(printf '%s\n' "$UPDATED_BODY" | grep -cxF "$FOLLOW_UP_MARKER" || true)
+if [ "$MARKER_COUNT" != 1 ] || [ "$MATCH_COUNT" != 1 ]; then
+  echo "ABORT: parent follow-up marker check failed (markers=$MARKER_COUNT, matched=$MATCH_COUNT); parent Issue remains open"
+  exit 1
+fi
 ```
 
-追記後、`kaji issue view` で同じマーカーが 1 件だけ存在することを確認する。作成・再利用、
-マーカー追記、追記後確認のいずれかが失敗した場合は `ABORT` とし、親 Issue の close を
-実行しない。
+ID の検証、作成・再利用、マーカー追記、追記後確認（有効な ID を持つ同じマーカーが 1 件だけ
+存在すること）のいずれかが失敗した場合は `ABORT` とし、親 Issue の close を実行しない。
 
 > **結果を記録**: `follow_up_result` = 「対象なし」/「作成: [follow_up_issue_id]」/
 > 「既存再利用: [follow_up_issue_id]」。完了報告に含める。
