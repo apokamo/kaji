@@ -823,10 +823,16 @@ Step 3〜5.6 の結果を使って、**stdout への報告**と **Issue タイ�
 
 #### 6a. Issue コメント投稿
 
-各ステップで記録した結果変数を使い、コメント内容を動的に組み立てて投稿する:
+各ステップで記録した結果変数を使い、コメント内容を動的に組み立てて投稿する。
+このコメントは PASS（クローズ完了）のときだけ投稿するため、`--verdict-step close --verdict-status PASS` を
+常に付ける（1 行目の verdict marker は `kaji issue comment` が付与する。
+[shared_skill_rules.md](../../../docs/dev/shared_skill_rules.md) § verdict マーカー契約）。
+ABORT のときはコメントを投稿せず、verdict を stdout に出力して終了する:
 
 ```bash
-kaji issue comment [issue_id] --commit --body-file - <<'COMMENT_EOF'
+kaji issue comment [issue_id] --commit \
+  --verdict-step close --verdict-status PASS \
+  --body-file - <<'COMMENT_EOF'
 ## Issue クローズ完了
 
 | 項目 | 状態 |
@@ -839,6 +845,8 @@ kaji issue comment [issue_id] --commit --body-file - <<'COMMENT_EOF'
 | follow-up Issue | [follow_up_result] |
 | Issue | [close_result] |
 | 一時ディレクトリ | [tmp_cleanup_result] |
+
+(末尾に、下記「Verdict 出力」で返す内容と同じ verdict block を `---VERDICT---` / `---END_VERDICT---` で囲んで付ける)
 COMMENT_EOF
 
 ```

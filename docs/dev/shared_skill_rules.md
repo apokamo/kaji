@@ -93,7 +93,9 @@ cross-skill 契約（BACK 再入検出など）は SKILL.md の散文ではな�
     `issue-small-change-review` / `issue-review-ready` / `issue-fix-ready` /
     `issue-fix-design` / `issue-verify-design` / `issue-fix-code` /
     `issue-verify-code` / `i-doc-update` / `i-doc-review` / `i-doc-fix` /
-    `i-doc-verify`
+    `i-doc-verify` / `i-doc-final-check` / `issue-start` / `issue-close`
+  - `issue-start` / `issue-close` は PASS のときだけ報告コメントを投稿するため、
+    `--verdict-status PASS` を固定で付ける（ABORT 時はコメントを投稿せず stdout に verdict を出す）
   - `issue-fix-ready` は producer であると同時に review-ready 判定の consumer でもある。
     1 行目が `<!-- kaji-verdict: step=review-ready ` で始まる最新コメント 1 件だけを選び、
     行全体を marker 文法（meta キー重複の拒否を含む）で検証する。marker 無し・最新 marker 不正・
