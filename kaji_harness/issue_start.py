@@ -670,8 +670,13 @@ class _StartRun:
                 f"remote.{remote}.fetch の refspec が {base} を {remote_base} へ写すか確認する。",
             )
 
+        # 登録照合は realpath 同士で行うが、存在の観測は realpath 前のパスで行う。
+        # realpath 化すると dangling symlink が「存在しないリンク先」に化け、NEW と誤認するため。
+        path_exists = os.path.lexists(ctx.worktree_dir)
         worktree = Path(os.path.realpath(ctx.worktree_dir))
-        reused = self._ensure_worktree(main_repo, worktree, branch, remote_base)
+        reused = self._ensure_worktree(
+            main_repo, worktree, branch, remote_base, path_exists=path_exists
+        )
         venv_created = self._ensure_symlink(worktree / ".venv", main_repo / ".venv", ".venv")
         overlay: OverlayStatus = "absent"
         main_overlay = main_repo / ".kaji" / "config.local.toml"
@@ -728,7 +733,9 @@ class _StartRun:
         except GitHubProviderError as exc:
             raise _StartAbort(reason, f"{type(exc).__name__}: {exc}") from exc
 
-    def _ensure_worktree(self, main_repo: Path, worktree: Path, branch: str, base: str) -> bool:
+    def _ensure_worktree(
+        self, main_repo: Path, worktree: Path, branch: str, base: str, *, path_exists: bool
+    ) -> bool:
         listing = _git_required(
             main_repo, "worktree 一覧を取得できない", "worktree", "list", "--porcelain"
         )
@@ -745,7 +752,7 @@ class _StartRun:
             worktree_dir=str(worktree),
             branch=branch,
             branch_exists=branch_exists,
-            path_exists=os.path.lexists(worktree),
+            path_exists=path_exists,
             path_is_dir=worktree.is_dir(),
         )
         if state is WorktreeState.REUSABLE:

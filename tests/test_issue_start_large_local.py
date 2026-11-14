@@ -340,7 +340,14 @@ def test_stale_tracking_ref_aborts_without_side_effects(
 
 
 @pytest.mark.parametrize(
-    "case", ["path-on-other-branch", "branch-in-other-path", "branch-only", "unregistered-path"]
+    "case",
+    [
+        "path-on-other-branch",
+        "branch-in-other-path",
+        "branch-only",
+        "unregistered-path",
+        "unregistered-dangling-symlink",
+    ],
 )
 def test_worktree_mismatch_aborts_and_keeps_existing_state(
     fx: _Fixture, capsys: pytest.CaptureFixture[str], case: str
@@ -353,9 +360,12 @@ def test_worktree_mismatch_aborts_and_keeps_existing_state(
         _git(fx.maintainer, "worktree", "add", "-q", "-b", _BRANCH, str(fx.root / "else"), "main")
     elif case == "branch-only":
         _git(fx.maintainer, "branch", _BRANCH, "main")
-    else:
+    elif case == "unregistered-path":
         wt.mkdir()
         (wt / "keep.txt").write_text("keep\n", encoding="utf-8")
+    else:
+        # 期待パスに未登録の dangling symlink。realpath 化でリンク先へ作成してはならない。
+        wt.symlink_to(fx.root / "unexpected-target", target_is_directory=True)
     branch_before = _branch_sha(fx.maintainer, _BRANCH)
     listing_before = _out(fx.maintainer, "worktree", "list", "--porcelain")
     provider = _FakeProvider(fx.context())
@@ -368,6 +378,10 @@ def test_worktree_mismatch_aborts_and_keeps_existing_state(
     assert not (wt / ".venv").is_symlink()
     if case == "unregistered-path":
         assert (wt / "keep.txt").read_text(encoding="utf-8") == "keep\n"
+    if case == "unregistered-dangling-symlink":
+        assert os.readlink(wt) == str(fx.root / "unexpected-target")
+        assert not os.path.lexists(fx.root / "unexpected-target")
+        assert "state=path_exists_unregistered" in verdict.evidence
     assert provider.writes == []
 
 
