@@ -13,7 +13,9 @@ from __future__ import annotations
 import errno
 import json
 import os
+import stat
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -361,6 +363,33 @@ class TestAtomicPublishNew:
 
         assert path.read_text(encoding="utf-8") == "original\n"
         assert _tmp_leftovers(tmp_path) == []
+
+    def test_temp_name_collision_retries_with_new_name(self, tmp_path: Path) -> None:
+        path = tmp_path / "verdict.yaml"
+        squatter = tmp_path / ".verdict.yaml.aaaa.tmp"
+        squatter.write_text("other\n", encoding="utf-8")
+
+        with patch("kaji_harness.fsio.secrets.token_hex", side_effect=["aaaa", "bbbb"]):
+            atomic_publish_new(path, "content\n")
+
+        assert path.read_text(encoding="utf-8") == "content\n"
+        assert squatter.read_text(encoding="utf-8") == "other\n"
+        assert not (tmp_path / ".verdict.yaml.bbbb.tmp").exists()
+
+    def test_exhausted_temp_names_is_not_reported_as_already_published(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "verdict.yaml"
+        (tmp_path / ".verdict.yaml.aaaa.tmp").write_text("other\n", encoding="utf-8")
+
+        with (
+            patch("kaji_harness.fsio.secrets.token_hex", return_value="aaaa"),
+            pytest.raises(OSError, match="unique temporary file") as excinfo,
+        ):
+            atomic_publish_new(path, "content\n")
+
+        assert not isinstance(excinfo.value, FileExistsError)
+        assert not path.exists()
 
     def test_link_failure_leaves_nothing(self, tmp_path: Path) -> None:
         path = tmp_path / "verdict.yaml"
@@ -712,6 +741,42 @@ class TestVerdictPublishCli:
         rc = _cli(monkeypatch, environ, "--status=PASS", "--reason=r", "--evidence=e")
         assert rc == 2
         assert "already published" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(("umask", "expected_mode"), [(0o077, 0o600), (0o022, 0o644)])
+    def test_published_mode_honors_caller_umask(
+        self, tmp_path: Path, umask: int, expected_mode: int
+    ) -> None:
+        """公開した artifact は呼び出し元の umask より広い権限を持たない（MF1）。
+
+        umask はプロセス全体の状態のため、テストプロセスでは変えず隔離 subprocess の
+        shell で設定してから実 CLI を実行する。
+        """
+        attempt_dir, environ = _attempt(tmp_path)
+        script = f'umask {umask:03o} && exec "$0" -m kaji_harness.cli_main "$@"'
+
+        proc = subprocess.run(
+            [
+                "sh",
+                "-c",
+                script,
+                sys.executable,
+                "verdict",
+                "publish",
+                "--status=PASS",
+                "--reason=r",
+                "--evidence=e",
+            ],
+            env={**os.environ, **environ},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert proc.returncode == 0, proc.stderr
+        verdict_path = attempt_dir / "verdict.yaml"
+        assert stat.S_IMODE(verdict_path.stat().st_mode) == expected_mode
+        assert load_verdict_yaml(verdict_path, {"PASS"}).status == "PASS"
+        assert _tmp_leftovers(attempt_dir) == []
 
 
 # ============================================================
