@@ -173,6 +173,14 @@ compatibility contract.
     `kaji pr view --comments`, so this is fine on the observation path.
 - `kaji issue comment <id> --verdict-step <step> --verdict-status <STATUS>` adds
   a verdict marker to judgment comments (see section 2.1).
+- `kaji issue start <id>` runs the deterministic `issue-start` entry
+  (`kaji_harness.scripts.issue_start`, the same entry the workflow `start` step runs via
+  `exec_script`). From the main checkout it fetches `<git_remote> <default_branch>`, checks that
+  `FETCH_HEAD` matches the remote-tracking ref, creates the worktree with `--no-track` (or verifies
+  and reuses the matching one), links `.venv` / `.kaji/config.local.toml`, adds the Issue NOTE and
+  posts the `step=start status=PASS` report once, then prints the verdict. Expected failures print
+  an `ABORT` verdict and exit 0; a second positional argument (the removed `prefix`) is a usage
+  error (exit 2) with no side effects. Re-running after a partial stop is safe (Issue #569).
 
 ### 2.2 Sequential Issue series
 

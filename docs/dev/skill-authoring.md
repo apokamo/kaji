@@ -140,6 +140,10 @@ exec_script: kaji_harness.scripts.review_poll_entry
 |-----------|-----|------|------|
 | `exec_script` | str | 任意 | Python module dotted path。`python -m <value>` で実行される |
 
+現行の exec_script skill: `review-poll`（`kaji_harness.scripts.review_poll_entry`）、`issue-start`
+（`kaji_harness.scripts.issue_start`。Issue #569）。どちらも手動用の CLI（`kaji pr review-poll` /
+`kaji issue start <issue_id>`）が同じ entry `main` に合流する。
+
 **制約**:
 - 値は Python identifier の `.` 区切り表記（`[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*`）のみ。
   違反は skill load 時に `SkillFrontmatterError` で fail-fast（path traversal / shell metachar を
@@ -406,7 +410,9 @@ $ARGUMENTS = <issue_id>
 
 ### 手動専用スキル
 
-`issue-create`、`issue-start` のようにワークフロー開始前のフェーズを担うスキルは、ハーネス駆動の対象外。verdict 出力は追加するが、入力は既存の `$ARGUMENTS` を維持する。
+`issue-create` のようにワークフロー開始前のフェーズを担うスキルは、ハーネス駆動の対象外。verdict 出力は追加するが、入力は既存の `$ARGUMENTS` を維持する。
+`issue-start` は workflow の `start` step として exec_script で実行され（`KAJI_ISSUE_ID` を使う）、手動時は
+`$ARGUMENTS` の `issue_id` を `kaji issue start` に渡す（Issue #569）。
 
 ### fix スキルのレビュー結果取得
 

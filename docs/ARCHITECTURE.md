@@ -101,6 +101,8 @@ kaji_harness/
   logger.py       # JSONL 構造化ログ
   runner.py       # WorkflowRunner (自動遷移・サイクル管理)
   scripts/baseline_precheck.py  # agentless baseline measure / evaluate / compare entrypoint
+  issue_start.py  # issue-start の worktree 構築本体（fetch / 照合 / 作成・再利用判定 / symlink / NOTE / 報告）(#569)
+  scripts/issue_start.py  # issue-start の exec_script / `kaji issue start` 共通 entry (#569)
   series/         # ordered Issue series の schema / state / lock / runner / generator
   providers/      # Issue provider 抽象 (GitHub) — foundation のみに依存
     __init__.py   # facade。__all__ が package の public API を宣言する
@@ -211,7 +213,8 @@ WorkflowRunner.run()
 ```
 
 決定論 dispatch は 2 経路ある。workflow.yaml の `exec:` step（任意 argv・Issue #205）と、
-`exec_script` frontmatter を持つ skill（`python -m <module>`・Issue #204）。どちらも LLM を
+`exec_script` frontmatter を持つ skill（`python -m <module>`・Issue #204。例: `review-poll`、
+`issue-start` → `kaji_harness.scripts.issue_start`・Issue #569）。どちらも LLM を
 起動せず subprocess で実行され、AI formatter fallback を呼ばない。RunLogger は agent / exec /
 exec_script の 3 経路を `dispatch` field で区別する。詳細は
 [ロギング規約](./reference/python/logging.md) を参照。

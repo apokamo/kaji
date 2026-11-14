@@ -156,6 +156,10 @@ def _handle_issue(raw_args: list[str]) -> int:
     # GitHub passthrough 前に捕捉する（Issue #200）。
     if args and args[0] == "prepend-note":
         return _handle_issue_prepend_note(provider, args[1:])
+    # ``start`` も ``gh issue`` に存在しない。workflow の exec_script と同じ entry に
+    # 合流させ、手動 ``/issue-start`` と workflow で同一の処理を使う（Issue #569）。
+    if args and args[0] == "start":
+        return _run_issue_start(provider, args[1:])
     if args and args[0] == "resolve-verdict":
         return _handle_issue_resolve_verdict(
             provider,
@@ -368,6 +372,17 @@ def _resolve_from_artifact(
         )
         return EXIT_VERDICT_META_MISSING
     return _emit_json(artifact.as_json(), jq_expr=None)
+
+
+def _run_issue_start(provider: IssueProvider, rest: list[str]) -> int:
+    """``kaji issue start <issue_id>``: ``issue-start`` の entry ``main`` へ委譲する。
+
+    dispatch 用 config で構築済みの provider を渡す。引数の検査（第 2 引数の usage error）は
+    entry 側の argparse が provider / git を呼ぶ前に行う。
+    """
+    from ..scripts import issue_start
+
+    return issue_start.main(rest, provider=provider)
 
 
 def _handle_issue_prepend_note(provider: IssueProvider, rest: list[str]) -> int:

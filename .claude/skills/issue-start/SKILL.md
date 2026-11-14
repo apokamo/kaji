@@ -1,11 +1,26 @@
 ---
 description: イシュー着手時に使用。worktreeで分離された開発環境を構築し、Issue本文にメタ情報を追記する
 name: issue-start
+exec_script: kaji_harness.scripts.issue_start
 ---
 
 # Issue Start
 
 イシュー対応を開始するためのworktreeをセットアップし、Issue本文にメタ情報を追記します。
+
+本 skill は LLM agent を起動しない deterministic skill です。context 取得から worktree 作成・
+symlink・Issue NOTE・報告コメント・verdict 出力までを、1 プロセスの Python entry
+`kaji_harness.scripts.issue_start`（処理本体は `kaji_harness/issue_start.py`）が実行します
+（Issue #569。複数の Bash 呼び出し間でシェル変数が失われる #560 と、手書き verdict の書式崩れ #551 の対策）。
+
+起動経路は 2 系統あり、いずれも同じ entry `main` に合流します:
+
+- **workflow の `start` step**: frontmatter の `exec_script` により、harness が entry を
+  subprocess 実行します（`agent_runner` が headless / Herdr のどちらでも agent は起動しない）。
+  step 定義は `skill: issue-start` と `on:` だけを持ち、`agent` / `model` / `effort` を書きません。
+- **手動**: main checkout で `kaji issue start [issue_id]` を 1 回実行します（下記「手動実行」）。
+
+入力・副作用・verdict の正本は entry module であり、本ファイルの記述はその契約のミラーです。
 
 ## いつ使うか
 
@@ -23,182 +38,93 @@ name: issue-start
 $ARGUMENTS = <issue_id>
 ```
 
-- `issue_id` (必須): Issue番号 (例: 247 / `gh:153`)
+- `issue_id` (必須): Issue番号 (例: 247 / `gh:153`)。workflow では `KAJI_ISSUE_ID` から取得する
 
-第 2 引数は **廃止** されました。ブランチ prefix は
-`kaji issue context` が返す `branch_prefix`（`type:*` ラベル → `chore` fallback の
-優先順）から自動決定します。
+第 2 引数（旧 `prefix`）は **廃止** されました。ブランチ prefix は
+`kaji issue context` と同じ `provider.resolve_issue_context()` が返す `branch_prefix`
+（`type:*` ラベル → `chore` fallback の優先順）から自動決定します。
+`kaji issue start` に第 2 引数を渡すと usage error（exit 2）で何もせず終了します。
+手動 `/issue-start` で第 2 引数が渡された場合は、コマンドを実行せず ABORT verdict を出して停止し、
+廃止アナウンスをユーザに返してください。
 
 ## 命名規則
 
-`kaji issue context <issue_id>` の出力（`provider.resolve_issue_context()` が正本）から
-取得する `branch_name` / `worktree_dir` をそのまま使います。
+`provider.resolve_issue_context()`（`kaji issue context` と同じ関数）が返す `branch_name` /
+`worktree_dir` をそのまま使います。
 
 - **ブランチ名**: `<branch_prefix>/<issue_id>` (例: `fix/247`)
-- **ディレクトリ**: `<repo_root>/../kaji-<branch_prefix>-<issue_id>` (例: `../kaji-fix-247`)
+- **ディレクトリ**: `<repo_root>/../<worktree_prefix>-<branch_prefix>-<issue_id>` (例: `../kaji-fix-247`)
 
-## 実行手順
+## 手動実行
 
-### Step 0: 引数の検査
-
-`$ARGUMENTS` から `issue_id` を取得してください。第 2 引数（旧 `prefix`）が
-渡された場合は **ABORT** verdict を出して停止し、廃止アナウンスをユーザに返してください
-（`type:*` ラベルからの自動導出に一本化されているため）。
-
-### Step 1: context 正本の取得
-
-system `jq` バイナリ依存を持ち込まないため、`kaji issue context` の `-q` (Python jq) を使う:
+main checkout（worktree ではない）で次の 1 コマンドを実行し、stdout 末尾の verdict block を
+そのまま報告してください。途中で止まった場合も、原因を解消してから同じコマンドを再実行します。
 
 ```bash
-PREFIX=$(kaji issue context [issue_id] -q '.branch_prefix')
-BRANCH=$(kaji issue context [issue_id] -q '.branch_name')
-WT=$(kaji issue context [issue_id] -q '.worktree_dir')
-REMOTE=$(kaji issue context [issue_id] -q '.git_remote')
-BASE=$(kaji issue context [issue_id] -q '.default_branch')
+kaji issue start [issue_id]
 ```
 
-`worktree_dir` は絶対パスで返ります。`git_remote` / `default_branch` は provider 設定
-（`provider.<type>.git_remote` / `provider.<type>.default_branch`）から解決された値です。
-以降の手順では上記 5 変数を使います。
+## 処理内容（entry の契約）
 
-### Step 2: ブランチとWorktreeの作成
+正常時は次の順で実行します（現行の副作用・順序を維持）:
 
-worktree の基点は **fetch した直後の `$REMOTE/$BASE`**（PR の base である remote 側の default branch）。
-ローカルの `$BASE` は remote のキャッシュにすぎず、kaji の外（GitHub UI での merge、別 machine の push 等）で
-remote が進んでいると古いため、基点にしない。
+0. **事前検証（Git / Issue への書き込み前）**: context を 1 回取得し、workflow では runner が注入した
+   `KAJI_WORKTREE_DIR` / `KAJI_BRANCH_NAME` / `KAJI_GIT_REMOTE` / `KAJI_DEFAULT_BRANCH` との一致を
+   検査する。Issue コメントを読み、既存の start PASS 報告を分類する（下記「再実行」）
+1. `git fetch <git_remote> <default_branch>` の後、`FETCH_HEAD` と
+   `refs/remotes/<git_remote>/<default_branch>` の一致を確認する（fetch refspec が base を
+   remote-tracking ref へ写さない設定で、古い ref から作ることを防ぐ）
+2. `git worktree add --no-track -b <branch_name> <worktree_dir> <git_remote>/<default_branch>`。
+   基点は fetch 直後の remote 側 default branch。ローカルの `<default_branch>` は基点にせず、更新もしない。
+   `--no-track` のため upstream は設定しない（`/i-pr` の `git push -u` で設定する）
+3. `<worktree_dir>/.venv` → `<main checkout>/.venv` の symlink（これにより `make check` が即座に実行可能）
+4. main に `.kaji/config.local.toml`（gitignored の overlay）がある場合のみ、
+   `<worktree_dir>/.kaji/config.local.toml` → main の overlay の symlink
+5. `git worktree list --porcelain` で `<worktree_dir>` が `<branch_name>` で登録されていることを再確認
+6. Issue 本文先頭に NOTE（`build_worktree_note_body` が生成する `> [!NOTE]` / Worktree / Branch の 3 行
+   と空行 1 行）
+7. 報告コメント（1 行目 marker `<!-- kaji-verdict: step=start status=PASS -->`、表に Issue / ブランチ /
+   ディレクトリ / 基点 / venv / config overlay / メタ情報、ローカル `<default_branch>` に未 push の
+   commit がある場合はその件数の注意、次のステップ、クリーンアップ、末尾に verdict block）。
+   marker の契約は [shared_skill_rules.md](../../../docs/dev/shared_skill_rules.md) § verdict マーカー契約
+8. verdict: workflow では `KAJI_VERDICT_PATH` へ pure YAML を原子的に書き、同じ内容を stdout の
+   `---VERDICT---` block に出す（#568 の正規化・検証・直列化を通す）
 
-メインリポジトリのルートから、次の block をそのまま 1 回で実行:
+`git pull` / `reset` / `checkout` / `clean` / `branch -D` / `worktree remove` は一切実行しません。
 
-```bash
-# kaji-issue-start-worktree
-MAIN_REPO=$(git rev-parse --show-toplevel) || exit 1
-git -C "$MAIN_REPO" fetch "$REMOTE" "$BASE" || { echo "error: git fetch $REMOTE $BASE failed" >&2; exit 1; }
-FETCHED=$(git -C "$MAIN_REPO" rev-parse --verify --quiet "FETCH_HEAD^{commit}") || { echo "error: FETCH_HEAD is not resolvable after fetch" >&2; exit 1; }
-TRACKING=$(git -C "$MAIN_REPO" rev-parse --verify --quiet "refs/remotes/$REMOTE/$BASE^{commit}") || { echo "error: $REMOTE/$BASE is not resolvable after fetch" >&2; exit 1; }
-[ "$FETCHED" = "$TRACKING" ] || { echo "error: $REMOTE/$BASE ($TRACKING) does not match fetched $BASE ($FETCHED)" >&2; exit 1; }
-git -C "$MAIN_REPO" worktree add --no-track -b "$BRANCH" "$WT" "$REMOTE/$BASE"
-```
+## 再実行（部分成功からの再開）
 
-- **fetch → 照合 → 作成の順を崩さない**。`FETCH_HEAD` との照合は、fetch refspec が `$REMOTE/$BASE` を
-  更新しない設定（非標準の `remote.<name>.fetch`）で古い remote-tracking ref から作ることを防ぐ。
-- `--no-track`: 新しい branch に upstream を設定しない（現行どおり。upstream は `/i-pr` の
-  `git push -u [git_remote] HEAD` で設定する）。`$REMOTE/$BASE` を upstream にすると、素の `git push` が
-  default branch へ向かいうる。
-- ローカルの `$BASE` は更新しない（main checkout は作業中でありうる）。追随は `/issue-close` の
-  `git pull` か保守者の操作に任せる。
-- **block が非ゼロで終了した場合（fetch 失敗、`$REMOTE/$BASE` 未解決・不一致、worktree 作成失敗）は
-  ABORT**: ローカルの `$BASE` など古い基点で再試行・続行せず、以降の Step を実行しない。
-  verdict の evidence に失敗したコマンド・終了コード・stderr を書いて stdout に出力し、終了する。
-  worktree 作成前に止まるため半端な branch / worktree は残らず、原因を解消した後の再実行は安全。
+途中で止まった後に同じコマンドを再実行すると、次のように扱います。fetch と照合は毎回実行します。
 
-成功したら、完了報告用に基点の SHA と、ローカル `$BASE` にある未 push の commit 数を取得する:
+| 状態 | 扱い |
+|------|------|
+| `worktree_dir` 未登録・パス不在・branch 不在 | 新規作成 |
+| `worktree_dir` が `branch_name` で登録済み・ディレクトリ実在 | 検証して再利用（Git に書き込まない。利用者の commit / 未 commit 変更はそのまま） |
+| `worktree_dir` が別 branch / detached で登録済み | ABORT |
+| `branch_name` が別パスの worktree で checkout 済み | ABORT |
+| `branch_name` は存在するが worktree 未登録 | ABORT（既存 branch を自動で attach しない） |
+| `worktree_dir` が未登録だがパスが存在 | ABORT |
+| 登録済みだがディレクトリ不在（prunable） | ABORT |
+| symlink が既に期待どおり | そのまま |
+| symlink の参照先が異なる / 実ファイル・ディレクトリがある | ABORT（上書き・削除しない） |
+| 同一 NOTE が本文先頭にある | 追記しない |
 
-```bash
-BASE_SHA=$(git -C "$MAIN_REPO" rev-parse --short "$REMOTE/$BASE")
-LOCAL_AHEAD=$(git -C "$MAIN_REPO" rev-list --count "$REMOTE/$BASE..refs/heads/$BASE" 2>/dev/null || echo 0)
-```
+再利用時の報告の「基点」は、作成時の基点ではなく、現在の `<git_remote>/<default_branch>` との
+共通祖先（`git merge-base`）の短縮 SHA として表示し、表に「再利用」行を加えます。
 
-`LOCAL_AHEAD` が 0 でない場合、ローカル `$BASE` の未 push commit は基点に **含まれない**（PR の base は
-remote 側のため）。停止はせず、Step 5 の完了報告に注意として記載する。
+報告コメントの重複判定: 1 行目 marker が `step=start status=PASS`（metadata の有無は問わない）の
+コメントを候補とし、表の `ブランチ` 行と `ディレクトリ` 行の値（前後の空白と、値全体を囲む 1 組の
+backtick を除く）で分類します。旧形式（agent が投稿した報告）も同じ規則で判定します。
 
-### Step 2.5: venv シンボリックリンク作成
-
-main プロジェクトの `.venv` へのシンボリックリンクを作成:
-
-```bash
-ln -s "$MAIN_REPO/.venv" "$WT/.venv"
-```
-
-これにより `make check` が即座に実行可能になります。
-
-### Step 2.6: config overlay (`.kaji/config.local.toml`) シンボリックリンク作成
-
-`.kaji/config.local.toml` は gitignored のため `git worktree add` では worktree に転写されない。
-overlay 不在の worktree では `kaji` CLI が `.kaji/config.toml` だけで動き、main 側で上書きした
-マシン固有設定（`[execution]` 等）が worktree 配下の実行に反映されない。
-
-main の overlay が存在する場合のみ、worktree の `.kaji/` にシンボリックリンクで共有する:
-
-```bash
-if [ -f "$MAIN_REPO/.kaji/config.local.toml" ]; then
-  ln -sf "$MAIN_REPO/.kaji/config.local.toml" "$WT/.kaji/config.local.toml"
-fi
-```
-
-`-f` で再作成を許容（既存 symlink を上書き）。`.gitignore` に登録済みのパスなので
-worktree 側 git status には現れない。main に overlay が無い場合は何も起きない。
-
-### Step 3: Worktreeの確認
-
-```bash
-git worktree list
-```
-
-ワークツリーが正しく作成されたことを確認してください。
-
-### Step 4: Issue本文にメタ情報を追記
-
-Issue本文の先頭にWorktree情報を追記します。本文合成は `kaji` 内部の決定的な
-Python 経路（`build_worktree_note_body`）が担うため、エージェントは単一トークン
-引数を 3 つ渡すだけでよい（multi-line 本文を自前で組み立てない）:
-
-```bash
-WT_BASENAME=$(basename "$WT")
-kaji issue prepend-note [issue_id] --worktree "$WT_BASENAME" --branch "$BRANCH" --commit
-```
-
-`kaji issue prepend-note` は現在の Issue 本文を取得し、`> [!NOTE]` メタブロックと
-本文の間に **空行ちょうど 1 行** を保証して合成・更新する。blank line がエージェント
-ではなく Python 文字列リテラルに固定されるため、どのモデルでも blockquote と本文
-heading が密着しない（Issue #200）。`--commit` は github provider では silent に無視される（CLI 互換のため付与を維持）。
-
-### Step 5: セットアップ完了報告
-
-Worktree 構築に成功した場合だけ、以下の形式で Issue にコメントを投稿し、同じ内容を stdout にも報告してください
-（`$PREFIX` / `$BRANCH` / `$WT` / `$REMOTE` / `$BASE` / `$BASE_SHA` / `$LOCAL_AHEAD` の値で埋めること）。
-このコメントは PASS のときだけ投稿するため、`--verdict-step start --verdict-status PASS` を常に付ける
-（1 行目の verdict marker は `kaji issue comment` が付与する。
-[shared_skill_rules.md](../../../docs/dev/shared_skill_rules.md) § verdict マーカー契約）。
-ABORT のときはコメントを投稿せず、verdict を stdout に出力して終了する。
-heredoc は quote しているため `$...` は展開されない。値に置き換えてから投稿すること。
-
-```bash
-kaji issue comment [issue_id] --commit \
-  --verdict-step start --verdict-status PASS \
-  --body-file - <<'EOF'
-## Worktree セットアップ完了
-
-| 項目 | 値 |
-|------|-----|
-| Issue | [issue_ref] |
-| ブランチ | $BRANCH |
-| ディレクトリ | ../$(basename "$WT") |
-| 基点 | $REMOTE/$BASE（$BASE_SHA） |
-| venv | シンボリックリンク作成済み |
-| config overlay | シンボリックリンク作成済み / 不要（main に未配置） |
-| メタ情報 | Issue本文に追記済み |
-
-（`LOCAL_AHEAD` が 0 でない場合のみ追記）
-> 注意: ローカル `$BASE` に `$REMOTE/$BASE` へ未 push の commit が $LOCAL_AHEAD 件あります。
-> これらは worktree の基点に含まれていません。
-
-### 次のステップ
-
-このタスクに関する今後のコマンドは、すべて以下のディレクトリ内で実行してください:
-
-cd ../$(basename "$WT")
-
-### クリーンアップ（作業完了後）
-
-作業が完了したら `/issue-close [issue_id]` を実行してください。
-
-(末尾に、下記「Verdict 出力」で返す内容と同じ verdict block を `---VERDICT---` / `---END_VERDICT---` で囲んで付ける)
-EOF
-```
+| 既存の候補 | 扱い |
+|-----------|------|
+| 同じ `branch_name` と `../<worktree_dir の basename>` の報告がある | 投稿しない |
+| 同一報告が無く、`ブランチ` / `ディレクトリ` 行が欠落・矛盾する報告がある | 書き込み前に ABORT（重複しうるため） |
+| 候補なし / 別の branch・ディレクトリの報告のみ | 1 件投稿する |
 
 ## Verdict 出力
 
-実行完了後、以下の形式で verdict を出力すること:
+verdict は entry が出力します（agent は書きません）。
 
 ```
 ---VERDICT---
@@ -206,16 +132,23 @@ status: PASS
 reason: |
   Worktree 構築成功
 evidence: |
-  fetch 後の $REMOTE/$BASE（$BASE_SHA）を基点に worktree 作成、venv symlink 済み
+  fetch 直後の origin/main（abc1234）と FETCH_HEAD の一致を確認し、fix/247 を ../kaji-fix-247 に --no-track で作成
+  （以降、venv / config overlay / Issue NOTE / 報告コメントの扱い）
 suggestion: |
 ---END_VERDICT---
 ```
-
-**重要**: verdict は **stdout にそのまま出力** すること。Issue コメントや Issue 本文更新とは別に、最終的な verdict ブロックは stdout に残す。
 
 ### status の選択基準
 
 | status | 条件 |
 |--------|------|
-| PASS | Worktree 構築成功 |
-| ABORT | 構築失敗（Step 2 の `# kaji-issue-start-worktree` block の非ゼロ終了: `git fetch` 失敗、`$REMOTE/$BASE` の未解決・FETCH_HEAD との不一致を含む） / 第 2 引数（旧 `prefix`）が渡された |
+| PASS | worktree の作成または検証付き再利用、symlink、NOTE、報告（同一報告が既存なら省略）が完了 |
+| ABORT | context 取得失敗、`KAJI_*` と context の不一致、識別不能な start PASS 報告、`git fetch` 失敗、`<git_remote>/<default_branch>` の未解決・`FETCH_HEAD` との不一致、worktree のパス / branch 不一致、symlink 衝突、Issue NOTE / 報告コメントの投稿失敗 / 第 2 引数（旧 `prefix`）が渡された |
+
+ABORT の evidence には失敗した操作・コマンド・終了コード・stderr 末尾と「完了済みの副作用」を、
+suggestion には再実行コマンド `kaji issue start <issue_id>` を書きます。ABORT のときは報告コメントを
+投稿しません。別の base（ローカルの `<default_branch>` 等）へ fallback して続行することはありません。
+
+`start` は自動 recovery の対象外（`non_resumable_skill`）のままです。workflow が ABORT / ERROR で
+止まった場合は、上記の再実行で start を完了させてから、後続 step から手動で再開してください
+（[failure-recovery.md](../../../docs/cli-guides/failure-recovery.md)）。

@@ -60,9 +60,6 @@ steps:
 
   - id: start
     skill: issue-start
-    agent: codex
-    model: gpt-6-luna
-    effort: medium
     on:
       PASS: baseline
       ABORT: end

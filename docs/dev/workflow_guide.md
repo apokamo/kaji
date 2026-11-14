@@ -287,6 +287,8 @@ kaji run .kaji/wf/official/dev.yaml 288 --auto-recover  # 復旧可能なら 10 
   副作用 skill（`issue-start` / `i-pr` / `issue-close`。これらを実行する step は
   step ID に依存せず対象になり、原因分類・`auto_recover` の設定より優先して常に
   `not_resumable` になる）→ `not_resumable`
+  （`start` で止まった場合は main checkout で `kaji issue start <issue_id>` を再実行する。期待パス / branch の
+  worktree を検証して再利用し、NOTE と同一の start 報告を重複させない。完了後に後続 step から手動で再開する。Issue #569）
 - 既に自動再開済みの chain → `exhausted`
 - artifact と runner event の決定論的矛盾 → `bug_issue_created`（`type:bug` の Issue を起票）
 - triage コメントの投稿に失敗した場合も自動再開しない（handler が必要操作を完遂できていないため）
@@ -475,8 +477,9 @@ custom は利用者が自由に作る場所なので、本節の原則と基準�
 2. **Claude の非定型 step は opus**: Opus 5.5 は公式に "For long-running agentic coding and knowledge work" と
    位置づけられている。kaji では implement の失敗が review → fix → verify の周回に直結するため、
    トークン単価ではなく完了 1 件あたりのコストで判断する（"Compare on cost per completed task, not per token"）。
-3. **Codex の検査は `gpt-6.1-sol`、定型 step（start / pr / close）は軽量モデル / medium**
-   （`codex / gpt-6-luna` または `claude / sonnet`）。
+3. **Codex の検査は `gpt-6.1-sol`、定型 step（pr / close）は軽量モデル / medium**
+   （`codex / gpt-6-luna` または `claude / sonnet`）。start は agent を起動しない exec_script step
+   （`issue-start` → `kaji_harness.scripts.issue_start`。Issue #569）で、model を持たない。
 4. **長い step は timeout を明示する**: `.kaji/config.toml` の `default_timeout`（2400 秒）では opus / high の
    implement が収まらない run がある（実測で平均 21.8 分・最大 46.4 分）。implement / fix-code は 3600 秒とする。
 
@@ -488,7 +491,8 @@ dev-thorough（custom）は丁寧版の参考値として併記する。
 |------|------|-----|----------------------|
 | review-ready | Issue レビュー | codex / gpt-6.1-sol / high | 同左 |
 | fix-ready | Issue 修正 | claude / opus / high | 同左 |
-| start / pr / close | 定型 | codex / gpt-6-luna / medium | 同左 |
+| start | 定型（exec_script・agent なし） | なし（`skill: issue-start` のみ） | 同左 |
+| pr / close | 定型 | codex / gpt-6-luna / medium | 同左 |
 | design | 生成 | claude / opus / high | claude / opus / xhigh |
 | review-design | レビュー | codex / gpt-6.1-sol / high | codex / gpt-6-astra / high |
 | fix-design | 修正 | claude / opus / medium | claude / opus / xhigh |
