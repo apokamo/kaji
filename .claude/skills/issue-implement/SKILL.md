@@ -65,7 +65,7 @@ $ARGUMENTS = <issue_id>
 
 ### Step 1.5: 実行期限の確認
 
-agent step の hard deadline は延長されず、到達時点で `verdict_path` が未保存なら harness が session を
+agent step の hard deadline は延長されず、到達時点で `verdict_path` が未公開なら harness が session を
 強制終了する（正本: [workflow-authoring.md](../../../docs/dev/workflow-authoring.md) § timeout と attempt deadline）。
 正常に前進していても期限切れで進捗が失われないよう、次の規則で残時間を管理する。
 
@@ -113,8 +113,9 @@ agent step の hard deadline は延長されず、到達時点で `verdict_path`
      で投稿する。本文は見出し `## 期限前 checkpoint（implement）` で始め、完了済み作業（commit SHA）、
      未 commit 差分の概要、実行中だった検証と結果、残作業と次 attempt の開始手順、確認時の残時間を記載し、
      末尾に `status: S` の `---VERDICT---` block を付ける。
-   - その後に同じ `status: S` の verdict を stdout と `verdict_path` へ保存する（artifact 保存前に停止して
-     comment fallback が読まれても許可 status S が解決される）。
+   - その後に同じ `status: S` の verdict を stdout に出し、最後に prompt の `kaji verdict publish` で
+     `verdict_path` へ公開する（`verdict_path` を直接書かない。artifact 公開前に停止して comment fallback が
+     読まれても許可 status S が解決される）。
    - `S = ABORT` の場合、suggestion に `kaji run <workflow> [issue_id] --from implement` での再開（必要なら
      `--reset-cycle`）と手順 5 の人間判断事項を記載する。
 8. **cycle 上限**: checkpoint の `RETRY` も `implementation` cycle のカウント対象であり、上限到達時は runner が
@@ -261,7 +262,7 @@ Issue、テスト件数、品質チェック結果、次の `/issue-review-code 
 
 ## Verdict 出力
 
-作業報告 Issue コメント末尾、stdout、最後に `verdict_path` の pure YAML へ同じ内容を残す。
+作業報告 Issue コメント末尾、stdout に同じ内容を残し、最後に prompt の `kaji verdict publish` で `verdict_path` へ公開する（`verdict_path` を直接書かない）。
 
 ```text
 ---VERDICT---

@@ -162,7 +162,7 @@ commit する。commit 後に `git status --porcelain` が空であることと 
 
 ### Step 9: 報告
 
-下記「報告」に従い Issue コメント → stdout → `verdict_path` の順に残す。
+下記「報告」に従い Issue コメント → stdout → `kaji verdict publish`（`verdict_path` への公開）の順に残す。
 
 ## 実行手順（fix-change）
 
@@ -228,7 +228,7 @@ EOF
   人間が決める必要のある事項（不整合なら本文変更 / 標準 dev 切替の選択）、完了済み / 未完了の作業、branch・worktree path・
   HEAD full SHA・`git status --porcelain` の要約、関連報告の参照、「再実行は初めから」の案内
 
-同じ説明を他工程・PR へ全文複製しない。Issue コメント投稿に失敗した場合は ABORT とし、verdict を stdout と `verdict_path` に残す。
+同じ説明を他工程・PR へ全文複製しない。Issue コメント投稿に失敗した場合は ABORT とし、verdict を stdout に出して `kaji verdict publish` で公開する。
 
 ## 副作用の境界
 
@@ -238,7 +238,7 @@ push・PR 作成・merge・label 変更・worktree 作成/削除・Issue 本文�
 
 ## Verdict 出力
 
-作業報告コメント末尾、stdout、最後に `verdict_path` の pure YAML（delimiter なし）へ同じ内容を残す。
+作業報告コメント末尾、stdout に同じ内容を残し、最後に prompt の `kaji verdict publish` で `verdict_path` へ公開する（`verdict_path` を直接書かない）。
 
 ```text
 ---VERDICT---

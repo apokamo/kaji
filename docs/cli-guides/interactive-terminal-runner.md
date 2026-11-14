@@ -4,8 +4,8 @@ Language: English | [日本語](interactive-terminal-runner.ja.md)
 
 A runner that executes `kaji run` agent steps through normal `claude`, `codex`,
 or Antigravity (`agy`) interactive CLIs inside **Herdr panes**, instead of the headless CLI
-path (Issues 224, 230, 396, and 515). When an agent writes
-`verdict.yaml` in the attempt directory, kaji reads the verdict through the
+path (Issues 224, 230, 396, and 515). When an agent publishes
+`verdict.yaml` in the attempt directory (with `kaji verdict publish`), kaji reads the verdict through the
 artifact-primary path ([ADR 005](../adr/005-artifact-primary-verdict.md)) and
 advances to the next step.
 
@@ -298,7 +298,10 @@ kaji run .kaji/wf/official/dev.yaml 224 --log-level WARNING
 5. The wrapper first runs `cd <workdir>` (trusted project worktree; not `/tmp` or
    the attempt directory), then launches normal `claude` / `codex` / `agy`
    (Codex also receives `--cd <workdir>`). The wrapper does not embed the full prompt. It only tells
-   the agent to read `prompt.txt` and write pure YAML to `verdict.yaml`.
+   the agent to read `prompt.txt` and publish the verdict with `kaji verdict publish`; the agent does
+   not write `verdict.yaml` itself. The command validates the fields against the attempt's
+   `verdict-contract.json` (env `KAJI_VERDICT_CONTRACT`) and publishes the finished file atomically
+   (temporary file + `os.link`), so a partially written file never triggers completion (Issue #568).
 6. `verdict.yaml` is the only completion trigger. Foreground process observations only detect a
    command that returned to its shell early; output/status text and the recorder's exit code never
    complete a step. Missing or malformed optional process fields are treated as unknown and never
@@ -436,11 +439,11 @@ Procedure:
    `.kaji/config.local.toml` (or pass `kaji run ... --agent-runner interactive-terminal`).
 3. Start a minimal workflow with `kaji run`, and confirm a pane opens on the
    right side of the origin pane and launches normal `claude`.
-4. Confirm kaji advances to the next step after the agent writes `verdict.yaml`
+4. Confirm kaji advances to the next step after the agent publishes `verdict.yaml`
    (**Claude fresh**).
 5. Confirm the resume step starts with the same session id (`--resume <uuid>`)
    (**Claude resume**).
-6. Repeat for Codex: fresh writes `verdict.yaml` (**Codex fresh**), then resume
+6. Repeat for Codex: fresh publishes `verdict.yaml` (**Codex fresh**), then resume
    starts with `codex resume` (**Codex resume**).
 7. Confirm panes close after verdict with `interactive_terminal_close_on_verdict = true`, and remain
    with `false` (`--no-interactive-terminal-close-on-verdict`).
@@ -462,7 +465,7 @@ Record the Herdr and agent versions with the result.
 | Immediate exit with `must run inside Herdr` (`HerdrSessionRequiredError`) | Start kaji inside a Herdr pane, or set `agent_runner = "headless"`; external focused-session control is intentionally refused |
 | `HERDR_PANE_ID is not set` | Restart the command in a normal Herdr pane so caller identity is explicit |
 | `transcript may be incomplete (recorder state: ...)` | The recorder could not write part of `terminal.log` (`incomplete`, see `transcript_error`, e.g. disk full) or its state could not be confirmed (`unknown`). The agent run itself is unaffected |
-| Step times out | The agent did not write `verdict.yaml`. Check the prompt's verdict-writing instruction and path |
+| Step times out | The agent did not publish `verdict.yaml`. Check whether `kaji verdict publish` ran and its exit code (1: invalid fields, fix and rerun; 2: contract missing/already published; 3: I/O error) |
 | `Herdr pane returned to its shell before writing verdict.yaml` | Agent launch failed or the agent exited early. The error carries a normalized summary of the failure line from the end of `terminal.log` (`last error line: ...`, or `last output line: ...` when no error-shaped line is found; the wrapper banner is skipped). Read the full tail in `terminal_diagnostic.clean_tail` of `pane-metadata.json` or in `terminal.log` |
 | No color | The wrapper unsets `NO_COLOR` and sets `COLORTERM=truecolor`; also check terminal color support and agent-side settings |
 | `Herdr pane <id> may still have provider session <S> open ...` (resume step fails before a pane is created) | A pane kaji cannot close safely (another kaji origin, changed ownership, or a failed close) still has the resume session open. Inspect it, close it with `herdr pane close <id>`, and rerun the step. When the message names `herdr-untracked-sessions.json`, the record is removed automatically on the next check once the pane is gone; do not edit the file by hand. A malformed record fails loud: fix or delete it after checking that no listed pane is alive |

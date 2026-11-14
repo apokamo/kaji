@@ -62,6 +62,6 @@ managed starter の local main に review 前の candidate を作る maintainer 
 ```
 
 コメント末尾と stdout に共通 `---VERDICT---` block を出し、`verdict_path` が注入されている場合は
-外部副作用完了後に同内容の pure YAML を最後に保存する。ABORT の suggestion は必須。
+外部副作用完了後に、最後に prompt の `kaji verdict publish` で同内容を公開する（直接書かない）。ABORT の suggestion は必須。
 
 次は update と別 session で `/review-starter-update <tracking_issue_id>` を実行する。

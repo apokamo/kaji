@@ -122,3 +122,26 @@ class TestNonCodexInitialMessageUnchanged:
 
         assert result.returncode == 0, result.stderr
         assert argv[-1].startswith(LEGACY_HEAD)
+
+
+class TestInitialMessagePublishInstruction:
+    """Issue #568: 初期メッセージは手書きではなく ``kaji verdict publish`` を指示する。"""
+
+    @pytest.mark.parametrize(("agent", "binary"), [("claude", "claude"), ("codex", "codex")])
+    def test_initial_message_instructs_publish(
+        self, tmp_path: Path, agent: str, binary: str
+    ) -> None:
+        wrapper_args = _base_args(tmp_path, agent) + ["", "", "m", "low", "auto", ""]
+
+        result, argv = _run_wrapper(tmp_path, binary, wrapper_args)
+
+        assert result.returncode == 0, result.stderr
+        initial = argv[-1]
+        assert "publish the verdict with the `kaji verdict publish` command" in initial
+        assert f"Do not write {tmp_path / 'verdict.yaml'} yourself" in initial
+        assert "write only a pure YAML verdict file" not in initial
+        # banner 行は #527 の terminal.log 解析契約のため維持する
+        assert (
+            "The agent must read prompt_path and write a pure YAML verdict to verdict_path."
+            in result.stdout
+        )
