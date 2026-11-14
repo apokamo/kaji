@@ -175,7 +175,8 @@ runner は agent step の起動時に、既存の 4 変数（`KAJI_TMP_DIR` / `T
 | 公開成功 | 0 | stdout 1 行: `verdict published: step=<id> attempt=<NNN> status=<S> path=<abs>` | `verdict.yaml` が完成した内容で 1 回だけ出現する。一時ファイルは残らない |
 | 入力検証エラー（status が `on:` 外、reason / evidence が空、`ABORT` / `BACK*` で suggestion が空） | 1（`EXIT_VALIDATION_ERROR`） | stderr に理由と許容 status 一覧。**入力を直せば同じ attempt で再実行できる** | 何も作らない |
 | 状況エラー（`KAJI_VERDICT_CONTRACT` が未設定、契約ファイルが欠落・破損・不整合、attempt が終了済み（`result.json` がある）、`verdict.yaml` が既にある） | 2（`EXIT_INVALID_INPUT`） | stderr に理由。入力を直しても解決しない | 何も作らない・上書きしない |
-| I/O エラー（一時ファイル作成・fsync・link の `OSError`。hard link を作れないファイルシステムを含む） | 3（`EXIT_RUNTIME_ERROR`） | stderr に理由 | `verdict.yaml` は作らない。一時ファイルは削除を試みる |
+| I/O エラー（link **前**の一時ファイル作成・書き込み・fsync・link の `OSError`。hard link を作れないファイルシステムを含む） | 3（`EXIT_RUNTIME_ERROR`） | stderr に理由 | `verdict.yaml` は作らない。一時ファイルは削除を試みる。**exit 3 は「`verdict.yaml` を作っていない」ことを意味する** |
+| link 成功後の後始末失敗（一時ファイルの unlink の `OSError`） | 0 | stdout に成功行、stderr に警告 1 行 | `verdict.yaml` は公開済みのまま維持する（削除・巻き戻ししない）。一時ファイルは残りうるが名前が `verdict.yaml` と一致しないため判定に影響しない |
 
 副作用: 成功時に `verdict.yaml` を 1 つ作るだけ。Issue コメントの投稿・stdout block の出力は行わない
 （コメント投稿の統合は Issue 本文 § 範囲外）。
@@ -184,12 +185,12 @@ runner は agent step の起動時に、既存の 4 変数（`KAJI_TMP_DIR` / `T
 
 | シンボル | 区分 | 責務 |
 |----------|------|------|
-| `verdict.dump_verdict_yaml(verdict) -> str` | 新規（既存 `write_verdict_yaml` から抽出） | 既存の pure YAML 直列化（`yaml.safe_dump(allow_unicode=True, default_flow_style=False, sort_keys=False)`、4 キー固定順） |
+| `verdict.dump_verdict_yaml(verdict) -> str` | 新規（既存 `write_verdict_yaml` から抽出・修正） | 4 キー固定順の pure YAML 直列化。**読み戻して同じ値になることを保証する**（MF1）。(1) 可読形式: `yaml.SafeDumper` の派生 Dumper で `allow_unicode=True` を保ちつつ、YAML の LF 以外の改行文字（U+0085 / U+2028 / U+2029）を含む str は double-quoted style を強制する（double-quoted ではこれらが `\N` / `\L` / `\P` にエスケープされる）。(2) 出力を `_parse_yaml_fields` で読み戻し、4 値が一致しなければ `allow_unicode=False`（非 ASCII をすべてエスケープ）で直列化し直して再確認する。(3) それでも一致しなければ内部不変条件違反として送出する（実装バグ扱い。有効な入力をこの経路で拒否することは想定しない） |
 | `verdict.write_verdict_yaml(path, verdict)` | 変更 | `dump_verdict_yaml` と `fsio.atomic_write` を使う（runner の正規化保存専用。上書きは許す） |
-| `fsio.atomic_publish_new(path, content)` | 新規 | 同じディレクトリに一意名の一時ファイルを作り、write → flush → fsync → `os.link(tmp, path)` → 一時ファイルを unlink（finally）。`path` が既にあれば `FileExistsError`。途中状態は外から見えず、上書きもしない |
+| `fsio.atomic_publish_new(path, content) -> PublishOutcome` | 新規 | 同じディレクトリに一意名の一時ファイルを作り、write → flush → fsync → `os.link(tmp, path)` → 一時ファイルを unlink。`path` が既にあれば `FileExistsError`。途中状態は外から見えず、上書きもしない。**`os.link` の成功を公開の確定点とする**: link 前の失敗は一時ファイルを削除して例外を送出する。link 後の unlink 失敗は送出せず、`PublishOutcome.cleanup_error` に入れて返す（公開済みの `path` には触れない） |
 | `verdict_publish.VerdictContract` | 新規 | 契約ファイルの Pydantic model |
 | `verdict_publish.write_verdict_contract(attempt_dir, *, issue_id, run_id, step_id, attempt, valid_statuses) -> Path` | 新規 | runner が呼ぶ |
-| `verdict_publish.publish_agent_verdict(environ, *, status, reason, evidence, suggestion) -> PublishedVerdict` | 新規 | 状況検証 → 正規化 → 入力検証 → 直列化と round-trip 確認 → 原子的公開 |
+| `verdict_publish.publish_agent_verdict(environ, *, status, reason, evidence, suggestion) -> PublishedVerdict` | 新規 | 状況検証 → 正規化 → 入力検証 → 直列化（round-trip 保証付き）→ 原子的公開。`PublishedVerdict` は後始末の警告（あれば）を持つ |
 | `errors.VerdictPublishInputError` / `errors.VerdictPublishContextError` | 新規（`HarnessError` 派生） | exit 1 / 2 への対応付け用 |
 | `commands/verdict.py:cmd_verdict_publish` + `parser._register_verdict` | 新規 | argparse と exit code の対応付けだけを担う |
 
@@ -229,7 +230,7 @@ assert published.path.name == "verdict.yaml"
 
 | ファイル | 変更 |
 |----------|------|
-| `kaji_harness/verdict.py` | `dump_verdict_yaml` を抽出し、`write_verdict_yaml` を原子化。正規化（strip + #298 の制御文字置換）と検証の共通 helper を公開する。`resolve_verdict` / `load_verdict_yaml` は不変 |
+| `kaji_harness/verdict.py` | `dump_verdict_yaml` を抽出し（U+0085 等を保持する Dumper と ASCII エスケープへの fallback を含む）、`write_verdict_yaml` を原子化。正規化（strip + #298 の制御文字置換）と検証の共通 helper を公開する。`resolve_verdict` / `load_verdict_yaml` は不変 |
 | `kaji_harness/fsio.py` | `atomic_publish_new` を追加 |
 | `kaji_harness/verdict_publish.py` | 新規（契約 model・契約の書き出しと読み込み・publish 本体） |
 | `kaji_harness/errors.py` | publish 用の例外 2 種を追加 |
@@ -288,12 +289,26 @@ publish_agent_verdict(environ, fields)
      - status ∈ contract.valid_statuses（完全一致）
      - reason / evidence が非空、ABORT / BACK* なら suggestion も非空（既存 _validate / _require_suggestion と同じ規則）
   4. text = dump_verdict_yaml(verdict)
-     round-trip 確認: _parse_yaml_fields(text) + _validate(…, valid_statuses) の結果が verdict と一致する
-     （内部不変条件。不一致は実装バグなので fail-loud）
-  5. fsio.atomic_publish_new(verdict_path, text)
-     （FileExistsError → 競合として exit 2、OSError → exit 3）
-  6. PublishedVerdict(path, step_id, attempt, status) を返す → CLI が 1 行を出力
+     - 可読 Dumper（allow_unicode=True、U+0085 / U+2028 / U+2029 を含む値は double-quoted）で直列化
+     - _parse_yaml_fields(text) + _validate(…, valid_statuses) の 4 値が verdict と一致しなければ
+       allow_unicode=False で直列化し直して再確認（ASCII エスケープ。内容は保持される）
+     - それでも不一致なら内部不変条件違反（実装バグ）として exit 3。有効な入力を黙って変形して公開しない
+  5. outcome = fsio.atomic_publish_new(verdict_path, text)
+     - link 前の FileExistsError → 競合として exit 2、link 前の OSError → exit 3（どちらも verdict.yaml なし）
+     - os.link 成功 = 公開の確定点。以降は verdict.yaml を削除・巻き戻ししない
+     - link 後の一時ファイル unlink 失敗は outcome.cleanup_error（best-effort。exit 0 + stderr 警告）
+  6. PublishedVerdict(path, step_id, attempt, status, cleanup_warning) を返す → CLI が成功行を出力
 ```
+
+### 公開確定後の扱い（SF1）
+
+- 確定点は `os.link` の成功。その瞬間から `verdict.yaml` は完了トリガとして見え、Herdr はこれを検知して pane の
+  後始末へ進みうる。その後に publish プロセスが pane の終了などで中断され、成功行の出力や一時ファイルの削除が
+  行われなくても、公開は有効のまま扱う（runner の解決は `verdict.yaml` だけを見るので一貫する）。
+- 成功行が出なかった agent が publish を再実行すると、「`verdict.yaml` が既にある」として exit 2 になる。この
+  stderr には「既に公開済み（artifact を確認すること）」と明記し、未公開と誤解させない。
+- 一時ファイルの削除は best-effort。失敗しても exit 0 で、stderr に一時ファイルのパスを含む警告を出す。残った
+  一時ファイル（`.verdict.yaml.<random>.tmp`）は Herdr の完了検知にも `resolve_verdict` にも使われない。
 
 ### runner（agent 分岐）
 
@@ -348,6 +363,8 @@ ABORT 時の扱いは変えない。手動起動（`verdict_path` なし）の�
 | agent env の拡張範囲 | 既存 4 変数に `KAJI_VERDICT_CONTRACT` を 1 つだけ追加する。`KAJI_VERDICT_PATH` 等の既存 `KAJI_*` は渡さない | Issue 本文 § 概要が「runner の agent context」を対象に含める（人間決定のスコープ）。#407 設計書の「agent へは 4 変数のみ」は当時の AI の仮定（同設計書 provenance 表）であり人間決定ではない。最小追加にとどめるのは AI の仮定。根拠: 制約・前提条件 § `KAJI_VERDICT_PATH` を agent env に入れない。検査先: review-design | `tests/test_tmp_env_propagation.py` の「agent は 4 変数のみ」assert を「4 変数 + 契約変数」に更新する |
 | 原子的公開の方式 | 同じディレクトリの一時ファイル + fsync + `os.link`（上書きしない）。hard link 非対応なら exit 3 | AI の仮定。根拠: POSIX `link(2)` の EEXIST 意味論と `os.replace` が上書きすることの比較。検査先: review-code | 一時ファイル名を `verdict.yaml` と一致させない。一時ファイルは finally で削除する |
 | runner の正規化保存の原子化 | `write_verdict_yaml` を `fsio.atomic_write` 経由にする（上書きは許す） | AI の仮定。根拠: Issue 本文 § OB が `write_verdict_yaml` の直接 `write_text` を問題として挙げており、serializer を共有するので揃える。検査先: review-code | `dump_verdict_yaml` を抽出して publish と共有する |
+| 直列化が値を保持すること（MF1） | 可読 Dumper（`allow_unicode=True` + LF 以外の改行文字を含む値は double-quoted）を使い、読み戻して不一致なら `allow_unicode=False` で再直列化する | 人間決定（要件）: 完了条件「複数行・`: `・`#`・引用符・バックスラッシュ・Unicode を含む値が現行 parser と round-trip する」。方式は AI の仮定。根拠: review-design の再現（既存の `safe_dump(allow_unicode=True)` では U+0085 が single-quoted で生出力され、読み戻すと空白に畳まれる）と fix-design での確認（PyYAML 6.0.3 で、U+0085 / U+2028 / U+2029 / CR / TAB / BOM / NBSP / U+3000 / ZWSP / ESC / DEL / U+009F / 絵文字 / U+E0001 を 8 種のテンプレートに埋め込み、既存方式は U+0085 だけが失敗、提案の Dumper と `allow_unicode=False` はすべて一致）。可読性は日本語をエスケープしない方を優先し、未知の欠陥には ASCII 版で備える。検査先: review-code | 既存 reader（`_parse_yaml_fields`）は変えない。runner の正規化保存も同じ `dump_verdict_yaml` を使うので、comment / stdout 由来の verdict に U+0085 があっても正規化保存で壊れなくなる |
+| 公開の確定点と後始末（SF1） | `os.link` の成功を確定点とし、以降は artifact を維持する。一時ファイルの削除は best-effort | AI の仮定。根拠: link 後は Herdr が即座に完了を検知しうる（`interactive_terminal_herdr.py:351`）ので、公開後の失敗を「未公開」と報告すると実際の状態と矛盾する。検査先: review-code | exit 3 は「artifact を作っていない」場合に限る。再実行時の exit 2 の文言で公開済みを明示する |
 | 制御文字の扱い | publish でも #298 の規則（YAML 1.2 printable 外 → U+FFFD）を適用する | AI の仮定。根拠: 手書き経路では load 時に置換されていたので、publish 経路でも読み戻した値を同じにする（`verdict.py:_sanitize_yaml_control_chars`）。検査先: review-code | 置換後の値で round-trip 一致を確認する |
 | wrapper banner | banner 行は維持し、`initial_prompt` だけを変える | AI の仮定。根拠: #527 の banner 終端契約（`interactive_terminal_common.py:43-45` とテスト）。検査先: review-design | — |
 | 「同梱 agent skill」の範囲 | 本リポジトリの `.claude/skills/` の agent skill（7 件）。managed starter への追随は Release 後の `/update-starter` | AI の仮定。根拠: CLAUDE.md のライフサイクル「Starter 追随（Release 後）」。検査先: review-design | exec_script skill（`baseline-precheck` / `review-poll`）は対象外 |
@@ -378,6 +395,13 @@ one-way door の確認: 公開 CLI と API（追加だけで既存の引数・ex
 - **round-trip**: `dump_verdict_yaml` → `_parse_yaml_fields` + `_validate` で元の値と一致する。値の例: 複数行、`: `、
   ` #`、`'` と `"`、`\`、Unicode（日本語・絵文字）、行頭の `- ` / `|` / `>`、`---` や `---END_VERDICT---`
   だけの行、80 桁を超える長い行、前後の空白（strip 後の値で比較）、制御文字（U+FFFD 置換後の値で比較）。
+- **回帰（MF1: U+0085）**: `reason="line\x85next"` 等、U+0085 / U+2028 / U+2029 を単独・複数行の途中・日本語の間に含む値が、
+  `dump_verdict_yaml` → `_parse_yaml_fields` で同じ値に戻る（既存の `safe_dump(allow_unicode=True)` では U+0085 が
+  `"line next"` になり Red）。日本語だけの値は可読形式のまま（`\u` エスケープされない）であることも確認する。
+- **直列化の fallback**: 可読 Dumper の出力が読み戻しで一致しない状況を注入すると、`allow_unicode=False` の出力に
+  切り替わり、値が保持される。両方が一致しない状況を注入すると内部不変条件違反として送出され、何も公開されない。
+- **既存 parser との互換**: `dump_verdict_yaml` の出力は既存の `load_verdict_yaml` / `load_verdict_yaml_for_marker_vocabulary`
+  でそのまま読める（reader 側の変更はない）。
 - **入力検証**: `on:` 外の status（marker 文法上は正しい `RETRY` を `on: {PASS, ABORT}` に渡す場合を含む）、空白だけの
   reason / evidence、suggestion が空の `ABORT` / `BACK` / `BACK_DESIGN` を拒否する。suggestion が空の `PASS` / `RETRY`
   は受理する。status は大文字小文字を区別して完全一致で照合する。
@@ -398,6 +422,8 @@ one-way door の確認: 公開 CLI と API（追加だけで既存の引数・ex
 - **別 attempt / 終了済み attempt の拒否**: `result.json` のある attempt、契約の `verdict_path` が別ディレクトリを指す場合、
   env 未設定、契約欠落・破損を exit 2 で拒否し、ファイルを作らない。
 - **attempt 内での訂正**: 無効な status で exit 1 → `verdict.yaml` なし → 正しい値で再実行 → 成功。
+- **公開確定後の後始末失敗（SF1）**: link 成功後の unlink に `OSError` を注入すると、exit 0・stderr に警告・`verdict.yaml`
+  は完成した内容のまま、となる。続けて publish を再実行すると exit 2 になり、stderr に公開済みであることが示される。
 - **I/O 失敗**: 一時ファイル書き込みや link で `OSError`（`EPERM` 等）を注入すると exit 3 になり、`verdict.yaml` も
   一時ファイルも残らない。
 - **CLI**: `kaji_harness.commands.main` 経由で各 exit code、stderr の理由と許容 status 一覧、成功時の stdout 1 行を確認する。
@@ -466,6 +492,8 @@ one-way door の確認: 公開 CLI と API（追加だけで既存の引数・ex
 | ADR 005 / 007 / 012 | `docs/adr/005-artifact-primary-verdict.md`、`docs/adr/007-interactive-terminal-runner.md`、`docs/adr/012-verdict-yaml-no-timestamp.md` | 維持する不変条件（artifact primary、出現が完了トリガ、`verdict.yaml` に識別情報を入れない） |
 | POSIX `link(2)` | https://pubs.opengroup.org/onlinepubs/9799919799/functions/link.html | 要約: ERRORS の `[EEXIST]` により、path2 が既存のディレクトリエントリを指す場合 link() は失敗する（宛先を上書きしない）。成功すると、書き込み済みの inode を指す新しいエントリが 1 回の操作で作られる |
 | Python `os.link` / `os.replace` | https://docs.python.org/3/library/os.html#os.link , https://docs.python.org/3/library/os.html#os.replace | `os.replace`: 宛先が存在すれば置き換える（上書き禁止の手段にはならない）。`os.link`: hard link を作る |
-| PyYAML `safe_dump` | https://pyyaml.org/wiki/PyYAMLDocumentation | 既存 serializer の出力。表現できない文字は quoted style とエスケープで出力され、`safe_load` で元に戻る |
+| PyYAML `safe_dump` / Dumper | https://pyyaml.org/wiki/PyYAMLDocumentation | 既存 serializer の出力。`allow_unicode` で非 ASCII のエスケープ有無を、representer の `style='"'` で double-quoted style を指定できる |
+| PyYAML emitter 実装 | https://github.com/yaml/pyyaml/blob/6.0.2/lib/yaml/emitter.py （`write_double_quoted` / `write_single_quoted`）、ローカル `.venv` の `yaml/emitter.py`（6.0.3） | `write_double_quoted` は `\x85` / `\u2028` / `\u2029` / `\uFEFF` を常にエスケープする（`\N` / `\L` / `\P`）。`write_single_quoted` は改行文字を生のまま書き、LF 以外の改行では読み戻し時の折り畳みを打ち消す追加改行を書かない。U+0085 だけが壊れる理由 |
+| YAML 1.1 の改行文字 | https://yaml.org/spec/1.1/#id871136 （§ 5.4 Line Break Characters） | PyYAML が準拠する YAML 1.1 は LF・CR に加えて NEL（U+0085）・LS（U+2028）・PS（U+2029）を改行文字とする。single-quoted / plain では折り畳み（line folding）の対象になる |
 | argparse（`--opt=value`） | https://docs.python.org/3/library/argparse.html#option-value-syntax | 「For long options ... the option and value can also be passed as a single command-line argument, using = to separate them」。値が `-` で始まってもよい |
 | Bash heredoc（引用符付き区切り語） | https://www.gnu.org/software/bash/manual/bash.html#Here-Documents | 「If any part of word is quoted ... the lines in the here-document are not expanded」。値をそのまま渡せる |
