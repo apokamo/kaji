@@ -53,6 +53,7 @@ MODULE_LAYERS: dict[str, str] = {
     "kaji_harness.starter_release": "application",
     "kaji_harness.starter_tracking": "application",
     "kaji_harness.verdict": "application",
+    "kaji_harness.verdict_publish": "application",
     "kaji_harness.workflow": "application",
     "kaji_harness.worktree_discovery": "application",
     "kaji_harness.commands": "command",

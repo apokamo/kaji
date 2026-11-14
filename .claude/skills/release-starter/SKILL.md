@@ -88,4 +88,4 @@ force push、tag 上書き、lightweight tag、review 前 publish を禁止す�
 
 `PASS | ABORT`。報告コメントに `--verdict-step release-starter --verdict-status <STATUS>` を付け、
 コメント末尾と stdout に共通 verdict block を出す。注入時は全外部副作用の後、最後に
-`verdict_path` へ pure YAML を保存する。ABORT は復旧 suggestion を必須とする。
+prompt の `kaji verdict publish` で `verdict_path` へ公開する（直接書かない）。ABORT は復旧 suggestion を必須とする。

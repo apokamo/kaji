@@ -80,7 +80,7 @@ kaji 標準スキルセット（`.claude/skills/` 実体、計 23 種）はラ�
 kaji_harness/
   __init__.py
   errors.py       # エラー階層 (ConfigNotFoundError / SyncError 等) — foundation
-  fsio.py         # atomic write helper (atomic_write / atomic_write_new) — foundation
+  fsio.py         # atomic write helper (atomic_write / atomic_write_new / atomic_publish_new) — foundation
   design_dir.py   # [paths].design_dir の規約 (LEGACY_DESIGN_DIR) と lexical 検証 — foundation (#397)
   agents.py       # agent capability registry — foundation
   deadline.py     # attempt の hard deadline (AttemptDeadline)。prompt 表示と runner backend の単一計算元 — foundation (#421)
@@ -89,7 +89,8 @@ kaji_harness/
   config.py       # .kaji/config.toml 探索・パース (KajiConfig, PathsConfig, ExecutionConfig)
   models.py       # データクラス: Workflow, Step, CycleDefinition, Verdict, CLIResult
   workflow.py     # YAML パーサ & バリデータ
-  verdict.py      # Verdict パーサ (3段階フォールバック)
+  verdict.py      # Verdict パーサ (3段階フォールバック) と round-trip 保証付き直列化 (dump_verdict_yaml)
+  verdict_publish.py  # agent step の verdict 公開契約と `kaji verdict publish` 本体 (#568)
   adapters.py     # CLI イベントアダプタ (Claude/Codex/Antigravity)
   cli.py          # CLI 引数構築 & サブプロセス実行
   prompt.py       # プロンプトビルダー
@@ -110,7 +111,7 @@ kaji_harness/
     markers.py    # kaji-verdict marker の生成 / optional flag 解決
     _mappings.py  # label → branch_prefix mapping (private。facade 経由で公開)
     _worktree.py  # main worktree 解決 (private。facade 経由で公開)
-  commands/       # kaji CLI subcommand dispatcher の実体 (Issue #283/#286 で分割・分離)
+  commands/       # kaji CLI subcommand dispatcher の実体 (Issue #283/#286 で分割・分離。verdict.py は #568)
   cli_main.py     # console entry point `kaji` / `python -m` 専用 (#284 で互換 shim 撤去)
   runstate/       # run の生存・最新 run・失敗 step・必須 artifact の事実 (Issue #540)
   recovery/       # failure triage / recovery handler (Issue #288)
@@ -302,8 +303,9 @@ resolve_verdict(attempt_dir, full_output, valid_statuses, attempt_started_at, st
 - **comment fallback の attempt scoping**: `attempt_started_at`（dispatch 直前に harness が記録するローカル時刻）を下限に、`created_at >= attempt_started_at` のコメントのみ対象にする。retry / resume で当該 attempt が verdict を出さなかった場合に、前 attempt の作業報告コメントを誤採用しない。下限を満たすコメントが無ければ古いコメントを拾わず stdout / `VerdictNotFound` へ落とす（false verdict より解決失敗を優先する fail-safe）。
 - **comment fallback の step scoping（Issue #449）**: 時刻条件を満たすコメントのうち、body 1 行目の `<!-- kaji-verdict: step=... -->` marker が別 step を指すもの、および marker 風だが文法外のものは候補から除外する（フィルタは newest-first 走査の前に適用）。marker 無しのコメントは後方互換で候補に残す。秒精度の `created_at` では同一秒の前 step コメントと自 step コメントを時刻だけでは区別できないため、この step scoping で補う。
 - **exec / exec_script step は comment fallback を行わない（Issue #449）**: runner は script-like step に `comment_loader=None` を渡す。verdict の正本は stdout と `KAJI_VERDICT_PATH`（artifact）のみで、他 step の作業報告コメントが採用されることはない。
-- **source != "artifact" の正規化保存**: comment / stdout で解決した場合、harness は同じ verdict を `attempt_dir/verdict.yaml` へ正規化保存する。未移行スキルが stdout しか出さなくても attempt 単位の `verdict.yaml` が必ず残る。解決経路は `run.log` の `verdict_source` イベントに記録される。
-- **agent 側の書き込み順**: 上記は harness の解決順であり、agent / script の書き込み順とは別概念。interactive terminal runner では `verdict.yaml` の出現が次 step への完了トリガになるため、作業報告 Issue comment など当該 step の外部副作用を完了してから最後に `verdict.yaml` を保存する。
+- **source != "artifact" の正規化保存**: comment / stdout で解決した場合、harness は同じ verdict を `attempt_dir/verdict.yaml` へ正規化保存する（`dump_verdict_yaml` + `fsio.atomic_write`。Issue #568）。未移行スキルが stdout しか出さなくても attempt 単位の `verdict.yaml` が必ず残る。解決経路は `run.log` の `verdict_source` イベントに記録される。
+- **agent 側の書き込み順**: 上記は harness の解決順であり、agent / script の書き込み順とは別概念。interactive terminal runner では `verdict.yaml` の出現が次 step への完了トリガになるため、作業報告 Issue comment など当該 step の外部副作用を完了してから最後に `verdict.yaml` を公開する。
+- **agent step の公開経路（Issue #568）**: agent は `verdict.yaml` を手書きせず、`kaji verdict publish --status= --reason= --evidence= [--suggestion=]` で公開する。runner は agent 起動前に `attempt_dir/verdict-contract.json`（`schema_version` / `issue_id` / `run_id` / `step_id` / `attempt` / `verdict_path` / `valid_statuses` = `step.on` のキー）を `fsio.atomic_write` で書き、その絶対パスを env `KAJI_VERDICT_CONTRACT` で agent プロセスへ渡す（headless は `execute_cli(env=...)`、Herdr は wrapper の `env K=V` prefix。exec / exec_script には渡さない）。`verdict_publish.publish_agent_verdict` は (1) 契約の Pydantic 検証・`verdict_path` が契約と同じ dir・`result.json` 不在・`verdict.yaml` 不在を確認し（違反は exit 2）、(2) strip と YAML 禁止制御文字の `U+FFFD` 置換で正規化し、(3) status ∈ `valid_statuses`・reason / evidence 非空・ABORT / BACK* の suggestion 非空を検証し（違反は exit 1。`verdict.yaml` は作らず同じ attempt で訂正できる）、(4) `dump_verdict_yaml` で既存 parser に読み戻して一致する pure YAML を作り（可読形式 → 不一致なら `allow_unicode=False` → それでも不一致なら exit 3）、(5) `fsio.atomic_publish_new`（同じ dir の `.verdict.yaml.<random>.tmp` に write + fsync → `os.link` → 一時ファイル削除）で上書きせず公開する。`os.link` の成功が確定点で、以降の一時ファイル削除失敗は警告（exit 0）にとどめる。`verdict.yaml` の schema・解決順・壊れた artifact の fail-loud は変えず、手書き artifact もこれまでどおり読む。
 
 artifact / log の layout は attempt 単位（`runs/<run_id>/steps/<step_id>/attempt-NNN/`、詳細は § 実行アーティファクトの layout）。
 

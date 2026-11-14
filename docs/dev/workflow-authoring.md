@@ -185,7 +185,8 @@ exec-step の規約:
   `KAJI_STEP_ID` / `KAJI_WORKTREE_DIR` / `KAJI_VERDICT_PATH` 等）を注入する。script は
   `KAJI_VERDICT_PATH` に `verdict.yaml` を書く artifact-primary 経路で完了判定できる。
   あわせて attempt 固有の一時作業ディレクトリを `KAJI_TMP_DIR` / `TMPDIR` / `TMP` / `TEMP`（同値、Issue #407）として
-  注入する。agent step にもこの 4 変数だけが注入される。詳細は
+  注入する。agent step にはこの 4 変数と、verdict 公開契約を指す `KAJI_VERDICT_CONTRACT`（Issue #568）だけが
+  注入される。詳細は
   [skill-authoring.md](./skill-authoring.md) の exec_script 入力表を参照。
 - **verdict 解決**: artifact → stdout の順（Issue #449 以降、exec step は **comment fallback
   を行わない**。Issue コメントにだけ verdict を残しても採用されない）。決定論 step のため
@@ -377,7 +378,8 @@ agent step の timeout は **attempt 開始時刻を起点とする hard deadlin
   なら待機も再起動もせず元のエラーを返す（従来は retry ごとに full timeout で再始動していた）。retry 回数上限
   （3 回）は不変
 - **延長なし**: timeout の自動延長・無制限 retry はない。cycle の `max_iterations`・各 workflow YAML の
-  `timeout` 値・verdict-last（外部副作用の完了後に最後に `verdict.yaml` を保存する。
+  `timeout` 値・verdict-last（外部副作用の完了後に最後に `verdict.yaml` を公開する。agent step は
+  `kaji verdict publish` を使う（Issue #568）。
   [ADR 005](../adr/005-artifact-primary-verdict.md)）も変わらない
 - **wall clock 推定の限界**: hard deadline は monotonic clock で判定するが、agent が `date -u` で見る残時間は
   wall clock 基準の推定値になる。実行中に wall clock が monotonic より速く進むと（Incident #393 では約 10%）

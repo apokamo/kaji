@@ -45,10 +45,9 @@ initial_prompt="Read the full task prompt from: $prompt_path
 
 Carry out the requested workflow step in this existing workspace: $workdir
 
-When the step is complete, write only a pure YAML verdict file to this exact path:
-$verdict_path
-
-Do not wrap the YAML in Markdown. Use the valid status values described in the prompt."
+When the step is complete, publish the verdict with the \`kaji verdict publish\` command described in the prompt.
+Do not write $verdict_path yourself; it appears only after a successful publish.
+Use the valid status values described in the prompt."
 
 # Codex resolves a `$<skill>` mention only in the user's input, not in prompt.txt.
 if [[ -n "$skill_invocation" ]]; then

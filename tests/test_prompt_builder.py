@@ -7,7 +7,6 @@ injection, and previous_verdict handling.
 
 from __future__ import annotations
 
-import textwrap
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -470,9 +469,7 @@ class TestVerdictPathInjection:
         assert f"`{path}`" in prompt
         assert "作業報告 Issue comment の末尾" in prompt
         assert "harness の完了トリガ" in prompt
-        assert prompt.index("作業報告 Issue comment の末尾") < prompt.index(
-            f"pure YAML を `{path}` に保存"
-        )
+        assert prompt.index("作業報告 Issue comment の末尾") < prompt.index("kaji verdict publish")
         # stdout 互換 block も残る
         assert "---VERDICT---" in prompt
         assert "---END_VERDICT---" in prompt
@@ -524,22 +521,6 @@ def _delimiter_example(prompt: str) -> str:
     return match.group(1)
 
 
-def _pure_yaml_example(prompt: str) -> str:
-    """出力要件の手順 3（pure YAML の保存指示）以降に示される YAML 例を返す。"""
-    lines = prompt.splitlines()
-    step3 = next(
-        i for i, line in enumerate(lines) if line.startswith("3. ") and "pure YAML" in line
-    )
-    rest = [line for line in lines[step3 + 1 :] if not line.lstrip().startswith("```")]
-    start = next(i for i, line in enumerate(rest) if line.lstrip().startswith("status:"))
-    example: list[str] = []
-    for line in rest[start:]:
-        if not line.strip():
-            break
-        example.append(line)
-    return textwrap.dedent("\n".join(example))
-
-
 _EXAMPLE_CASES = [
     pytest.param({"PASS": "review", "ABORT": "__end__"}, _VERDICT_PATH, id="pass-abort-path"),
     pytest.param({"PASS": "review", "ABORT": "__end__"}, None, id="pass-abort-placeholder"),
@@ -571,31 +552,72 @@ class TestVerdictExampleIsValidYaml:
         assert "ABORT/BACK" not in str(data["suggestion"])
 
     @pytest.mark.parametrize(("on", "verdict_path"), _EXAMPLE_CASES)
-    def test_pure_yaml_example_is_yaml_mapping(
-        self, on: dict[str, str], verdict_path: str | None
-    ) -> None:
-        data = yaml.safe_load(_pure_yaml_example(_prompt_for_example(on, verdict_path)))
-
-        assert isinstance(data, dict)
-        assert set(data) == _VERDICT_KEYS
-        assert "ABORT/BACK" not in str(data["suggestion"])
-
-    @pytest.mark.parametrize(("on", "verdict_path"), _EXAMPLE_CASES)
     def test_examples_use_block_scalars(self, on: dict[str, str], verdict_path: str | None) -> None:
         prompt = _prompt_for_example(on, verdict_path)
 
-        for example in (_delimiter_example(prompt), _pure_yaml_example(prompt)):
-            lines = example.splitlines()
-            for key in _BLOCK_SCALAR_KEYS:
-                assert f"{key}: |" in lines, f"{key} must be a literal block scalar"
+        lines = _delimiter_example(prompt).splitlines()
+        for key in _BLOCK_SCALAR_KEYS:
+            assert f"{key}: |" in lines, f"{key} must be a literal block scalar"
+
+
+# ============================================================
+# 12c. verdict.yaml は kaji verdict publish で公開する (Issue #568)
+# ============================================================
+
+
+def _publish_command_block(prompt: str) -> str:
+    """出力要件の手順 3 に示される bash code block の本文を返す。"""
+    lines = prompt.splitlines()
+    step3 = next(i for i, line in enumerate(lines) if line.startswith("3. "))
+    start = next(i for i in range(step3, len(lines)) if lines[i] == "```bash")
+    end = next(i for i in range(start + 1, len(lines)) if lines[i] == "```")
+    return "\n".join(lines[start + 1 : end])
+
+
+@pytest.mark.small
+class TestVerdictPublishInstruction:
+    """Issue #568: agent に verdict.yaml を手書きさせず、publish コマンドを示す。"""
 
     @pytest.mark.parametrize(("on", "verdict_path"), _EXAMPLE_CASES)
-    def test_pure_yaml_example_matches_delimiter_example(
+    def test_step3_shows_publish_command_with_quoted_heredocs(
         self, on: dict[str, str], verdict_path: str | None
     ) -> None:
         prompt = _prompt_for_example(on, verdict_path)
+        command = _publish_command_block(prompt)
 
-        assert _pure_yaml_example(prompt) == _delimiter_example(prompt)
+        assert command.startswith("kaji verdict publish --status=STATUS")
+        for field in ("reason", "evidence", "suggestion"):
+            assert f"""--{field}="$(cat <<'KAJI_VERDICT_EOF'""" in command
+        assert f"`STATUS` を {' | '.join(on)} のいずれか 1 つに置き換える" in prompt
+
+    @pytest.mark.parametrize(("on", "verdict_path"), _EXAMPLE_CASES)
+    def test_no_handwritten_yaml_instruction(
+        self, on: dict[str, str], verdict_path: str | None
+    ) -> None:
+        prompt = _prompt_for_example(on, verdict_path)
+        target = verdict_path or "[verdict_path]"
+
+        assert "pure YAML" not in prompt
+        assert f"`{target}` に保存" not in prompt
+        assert f"`{target}` に直接書き込まない" in prompt
+        assert f"`{target}` を手書きせず" in prompt
+
+    def test_exit_code_guidance(self) -> None:
+        prompt = _prompt_for_example({"PASS": "review", "ABORT": "__end__"}, _VERDICT_PATH)
+
+        assert "exit 0: 公開完了" in prompt
+        assert "exit 1: 入力が無効" in prompt
+        assert "同じコマンドを再実行する" in prompt
+        assert "exit 2 / 3: 再実行では解決しない" in prompt
+
+    def test_comment_and_stdout_steps_precede_publish(self) -> None:
+        prompt = _prompt_for_example({"PASS": "review", "ABORT": "__end__"}, _VERDICT_PATH)
+
+        comment = prompt.index("1. 作業報告 Issue comment の末尾")
+        stdout = prompt.index("2. 互換のため、同じ block を stdout にも出力する")
+        publish = prompt.index("3. 最後に、同じ内容を次のコマンドで公開する")
+        assert comment < stdout < publish
+        assert "書き方の規則（YAML の外の注記）" in prompt
 
 
 # ============================================================

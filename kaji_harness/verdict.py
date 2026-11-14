@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,7 +21,13 @@ from typing import Any, Protocol
 
 import yaml
 
-from .errors import InvalidVerdictValue, VerdictNotFound, VerdictParseError
+from .errors import (
+    InvalidVerdictValue,
+    VerdictNotFound,
+    VerdictParseError,
+    VerdictSerializationError,
+)
+from .fsio import atomic_write
 from .models import Verdict
 from .providers.markers import is_valid_verdict_status, parse_kaji_verdict_marker
 
@@ -271,6 +277,56 @@ def _require_suggestion(verdict: Verdict) -> None:
     """ABORT / BACK* は非空 suggestion を要求する。"""
     if (verdict.status == "ABORT" or verdict.status.startswith("BACK")) and not verdict.suggestion:
         raise VerdictParseError(f"{verdict.status} verdict requires non-empty suggestion")
+
+
+def normalize_verdict_fields(
+    *, status: str, reason: str, evidence: str, suggestion: str
+) -> Verdict:
+    """agent が渡した 4 フィールドを、読み込み側と同じ規則で正規化する。
+
+    YAML 1.2 printable 範囲外の制御文字を ``U+FFFD`` へ置換し（Issue #298 と同じ規則）、
+    前後の空白を除く。artifact に書く値と、既存 parser が読み戻す値を一致させるため（Issue #568）。
+
+    Args:
+        status: 判定 status。
+        reason: 判定理由。
+        evidence: 具体的根拠。
+        suggestion: 次のアクション提案。不要なら空文字列。
+
+    Returns:
+        正規化済みの ``Verdict``（検証はしない）。
+    """
+
+    def _clean(value: str) -> str:
+        sanitized, _ = _sanitize_yaml_control_chars(value)
+        return sanitized.strip()
+
+    return Verdict(
+        status=_clean(status),
+        reason=_clean(reason),
+        evidence=_clean(evidence),
+        suggestion=_clean(suggestion),
+    )
+
+
+def validate_verdict_fields(verdict: Verdict, valid_statuses: Collection[str]) -> None:
+    """正規化済み verdict に、既存 parser と同じ必須項目・status・suggestion 規則を適用する。
+
+    Args:
+        verdict: ``normalize_verdict_fields`` で正規化した verdict。
+        valid_statuses: 当該 step の ``on:`` キー。大文字小文字を区別して完全一致で照合する。
+
+    Raises:
+        InvalidVerdictValue: status が ``valid_statuses`` 外。
+        VerdictParseError: reason / evidence が空、または ABORT・BACK* で suggestion が空。
+    """
+    if verdict.status not in valid_statuses:
+        raise InvalidVerdictValue(f"'{verdict.status}' is not one of the step's statuses")
+    if not verdict.reason:
+        raise VerdictParseError("Missing required field: reason")
+    if not verdict.evidence:
+        raise VerdictParseError("Missing required field: evidence")
+    _require_suggestion(verdict)
 
 
 def parse_verdict(
@@ -650,27 +706,92 @@ def load_verdict_yaml_for_marker_vocabulary(path: Path) -> Verdict:
     return verdict
 
 
-def write_verdict_yaml(path: Path, verdict: Verdict) -> None:
-    """``Verdict`` を ``status/reason/evidence/suggestion`` の pure YAML で書き出す。
+# YAML 1.1（PyYAML）が LF・CR 以外に改行として扱う文字。single-quoted / plain では
+# 読み戻し時に折り畳まれて内容が変わるため、含む値は double-quoted でエスケープする（Issue #568）。
+_NON_LF_LINE_BREAKS = frozenset("\x85  ")
 
-    ``load_verdict_yaml`` と round-trip 可能。run_id / step_id / attempt_id は
-    保存しない（attempt path 自体が現在の run / step / attempt を表す）。
 
-    Args:
-        path: 書き込み先（親ディレクトリは必要なら作成する）。
-        verdict: 直列化する ``Verdict``。
-    """
+class _VerdictDumper(yaml.SafeDumper):
+    """``allow_unicode=True`` でも LF 以外の YAML 改行文字を保持する Dumper（Issue #568）。"""
+
+
+def _represent_verdict_str(dumper: yaml.SafeDumper, data: str) -> yaml.ScalarNode:
+    """LF 以外の改行文字を含む str は double-quoted（``\\N`` / ``\\L`` / ``\\P``）で表す。"""
+    if any(char in _NON_LF_LINE_BREAKS for char in data):
+        return dumper.represent_scalar("tag:yaml.org,2002:str", data, style='"')
+    return dumper.represent_str(data)
+
+
+_VerdictDumper.add_representer(str, _represent_verdict_str)
+
+
+def _render_verdict_yaml(verdict: Verdict, *, allow_unicode: bool) -> str:
+    """4 キー固定順の pure YAML を生成する（読み戻しの確認はしない）。"""
     data = {
         "status": verdict.status,
         "reason": verdict.reason,
         "evidence": verdict.evidence,
         "suggestion": verdict.suggestion,
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        yaml.safe_dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False),
-        encoding="utf-8",
+    return yaml.dump(
+        data,
+        Dumper=_VerdictDumper,
+        allow_unicode=allow_unicode,
+        default_flow_style=False,
+        sort_keys=False,
     )
+
+
+def _round_trips(text: str, verdict: Verdict) -> bool:
+    """``text`` を既存 parser で読み戻した 4 値が ``verdict`` と一致するかを返す。"""
+    try:
+        return _parse_yaml_fields(text) == verdict
+    except VerdictParseError:
+        return False
+
+
+def dump_verdict_yaml(verdict: Verdict) -> str:
+    """``Verdict`` を ``status/reason/evidence/suggestion`` の pure YAML 文字列にする。
+
+    まず可読形式（非 ASCII をエスケープしない）で直列化し、既存 parser
+    （``_parse_yaml_fields``）で読み戻して 4 値が一致することを確認する。一致しなければ
+    ``allow_unicode=False``（非 ASCII をすべてエスケープ）で直列化し直して再確認する。
+    どちらも一致しなければ、値を変形したまま返さず送出する（Issue #568）。
+
+    Args:
+        verdict: 直列化する ``Verdict``。値は前後の空白を除き、YAML 禁止制御文字を置換済みで
+            あること（``normalize_verdict_fields`` / 既存 parser の出力）。
+
+    Returns:
+        ``load_verdict_yaml`` で同じ値に読み戻せる pure YAML。
+
+    Raises:
+        VerdictSerializationError: どの形式でも同じ値に読み戻せない（内部不変条件違反）。
+    """
+    for allow_unicode in (True, False):
+        text = _render_verdict_yaml(verdict, allow_unicode=allow_unicode)
+        if _round_trips(text, verdict):
+            return text
+    raise VerdictSerializationError(
+        f"verdict (status={verdict.status!r}) does not round-trip through the verdict parser"
+    )
+
+
+def write_verdict_yaml(path: Path, verdict: Verdict) -> None:
+    """``Verdict`` を ``status/reason/evidence/suggestion`` の pure YAML で書き出す。
+
+    runner の正規化保存専用で、上書きを許す。``dump_verdict_yaml`` で直列化し、
+    ``fsio.atomic_write`` で置き換える。run_id / step_id / attempt_id は保存しない
+    （attempt path 自体が現在の run / step / attempt を表す）。
+
+    Args:
+        path: 書き込み先（親ディレクトリは必要なら作成する）。
+        verdict: 直列化する ``Verdict``。
+
+    Raises:
+        VerdictSerializationError: 同じ値に読み戻せる直列化ができない。
+    """
+    atomic_write(path, dump_verdict_yaml(verdict))
 
 
 def parse_verdict_block(

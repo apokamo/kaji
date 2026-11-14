@@ -4,7 +4,7 @@ Language: [English](interactive-terminal-runner.md) | 日本語
 
 `kaji run` の agent step を、headless CLI ではなく **Herdr pane 上**の通常 `claude` / `codex` /
 Antigravity（`agy`）対話 CLI で実行する runner backend（Issue #224 / #230 / #396 / #515）。agent が
-attempt directory の `verdict.yaml` を書いたら、kaji は artifact-primary 経路
+attempt directory の `verdict.yaml` を（`kaji verdict publish` で）公開したら、kaji は artifact-primary 経路
 （[ADR 005](../adr/005-artifact-primary-verdict.md)）で verdict を読み、次 step へ進む。
 
 Herdr が唯一の interactive terminal backend である。tmux backend は 0.23.0 で非推奨化した後、
@@ -255,7 +255,10 @@ kaji run .kaji/wf/official/dev.yaml 224 --log-level WARNING
    recorder は子の環境から `HERDR_AGENT` を取り除くため、nested kaji へ漏れない。
 5. wrapper はまず `cd <workdir>`（trusted な project worktree。`/tmp` や attempt directory ではない）を
    行い、通常の `claude` / `codex` / `agy` を起動する（Codex には `--cd <workdir>` も渡す）。wrapper は
-   prompt 全文を埋め込まず、`prompt.txt` を読み `verdict.yaml` に pure YAML を書くよう指示するだけである。
+   prompt 全文を埋め込まず、`prompt.txt` を読み `kaji verdict publish` で verdict を公開するよう指示するだけである。
+   agent は `verdict.yaml` を直接書かない。コマンドは attempt の `verdict-contract.json`（env `KAJI_VERDICT_CONTRACT`）に
+   照らして検証し、完成した内容を原子的に公開する（一時ファイル + `os.link`）ため、書き込み途中のファイルが完了トリガに
+   なることはない（Issue #568）。
 6. 完了トリガは `verdict.yaml` のみ。foreground process の観測は shell への早期復帰の検出にだけ使い、
    出力・status text・recorder の終了コードで step を完了させない。optional な process field の欠落・
    不正は unknown として扱い、shell 復帰の確定とは数えない。
@@ -380,9 +383,9 @@ Codex の `reasoning.effort = minimal` は現在の tool 構成（`image_gen` / 
    （または `kaji run ... --agent-runner interactive-terminal`）。
 3. 最小 workflow を `kaji run` で開始し、origin pane の右に pane が開いて通常の `claude` が起動することを
    確認する。
-4. agent が `verdict.yaml` を書いた後に kaji が次 step へ進むことを確認する（**Claude fresh**）。
+4. agent が `verdict.yaml` を公開した後に kaji が次 step へ進むことを確認する（**Claude fresh**）。
 5. resume step が同じ session id（`--resume <uuid>`）で起動することを確認する（**Claude resume**）。
-6. Codex でも同様に、fresh で `verdict.yaml` が書かれ（**Codex fresh**）、resume が `codex resume` で起動する
+6. Codex でも同様に、fresh で `verdict.yaml` が公開され（**Codex fresh**）、resume が `codex resume` で起動する
    こと（**Codex resume**）を確認する。
 7. `interactive_terminal_close_on_verdict = true` では verdict 後に pane が閉じ、`false`
    （`--no-interactive-terminal-close-on-verdict`）では残ることを確認する。
@@ -403,7 +406,7 @@ Codex の `reasoning.effort = minimal` は現在の tool 構成（`image_gen` / 
 | `must run inside Herdr`（`HerdrSessionRequiredError`）で即終了 | Herdr pane 内で kaji を起動するか `agent_runner = "headless"` にする。外部から focus 中 session を操作することは意図的に拒否している |
 | `HERDR_PANE_ID is not set` | caller の識別が明示されるよう、通常の Herdr pane で command を再実行する |
 | `transcript may be incomplete (recorder state: ...)` | recorder が `terminal.log` の一部を書けなかった（`incomplete`。`transcript_error` を参照。例: disk full）か、状態を確認できなかった（`unknown`）。agent の実行自体には影響しない |
-| step が timeout する | agent が `verdict.yaml` を書かなかった。prompt の verdict 書き込み指示と path を確認する |
+| step が timeout する | agent が `verdict.yaml` を公開しなかった。`kaji verdict publish` が実行されたかと exit code（1: 入力不備・直して再実行、2: 契約不備・公開済み、3: I/O エラー）を確認する |
 | `Herdr pane returned to its shell before writing verdict.yaml` | agent の起動失敗または早期終了。error に添付された `terminal.log` の末尾を確認する |
 | 色が出ない | wrapper は `NO_COLOR` を unset し `COLORTERM=truecolor` を設定する。端末の色対応と agent 側の設定も確認する |
 | `Herdr pane <id> may still have provider session <S> open ...`（resume step が pane を作る前に失敗） | kaji が安全に閉じられない pane（別の kaji origin、ownership の変更、close の失敗）が resume の session を開いたまま残っている。確認して `herdr pane close <id>` で閉じ、step を再実行する。メッセージに `herdr-untracked-sessions.json` が出ている場合も、pane が消えれば次の検査で記録は自動で消えるので手で編集しない。記録が壊れている場合は fail-loud になるので、記載の pane が生きていないことを確認してから修正または削除する |

@@ -90,6 +90,16 @@ def clean_kaji_console_root() -> Iterator[None]:
     restore_kaji_root_logging(state)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_verdict_contract_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """agent step 内の ``make check`` が実 attempt へ verdict を公開しないよう隔離する。
+
+    Issue #568: runner は agent プロセスへ ``KAJI_VERDICT_CONTRACT`` を注入し、agent が
+    実行するテストプロセスにも継承される。必要なテストだけが ``monkeypatch.setenv`` で設定する。
+    """
+    monkeypatch.delenv("KAJI_VERDICT_CONTRACT", raising=False)
+
+
 @pytest.fixture()
 def bare_with_two_worktrees(tmp_path: Path) -> tuple[Path, Path, Path]:
     """bare repo + main worktree + feature worktree を作成して返す。

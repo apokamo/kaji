@@ -46,6 +46,35 @@ def _verdict_example_yaml(status_choices: str) -> str:
     )
 
 
+_PUBLISH_HEREDOC_DELIMITER = "KAJI_VERDICT_EOF"
+
+
+def _verdict_publish_command() -> str:
+    """出力要件の手順 3 に示す ``kaji verdict publish`` のコマンド例を返す（Issue #568）。
+
+    各値は ``--field=value`` 形式で渡し、区切り語を引用符で囲んだ heredoc に本文を書く。
+    heredoc 内では ``$``・バッククォート・``\\``・引用符が展開されないため、agent は YAML の
+    字下げもエスケープも書かない。status は shell のリダイレクトと誤解されない placeholder
+    ``STATUS`` で示し、候補は呼び出し側が本文で示す。
+
+    Returns:
+        末尾改行なしの bash コマンド例。
+    """
+    eof = _PUBLISH_HEREDOC_DELIMITER
+
+    def _field(name: str, placeholder: str) -> str:
+        return f"""  --{name}="$(cat <<'{eof}'\n{placeholder}\n{eof}\n)\""""
+
+    return " \\\n".join(
+        [
+            "kaji verdict publish --status=STATUS",
+            _field("reason", "判定理由"),
+            _field("evidence", "具体的根拠（複数行可。抽象表現禁止）"),
+            _field("suggestion", "次のアクション提案"),
+        ]
+    )
+
+
 def skill_invocation_line(step: Step) -> str:
     """step の skill を起動する指示行を返す。
 
@@ -150,13 +179,15 @@ def build_prompt(
     status_choices = " | ".join(valid_statuses)
     verdict_target = verdict_path if verdict_path is not None else "[verdict_path]"
     verdict_example = _verdict_example_yaml(status_choices)
+    publish_command = _verdict_publish_command()
+    heredoc_delimiter = _PUBLISH_HEREDOC_DELIMITER
     deadline_section = ""
     if attempt_deadline is not None:
         deadline_section = f"""## 実行期限
-この attempt の hard deadline は {variables["attempt_deadline_utc"]}（UTC）です（timeout {attempt_deadline.timeout_seconds} 秒）。延長されません。到達時点で `{verdict_target}` が未保存なら、harness が session を終了し `StepTimeoutError` として記録します。
+この attempt の hard deadline は {variables["attempt_deadline_utc"]}（UTC）です（timeout {attempt_deadline.timeout_seconds} 秒）。延長されません。到達時点で `{verdict_target}` が未公開なら、harness が session を終了し `StepTimeoutError` として記録します。
 
 - 長時間処理の開始前と主要フェーズの境界で `date -u +%Y-%m-%dT%H:%M:%SZ` を実行し、残時間を確認する
-- 処理・外部副作用・verdict 保存まで deadline 内に完了できない処理を開始しない
+- 処理・外部副作用・verdict 公開まで deadline 内に完了できない処理を開始しない
 - 期限内に完了できない場合の手順と status は skill の規則に従い、下記の status 候補以外を出力しない: {status_choices}
 
 """
@@ -174,7 +205,7 @@ def build_prompt(
 
 {deadline_section}## 出力要件
 作業完了後、以下を必ず実施してください。
-`{verdict_target}` は harness の完了トリガです。Issue comment 投稿など、この step の外部副作用がすべて完了するまで保存してはいけません。
+`{verdict_target}` は harness の完了トリガです。Issue comment 投稿など、この step の外部副作用がすべて完了するまで公開してはいけません。
 
 1. 作業報告 Issue comment の末尾に、次の `---VERDICT---` block を追記して投稿を完了する。
 2. 互換のため、同じ block を stdout にも出力する:
@@ -188,7 +219,16 @@ def build_prompt(
 - reason / evidence / suggestion は常に `|` の後で改行し、各行を同じ 2 スペースで字下げして書く。`: `・`#`・引用符・`\\`・改行を含んでもエスケープ不要
 - status が ABORT / BACK 系のときは suggestion が必須（空不可）。それ以外で不要なら `suggestion: |` の後を空にしてよい
 
-3. 最後に、上の block から `---VERDICT---` / `---END_VERDICT---` の 2 行を除いた同じ内容の pure YAML を `{verdict_target}` に保存する:
+3. 最後に、同じ内容を次のコマンドで公開する。`{verdict_target}` に直接書き込まない（コマンドが検証・直列化し、有効な内容だけを原子的に公開する）:
 
-{verdict_example}
+```bash
+{publish_command}
+```
+
+- `STATUS` を {status_choices} のいずれか 1 つに置き換える
+- 各値は `--field=value` 形式のまま、`<<'{heredoc_delimiter}'` の heredoc に本文をそのまま書く。字下げ・エスケープは不要。`{heredoc_delimiter}` だけの行を本文に書かない
+- suggestion が不要なら `--suggestion=""` とする（ABORT / BACK 系では必須）
+- exit 0: 公開完了（stdout に `verdict published: ...` が出る）
+- exit 1: 入力が無効（status が候補外、reason / evidence が空、ABORT / BACK 系で suggestion が空）。stderr を読んで値を直し、同じコマンドを再実行する
+- exit 2 / 3: 再実行では解決しない（公開済み・実行環境の不備・I/O エラー）。`{verdict_target}` を手書きせず、stderr の内容を報告して終了する
 """

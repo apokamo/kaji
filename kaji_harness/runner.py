@@ -62,6 +62,7 @@ from .script_exec import execute_exec, execute_script
 from .skill import SkillMetadata, load_skill_metadata, validate_skill_exists
 from .state import SessionState
 from .verdict import CommentLike, create_verdict_formatter, resolve_verdict, write_verdict_yaml
+from .verdict_publish import VERDICT_CONTRACT_ENV, write_verdict_contract
 from .workflow import resolve_step_workdir
 from .worktree_discovery import AmbiguousWorktreeError, discover_existing_worktree
 
@@ -442,6 +443,7 @@ class _StepExecutor:
                 pr_context,
                 session_id,
                 attempt_dir,
+                attempt_no,
                 verdict_path,
                 settings,
                 attempt_started_at_ref,
@@ -587,6 +589,7 @@ class _StepExecutor:
         pr_context: PRContext | None,
         session_id: str | None,
         attempt_dir: Path,
+        attempt_no: int,
         verdict_path: Path,
         settings: _ExecutionSettings,
         attempt_started_at_ref: list[datetime],
@@ -627,6 +630,17 @@ class _StepExecutor:
         # Issue #421: attempt の時間予算は 1 回だけ起算し、prompt 表示・hard deadline・
         # result.json の started_at へ同じ値を配る（単一計算元）。
         deadline = AttemptDeadline.start(settings.timeout)
+        # Issue #568: agent は verdict.yaml を手書きせず `kaji verdict publish` で公開する。
+        # 公開先と許容 status は runner が書く契約からのみ決まり、env で現在の attempt に結び付く。
+        contract_path = write_verdict_contract(
+            attempt_dir,
+            issue_id=self.run_ctx.canonical_id,
+            run_id=self.run_dir.name,
+            step_id=step.id,
+            attempt=attempt_no,
+            valid_statuses=list(step.on.keys()),
+        )
+        agent_env = {**tmp_env, VERDICT_CONTRACT_ENV: str(contract_path)}
         prompt = build_prompt(
             step,
             self.run_ctx.canonical_id,
@@ -649,7 +663,7 @@ class _StepExecutor:
                 session_id=session_id,
                 close_on_verdict=self.config.execution.interactive_terminal_close_on_verdict,
                 execution_policy=self.workflow.execution_policy,
-                env=tmp_env,
+                env=agent_env,
                 deadline_monotonic=deadline.deadline_monotonic,
                 untracked_sessions_path=(
                     self.state.artifacts_dir
@@ -667,7 +681,7 @@ class _StepExecutor:
                 execution_policy=self.workflow.execution_policy,
                 verbose=self.verbose,
                 default_timeout=settings.default_timeout,
-                env=tmp_env,
+                env=agent_env,
                 deadline_monotonic=deadline.deadline_monotonic,
             )
         return result

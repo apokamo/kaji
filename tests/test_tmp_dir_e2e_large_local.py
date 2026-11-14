@@ -55,7 +55,8 @@ text = sys.argv[-1]
 m = re.search(r"^- verdict_path: (.+)$", text, re.M)
 interactive = m is None
 if interactive:
-    m = re.search(r"exact path:\\n(.+)$", text, re.M)
+    # Issue #568: wrapper の初期メッセージは公開先を "Do not write <path> yourself" で示す
+    m = re.search(r"^Do not write (.+) yourself;", text, re.M)
 verdict = m.group(1).strip()
 record_path = os.path.join(os.path.dirname(verdict), "fake-agent-record.json")
 with open(record_path, "w", encoding="utf-8") as out:

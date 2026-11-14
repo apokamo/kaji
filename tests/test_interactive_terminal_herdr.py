@@ -21,6 +21,7 @@ from kaji_harness.errors import (
     SessionResolution,
     StepTimeoutError,
 )
+from kaji_harness.fsio import atomic_publish_new
 from kaji_harness.interactive_terminal_herdr import (
     HerdrManagedPane,
     HerdrPaneLaunch,
@@ -2517,3 +2518,62 @@ def test_missing_recorder_fails_before_pane_launch(tmp_path: Path) -> None:
             timeout=30,
         )
     launch.assert_not_called()
+
+
+# ============================================================
+# Issue #568: kaji verdict publish の原子的公開と完了検知
+# ============================================================
+
+
+@pytest.mark.medium
+class TestHerdrCompletesOnlyAfterAtomicPublish:
+    """一時ファイルだけでは完了せず、公開後の最初のポーリングで 1 回だけ完了する。"""
+
+    def test_temp_file_is_ignored_and_publish_completes_once(self, tmp_path: Path) -> None:
+        prompt_path = tmp_path / "prompt.txt"
+        prompt_path.write_text("do work", encoding="utf-8")
+        verdict_path = tmp_path / "verdict.yaml"
+        step = Step(id="design", skill="design", agent="claude")
+        clock = _FakeClock(0.0)
+        polls_after_publish: list[float] = []
+        content = "status: PASS\nreason: r\nevidence: e\nsuggestion: ''\n"
+
+        def sleep(seconds: float) -> None:
+            clock.sleep(seconds)
+            if len(clock.slept) == 1:
+                # 書き込み途中に相当する一時ファイルだけが存在する状態
+                (tmp_path / ".verdict.yaml.partial.tmp").write_text("status: PA")
+            elif len(clock.slept) == 2:
+                atomic_publish_new(verdict_path, content)
+            else:
+                polls_after_publish.append(seconds)
+
+        with (
+            patch(
+                f"{_HERDR}._preflight_herdr",
+                return_value=("/usr/bin/herdr", "w1:p1", "herdr 0.8.2"),
+            ),
+            patch(f"{_HERDR}._launch_herdr_pane", return_value=_LAUNCH),
+            patch(f"{_HERDR}._mark_herdr_pane"),
+            patch(f"{_HERDR}._run_herdr_pane_command"),
+            patch(f"{_HERDR}._wait_for_herdr_launcher_start"),
+            patch(f"{_HERDR}._get_herdr_process_info", return_value={}),
+            patch(f"{_HERDR}._classify_herdr_process_liveness", return_value="running"),
+            patch(f"{_HERDR}._finish_verdict_pane", return_value=(None, None, None)) as finish,
+            patch(f"{_HERDR}.time.monotonic", clock.monotonic),
+            patch(f"{_HERDR}.time.sleep", sleep),
+            patch(f"{_HERDR}.uuid.uuid4", return_value="run-id"),
+        ):
+            execute_interactive_terminal_herdr(
+                step=step,
+                prompt_path=prompt_path,
+                verdict_path=verdict_path,
+                workdir=tmp_path,
+                timeout=60,
+            )
+
+        # 一時ファイルだけの poll（1 回目の sleep 後）では完了せず、公開直後の poll で完了する
+        assert len(clock.slept) == 2
+        assert polls_after_publish == []
+        finish.assert_called_once()
+        assert verdict_path.read_text(encoding="utf-8") == content

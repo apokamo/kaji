@@ -59,7 +59,7 @@ agent step の hard deadline は延長されず、prompt のコンテキスト�
 
 ## verdict 永続化（共通）
 
-すべての workflow スキルは作業完了時に verdict を **artifact `verdict.yaml`（primary）+ 作業報告 Issue comment 末尾の `---VERDICT---` block（fallback）+ stdout（互換）** の 3 経路で残す（Issue #220）。harness は `verdict_path`（exec_script では env `KAJI_VERDICT_PATH`）で保存先 attempt の絶対パスを注入し、解決順は artifact → comment → stdout（exec / exec_script step は comment を見ず artifact → stdout のみ。Issue #449）。verdict 専用コメントは新設せず、既存の作業報告コメント末尾に block を追記するだけでよい。詳細・YAML 例・stdout 段階廃止方針は [skill-authoring.md](skill-authoring.md) § verdict 出力規約 を参照。
+すべての workflow スキルは作業完了時に verdict を **artifact `verdict.yaml`（primary）+ 作業報告 Issue comment 末尾の `---VERDICT---` block（fallback）+ stdout（互換）** の 3 経路で残す（Issue #220）。harness は `verdict_path`（exec_script では env `KAJI_VERDICT_PATH`）で保存先 attempt の絶対パスを注入し（agent step は `verdict_path` を直接書かず、prompt の `kaji verdict publish` で検証済みの内容を原子的に公開する。Issue #568）、解決順は artifact → comment → stdout（exec / exec_script step は comment を見ず artifact → stdout のみ。Issue #449）。verdict 専用コメントは新設せず、既存の作業報告コメント末尾に block を追記するだけでよい。詳細・YAML 例・stdout 段階廃止方針は [skill-authoring.md](skill-authoring.md) § verdict 出力規約 を参照。
 
 ## 後方互換（共通）
 

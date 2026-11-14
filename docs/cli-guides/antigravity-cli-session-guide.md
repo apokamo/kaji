@@ -162,5 +162,5 @@ supported session contract and are not scraped.
 | `CLI 'agy' not found` | Install Antigravity CLI and ensure `agy` is on PATH |
 | Non-zero exit | Inspect the captured stderr and `stderr.log` |
 | Exit 0 with empty output | Check AGY permission rules; use `auto` only when automatic approval is acceptable |
-| Interactive timeout | Confirm the agent wrote pure YAML to the exact `verdict.yaml` path from the prompt |
+| Interactive timeout | Confirm the agent ran the prompt's `kaji verdict publish` command and check its exit code (it must not write `verdict.yaml` by hand) |
 | Resume validation error | Remove `resume:` and use a single-run Antigravity step |

@@ -170,7 +170,7 @@ Step 2 で working tree が dirty だった場合は、結果が HEAD に対応�
 
 ### Step 6: 報告
 
-下記「報告」に従い Issue コメント → stdout → `verdict_path` の順に残す。
+下記「報告」に従い Issue コメント → stdout → `kaji verdict publish`（`verdict_path` への公開）の順に残す。
 
 ## 実行手順（verify-change）
 
@@ -216,7 +216,7 @@ EOF
 - ABORT 時: 停止理由（該当条件と根拠）、人間が決める必要のある事項、branch・worktree path・HEAD full SHA・
   `git status --porcelain` の要約、関連報告の参照、「再実行は初めから」の案内
 
-成功時の検証ログ全文は貼らない。Issue コメント投稿に失敗した場合は ABORT とし、verdict を stdout と `verdict_path` に残す。
+成功時の検証ログ全文は貼らない。Issue コメント投稿に失敗した場合は ABORT とし、verdict を stdout に出して `kaji verdict publish` で公開する。
 
 ## 副作用の境界
 
@@ -225,7 +225,7 @@ label 変更・worktree 作成/削除・session-state 編集・他 workflow 起�
 
 ## Verdict 出力
 
-作業報告コメント末尾、stdout、最後に `verdict_path` の pure YAML（delimiter なし）へ同じ内容を残す。
+作業報告コメント末尾、stdout に同じ内容を残し、最後に prompt の `kaji verdict publish` で `verdict_path` へ公開する（`verdict_path` を直接書かない）。
 
 ```text
 ---VERDICT---

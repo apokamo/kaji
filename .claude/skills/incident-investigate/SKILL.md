@@ -51,7 +51,8 @@ $ARGUMENTS = <incident_issue_id>
   ART="$(kaji config artifacts-dir)"   # main worktree 基準の絶対パス（副作用なし）
   ```
   以降、本ドキュメントの `<artifact_root>` は `$ART` を指す。
-- **verdict 3 経路**: 作業報告コメント末尾 → stdout → artifact `verdict.yaml`。コメントには
+- **verdict 3 経路**: 作業報告コメント末尾 → stdout → artifact `verdict.yaml`（prompt の
+  `kaji verdict publish` で公開し、直接書かない）。コメントには
   `kaji issue comment <id> --verdict-step <step> --verdict-status <STATUS>` を無条件付与する。
 - **長時間コマンドは foreground ＋明示 timeout** で待ち切る。background 実行・wake 系 tool に依存しない
   （#301 の上流不具合 [anthropics/claude-code#59864](https://github.com/anthropics/claude-code/issues/59864) を踏まないため）。
@@ -178,7 +179,8 @@ kaji issue comment [issue_id] --commit \
 
 ## Verdict 出力
 
-作業報告コメント末尾 → stdout → artifact `verdict.yaml` の 3 経路に残す。
+作業報告コメント末尾 → stdout → artifact `verdict.yaml` の 3 経路に残す。artifact は最後に prompt の
+`kaji verdict publish` で公開する（`verdict.yaml` を直接書かない）。
 
 ---VERDICT---
 status: PASS

@@ -17,6 +17,7 @@ from .series import cmd_run_series, cmd_validate_series
 from .starter import cmd_starter_release_plan, cmd_starter_task_plan, cmd_starter_tracking_plan
 from .status import cmd_status
 from .validate import cmd_validate
+from .verdict import cmd_verdict_publish
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -56,6 +57,11 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_starter_tracking_plan()
         if args.starter_command == "task-plan":
             return cmd_starter_task_plan()
+        parser.print_help()
+        return EXIT_ABORT
+    if args.command == "verdict":
+        if args.verdict_command == "publish":
+            return cmd_verdict_publish(args)
         parser.print_help()
         return EXIT_ABORT
 
