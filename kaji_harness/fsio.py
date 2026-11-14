@@ -11,8 +11,35 @@ private import が生じていた。foundation 層へ切り出して利用者が
 
 from __future__ import annotations
 
+import contextlib
 import os
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
+
+
+@dataclass(frozen=True)
+class PublishOutcome:
+    """``atomic_publish_new`` の結果。
+
+    Attributes:
+        path: 公開したファイルのパス。
+        cleanup_error: 公開確定（``os.link`` 成功）後に一時ファイルを削除できなかった場合の
+            ``OSError``。公開自体は有効なため送出せずにここへ入れる。
+    """
+
+    path: Path
+    cleanup_error: OSError | None = None
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    """short write に備えて ``data`` を書ききる。"""
+    written = 0
+    while written < len(data):
+        n = os.write(fd, data[written:])
+        if n <= 0:
+            raise OSError(f"os.write returned non-positive count {n}")
+        written += n
 
 
 def atomic_write(path: Path, content: str) -> None:
@@ -53,3 +80,48 @@ def atomic_write_new(path: Path, content: str) -> None:
             written += n
     finally:
         os.close(fd)
+
+
+def atomic_publish_new(path: Path, content: str) -> PublishOutcome:
+    """完成した内容を、上書きせず 1 回の操作で ``path`` に公開する。
+
+    同じディレクトリに一意名の一時ファイル（``.<name>.<random>.tmp``）を作り、write →
+    fsync → ``os.link(tmp, path)`` → 一時ファイルの unlink の順に行う。``os.link`` は宛先が
+    既にあれば ``EEXIST`` で失敗し、成功すると書き込み済みの inode が一度に見える（POSIX
+    ``link(2)``）。そのため途中状態は外から見えず、既存ファイルも上書きしない。
+
+    ``os.link`` の成功を公開の確定点とする。link 前の失敗では一時ファイルを削除して例外を
+    送出し、``path`` は作らない。link 後の一時ファイル削除の失敗は送出せず
+    ``PublishOutcome.cleanup_error`` に入れて返す（公開済みの ``path`` には触れない）。
+
+    Args:
+        path: 公開先。親ディレクトリは存在している必要がある。
+        content: UTF-8 で書き込む完成済みの内容。
+
+    Returns:
+        公開結果。
+
+    Raises:
+        FileExistsError: ``path`` が既に存在する。
+        OSError: link 前の一時ファイル作成・書き込み・fsync・link に失敗した（hard link を
+            作れないファイルシステムを含む）。
+    """
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        try:
+            os.fchmod(fd, 0o644)
+            _write_all(fd, content.encode("utf-8"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.link(tmp_name, path)
+    except BaseException:
+        # 公開前の失敗。元の例外を優先し、一時ファイルの削除失敗では置き換えない
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
+    try:
+        os.unlink(tmp_name)
+    except OSError as exc:
+        return PublishOutcome(path=path, cleanup_error=exc)
+    return PublishOutcome(path=path)

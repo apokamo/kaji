@@ -301,7 +301,7 @@ class TestRunnerDispatchWiring:
 
         _assert_attempt_env(captured["env"], tmp_path)
 
-    def test_headless_agent_receives_only_four_variables(self, tmp_path: Path) -> None:
+    def test_headless_agent_receives_four_variables_and_contract(self, tmp_path: Path) -> None:
         step = Step(id="design", skill="plain", agent="claude", on={"PASS": "end"})
         runner = _make_runner(_make_config(tmp_path), tmp_path, step)
         captured: dict[str, Any] = {}
@@ -320,7 +320,8 @@ class TestRunnerDispatchWiring:
             runner.run()
 
         env = captured["env"]
-        assert set(env) == set(_TMP_VARS)
+        # Issue #568: 4 変数に verdict 公開契約の変数だけを加える（KAJI_VERDICT_PATH 等は渡さない）
+        assert set(env) == {*_TMP_VARS, "KAJI_VERDICT_CONTRACT"}
         _assert_attempt_env(env, tmp_path)
 
     def test_interactive_agent_receives_four_variables(self, tmp_path: Path) -> None:
@@ -347,7 +348,7 @@ class TestRunnerDispatchWiring:
         ):
             runner.run()
 
-        assert set(captured["env"]) == set(_TMP_VARS)
+        assert set(captured["env"]) == {*_TMP_VARS, "KAJI_VERDICT_CONTRACT"}
         _assert_attempt_env(captured["env"], tmp_path)
 
     def test_prepare_failure_prevents_dispatch(self, tmp_path: Path) -> None:

@@ -48,7 +48,36 @@ def create_parser() -> argparse.ArgumentParser:
     _register_pr(subparsers)
     _register_config(subparsers)
     _register_starter(subparsers)
+    _register_verdict(subparsers)
     return parser
+
+
+def _register_verdict(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    """Register the internal ``verdict`` command group used inside agent steps (Issue #568).
+
+    Every field defaults to an empty string so that a missing value is reported by the
+    publish validation (exit 1, fixable in the same attempt) instead of argparse (exit 2).
+    """
+    verdict = subparsers.add_parser(
+        "verdict", help="Agent step verdict helpers (internal; used inside kaji agent steps)"
+    )
+    verdict_subs = verdict.add_subparsers(dest="verdict_command", required=True)
+    publish = verdict_subs.add_parser(
+        "publish",
+        help="Validate this agent step's verdict and publish verdict.yaml atomically",
+    )
+    publish.add_argument(
+        "--status", default="", help="Verdict status; one of the step's on: keys (required)"
+    )
+    publish.add_argument("--reason", default="", help="Reason for the verdict (required)")
+    publish.add_argument("--evidence", default="", help="Concrete evidence (required)")
+    publish.add_argument(
+        "--suggestion",
+        default="",
+        help="Next action; required for ABORT and BACK* statuses",
+    )
 
 
 def _register_starter(

@@ -359,6 +359,29 @@ class InvalidVerdictValue(HarnessError):
     """on に未定義の status 値。プロンプト違反。回復不能・リトライしない。"""
 
 
+class VerdictSerializationError(HarnessError):
+    """verdict の直列化結果を既存 parser で同じ値に読み戻せない（内部不変条件違反）。
+
+    Issue #568: 有効な入力では起きない想定。起きた場合は値を変形したまま公開しない。
+    """
+
+
+class VerdictPublishInputError(HarnessError):
+    """``kaji verdict publish`` の入力が公開規則を満たさない（Issue #568）。
+
+    status が ``on:`` 外、reason / evidence が空、ABORT / BACK* で suggestion が空。
+    入力を直せば同じ attempt 内で再実行できる。
+    """
+
+
+class VerdictPublishContextError(HarnessError):
+    """``kaji verdict publish`` を実行できる状況にない（Issue #568）。
+
+    契約の欠落・破損・不整合、終了済み attempt、公開済みの ``verdict.yaml`` など。
+    入力を直しても解決しない。
+    """
+
+
 # --- 遷移エラー ---
 class InvalidTransition(HarnessError):
     """verdict.status に対応する遷移先が on に未定義。"""

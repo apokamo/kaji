@@ -165,8 +165,8 @@ exec_script: kaji_harness.scripts.review_poll_entry
 | `TMPDIR` / `TMP` / `TEMP` | `KAJI_TMP_DIR` と同値。標準的な一時ファイル API を同ディレクトリへ誘導する |
 
 `KAJI_TMP_DIR` / `TMPDIR` / `TMP` / `TEMP` は `exec_script` に限らず **agent step を含む全 dispatch 経路**
-（headless / interactive terminal / `exec` / `exec_script`）のプロセス環境に入る（agent 経路へはこの 4 変数のみ。
-他の `KAJI_*` は script-like 専用）。実体は project root 直下の `tmp/kaji/<issue_id>/<NNNN>/`（Issue 内の通し番号。Issue #508）
+（headless / interactive terminal / `exec` / `exec_script`）のプロセス環境に入る（agent 経路へはこの 4 変数と、
+verdict 公開契約を指す `KAJI_VERDICT_CONTRACT`（Issue #568。後述 § verdict 出力規約）のみ。他の `KAJI_*` は script-like 専用）。実体は project root 直下の `tmp/kaji/<issue_id>/<NNNN>/`（Issue 内の通し番号。Issue #508）
 で、親環境の同名変数は上書きされる。kaji 固有の処理は `$KAJI_TMP_DIR` を明示参照してよい
 （例: `git diff > "$KAJI_TMP_DIR/diff.txt"`）。runner 自体は環境変数を設定するだけで、プロセスの明示的な
 `/tmp` 書き込みを禁止・強制しない。ただし本 repo の skill 手順（`.claude/skills/`）では、Issue 番号を含まない
@@ -214,12 +214,19 @@ suggestion: |
 
 1. **作業報告 Issue comment 末尾（fallback）**: 作業報告コメントの末尾に、上記 `---VERDICT---` block をそのまま追記する。verdict 専用コメントを新設せず、既存の作業報告コメントの末尾に足すだけでよい。
 2. **stdout（互換 fallback）**: 同じ `---VERDICT---` block を stdout にも出力する。
-3. **artifact `verdict.yaml`（primary / 書き込みは最後）**: コンテキスト変数 `verdict_path`（exec_script では env `KAJI_VERDICT_PATH`）が指す絶対パスへ、`status` / `reason` / `evidence` / `suggestion` の **pure YAML**（`---VERDICT---` delimiter なし）を保存する。
+3. **artifact `verdict.yaml`（primary / 公開は最後）**: agent step は prompt の出力要件に示される `kaji verdict publish --status=<S> --reason=<R> --evidence=<E> [--suggestion=<G>]` で公開する（Issue #568）。`verdict_path` を agent が直接書いてはならない。各値は `--field=value` 形式で、区切り語を引用符で囲んだ heredoc（`<<'KAJI_VERDICT_EOF'`）に本文をそのまま書く。コマンドは runner が attempt ごとに書く契約 `verdict-contract.json`（env `KAJI_VERDICT_CONTRACT` が指す）から公開先と許容 status（`step.on` のキー）を決め、正規化（前後の空白除去・YAML 禁止制御文字の `U+FFFD` 置換）と検証（status・reason / evidence 非空・ABORT / BACK* の suggestion 非空）を通し、既存 parser で同じ値に読み戻せる pure YAML（`---VERDICT---` delimiter なし）を、上書きせず原子的に公開する（同じディレクトリの一時ファイル + `os.link`）。exec_script は従来どおり env `KAJI_VERDICT_PATH` へ自分で書く。
 
-ハーネスはこの 3 経路を **artifact → comment → stdout** の順で解決する（詳細は [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) § Verdict 判定機構）。agent step の comment 経路では、body 1 行目の `kaji-verdict` marker が別 step を指すコメントは候補から除外される（Issue #449。marker 無しコメントは従来どおり候補）。exec / exec_script step は comment 経路を持たない。`verdict_path` への保存が primary 経路であり、`kaji issue comment --body` の引数や別コマンドの入力にだけ verdict を埋めても、artifact / 作業報告コメント末尾 / stdout のいずれにも残っていなければ判定されない。
-interactive terminal runner では `verdict.yaml` の出現が次 step への完了トリガになるため、agent は Issue comment 投稿などの外部副作用を完了してから、最後に `verdict.yaml` を保存する。
+   | exit | 意味 | agent の対応 |
+   |:---:|------|------|
+   | 0 | 公開完了（stdout 1 行 `verdict published: step=... attempt=NNN status=... path=...`） | 終了する |
+   | 1 | 入力が無効（status が `on:` 外、reason / evidence が空、ABORT / BACK* で suggestion が空）。`verdict.yaml` は作られない | stderr を読んで値を直し、同じ attempt 内で再実行する |
+   | 2 | 状況エラー（`KAJI_VERDICT_CONTRACT` 未設定、契約の欠落・破損・不整合、`result.json` のある終了済み attempt、`verdict.yaml` が既にある＝公開済み） | 再実行しない。`verdict_path` を手書きせず報告する |
+   | 3 | I/O エラー（hard link を作れないファイルシステムを含む）または直列化の不変条件違反。`verdict.yaml` は作られていない | 同上 |
 
-`verdict.yaml` の例（pure YAML）:
+ハーネスはこの 3 経路を **artifact → comment → stdout** の順で解決する（詳細は [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) § Verdict 判定機構）。agent step の comment 経路では、body 1 行目の `kaji-verdict` marker が別 step を指すコメントは候補から除外される（Issue #449。marker 無しコメントは従来どおり候補）。exec / exec_script step は comment 経路を持たない。`verdict_path` への公開が primary 経路であり、`kaji issue comment --body` の引数や別コマンドの入力にだけ verdict を埋めても、artifact / 作業報告コメント末尾 / stdout のいずれにも残っていなければ判定されない。
+interactive terminal runner では `verdict.yaml` の出現が次 step への完了トリガになるため、agent は Issue comment 投稿などの外部副作用を完了してから、最後に `kaji verdict publish` で `verdict.yaml` を公開する。`os.link` の成功が公開の確定点であり、書き込み途中の内容が完了トリガとして見えることはない。runner は既存の手書き `verdict.yaml`（exec_script の出力や移行前の artifact）もこれまでどおり読む。
+
+公開される `verdict.yaml` の例（pure YAML）:
 
 ```yaml
 status: PASS
@@ -282,7 +289,7 @@ suggestion: |
 | `issue_ref` | str | 人間可読の Issue 参照（`#<issue_id>`。例: `"#153"`） |
 | `step_id` | str | 現在のステップ ID |
 | `design_path` | str | 設計書の repository 相対パス。`[paths].design_dir`（未設定時は legacy default `draft/design`）配下の `issue-<id>-<slug>.md`（Issue #397） |
-| `verdict_path` | str | 当該 attempt の `verdict.yaml` 絶対パス（Issue #220）。スキルはここへ pure YAML の verdict を保存する。exec_script 経路では env `KAJI_VERDICT_PATH` として注入される |
+| `verdict_path` | str | 当該 attempt の `verdict.yaml` 絶対パス（Issue #220）。agent step は直接書かず、`kaji verdict publish` で公開する（Issue #568）。exec_script 経路では env `KAJI_VERDICT_PATH` として注入され、script が自分で書く |
 | `step_timeout_seconds` | int | この attempt に適用される step timeout（秒）。解決済みの値（step → workflow → config）（Issue #421。agent step のみ） |
 | `attempt_started_at_utc` | str | attempt 開始時刻。ISO 8601 UTC（`2026-10-03T04:27:28Z`）、秒未満切り捨て（Issue #421） |
 | `attempt_deadline_utc` | str | この attempt の hard deadline。同形式・秒未満切り捨て（実 deadline 以前の保守側）。延長されない（Issue #421） |
@@ -297,13 +304,13 @@ suggestion: |
 ## 実行期限と期限前 checkpoint
 
 agent step の prompt には `## 実行期限` 節と上記 3 変数が入る（Issue #421）。hard deadline は延長されず、
-到達時点で `verdict_path` が未保存なら harness が session を終了する（[workflow-authoring.md](workflow-authoring.md)
+到達時点で `verdict_path` が未公開なら harness が session を終了する（[workflow-authoring.md](workflow-authoring.md)
 § timeout と attempt deadline）。長時間処理を行う skill は次を守る。
 
 - 長時間処理の開始前と主要フェーズの境界で `date -u +%Y-%m-%dT%H:%M:%SZ` により残時間を確認し、
-  commit・コメント・verdict 保存に充てる予備時間 R を残して切り上げる。変数がない（手動実行）場合は適用しない
+  commit・コメント・verdict 公開に充てる予備時間 R を残して切り上げる。変数がない（手動実行）場合は適用しない
 - 期限前 checkpoint でも verdict-last を守る: 外部副作用（commit・Issue コメント）を完了してから最後に
-  `verdict_path` を保存する。status は prompt の status 候補（`step.on` のキー）に含まれるものだけを使い、
+  `kaji verdict publish` で `verdict_path` へ公開する。status は prompt の status 候補（`step.on` のキー）に含まれるものだけを使い、
   候補にない status を出力しない。checkpoint 手順の中で RETRY の意味づけをするのは skill 側で、共通 prompt は
   RETRY の意味づけをしない（RETRY の遷移先は step ごとに異なる）
 - self-RETRY で次 attempt に引き継ぐ場合、cycle 上限（`max_iterations`）を迂回しない。上限回避のために

@@ -46,4 +46,4 @@ ABORT する。
 ```
 
 共通 schema は変更せず、target / base / candidate は marker meta と人間可読 evidence の両方へ残す。
-コメント末尾、stdout、注入時は最後に `verdict_path` の pure YAML へ同じ verdict を保存する。
+コメント末尾、stdout に同じ verdict を残し、注入時は最後に prompt の `kaji verdict publish` で `verdict_path` へ公開する（`verdict_path` を直接書かない）。
