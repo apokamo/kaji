@@ -121,6 +121,7 @@ kaji は GitHub project 直下の `.github/labels.yml` を label の正本とし
   - **`--request-changes` の body 必須契約（self / 非 self 一貫）**: GitHub REST API の `event=REQUEST_CHANGES` は body parameter を必須とするため、kaji 側で `--body` / `--body-file` 未指定または空白のみは subprocess 呼び出し前に `EXIT_INVALID_INPUT` (rc=2) で fail-fast する。`--approve` は GitHub API 側で body optional のため空 body を許容（既存挙動を維持）
   - **marker comment の観測経路の非対称性**: self-PR fallback で投稿された marker comment は Issue Comments API (`/repos/<repo>/issues/<N>/comments`) に書き込まれるため、`kaji pr view <pr> --comments` 経由では取得可能だが、`kaji pr reviews <pr>` (`/pulls/<N>/reviews`) には現れない。後続の `pr-fix` skill は `kaji pr view --comments` を主要 read path としているため、観測経路上は問題なし
 - `kaji issue comment <id> --verdict-step <step> --verdict-status <STATUS>` は判定コメントに verdict マーカーを付与する（下記 § 2.1）
+- `kaji issue start <id>` は決定論的な `issue-start` entry（`kaji_harness.scripts.issue_start`。workflow の `start` step が `exec_script` で起動するものと同じ）を実行する。main checkout で `<git_remote> <default_branch>` を fetch し、`FETCH_HEAD` と remote-tracking ref の一致を確認してから `--no-track` で worktree を作成（一致する既存 worktree は検証して再利用）し、`.venv` / `.kaji/config.local.toml` の symlink、Issue NOTE、`step=start status=PASS` 報告（1 回だけ）を行って verdict を出力する。想定内の失敗は `ABORT` verdict を出して exit 0、第 2 位置引数（廃止した `prefix`）は副作用なしの usage error（exit 2）。途中停止後の再実行は安全（Issue #569）
 
 ### 2.2 複数 Issue の sequential series
 

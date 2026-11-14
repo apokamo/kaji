@@ -158,7 +158,7 @@ retry-gate: branch_mismatch worktree=feat/9 state=feat/540
 | `artifact_unreadable` | 必須の artifact が欠落・破損（読めない・非 UTF-8・JSON 不正、`result.json` は必須 key 欠落・型不正、省略可能な `error` / `synthetic` の型不正も含む。run.log の `workflow_end` / `failure_event` と `session-state.json` の文字列項目の型不正も同様）（run.log、`step_end` のある attempt の `result.json`、`session-state.json`、`recovery-chain.json`、`recovery.json`） |
 | `workflow_mismatch` | run の workflow 名が `<workflow.yaml>` と異なる |
 | `unknown_failed_step` | 失敗 step を特定できない、または workflow に無い |
-| `non_resumable_skill` | 失敗 step か実際の再開先が `issue-start` / `i-pr` / `issue-close` を実行する |
+| `non_resumable_skill` | 失敗 step か実際の再開先が `issue-start` / `i-pr` / `issue-close` を実行する（`start` で止まった場合は main checkout で `kaji issue start <issue_id>` を再実行する。一致する worktree を検証して再利用し、NOTE と同一の start 報告を重複させない。その後、次の step から再開する） |
 | `agent_declared_abort` / `cycle_exhausted` / `user_interrupted` / `ambiguous_worktree_abort` | triage の cause がこれら |
 | `sensitive_failure_pattern` | エラー文字列が認証・権限の pattern に一致する |
 | `worktree_unavailable` / `branch_mismatch` | `session-state.json` の worktree が無い / branch が異なる |

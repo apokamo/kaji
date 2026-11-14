@@ -39,12 +39,14 @@ _PRODUCER_STEP_IDS: dict[str, str] = {
     "i-doc-fix": "doc-fix",
     "i-doc-verify": "doc-verify",
     "i-doc-final-check": "final-check",
-    "issue-start": "start",
     "issue-close": "close",
 }
+# issue-start は Issue #569 で exec_script（``kaji_harness.issue_start``）へ移り、SKILL.md から
+# コメントを投稿しない。start marker の付与と PASS 時のみの投稿は ``tests/test_issue_start.py`` /
+# ``tests/test_issue_start_large_local.py`` が検証する。
 
 # 成功時だけ報告コメントを投稿する skill。marker の status は返却 status と一致させるため PASS 固定。
-_PASS_ONLY_REPORTERS: tuple[str, ...] = ("issue-close", "issue-start")
+_PASS_ONLY_REPORTERS: tuple[str, ...] = ("issue-close",)
 
 _COMMENT_START_RE = re.compile(r"^[ \t]*kaji issue comment\b", re.MULTILINE)
 _BODY_ARG_RE = re.compile(r"--body(?:-file)?\b")

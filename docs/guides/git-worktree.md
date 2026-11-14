@@ -149,7 +149,13 @@ Issue ごとに worktree を作成し、並列開発を実現する。
 
 worktree のライフサイクルはスキルで管理される:
 
-- `/issue-start [issue-number]`: worktree 作成、`.venv` シンボリックリンク、Issue 本文にメタ情報追記
+- `/issue-start [issue-number]`: worktree 作成、`.venv` シンボリックリンク、Issue 本文にメタ情報追記。
+  workflow の `start` step と手動の `kaji issue start [issue-number]` は同じ deterministic script
+  （`kaji_harness.scripts.issue_start`）を 1 プロセスで実行する（agent を起動しない。Issue #569）。
+  基点は fetch 直後の `<git_remote>/<default_branch>`（`FETCH_HEAD` と remote-tracking ref の一致を確認）、
+  `--no-track` で作成する。途中で止まった場合は同じコマンドを再実行すると、期待パス / branch で登録済みの
+  worktree を reset / 削除せずに検証して再利用し、未完了の symlink・NOTE・報告だけを行う。パス / branch の
+  不一致や既存 symlink の参照先違いは ABORT（上書き・削除しない）
 - `/pr-fix [issue-number]`: PR レビュー指摘対応を **同じ worktree** で実行
 - `/pr-verify [issue-number]`: 指摘修正の収束確認を行う（新規指摘は禁止）
 - `/issue-close [issue-number]`: `.venv` symlink 削除、worktree 削除、ブランチ削除、PR マージ、Issue の一時作業ディレクトリ（`tmp/kaji/<issue_id>/`）削除

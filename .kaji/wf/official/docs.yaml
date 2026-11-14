@@ -56,9 +56,6 @@ steps:
 
   - id: start
     skill: issue-start
-    agent: claude
-    model: sonnet
-    effort: medium
     on:
       PASS: doc-update
       ABORT: end
