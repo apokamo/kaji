@@ -141,8 +141,13 @@ Issue #569 本文「Expected Behavior」と「完了条件」を正本とする�
 
 ### 出力
 
-正常時（順序は現行どおり）:
+正常時（順序は現行どおり。0 は書き込みを伴わない事前検証で、現行 Step 1 の context 取得と同じ位置）:
 
+0. **事前検証（Git / Issue への書き込み前）**: context 取得、env との一致確認、報告コメントの
+   marker（固定値 `step=start status=PASS`）を `build_kaji_verdict_marker` で構築、報告の同一性キー
+   （ブランチ = `branch_name`、ディレクトリ = `../<worktree_dir の basename>`）の導出、Issue コメントの
+   読み取りと既存 start PASS 報告の分類（下記「報告コメントの重複判定」）。ここで失敗・識別不能が
+   あれば fetch より前に ABORT し、Git にも Issue にも何も書かない
 1. `git fetch <remote> <base>`、`FETCH_HEAD` と `refs/remotes/<remote>/<base>` の一致確認
 2. 新規時: `git worktree add --no-track -b <branch> <worktree_dir> <remote>/<base>`
    再利用時: 下記「再利用の判定」を満たすことを検証し、Git には何も書かない
@@ -152,8 +157,8 @@ Issue #569 本文「Expected Behavior」と「完了条件」を正本とする�
 5. `git worktree list --porcelain` で `<worktree_dir>` が `<branch>` で登録されていることを再確認
 6. Issue 本文先頭に NOTE（`build_worktree_note_body` と同一文字列）。同一 NOTE が既に先頭にあれば省略
 7. 報告コメント（現行 SKILL.md Step 5 の本文と同じ表・注意・次のステップ・verdict block）。
-   1 行目 marker は `<!-- kaji-verdict: step=start status=PASS branch=<branch> worktree=<basename> -->`。
-   同じ `step=start status=PASS branch=… worktree=…` marker のコメントが既にあれば投稿しない
+   1 行目 marker は現行と同じ `<!-- kaji-verdict: step=start status=PASS -->`（metadata を付けない）。
+   0 で「同一の start PASS 報告あり」と分類した場合は投稿しない
 8. verdict（PASS）: `KAJI_VERDICT_PATH` へ pure YAML、stdout へ `---VERDICT---` block。exit 0
 
 ABORT 時:
@@ -164,6 +169,7 @@ ABORT 時:
   （例: worktree 作成済み / NOTE 済み）を書く。suggestion に再実行コマンド
   `kaji issue start <issue_id>` を含める
 - ABORT 時はコメントを投稿しない（現行どおり）
+- 事前検証（0）の ABORT は書き込み前に止まるため、evidence の完了済み副作用は「なし」となる
 
 想定外の例外（バグ）は捕捉せず traceback + 非ゼロ終了とし、既存の exec_script fail-loud 契約に従う。
 
@@ -191,8 +197,10 @@ symlink（`.venv` / overlay 共通）:
 | symlink で参照先が異なる、または実ファイル / ディレクトリ | ABORT（上書き・削除しない） |
 
 再利用時でも fetch と照合は必ず実行し、失敗したら ABORT する（ゲート順序を変えない）。
-報告の「基点」は、新規時は `<remote>/<base>` の短縮 SHA、再利用時は
-`git merge-base <branch> <remote>/<base>` の短縮 SHA（作成時の基点に一致する）とし、
+報告の「基点」は、新規時は現行どおり `<remote>/<base>` の短縮 SHA。再利用時は作成時の基点を
+記録した証跡が無い（branch の reflog は利用者の操作で変わりうる）ため作成時の基点を主張せず、
+`git merge-base <branch> <remote>/<base>` の短縮 SHA を「現在の `<remote>/<base>` との共通祖先」と
+明記して表示する（利用者が新しい base を merge / rebase していれば作成時の基点とは異なりうる）。
 再利用である旨を報告コメントの表に 1 行追加する。
 
 ### 使用例
@@ -239,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
 | `kaji_harness/commands/issue.py` | `kaji issue start <issue_id>` を追加し entry の `main` へ委譲（`kaji pr review-poll` → `review_poll_entry.main` と同じ形） |
 | `.claude/skills/issue-start/SKILL.md` | frontmatter に `exec_script: kaji_harness.scripts.issue_start`。本文は script の契約のミラー（入出力・副作用順・ABORT 条件・再実行）と、手動時の `kaji issue start` 1 コマンド手順に置換。複数 block の変数受け渡しを削除 |
 | `.kaji/wf/official/{dev,docs}.yaml`、`.kaji/wf/custom/dev/{dev-small,dev-thorough,dev-thorough-codex}.yaml`、`.kaji/wf/custom/docs/{docs-codex,docs-thorough-codex}.yaml` | `start` から `agent` / `model` / `effort` を削除（`skill: issue-start` と `on:` は不変） |
-| `kaji_harness/providers/markers.py` | 変更なし（既存の metadata 付き marker を使う） |
+| `kaji_harness/providers/markers.py` | 変更なし（`build_kaji_verdict_marker` / `parse_kaji_verdict_marker` を metadata なしで使う） |
 
 ### 処理の流れ（疑似コード）
 
@@ -247,6 +255,10 @@ def main(argv: list[str] | None = None) -> int:
 def run_issue_start(issue_id, provider, cwd, env) -> StartOutcome:
     ctx = provider.resolve_issue_context(issue_id)            # 正本は 1 回だけ取得
     check_env_matches(ctx, env)                               # 不一致 → Abort
+    identity = ReportIdentity(ctx.branch_name, f"../{Path(ctx.worktree_dir).name}")
+    marker = build_kaji_verdict_marker("start", "PASS")       # 書き込み前に構築（固定値）
+    existing = classify_start_reports(provider.view_issue(issue_id).comments, identity)
+    if existing is UNIDENTIFIABLE: Abort                      # 書き込み前に停止
     main_repo = git_toplevel(cwd)
     fetch(main_repo, ctx.git_remote, ctx.default_branch)      # 失敗 → Abort
     fetched = rev_parse(main_repo, "FETCH_HEAD^{commit}")
@@ -261,7 +273,8 @@ def run_issue_start(issue_id, provider, cwd, env) -> StartOutcome:
     confirm_registered(main_repo, wt, branch)
     base_sha, local_ahead = report_values(...)
     ensure_note(provider, issue_id, wt.name, branch)          # 同一 NOTE が先頭なら省略
-    ensure_report_comment(provider, issue_id, marker_meta, body)  # 同一 marker があれば省略
+    if existing is not SAME:                                  # 同一報告があれば省略
+        provider.comment_issue(issue_id, marker + "\n" + render_report(identity, ...))
     return Pass(...)
 ```
 
@@ -270,12 +283,49 @@ verdict に変換する）。provider 呼び出しの `GitHubProviderError` は 
 
 ### 報告コメントの重複判定
 
-`provider.view_issue(issue_id).comments` の各 `body` の 1 行目を `parse_kaji_verdict_marker` で
-解析し、`step == "start" and status == "PASS" and meta == {"branch": <branch>, "worktree": <basename>}`
-のものがあれば投稿しない。metadata の無い旧形式の start コメント（本 Issue 以前に agent が投稿したもの）は
-同一判定の対象にしない（branch を特定できないため。旧形式の Issue で再実行した場合は新形式で 1 件投稿する）。
-marker への metadata 追加は既存文法（`markers.py` の `_VERDICT_MARKER_RE`）の範囲内で、consumer
-（`issue-design` Step 1.6 の BACK 検出は `status=(BACK|BACK_DESIGN)` のみ照合）に影響しない。
+**同一性の鍵は報告本文の表に置き、marker metadata は使わない。** 現行テンプレート（SKILL.md Step 5）
+が出力してきた報告にも、本 Issue の script が出力する報告にも、同じ 2 行が必ずある:
+
+```text
+| ブランチ | <branch_name> |
+| ディレクトリ | ../<worktree_dir の basename> |
+```
+
+旧形式（agent 投稿、例: [#569 の start コメント](https://github.com/apokamo/kaji/issues/569#issuecomment-6880885684)
+は `| ブランチ | fix/569 |` / `| ディレクトリ | ../kaji-fix-569 |`）と新形式を **同じ関数** で生成・照合する
+（生成は `render_report`、照合は `parse_report_identity`。行ラベルと値の書式を 1 箇所の定数で共有）。
+marker metadata を使わないのは、worktree basename が `[paths].worktree_prefix` の許容域
+（`config.py` `_validate_worktree_prefix`: `[A-Za-z0-9._-]+`、`.` / `..` 以外）により `_` / `.` / `-` で
+始まりうる一方、marker metadata 値の文法（`markers.py`: `^[A-Za-z0-9][A-Za-z0-9._/-]*$`）はそれを
+表現できないため。表の値は自由文字列で、許容域内のすべての basename と branch
+（`<branch_prefix>/<issue_id>`）をそのまま表現でき、`|` や backtick を含まないので表の解析も崩れない。
+
+判定手順（事前検証 0 で実行、Issue への書き込み前）:
+
+1. 各コメントの 1 行目を `parse_kaji_verdict_marker` で解析し、`step == "start" and status == "PASS"` の
+   ものだけを候補とする（metadata の有無・内容は問わない）。marker の無いコメント、他 step、
+   `status != PASS` は対象外
+2. 候補ごとに本文から `| ブランチ | … |` 行と `| ディレクトリ | … |` 行を抽出する。セル値は前後の空白と、
+   値全体を囲む 1 組の backtick を除いて比較する（旧形式で agent が backtick を付けた場合を許容）
+3. 候補を分類する:
+
+| 候補の状態 | 分類 |
+|------------|------|
+| 2 行とも 1 件ずつあり、値が `branch_name` と `../<basename>` に完全一致 | SAME（同一報告） |
+| 2 行とも 1 件ずつあり、どちらかの値が異なる | OTHER（別の start の報告。同一扱いしない） |
+| どちらかの行が無い、または同じラベルの行が複数あり値が食い違う | UNIDENTIFIABLE |
+
+4. Issue 全体の判定: SAME が 1 件以上 → **投稿しない**（他に UNIDENTIFIABLE があっても重複の危険は
+   無いため続行）。SAME が無く UNIDENTIFIABLE がある → **事前検証で ABORT**（同一か判定できない報告がある
+   状態で新規投稿すると重複しうるため。metadata が無いことだけでは UNIDENTIFIABLE にならない）。
+   それ以外（候補なし / OTHER のみ）→ 処理後に 1 件投稿する
+
+UNIDENTIFIABLE による ABORT の suggestion: 「該当コメント（URL / 作成日時）を確認し、同一 start の報告なら
+表の `ブランチ` / `ディレクトリ` 行を現在の値で補うか、別物なら 1 行目の marker を外してから
+`kaji issue start <issue_id>` を再実行する」。この ABORT は書き込み前なので再実行は安全。
+
+marker は現行の `step=start status=PASS` から変えないため、consumer（`issue-design` Step 1.6 の BACK 検出は
+`status=(BACK|BACK_DESIGN)` のみ照合）と `docs/dev/shared_skill_rules.md` の marker 契約に影響しない。
 
 ### NOTE の重複判定
 
@@ -294,8 +344,9 @@ marker への metadata 追加は既存文法（`markers.py` の `_VERDICT_MARKER
 | ABORT の出力形態 | 想定内の失敗は ABORT verdict + exit 0、想定外の例外は非ゼロ終了 | **AI の仮定**: 現行 SKILL.md は失敗時 ABORT verdict を出す契約で、exec_script の非ゼロ終了は ERROR となり `on: ABORT` 遷移が成立しない（`script_exec.py` docstring / `baseline_precheck._emit_guard_abort` の前例）。検査先: review-design / review-code | provider エラー（NOTE / コメント失敗）も ABORT とし、完了済み副作用と再実行コマンドを evidence / suggestion に書く |
 | overlay symlink の既存参照先 | `ln -sf` の上書きをやめ、異なる参照先は ABORT | Issue 本文 EB「既存 symlink の異なる参照先は ABORT する」（保守者の決定） | 同一参照先は no-op、実ファイルも ABORT。`.venv` にも同じ規則を適用 |
 | env と provider context の不一致 | ABORT（どちらも採らない） | **AI の仮定**: Issue 本文は `kaji issue context` を正本と定める一方、runner は state / discovery で worktree を上書きしうる（`runner.py` `_load_session_state`）。黙って片方を選ぶと別 worktree を作りうる。検査先: review-design | 通常の初回 run では両者は同値（runner も `resolve_issue_context` を使う）なので正常系の挙動は変わらない |
-| 報告コメントの marker metadata | `branch=` / `worktree=` を追加し、同一判定に使う | **AI の仮定**: 「同一 start PASS 報告」を機械判定する最小の鍵。既存 marker 文法内の加算で consumer に非影響。検査先: review-design | 旧形式コメントは同一判定の対象外と明記 |
-| 再利用時の報告基点 | `merge-base <branch> <remote>/<base>` の短縮 SHA | **AI の仮定**: 再実行時に fetch で remote が進んでいても、作成時の基点を報告するため。検査先: review-code | 新規時は現行どおり `<remote>/<base>` の短縮 SHA |
+| 同一 start PASS 報告の判定 | marker `step=start status=PASS`（metadata 不問）+ 本文表の `ブランチ` / `ディレクトリ` 行の値で判定。旧形式・新形式を同じ規則で扱い、識別不能な報告しか無い場合は書き込み前に ABORT | 決定: Issue 完了条件「既に投稿済みの同一 start PASS 報告を重複させない」（保守者の決定、形式を限定していない）。**AI の仮定**（判定鍵の選択）: 現行テンプレートが両行を必ず出力しており、旧形式にも同一性の根拠がある（review-design 指摘 R1 で #569 の実コメントを確認）。検査先: verify-design / review-code | 分類表（SAME / OTHER / UNIDENTIFIABLE）と Issue 全体の判定規則、値の正規化（空白・囲み backtick）を定義 |
+| marker metadata を使わない | marker は現行の `step=start status=PASS` のまま | 既存契約: `[paths].worktree_prefix` の許容域（`config.py` `_validate_worktree_prefix`）を狭めない（Issue「範囲外: branch naming の変更」）。**AI の仮定**: 許容域の basename（`_` / `.` / `-` 始まり）は metadata 値文法で表現できないため、符号化を足すより既存の表に鍵を置く方が生成・照合の規則が 1 つで済む（review-design 指摘 R2）。検査先: verify-design | 生成（`render_report`）と照合（`parse_report_identity`）で行ラベル・値書式の定数を共有。marker 構築は事前検証で行う |
+| 再利用時の報告基点 | `merge-base <branch> <remote>/<base>` の短縮 SHA を「現在の共通祖先」と明記して表示し、作成時の基点とは主張しない | **AI の仮定**: 作成時の基点を記録した証跡が無いため、事実として言える値だけを出す（review-design 改善提案 S1、[git merge-base](https://git-scm.com/docs/git-merge-base)）。検査先: review-code | 新規時は現行どおり `<remote>/<base>` の短縮 SHA |
 
 one-way door の未決: 該当なし。公開 CLI は加算のみ（既存 `kaji issue` サブコマンドの引数・終了コードを
 変更しない）、永続化 schema（`verdict.yaml` / state / run.log）は不変、workflow 遷移は不変、
@@ -327,7 +378,18 @@ recovery gate は不変。いずれも Issue 本文の決定範囲内の詳細�
 - worktree 状態判定（porcelain 文字列 + ref 有無 → NEW / REUSABLE / 各 ABORT 理由）の 7 状態
 - symlink 判定（不在 / 同一参照先 / 異なる参照先 / 実ファイル）
 - NOTE 判定（同一 NOTE が先頭 / 無し / 別 branch の NOTE が先頭 / 空本文）
-- 報告コメント重複判定（同一 meta / 別 branch meta / metadata 無しの旧形式 / marker 無し）
+- 報告の同一性判定（`classify_start_reports` / `parse_report_identity`、指摘 R1）:
+  - 旧形式: 現行テンプレートで agent が埋めた本文（#569 の実 start コメント本文を fixture 化）が、同じ
+    branch / `../<basename>` に対して SAME、別 branch または別ディレクトリに対して OTHER
+  - 新形式: `render_report` の出力を `parse_report_identity` に通すと同じ鍵に戻る（生成と照合の往復）
+  - 値の正規化: 囲み backtick・前後空白付きの旧形式も SAME
+  - UNIDENTIFIABLE: ブランチ行欠落 / ディレクトリ行欠落 / 同ラベル行が複数で値が食い違う
+  - 対象外: marker 無し、`step=start status=ABORT`、他 step の PASS、marker が 2 行目以降にあるもの
+  - Issue 全体: SAME+UNIDENTIFIABLE → 投稿しない（続行）、UNIDENTIFIABLE のみ → ABORT、OTHER のみ / 候補なし → 投稿
+- 合法な worktree prefix（指摘 R2）: `worktree_prefix` が `kaji` / `_kaji` / `.kaji` / `-kaji`（および
+  `build_worktree_dir` の既定）の各 basename について、`build_kaji_verdict_marker("start", "PASS")`・
+  `render_report`・`parse_report_identity` の往復・PASS verdict の `validate_verdict_fields` がいずれも
+  例外なく成立すること
 - 報告本文生成: 現行 SKILL.md Step 5 の項目（Issue / ブランチ / ディレクトリ / 基点 / venv /
   config overlay / メタ情報 / LOCAL_AHEAD 注意 / 次のステップ / クリーンアップ / verdict block）を含むこと
 - env と context の不一致検出
@@ -366,7 +428,7 @@ recovery gate は不変。いずれも Issue 本文の決定範囲内の詳細�
 `comment_issue` / `resolve_issue_context` を記録）。
 
 - 正常系: 上記回帰テスト 2 に加え、`.venv` symlink、main に overlay がある場合/無い場合の overlay
-  symlink、NOTE 1 回、`step=start status=PASS branch=… worktree=…` marker 付きコメント 1 回、
+  symlink、NOTE 1 回、`<!-- kaji-verdict: step=start status=PASS -->` marker 付きコメント 1 回、
   `KAJI_VERDICT_PATH` の PASS verdict、操作順序（fake provider の呼び出し記録と git 状態で確認）
 - LOCAL_AHEAD: ローカル main に未 push commit がある場合、基点に含まれず報告に注意が出る
 - fetch 失敗（到達不能 remote）: ABORT、branch / worktree / symlink 無し、provider の書き込み呼び出し 0 回
@@ -380,6 +442,16 @@ recovery gate は不変。いずれも Issue 本文の決定範囲内の詳細�
   - NOTE 済み・コメント未投稿（provider の `comment_issue` を 1 回目だけ失敗させて ABORT）→ 再実行で
     PASS、NOTE は増えず、コメントは 1 件
   - コメント投稿済み → 再実行で PASS、コメントは増えない
+  - **旧形式の PASS 報告が既にある（#551 型、指摘 R1）**: 現行テンプレートの本文で同じ branch /
+    `../<basename>` の start PASS コメントと NOTE を fake provider に事前配置し、worktree に利用者の commit と
+    未 commit 変更を置いて再実行 → PASS、NOTE・コメントとも増えない、commit と変更が保持される
+  - 旧形式で **別 branch / 別ディレクトリ** の start PASS 報告だけがある → 新規作成・再利用いずれでも
+    1 件投稿される（同一扱いしない）
+  - 識別不能な start PASS 報告だけがある → ABORT、fetch を含む Git 操作・NOTE・コメントが 0 回
+    （remote-tracking ref と branch / worktree が不変）
+- 合法な worktree prefix（指摘 R2）: `[paths].worktree_prefix` を `_kaji` / `.kaji` / `-kaji` に設定した
+  fixture（parametrize）で、初回 PASS（worktree `../<prefix>-fix-<id>`、branch `fix/<id>`）、報告 1 件、
+  再実行で PASS かつコメント非重複、branch / worktree 名が context と一致して不変
 - 正常時にローカル `<base>` の ref が変わらないこと
 
 外部 API（GitHub）との疎通は既存 provider の責務でテスト済みのため、本 Issue では追加しない
@@ -400,7 +472,7 @@ large_local と同程度）。配置先 implement step の timeout の 25% を�
 | docs/dev/workflow_guide.md | あり | start step が agent ではなく script で動くこと、再実行方法（`kaji issue start`） |
 | docs/dev/development_workflow.md / workflow_overview.md / docs_maintenance_workflow.md | あり（該当記述があれば） | issue-start を agent step として説明している箇所の整合 |
 | docs/dev/skill-authoring.md | あり | exec_script skill の例に issue-start を追加 |
-| docs/dev/shared_skill_rules.md | あり | start の verdict marker に metadata（`branch` / `worktree`）が付くこと |
+| docs/dev/shared_skill_rules.md | なし（marker 契約） | start の marker は現行の `step=start status=PASS` のまま。issue-start が SKILL.md からコメントを投稿しなくなる旨の記述が producer 一覧にあれば、script が付与する形へ整合させる |
 | docs/guides/git-worktree.md | あり | worktree 作成手順の正本記述を script 契約・再実行規則へ更新 |
 | docs/cli-guides/failure-recovery.md(.ja) | あり | `non_resumable_skill`（start）で停止した場合の手動復旧として `kaji issue start <id>` の再実行を案内 |
 | docs/reference/configuration.md(.ja) | あり（該当記述があれば） | `kaji issue context` / issue-start の説明の整合 |
@@ -424,7 +496,10 @@ large_local と同程度）。配置先 implement step の timeout の 25% を�
 | 合流の前例 | `.claude/skills/review-poll/SKILL.md`、`kaji_harness/scripts/review_poll_entry.py` | exec_script と `kaji pr review-poll` が同一 entry `main` に合流 |
 | ABORT 出力の前例 | `kaji_harness/scripts/baseline_precheck.py` `_emit_verdict` / `_emit_guard_abort` | ポリシー ABORT を verdict 出力 + `return 0` で返す |
 | verdict 検証（#568） | `kaji_harness/verdict.py` `normalize_verdict_fields` / `validate_verdict_fields` / `dump_verdict_yaml` | 読み込み側と同一規則で正規化・検証し、読み戻し一致を確認して直列化 |
-| marker 文法 | `kaji_harness/providers/markers.py` `build_kaji_verdict_marker` / `parse_kaji_verdict_marker` | metadata（`key=value`、値は `^[A-Za-z0-9][A-Za-z0-9._/-]*$`）を許容 |
+| marker 文法 | `kaji_harness/providers/markers.py` `build_kaji_verdict_marker` / `parse_kaji_verdict_marker` | metadata 値は `^[A-Za-z0-9][A-Za-z0-9._/-]*$`（英数字始まり）。`_` / `.` / `-` 始まりの basename を表現できない（R2 の根拠）。parse は 1 行全体を照合し metadata の有無を問わない |
+| worktree_prefix の許容域 | `kaji_harness/config.py` `_validate_worktree_prefix`、`kaji_harness/providers/context.py` `build_worktree_dir` | `[A-Za-z0-9._-]+`（`.` / `..` 以外）を許容し、basename は `<prefix or "kaji">-<branch_prefix>-<issue_id>`。パイプ記号と backtick を含まない（表の解析が崩れない根拠） |
+| 旧形式の start PASS 報告 | https://github.com/apokamo/kaji/issues/569#issuecomment-6880885684 | 1 行目 `<!-- kaji-verdict: step=start status=PASS -->`、表に `ブランチ` 行 = `fix/569`、`ディレクトリ` 行 = `../kaji-fix-569`。旧形式にも同一性の鍵がある根拠 |
+| git merge-base | https://git-scm.com/docs/git-merge-base | 2 つの commit の最良の共通祖先を返す。branch の作成時点を記録するものではない（S1 の根拠） |
 | NOTE 合成 | `kaji_harness/providers/context.py` `build_worktree_note_body` | 既存 NOTE を見ずに先頭へ追加する（再実行で二重化する根拠） |
 | git worktree | https://git-scm.com/docs/git-worktree | `add -b` は既存 branch で失敗。`list --porcelain` の `worktree` / `branch` / `detached` / `prunable` 行で登録状態を機械判定できる |
 | git fetch / FETCH_HEAD | https://git-scm.com/docs/git-fetch | `FETCH_HEAD` は fetch した ref を記録。remote-tracking ref の更新は refspec 設定に依存（照合が必要な根拠、#549） |
