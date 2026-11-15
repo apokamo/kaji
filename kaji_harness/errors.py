@@ -412,3 +412,15 @@ class WatchPreconditionError(HarnessError):
     def __init__(self, reason: str, message: str) -> None:
         self.reason = reason
         super().__init__(message)
+
+
+class RunWatchedError(HarnessError):
+    """``run_watched execute`` の停止（Issue #543 M3・M8）。
+
+    Attributes:
+        exit_code: 2 = 前提違反・外部状態の相違、3 = 解決に人手が要る（remote が進んだ等）。
+    """
+
+    def __init__(self, exit_code: int, message: str) -> None:
+        self.exit_code = exit_code
+        super().__init__(message)

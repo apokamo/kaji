@@ -395,3 +395,74 @@ def test_reopened_done_with_new_failed_run_becomes_aborted(tmp_path: Path) -> No
     _write_ended_run(artifacts, "261115010000", [start(), step_start("implement"), end("ERROR")])
     run_once(deps)
     assert provider.issues[101].labels == {"state:aborted"}
+
+
+# M4: 永続化の順序（境界ごとの中断と再起動）
+
+
+def test_crash_right_after_label_switch_launches_triage_next_poll(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kaji_harness.watch import loop
+
+    artifacts = tmp_path / ".kaji-artifacts"
+    _write_ended_run(artifacts, "261115000000", [start(), step_start("implement"), end("ERROR")])
+    provider = FakeProvider({101: FakeIssue(labels={"state:running"})})
+    herdr = FakeHerdr()
+    deps = _deps(tmp_path, provider, herdr)
+
+    def crash(*_: object, **__: object) -> None:
+        raise RuntimeError("injected: after label switch")
+
+    monkeypatch.setattr(loop, "_launch_triage", crash)
+    with pytest.raises(RuntimeError, match="after label switch"):
+        run_once(deps)
+    assert provider.issues[101].labels == {"state:aborted"}
+    assert herdr.runs == []
+    monkeypatch.undo()
+
+    run_once(_deps(tmp_path, provider, herdr))
+    assert [t.label for t in herdr.tabs] == ["watch-triage-101"]
+    assert len(herdr.runs) == 1 and "/watch-triage" in herdr.runs[0][1]
+
+
+def test_crash_after_report_saved_before_notify_does_not_notify_or_repost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kaji_harness.watch import loop
+
+    artifacts = tmp_path / ".kaji-artifacts"
+    _write_ended_run(artifacts, "261115000000", [start(), step_start("implement"), end("ERROR")])
+    provider = FakeProvider({101: FakeIssue(labels={"state:running"})})
+    herdr = FakeHerdr()
+    script, out = _notify_script(tmp_path)
+
+    def crash(*_: object, **__: object) -> None:
+        raise RuntimeError("injected: after save, before notify")
+
+    monkeypatch.setattr(loop, "send_notification", crash)
+    with pytest.raises(RuntimeError, match="before notify"):
+        run_once(_deps(tmp_path, provider, herdr, script))
+    monkeypatch.undo()
+
+    run_once(_deps(tmp_path, provider, herdr, script))
+    assert provider.comment_calls == 1
+    assert len(provider.issues[101].comments) == 1
+    assert not out.exists()
+
+
+def test_new_run_failed_while_watch_stopped_is_detected_on_first_poll(tmp_path: Path) -> None:
+    artifacts = tmp_path / ".kaji-artifacts"
+    _write_ended_run(artifacts, "261115000000", [start(), step_start("implement"), end("ERROR")])
+    provider = FakeProvider({101: FakeIssue(labels={"state:running"})})
+    herdr = FakeHerdr()
+    run_once(_deps(tmp_path, provider, herdr))
+    events_dir = artifacts / "_watch" / "events"
+    assert (events_dir / "101-aborted-261115000000.json").is_file()
+
+    # 保守者が triage タブを閉じ、watch の停止中に retry した run B も失敗した
+    herdr.tabs = []
+    _write_ended_run(artifacts, "261115010000", [start(), step_start("implement"), end("ERROR")])
+    run_once(_deps(tmp_path, provider, herdr))
+    assert (events_dir / "101-aborted-261115010000.json").is_file()
+    assert provider.issues[101].labels == {"state:aborted"}

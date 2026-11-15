@@ -58,3 +58,16 @@ def test_issue_close_calls_watch_labels() -> None:
     text = ISSUE_CLOSE.read_text(encoding="utf-8")
     assert "python -m kaji_harness.scripts.watch_labels mark-done" in text
     assert "python -m kaji_harness.scripts.watch_labels mark-follow-up" in text
+
+
+RUN_WATCHED = ROOT / ".claude" / "skills" / "run-watched" / "SKILL.md"
+
+
+def test_run_watched_forbids_hand_written_yaml_and_direct_launch() -> None:
+    text = RUN_WATCHED.read_text(encoding="utf-8")
+    assert "series YAML と draft を手で書かない" in text
+    assert "`kaji run` / `kaji run-series` を直接起動しない" in text
+    assert "python -m kaji_harness.scripts.run_watched plan" in text
+    assert "python -m kaji_harness.scripts.run_watched execute --draft" in text
+    link = ROOT / ".agents" / "skills" / "run-watched"
+    assert link.is_symlink() and link.resolve() == RUN_WATCHED.parent.resolve()
