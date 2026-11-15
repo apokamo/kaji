@@ -244,6 +244,21 @@ kaji issue edit "$FOLLOW_UP_ID" --commit \
   }
 ```
 
+### 3.5. follow-up Issue の `state:needs-maintainer`（`[watch]` 宣言 repo のみ）
+
+§ 2 / § 3 で follow-up Issue ID を得た直後（作成・再利用のどちらでも）に、決定的な script で
+ラベルを付ける。`[watch]` を宣言していない repo では script が `watch labels: skipped (no [watch])`
+を出して exit 0 で何もしない（skill は TOML を読まない。正本: `docs/cli-guides/watch.md`）。
+
+```bash
+python -m kaji_harness.scripts.watch_labels mark-follow-up '[follow_up_issue_id]' || {
+  echo "ABORT: watch_labels mark-follow-up failed; parent Issue remains open"
+  exit 1
+}
+```
+
+exit 2（契約ラベルの不足）/ 3（GitHub の書き込み失敗）のときは `ABORT` とし、親 Issue の close を実行しない。
+
 ### 4. 親本文へのマーカー追記
 
 親本文に有効なマーカーがなかった場合だけ、新規作成・既存検索で得た Issue ID の
@@ -683,6 +698,21 @@ kaji issue close [issue_id] --reason completed
 >
 > **重要**: `kaji issue close` が失敗した場合は verdict を **ABORT** にすること。Issue が未クローズのまま残ることは許容しない。
 
+### Step 5.5.1: `state:done` の付与（`[watch]` 宣言 repo のみ）
+
+Step 5.5 で Issue をクローズできた場合だけ、決定的な script で `state:done` を付け、ほかの
+`state:*`（`planned` / `running` / `aborted` / `hold` / `needs-maintainer`）をすべて外す。
+`[watch]` を宣言していない repo では `watch labels: skipped (no [watch])` を出して exit 0 で何もしない。
+
+```bash
+python -m kaji_harness.scripts.watch_labels mark-done [issue_id]
+```
+
+exit 2 / 3 のときは `ABORT` とする。close は済んでいるので、報告に「`python -m
+kaji_harness.scripts.watch_labels mark-done [issue_id]` の再実行で `mark-done` だけをやり直せる」と書く。
+
+> **結果を記録**: `watch_labels_result` = 「skipped」/「mark-done 済み」/「失敗（要再実行）」。Step 6 で使用する。
+
 ### Step 5.6: Issue の一時作業ディレクトリ削除
 
 Step 5.5 で Issue をクローズできた場合だけ、その Issue の一時作業ディレクトリ
@@ -895,6 +925,6 @@ suggestion: |
 | status | 条件 |
 |--------|------|
 | PASS | クローズ完了 |
-| ABORT | review-poll 承認証跡の欠落・不変条件違反・現在の PR との不一致・照合した SHA の欠落・不正・`[review_poll_mode]` の未記録・`--match-head-commit` による merge 拒否、follow-up 作成・再利用・親マーカー追記の失敗（マーカー参照先が close 済みの場合を含む）、またはクローズ失敗（`kaji issue close` 失敗を含む） |
+| ABORT | review-poll 承認証跡の欠落・不変条件違反・現在の PR との不一致・照合した SHA の欠落・不正・`[review_poll_mode]` の未記録・`--match-head-commit` による merge 拒否、follow-up 作成・再利用・親マーカー追記の失敗（マーカー参照先が close 済みの場合を含む）、クローズ失敗（`kaji issue close` 失敗を含む）、または `watch_labels`（`mark-follow-up` / `mark-done`）の exit 2 / 3 |
 
 Step 5.6 の一時ディレクトリ削除の結果（スキップ・一部削除失敗を含む）は status に影響しない。

@@ -42,6 +42,7 @@ def create_parser() -> argparse.ArgumentParser:
     _register_run(subparsers)
     _register_recover(subparsers)
     _register_status(subparsers)
+    _register_watch(subparsers)
     _register_validate(subparsers)
     _register_series(subparsers)
     _register_issue(subparsers)
@@ -333,6 +334,41 @@ def _register_status(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
         default=Path.cwd(),
         help="Starting directory for config discovery (default: current directory)",
     )
+
+
+def _register_watch(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Register the ``watch`` subcommand (Issue #543)."""
+    p = subparsers.add_parser("watch", help="Monitor series Issues and sync state:* labels")
+    sub = p.add_subparsers(dest="watch_command", required=True)
+
+    def workdir(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument(
+            "--workdir",
+            type=Path,
+            default=Path.cwd(),
+            help="Starting directory for config discovery (default: current directory)",
+        )
+
+    workdir(sub.add_parser("start", help="Start the monitor loop in a Herdr tab (idempotent)"))
+    status = sub.add_parser("status", help="Show monitored Issues (read-only)")
+    status.add_argument("--json", action="store_true", help="Print the JSON document (schema v1)")
+    workdir(status)
+    once = sub.add_parser("once", help="Run one poll")
+    once.add_argument("--dry-run", action="store_true", help="Compute and print; write nothing")
+    workdir(once)
+    record = sub.add_parser("record", help="Record a triage outcome for an event")
+    record.add_argument("--event", required=True, help="Event file under _watch/events/")
+    record.add_argument(
+        "--outcome",
+        required=True,
+        choices=("handoff", "still-working", "not-stalled", "recovered"),
+    )
+    record.add_argument("--comment-url", default=None)
+    record.add_argument("--summary", default=None)
+    workdir(record)
+    events = sub.add_parser("events", help="List events and records (read-only)")
+    events.add_argument("--json", action="store_true", help="Print the JSON document (schema v1)")
+    workdir(events)
 
 
 def _register_issue(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:

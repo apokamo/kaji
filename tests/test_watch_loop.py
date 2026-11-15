@@ -260,3 +260,51 @@ def test_label_failure_mid_way_is_fixed_next_poll(tmp_path: Path) -> None:
     }
     run_once(deps)
     assert provider.issues[101].labels == {"state:planned"}
+
+
+def _context(tmp_path: Path) -> object:
+    from kaji_harness.config import KajiConfig
+    from kaji_harness.watch.preflight import WatchContext
+    from tests.runstate_helpers import write_config
+
+    write_config(tmp_path)
+    path = tmp_path / ".kaji" / "config.toml"
+    path.write_text(path.read_text(encoding="utf-8") + "\n[watch]\n", encoding="utf-8")
+    config = KajiConfig.discover(start_dir=tmp_path)
+    assert config.watch is not None
+    return WatchContext(
+        config=config,
+        watch=config.watch,
+        provider=FakeProvider({}),  # type: ignore[arg-type]
+        repo="o/r",
+        herdr_bin="/usr/bin/herdr",
+        herdr_pane_id="p_1",
+    )
+
+
+def test_start_creates_tab_then_reuses_shell_pane(outside_project_tmp_path: Path) -> None:
+    from kaji_harness.watch import service
+
+    context = _context(outside_project_tmp_path)
+    herdr = FakeHerdr()
+    line = service.start(context, herdr)  # type: ignore[arg-type]
+    assert line == "watch started (pane p_1)"
+    assert [t.label for t in herdr.tabs] == ["kaji-watch"]
+    assert "kaji_harness.watch" in herdr.runs[0][1]
+    herdr.foreground["p_1"] = ("shell_only", ["bash"])
+    service.start(context, herdr)  # type: ignore[arg-type]
+    assert len(herdr.tabs) == 1
+    assert [run[0] for run in herdr.runs] == ["p_1", "p_1"]
+
+
+def test_run_loop_exits_after_empty_polls(tmp_path: Path) -> None:
+    from kaji_harness.watch import service
+
+    provider = FakeProvider({})
+    sleeps: list[int] = []
+    line = service.run_loop(
+        _deps(tmp_path, provider, FakeHerdr()), pane_id="p_1", sleep=sleeps.append
+    )
+    assert line == "watch finished"
+    assert sleeps == [180]
+    assert WatchStore(tmp_path / ".kaji-artifacts").is_locked() is False
