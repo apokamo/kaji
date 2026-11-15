@@ -269,6 +269,11 @@ kaji watch recoveries --issue 101
   - 予定時刻の後の `pane_idle` の `:w<n>` は、run が実行中で pane がある（Issue が open）ときだけ出す。run の終了
     （COMPLETE / ERROR）・Issue の close・pane の消失では出さない（review-code 指摘 MF-2）。ERROR で終わった場合は
     `aborted` を検知し、その起動だけを予定時刻まで遅らせる（失敗した run が目標の根拠の間だけ `wait` を起動の遅延に効かせる）。
+  - 出し直した `pane_idle` の `<key>:w<n>` に `still-working` が記録された場合も、通常の `still-working` と同じく
+    snooze の後に `<key>:w<n>:r<m>` で同じ episode を再確認する（PR #577 指摘。triage が周の間に `working` を観測し、
+    次の周より前に再び idle になると episode が増えず、`<key>` の最新の記録は `wait` のままなので、これがないと
+    `pane_idle` の再検知が止まる）。`wait` の系列（`_root_key`）は `:r<m>` と `:w<n>` の接尾辞をすべて外した key で数え、
+    `:r<m>` / `:w<n>:r<m>` に記録した `wait` も次の `<key>:w<n>` として 1 件だけ出し直す。
   - event ファイルを書くときに `anchor`（`resolve_anchor` の値）を入れる。
 - `detect.py`: **監視の周の間に復旧して再停止した場合の再検知（MF-5）**。
   - 問題: episode は監視自身が `working` を観測したときだけ増える。triage が `continue` → `working` を観測して

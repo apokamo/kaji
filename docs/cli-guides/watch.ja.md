@@ -59,6 +59,9 @@ kaji watch recoveries [--issue N] [--json]    # 自動復旧の一覧（読む�
 - `pane_idle` の `wait` は、同じ step の pane（run・step・attempt・episode）が実行中の間だけ効く。新しい run、別の step・
   attempt への進行、予定時刻の前の `working` への戻りで破棄する。run の終了・Issue の close・pane の消失では
   `pane_idle` の `:w<n>` を出さない。run が `ERROR` で終わった場合は `aborted` を検知し、その起動だけを予定時刻まで遅らせる。
+- 出し直した `pane_idle` の `<key>:w<n>` に `still-working` を記録した場合も、通常どおり snooze の後に同じ episode を
+  `<key>:w<n>:r<m>` で再確認する。系列のどの key（`:r<m>` / `:w<n>:r<m>`）に記録した `wait` も、次の `<key>:w<n>` として
+  1 件だけ出し直す。
 - 周の間に記録された `recovered` は `working` の観測と同じに扱い（1 件につき 1 回）、同じ attempt の再停止も 2 周で再検知する。
 - 1.〜4. で戻った場合は通知しない。`retry` と `handoff` は通知する。series の member（event の `anchor` が
   `member:<run_id>`）の `retry` の通知の summary には、残りの member は止まったままで、やり直しが close まで進んだ後に

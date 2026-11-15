@@ -146,6 +146,9 @@ summary adds that the remaining members stay stopped and the maintainer resumes 
   or the pane returning to `working` before the reset time drops it. If the run ends, the Issue
   is closed or the pane is gone, the `pane_idle` `:w<n>` is not raised; when the run ended with
   `ERROR`, the `aborted` event is still detected and its triage launch waits for the reset time.
+  A `still-working` record on a re-raised `pane_idle` `<key>:w<n>` keeps the usual snooze: the
+  same episode is rechecked as `<key>:w<n>:r<m>` after the snooze. A `wait` recorded on any key
+  of the series (`:r<m>` / `:w<n>:r<m>`) is re-raised once as the next `<key>:w<n>`.
 - **`recovered` between polls**: a new `recovered` record for the same run, step and attempt
   counts as an observed `working` (the pane episode advances once per record), so a second
   stop of the same attempt is raised again after 2 idle polls and is still bounded by the

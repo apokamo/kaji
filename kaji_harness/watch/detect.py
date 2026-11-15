@@ -307,7 +307,7 @@ def detect_events(
             base = f"{number}:pane_idle:{run_id}:{step}:{attempt}:{counter.episode}"
             key_or_none = _next_rerun_key(
                 base, ledger, now, "still-working", STILL_WORKING_SNOOZE_SECONDS, ":r"
-            )
+            ) or _deferred_rerun_key(base, ledger, now)
             if key_or_none is not None:
                 candidates.append(
                     DetectedEvent(
@@ -362,10 +362,24 @@ def _key_parts(key: str) -> list[str]:
     return key.split(":")
 
 
+#: event の種類ごとの、接尾辞のない key の要素数（``<issue>:<kind>:<run_id>[:<step>:<attempt>:<episode>]``）
+_BASE_KEY_PARTS: Mapping[str, int] = {"pane_idle": 6, "aborted": 3, "log_stall": 6}
+
+
+def _is_rerun_suffix(part: str) -> bool:
+    """再確認（``r<n>``）・出し直し（``w<n>``）の接尾辞かを返す。"""
+    return part[:1] in ("r", "w") and part[1:].isdigit()
+
+
 def _root_key(key: str) -> str:
-    """再確認・出し直しの接尾辞（``:w<n>``）を外した key。"""
+    """再確認・出し直しの接尾辞（``:r<n>`` / ``:w<n>``）をすべて外した、系列の最初の key。
+
+    ``<base>:r1`` や ``<base>:w1:r1`` に記録した ``wait`` も ``<base>`` の系列として扱い、
+    1 つの系列から出し直しを 1 件だけ出す（PR #577）。
+    """
     parts = _key_parts(key)
-    while len(parts) > 3 and parts[-1][:1] == "w" and parts[-1][1:].isdigit():
+    base = _BASE_KEY_PARTS.get(parts[1], 3) if len(parts) > 1 else len(parts)
+    while len(parts) > base and _is_rerun_suffix(parts[-1]):
         parts.pop()
     return ":".join(parts)
 
@@ -447,7 +461,7 @@ def _waited_events(
         count = sum(
             1
             for r in ledger.records
-            if r.outcome == "wait" and (r.event_key == root or r.event_key.startswith(f"{root}:w"))
+            if r.outcome == "wait" and r.issue == issue and _root_key(r.event_key) == root
         )
         new_key = f"{root}:w{count}"
         if ledger.has(new_key):
@@ -470,6 +484,22 @@ def _waited_events(
             )
         )
     return events
+
+
+def _deferred_rerun_key(base: str, ledger: Ledger, now: datetime) -> str | None:
+    """出し直した ``pane_idle`` の event の、``still-working`` の後の再確認の key を返す（PR #577）。
+
+    ``<base>:w<n>`` の最新の出し直しに ``still-working`` が記録されたら、``base`` と同じく
+    snooze の後に ``<base>:w<n>:r<m>`` で再確認する。出し直しがなければ ``None``。
+    """
+    count = 0
+    while ledger.has(f"{base}:w{count + 1}"):
+        count += 1
+    if count == 0:
+        return None
+    return _next_rerun_key(
+        f"{base}:w{count}", ledger, now, "still-working", STILL_WORKING_SNOOZE_SECONDS, ":r"
+    )
 
 
 def _apply_recovered(counter: PaneIdleCounter, issue: int, ledger: Ledger) -> PaneIdleCounter:

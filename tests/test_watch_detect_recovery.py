@@ -176,6 +176,53 @@ def test_second_wait_on_reemitted_event_uses_next_suffix() -> None:
     assert [e.key for e in driver.poll("idle", _t(63)).events] == [f"{key}:w2"]
 
 
+def test_still_working_on_reemitted_event_rechecks_after_snooze() -> None:
+    """出し直した ``:w1`` に ``still-working`` が記録されても、同じ episode の再確認を続ける（PR #577）。"""
+    driver = Driver()
+    key = _idle_event(driver, 0)
+    driver.record(key, "wait", _t(4), until=_t(30))
+    reemitted = driver.poll("idle", _t(33)).events[0].key
+    assert reemitted == f"{key}:w1"
+    # triage が周の間に working を観測して still-working（監視は working を見ていない）
+    driver.record(reemitted, "still-working", _t(34))
+    for minute in (36, 39, 51):
+        assert driver.poll("idle", _t(minute)).events == []
+    result = driver.poll("idle", _t(54))
+    assert [e.key for e in result.events] == [f"{reemitted}:r1"]
+    driver.record(f"{reemitted}:r1", "still-working", _t(55))
+    assert driver.poll("idle", _t(66)).events == []
+    assert [e.key for e in driver.poll("idle", _t(75)).events] == [f"{reemitted}:r2"]
+
+
+def test_wait_on_recheck_of_reemitted_event_continues_one_series() -> None:
+    """``:w1:r1`` に記録した ``wait`` は同じ系列の ``:w2`` として 1 件だけ出し直す（PR #577）。"""
+    driver = Driver()
+    key = _idle_event(driver, 0)
+    driver.record(key, "wait", _t(4), until=_t(30))
+    reemitted = driver.poll("idle", _t(33)).events[0].key
+    driver.record(reemitted, "still-working", _t(34))
+    recheck = driver.poll("idle", _t(54)).events[0].key
+    assert recheck == f"{key}:w1:r1"
+    driver.record(recheck, "wait", _t(55), until=_t(90))
+    before = driver.poll("idle", _t(60))
+    assert before.events == [] and before.waiting == {101: _t(90)}
+    # 93 分は log_stall の閾値も越えるので、pane_idle の出し直しだけを比べる
+    after = driver.poll("idle", _t(93))
+    assert [e.key for e in after.events if e.kind == "pane_idle"] == [f"{key}:w2"]
+    assert [e for e in driver.poll("idle", _t(96)).events if e.kind == "pane_idle"] == []
+
+
+def test_wait_on_still_working_recheck_reemits_in_base_series() -> None:
+    driver = Driver()
+    key = _idle_event(driver, 0)
+    driver.record(key, "still-working", _t(4))
+    recheck = driver.poll("idle", _t(27)).events[0].key
+    assert recheck == f"{key}:r1"
+    driver.record(recheck, "wait", _t(28), until=_t(60))
+    assert driver.poll("idle", _t(40)).events == []
+    assert [e.key for e in driver.poll("idle", _t(63)).events] == [f"{key}:w1"]
+
+
 def test_wait_dropped_when_pane_returns_to_working() -> None:
     driver = Driver()
     key = _idle_event(driver, 0)
