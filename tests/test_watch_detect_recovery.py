@@ -212,3 +212,95 @@ def test_wait_on_aborted_delays_only_launch_then_reemits() -> None:
     assert [(e.key, e.kind, e.waited_until) for e in after.events] == [
         (f"{key}:w1", "aborted", until)
     ]
+
+
+def _with_step(step: str, attempt: int) -> WatchIssue:
+    issue = _issue()
+    issue.status["latest_run"]["last_step"] = {"id": step, "attempt": attempt}
+    return issue
+
+
+@pytest.mark.parametrize(
+    ("step", "attempt", "new_key"),
+    [
+        ("review-code", 1, f"101:pane_idle:{RUN}:review-code:1:0"),
+        ("implement", 2, f"101:pane_idle:{RUN}:implement:2:0"),
+    ],
+    ids=["step-changed", "attempt-changed"],
+)
+def test_wait_dropped_when_step_or_attempt_changes(step: str, attempt: int, new_key: str) -> None:
+    # MF-1: 同じ run の別の step / attempt に進んだら、旧 pane の wait は効かない
+    driver = Driver()
+    key = _idle_event(driver, 0)
+    driver.record(key, "wait", _t(4), until=_t(60))
+    moved = _with_step(step, attempt)
+    working = driver.poll("working", _t(6), moved)
+    assert working.waiting == {}
+    driver.poll("idle", _t(9), moved)
+    result = driver.poll("idle", _t(12), moved)
+    assert [e.key for e in result.events] == [new_key]
+    assert result.waiting == {}
+    # 旧 wait の予定時刻を過ぎても、古い step の pane_idle を出し直さない
+    later = driver.poll("idle", _t(63), moved)
+    assert [e.key for e in later.events] == []
+
+
+def test_wait_dropped_when_step_changes_without_observing_pane() -> None:
+    # pane の状態が観測できない周でも、step が変われば旧 wait は効かない
+    driver = Driver()
+    key = _idle_event(driver, 0)
+    driver.record(key, "wait", _t(4), until=_t(60))
+    assert driver.poll(None, _t(6), _with_step("review-code", 1)).waiting == {}
+
+
+def _closed_issue() -> WatchIssue:
+    issue = _issue()
+    return WatchIssue(
+        issue=issue.issue,
+        github_state="closed",
+        state_reason="completed",
+        state_labels=issue.state_labels,
+        status=issue.status,
+    )
+
+
+def _pane_gone_issue() -> WatchIssue:
+    issue = _issue()
+    issue.status["latest_run"]["pane"] = None
+    return issue
+
+
+@pytest.mark.parametrize(
+    "current",
+    [
+        _issue(termination="ended", end_status="COMPLETE"),
+        _closed_issue(),
+        _pane_gone_issue(),
+    ],
+    ids=["complete", "issue-closed", "pane-gone"],
+)
+def test_waited_pane_idle_not_reemitted_without_running_pane(current: WatchIssue) -> None:
+    # MF-2: 予定時刻の後でも、実行中の pane がなければ pane_idle を出し直さない
+    driver = Driver()
+    key = _idle_event(driver, 0)
+    driver.record(key, "wait", _t(4), until=_t(60))
+    before = driver.poll(None, _t(30), current)
+    assert before.events == [] and before.waiting == {}
+    after = driver.poll(None, _t(61), current)
+    assert after.events == []
+    assert driver.poll(None, _t(64), current).events == []
+
+
+def test_pane_idle_wait_then_error_delays_aborted_launch_only() -> None:
+    # MF-2 の対照: wait 中に同じ run が ERROR になったら aborted を検知し、起動だけ予定時刻まで遅らせる
+    driver = Driver()
+    key = _idle_event(driver, 0)
+    until = _t(60)
+    driver.record(key, "wait", _t(4), until=until)
+    aborted = _issue(termination="ended", end_status="ERROR")
+    before = driver.poll(None, _t(30), aborted)
+    assert [e.key for e in before.events] == [f"101:aborted:{RUN}"]
+    assert before.waiting == {101: until}
+    after = driver.poll(None, _t(61), aborted)
+    assert after.events == []
+    assert after.waiting == {}

@@ -294,14 +294,30 @@ def retry(deps: WatchDeps, event_file: Path, reason: str) -> JsonDict:
             "retry",
             repo=deps.repo,
             issue=event.issue,
-            summary=f"retry {event.failed_step or event.step or 'failed step'} on #{event.issue}: "
-            f"{reason}",
+            summary=retry_summary(event, reason),
             pane_id=pane_id,
             event_key=event.key,
         ),
         cwd=deps.repo_root,
     )
     return {"record": entry.model_dump(), "tab_id": tab_id, "pane_id": pane_id, "command": command}
+
+
+#: series の member をやり直したときに通知の summary へ足す案内（#545 方針 2。skill のコメントと同じ内容）
+SERIES_RETRY_NOTE = (
+    "series: the remaining members stay stopped; after this retry reaches close, "
+    "the maintainer resumes the series with /run-watched (not run-series --resume)"
+)
+
+
+def retry_summary(event: WatchEventFile, reason: str) -> str:
+    """通知 ``retry`` の summary。series の member（anchor が ``member:``）なら続きの起動の案内を足す。"""
+    summary = (
+        f"retry {event.failed_step or event.step or 'failed step'} on #{event.issue}: {reason}"
+    )
+    if event.anchor is not None and event.anchor.startswith("member:"):
+        summary = f"{summary} | {SERIES_RETRY_NOTE}"
+    return summary
 
 
 def retry_command(workflow_path: Path, issue: int, run_id: str) -> str:

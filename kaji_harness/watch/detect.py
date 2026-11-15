@@ -272,8 +272,12 @@ def detect_events(
             suppressed.add(number)
         tab_open = number in open_triage
         current_run = target.run_id if target is not None and _failed(target) else run_id
-        wait_episode = counter.episode if counter is not None else None
-        active_wait = _active_wait(number, current_run, wait_episode, ledger, now)
+        scope = _WaitScope(
+            run_id=current_run,
+            pane=(counter.step, counter.attempt, counter.episode) if counter is not None else None,
+            failed=_failed(target),
+        )
+        active_wait = _active_wait(number, scope, ledger, now)
         if active_wait is not None:
             waiting[number] = active_wait
 
@@ -297,7 +301,7 @@ def detect_events(
                     )
                 )
         if active_wait is None:
-            candidates.extend(_waited_events(number, current_run, wait_episode, ledger, now))
+            candidates.extend(_waited_events(number, scope, ledger, now))
         quiet = tab_open or active_wait is not None
         if not quiet and counter is not None and counter.idle_polls >= PANE_IDLE_POLLS:
             base = f"{number}:pane_idle:{run_id}:{step}:{attempt}:{counter.episode}"
@@ -366,14 +370,45 @@ def _root_key(key: str) -> str:
     return ":".join(parts)
 
 
-def _wait_applies(key: str, current_run: str | None, episode: int | None) -> bool:
-    """``wait`` の記録の event が今の run（と pane の episode）のものかを返す（kamo2 ``prune_waits``）。"""
+@dataclass(frozen=True)
+class _WaitScope:
+    """``wait`` の記録が今も効くかを判定するための、Issue の現在の状態（#545）。
+
+    Attributes:
+        run_id: 今の run（失敗した run が目標の根拠ならその run）。
+        pane: 実行中の step の pane の ``(step, attempt, episode)``。run が実行中で pane が
+            あるときだけ値を持つ（終了・Issue の close・pane の消失では ``None``）。
+        failed: 失敗した run が目標の根拠か（``aborted`` の検知と起動の遅延の対象か）。
+    """
+
+    run_id: str | None
+    pane: tuple[str, int | None, int] | None
+    failed: bool
+
+
+def _wait_applies(key: str, scope: _WaitScope, *, reemit: bool) -> bool:
+    """``wait`` の記録の event が今の Issue の状態に対して効くかを返す（kamo2 ``prune_waits``）。
+
+    - run が変わったら失効する。
+    - ``pane_idle`` は、実行中の pane の step・attempt・episode が key と一致する間だけ効く。
+      別の step / attempt に進んだ、または ``working`` に戻って episode が増えたら失効する（#545 MF-1）。
+    - ``pane_idle`` で実行中の pane がない（run の終了・Issue の close・pane の消失）とき、
+      出し直し（``reemit``）はしない（#545 MF-2）。予定時刻の前の起動の遅延は、失敗した run の
+      ``aborted`` の起動を遅らせるためにだけ効かせる。
+    - ``aborted`` は、同じ run が失敗した run として目標の根拠である間だけ効く。
+    """
     parts = _key_parts(key)
-    if len(parts) < 3 or current_run is None or parts[2] != current_run:
+    if len(parts) < 3 or scope.run_id is None or parts[2] != scope.run_id:
         return False
-    if episode is not None and parts[1] == "pane_idle" and len(parts) >= 6 and parts[5].isdigit():
-        return int(parts[5]) == episode
-    return True
+    kind = parts[1]
+    if kind == "aborted":
+        return scope.failed
+    if kind != "pane_idle" or len(parts) < 6:
+        return False
+    if scope.pane is None:
+        return not reemit and scope.failed
+    step, attempt, episode = scope.pane
+    return (parts[3], parts[4], parts[5]) == (step, str(attempt), str(episode))
 
 
 def _latest_waits(issue: int, ledger: Ledger) -> dict[str, RecordEntry]:
@@ -385,22 +420,20 @@ def _latest_waits(issue: int, ledger: Ledger) -> dict[str, RecordEntry]:
     return {record.event_key: record for record in latest.values()}
 
 
-def _active_wait(
-    issue: int, current_run: str | None, episode: int | None, ledger: Ledger, now: datetime
-) -> datetime | None:
+def _active_wait(issue: int, scope: _WaitScope, ledger: Ledger, now: datetime) -> datetime | None:
     """予定時刻の前の ``wait`` があれば、その予定時刻を返す（#545）。"""
     found: datetime | None = None
     for key, record in _latest_waits(issue, ledger).items():
         last = ledger.last_record(key)
         if last is None or last.outcome != "wait" or record.until is None:
             continue
-        if record.until > now and _wait_applies(key, current_run, episode):
+        if record.until > now and _wait_applies(key, scope, reemit=False):
             found = record.until if found is None else max(found, record.until)
     return found
 
 
 def _waited_events(
-    issue: int, current_run: str | None, episode: int | None, ledger: Ledger, now: datetime
+    issue: int, scope: _WaitScope, ledger: Ledger, now: datetime
 ) -> list[DetectedEvent]:
     """予定時刻を過ぎた ``wait`` の event を ``<key>:w<n>`` で出し直す（#545）。"""
     events: list[DetectedEvent] = []
@@ -408,7 +441,7 @@ def _waited_events(
         last = ledger.last_record(key)
         if last is None or last.outcome != "wait" or record.until is None:
             continue
-        if record.until > now or not _wait_applies(key, current_run, episode):
+        if record.until > now or not _wait_applies(key, scope, reemit=True):
             continue
         root = _root_key(key)
         count = sum(
@@ -423,13 +456,13 @@ def _waited_events(
         kind = parts[1]
         if kind not in ("pane_idle", "aborted"):
             continue
-        progress = record.progress or (None, current_run, None, None, 0)
+        progress = record.progress or (None, scope.run_id, None, None, 0)
         events.append(
             DetectedEvent(
                 key=new_key,
                 kind="pane_idle" if kind == "pane_idle" else "aborted",
                 issue=issue,
-                run_id=current_run,
+                run_id=scope.run_id,
                 step=progress[2],
                 attempt=progress[3],
                 progress=progress,

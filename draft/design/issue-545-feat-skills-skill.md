@@ -264,6 +264,11 @@ kaji watch recoveries --issue 101
     出し直さない（報告は run ごとに 1 回のまま）。
   - その Issue の最新の run が変わった、または pane の episode が増えた（予定時刻の前に `working` に戻った）場合は、
     新しい key の event として通常どおり検知する（kamo2 の `prune_waits` と同じ結果）。
+  - `pane_idle` の `wait` は、実行中の step の pane の同一性（run・step・attempt・episode）が key と一致する間だけ効く。
+    同じ run の別の step・attempt に進んだら破棄する（review-code 指摘 MF-1）。
+  - 予定時刻の後の `pane_idle` の `:w<n>` は、run が実行中で pane がある（Issue が open）ときだけ出す。run の終了
+    （COMPLETE / ERROR）・Issue の close・pane の消失では出さない（review-code 指摘 MF-2）。ERROR で終わった場合は
+    `aborted` を検知し、その起動だけを予定時刻まで遅らせる（失敗した run が目標の根拠の間だけ `wait` を起動の遅延に効かせる）。
   - event ファイルを書くときに `anchor`（`resolve_anchor` の値）を入れる。
 - `detect.py`: **監視の周の間に復旧して再停止した場合の再検知（MF-5）**。
   - 問題: episode は監視自身が `working` を観測したときだけ増える。triage が `continue` → `working` を観測して

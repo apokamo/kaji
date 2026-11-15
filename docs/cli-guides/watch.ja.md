@@ -56,8 +56,13 @@ kaji watch recoveries [--issue N] [--json]    # 自動復旧の一覧（読む�
 
 - `wait` の予定時刻の前は、その Issue・run の `pane_idle` / `log_stall` を出さず、新しい `aborted` は報告して起動だけを
   遅らせる。過ぎたら `waited_until` 付きの `<key>:w<n>` を出す（`aborted` の `:w<n>` は報告・通知を出し直さない）。
+- `pane_idle` の `wait` は、同じ step の pane（run・step・attempt・episode）が実行中の間だけ効く。新しい run、別の step・
+  attempt への進行、予定時刻の前の `working` への戻りで破棄する。run の終了・Issue の close・pane の消失では
+  `pane_idle` の `:w<n>` を出さない。run が `ERROR` で終わった場合は `aborted` を検知し、その起動だけを予定時刻まで遅らせる。
 - 周の間に記録された `recovered` は `working` の観測と同じに扱い（1 件につき 1 回）、同じ attempt の再停止も 2 周で再検知する。
-- 1.〜4. で戻った場合は通知しない。`retry` と `handoff` は通知する。
+- 1.〜4. で戻った場合は通知しない。`retry` と `handoff` は通知する。series の member（event の `anchor` が
+  `member:<run_id>`）の `retry` の通知の summary には、残りの member は止まったままで、やり直しが close まで進んだ後に
+  保守者が `/run-watched` で続きを起動する（`run-series --resume` は使わない）旨を足す。
 - event ファイルには任意の `anchor`（`member:<run_id>` / `baseline:<run_id>` / `none`）と `waited_until` が入る。
 - 通知の payload と `events --json` は schema v2（`kind` に `retry`、`records[].outcome` に 5 値と任意の項目を追加）。
   `schema_version == 1` を確かめている通知スクリプトは 2 も受け付けるように直す。`status --json` は v1 のまま、

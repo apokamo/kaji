@@ -192,10 +192,27 @@ def test_retry_launches_recover_tab_once_and_notifies(tmp_path: Path) -> None:
     assert result["record"]["unit"] == [101, "member:261115000000"]
     payloads = _payloads(out)
     assert [(p["kind"], p["schema_version"]) for p in payloads] == [("retry", 2)]
+    # series の member: 通知だけを見る保守者にも、続きの起動の案内を出す（#545 方針 2）
+    assert payloads[0]["summary"] == (
+        f"retry implement on #101: provider at capacity | {service.SERIES_RETRY_NOTE}"
+    )
     with pytest.raises(AutoRecoveryLimitReached):
         service.retry(deps, event, "again")
     assert len(herdr.tabs) == 1
     assert len(_payloads(out)) == 1
+
+
+@pytest.mark.parametrize("anchor", ["baseline:261115000000", "none"])
+def test_retry_summary_without_series_member_has_no_series_note(
+    tmp_path: Path, anchor: str
+) -> None:
+    _workflow(tmp_path)
+    script, out = _notify_script(tmp_path)
+    deps = _deps(tmp_path, FakeProvider({101: FakeIssue()}), FakeHerdr(), script)
+    service.retry(deps, _event(tmp_path, "aborted", anchor=anchor), "provider at capacity")
+    assert [p["summary"] for p in _payloads(out)] == [
+        "retry implement on #101: provider at capacity"
+    ]
 
 
 @pytest.mark.parametrize("names", [[], ["dev", "dev"]])

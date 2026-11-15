@@ -154,6 +154,42 @@ def test_pane_working_before_until_detects_new_episode(
     assert f"101:pane_idle:{RUN}:implement:1:1" in deps.store.load_state().events
 
 
+def _completed() -> Facts:
+    facts = _running("idle")
+    issue = facts.issues[0]
+    run = dict(issue.status["latest_run"])
+    run.update(termination="ended", end_status="COMPLETE", pane=None)
+    status = {**issue.status, "any_run_alive": False, "latest_run": run}
+    return replace(facts, issues=[replace(issue, status=status)], pane_status={101: None})
+
+
+def test_pane_idle_wait_then_complete_does_not_relaunch_triage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # MF-2: wait 中に同じ run が COMPLETE で終わったら、予定時刻の後に pane_idle を出し直さない
+    deps, herdr, clock, current = _setup(tmp_path, monkeypatch)
+    run_once(deps)
+    clock.advance(3)
+    run_once(deps)
+    key = f"101:pane_idle:{RUN}:implement:1:0"
+    service.record(
+        deps,
+        _event_path(deps.store, key),
+        "wait",
+        comment_url=None,
+        summary=None,
+        reason="usage limit",
+        until=(clock.now + timedelta(minutes=30)).isoformat(),
+    )
+    _close_triage(herdr)
+    current["facts"] = _completed()
+    for _ in range(3):
+        clock.advance(15)
+        run_once(deps)
+    assert sorted(deps.store.load_state().events) == [key]
+    assert len(herdr.runs) == 1
+
+
 def test_aborted_wait_reports_once_and_launches_after_until(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

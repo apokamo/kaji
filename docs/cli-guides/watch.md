@@ -134,13 +134,18 @@ only on exit 0. Limits are counted from `records.jsonl` lines under its `flock`.
 
 Everything else, including class-3 questions, is reported and handed off as before. Successful
 `continue-sent` / `dialog-answered` / `question-answered` recoveries are not notified;
-`retry` and `handoff` are.
+`retry` and `handoff` are. For a series member (event `anchor` `member:<run_id>`) the `retry`
+summary adds that the remaining members stay stopped and the maintainer resumes the series with
+`/run-watched` after the retry reaches close (not `run-series --resume`).
 
 - **`wait`**: until the reset time, `kaji watch` raises no `pane_idle` / `log_stall` for the
   Issue's run and delays the triage launch of a new `aborted` event (it is still reported).
   After the reset time it raises `<key>:w<n>` with `waited_until` set; an `aborted` `:w<n>` is
-  not reported or notified again. A new run, or the pane returning to `working` before the
-  reset time, drops the wait.
+  not reported or notified again. A `pane_idle` wait holds only while the same step pane
+  (run, step, attempt, episode) is still running: a new run, a move to another step or attempt,
+  or the pane returning to `working` before the reset time drops it. If the run ends, the Issue
+  is closed or the pane is gone, the `pane_idle` `:w<n>` is not raised; when the run ended with
+  `ERROR`, the `aborted` event is still detected and its triage launch waits for the reset time.
 - **`recovered` between polls**: a new `recovered` record for the same run, step and attempt
   counts as an observed `working` (the pane episode advances once per record), so a second
   stop of the same attempt is raised again after 2 idle polls and is still bounded by the
