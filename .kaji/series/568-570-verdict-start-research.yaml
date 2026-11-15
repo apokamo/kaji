@@ -1,0 +1,10 @@
+id: 568-570-verdict-start-research
+strategy: sequential
+members:
+  - issue: 568
+    workflow: .kaji/wf/custom/dev/dev-thorough.yaml
+  - issue: 569
+    workflow: .kaji/wf/custom/dev/dev-thorough.yaml
+  - issue: 570
+    workflow: .kaji/wf/official/docs.yaml
+on_failure: stop
