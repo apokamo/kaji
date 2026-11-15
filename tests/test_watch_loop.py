@@ -308,3 +308,90 @@ def test_run_loop_exits_after_empty_polls(tmp_path: Path) -> None:
     assert line == "watch finished"
     assert sleeps == [180]
     assert WatchStore(tmp_path / ".kaji-artifacts").is_locked() is False
+
+
+def _aborted_setup(tmp_path: Path) -> tuple[FakeProvider, FakeHerdr, WatchDeps]:
+    artifacts = tmp_path / ".kaji-artifacts"
+    _write_ended_run(artifacts, "261115000000", [start(), step_start("implement"), end("ERROR")])
+    provider = FakeProvider({101: FakeIssue(labels={"state:running"})})
+    herdr = FakeHerdr()
+    return provider, herdr, _deps(tmp_path, provider, herdr)
+
+
+def test_launching_with_claude_in_tab_is_reconciled_without_relaunch(tmp_path: Path) -> None:
+    # pane run の後・launched の保存前に落ちた: 照合で launched になり二重起動しない
+    provider, herdr, deps = _aborted_setup(tmp_path)
+    original = herdr.run_in_pane
+
+    def crash_after_run(pane_id: str, command: str) -> None:
+        original(pane_id, command)
+        raise KeyboardInterrupt
+
+    herdr.run_in_pane = crash_after_run  # type: ignore[method-assign]
+    with pytest.raises(KeyboardInterrupt):
+        run_once(deps)
+    store = WatchStore(tmp_path / ".kaji-artifacts")
+    assert store.load_state().events["101:aborted:261115000000"].launch_status == "launching"
+    herdr.run_in_pane = original  # type: ignore[method-assign]
+    herdr.foreground["p_1"] = ("active", ["claude --dangerously-skip-permissions /watch-triage x"])
+    run_once(deps)
+    assert store.load_state().events["101:aborted:261115000000"].launch_status == "launched"
+    assert len(herdr.runs) == 1
+
+
+def test_launching_with_shell_only_tab_closes_and_relaunches(tmp_path: Path) -> None:
+    # tab create の後・pane run の前に落ちた: シェルだけのタブを閉じて起動し直す
+    provider, herdr, deps = _aborted_setup(tmp_path)
+
+    def crash(pane_id: str, command: str) -> None:
+        raise KeyboardInterrupt
+
+    original = herdr.run_in_pane
+    herdr.run_in_pane = crash  # type: ignore[method-assign]
+    with pytest.raises(KeyboardInterrupt):
+        run_once(deps)
+    herdr.run_in_pane = original  # type: ignore[method-assign]
+    herdr.foreground["p_1"] = ("shell_only", ["bash"])
+    run_once(deps)
+    assert herdr.closed == ["t1"]
+    assert len(herdr.runs) == 1
+    state = WatchStore(tmp_path / ".kaji-artifacts").load_state()
+    assert state.events["101:aborted:261115000000"].launch_status == "launched"
+
+
+def test_launch_failures_reach_launch_failed(tmp_path: Path) -> None:
+    provider, herdr, deps = _aborted_setup(tmp_path)
+
+    def fail(label: str, cwd: Path) -> tuple[str, str]:
+        raise RuntimeError("herdr down")
+
+    herdr.create_tab = fail  # type: ignore[method-assign]
+    for _ in range(4):
+        run_once(deps)
+    event = WatchStore(tmp_path / ".kaji-artifacts").load_state().events["101:aborted:261115000000"]
+    assert event.launch_status == "launch_failed"
+    assert event.launch_attempts == 3
+
+
+def test_reopened_done_without_run_is_kept(tmp_path: Path) -> None:
+    artifacts = tmp_path / ".kaji-artifacts"
+    _write_ended_run(artifacts, "261115000000", [start(), end("COMPLETE")])
+    provider = FakeProvider({101: FakeIssue(labels={"state:done"})})
+    deps = _deps(tmp_path, provider, FakeHerdr())
+    first = run_once(deps)
+    assert provider.edits == []
+    assert provider.issues[101].labels == {"state:done"}
+    run_once(deps)
+    # 終了判定の件数に数えない（M6）→ 2 周で終了
+    assert first.exit is False
+
+
+def test_reopened_done_with_new_failed_run_becomes_aborted(tmp_path: Path) -> None:
+    artifacts = tmp_path / ".kaji-artifacts"
+    _write_ended_run(artifacts, "261115000000", [start(), end("COMPLETE")])
+    provider = FakeProvider({101: FakeIssue(labels={"state:done"})})
+    deps = _deps(tmp_path, provider, FakeHerdr())
+    run_once(deps)
+    _write_ended_run(artifacts, "261115010000", [start(), step_start("implement"), end("ERROR")])
+    run_once(deps)
+    assert provider.issues[101].labels == {"state:aborted"}
