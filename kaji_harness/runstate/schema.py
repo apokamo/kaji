@@ -13,6 +13,7 @@ from typing import Any, get_args
 
 from pydantic import TypeAdapter, ValidationError
 
+from ..series.models import is_valid_series_id
 from ..series.state import MemberState, SeriesState
 from .facts import IssueFacts, ReadError, RunFacts
 
@@ -135,6 +136,21 @@ def _validate_field(annotation: Any, value: Any) -> tuple[Any, bool]:
         return TypeAdapter(annotation).validate_python(value, strict=True), True
     except ValidationError:
         return None, False
+
+
+def list_series_ids(artifacts_dir: Path) -> list[str]:
+    """``_series/<id>/`` の配置から series id を昇順で列挙する。
+
+    ``series_to_json`` と同じ配置規則を使い、``is_valid_series_id`` を満たす dir だけを返す。
+    """
+    series_root = artifacts_dir / "_series"
+    if not series_root.is_dir():
+        return []
+    return sorted(
+        path.name
+        for path in series_root.iterdir()
+        if path.is_dir() and is_valid_series_id(path.name)
+    )
 
 
 def series_to_json(artifacts_dir: Path, series_id: str) -> tuple[JsonDict, list[int]]:

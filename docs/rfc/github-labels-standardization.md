@@ -128,6 +128,25 @@ Epic 親 Issue は workflow で直接実行しない。原則として `/issue-s
 - **配色アクセシビリティ**: `type:feature` (Green) と `type:bug` (Red) はテキストプレフィックスで補完するため colorblind 配慮は致命的でない
 - **同期トリガー**: 手動 / `.github/labels.yml` への push / 週次 cron（drift 検知）
 
+### state:* / wf:* の契約（#543 で追加）
+
+`[watch]` を宣言した repo でだけ使う opt-in のラベル（kamo2 と同じ名前、`kaji:` 接頭辞なし）。
+
+| ラベル | 意味 | 付ける主体 | 外す主体 |
+|---|---|---|---|
+| `state:planned` | series に投入済みで、まだ run が始まっていない | `/run-watched`、`kaji watch` | `kaji watch`、`issue-close` |
+| `state:running` | その Issue の `kaji run` が生きている | `kaji watch` | `kaji watch`、`issue-close` |
+| `state:aborted` | 投入後の最新の run が失敗・消失、または COMPLETE で open のまま | `kaji watch` | `kaji watch`、`issue-close` |
+| `state:done` | close 済み（completed） | `issue-close`、`kaji watch` | `kaji watch`（reopen 後に新しい run がある場合） |
+| `state:hold` | 保留中。無人の workflow に渡さない | 人 | 人、`issue-close` |
+| `state:needs-maintainer` | 保守者の対応待ち | 人、`issue-close`（follow-up 起票時） | 人、`issue-close` |
+
+- **排他**: 1 Issue に付く `state:*` は高々 1 個。`kaji watch` は「付ける → 外す」の 2 段で付け替え、途中で落ちた 2 個は次の周で直す。
+- **close 時**: `issue-close` の `mark-done` は `state:done` を付けてほかのすべての `state:*` を外す（排他を優先する）。
+- **人が付けてよいもの**: `state:hold` と `state:needs-maintainer` だけ。`kaji watch` はこれらが付いた Issue と、人の操作で 2 個以上付いた Issue に触れない。
+- **`wf:<name>`**: `<name>` は workflow YAML の `name:`。1 Issue に高々 1 個。人だけが付け、`/run-watched` が既定の workflow として読む。`.kaji/wf/**/*.yaml` の `name:` がちょうど 1 個一致するときだけ解決する。
+- 定義しない: `state:ready` / `state:needs-verify` / `state:needs-grill` / `prio:*`。
+
 ## bootstrap exception の記録
 
 本 RFC を実装した #154 自体は、`type:*` 体系を新設する Issue であるため、`type:*` ラベル体系成立前は付与不能だった。実装途中で `type:chore` を bootstrap 用途として先行作成し、Issue に付与することで `issue-review-design` の cardinality チェックを通した。移行フェーズの self-validation で `enhancement` を剥がして `type:chore` のみが残ることを確認する（前述「移行手順」step 6）。

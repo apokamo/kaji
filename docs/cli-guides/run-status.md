@@ -6,7 +6,8 @@
 tools call it instead of reading kaji's internal files (`run.log`, `session-state.json`,
 `process.json`, `_series/*/state.json`, ...). The JSON output (`--json`) is a public
 contract with a `schema_version`; the default table output is for people and is not a
-contract.
+contract. [`kaji watch`](watch.md) is one such monitoring tool: it reads run and series
+facts through the same path as `kaji status --json`.
 
 ```bash
 kaji status 540 541                 # table

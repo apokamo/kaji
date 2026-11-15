@@ -58,7 +58,32 @@ classification 軸の 2 軸からなり、`kaji:incident:cause:transient` のみ
 | `kaji:incident:cause:environment` | classification | 人間 |
 | `kaji:incident:cause:transient` | classification | 第1層（auto-resume 自己回復時） |
 
-管理対象ラベル数: type:* (11) + meta (10) + incident (8) = 29。
+### state:* (6) — 実行段階（`[watch]` 宣言 repo で `kaji watch` が同期。#543）
+
+series に投入した Issue の実行段階。`[watch]` を宣言した repo でだけ `kaji watch` / `/run-watched` /
+`issue-close` が付け外しする。契約（意味・付ける主体と外す主体・排他・人が付けてよいもの）の正本は
+[`docs/cli-guides/watch.md` § Label contract](../cli-guides/watch.md#label-contract) と
+[RFC](../rfc/github-labels-standardization.md)。
+
+| ラベル | 付与者 |
+|--------|--------|
+| `state:planned` | `/run-watched`（投入時）・`kaji watch` |
+| `state:running` | `kaji watch` |
+| `state:aborted` | `kaji watch` |
+| `state:done` | `issue-close`・`kaji watch` |
+| `state:hold` | 人間 |
+| `state:needs-maintainer` | 人間・`issue-close`（follow-up 起票時） |
+
+1 Issue に付く `state:*` は高々 1 個。`state:hold` / `state:needs-maintainer` が付いた Issue に
+`kaji watch` は触れない。`state:ready` / `state:needs-verify` / `state:needs-grill` / `prio:*` は定義しない。
+
+### wf:* (4) — `/run-watched` の既定 workflow（人間が起票時に任意で付与）
+
+`wf:<name>` の `<name>` は workflow YAML の `name:`。`.kaji/wf/**/*.yaml` のうち `name:` が一致するものが
+ちょうど 1 個のときだけ解決する。kaji の repo では `wf:dev` / `wf:dev-thorough` / `wf:dev-small` / `wf:docs`
+を定義する（Issue から指定する運用のない `incident` / `starter-sync` / `*-codex` は定義しない）。kaji は書かない。
+
+管理対象ラベル数: type:* (11) + meta (10) + incident (8) + state:* (6) + wf:* (4) = 39。
 
 ## Epic 親 Issue の運用
 

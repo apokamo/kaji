@@ -275,6 +275,11 @@ Use `/series-create <issue>... --id <series-id>` to generate a validated definit
 starting execution. The runner advances only after the preceding workflow exits successfully and
 the Issue is closed with reason `completed`.
 
+In a repository that declares `[watch]` in `.kaji/config.toml`, `kaji watch start` (inside a
+Herdr pane) keeps `state:*` labels in sync with run state and launches `/watch-triage` when a
+run stops; `/run-watched` creates, commits and launches a watched series from an explicit
+request. See [docs/cli-guides/watch.md](docs/cli-guides/watch.md).
+
 ### Develop kaji itself
 
 Use this path only when you want to work on kaji, not just run it in another

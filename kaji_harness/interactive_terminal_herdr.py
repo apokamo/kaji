@@ -768,6 +768,15 @@ def _resolve_herdr() -> str:
     return herdr
 
 
+def resolve_herdr_cli() -> str:
+    """Resolve the installed Herdr CLI (public wrapper for monitoring tools, Issue #543).
+
+    Raises:
+        CLINotFoundError: The ``herdr`` executable is not on ``PATH``.
+    """
+    return _resolve_herdr()
+
+
 def _resolve_herdr_origin() -> str:
     """Resolve the explicit caller pane from the Herdr environment.
 
@@ -1685,6 +1694,122 @@ def inspect_agent_pane(
     if liveness == "confirmed_shell_only":
         return "shell_only"
     return "unknown"
+
+
+def _herdr_result_object(response: dict[str, object]) -> dict[str, object]:
+    """Extract the Herdr result object without pinning its ``type`` name."""
+    result = response.get("result")
+    if not isinstance(result, dict):
+        raise CLIExecutionError("interactive_terminal", 1, "Herdr response omitted result")
+    return cast(dict[str, object], result)
+
+
+def _herdr_id(value: object, key: str) -> str:
+    if isinstance(value, dict):
+        value = value.get(key)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    if not isinstance(value, str) or not value:
+        raise CLIExecutionError("interactive_terminal", 1, f"Herdr response omitted {key}")
+    return value
+
+
+def list_tabs(herdr: str) -> list[dict[str, object]]:
+    """Issue #543: ``herdr tab list`` のタブを返す（読み取りのみ）。
+
+    Raises:
+        CLIExecutionError: 照会に失敗した、または応答を読めない場合。
+    """
+    tabs = _herdr_result_object(_run_herdr_json(herdr, ["tab", "list"])).get("tabs")
+    if not isinstance(tabs, list):
+        raise CLIExecutionError("interactive_terminal", 1, "Herdr tab list omitted tabs")
+    return [cast(dict[str, object], tab) for tab in tabs if isinstance(tab, dict)]
+
+
+def list_panes(herdr: str) -> list[dict[str, object]]:
+    """Issue #543: ``herdr pane list`` の全 pane を返す（読み取りのみ）。
+
+    Raises:
+        CLIExecutionError: 照会に失敗した、または応答を読めない場合。
+    """
+    return list(_list_all_herdr_panes(herdr).values())
+
+
+def create_tab(herdr: str, *, label: str, cwd: Path) -> tuple[str, str]:
+    """Issue #543: focus を奪わずにタブを作り ``(tab_id, root_pane_id)`` を返す。
+
+    Raises:
+        CLIExecutionError: 作成に失敗した、または応答を読めない場合。
+    """
+    result = _herdr_result_object(
+        _run_herdr_json(herdr, ["tab", "create", "--cwd", str(cwd), "--label", label, "--no-focus"])
+    )
+    return _herdr_id(result.get("tab"), "tab_id"), _herdr_id(result.get("root_pane"), "pane_id")
+
+
+def run_in_pane(herdr: str, pane_id: str, command: str) -> None:
+    """Issue #543: pane で 1 行のコマンドを実行する（``herdr pane run``）。
+
+    Raises:
+        CLIExecutionError: 実行に失敗した場合。
+    """
+    _run_herdr(herdr, ["pane", "run", pane_id, command])
+
+
+def close_tab(herdr: str, tab_id: str) -> None:
+    """Issue #543: タブを閉じる。
+
+    Raises:
+        CLIExecutionError: 実行に失敗した場合。
+    """
+    _run_herdr(herdr, ["tab", "close", tab_id])
+
+
+def pane_foreground(herdr: str, pane_id: str) -> tuple[str, list[str]]:
+    """Issue #543: pane の前景の状態と、前景プロセスの argv（空白区切り）を返す。
+
+    Returns:
+        ``(active | shell_only | unknown, argv の列)``。照会できなければ ``("unknown", [])``。
+    """
+    try:
+        info = _get_herdr_process_info(herdr, pane_id)
+    except (CLIExecutionError, OSError):
+        return "unknown", []
+    liveness = _classify_herdr_process_liveness(info)
+    commands: list[str] = []
+    processes = info.get("foreground_processes")
+    if isinstance(processes, list):
+        for proc in processes:
+            argv = proc.get("argv") if isinstance(proc, dict) else None
+            if isinstance(argv, list):
+                commands.append(" ".join(str(arg) for arg in argv))
+    state = {"active": "active", "confirmed_shell_only": "shell_only"}.get(liveness, "unknown")
+    return state, commands
+
+
+def read_pane_agent_status(pane_id: str, *, origin_pane: str | None, run_id: str | None) -> str:
+    """Issue #543: step の pane の ``agent_status`` を読み取り専用で返す。
+
+    ``inspect_agent_pane`` と同じ所有の確認（tokens の ``kaji_run`` / ``kaji_origin``）を行い、
+    所有が確認できない pane は ``unknown`` とする。
+
+    Returns:
+        ``working`` / ``idle`` / ``done`` / ``blocked`` 等の Herdr の値、または ``unknown``。
+    """
+    if not _is_nonempty_str(origin_pane) or not _is_nonempty_str(run_id):
+        return "unknown"
+    try:
+        herdr = _resolve_herdr()
+        pane = _get_herdr_pane(herdr, pane_id)
+    except (CLINotFoundError, CLIExecutionError, OSError):
+        return "unknown"
+    tokens = pane.get("tokens")
+    if not isinstance(tokens, dict):
+        return "unknown"
+    if tokens.get("kaji_origin") != origin_pane or tokens.get("kaji_run") != run_id:
+        return "unknown"
+    status = pane.get("agent_status")
+    return status if isinstance(status, str) and status else "unknown"
 
 
 def _close_owned_herdr_pane(

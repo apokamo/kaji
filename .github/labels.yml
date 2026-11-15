@@ -3,10 +3,11 @@
 # 配色: Catppuccin Mocha パレット（https://catppuccin.com/palette）
 # 同期: .github/workflows/labels-sync.yml が main への push / 手動 / 週次 cron で実行
 #
-# 管理対象は type:* (11) + meta (10) + incident (8) = 合計 29 ラベルのみ。
+# 管理対象は type:* (11) + meta (10) + incident (8) + state:* (6) + wf:* (4) = 合計 39 ラベルのみ。
 # release-please が自動生成する `autorelease:*` / `release-please:*` は bot 所有で
 # 管理対象外（運用ガイド: docs/dev/labels.md を参照）。
 # incident 2 軸（status / classification）の意味と遷移意図: docs/dev/incident-labels.md。
+# state:* / wf:* の契約（意味・付ける主体と外す主体・排他）: docs/rfc/github-labels-standardization.md。
 
 labels:
   # ============================================================
@@ -141,3 +142,51 @@ labels:
   - name: "kaji:incident:cause:transient"
     color: "9399b2"
     description: "classification 軸: 一過性（auto-resume 自己回復。第1層が自動付与＋即クローズ）"
+
+  # ============================================================
+  # state:* (6) — 実行段階（[watch] を宣言した repo で kaji watch が同期。#543）
+  # ============================================================
+
+  - name: "state:planned"
+    color: "89dceb"
+    description: "series に投入済みで、まだ run が始まっていない（/run-watched・kaji watch が付与）"
+
+  - name: "state:running"
+    color: "a6e3a1"
+    description: "その Issue の kaji run が生きている（kaji watch が付与）"
+
+  - name: "state:aborted"
+    color: "f38ba8"
+    description: "投入後の最新の run が失敗・消失、または COMPLETE で open のまま（kaji watch が付与）"
+
+  - name: "state:done"
+    color: "9399b2"
+    description: "close 済み（completed。issue-close・kaji watch が付与）"
+
+  - name: "state:hold"
+    color: "f9e2af"
+    description: "保留中。無人の workflow に渡さない（人が付与）"
+
+  - name: "state:needs-maintainer"
+    color: "fab387"
+    description: "保守者の対応待ち（人・issue-close の follow-up 起票時に付与）"
+
+  # ============================================================
+  # wf:* (4) — /run-watched が既定に使う workflow（name: と一致。人が起票時に任意で付与）
+  # ============================================================
+
+  - name: "wf:dev"
+    color: "b4befe"
+    description: "既定の workflow: dev"
+
+  - name: "wf:dev-thorough"
+    color: "b4befe"
+    description: "既定の workflow: dev-thorough"
+
+  - name: "wf:dev-small"
+    color: "b4befe"
+    description: "既定の workflow: dev-small"
+
+  - name: "wf:docs"
+    color: "b4befe"
+    description: "既定の workflow: docs"

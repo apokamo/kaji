@@ -18,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 LABELS_PATH = REPO_ROOT / ".github" / "labels.yml"
 SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
 
-EXPECTED_LABEL_COUNT = 29
+EXPECTED_LABEL_COUNT = 39  # #543: state:* (6) + wf:* (4) を追加
 DEFAULT_INCIDENT_LABELS = {
     "kaji:incident",
     "kaji:incident:investigating",

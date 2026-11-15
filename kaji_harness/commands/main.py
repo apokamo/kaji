@@ -18,6 +18,7 @@ from .starter import cmd_starter_release_plan, cmd_starter_task_plan, cmd_starte
 from .status import cmd_status
 from .validate import cmd_validate
 from .verdict import cmd_verdict_publish
+from .watch import cmd_watch
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -31,6 +32,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_run(args)
     if args.command == "status":
         return cmd_status(args)
+    if args.command == "watch":
+        return cmd_watch(args)
     if args.command == "validate":
         return cmd_validate(args)
     if args.command == "validate-series":

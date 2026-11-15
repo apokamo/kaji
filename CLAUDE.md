@@ -32,6 +32,7 @@ PR 作成後のレビュー収束サイクルを管理する。
 | PR レビュー後 | `/pr-fix` / `/pr-verify` / `/review-cycle` |
 | 完了 | `/issue-close` |
 | インシデント調査（第2層・手動起動） | `/incident-cycle`（内部: `incident-investigate` → `incident-review` → (`incident-fix` → `incident-verify`) → `incident-report`） |
+| 監視付き series 起動・停止の判断（`[watch]` 宣言 repo） | `/run-watched`（起動の入口）/ `/watch-triage`（`kaji watch` が自動起動） |
 | Release | `/release` |
 | Starter 追随（Release 後） | `/update-starter` → 別 session `/review-starter-update` → `/release-starter` |
 

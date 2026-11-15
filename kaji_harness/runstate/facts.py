@@ -209,7 +209,8 @@ def decide_termination(
     return "unknown"
 
 
-def _attempt_dir(run_dir: Path, step_id: str, attempt: int | None) -> Path | None:
+def attempt_dir(run_dir: Path, step_id: str, attempt: int | None) -> Path | None:
+    """step の attempt dir を返す（指定 attempt が無ければ最新の attempt、無ければ ``None``）。"""
     steps_dir = run_dir / "steps" / step_id
     if attempt is not None:
         candidate = steps_dir / attempt_dir_name(attempt)
@@ -378,10 +379,10 @@ def _collect_pane(facts: RunFacts, *, artifacts_dir: Path) -> None:
     step = facts.last_step
     if step is None:
         return
-    attempt_dir = _attempt_dir(facts.run_dir, step.id, step.attempt)
-    if attempt_dir is None:
+    attempt_dir_path = attempt_dir(facts.run_dir, step.id, step.attempt)
+    if attempt_dir_path is None:
         return
-    path = attempt_dir / PANE_METADATA_FILE
+    path = attempt_dir_path / PANE_METADATA_FILE
     data, kind, message = _read_json_object(path)
     if kind is None and data is not None:
         # 所有確認（agent_pane ゲート）に必要な 3 項目。欠落・型不正は照会せず
