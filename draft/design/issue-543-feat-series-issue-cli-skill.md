@@ -314,7 +314,7 @@ jq -n --arg c "$(jq -r '"[\(.kind)] #\(.issue // "-") \(.summary) \(.comment_url
 
 - **#540 の API だけを通す（M2）**: `kaji_harness/runstate/query.py` を新設し、watch はこのモジュールだけを runstate から import する。中身は既存の収集器の再利用だけで、判定を再実装しない。
   - `collect_status(artifacts_dir, issue_ids: list[str], *, probe=None) -> JsonDict`: `collect_issue_facts` → `issue_to_json` → `status_document` を順に呼び、`kaji status --json <issue>...` と同じ schema v1 の文書を返す。`commands/status.py` の Issue 指定の経路もこの関数を呼ぶように置き換え、CLI と watch が 1 つの経路を共有する（CLI の出力は不変。既存の status のテストで担保）。
-  - `list_series(artifacts_dir) -> list[JsonDict]`: `_series/` の下の series id を列挙する `list_series_ids`（`kaji_harness.series.state` の state dir の規則を使って `runstate.schema` に追加）と、既存の `series_to_json` を組み合わせ、`kaji status --json --series <id>` の `series` 部分と同じ形を返す。
+  - `list_series(artifacts_dir) -> list[JsonDict]`: `_series/` の下の series id を列挙する `list_series_ids`（`series_to_json` が既に使っている `_series/<id>` の配置の規則に揃えて `runstate.schema` に追加。id は `is_valid_series_id` を満たすものだけ）と、既存の `series_to_json` を組み合わせ、`kaji status --json --series <id>` の `series` 部分と同じ形を返す。
   - `locate_step_artifacts(artifacts_dir, issue_id, run_id, step_id, attempt) -> StepArtifacts(run_dir: Path | None, attempt_dir: Path | None)`: 既存の `facts._attempt_dir` を `facts.attempt_dir` として公開し直して使う（挙動は不変）。triage がパスを自分で組み立てずに済むようにするため。
   - facade（`runstate/__init__.py`）は循環を避けて `facts` / `schema` を再 export しない方針（同ファイルの docstring）なので、`query` も facade には載せず、`kaji_harness.runstate.query` として import する。
   - watch は `run.log` / `session-state.json` / `process.json` / `_series/*/state.json` を開かない。自分の永続化（`_watch/` の下）の I/O は許可する。検査はテスト戦略の契約テスト（S1 で範囲を限定）で行う。
