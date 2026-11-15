@@ -89,6 +89,15 @@ provider API、Issue、artifact、state、lock、member workflow 実行への副
 は member 単位 `--workflow` override がある場合だけ採用する。生成後は validation と dry-run
 まで行い、本実行は開始しない。
 
+### 監視付きの起動（`/run-watched`・`/watch-triage`。Issue #543）
+
+`[watch]` を宣言した repo では、保守者が Herdr の pane で「#101, #102 を dev で直列に」と依頼すると
+`/run-watched` が series YAML の生成・検証・main への commit / push・`state:planned` の付与・
+`kaji-series-<id>` タブでの `kaji run-series` 起動・`kaji watch start` までを決定的な script
+（`run_watched plan` / `execute`）で行う。`kaji watch` が停止（`aborted` / `pane_idle` / `log_stall`）を
+検知すると、`watch-triage-<issue>` タブで `/watch-triage` が起動し、原因を Issue に報告して保守者に回す。
+復旧の実行は保守者の承認後だけ行う。詳細: [docs/cli-guides/watch.md](../cli-guides/watch.md)
+
 ## provider × workflow の対応表
 
 各 builtin workflow が要求する provider type。`kaji run` 起動時に

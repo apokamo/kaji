@@ -44,5 +44,23 @@ kaji watch events [--json]       # event と判断の記録（読むだけ）
 | 2 | 引数の誤り・config がない・`[watch]` がない・ラベルがない・github 以外の provider・Herdr の外での `start` / `once`・lock 保持中の `once`・不正な event ファイルや outcome |
 | 3 | 予期しないエラー |
 
-ラベルの契約・event の種類・通知の JSON（schema v1）・`issue-close` の動作の詳細は英語正本
+## `/run-watched`
+
+保守者の明示的な依頼（「#101, #102 を dev で直列に」）から series を作って起動し、監視させる入口。
+skill は判断（workflow の選択・順番）だけを行い、決定的な処理は script が行う。
+
+```bash
+python -m kaji_harness.scripts.run_watched plan --issues 101,102 --workflow dev
+python -m kaji_harness.scripts.run_watched execute --draft <draft-id>
+```
+
+- `plan`: Issue・`kaji status`・worktree・open の PR を読んで分類し、draft を
+  `<artifacts>/_watch/run-watched/<draft-id>.json` に保存する。GitHub には書かない。series に入る Issue が
+  0 件なら exit 2。
+- `execute`: 前提の検証 → series YAML → `validate-series` / `run-series --dry-run` → YAML だけの commit と
+  push（force なし）→ `state:planned` → `kaji-series-<id>` タブでの `kaji run-series` → `kaji watch start`。
+  各段は外部の状態との照合で済んだかを判定するため、落ちた後も同じ draft で再実行すれば二重の副作用なしに
+  収束する。exit 2 は前提違反・外部状態の相違、exit 3 は remote が先に進んだ等の人手の解決が要る状況。
+
+ラベルの契約・event の種類・通知の JSON（schema v1）・`issue-close`・`/run-watched` の動作の詳細は英語正本
 [watch.md](watch.md) を参照する。

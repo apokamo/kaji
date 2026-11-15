@@ -142,6 +142,43 @@ jq -n --arg c "$(jq -r '"[\(.kind)] #\(.issue // "-") \(.summary) \(.comment_url
   | curl -fsS -H 'Content-Type: application/json' -d @- "$DISCORD_WEBHOOK_URL" >/dev/null
 ```
 
+## `/run-watched`
+
+`/run-watched` is the entry point that turns an explicit request ("run #101, #102 with dev in
+sequence") into a launched, watched series. The skill only makes judgements (workflow choice,
+order); everything deterministic is done by `kaji_harness.scripts.run_watched`:
+
+```bash
+python -m kaji_harness.scripts.run_watched plan --issues 101,102 [--workflow dev | --member 101=dev --member 102=docs] [--chosen-by-skill] [--order-ambiguous]
+python -m kaji_harness.scripts.run_watched execute --draft <draft-id>
+```
+
+- `plan` reads the Issues, `kaji status` facts (`any_run_alive` / `launching`), worktrees and
+  open PRs, classifies them, and saves a draft under `<artifacts>/_watch/run-watched/<draft-id>.json`.
+  It never writes to GitHub. The workflow comes from the argument (stem, file name or path),
+  then the Issue's `wf:*` label; otherwise the Issue is listed in `needs_selection`.
+  Excluded Issues carry a reason (`closed`, `state_label`, `state_conflict`,
+  `workflow_mismatch`, `wf_unresolvable`, `wf_ambiguous`, `run_alive_or_unknown`,
+  `worktree_or_pr`). `approval_required` is true with `--chosen-by-skill`,
+  `--order-ambiguous` or any exclusion. No member → exit 2.
+- `execute` runs, in order: preconditions (`[watch]`, labels, github provider, Herdr; main
+  checkout on the default branch, no staged change other than the series YAML, `HEAD` equal to
+  the fetched remote) → series YAML (`.kaji/series/rw-<first>-<last>-<YYMMDDHHMM>.yaml`, never
+  overwriting a file with different content) → `kaji validate-series` and
+  `kaji run-series --dry-run` → commit of the YAML only and `git push <remote> <sha>:refs/heads/<default>`
+  (no force) → `state:planned` on each member → the `kaji-series-<id>` Herdr tab running
+  `kaji run-series <yaml>` → `kaji watch start`. Issue state is re-checked before each side
+  effect; any change other than our own `state:planned` stops with exit 2.
+- Every stage is decided by comparing external state, with receipts saved to the draft before
+  (intent) and after (result) each side effect. Re-running `execute` with the same draft after
+  a crash skips finished stages: no empty commit, double push, double label, double tab or
+  double launch. A commit made just before a crash is recognised by its parent, the single
+  added YAML, its blob and its exact message; any other commit ahead of the remote is refused.
+- Exit codes: 0 success (prints `series_id`, `yaml`, `commit`, `series_pane`, `watch`); 2
+  precondition failure or external change (fix it and re-run the same draft); 3 the remote
+  moved past our parent or the push failed (no rebase or force push; resolve by hand, e.g.
+  `git reset --soft <parent>`), or an unexpected error.
+
 ## `issue-close`
 
 `issue-close` calls `python -m kaji_harness.scripts.watch_labels mark-done <issue>` after
