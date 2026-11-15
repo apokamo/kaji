@@ -134,10 +134,10 @@ Epic 親 Issue は workflow で直接実行しない。原則として `/issue-s
 
 | ラベル | 意味 | 付ける主体 | 外す主体 |
 |---|---|---|---|
-| `state:planned` | series に投入済みで、まだ run が始まっていない | `/run-watched`、`kaji watch` | `kaji watch` |
-| `state:running` | その Issue の `kaji run` が生きている | `kaji watch` | `kaji watch` |
+| `state:planned` | series に投入済みで、まだ run が始まっていない | `/run-watched`、`kaji watch` | `kaji watch`、`issue-close` |
+| `state:running` | その Issue の `kaji run` が生きている | `kaji watch` | `kaji watch`、`issue-close` |
 | `state:aborted` | 投入後の最新の run が失敗・消失、または COMPLETE で open のまま | `kaji watch` | `kaji watch`、`issue-close` |
-| `state:done` | close 済み（completed） | `issue-close`、`kaji watch` | — |
+| `state:done` | close 済み（completed） | `issue-close`、`kaji watch` | `kaji watch`（reopen 後に新しい run がある場合） |
 | `state:hold` | 保留中。無人の workflow に渡さない | 人 | 人、`issue-close` |
 | `state:needs-maintainer` | 保守者の対応待ち | 人、`issue-close`（follow-up 起票時） | 人、`issue-close` |
 

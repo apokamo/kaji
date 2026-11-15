@@ -51,6 +51,9 @@ kaji のドキュメント一覧。[Diataxis フレームワーク](https://diat
 | [テストサイズ判断ガイド](reference/testing-size-guide.md) | S/M/L の境界ケース判断基準 |
 | [CLI ガイド](cli-guides/) | CLI 操作リファレンス（[GitHub Mode](cli-guides/github-mode.md)（英語正本、[日本語](cli-guides/github-mode.ja.md)） / [Interactive Terminal Runner](cli-guides/interactive-terminal-runner.md)（英語正本、[日本語](cli-guides/interactive-terminal-runner.ja.md)） / [Failure Triage / Recovery](cli-guides/failure-recovery.md)（英語正本、[日本語](cli-guides/failure-recovery.ja.md)） / [Run Status](cli-guides/run-status.md)（英語正本、[日本語](cli-guides/run-status.ja.md)） / [Claude Code CLI](cli-guides/claude-code-cli-guide.md)（英語正本、[日本語](cli-guides/claude-code-cli-guide.ja.md)） / [Codex CLI](cli-guides/codex-cli-session-guide.md)（英語正本、[日本語](cli-guides/codex-cli-session-guide.ja.md)） / [Antigravity CLI](cli-guides/antigravity-cli-session-guide.md)（英語正本）） |
 
+[Series monitoring (`kaji watch`)](cli-guides/watch.md)（[日本語](cli-guides/watch.ja.md)）は、
+監視の導入・ラベル契約・`/run-watched` による起動・`/watch-triage` による停止時の判断を説明する。
+
 ### Python 品質規約
 
 | ドキュメント | 概要 |

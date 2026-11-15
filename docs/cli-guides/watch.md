@@ -67,10 +67,10 @@ All subcommands accept `--workdir DIR`. There is no `stop`.
 
 | Label | Meaning | Added by | Removed by |
 |---|---|---|---|
-| `state:planned` | queued in a series, no run yet | `/run-watched`, `kaji watch` | `kaji watch` |
-| `state:running` | a `kaji run` for the Issue is alive (or launching) | `kaji watch` | `kaji watch` |
+| `state:planned` | queued in a series, no run yet | `/run-watched`, `kaji watch` | `kaji watch`, `issue-close` |
+| `state:running` | a `kaji run` for the Issue is alive (or launching) | `kaji watch` | `kaji watch`, `issue-close` |
 | `state:aborted` | the latest run since queueing failed or vanished, or it COMPLETEd while the Issue is still open | `kaji watch` | `kaji watch`, `issue-close` |
-| `state:done` | closed as completed | `issue-close`, `kaji watch` | — |
+| `state:done` | closed as completed | `issue-close`, `kaji watch` | `kaji watch` (after reopening and a new run) |
 | `state:hold` | on hold; do not hand to unattended workflows | people | people, `issue-close` |
 | `state:needs-maintainer` | waiting for the maintainer | people, `issue-close` (follow-up) | people, `issue-close` |
 
