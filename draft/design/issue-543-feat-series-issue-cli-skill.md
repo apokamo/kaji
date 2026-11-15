@@ -64,12 +64,13 @@ notify_command = ["scripts/notify-discord.sh"]   # 任意。argv の配列。未
 |---|---|---|---|
 | `state:planned` | series に投入済みで、まだ run が始まっていない | `/run-watched`（投入時）、`kaji watch`（事実から） | `kaji watch` |
 | `state:running` | その Issue の `kaji run` が生きている | `kaji watch` | `kaji watch` |
-| `state:aborted` | 投入後の最新の run が失敗した、または消えた。あるいは COMPLETE したのに Issue が open のまま | `kaji watch` | `kaji watch`、`issue-close` |
+| `state:aborted` | 投入後の最新の run が失敗した、または消えた。あるいは COMPLETE したのに Issue が open のまま | `kaji watch` | `kaji watch`、`issue-close`（close 時） |
 | `state:done` | close 済み（completed） | `issue-close`、`kaji watch` | — |
-| `state:hold` | 保留中。無人の workflow に渡さない | 人 | 人 |
-| `state:needs-maintainer` | 保守者の対応待ち（人の作業・完了後の確認） | 人、`issue-close`（follow-up の起票時） | 人 |
+| `state:hold` | 保留中。無人の workflow に渡さない | 人 | 人、`issue-close`（close 時） |
+| `state:needs-maintainer` | 保守者の対応待ち（人の作業・完了後の確認） | 人、`issue-close`（follow-up の起票時） | 人、`issue-close`（その Issue の close 時） |
 
 - **排他**: 1 Issue に付く `state:*` は高々 1 個とする。`kaji watch` は「付ける → 外す」の 2 段で付け替えるので、途中で落ちると一時的に 2 個付くことがある。この状態は次の周で直る。
+- **close 時の排他（M1）**: `issue-close` の `mark-done` は、`state:done` を付けて**ほかのすべての `state:*`**（`planned` / `running` / `aborted` / `hold` / `needs-maintainer`）を外す（Issue 完了条件「state:done を付け（他の state:* は外す）」）。人用のラベルに触れないという規則は `kaji watch` の規則であり、`issue-close` には適用しない。close 済みの Issue に保留・対応待ちの意味は残らないので、排他を優先する。
 - **人が付けてよいもの**: `state:hold` と `state:needs-maintainer` だけ。`kaji watch` はこの 2 つが付いた Issue に触れない。2 個以上の `state:*` が付いた Issue（人の操作によるもの）にも触れず、`status` の行に `conflict` と表示する。ただし、自分の `pending_labels` に記録した付け替えの途中で生じた 2 個は直す。
 - **`wf:<name>`**: `<name>` には workflow YAML の `name:` を入れる。1 Issue に高々 1 個とする。付けるのは人（起票時の任意）だけで、kaji は書かない。読むのは `/run-watched` で、workflow を指定しなかったときの既定に使う。解決方法: `.kaji/wf/**/*.yaml` のうち `name:` が `<name>` と一致するものがちょうど 1 個ならそれを採る。0 個なら「解決不能」、2 個以上なら「曖昧」とし、どちらも除外の理由にする。
 - kaji の repo で定義する `wf:*`: `wf:dev` / `wf:dev-thorough` / `wf:dev-small` / `wf:docs`。`incident` / `starter-sync` / `*-codex` は、Issue から指定する運用がないので定義しない。
@@ -89,18 +90,18 @@ kaji watch events [--json] [--workdir DIR]
 
 | サブコマンド | 前提の検証（違反は exit 2） | 動作 |
 |---|---|---|
-| 共通 | `.kaji/config.toml` がある。`[watch]` が宣言されている | — |
-| `start` / `once`（`--dry-run` なし） / `status` / `once --dry-run` | 契約の 6 ラベルが GitHub にある（`list_labels`） | — |
-| `start` | `HERDR_ENV=1` かつ `HERDR_PANE_ID` が空でない（D4） | lock が取られていれば `watch already running (pane <id>)` を出して exit 0。そうでなければ、label `kaji-watch` のタブを探し、シェルに戻った pane があれば再利用し、なければ `herdr tab create --label kaji-watch --no-focus` で作る。その pane で内部の entrypoint `python -m kaji_harness.watch` を起動する |
+| 共通（5 つすべて） | `.kaji/config.toml` がある。tracked の `[watch]` が宣言されている。`provider.type == github`。契約の 6 ラベルが GitHub にある（`list_labels`）。D1 の「宣言があるのにラベルがなければ `kaji watch` はエラー」を、読むだけの `status` / `events` / `record` にも同じく適用する | — |
+| Herdr の前提（`start`・`once`（`--dry-run` なし）・内部 loop） | `HERDR_ENV=1` かつ `HERDR_PANE_ID` が空でなく、`herdr` が解決できる（D4）。書き込みを行う入口はすべて、最初の副作用（lock 以外）より前にこれを検証する（M7） | — |
+| `start` | 上記 | lock が取られていれば `watch already running (pane <id>)` を出して exit 0。そうでなければ、label `kaji-watch` のタブを探し、シェルに戻った pane があれば再利用し、なければ `herdr tab create --label kaji-watch --no-focus` で作る。その pane で内部の entrypoint `python -m kaji_harness.watch` を起動する |
 | `status` | — | 読むだけ。対象の Issue ごとに、事実・今のラベル・目標・保留の理由・triage タブ・抑止の状態を表示する。GitHub と artifacts には書かない |
-| `once` | 書き込みあり: lock を取れること（取れなければ exit 2 `watch is running`） | 1 周分を実行する。`--dry-run` なら計算結果（目標・差分・event）を JSON で出し、何も書かない（GitHub・状態ファイル・Herdr・通知のいずれにも） |
+| `once` | 書き込みあり: Herdr の前提と、lock を取れること（取れなければ exit 2 `watch is running`） | 1 周分を実行する。`--dry-run` なら Herdr の前提は求めず、計算結果（目標・差分・event）を JSON で出し、何も書かない（GitHub・状態ファイル・Herdr・通知のいずれにも）。Herdr の外での `--dry-run` は pane の観測を行わず、出力の `herdr` を `"unavailable"` にし、`pane_idle` の候補を出さない |
 | `record` | event ファイルが `_watch/events/` の下にあり、schema v1 として読める | 判断の結果を `records.jsonl` に追記する。`--outcome handoff` のときは、通知（kind `handoff`）も送る |
 | `events` | — | event と record を時系列で一覧する（読むだけ） |
 
 - `OUTCOME` の enum: `handoff`（保守者に回した）/ `still-working`（`pane_idle` だが作業中だった）/ `not-stalled`（`log_stall` だが進んでいた）/ `recovered`（保守者が承認した復旧を実行した）。`still-working` を `pane_idle` 以外の event に、`not-stalled` を `log_stall` 以外の event に使うと exit 2 にする。
-- 終了コード: 0 = 正常（2 周続けて対象が 0 件になって終えた場合を含む）、2 = 引数の誤り・config がない・`[watch]` がない・ラベルがない・Herdr の外での `start`、3 = 予期しないエラー（`exit_codes` の既存の定数）。
+- 終了コード: 0 = 正常（2 周続けて対象が 0 件になって終えた場合を含む）、2 = 引数の誤り・config がない・`[watch]` がない・ラベルがない・Herdr の外での `start` / `once`（`--dry-run` なし）、3 = 予期しないエラー（`exit_codes` の既存の定数）。
 - `stop` は作らない（D3）。
-- 監視の loop の本体は内部の entrypoint `python -m kaji_harness.watch` に置き、公開の CLI にはしない（D3 のサブコマンド一覧を増やさないため）。loop も起動時に Herdr の pane の中であること・`[watch]` の宣言・ラベルの存在を検証する。lock は `<artifacts>/_watch/lock` の `fcntl.flock` で取る（kaji の `series/lock.py` と同じ方式）。
+- 監視の loop の本体は内部の entrypoint `python -m kaji_harness.watch` に置き、公開の CLI にはしない（D3 のサブコマンド一覧を増やさないため）。前提の検証は `kaji_harness/watch/preflight.py` の 1 関数（`check_watch_preconditions(config, *, require_herdr: bool) -> WatchContext`）に集約し、5 つのサブコマンド・内部 loop・`run_watched execute`・`watch_labels` が共有する（`watch_labels` は `[watch]` がない場合だけ skip で exit 0 にする点が異なる）。lock は `<artifacts>/_watch/lock` の `fcntl.flock` で取る（kaji の `series/lock.py` と同じ方式）。
 
 #### `status --json` / `events --json`（schema v1。A6）
 
@@ -128,7 +129,32 @@ kaji watch events [--json] [--workdir DIR]
   "pending_reports": []
 }
 // kaji watch events --json
-{"schema_version": 1, "events": [ {Event}... ], "records": [ {Record}... ]}
+{
+  "schema_version": 1,
+  "events": [
+    {
+      "key": "101:aborted:261115113853",   // str
+      "kind": "aborted",                   // pane_idle | aborted | log_stall
+      "issue": 101,                        // int
+      "run_id": "261115113853",            // str | null（run がない event はない想定だが、読めなければ null）
+      "detected_at": "...",                // ISO 8601
+      "launch_status": "launched",         // detected | launching | launched | launch_failed
+      "launch_attempts": 1,                // int
+      "triage_pane": "p_30",               // str | null（未起動・不明なら null）
+      "event_file": "/abs/.kaji-artifacts/_watch/events/101-aborted-261115113853.json"
+    }
+  ],
+  "records": [
+    {
+      "event_key": "101:aborted:261115113853",  // str
+      "outcome": "handoff",                     // handoff | still-working | not-stalled | recovered
+      "recorded_at": "...",                     // ISO 8601
+      "comment_url": "https://…",               // str | null（--comment-url を省略したら null）
+      "summary": "…",                           // str | null（--summary を省略したら null）
+      "judge": "host:pid"                       // str（record を書いたプロセス）
+    }
+  ]
+}
 ```
 
 #### event ファイル（`<artifacts>/_watch/events/<event-key のファイル名化>.json`。A5: 内部の形式だが、triage skill の入力にはなる）
@@ -146,7 +172,11 @@ kaji watch events [--json] [--workdir DIR]
   "failed_step": "implement",          // latest_run.failed_step
   "failure": {"cause": "...", "source": "...", "recoverability_hint": "..."},  // なければ null
   "pane": {"pane_id": "p_9", "origin_pane": "p_1"},   // step の pane（headless なら null）
-  "status_document": { ... }           // 検知時点の `kaji status --json <issue>` と同じ文書（#540 schema v1）
+  "artifacts": {                       // runstate.query.locate_step_artifacts の結果（M2）。見つからなければ各値 null
+    "run_dir": "/abs/.kaji-artifacts/101/runs/261115113853",
+    "attempt_dir": "/abs/.kaji-artifacts/101/runs/261115113853/steps/implement/attempt-001"
+  },
+  "status_document": { ... }           // 検知時点の `kaji status --json <issue>` と同じ文書（#540 schema v1。runstate.query.collect_status の戻り値）
 }
 ```
 
@@ -183,7 +213,7 @@ python -m kaji_harness.scripts.watch_labels mark-follow-up <issue>
 |---|---|---|
 | `[watch]` がない（tracked の config） | 何もせず、`watch labels: skipped (no [watch])` を出す | 0 |
 | `[watch]` があり、契約の 6 ラベルのどれかが GitHub にない | 不足しているラベル名を stderr に出す | 2 |
-| `mark-done` | `state:done` を付け、`state:planned` / `running` / `aborted` を外す。`hold` / `needs-maintainer` は残す | 0 |
+| `mark-done` | `state:done` を付け、ほかの `state:*`（`planned` / `running` / `aborted` / `hold` / `needs-maintainer`）をすべて外す（M1。結果として `state:*` は `done` の 1 個だけになる） | 0 |
 | `mark-follow-up` | `state:needs-maintainer` を付ける | 0 |
 | GitHub の書き込みが失敗した | — | 3 |
 
@@ -200,21 +230,27 @@ python -m kaji_harness.scripts.run_watched execute --draft <draft-id>
   - workflow の解決: 引数（stem・ファイル名・パス）→ Issue の `wf:*` ラベル → どちらもなければ `needs_selection`（skill が選び、`--chosen-by-skill` を付けて `plan` をやり直す）。stem は `.kaji/wf/**/<stem>.yaml` のうちちょうど 1 個に一致するものに解決する。
   - 除外（理由付き）: closed、`state:planned` / `running` / `aborted` / `done` / `hold` / `needs-maintainer`、`state:*` が 2 個以上、指定した workflow と `wf:*` が食い違う、`wf:*` が解決できない、または曖昧、`kaji status` で `any_run_alive` / `launching` が `true` または `null`、worktree（`kaji status` の `latest_run.worktree_dir` が存在する）、または open の PR（`head` = Issue の branch）が残っている。
   - 承認が要る条件: `--chosen-by-skill`、`--order-ambiguous`、除外が 1 件以上ある。どれにも当たらなければ `approval_required: false`。series に入る Issue が 0 件なら exit 2 にする。
-- `execute`: draft の各段を順に実行し、済んだ段は draft に記録して、やり直しのときには飛ばす。
-  1. 状態の読み直し: 各 Issue の state・labels を再取得し、draft の snapshot と比べる。違いがあれば何も変えずに exit 2。
-  2. series の生成: `kaji_harness.scripts.series_generate` と同じ生成器（`kaji_harness.series.generator`）で `.kaji/series/<series-id>.yaml` を新規作成する。ファイルが既にあれば exit 2 にする（上書きしない）。series-id は `rw-<最初の issue>-<最後の issue>-<YYMMDDHHMM>`（`^[a-z0-9][a-z0-9-]{0,63}$` に収まる）。
-  3. 検証: `kaji validate-series <yaml>` と `kaji run-series <yaml> --dry-run` を subprocess で実行する。どちらかが失敗したら exit 2（ラベル・タブは変えない）。
-  4. commit / push（D7）: `git add -- .kaji/series/<id>.yaml` → `git commit -m "chore(series): add <id> for #101, #102"` → `git push <git_remote> HEAD:<default_branch>`。前提として、cwd が main checkout で、現在の branch が `default_branch` であり、index にほかの staged 変更がないこと。満たさなければ exit 2。push が失敗したら exit 3 で止まる（commit はローカルに残す。force push・rebase はしない）。
-  5. `state:planned` の付与（`provider.edit_issue(add_labels=…)`）。
-  6. series のタブ: `herdr tab create --label kaji-series-<id> --no-focus` → `herdr pane run <pane> "kaji run-series <yaml>"`。
-  7. 監視の起動: `kaji watch start`。
+- `execute`: draft の各段を順に実行する。各段は**外部の結果との照合**で済んだかどうかを判定し、draft の完了フラグだけには依存しない（M3）。各段の receipt（識別子と期待状態）を、副作用の直前（intent）と直後（result）に draft へ保存する。
+  0. **前提の検証（M7・M8。最初の副作用より前）**: `check_watch_preconditions(require_herdr=True)`（tracked の `[watch]`・6 ラベル・github provider・Herdr）。git の前提は次のとおり。cwd が main checkout で、現在の branch が `default_branch`。index と作業ツリーに、series YAML 以外の staged 変更がない。`git fetch <git_remote> <default_branch>` の後、`HEAD == <git_remote>/<default_branch>` であること（ahead も behind もない）。ただし、自分の receipt の commit が HEAD である再実行の場合は、`HEAD^ == receipt.parent` を条件とする。満たさなければ exit 2 で、何も書かない。
+  1. **状態の再検査（毎回、各副作用の直前）**: 各 Issue の state・labels を読み直し、**期待状態**と比べる。期待状態は「draft の snapshot に、自分の receipt にある変更（段 5 で付けた `state:planned`）を足したもの」とする。自分の変更以外の違い（close・hold の付与・ほかの `state:*`・別の run の開始など）があれば、そこで止まり（exit 2）、以降の副作用を行わない。済んだ段は報告に書く。この検査は段 2・4・5・6 の直前に毎回行い、再実行でも飛ばさない。
+  2. **series YAML**: 識別子は draft に固定した `series_id` とパスで、期待状態は生成した内容の sha256。ファイルがなければ、`kaji_harness.series.generator` で生成し、sha256 を receipt に保存する。ファイルがあり、sha256 が receipt（または draft から再生成した内容）と一致する場合は、済んだものとして扱う。一致しなければ exit 2（他者のファイルを上書きしない）。series-id は `rw-<最初の issue>-<最後の issue>-<YYMMDDHHMM>`（`^[a-z0-9][a-z0-9-]{0,63}$` に収まる）で、`plan` の時点で draft に固定する。
+  3. **検証**: `kaji validate-series <yaml>` と `kaji run-series <yaml> --dry-run` を毎回実行する（冪等で副作用がない）。どちらかが失敗したら exit 2（ラベル・タブは変えない）。
+  4. **commit / push（D7・M8）**:
+     - commit: receipt に `commit` がなく、HEAD が `<git_remote>/<default_branch>` と一致している場合だけ、次を行う。`git add -- <yaml>` → `git diff --cached --name-only` が `<yaml>` の 1 行だけであることを確かめる → `git commit -m "chore(series): add <id> for #101, #102"`。その後、`{sha, parent}` を保存する。parent は fetch した remote の sha。
+     - push: `git push <git_remote> <sha>:refs/heads/<default_branch>`（force なし）。送る履歴は `parent..sha` の 1 commit だけになる。段 0 で、HEAD が remote と一致すること（無関係な ahead commit がないこと）を確かめているためである。
+     - 再実行時の照合: fetch の後、`git merge-base --is-ancestor <sha> <remote>/<default_branch>` が真なら push は済んでいる。偽で、remote が `parent` のままで、HEAD が `sha` なら push だけをやり直す。remote が先に進んでいれば exit 3 で止まる（rebase・force push はしない。保守者に、ローカルの commit を `git reset --soft <parent>` で戻すか、手で解決するかを報告する）。
+  5. **`state:planned` の付与**: Issue ごとに intent を保存し、`provider.edit_issue(add_labels=["state:planned"])` を実行して result を保存する。再実行時は、`view_issue` で `state:planned` が付いていれば済んだものとする。
+  6. **series のタブと起動**: 識別子は label `kaji-series-<id>`。
+     - 照合: `runstate.query.list_series()` で `<id>` の series state を確かめる。`status` が null でない（run-series が state を書いた）か、member に `run_id` / `child_pid` があれば、起動は済んでいるので段 7 へ進む。そうでなければ、label `kaji-series-<id>` のタブを探す。pane の前景に `kaji run-series` がいれば済んだものとし、シェルだけなら、その pane で起動する。タブがなければ `herdr tab create --label kaji-series-<id> --no-focus` で作り、tab_id・pane_id を保存してから起動する。
+     - 起動は `herdr pane run <pane> "kaji run-series <yaml>"` で、実行後に `series_pane` を保存する。run-series 自体も `series/lock.py` の lock で重複起動を拒否するので、照合の窓で二重に `pane run` しても、2 つ目は起動しない（二重の安全）。
+  7. **監視の起動**: `kaji watch start`（冪等）。
 - 出力は最後に JSON（`series_id`・`yaml`・`commit`・`series_pane`・`watch`）を出す。
 - skill の絶対規則: series YAML と draft を LLM が手で書かない。`kaji run` / `kaji run-series` を直接起動しない。明示された依頼（Issue と workflow を保守者が指定した）は、それ自体を承認として扱う。
 
 ### 6. `/watch-triage`（判断用の skill）
 
 - 起動: `kaji watch` が `herdr tab create --label watch-triage-<issue> --no-focus` → `herdr pane run <pane> "claude --dangerously-skip-permissions '/watch-triage <event-file>'"`（D6・A7）。
-- 入力: event ファイル。読むもの: event、Issue 本文（特に `## 決定事項`）、`kaji status --json <issue>`、run の artifact（`latest_run` の `run_id` / `last_step` から辿る attempt の `prompt.txt`・ログ。#540 の API が返すパスだけを使う）、`pane_idle` / `log_stall` なら `herdr pane read <step_pane> --source recent --lines 200`。
+- 入力: event ファイル。読むもの: event、Issue 本文（特に `## 決定事項`）、`kaji status --json <issue>`、run の artifact（event の `artifacts.run_dir` / `artifacts.attempt_dir` の下の `prompt.txt`・ログ・`run.log`。パスは watch が `runstate.query.locate_step_artifacts` で解決して event に書いたものだけを使い、skill がパスを組み立てない。読むのは原因の調査のための本文の閲読で、状態の判定は event の `status_document` を正とする。`artifacts` が null なら `kaji status --json <issue>` の再取得だけで報告し、artifact が見つからなかったことを報告に書く）、`pane_idle` / `log_stall` なら `herdr pane read <step_pane> --source recent --lines 200`。
 - 手順: 読む → 原因を分類する → 報告コメント（1 行目 `<!-- kaji-watch-triage: key=<event key> -->`）→ `kaji watch record --event <file> --outcome handoff --comment-url <url> --summary <要約>`（通知はこの record が送る）→ pane を開いたまま、保守者の指示を待つ。
 - `pane_idle` で agent が作業中だった、または `log_stall` で進んでいた場合は、`still-working` / `not-stalled` を記録して自分のタブを閉じる。
 - 保守者の承認を得た復旧だけを実行する。失敗した step のやり直しは `kaji recover <workflow> <issue> --retry-failed-step` だけを使い、実行後に `kaji watch record --outcome recovered` と `kaji watch start` を行う。
@@ -276,10 +312,15 @@ jq -n --arg c "$(jq -r '"[\(.kind)] #\(.issue // "-") \(.summary) \(.comment_url
 
 ## 制約・前提条件
 
-- **#540 の API だけを通す**: watch package（`kaji_harness/watch/`）は、run の事実を `kaji_harness.runstate` の公開関数（`status_document` / `series_to_json` と、本 Issue で追加する `list_series_ids`）からしか得ない。`run.log` / `session-state.json` / `process.json` / `_series/*/state.json` を自分で開かない。これは import と文字列の契約テストで検査する（テスト戦略を参照）。`status_document` が返すのは `kaji status --json` と同じ文書なので、監視の判定は公開の契約（schema v1）の上に成り立つ。
+- **#540 の API だけを通す（M2）**: `kaji_harness/runstate/query.py` を新設し、watch はこのモジュールだけを runstate から import する。中身は既存の収集器の再利用だけで、判定を再実装しない。
+  - `collect_status(artifacts_dir, issue_ids: list[str], *, probe=None) -> JsonDict`: `collect_issue_facts` → `issue_to_json` → `status_document` を順に呼び、`kaji status --json <issue>...` と同じ schema v1 の文書を返す。`commands/status.py` の Issue 指定の経路もこの関数を呼ぶように置き換え、CLI と watch が 1 つの経路を共有する（CLI の出力は不変。既存の status のテストで担保）。
+  - `list_series(artifacts_dir) -> list[JsonDict]`: `_series/` の下の series id を列挙する `list_series_ids`（`kaji_harness.series.state` の state dir の規則を使って `runstate.schema` に追加）と、既存の `series_to_json` を組み合わせ、`kaji status --json --series <id>` の `series` 部分と同じ形を返す。
+  - `locate_step_artifacts(artifacts_dir, issue_id, run_id, step_id, attempt) -> StepArtifacts(run_dir: Path | None, attempt_dir: Path | None)`: 既存の `facts._attempt_dir` を `facts.attempt_dir` として公開し直して使う（挙動は不変）。triage がパスを自分で組み立てずに済むようにするため。
+  - facade（`runstate/__init__.py`）は循環を避けて `facts` / `schema` を再 export しない方針（同ファイルの docstring）なので、`query` も facade には載せず、`kaji_harness.runstate.query` として import する。
+  - watch は `run.log` / `session-state.json` / `process.json` / `_series/*/state.json` を開かない。自分の永続化（`_watch/` の下）の I/O は許可する。検査はテスト戦略の契約テスト（S1 で範囲を限定）で行う。
 - **GitHub**: `kaji_harness.providers` の `GitHubProvider`（`search_issues_all` / `view_issue` / `edit_issue` / `comment_issue` / `list_labels`）を使う。`provider.type` は `github` だけを対象にし、`local` provider で `[watch]` を宣言した場合は exit 2 にする（ラベルの概念がないため）。
 - **Herdr**: `kaji_harness.interactive_terminal_herdr` の既存のヘルパー（`_resolve_herdr` / `_run_herdr_json` 等）を、公開関数として切り出したもの（`list_tabs` / `create_tab` / `run_in_pane` / `close_tab` / `read_pane_agent_status`）を使う。`read_pane_agent_status` は `inspect_agent_pane` と同じ所有の確認（tokens の `kaji_run` / `kaji_origin`）を行い、所有が確認できない pane の状態は `unknown` として扱う。
-- **API の回数**: 1 周あたり、ラベルごとの `search_issues_all` が 3 回（`state=all`）、差分のある Issue だけ `edit_issue` / `comment_issue`、それに Herdr のローカルな呼び出しが加わる。周期は 180 秒なので、GitHub の rate limit（5,000 req/h）に対して十分に小さい。
+- **API の回数**: 1 周あたり、`search_issues_all` が 4 回（`planned` / `running` / `aborted` は `state=all`、`done` は `state=open`）、`aborted` の報告前のコメントの確認（`list_issue_comments_all`、報告待ちの Issue だけ）、差分のある Issue だけ `edit_issue` / `comment_issue`、それに Herdr のローカルな呼び出しが加わる。周期は 180 秒なので、GitHub の rate limit（5,000 req/h）に対して十分に小さい。
 - **互換**: `[watch]` を宣言しない repo では、`kaji watch` の exit 2 と `watch_labels` の skip のほかに挙動の変化はない。既存の CLI・skill・`KajiConfig` の既定値は変えない。
 - **Python の規約**: `docs/reference/python/` に従う。外部入力（config・event ファイル・draft・状態ファイル）は Pydantic で検証する。
 
@@ -287,9 +328,9 @@ jq -n --arg c "$(jq -r '"[\(.kind)] #\(.issue // "-") \(.summary) \(.comment_url
 
 | 種別 | パス |
 |---|---|
-| 新規 | `kaji_harness/watch/`（`__init__.py` / `__main__.py`（loop の entrypoint）/ `constants.py` / `models.py` / `labels.py` / `facts.py` / `detect.py` / `store.py` / `notify.py` / `herdr.py` / `loop.py`） |
+| 新規 | `kaji_harness/watch/`（`__init__.py` / `__main__.py`（loop の entrypoint）/ `constants.py` / `preflight.py` / `models.py` / `labels.py` / `facts.py` / `detect.py` / `store.py` / `notify.py` / `herdr.py` / `loop.py`） |
 | 新規 | `kaji_harness/commands/watch.py`、`kaji_harness/scripts/watch_labels.py`、`kaji_harness/scripts/run_watched.py` |
-| 変更 | `kaji_harness/config.py`（`WatchConfig`）、`kaji_harness/commands/parser.py` / `main.py`（`watch` の登録）、`kaji_harness/runstate/`（`list_series_ids` の追加）、`kaji_harness/interactive_terminal_herdr.py`（読み取り・タブ操作の公開関数の切り出し） |
+| 変更 | `kaji_harness/config.py`（`WatchConfig`）、`kaji_harness/commands/parser.py` / `main.py`（`watch` の登録）、`kaji_harness/runstate/`（`query.py` の新設、`schema.list_series_ids` の追加、`facts._attempt_dir` の公開化）、`kaji_harness/commands/status.py`（`query.collect_status` の呼び出しへの置き換え。出力は不変）、`kaji_harness/interactive_terminal_herdr.py`（読み取り・タブ操作の公開関数の切り出し） |
 | 新規 skill | `.claude/skills/watch-triage/SKILL.md`、`.claude/skills/run-watched/SKILL.md` |
 | 変更 skill | `.claude/skills/issue-close/SKILL.md`（`watch_labels` の呼び出しを 2 箇所） |
 | 設定 | `.github/labels.yml`（`state:*` 6 個・`wf:*` 4 個）、`.kaji/config.toml`（kaji の repo 自身にも `[watch]` を宣言するかは後述） |
@@ -301,21 +342,25 @@ jq -n --arg c "$(jq -r '"[\(.kind)] #\(.issue // "-") \(.summary) \(.comment_url
 ```
 facts.collect()
   ├─ provider.search_issues_all(labels=[state:planned|running|aborted], state="all")  → 対象の Issue
-  │    + 状態ファイルの pending_labels / pending_reports の Issue
-  ├─ runstate.status_document(issues)            → IssueStatus（#540 schema v1）
-  ├─ runstate.list_series_ids + series_to_json   → Issue → 最新の series の member（anchor）
-  └─ herdr.list_tabs / read_pane_agent_status    → triage タブ・step の pane の状態
-labels.compute_targets(facts, state)  → 純粋関数。Issue ごとの目標・保留の理由
-store.plan_label_ops(diff)            → pending_labels に記録 → 付ける → 外す → 記録を消す
-detect.detect_events(facts, state, records, now) → 純粋関数。新しい event のリスト
-for event: store.write_event → herdr.create_tab + run claude → state に triage タブを記録
-reports: aborted に揃った Issue に 1 回だけコメント → 通知（pending_reports で 1 回を保証）
-empty_polls 更新 → 2 周続けて 0 件で、pending がなければ watch_exit を通知して終了
+  ├─ provider.search_issues_all(labels=[state:done], state="open")                    → reopen された done（M6）
+  │    + 状態ファイルの pending_labels / pending_reports / 未起動の event の Issue
+  ├─ runstate.query.collect_status(issues)       → IssueStatus（#540 schema v1）
+  ├─ runstate.query.list_series()                → Issue → 最新の series の member（anchor）
+  └─ herdr.list_tabs / read_pane_agent_status    → triage タブ・step の pane の状態（Herdr の外の --dry-run では省略）
+labels.compute_targets(facts, state)            → 純粋関数。Issue ごとの目標・保留の理由
+detect.detect_events(facts, targets, ledger, now) → 純粋関数。未処理の event のリスト（M5: ラベルの遷移に依存しない）
+store.save_intents(pending_labels, pending_reports, new events=detected)   → 1 回の原子的な保存（M4: ラベル操作より前）
+label ops: 付ける → 外す → pending_labels から消して保存
+launch: detected / launching の event ごとに、照合 → 起動 → launched を保存（M4）
+reports: aborted に揃った Issue ごとに、marker の既存確認 → コメント → 保存 → 通知（M4）
+empty_polls 更新 → 2 周続けて 0 件で、pending と未起動の event がなければ watch_exit を通知して終了
 ```
 
 ### 目標ラベルの計算（`labels.compute_targets`。純粋関数）
 
 書き換えの対象は、今のラベルが `planned` / `running` / `aborted` / `done` のうち 1 個だけの Issue（と、自分の `pending_labels` にある Issue）に限る。上から順に、最初に当てはまった行を採る。
+
+**reopen された `state:done`（M6）**: open で今のラベルが `state:done` の Issue は、次の場合だけ下の表で再計算する。(a) `any_run_alive == true` または `launching == true`、(b) watch がその Issue を open の `done` として初めて見た周の `latest_run.run_id`（状態ファイルの `reopen_baselines`）より新しい run がある。どちらでもなければ `done` のまま書かない（reopen しただけでは planned / aborted と断定しない）。(b) の anchor は `reopen_baselines` の値とする。
 
 | 事実 | 目標 |
 |---|---|
@@ -349,11 +394,18 @@ run_id は、同じ host の時計による `YYMMDDHHMMSS(-NNN)` の文字列比
 
 | kind | 条件 | event key |
 |---|---|---|
-| `aborted` | 今周に目標が `state:aborted` に**変わった**（`COMPLETE` で open の場合は除く） | `<issue>:aborted:<run_id>` |
+| `aborted` | 目標が `state:aborted` で、その根拠が anchor 以降の最新の run の失敗（`ended` かつ `end_status ∈ {ABORT, ERROR}`、または `vanished`）であり、その run の key `<issue>:aborted:<run_id>` が ledger（events と records）にまだない。ラベルの遷移は条件にしない（M5）。`COMPLETE` で open の場合は目標が `aborted` でも event にしない | `<issue>:aborted:<run_id>` |
 | `pane_idle` | `latest_run.termination == running`、`latest_run.pane` がある（headless なら null なので対象外。D4）、step の pane の `agent_status` が `working` 以外（`idle` / `done` / `blocked` / `unknown`）の周が、同じ `(run_id, step, attempt)` で `PANE_IDLE_POLLS` 回続いた | `<issue>:pane_idle:<run_id>:<step>:<attempt>:<episode>`（`working` に戻るたびに `episode` を増やす） |
 | `log_stall` | `latest_run.termination == running` で、進み具合（`run_id`・`last_step.id`・`last_step.attempt`・`termination`）が `LOG_STALL_SECONDS` の間変わらない | `<issue>:log_stall:<run_id>:<step>:<attempt>:<recheck>` |
 
-- 同じ event key では 1 回だけ起動する（`events/` にファイルがあれば起動しない）。
+- **M5 の例**: run A の失敗で既に `aborted` の Issue を承認後に retry し、次の周までに run B も失敗した場合、目標は前後とも `aborted` だが、run B の key `101:aborted:<B>` は ledger にないので event になる。watch を止めている間に新しい run が失敗した場合も同じく、起動後の最初の周で event になる。
+- **event の存在と起動済みを分ける（M4）**: event は `launch_status` を持つ（`detected` → `launching` → `launched`、または `launch_failed`）。同じ key で 2 度起動しないための判定は `launched` に対して行い、ファイルの存在では判定しない。手順は次のとおり。
+  1. 検知した event は、ラベル操作より前に `detected` として event ファイルと状態ファイルに保存する（処理意図の永続化）。ラベル操作の途中で落ちても、次の周に `detected` から再開する。
+  2. 起動の直前に `launching`（`launch_attempts += 1`、タブの label `watch-triage-<issue>`）を保存する。
+  3. `herdr tab create` → `herdr pane run`。成功したら tab_id・pane_id と `launched` を保存する。
+  4. 再起動時、または前の周に `launching` のまま残った event は、まず Herdr を照合する。label `watch-triage-<issue>` のタブがあり、その pane の前景に claude がいる場合は、`launched` として記録する。タブはあるが pane がシェルだけの場合（`pane run` の前に落ちた）は、そのタブを閉じてから起動し直す（このタブは watch が作ったもので、label で所有を確認する）。タブがなければ、そのまま起動し直す。
+  5. 起動の失敗（Herdr のエラー）は警告して `detected` に戻し、次の周にやり直す。`launch_attempts` が 3 に達したら `launch_failed` にして、それ以上自動では起動しない。`status` に `launch_failed` と event ファイルのパスを表示する（保守者は `/watch-triage <event-file>` を手で起動できる）。
+- `launched` の event は、同じ key では再び起動しない。
 - 抑止 1: その Issue の `watch-triage-<issue>` タブが開いている間は起動しない。
 - 抑止 2: `handoff` を記録した Issue は、進み具合（目標ラベル・`run_id`・`last_step`・`episode`）が変わるまで、event の種類によらず起動しない。タブを閉じても、監視を起動し直しても解除しない（`records.jsonl` から再構成する）。
 - `still-working` の記録の後は、`STILL_WORKING_SNOOZE_SECONDS` の間、同じ attempt・episode では起動しない。その後も条件が続いていれば、key の末尾に `:r<n>` を付けて再確認する。`not-stalled` の後は、記録から `LOG_STALL_SECONDS` 後に `recheck + 1` で再確認する。
@@ -361,12 +413,17 @@ run_id は、同じ host の時計による `YYMMDDHHMMSS(-NNN)` の文字列比
 
 ### `aborted` の報告
 
-- 目標が `aborted` に変わった周に `pending_reports` に記録し、ラベルが `aborted` に揃った周に、コメント（1 行目 `<!-- kaji-watch: aborted key=<event key> -->`。run_id・end_status・failed_step・failure.cause を書く）→ 通知（kind `aborted`）を送る。
-- コメントに成功したら記録を消す。通知の失敗は再送しない（D5「警告して続ける」）。コメントが失敗した場合は、次の周でやり直す。目標が `aborted` でなくなったら、記録を捨てる。
+- `aborted` の event を検知した周に、ラベル操作より前に `pending_reports[key]` を保存する（M4。検知は M5 のとおり事実から行うので、記録が失われても次の周に再検知できる）。
+- ラベルが `aborted` に揃った周に、次の順で報告する。
+  1. **marker の既存確認**: `list_issue_comments_all` で、1 行目が `<!-- kaji-watch: aborted key=<key> -->` のコメントを探す。あれば投稿済みとして、その URL を採り、2 を飛ばす（前回、コメントの成功後・保存前に落ちた場合や、応答を失った場合の重複を防ぐ）。
+  2. コメントを投稿する（1 行目は上記の marker。run_id・end_status・failed_step・failure.cause を書く）。例外（応答の喪失を含む）の場合は、結果不明として `pending_reports` を残し、次の周に 1 からやり直す。
+  3. `reports[key] = {comment_url, notified: true}` を保存し、`pending_reports` から消す。
+  4. 通知（kind `aborted`）を送る。通知は 3 の保存の後に 1 回だけ送る（at-most-once。D5 の非再送）。3 と 4 の間で落ちた場合、その通知は送られないが、コメントは残る。
+- 目標が `aborted` でなくなったら、`pending_reports` を捨てる。
 
 ### 終了
 
-対象（open で `planned` / `running` / `aborted`）が 2 周続けて 0 件になり、`pending_labels` と `pending_reports` が空なら、`watch_exit` を通知して exit 0 で終える。事実の収集に失敗した周は `empty_polls` を 0 に戻し、警告して次の周へ進む（GitHub が一時的に落ちても監視は終わらない）。
+終了判定の件数は「open で、今のラベルまたは目標が `planned` / `running` / `aborted` の Issue」の数とする。reopen された `done` で再計算の対象にならないものは数えない（M6: 取得の経路と終了判定の件数を分ける）。この件数が 2 周続けて 0 件になり、`pending_labels`・`pending_reports`・`detected` / `launching` の event がすべて空なら、`watch_exit` を通知して exit 0 で終える。事実の収集に失敗した周は `empty_polls` を 0 に戻し、警告して次の周へ進む（GitHub が一時的に落ちても監視は終わらない）。
 
 ### `herdr` の公開関数
 
@@ -400,6 +457,9 @@ kaji の repo の `.kaji/config.toml` には `[watch]` を**宣言しない**。
 | triage skill の名前 | `/watch-triage`（Issue の仮称は `/lane-triage`） | **AI の仮定**（本設計で追加）。根拠: kaji には「レーン」の概念がなく（`/plan-run` 相当は EPIC の範囲外）、`kaji watch` と対にした方が発見しやすい。skill 名は後から改名できる（two-way door）。検査先: issue-review-design | タブの label `watch-triage-<issue>`、コメントのマーカー |
 | `log_stall` の判定元 | #540 の文書の進み具合の不変時間 | **AI の仮定**（本設計で追加）。根拠: 完了条件「#540 の API を通す」に合わせ、`kaji status` の契約を広げない。内部の判定なので後から変えられる。検査先: issue-review-design | 進み具合の 4 要素 |
 | anchor | 時刻ではなく run_id の比較（series の member / `baseline_run_id`） | **AI の仮定**（本設計で追加）。根拠: kamo2 の時計のずれの補正（apokamo/kamo2#2183）を不要にする。内部の判定なので後から変えられる。検査先: issue-review-design | 方針の「anchor」 |
+| `mark-done` が外すラベル | ほかのすべての `state:*`（`hold` / `needs-maintainer` を含む） | Issue 完了条件「state:done を付け（他の state:* は外す）」（review-design の M1 で、初版の弱化を是正した） | 契約表の「外す主体」に `issue-close`（close 時）を追加 |
+| 事実の取得の境界 | `runstate.query`（既存の収集器の再利用だけ）を新設し、`kaji status` の CLI も同じ経路を使う | #543 完了条件「事実の取得は #540 の API を通す」。query の新設は AI の詳細化（内部の module 境界で、公開の schema は変えない。検査先: issue-verify-design） | `collect_status` / `list_series` / `locate_step_artifacts` |
+| series YAML だけを公開する保証 | HEAD と remote の一致を前提とし、`<sha>:refs/heads/<branch>` で 1 commit だけを push | D7「YAML だけを main に commit / push」（review-design の M8 で、index の検査だけでは足りないことが再現された） | 段 0・段 4 の照合と再開 |
 | kaji の repo での `[watch]` の宣言 | 本 Issue では宣言しない | **AI の仮定**。根拠: labels-sync より前に `issue-close` が止まる窓を作らないため。宣言は 1 行で足せる。検査先: issue-review-design、事後確認 | — |
 
 source of truth の扱い: Issue 本文の `## 決定事項`（D1〜D7・A1〜A8）と、#540 の決定事項 D1〜D10 / `docs/cli-guides/run-status.md` を正とし、これらを上書き・弱化していない。one-way door の未決は見つからなかった。公開の契約（CLI・JSON）の形は D3・D5・A6 の範囲内で詳細化した。
@@ -432,9 +492,29 @@ source of truth の扱い: Issue 本文の `## 決定事項`（D1〜D7・A1〜A8
 - `notify_command`: tmp の script（標準入力を file に書く）で JSON が届くこと。失敗・timeout は警告して続行すること。argv とログに通知の内容と stderr が出ないこと。
 - lock: `once` が lock の保持中に exit 2 になること。`start` が lock の保持中に exit 0（何もしない）になること。
 - CLI の exit code: `[watch]` がない → 2、ラベルが足りない → 2、Herdr の外の `start` → 2、`local` provider → 2、予期しない例外 → 3。
-- `watch_labels`: skip / exit 2 / `mark-done` で外すラベルと残すラベル / `mark-follow-up`。
-- `run_watched execute`: tmp の git repo（bare の remote 付き）で、段ごとの冪等性（同じ draft でやり直すと済んだ段を飛ばす）を確認する。snapshot が変わったら何も変えないこと、検証の失敗でラベル・タブを変えないこと、既存の series YAML を上書きしないこと、push の失敗で止まること（`git` は実物、`gh` と `herdr` は fake）。
-- **#540 の API だけを使う契約テスト**: `kaji_harness/watch/` の全モジュールについて、AST で `open(` / `Path.read_text` の呼び出しと、文字列リテラル `run.log` / `session-state.json` / `process.json` / `state.json`（`_series`）が現れないこと、`kaji_harness.runstate` の公開関数以外の runstate 内部（`runlog` / `facts` の private）を import しないことを検査する。
+- `watch_labels`: skip / exit 2 / `mark-follow-up`。`mark-done` は、`state:hold` 付き・`state:needs-maintainer` 付き（follow-up の完了）・2 個以上付きの Issue を close した場合に、結果が `state:done` の 1 個だけになること（M1）。
+- 前提の fail-fast（M7）: Herdr の外で `once`（`--dry-run` なし）を呼ぶと exit 2 になり、GitHub・状態ファイル・event・Herdr のどれにも書かないこと。`--dry-run` は Herdr の外でも動き、`herdr: unavailable` を出すこと。`run_watched execute` が `[watch]` なし・ラベル不足・Herdr の外の場合は、git（commit なし）・GitHub（ラベルなし）・Herdr のどれにも副作用を残さず exit 2 になること。`status` / `events` / `record` も、宣言済みでラベルが足りなければ exit 2 になること。
+- aborted の検知（M5）: run A の失敗で `aborted` の Issue に対して、poll の間に retry した run B も失敗した場合に、`<issue>:aborted:<B>` の event が出ること。watch の停止中に新しい run が失敗した場合も、起動後の最初の周で出ること。`COMPLETE` で open の場合は出ないこと（S と M の両方）。
+- 永続化の順序（M4）: 次の各境界で例外を起こし、再起動後の挙動を確かめる。
+  - ラベル付け替えの直後: 次の周に `detected` の event から起動されること。
+  - `launching` の保存後・`tab create` の前: 起動し直されること。
+  - `tab create` の後・`pane run` の前: シェルだけのタブを閉じてから起動し直されること。
+  - `pane run` の後・`launched` の保存前: 照合で `launched` になり、二重に起動しないこと。
+  - Herdr の起動が 3 回失敗した場合: `launch_failed` になること。
+  - コメントの成功後・保存前、およびコメントの応答喪失: marker の既存確認で、二重に投稿しないこと。
+  - 保存後・通知前: 通知は送られず、コメントは 1 件であること。
+- reopen された done（M6）: `state:done` の Issue を reopen し、run を起動すると `running` に戻ること。run のない reopen では `done` のまま書かないこと。いずれの場合も、終了判定の件数に正しく反映されること。
+- `run_watched execute`（M3・M8）: tmp の git repo（bare の remote 付き）で確かめる。`git` は実物、`gh` と `herdr` は fake を使う。
+  - 中断と再開: YAML の作成直後、commit の直後、push の直後、各 Issue のラベル付与の直後、タブの作成直後、`pane run` の直後のそれぞれで停止させ、同じ draft で再実行する。済んだ段は外部の照合で飛ばされ、空の commit・二重の push・二重のラベル・二重のタブ・二重の起動が起きないこと。
+  - push の失敗後: remote が parent のままなら push だけがやり直されること。remote が進んでいれば exit 3 で止まり、rebase・force push をしないこと。
+  - 状態の再検査: 段の間で、Issue が close される・`state:hold` が付く場合は、残りの副作用を行わずに exit 2 になること。自分が付けた `state:planned` は相違とみなさず、再実行が続行すること。
+  - 既存の YAML: sha256 が一致しない既存の series YAML は上書きせず、exit 2 になること。
+  - 無関係な ahead commit: main に無関係な未 push の commit がある場合は、段 0 で exit 2 になり、YAML の作成・commit・push のどれも行わないこと（M8。レビューで再現された状況）。push の後、remote の差分が YAML の 1 ファイルだけであること。
+  - 検証の失敗: ラベル・タブを変えないこと。
+- **#540 の API だけを使う契約テスト（S1 で範囲を限定）**: 対象は、run と series の内部事実を取得する境界だけとする。
+  - `kaji_harness/watch/` の全モジュールについて、AST で次を検査する。runstate から import するのは `kaji_harness.runstate.query` だけで、`runstate.facts` / `runlog` / `process` / `launch` / `schema` と `kaji_harness.series.state` を import しない。文字列リテラル `run.log` / `session-state.json` / `process.json` / `pane-metadata.json` / `_series` が現れない。
+  - 自分の永続化（`store.py` による `_watch/` の下の state・event・record の読み書き）は許可し、`open` / `Path.read_text` を一律には禁止しない。
+  - `query.collect_status` の結果が、同じ fixture に対する `kaji status --json` の文書と一致すること（CLI と同じ経路であることの検査）。`locate_step_artifacts` が既存の attempt dir を返し、ないものには null を返すこと。
 - **skill の契約テスト**:
   - `.claude/skills/watch-triage/SKILL.md` と本設計書の `watch-triage-forbidden` マーカー区間の表から ID の集合を抜き出し、一致することを確かめる（D6）。
   - watch-triage に「agent の質問に答えない」の規則があること。
@@ -474,7 +554,7 @@ source of truth の扱い: Issue 本文の `## 決定事項`（D1〜D7・A1〜A8
 | 情報源 | URL/パス | 根拠（引用/要約） |
 |---|---|---|
 | Issue #543 本文・決定事項 | https://github.com/apokamo/kaji/issues/543 | D1〜D7・A1〜A8、完了条件。本設計の要件の正本 |
-| #540 の状態 API | `docs/cli-guides/run-status.md`、`kaji_harness/runstate/schema.py`（`status_document` / `series_to_json`） | 「Monitoring tools call it instead of reading kaji's internal files」。`any_run_alive` / `launching` / `termination` / `pane` / schema の互換規則 |
+| #540 の状態 API | `docs/cli-guides/run-status.md`、`kaji_harness/commands/status.py`（`collect_issue_facts` → `issue_to_json` → `status_document` の順で文書を作る）、`kaji_harness/runstate/schema.py`（`status_document` は受け取った文書を包むだけ / `series_to_json`）、`kaji_harness/runstate/__init__.py`（facade は循環を避けて facts / schema を再 export しない） | 「Monitoring tools call it instead of reading kaji's internal files」。`any_run_alive` / `launching` / `termination` / `pane` / schema の互換規則 |
 | #540 の安全ゲート付きのやり直し | `docs/cli-guides/failure-recovery.md` § `kaji recover --retry-failed-step` | triage が使う唯一のやり直し。exit 2 / 3 / 4、`retry-gate:` 行 |
 | `[incident]` の作法 | `kaji_harness/config.py`（`IncidentConfig` / `_parse_incident`）、`docs/reference/configuration.md` | tracked の config だけを読み、kaji はラベルを作らない。D1 がこれに倣う |
 | 終了コード | `kaji_harness/commands/exit_codes.py` | `EXIT_INVALID_INPUT = 2` / `EXIT_RUNTIME_ERROR = 3` |
