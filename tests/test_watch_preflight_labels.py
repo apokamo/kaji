@@ -115,6 +115,40 @@ def test_preconditions_ok(repo: Path) -> None:
     assert context.watch.notify_command == ("notify.sh",)
 
 
+def test_preconditions_probe_herdr_inside_herdr(repo: Path) -> None:
+    """読み取りの入口: Herdr の中なら ``herdr`` を解決する（PR #576 review）。"""
+    _declare(repo)
+    context = check_watch_preconditions(
+        _config(repo),
+        require_herdr=False,
+        probe_herdr=True,
+        provider=FakeProvider(),
+        env=HERDR_ENV,
+        herdr_resolver=lambda: "/usr/bin/herdr",
+    )
+    assert context.herdr_bin == "/usr/bin/herdr"
+    assert context.herdr_pane_id == "p_1"
+
+
+def test_preconditions_probe_herdr_outside_herdr_is_not_an_error(repo: Path) -> None:
+    _declare(repo)
+
+    def missing() -> str:
+        raise CLINotFoundError("CLI 'herdr' not found")
+
+    for env, resolver in ((dict[str, str](), lambda: "/usr/bin/herdr"), (HERDR_ENV, missing)):
+        context = check_watch_preconditions(
+            _config(repo),
+            require_herdr=False,
+            probe_herdr=True,
+            provider=FakeProvider(),
+            env=env,
+            herdr_resolver=resolver,
+        )
+        assert context.herdr_bin is None
+        assert context.herdr_pane_id is None
+
+
 def test_watch_labels_skips_without_watch(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     provider = FakeProvider()
     code = watch_labels.main(["mark-done", "101", "--workdir", str(repo)], provider=provider)

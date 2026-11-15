@@ -26,7 +26,7 @@ class WatchContext:
         watch: tracked の ``[watch]``。
         provider: GitHub provider。
         repo: provider の repo（``owner/name``）。
-        herdr_bin: 解決した ``herdr``（Herdr を要求しなかった場合は ``None``）。
+        herdr_bin: 解決した ``herdr``（Herdr を要求も観測もしなかった、または観測で満たさなかった場合は ``None``）。
         herdr_pane_id: 呼び出し元の pane（同上）。
     """
 
@@ -66,6 +66,7 @@ def check_watch_preconditions(
     config: KajiConfig,
     *,
     require_herdr: bool,
+    probe_herdr: bool = False,
     provider: IssueProvider | None = None,
     env: Mapping[str, str] | None = None,
     herdr_resolver: Callable[[], str] = resolve_herdr_cli,
@@ -75,6 +76,8 @@ def check_watch_preconditions(
     Args:
         config: 読み込んだ config。
         require_herdr: Herdr の前提を求めるか（書き込みを行う入口）。
+        probe_herdr: ``require_herdr`` が偽のとき、Herdr の前提を満たしていれば解決する
+            （読み取りの入口。満たさなくてもエラーにせず ``None`` のままにする）。
         provider: 注入する provider（省略時は ``get_provider``）。
         env: 環境変数（テスト用）。
         herdr_resolver: ``herdr`` の解決（テスト用）。
@@ -95,6 +98,11 @@ def check_watch_preconditions(
     herdr_pane: str | None = None
     if require_herdr:
         herdr_bin, herdr_pane = check_herdr(env, herdr_resolver)
+    elif probe_herdr:
+        try:
+            herdr_bin, herdr_pane = check_herdr(env, herdr_resolver)
+        except WatchPreconditionError:
+            herdr_bin, herdr_pane = None, None
     resolved = provider if provider is not None else get_provider(config)
     existing = {label.name for label in resolved.list_labels()}
     missing = [name for name in CONTRACT_LABELS if name not in existing]

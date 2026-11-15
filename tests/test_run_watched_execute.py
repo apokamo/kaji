@@ -55,6 +55,7 @@ class FakeProvider:
         self.add_calls: list[tuple[str, list[str]]] = []
         self.fail_after_edit = False
         self.pr_branches: set[str] = set()
+        self.worktree_dirs: dict[int, str] = {}
 
     def view_issue(self, issue_id: str) -> Issue:
         data = self.issues[int(issue_id)]
@@ -86,8 +87,9 @@ class FakeProvider:
         @dataclass
         class _Ctx:
             branch_prefix: str = "feat"
+            worktree_dir: str = ""
 
-        return _Ctx()
+        return _Ctx(worktree_dir=self.worktree_dirs.get(int(issue_id), ""))
 
     def resolve_pr_context(self, branch_name: str) -> Any:
         return object() if branch_name in self.pr_branches else None
@@ -257,6 +259,27 @@ def test_plan_saves_draft_and_reports_exclusions(env: Env) -> None:
     assert draft.series_id == "rw-101-101-2611150301"
     assert draft.yaml_path == ".kaji/series/rw-101-101-2611150301.yaml"
     assert env.provider.add_calls == []
+
+
+def test_plan_excludes_worktree_without_run_artifact(env: Env, tmp_path: Path) -> None:
+    """run artifact も PR も無い worktree（手動の issue-start 等）も除外する（PR #576 review）。"""
+    worktree = tmp_path / "kaji-feat-106"
+    worktree.mkdir()
+    env.provider.issues[106] = FakeIssue()
+    env.provider.worktree_dirs[106] = str(worktree)
+    env.provider.worktree_dirs[101] = str(tmp_path / "missing")
+    code, document = run_plan(
+        PlanDeps(provider=env.provider, artifacts_dir=env.artifacts, repo_root=env.repo),
+        [101, 106],
+        workflow="dev",
+        member_workflows={},
+        chosen_by_skill=False,
+        order_ambiguous=False,
+        now=NOW,
+    )
+    assert code == 0
+    assert document["members"] == [{"issue": 101, "workflow": ".kaji/wf/official/dev.yaml"}]
+    assert document["excluded"] == [{"issue": 106, "reason": "worktree_or_pr"}]
 
 
 def test_plan_needs_selection_without_workflow(env: Env) -> None:

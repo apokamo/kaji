@@ -30,9 +30,13 @@ def cmd_watch(args: argparse.Namespace) -> int:
     action: str = args.watch_command
     dry_run = bool(getattr(args, "dry_run", False))
     require_herdr = action == "start" or (action == "once" and not dry_run)
+    # 読み取りの入口（status・once --dry-run）は Herdr の中なら pane を観測する（外でも動く）
+    probe_herdr = action == "status" or (action == "once" and dry_run)
     try:
         config = KajiConfig.discover(start_dir=Path(args.workdir).resolve())
-        context = check_watch_preconditions(config, require_herdr=require_herdr)
+        context = check_watch_preconditions(
+            config, require_herdr=require_herdr, probe_herdr=probe_herdr
+        )
     except (ConfigNotFoundError, ConfigLoadError, WatchPreconditionError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return EXIT_INVALID_INPUT

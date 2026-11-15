@@ -9,7 +9,7 @@ import pytest
 
 from kaji_harness.commands.main import main
 from kaji_harness.providers import Issue, Label
-from kaji_harness.watch import preflight
+from kaji_harness.watch import preflight, service
 from kaji_harness.watch.constants import CONTRACT_LABELS
 from kaji_harness.watch.models import WatchEventFile
 from kaji_harness.watch.store import WatchStore
@@ -118,6 +118,39 @@ def test_dry_run_outside_herdr_reports_unavailable(
     assert main(["watch", "once", "--dry-run", "--workdir", str(repo)]) == 0
     plan = json.loads(capsys.readouterr().out)
     assert plan["herdr"] == "unavailable"
+    assert not (repo / ".kaji-artifacts" / "_watch").exists()
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["watch", "once", "--dry-run"], ["watch", "status", "--json"]],
+)
+def test_read_only_commands_observe_herdr_inside_herdr(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+) -> None:
+    """status / once --dry-run は Herdr の中なら pane を観測する（PR #576 review）。"""
+    _declare(repo)
+    _provider(monkeypatch, FakeProvider())
+    _herdr_env(repo, monkeypatch)
+    seen: list[str | None] = []
+
+    class ListOnlyHerdr:
+        def list_tabs(self) -> list[object]:
+            return []
+
+    def fake_default_herdr(context: object) -> ListOnlyHerdr:
+        seen.append(getattr(context, "herdr_bin", None))
+        return ListOnlyHerdr()
+
+    monkeypatch.setattr(service, "default_herdr", fake_default_herdr)
+    assert main([*argv, "--workdir", str(repo)]) == 0
+    assert seen == [str(repo / "fake-herdr")]
+    document = json.loads(capsys.readouterr().out)
+    if argv[1] == "once":
+        assert document["herdr"] == "available"
     assert not (repo / ".kaji-artifacts" / "_watch").exists()
 
 

@@ -335,12 +335,22 @@ def _labels(issue: Issue) -> tuple[str, ...]:
     return tuple(sorted(label.name for label in issue.labels))
 
 
+def _existing_dir(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and Path(value).exists()
+
+
 def _has_worktree_or_pr(deps: PlanDeps, issue: int, latest_run: JsonDict | None) -> bool:
-    worktree = (latest_run or {}).get("worktree_dir")
-    if isinstance(worktree, str) and worktree and Path(worktree).exists():
+    """worktree（最新 run の記録、または provider が解決する位置）か open の PR が残っているか。
+
+    run artifact の無い worktree（手動の ``issue-start`` 等）も検出するため、
+    ``latest_run.worktree_dir`` に加えて Issue context の ``worktree_dir`` も確かめる。
+    """
+    if _existing_dir((latest_run or {}).get("worktree_dir")):
         return True
     try:
         context = deps.provider.resolve_issue_context(str(issue))
+        if _existing_dir(getattr(context, "worktree_dir", None)):
+            return True
         branch = f"{context.branch_prefix}/{issue}"
         return deps.provider.resolve_pr_context(branch) is not None
     except (HarnessError, OSError, ValueError):
