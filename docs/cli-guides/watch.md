@@ -1,5 +1,7 @@
 # Series monitoring (`kaji watch`)
 
+[日本語版](watch.ja.md)
+
 `kaji watch` monitors Issues queued in a series without an LLM. Every poll it recomputes
 the `state:*` label of each Issue from facts and fixes only the difference on GitHub.
 When a run stops, it posts a report comment, sends an external notification, and opens
