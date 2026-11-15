@@ -116,16 +116,58 @@ class WatchStore:
         return WatchEventFile.model_validate_json(resolved.read_text(encoding="utf-8"))
 
     def append_record(self, record: WatchRecord) -> None:
-        """``records.jsonl`` に 1 行追記する。"""
-        self._append(self.root / RECORDS_FILE, record.model_dump_json())
+        """``records.jsonl`` に 1 行追記する（``append_record_limited`` と同じ ``flock`` の下）。"""
+        self.append_record_limited(record, unit=None, limit=None)
+
+    def append_record_limited(
+        self,
+        record: WatchRecord,
+        *,
+        unit: list[str | int | None] | None,
+        limit: int | None,
+    ) -> bool:
+        """``records.jsonl`` の ``flock``（blocking）の下で数えて、上限未満なら 1 行追記する（#545）。
+
+        Args:
+            record: 追記する行。
+            unit: 上限を数える単位の値の列（``None`` は数えない）。
+            limit: 同じ outcome・同じ単位の上限（``None`` は数えない）。
+
+        Returns:
+            追記したか（上限に達していれば追記せず ``False``）。
+        """
+        path = self.root / RECORDS_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a+", encoding="utf-8") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                if unit is not None and limit is not None:
+                    f.seek(0)
+                    existing = self._parse_records(f.read(), path)
+                    used = sum(
+                        1 for r in existing if r.outcome == record.outcome and r.unit == unit
+                    )
+                    if used >= limit:
+                        return False
+                f.seek(0, os.SEEK_END)
+                f.write(record.model_dump_json() + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        return True
 
     def read_records(self) -> list[WatchRecord]:
         """``records.jsonl`` を読む（壊れた行は警告して飛ばす）。"""
         path = self.root / RECORDS_FILE
         if not path.is_file():
             return []
+        return self._parse_records(path.read_text(encoding="utf-8"), path)
+
+    @staticmethod
+    def _parse_records(text: str, path: Path) -> list[WatchRecord]:
         records: list[WatchRecord] = []
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        for number, line in enumerate(text.splitlines(), start=1):
             if not line.strip():
                 continue
             try:

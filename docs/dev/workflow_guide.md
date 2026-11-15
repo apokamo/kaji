@@ -95,8 +95,9 @@ provider API、Issue、artifact、state、lock、member workflow 実行への副
 `/run-watched` が series YAML の生成・検証・main への commit / push・`state:planned` の付与・
 `kaji-series-<id>` タブでの `kaji run-series` 起動・`kaji watch start` までを決定的な script
 （`run_watched plan` / `execute`）で行う。`kaji watch` が停止（`aborted` / `pane_idle` / `log_stall`）を
-検知すると、`watch-triage-<issue>` タブで `/watch-triage` が起動し、原因を Issue に報告して保守者に回す。
-復旧の実行は保守者の承認後だけ行う。詳細: [docs/cli-guides/watch.md](../cli-guides/watch.md)
+検知すると、`watch-triage-<issue>` タブで `/watch-triage` が起動する。決められた 5 種類の停止（一時エラー・
+usage limit・repo の中のダイアログ・分類 1・2 の質問・環境が原因の失敗。Issue #545）は上限付きで承認なしで戻し、
+それ以外は原因を Issue に報告して保守者に回す。一覧の外の復旧は保守者の承認後だけ行う。詳細: [docs/cli-guides/watch.md](../cli-guides/watch.md)
 
 ## provider × workflow の対応表
 

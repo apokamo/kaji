@@ -414,6 +414,22 @@ class WatchPreconditionError(HarnessError):
         super().__init__(message)
 
 
+class AutoRecoveryLimitReached(HarnessError):
+    """自動復旧の上限に達した（Issue #545。``kaji watch`` は exit 5）。
+
+    Attributes:
+        outcome: 自動復旧の outcome。
+        unit: 上限を数える単位の値の列。
+        limit: 上限。
+    """
+
+    def __init__(self, outcome: str, unit: list[str | int | None], limit: int) -> None:
+        self.outcome = outcome
+        self.unit = unit
+        self.limit = limit
+        super().__init__(f"auto-recovery limit reached: {outcome} unit={unit} limit={limit}")
+
+
 class RunWatchedError(HarnessError):
     """``run_watched execute`` の停止（Issue #543 M3・M8）。
 

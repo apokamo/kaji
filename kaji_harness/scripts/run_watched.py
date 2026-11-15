@@ -44,6 +44,7 @@ from ..series.generator import generate_series_yaml
 from ..series.models import SeriesConfig, SeriesMember
 from ..watch.herdr import SERIES_TAB_PREFIX, CliHerdrClient, HerdrClient, find_tab, foreground_has
 from ..watch.preflight import check_watch_preconditions
+from ..watch.workflows import WorkflowResolutionError, resolve_workflow_name, workflow_files
 
 ExclusionReason = Literal[
     "closed",
@@ -67,22 +68,6 @@ _BLOCKING_STATE_LABELS = frozenset(
 )
 
 
-class WorkflowResolutionError(ValueError):
-    """workflow を一意に解決できない。
-
-    Attributes:
-        reason: ``unresolvable`` / ``ambiguous``。
-    """
-
-    def __init__(self, reason: Literal["unresolvable", "ambiguous"], message: str) -> None:
-        self.reason = reason
-        super().__init__(message)
-
-
-def _workflow_files(wf_root: Path) -> list[Path]:
-    return sorted(path for path in wf_root.rglob("*.yaml") if path.is_file())
-
-
 def resolve_workflow_arg(value: str, repo_root: Path) -> Path:
     """引数（stem・ファイル名・パス）を workflow YAML に解決する。
 
@@ -93,7 +78,7 @@ def resolve_workflow_arg(value: str, repo_root: Path) -> Path:
     if ("/" in value or value.endswith(".yaml")) and candidate.is_file():
         return candidate
     stem = Path(value).name.removesuffix(".yaml")
-    matches = [p for p in _workflow_files(repo_root / ".kaji" / "wf") if p.stem == stem]
+    matches = [p for p in workflow_files(repo_root / ".kaji" / "wf") if p.stem == stem]
     if not matches:
         raise WorkflowResolutionError("unresolvable", f"workflow not found: {value}")
     if len(matches) > 1:
@@ -107,19 +92,13 @@ def resolve_wf_label(name: str, repo_root: Path) -> Path:
     Raises:
         WorkflowResolutionError: 0 個（unresolvable）または 2 個以上（ambiguous）の場合。
     """
-    matches: list[Path] = []
-    for path in _workflow_files(repo_root / ".kaji" / "wf"):
-        try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except (OSError, yaml.YAMLError):
-            continue
-        if isinstance(data, dict) and data.get("name") == name:
-            matches.append(path)
-    if not matches:
-        raise WorkflowResolutionError("unresolvable", f"wf:{name} matches no workflow")
-    if len(matches) > 1:
-        raise WorkflowResolutionError("ambiguous", f"wf:{name} matches several workflows")
-    return matches[0]
+    try:
+        return resolve_workflow_name(name, repo_root)
+    except WorkflowResolutionError as exc:
+        message = (
+            "matches no workflow" if exc.reason == "unresolvable" else "matches several workflows"
+        )
+        raise WorkflowResolutionError(exc.reason, f"wf:{name} {message}") from None
 
 
 def make_series_id(issues: list[int], now: datetime) -> str:

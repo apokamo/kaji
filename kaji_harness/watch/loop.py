@@ -44,6 +44,7 @@ from .herdr import (
     triage_tab_label,
 )
 from .labels import (
+    Anchor,
     Target,
     TargetBasis,
     WatchIssue,
@@ -292,6 +293,7 @@ def _ledger(state: WatchState, store: WatchStore) -> Ledger:
             continue
         try:
             recorded_at = datetime.fromisoformat(record.recorded_at)
+            until = datetime.fromisoformat(record.until) if record.until else None
         except ValueError:
             continue
         records.append(
@@ -301,6 +303,7 @@ def _ledger(state: WatchState, store: WatchStore) -> Ledger:
                 outcome=record.outcome,
                 recorded_at=recorded_at,
                 progress=progress_by_key.get(record.event_key),
+                until=until,
             )
         )
     return Ledger(event_keys=frozenset(state.events), records=tuple(records))
@@ -309,7 +312,14 @@ def _ledger(state: WatchState, store: WatchStore) -> Ledger:
 def _tracking(state: WatchState) -> DetectTracking:
     return DetectTracking(
         pane_idle={
-            int(k): PaneIdleCounter(v.run_id, v.step, v.attempt, v.idle_polls, v.episode)
+            int(k): PaneIdleCounter(
+                v.run_id,
+                v.step,
+                v.attempt,
+                v.idle_polls,
+                v.episode,
+                datetime.fromisoformat(v.recovered_seen_at) if v.recovered_seen_at else None,
+            )
             for k, v in state.pane_idle.items()
         },
         stall={
@@ -327,6 +337,7 @@ def _store_tracking(state: WatchState, tracking: DetectTracking) -> None:
             attempt=v.attempt,
             idle_polls=v.idle_polls,
             episode=v.episode,
+            recovered_seen_at=v.recovered_seen_at.isoformat() if v.recovered_seen_at else None,
         )
         for k, v in tracking.pane_idle.items()
     }
@@ -336,8 +347,20 @@ def _store_tracking(state: WatchState, tracking: DetectTracking) -> None:
     }
 
 
+def anchor_text(anchor: Anchor) -> str:
+    """event ファイルの ``anchor``（``member:<run_id>`` / ``baseline:<run_id>`` / ``none``）。"""
+    if anchor.run_id is None:
+        return "none"
+    return f"{'member' if anchor.inclusive else 'baseline'}:{anchor.run_id}"
+
+
 def build_event_file(
-    event: DetectedEvent, issue: WatchIssue, deps: WatchDeps, now: datetime, generated_at: str
+    event: DetectedEvent,
+    issue: WatchIssue,
+    deps: WatchDeps,
+    now: datetime,
+    generated_at: str,
+    anchor: str | None = None,
 ) -> WatchEventFile:
     """検知時点の事実を event ファイルに固定する。"""
     run = issue.latest_run or {}
@@ -367,6 +390,8 @@ def build_event_file(
             "issues": [issue.status],
         },
         progress=event.progress,
+        anchor=anchor,
+        waited_until=event.waited_until.astimezone(UTC).isoformat() if event.waited_until else None,
     )
 
 
@@ -444,8 +469,11 @@ def run_once(deps: WatchDeps, *, dry_run: bool = False) -> PollResult:
         elif str(issue.issue) in state.pending_labels:
             state.pending_labels.pop(str(issue.issue))
     for event in result.events:
+        anchor = anchor_text(resolve_anchor(event.issue, facts.series, state.baselines))
         path = store.write_event(
-            build_event_file(event, issues_by_id[event.issue], deps, now, facts.generated_at)
+            build_event_file(
+                event, issues_by_id[event.issue], deps, now, facts.generated_at, anchor
+            )
         )
         state.events[event.key] = EventState(
             key=event.key,
@@ -455,14 +483,15 @@ def run_once(deps: WatchDeps, *, dry_run: bool = False) -> PollResult:
             detected_at=now.isoformat(),
             event_file=str(path),
         )
-        if event.kind == "aborted":
+        # ``wait`` の後の出し直し（``:w<n>``）は報告を出し直さない（報告は run ごとに 1 回。#545）
+        if event.kind == "aborted" and event.waited_until is None:
             state.pending_reports[str(event.issue)] = event.key
     _store_tracking(state, result.tracking)
     store.save_state(state)
 
     _apply_labels(deps, store, state, issues_by_id, targets)
     if deps.herdr is not None:
-        _launch_triage(deps, store, state, facts.tabs or [])
+        _launch_triage(deps, store, state, facts.tabs or [], waiting=frozenset(result.waiting))
     _report_aborted(deps, store, state, targets)
 
     active = count_active(facts.issues, targets)
@@ -537,7 +566,12 @@ def _owns_tab(state: WatchState, event: EventState, tab: TabRef) -> bool:
 
 
 def _launch_triage(
-    deps: WatchDeps, store: WatchStore, state: WatchState, tabs: list[TabRef]
+    deps: WatchDeps,
+    store: WatchStore,
+    state: WatchState,
+    tabs: list[TabRef],
+    *,
+    waiting: frozenset[int] = frozenset(),
 ) -> None:
     """``detected`` / ``launching`` の event の triage タブを起動する（M4 の照合付き）。
 
@@ -553,6 +587,9 @@ def _launch_triage(
         if event.launch_status not in ("detected", "launching"):
             continue
         if event.issue in attempted:
+            continue
+        if event.issue in waiting:
+            # ``wait`` の予定時刻の前は起動しない（予定時刻の後の周で起動する。#545）
             continue
         label = triage_tab_label(event.issue)
         tab = find_tab(current, label)

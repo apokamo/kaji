@@ -15,6 +15,20 @@ STILL_WORKING_SNOOZE_SECONDS = 1200
 #: triage の起動の試行上限。
 MAX_LAUNCH_ATTEMPTS = 3
 
+#: 自動復旧の outcome → (上限を数える単位の項目, 上限)（Issue #545 D1。kamo2 ``AUTO_LIMITS``）。
+#: 単位の項目は event ファイルの項目名（``issue`` / ``run_id`` / ``step`` / ``attempt`` / ``anchor``）。
+AUTO_RECOVERY_LIMITS: dict[str, tuple[tuple[str, ...], int]] = {
+    "continue-sent": (("issue", "run_id", "step", "attempt"), 3),
+    "wait": (("issue", "run_id"), 3),
+    "dialog-answered": (("issue", "run_id", "step", "attempt"), 3),
+    "question-answered": (("issue", "run_id", "step", "attempt"), 3),
+    "retry-sent": (("issue", "anchor"), 1),
+}
+#: ``wait`` の ``--until`` の上限（今から 7 日以内）。
+WAIT_HORIZON_SECONDS = 7 * 24 * 3600
+#: ``kaji watch retry`` が ``kaji recover`` を起動するタブの label の接頭辞。
+RETRY_TAB_PREFIX = "kaji-retry-"
+
 STATE_PLANNED = "state:planned"
 STATE_RUNNING = "state:running"
 STATE_ABORTED = "state:aborted"

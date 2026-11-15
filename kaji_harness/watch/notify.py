@@ -1,6 +1,6 @@
 """External notification via ``notify_command`` (Issue #543 D5).
 
-通知の JSON（schema v1）を ``notify_command`` の標準入力に渡す。argv には
+通知の JSON（schema v2。#545 で ``kind`` に ``retry`` を追加）を ``notify_command`` の標準入力に渡す。argv には
 ``notify_command`` 以外を足さない（秘密を argv に載せない）。失敗は警告して続行し、
 ログには argv[0] と exit code だけを出す（stderr の本文は秘密を含みうるため出さない）。
 再送はしない（at-most-once）。
@@ -16,10 +16,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-NOTIFY_SCHEMA_VERSION = 1
+NOTIFY_SCHEMA_VERSION = 2
 NOTIFY_TIMEOUT_SECONDS = 30
 
-NotifyKind = Literal["aborted", "handoff", "watch_exit"]
+NotifyKind = Literal["aborted", "handoff", "watch_exit", "retry"]
 
 _console = logging.getLogger("kaji.watch")
 
@@ -35,7 +35,7 @@ def build_payload(
     event_key: str | None = None,
     now: datetime | None = None,
 ) -> dict[str, object]:
-    """通知の JSON（schema v1）を組み立てる。"""
+    """通知の JSON（schema v2。#545 で ``kind`` に ``retry`` を追加）を組み立てる。"""
     return {
         "schema_version": NOTIFY_SCHEMA_VERSION,
         "kind": kind,

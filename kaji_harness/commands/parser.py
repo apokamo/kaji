@@ -361,14 +361,42 @@ def _register_watch(subparsers: argparse._SubParsersAction[argparse.ArgumentPars
     record.add_argument(
         "--outcome",
         required=True,
-        choices=("handoff", "still-working", "not-stalled", "recovered"),
+        choices=(
+            "handoff",
+            "still-working",
+            "not-stalled",
+            "recovered",
+            "continue-sent",
+            "wait",
+            "dialog-answered",
+            "question-answered",
+        ),
     )
     record.add_argument("--comment-url", default=None)
     record.add_argument("--summary", default=None)
+    record.add_argument("--reason", default=None, help="Why (automatic recovery outcomes)")
+    record.add_argument("--until", default=None, help="Resume time, ISO 8601 with zone (wait)")
+    record.add_argument(
+        "--path",
+        dest="paths",
+        action="append",
+        default=None,
+        help="Absolute path inside the repo checkouts (dialog-answered; repeatable)",
+    )
     workdir(record)
+    retry = sub.add_parser(
+        "retry", help="Retry an environment-caused failure once (kaji recover --retry-failed-step)"
+    )
+    retry.add_argument("--event", required=True, help="aborted event file under _watch/events/")
+    retry.add_argument("--reason", required=True, help="Why the failure is environment-caused")
+    workdir(retry)
     events = sub.add_parser("events", help="List events and records (read-only)")
-    events.add_argument("--json", action="store_true", help="Print the JSON document (schema v1)")
+    events.add_argument("--json", action="store_true", help="Print the JSON document (schema v2)")
     workdir(events)
+    recoveries = sub.add_parser("recoveries", help="List automatic recoveries (read-only)")
+    recoveries.add_argument("--issue", type=int, default=None, help="Only this Issue")
+    recoveries.add_argument("--json", action="store_true", help="Print the JSON document")
+    workdir(recoveries)
 
 
 def _register_issue(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:

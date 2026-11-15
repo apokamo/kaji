@@ -20,9 +20,10 @@ from .constants import (
     STILL_WORKING_SNOOZE_SECONDS,
 )
 from .labels import Target, TargetBasis, WatchIssue
+from .models import OutcomeName
 
 EventKind = Literal["pane_idle", "aborted", "log_stall"]
-Outcome = Literal["handoff", "still-working", "not-stalled", "recovered"]
+Outcome = OutcomeName
 #: 進み具合: (目標ラベル, run_id, step, attempt, episode)。handoff の抑止に使う。
 Progress = tuple[str | None, str | None, str | None, int | None, int]
 
@@ -48,6 +49,8 @@ class DetectedEvent:
     step: str | None
     attempt: int | None
     progress: Progress
+    #: ``wait`` の予定時刻を過ぎて出し直した event のとき、その予定時刻（#545）
+    waited_until: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,7 @@ class RecordEntry:
         outcome: 判断の結果。
         recorded_at: 記録時刻。
         progress: 対象 event の進み具合（event ファイルが読めなければ ``None``）。
+        until: ``wait`` の予定時刻（#545。それ以外は ``None``）。
     """
 
     event_key: str
@@ -67,6 +71,7 @@ class RecordEntry:
     outcome: Outcome
     recorded_at: datetime
     progress: Progress | None
+    until: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -113,6 +118,8 @@ class PaneIdleCounter:
     attempt: int | None
     idle_polls: int = 0
     episode: int = 0
+    #: 反映済みの ``recovered`` の ``recorded_at``（#545 MF-5。同じ記録を 2 度反映しない）
+    recovered_seen_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -138,6 +145,8 @@ class DetectResult:
     events: list[DetectedEvent]
     tracking: DetectTracking
     suppressed: frozenset[int] = frozenset()
+    #: ``wait`` の予定時刻の前の Issue → 予定時刻（#545。``aborted`` の triage の起動を遅らせる）
+    waiting: Mapping[int, datetime] = field(default_factory=dict)
 
 
 def _step_of(issue: WatchIssue) -> tuple[str | None, str | None, int | None]:
@@ -200,6 +209,7 @@ def detect_events(
     """
     events: list[DetectedEvent] = []
     suppressed: set[int] = set()
+    waiting: dict[int, datetime] = {}
     pane_idle: dict[int, PaneIdleCounter] = {}
     stall: dict[int, StallTracker] = {}
 
@@ -223,6 +233,7 @@ def detect_events(
                 attempt,
             ):
                 previous = PaneIdleCounter(run_id=run_id, step=step, attempt=attempt)
+            previous = _apply_recovered(previous, number, ledger)
             if agent_status is None:
                 counter = previous
             elif agent_status == "working":
@@ -260,6 +271,15 @@ def detect_events(
         if _handoff_matches(handoff, target, progress, running=running):
             suppressed.add(number)
         tab_open = number in open_triage
+        current_run = target.run_id if target is not None and _failed(target) else run_id
+        scope = _WaitScope(
+            run_id=current_run,
+            pane=(counter.step, counter.attempt, counter.episode) if counter is not None else None,
+            failed=_failed(target),
+        )
+        active_wait = _active_wait(number, scope, ledger, now)
+        if active_wait is not None:
+            waiting[number] = active_wait
 
         candidates: list[DetectedEvent] = []
         if (
@@ -280,11 +300,14 @@ def detect_events(
                         progress=(STATE_ABORTED, target.run_id, step, attempt, 0),
                     )
                 )
-        if not tab_open and counter is not None and counter.idle_polls >= PANE_IDLE_POLLS:
+        if active_wait is None:
+            candidates.extend(_waited_events(number, scope, ledger, now))
+        quiet = tab_open or active_wait is not None
+        if not quiet and counter is not None and counter.idle_polls >= PANE_IDLE_POLLS:
             base = f"{number}:pane_idle:{run_id}:{step}:{attempt}:{counter.episode}"
             key_or_none = _next_rerun_key(
                 base, ledger, now, "still-working", STILL_WORKING_SNOOZE_SECONDS, ":r"
-            )
+            ) or _deferred_rerun_key(base, ledger, now)
             if key_or_none is not None:
                 candidates.append(
                     DetectedEvent(
@@ -298,7 +321,7 @@ def detect_events(
                     )
                 )
         if (
-            not tab_open
+            not quiet
             and tracker is not None
             and now - tracker.since >= timedelta(seconds=LOG_STALL_SECONDS)
         ):
@@ -324,7 +347,182 @@ def detect_events(
         events=events,
         tracking=DetectTracking(pane_idle=pane_idle, stall=stall),
         suppressed=frozenset(suppressed),
+        waiting=waiting,
     )
+
+
+def _failed(target: Target | None) -> bool:
+    return (
+        target is not None and target.basis is TargetBasis.FAILED_RUN and target.run_id is not None
+    )
+
+
+def _key_parts(key: str) -> list[str]:
+    """event key を ``:`` で分ける（``<issue>:<kind>:<run_id>:<step>:<attempt>:<episode>...``）。"""
+    return key.split(":")
+
+
+#: event の種類ごとの、接尾辞のない key の要素数（``<issue>:<kind>:<run_id>[:<step>:<attempt>:<episode>]``）
+_BASE_KEY_PARTS: Mapping[str, int] = {"pane_idle": 6, "aborted": 3, "log_stall": 6}
+
+
+def _is_rerun_suffix(part: str) -> bool:
+    """再確認（``r<n>``）・出し直し（``w<n>``）の接尾辞かを返す。"""
+    return part[:1] in ("r", "w") and part[1:].isdigit()
+
+
+def _root_key(key: str) -> str:
+    """再確認・出し直しの接尾辞（``:r<n>`` / ``:w<n>``）をすべて外した、系列の最初の key。
+
+    ``<base>:r1`` や ``<base>:w1:r1`` に記録した ``wait`` も ``<base>`` の系列として扱い、
+    1 つの系列から出し直しを 1 件だけ出す（PR #577）。
+    """
+    parts = _key_parts(key)
+    base = _BASE_KEY_PARTS.get(parts[1], 3) if len(parts) > 1 else len(parts)
+    while len(parts) > base and _is_rerun_suffix(parts[-1]):
+        parts.pop()
+    return ":".join(parts)
+
+
+@dataclass(frozen=True)
+class _WaitScope:
+    """``wait`` の記録が今も効くかを判定するための、Issue の現在の状態（#545）。
+
+    Attributes:
+        run_id: 今の run（失敗した run が目標の根拠ならその run）。
+        pane: 実行中の step の pane の ``(step, attempt, episode)``。run が実行中で pane が
+            あるときだけ値を持つ（終了・Issue の close・pane の消失では ``None``）。
+        failed: 失敗した run が目標の根拠か（``aborted`` の検知と起動の遅延の対象か）。
+    """
+
+    run_id: str | None
+    pane: tuple[str, int | None, int] | None
+    failed: bool
+
+
+def _wait_applies(key: str, scope: _WaitScope, *, reemit: bool) -> bool:
+    """``wait`` の記録の event が今の Issue の状態に対して効くかを返す（kamo2 ``prune_waits``）。
+
+    - run が変わったら失効する。
+    - ``pane_idle`` は、実行中の pane の step・attempt・episode が key と一致する間だけ効く。
+      別の step / attempt に進んだ、または ``working`` に戻って episode が増えたら失効する（#545 MF-1）。
+    - ``pane_idle`` で実行中の pane がない（run の終了・Issue の close・pane の消失）とき、
+      出し直し（``reemit``）はしない（#545 MF-2）。予定時刻の前の起動の遅延は、失敗した run の
+      ``aborted`` の起動を遅らせるためにだけ効かせる。
+    - ``aborted`` は、同じ run が失敗した run として目標の根拠である間だけ効く。
+    """
+    parts = _key_parts(key)
+    if len(parts) < 3 or scope.run_id is None or parts[2] != scope.run_id:
+        return False
+    kind = parts[1]
+    if kind == "aborted":
+        return scope.failed
+    if kind != "pane_idle" or len(parts) < 6:
+        return False
+    if scope.pane is None:
+        return not reemit and scope.failed
+    step, attempt, episode = scope.pane
+    return (parts[3], parts[4], parts[5]) == (step, str(attempt), str(episode))
+
+
+def _latest_waits(issue: int, ledger: Ledger) -> dict[str, RecordEntry]:
+    """出し直しの系列（``_root_key``）ごとに、最新の ``wait`` の記録を返す（key → 記録）。"""
+    latest: dict[str, RecordEntry] = {}
+    for record in ledger.records:
+        if record.issue == issue and record.outcome == "wait" and record.until is not None:
+            latest[_root_key(record.event_key)] = record
+    return {record.event_key: record for record in latest.values()}
+
+
+def _active_wait(issue: int, scope: _WaitScope, ledger: Ledger, now: datetime) -> datetime | None:
+    """予定時刻の前の ``wait`` があれば、その予定時刻を返す（#545）。"""
+    found: datetime | None = None
+    for key, record in _latest_waits(issue, ledger).items():
+        last = ledger.last_record(key)
+        if last is None or last.outcome != "wait" or record.until is None:
+            continue
+        if record.until > now and _wait_applies(key, scope, reemit=False):
+            found = record.until if found is None else max(found, record.until)
+    return found
+
+
+def _waited_events(
+    issue: int, scope: _WaitScope, ledger: Ledger, now: datetime
+) -> list[DetectedEvent]:
+    """予定時刻を過ぎた ``wait`` の event を ``<key>:w<n>`` で出し直す（#545）。"""
+    events: list[DetectedEvent] = []
+    for key, record in _latest_waits(issue, ledger).items():
+        last = ledger.last_record(key)
+        if last is None or last.outcome != "wait" or record.until is None:
+            continue
+        if record.until > now or not _wait_applies(key, scope, reemit=True):
+            continue
+        root = _root_key(key)
+        count = sum(
+            1
+            for r in ledger.records
+            if r.outcome == "wait" and r.issue == issue and _root_key(r.event_key) == root
+        )
+        new_key = f"{root}:w{count}"
+        if ledger.has(new_key):
+            continue
+        parts = _key_parts(root)
+        kind = parts[1]
+        if kind not in ("pane_idle", "aborted"):
+            continue
+        progress = record.progress or (None, scope.run_id, None, None, 0)
+        events.append(
+            DetectedEvent(
+                key=new_key,
+                kind="pane_idle" if kind == "pane_idle" else "aborted",
+                issue=issue,
+                run_id=scope.run_id,
+                step=progress[2],
+                attempt=progress[3],
+                progress=progress,
+                waited_until=record.until,
+            )
+        )
+    return events
+
+
+def _deferred_rerun_key(base: str, ledger: Ledger, now: datetime) -> str | None:
+    """出し直した ``pane_idle`` の event の、``still-working`` の後の再確認の key を返す（PR #577）。
+
+    ``<base>:w<n>`` の最新の出し直しに ``still-working`` が記録されたら、``base`` と同じく
+    snooze の後に ``<base>:w<n>:r<m>`` で再確認する。出し直しがなければ ``None``。
+    """
+    count = 0
+    while ledger.has(f"{base}:w{count + 1}"):
+        count += 1
+    if count == 0:
+        return None
+    return _next_rerun_key(
+        f"{base}:w{count}", ledger, now, "still-working", STILL_WORKING_SNOOZE_SECONDS, ":r"
+    )
+
+
+def _apply_recovered(counter: PaneIdleCounter, issue: int, ledger: Ledger) -> PaneIdleCounter:
+    """周の間に記録された ``recovered`` を ``working`` の観測と同じに扱う（#545 MF-5）。
+
+    同じ Issue・run・step・attempt の ``pane_idle`` の event に、``recovered_seen_at`` より新しい
+    ``recovered`` があれば episode を進めて ``idle_polls`` を 0 に戻す。1 件につき 1 回だけ反映する。
+    """
+    prefix = f"{issue}:pane_idle:{counter.run_id}:{counter.step}:{counter.attempt}:"
+    newest: datetime | None = None
+    for record in ledger.records:
+        if record.outcome != "recovered" or not record.event_key.startswith(prefix):
+            continue
+        if (
+            counter.recovered_seen_at is not None
+            and record.recorded_at <= counter.recovered_seen_at
+        ):
+            continue
+        newest = record.recorded_at if newest is None else max(newest, record.recorded_at)
+    if newest is None:
+        return counter
+    episode = counter.episode + (1 if counter.idle_polls > 0 else 0)
+    return replace(counter, idle_polls=0, episode=episode, recovered_seen_at=newest)
 
 
 def _handoff_matches(

@@ -39,7 +39,10 @@ kaji watch start                 # start the loop in the `kaji-watch` Herdr tab 
 kaji watch status [--json]       # read-only view of monitored Issues
 kaji watch once [--dry-run]      # run one poll; --dry-run prints the plan and writes nothing
 kaji watch record --event FILE --outcome OUTCOME [--comment-url URL] [--summary TEXT]
+                 [--reason TEXT] [--until ISO8601] [--path ABS ...]
+kaji watch retry --event FILE --reason TEXT   # retry an environment-caused failure once
 kaji watch events [--json]       # events and triage records (read-only)
+kaji watch recoveries [--issue N] [--json]    # automatic recoveries (read-only)
 ```
 
 All subcommands accept `--workdir DIR`. There is no `stop`.
@@ -49,19 +52,31 @@ All subcommands accept `--workdir DIR`. There is no `stop`.
 | `start` | yes | Exits 0 with `watch already running (pane <id>)` when the lock is held. Otherwise reuses the `kaji-watch` tab when its pane is back at a shell, or creates it with `herdr tab create --label kaji-watch --no-focus`, and runs the internal loop `python -m kaji_harness.watch` there. |
 | `status` | no | Facts, current label, target, hold reason, triage tab and suppression per Issue. Writes nothing to GitHub or artifacts. |
 | `once` | yes (not with `--dry-run`) | One poll under the lock (exit 2 `watch is running` when held). `--dry-run` computes targets, diffs and events and prints JSON without writing anything (GitHub, state files, Herdr, notifications). Outside Herdr `--dry-run` reports `"herdr": "unavailable"` and omits `pane_idle` candidates. |
-| `record` | no | Appends a triage outcome to `records.jsonl`. `--outcome handoff` also sends a `handoff` notification. |
+| `record` | no | Appends a triage outcome to `records.jsonl`. `--outcome handoff` also sends a `handoff` notification. Automatic recovery outcomes are counted against their limit under the `records.jsonl` lock and print the recorded line as JSON. |
+| `retry` | yes | `aborted` events only. Resolves the event `workflow` (the YAML `name:`) to the single `.kaji/wf/**.yaml` whose top-level `name:` matches exactly (0 or several matches: exit 2, nothing recorded), records `retry-sent` under the limit, then opens the Herdr tab `kaji-retry-<issue>` running `kaji recover <workflow.yaml> <issue> --retry-failed-step --run-id <run_id>` and sends a `retry` notification. Prints `{"record", "tab_id", "pane_id", "command"}`. The safety gates are decided by `kaji recover` ([failure recovery](failure-recovery.md)). |
 | `events` | no | Lists events and records. |
+| `recoveries` | no | Lists automatic recovery records in record order (`--issue` filters). |
 
 `OUTCOME` is one of `handoff`, `still-working` (only for `pane_idle` events),
-`not-stalled` (only for `log_stall` events) and `recovered`.
+`not-stalled` (only for `log_stall` events), `recovered`, and the automatic recovery
+outcomes below (`retry-sent` is written only by `kaji watch retry`).
+
+| Automatic outcome | Event kind | Required |
+|---|---|---|
+| `continue-sent` / `question-answered` | `pane_idle` | `--reason`; event `run_id` / `step` / `attempt` |
+| `dialog-answered` | `pane_idle` | `--reason`; one or more `--path`, each absolute and (after `resolve()`) inside the main checkout or a `git worktree list` worktree |
+| `wait` | `pane_idle` / `aborted` | `--reason`; event `run_id`; `--until` ISO 8601 with a time zone, in the future and within 7 days |
+
+`--reason` / `--until` / `--path` with any other outcome is exit 2.
 
 ### Exit codes
 
 | Code | Meaning |
 |------|---------|
 | 0 | Success (including the loop ending after two empty polls, and `start` when already running). |
-| 2 | Argument error, no `.kaji/config.toml`, no `[watch]`, missing contract labels, non-github provider, `start` / `once` (without `--dry-run`) outside Herdr, lock held by `once`, invalid event file or outcome. |
-| 3 | Unexpected error. |
+| 2 | Argument error, no `.kaji/config.toml`, no `[watch]`, missing contract labels, non-github provider, `start` / `once` (without `--dry-run`) / `retry` outside Herdr, lock held by `once`, invalid event file or outcome, outcome and event kind mismatch, missing or invalid `--reason` / `--until` / `--path`, `retry` workflow not resolvable. |
+| 3 | Unexpected error (including a `retry` whose tab failed to start after recording; the record stays). |
+| 5 | Automatic recovery limit reached. Nothing is appended (`retry` opens no tab); stderr has one line with the unit and the limit. |
 
 ## Label contract
 
@@ -103,6 +118,46 @@ its triage tab is launched after the open tab is closed. At most one triage tab 
 per Issue per poll. Tab panes are resolved by joining `herdr tab list` with `herdr pane list`
 (Herdr's tab rows carry no pane ID).
 
+## Automatic recovery
+
+`/watch-triage` may undo exactly these five kinds of stop without the maintainer's approval
+(Issue #545). Before each action it calls `kaji watch record` / `kaji watch retry` and acts
+only on exit 0. Limits are counted from `records.jsonl` lines under its `flock`.
+
+| Outcome | Stop | Action | Limit unit | Limit |
+|---|---|---|---|---|
+| `continue-sent` | transient provider error (`at capacity`, rate limit, `overloaded`, 5xx, connection) on a `pane_idle` | send `continue` and wait for `working` | issue, run, step, attempt | 3 |
+| `wait` | usage limit with a reset time on screen (otherwise `continue-sent`) | wait until the reset time | issue, run | 3 |
+| `dialog-answered` | trust / import dialog for a path inside the main checkout or a worktree | allow | issue, run, step, attempt | 3 |
+| `question-answered` | agent question of class 1 or 2 in `critical-decision-checklist.md` | answer (class 2 adds an Issue comment) | issue, run, step, attempt | 3 |
+| `retry-sent` | environment-caused member failure (`aborted`) | `kaji watch retry` (one `kaji recover --retry-failed-step`) | issue, anchor | 1 |
+
+Everything else, including class-3 questions, is reported and handed off as before. Successful
+`continue-sent` / `dialog-answered` / `question-answered` recoveries are not notified;
+`retry` and `handoff` are. For a series member (event `anchor` `member:<run_id>`) the `retry`
+summary adds that the remaining members stay stopped and the maintainer resumes the series with
+`/run-watched` after the retry reaches close (not `run-series --resume`).
+
+- **`wait`**: until the reset time, `kaji watch` raises no `pane_idle` / `log_stall` for the
+  Issue's run and delays the triage launch of a new `aborted` event (it is still reported).
+  After the reset time it raises `<key>:w<n>` with `waited_until` set; an `aborted` `:w<n>` is
+  not reported or notified again. A `pane_idle` wait holds only while the same step pane
+  (run, step, attempt, episode) is still running: a new run, a move to another step or attempt,
+  or the pane returning to `working` before the reset time drops it. If the run ends, the Issue
+  is closed or the pane is gone, the `pane_idle` `:w<n>` is not raised; when the run ended with
+  `ERROR`, the `aborted` event is still detected and its triage launch waits for the reset time.
+  A `still-working` record on a re-raised `pane_idle` `<key>:w<n>` keeps the usual snooze: the
+  same episode is rechecked as `<key>:w<n>:r<m>` after the snooze. A `wait` recorded on any key
+  of the series (`:r<m>` / `:w<n>:r<m>`) is re-raised once as the next `<key>:w<n>`.
+- **`recovered` between polls**: a new `recovered` record for the same run, step and attempt
+  counts as an observed `working` (the pane episode advances once per record), so a second
+  stop of the same attempt is raised again after 2 idle polls and is still bounded by the
+  per-attempt limit.
+- Event files carry the optional `anchor` (`member:<run_id>` / `baseline:<run_id>` / `none`,
+  the `retry-sent` unit) and `waited_until`.
+
+## Aborted reports
+
 For each `aborted` event the Issue gets one comment whose first line is
 `<!-- kaji-watch: aborted key=<key> -->` (an existing marker comment is reused), then one
 `aborted` notification.
@@ -111,18 +166,44 @@ State lives under `<artifacts>/_watch/` (`state.json`, `events/`, `records.jsonl
 `labels.jsonl`, `lock`). These are internal formats; the event file carries
 `schema_version: 1` because `/watch-triage` reads it.
 
-## JSON (schema v1)
+## JSON
 
-`kaji watch status --json`, `kaji watch events --json` and the notification payload carry
-`schema_version: 1`, versioned with the rules of
+`kaji watch status --json` carries `schema_version: 1`; `kaji watch events --json` and the
+notification payload carry `schema_version: 2`; `kaji watch recoveries --json` carries
+`schema_version: 1`. All are versioned with the rules of
 [run status § Schema compatibility](run-status.md#schema-compatibility).
+
+`kaji watch recoveries --json`:
+
+```jsonc
+{
+  "schema_version": 1,
+  "recoveries": [
+    {"recorded_at": "...", "issue": 101, "event_key": "101:pane_idle:261115113853:implement:1:0",
+     "outcome": "continue-sent", "unit": [101, "261115113853", "implement", 1],
+     "count": 2, "limit": 3,      // count = position within the same unit (2/3)
+     "reason": "Selected model is at capacity", "until": null, "paths": null, "judge": "host:pid"}
+  ]
+}
+```
+
+### Schema history
+
+- **v2 (Issue #545)** — notification payload: `kind` gains `retry`. `events --json`:
+  `records[].outcome` gains `continue-sent` / `wait` / `dialog-answered` /
+  `question-answered` / `retry-sent`, and `records[]` gains the optional `reason` / `until` /
+  `paths` / `unit` / `workflow_path`. Other fields and meanings are unchanged. Migration: a
+  `notify_command` script that checks `schema_version == 1` must also accept 2; one that
+  branches on `kind` must handle `retry` or treat unknown kinds generically. The example
+  script below does not read `schema_version` and keeps working.
+- **v1 (Issue #543)** — initial version.
 
 The notification payload is written to the standard input of `notify_command`:
 
 ```jsonc
 {
-  "schema_version": 1,
-  "kind": "aborted",            // aborted | handoff | watch_exit
+  "schema_version": 2,
+  "kind": "aborted",            // aborted | handoff | watch_exit | retry
   "repo": "owner/name",         // or null
   "issue": 101,                 // null for watch_exit
   "summary": "run 261115113853 ended ERROR at step implement",
