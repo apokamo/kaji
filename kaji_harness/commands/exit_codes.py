@@ -11,3 +11,5 @@ EXIT_INVALID_INPUT = 2
 EXIT_RUNTIME_ERROR = 3
 #: Issue #540: ``kaji recover --retry-failed-step`` が安全ゲートで拒否した（何も起動していない）。
 EXIT_RETRY_REFUSED = 4
+#: Issue #545: ``kaji watch record`` / ``retry`` が自動復旧の上限に達した（追記していない）。
+EXIT_AUTO_RECOVERY_LIMIT = 5

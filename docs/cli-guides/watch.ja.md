@@ -31,18 +31,44 @@ kaji watch start                 # `kaji-watch` タブで監視の loop を起�
 kaji watch status [--json]       # 監視対象の Issue を表示（読むだけ）
 kaji watch once [--dry-run]      # 1 周分を実行。--dry-run は計算結果だけを出し何も書かない
 kaji watch record --event FILE --outcome OUTCOME [--comment-url URL] [--summary TEXT]
+                 [--reason TEXT] [--until ISO8601] [--path ABS ...]
+kaji watch retry --event FILE --reason TEXT   # 環境が原因の失敗を 1 回だけやり直す
 kaji watch events [--json]       # event と判断の記録（読むだけ）
+kaji watch recoveries [--issue N] [--json]    # 自動復旧の一覧（読むだけ）
 ```
 
-すべて `--workdir DIR` を受け付ける。`stop` はない。`start` と `once`（`--dry-run` なし）は Herdr の中
+すべて `--workdir DIR` を受け付ける。`stop` はない。`start` と `once`（`--dry-run` なし）と `retry` は Herdr の中
 （`HERDR_ENV=1` と `HERDR_PANE_ID`）でだけ動く。`OUTCOME` は `handoff` / `still-working`（`pane_idle` 専用）/
-`not-stalled`（`log_stall` 専用）/ `recovered`。
+`not-stalled`（`log_stall` 専用）/ `recovered` と、下の自動復旧の outcome（`retry-sent` は `kaji watch retry` だけが書く）。
+
+## 自動復旧（Issue #545）
+
+`/watch-triage` は次の 5 種類だけを保守者の承認なしで戻す。各操作の前に `kaji watch record` /
+`kaji watch retry` を呼び、exit 0 のときだけ操作する。上限は `records.jsonl` の `flock` の下で行から数える。
+
+| outcome | 停止 | 操作 | 上限の単位 | 上限 |
+|---|---|---|---|---|
+| `continue-sent` | 一時エラーで止まった `pane_idle` | `continue` を送る | issue・run・step・attempt | 3 |
+| `wait` | usage limit（予定時刻あり） | 予定時刻まで待つ（`--until` は時刻帯付き・未来・7 日以内） | issue・run | 3 |
+| `dialog-answered` | repo の main checkout・worktree の中のパスのダイアログ | 許可で答える（`--path` は絶対パスで checkout の内側） | issue・run・step・attempt | 3 |
+| `question-answered` | 分類 1・2 の質問 | 答える | issue・run・step・attempt | 3 |
+| `retry-sent` | 環境が原因の `aborted` | `kaji watch retry`（`.kaji/wf/` の `name:` 完全一致 1 個に解決し、`kaji-retry-<issue>` タブで `kaji recover <yaml> <issue> --retry-failed-step --run-id <run_id>`） | issue・anchor | 1 |
+
+- `wait` の予定時刻の前は、その Issue・run の `pane_idle` / `log_stall` を出さず、新しい `aborted` は報告して起動だけを
+  遅らせる。過ぎたら `waited_until` 付きの `<key>:w<n>` を出す（`aborted` の `:w<n>` は報告・通知を出し直さない）。
+- 周の間に記録された `recovered` は `working` の観測と同じに扱い（1 件につき 1 回）、同じ attempt の再停止も 2 周で再検知する。
+- 1.〜4. で戻った場合は通知しない。`retry` と `handoff` は通知する。
+- event ファイルには任意の `anchor`（`member:<run_id>` / `baseline:<run_id>` / `none`）と `waited_until` が入る。
+- 通知の payload と `events --json` は schema v2（`kind` に `retry`、`records[].outcome` に 5 値と任意の項目を追加）。
+  `schema_version == 1` を確かめている通知スクリプトは 2 も受け付けるように直す。`status --json` は v1 のまま、
+  `recoveries --json` は v1。詳細は英語正本の Schema history。
 
 | 終了コード | 意味 |
 |------|---------|
 | 0 | 正常（2 周続けて対象が 0 件になって終えた場合、動作中の `start` を含む） |
-| 2 | 引数の誤り・config がない・`[watch]` がない・ラベルがない・github 以外の provider・Herdr の外での `start` / `once`・lock 保持中の `once`・不正な event ファイルや outcome |
-| 3 | 予期しないエラー |
+| 2 | 引数の誤り・config がない・`[watch]` がない・ラベルがない・github 以外の provider・Herdr の外での `start` / `once` / `retry`・lock 保持中の `once`・不正な event ファイルや outcome・outcome と event の kind の不一致・`--reason` / `--until` / `--path` の不足や不正・`retry` の workflow を解決できない |
+| 3 | 予期しないエラー（`retry` で記録の後にタブの起動に失敗した場合を含む。記録は残る） |
+| 5 | 自動復旧の上限に達した。追記しない（`retry` はタブも起動しない）。stderr に単位と上限を 1 行出す |
 
 ## `/run-watched`
 

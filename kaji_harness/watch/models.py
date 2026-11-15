@@ -14,7 +14,21 @@ WATCH_SCHEMA_VERSION: Literal[1] = 1
 
 EventKindName = Literal["pane_idle", "aborted", "log_stall"]
 LaunchStatus = Literal["detected", "launching", "launched", "launch_failed"]
-OutcomeName = Literal["handoff", "still-working", "not-stalled", "recovered"]
+OutcomeName = Literal[
+    "handoff",
+    "still-working",
+    "not-stalled",
+    "recovered",
+    "continue-sent",
+    "wait",
+    "dialog-answered",
+    "question-answered",
+    "retry-sent",
+]
+#: 自動復旧の outcome（Issue #545 D1）。
+AutoOutcomeName = Literal[
+    "continue-sent", "wait", "dialog-answered", "question-answered", "retry-sent"
+]
 
 
 class _Strict(BaseModel):
@@ -48,6 +62,10 @@ class WatchEventFile(_Strict):
     status_document: dict[str, Any] = Field(default_factory=dict)
     #: 検知時点の進み具合 ``[目標ラベル, run_id, step, attempt, episode]``（handoff の抑止用）
     progress: tuple[str | None, str | None, str | None, int | None, int] | None = None
+    #: event を出した時点の anchor（``member:<run_id>`` / ``baseline:<run_id>`` / ``none``。#545）
+    anchor: str | None = None
+    #: ``wait`` の予定時刻を過ぎてから出し直した event のとき、その予定時刻（UTC。#545）
+    waited_until: str | None = None
 
 
 class EventState(_Strict):
@@ -80,6 +98,8 @@ class PaneIdleState(_Strict):
     attempt: int | None = None
     idle_polls: int = Field(default=0, ge=0)
     episode: int = Field(default=0, ge=0)
+    #: 反映済みの ``recovered`` の ``recorded_at``（#545 MF-5）
+    recovered_seen_at: str | None = None
 
 
 class StallState(_Strict):
@@ -125,3 +145,13 @@ class WatchRecord(_Strict):
     comment_url: str | None = None
     summary: str | None = None
     judge: str
+    #: 自動復旧の判断理由（#545）
+    reason: str | None = None
+    #: ``wait`` の予定時刻（#545）
+    until: str | None = None
+    #: ``dialog-answered`` で許可したパス（#545）
+    paths: list[str] | None = None
+    #: 上限を数える単位の値の列（#545。例 ``[101, "261115113853", "implement", 1]``）
+    unit: list[str | int | None] | None = None
+    #: ``retry-sent`` で ``kaji recover`` に渡した workflow YAML の絶対パス（#545）
+    workflow_path: str | None = None

@@ -221,7 +221,7 @@ def test_record_appends_and_events_lists(
     capsys.readouterr()
     assert main(["watch", "events", "--json", "--workdir", str(repo)]) == 0
     document = json.loads(capsys.readouterr().out)
-    assert document["schema_version"] == 1
+    assert document["schema_version"] == 2
     assert document["records"][0]["outcome"] == "still-working"
     assert document["records"][0]["comment_url"] is None
 

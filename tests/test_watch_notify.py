@@ -25,10 +25,10 @@ _FIELDS = {
 
 
 @pytest.mark.small
-def test_payload_has_schema_v1_fields() -> None:
+def test_payload_has_schema_v2_fields() -> None:
     payload = build_payload("watch_exit", repo="o/r", issue=None, summary="done")
     assert set(payload) == _FIELDS
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert payload["issue"] is None
 
 

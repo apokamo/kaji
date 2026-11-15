@@ -99,3 +99,75 @@ def test_once_outside_herdr_exit_2(repo: Path) -> None:
     result = _kaji(repo, "watch", "once")
     assert result.returncode == 2
     assert "Herdr" in result.stderr
+
+
+def _pane_idle_event(repo: Path) -> Path:
+    from kaji_harness.watch.models import WatchEventFile
+    from kaji_harness.watch.store import WatchStore
+
+    return WatchStore(repo / ".kaji-artifacts").write_event(
+        WatchEventFile(
+            key="101:pane_idle:261115000000:implement:1:0",
+            kind="pane_idle",
+            issue=101,
+            detected_at="2026-11-15T03:00:00+00:00",
+            run_id="261115000000",
+            workflow="dev",
+            step="implement",
+            attempt=1,
+            anchor="none",
+        )
+    )
+
+
+def test_auto_recovery_limit_exit_5_and_recoveries(repo: Path) -> None:
+    """Issue #545: 上限で exit 5、``recoveries --json`` / ``events --json`` の配線。"""
+    _declare(repo)
+    event = str(_pane_idle_event(repo))
+    codes = []
+    stderr = ""
+    for _ in range(4):
+        result = _kaji(
+            repo,
+            "watch",
+            "record",
+            "--event",
+            event,
+            "--outcome",
+            "continue-sent",
+            "--reason",
+            "Selected model is at capacity",
+        )
+        codes.append(result.returncode)
+        stderr = result.stderr
+    assert codes == [0, 0, 0, 5]
+    assert len([line for line in stderr.splitlines() if "limit" in line]) == 1
+    dialog = _kaji(
+        repo,
+        "watch",
+        "record",
+        "--event",
+        event,
+        "--outcome",
+        "dialog-answered",
+        "--reason",
+        "trust",
+        "--path",
+        "/etc",
+    )
+    assert dialog.returncode == 2
+    listing = _kaji(repo, "watch", "recoveries", "--json")
+    assert listing.returncode == 0, listing.stderr
+    document = json.loads(listing.stdout)
+    assert document["schema_version"] == 1
+    assert [(r["count"], r["limit"]) for r in document["recoveries"]] == [(1, 3), (2, 3), (3, 3)]
+    events = _kaji(repo, "watch", "events", "--json")
+    assert events.returncode == 0, events.stderr
+    assert json.loads(events.stdout)["schema_version"] == 2
+
+
+def test_retry_outside_herdr_exit_2(repo: Path) -> None:
+    _declare(repo)
+    result = _kaji(repo, "watch", "retry", "--event", str(_pane_idle_event(repo)), "--reason", "x")
+    assert result.returncode == 2
+    assert "Herdr" in result.stderr
