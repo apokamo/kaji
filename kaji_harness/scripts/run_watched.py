@@ -367,6 +367,16 @@ def _relative(path: Path, repo_root: Path) -> str:
     return path.resolve().relative_to(repo_root.resolve()).as_posix()
 
 
+def _new_draft_id(artifacts_dir: Path, moment: datetime) -> str:
+    """既存の draft と衝突しない draft-id（同じ秒の 2 回目以降は ``-2`` 等を付ける）。"""
+    base = f"d-{moment.strftime('%y%m%d-%H%M%S')}"
+    candidate, n = base, 1
+    while (draft_dir(artifacts_dir) / f"{candidate}.json").exists():
+        n += 1
+        candidate = f"{base}-{n}"
+    return candidate
+
+
 def run_plan(
     deps: PlanDeps,
     issues: Sequence[int],
@@ -428,7 +438,7 @@ def run_plan(
         return 2, document
     series_id = make_series_id([m.issue for m in members], moment)
     draft = Draft(
-        draft_id=f"d-{moment.strftime('%y%m%d-%H%M%S')}",
+        draft_id=_new_draft_id(deps.artifacts_dir, moment),
         created_at=moment.isoformat(),
         series_id=series_id,
         yaml_path=f".kaji/series/{series_id}.yaml",
@@ -663,7 +673,7 @@ class _Executor:
         )
         for entry in document.get("issues", []):
             if entry.get("any_run_alive") is not False or entry.get("launching") is not False:
-                raise self.fail(2, f"#{entry.get('issue_id')} has a live or unknown run")
+                raise self.fail(2, f"#{entry.get('issue')} has a live or unknown run")
 
     # 段 2
     def ensure_yaml(self) -> Path:

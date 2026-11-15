@@ -615,3 +615,11 @@ def test_cli_rejects_invalid_issue_list(outside_project_tmp_path: Path) -> None:
     write_config(outside_project_tmp_path)
     code = run_watched.main(["--workdir", str(outside_project_tmp_path), "plan", "--issues", "1,1"])
     assert code == 2
+
+
+def test_plan_twice_in_same_second_does_not_overwrite_draft(env: Env) -> None:
+    first = env.plan()
+    second = env.plan()
+    assert first != second
+    assert load_draft(env.artifacts, first).draft_id == first
+    assert load_draft(env.artifacts, second).draft_id == second
