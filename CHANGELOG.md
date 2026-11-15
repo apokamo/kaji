@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-11-15
+
 ### BREAKING CHANGE
 
 - **`issue-fix-ready` reads the review-ready verdict only from the
@@ -36,6 +38,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     when `kaji` or `jq` exits non-zero, and discards partial output). For
     an Issue in progress, re-run `issue-review-ready` so that a marked
     review-ready comment exists. No compatibility fallback is provided.
+- **`kaji run-series --resume` resumes failed or interrupted members from
+  their failed step** (#540).
+  - **Broken contract**: resuming a member no longer restarts its workflow
+    from the first step. A safety-gate refusal stops the series with exit 1.
+  - **How to check whether you are affected**: search scripts and workflow
+    instructions for `run-series --resume`; any caller relying on earlier
+    steps being repeated after a member failure is affected.
+  - **Migration**: let `--resume` retry the failed step when earlier work
+    should be preserved. If the whole workflow must run again, start a new
+    series run explicitly after reviewing its side effects. See #540 for the
+    safety-gate and recovery behavior.
 
 ### Fixed
 
@@ -62,6 +75,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   marker, these comments stayed candidates for every step in the runner's
   comment fallback, and `kaji issue resolve-verdict --step final-check`
   could not find the final-check judgment.
+- **Agent verdicts are validated and published atomically** (#568).
+  `kaji verdict publish` checks the current attempt's status and required
+  fields, serializes the YAML, and creates the artifact without overwriting
+  an existing verdict. It respects the caller's umask.
+- **`issue-start` creates worktrees from the fetched remote default branch
+  and supports safe reruns** (#549, #569). The start operation now runs in
+  one process, verifies an existing worktree before reuse, and aborts on
+  path, branch, or symlink conflicts.
+- **`review-poll` accepts a completed Codex security review with null
+  findings only after independent checks pass** (#557). It rejects
+  unresolved bot threads and non-summary bot comments; approval evidence
+  uses schema v3.
+- **Workflow recovery and diagnostics are more reliable**: `issue-close`
+  preserves reviewed SHAs and follow-up Issue IDs across shell calls
+  (#537, #551); skills use per-Issue temporary paths (#548); interactive
+  resume closes holder panes before launch (#532); Herdr error reports
+  retain their cause (#527, #560); and verdict examples use valid YAML
+  (#536). The fallback review approval source is clarified (#523).
 
 ### Added
 
@@ -97,16 +128,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   other threads open. A failed resolve is reported in the review comment and
   the completion report and does not change the verdict. The starter
   repositories get this `pr-verify` change through the next starter sync.
+- **Follow-up Issues record when their completion should be checked**
+  (#538).
 
 ### Changed
 
-- **Breaking: `kaji run-series --resume` restarts failed / interrupted members
-  from their failed step** (#540). A member whose Issue was closed as completed
+- **Series resume handles already-completed Issues and safety-gate failures**
+  (#540). A member whose Issue was closed as completed
   outside the series is marked completed and the series continues; other closed
   states stop the series as before. The member resume goes through the same
   safety gates as `--retry-failed-step`; a refusal stops the series (exit 1) with
   `stop_reason` `member <issue> resume refused by safety gate: gates=<names>`.
-  The old behavior (restarting the member from its first step) is removed.
+- **ADR 013 records the decision for verdict comment publication and retry
+  duplication** (#570).
 
 ## [0.24.0] - 2026-10-20
 
