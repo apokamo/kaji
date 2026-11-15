@@ -260,6 +260,26 @@ To migrate existing labels to the default names instead, see the
 
 See [incident label guide](../dev/incident-labels.md) for the meaning of each label.
 
+### `[watch]`
+
+Optional, **opt-in** (Issue #543). Declaring the table — even empty — enables
+[`kaji watch`](../cli-guides/watch.md) and the `state:*` label operations of `issue-close`.
+Without it, `kaji watch` exits 2 and `issue-close` skips the label operations.
+
+| key | Required/Optional | Type | Default | Purpose |
+|-----|-------------------|------|---------|---------|
+| `notify_command` | Optional | list[str] | unset (no notification) | argv of the notification command; the JSON payload is written to its standard input |
+
+Validation (`ConfigLoadError` at load time; Pydantic model with `extra="forbid"` / `strict=True`):
+`watch` must be a table, unknown keys are rejected, and `notify_command` must be a non-empty list of
+non-empty strings.
+
+The section is **not overlaid**: only tracked `.kaji/config.toml` is read. A `[watch]` table in
+`config.local.toml` neither enables nor disables monitoring; it is ignored with a one-line warning.
+kaji does not create labels: when `[watch]` is declared, the six `state:*` contract labels must exist
+on GitHub (sync them from `.github/labels.yml`), otherwise `kaji watch` and `watch_labels` exit 2.
+Poll periods and thresholds are fixed constants, not configuration.
+
 ### `[provider]`
 
 The `[provider]` section is optional at the config loader layer: when neither tracked nor overlay

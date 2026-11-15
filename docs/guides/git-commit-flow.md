@@ -207,6 +207,7 @@ feature branch (worktree) → `--no-ff` merge とし、main 直コミットを�
 
 - `docs(...)`: `docs/` / `draft/` 配下の設計文書 / lab note 等、コードを伴わない文書変更
 - `chore`: 設定ファイル（`.gitignore` / `.github/labels.yml` 等）の minor 修正（コードビルドに影響しない範囲）
+- `chore(series)`: `/run-watched` による `.kaji/series/<id>.yaml` の新規追加 1 件だけ（#543 D7。YAML 以外を含む commit・既存 YAML の変更は対象外。push は `<sha>:refs/heads/<default_branch>` の 1 commit だけ）
 
 コード変更を含むコミットの前には pre-commit チェック（`source .venv/bin/activate && make check`）を
 必ず通す。markdown / 設計文書のみのコミットは省略可。

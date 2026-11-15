@@ -116,6 +116,7 @@ kaji_harness/
   commands/       # kaji CLI subcommand dispatcher の実体 (Issue #283/#286 で分割・分離。verdict.py は #568)
   cli_main.py     # console entry point `kaji` / `python -m` 専用 (#284 で互換 shim 撤去)
   runstate/       # run の生存・最新 run・失敗 step・必須 artifact の事実 (Issue #540)
+  watch/          # series の監視 `kaji watch`（opt-in の `[watch]`。runstate は query だけを使う。Issue #543）
   recovery/       # failure triage / recovery handler (Issue #288)
     models.py     # RecoveryDecision / FailureClassification / 定数 (budget, wait, denylist)
     snapshot.py   # 失敗 run の artifact / state / git state 収集
@@ -602,6 +603,9 @@ Issue #540 以降は `chain_index`（chain 内の通番）と `trigger`（`auto_
 - `runstate.runlog`: run.log の解釈（未終了 step）と必須 artifact の判定。recovery の snapshot からも使う
 - `runstate.facts`: `collect_issue_facts` / `collect_run_facts`（読めない項目は `read_errors`）
 - `runstate.schema`: `kaji status --json` の schema v1
+- `runstate.query`: 監視用の読み取り境界（`collect_status` / `list_series` / `locate_step_artifacts`）。
+  既存の収集器の再利用だけで、`kaji status` の Issue 指定の経路もここを通る。`kaji_harness/watch/` は runstate から
+  これだけを import する（`tests/test_watch_runstate_contract.py` が AST で検査。Issue #543）
 - `recovery.gates`: triage と共有する安全ゲート（`GateHit`）、`RetryPlanner`、`prepare_retry`
   （LaunchLock の中でゲート判定 → launcher record）、`RetryRecorder`（`recovery.json` の `retries` と run.log）
 
