@@ -23,3 +23,7 @@ type = "github"
 repo = "apokamo/kaji"
 default_branch = "main"
 git_remote = "origin"               # skill 内 git push / git fetch の対象 remote 名（既定 "origin"）
+
+# series の監視（kaji watch）の opt-in。表があること自体が宣言（docs/cli-guides/watch.md）。
+# 通知は未設定（必要になったら notify_command = ["<script>"] を足す）。
+[watch]
