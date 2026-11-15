@@ -343,7 +343,7 @@ kaji watch recoveries --issue 101
 | サブコマンドの形 | 1.〜4. は `record` の拡張、5. は新しい `retry`、一覧は新しい `recoveries` | AI の仮定 A1。根拠: kamo2 も `record` の拡張 + `rerun` + `recoveries`。5. は確認・記録・起動を 1 つにしないと記録とタブの起動がずれる。後段の検査先: `issue-review-design` | 引数・検証・出力を § インターフェースで定義 |
 | 上限の終了コード | 5 | AI の仮定 A1。根拠: `kaji watch` の 0/2/3、`kaji recover` の 4 と重ならない。後段の検査先: `issue-review-design` | `EXIT_AUTO_RECOVERY_LIMIT = 5` |
 | `pane_idle` で at capacity の pane を検知できるか | 検知できる。検知の追加はしない | A2 の事実確認（Herdr の仕様と 2026-11-15 の実機確認。§ A2 の事実確認） | 実 at capacity での確認は事後確認項目に残す |
-| 通知 | 1.〜4. で戻ったら通知しない。5. の実行と handoff は通知する | AI の仮定 A3。根拠: D1（kamo2 と揃える）。後段の検査先: `issue-review-design` | 通知の `kind` に `retry` を追加（schema v1 の追加の値） |
+| 通知 | 1.〜4. で戻ったら通知しない。5. の実行と handoff は通知する | AI の仮定 A3。根拠: D1（kamo2 と揃える）。後段の検査先: `issue-review-design` | 通知の `kind` に `retry` を追加し、enum の追加なので通知の payload の `schema_version` を 2 に上げる（§ 公開 JSON の schema version） |
 | 絶対規則 1 の書き換え | D1 の 4. に合わせて分類 1・2 だけ答える | AI の仮定 A4。根拠: 現行規則 1 が「答えて戻すのは #545 の範囲」としている。後段の検査先: `issue-review-code` | 文言を § 方針 2 に定義し、契約テストを更新 |
 | 上限の記録の排他 | `records.jsonl` の `flock`（blocking）の下で数えて追記する | AI の仮定。根拠: 完了条件 2「lock の下で 1 回に」、kamo2 `store.append_record`。loop の lock は loop が保持し続けるので使えない。後段の検査先: `issue-review-design` | 既存の outcome の追記も同じ `flock` を通す |
 | `wait` の後の再検知 | 予定時刻まで pane_idle / log_stall を出さず、過ぎたら `<key>:w<n>` で出し直す | AI の仮定。根拠: D2「これ以外は kamo2 と揃える」（kamo2 `apply_wait` / `prune_waits`）。後段の検査先: `issue-review-design` | `aborted` は報告を続けて起動だけ遅らせる（既存の `open_triage` の扱いに合わせる） |
