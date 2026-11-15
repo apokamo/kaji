@@ -768,6 +768,15 @@ def _resolve_herdr() -> str:
     return herdr
 
 
+def resolve_herdr_cli() -> str:
+    """Resolve the installed Herdr CLI (public wrapper for monitoring tools, Issue #543).
+
+    Raises:
+        CLINotFoundError: The ``herdr`` executable is not on ``PATH``.
+    """
+    return _resolve_herdr()
+
+
 def _resolve_herdr_origin() -> str:
     """Resolve the explicit caller pane from the Herdr environment.
 

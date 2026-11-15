@@ -400,3 +400,15 @@ class TrackingBodyError(HarnessError):
     呼び出し側の ``build_tracking_plan`` / ``build_task_plan`` はこれを捕捉し、
     観測矛盾として ``decision: ABORT`` の plan へ変換する（例外を上位へ伝播させない）。
     """
+
+
+class WatchPreconditionError(HarnessError):
+    """``kaji watch`` 系の前提（``[watch]``・provider・ラベル・Herdr）を満たさない（Issue #543）。
+
+    Attributes:
+        reason: 違反の種類（``not_declared`` / ``provider`` / ``herdr`` / ``labels``）。
+    """
+
+    def __init__(self, reason: str, message: str) -> None:
+        self.reason = reason
+        super().__init__(message)
