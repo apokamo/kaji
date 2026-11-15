@@ -466,3 +466,205 @@ def test_new_run_failed_while_watch_stopped_is_detected_on_first_poll(tmp_path: 
     run_once(_deps(tmp_path, provider, herdr))
     assert (events_dir / "101-aborted-261115010000.json").is_file()
     assert provider.issues[101].labels == {"state:aborted"}
+
+
+# review-code R1〜R6 の回帰（triage 起動の照合・抑止・status 表示）
+
+
+def _real_shaped(herdr: FakeHerdr) -> None:
+    """Herdr 0.9.5 の ``tab list`` と同じく pane ID を持たない行を返すようにする。"""
+    from kaji_harness.watch.herdr import parse_tabs
+
+    def list_tabs() -> list[TabRef]:
+        return parse_tabs(
+            [
+                {
+                    "tab_id": t.tab_id,
+                    "label": t.label,
+                    "workspace_id": "w",
+                    "number": i + 1,
+                    "pane_count": 1,
+                    "agent_status": "working",
+                    "focused": False,
+                }
+                for i, t in enumerate(herdr.tabs)
+            ]
+        )
+
+    herdr.list_tabs = list_tabs  # type: ignore[method-assign]
+
+
+def test_r1_real_shaped_tab_rows_do_not_duplicate_launch_after_crash(tmp_path: Path) -> None:
+    provider, herdr, deps = _aborted_setup(tmp_path)
+    _real_shaped(herdr)
+    original = herdr.run_in_pane
+
+    def crash_after_run(pane_id: str, command: str) -> None:
+        original(pane_id, command)
+        raise KeyboardInterrupt
+
+    herdr.run_in_pane = crash_after_run  # type: ignore[method-assign]
+    with pytest.raises(KeyboardInterrupt):
+        run_once(deps)
+    herdr.run_in_pane = original  # type: ignore[method-assign]
+    herdr.foreground["p_1"] = ("active", ["claude --dangerously-skip-permissions /watch-triage x"])
+    run_once(deps)
+    event = deps.store.load_state().events["101:aborted:261115000000"]
+    assert (event.launch_status, event.launch_attempts) == ("launched", 1)
+    assert len(herdr.tabs) == 1 and len(herdr.runs) == 1
+
+
+def test_r2_new_failure_while_triage_tab_open_is_recorded_and_reported(tmp_path: Path) -> None:
+    provider, herdr, deps = _aborted_setup(tmp_path)
+    run_once(deps)
+    assert [t.label for t in herdr.tabs] == ["watch-triage-101"]
+    # run A の triage タブを開いたまま、retry した run B も失敗した
+    _write_ended_run(
+        deps.artifacts_dir, "261115010000", [start(), step_start("implement"), end("ERROR")]
+    )
+    run_once(deps)
+    state = deps.store.load_state()
+    assert set(state.events) == {"101:aborted:261115000000", "101:aborted:261115010000"}
+    assert provider.comment_calls == 2
+    assert "key=101:aborted:261115010000" in provider.issues[101].comments[-1].body
+    # 追加の triage 起動はタブが開いている間は抑止する
+    assert len(herdr.tabs) == 1 and len(herdr.runs) == 1
+    assert state.events["101:aborted:261115010000"].launch_status == "detected"
+    # タブを閉じたら次の周に起動する
+    herdr.tabs = []
+    run_once(deps)
+    assert deps.store.load_state().events["101:aborted:261115010000"].launch_status == "launched"
+    assert len(herdr.runs) == 2
+
+
+def _running_facts() -> object:
+    from kaji_harness.watch.labels import WatchIssue
+    from kaji_harness.watch.loop import Facts
+
+    issue = WatchIssue(
+        101,
+        "open",
+        None,
+        ("state:running",),
+        {
+            "issue": "101",
+            "any_run_alive": True,
+            "launching": False,
+            "read_errors": [],
+            "latest_run": {
+                "run_id": "261115000000",
+                "termination": "running",
+                "last_step": {"id": "implement", "attempt": 1},
+                "pane": {"pane_id": "p_step", "origin_pane": "p_o"},
+            },
+        },
+    )
+    return Facts([issue], [], [], {101: "idle"}, NOW.isoformat())
+
+
+def test_r4_pane_idle_and_log_stall_in_same_poll_launch_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import timedelta
+
+    from kaji_harness.watch import loop
+    from kaji_harness.watch.models import PaneIdleState, StallState, WatchState
+
+    herdr = FakeHerdr()
+    provider = FakeProvider({101: FakeIssue(labels={"state:running"})})
+    deps = _deps(tmp_path, provider, herdr)
+    deps.store.save_state(
+        WatchState(
+            pane_idle={
+                "101": PaneIdleState(
+                    run_id="261115000000", step="implement", attempt=1, idle_polls=1
+                )
+            },
+            stall={
+                "101": StallState(
+                    signature=["261115000000", "implement", "1", "running"],
+                    since=(NOW - timedelta(hours=2)).isoformat(),
+                )
+            },
+        )
+    )
+    facts = _running_facts()
+    monkeypatch.setattr(loop, "collect_facts", lambda *_: facts)
+    run_once(deps)
+    events = deps.store.load_state().events.values()
+    assert sorted(e.kind for e in events) == ["log_stall", "pane_idle"]
+    assert sorted(e.launch_status for e in events) == ["detected", "launched"]
+    assert [t.label for t in herdr.tabs] == ["watch-triage-101"]
+    assert len(herdr.runs) == 1
+
+
+def test_r5_pane_run_error_is_retried_on_own_tab(tmp_path: Path) -> None:
+    provider, herdr, deps = _aborted_setup(tmp_path)
+    original = herdr.run_in_pane
+
+    def fail(pane_id: str, command: str) -> None:
+        raise RuntimeError("injected pane run error")
+
+    herdr.run_in_pane = fail  # type: ignore[method-assign]
+    run_once(deps)
+    event = deps.store.load_state().events["101:aborted:261115000000"]
+    assert (event.launch_status, event.triage_tab) == ("detected", "t1")
+    herdr.run_in_pane = original  # type: ignore[method-assign]
+    herdr.foreground["p_1"] = ("shell_only", ["bash"])
+    run_once(deps)
+    event = deps.store.load_state().events["101:aborted:261115000000"]
+    assert herdr.closed == ["t1"]
+    assert (event.launch_status, event.launch_attempts) == ("launched", 2)
+    assert len(herdr.tabs) == 1 and len(herdr.runs) == 1
+
+
+def test_r5_lost_create_tab_response_is_reconciled(tmp_path: Path) -> None:
+    provider, herdr, deps = _aborted_setup(tmp_path)
+    original = herdr.create_tab
+
+    def lost(label: str, cwd: Path) -> tuple[str, str]:
+        original(label, cwd)
+        raise RuntimeError("response lost")
+
+    herdr.create_tab = lost  # type: ignore[method-assign]
+    run_once(deps)
+    event = deps.store.load_state().events["101:aborted:261115000000"]
+    assert (event.launch_status, event.triage_tab) == ("detected", None)
+    herdr.create_tab = original  # type: ignore[method-assign]
+    herdr.foreground["p_1"] = ("shell_only", ["bash"])
+    run_once(deps)
+    event = deps.store.load_state().events["101:aborted:261115000000"]
+    assert herdr.closed == ["t1"]
+    assert event.launch_status == "launched"
+    assert [t.label for t in herdr.tabs] == ["watch-triage-101"] and len(herdr.runs) == 1
+
+
+def test_r5_tab_of_other_launched_event_still_suppresses(tmp_path: Path) -> None:
+    provider, herdr, deps = _aborted_setup(tmp_path)
+    run_once(deps)
+    _write_ended_run(
+        deps.artifacts_dir, "261115010000", [start(), step_start("implement"), end("ERROR")]
+    )
+    herdr.foreground["p_1"] = ("shell_only", ["bash"])
+    for _ in range(3):
+        run_once(deps)
+    # run A の triage タブは run A の event のもの。run B の event はそれを閉じない
+    assert herdr.closed == []
+    assert deps.store.load_state().events["101:aborted:261115010000"].launch_attempts == 0
+
+
+def test_r6_status_reflects_recovered_and_open_tabs(tmp_path: Path) -> None:
+    from kaji_harness.watch import service
+
+    provider, herdr, deps = _aborted_setup(tmp_path)
+    run_once(deps)
+    event = next(iter(deps.store.load_state().events.values()))
+    service.record(deps, Path(event.event_file), "handoff", comment_url=None, summary="h")
+    shown = service.status(deps)["issues"][0]
+    assert shown["suppressed_until_progress"] is True
+    assert shown["triage_tab"] == "p_1"
+    service.record(deps, Path(event.event_file), "recovered", comment_url=None, summary="r")
+    herdr.tabs = []
+    shown = service.status(deps)["issues"][0]
+    assert shown["suppressed_until_progress"] is False
+    assert shown["triage_tab"] is None

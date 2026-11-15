@@ -59,8 +59,12 @@ python -m kaji_harness.scripts.run_watched execute --draft <draft-id>
   0 件なら exit 2。
 - `execute`: 前提の検証 → series YAML → `validate-series` / `run-series --dry-run` → YAML だけの commit と
   push（force なし）→ `state:planned` → `kaji-series-<id>` タブでの `kaji run-series` → `kaji watch start`。
-  各段は外部の状態との照合で済んだかを判定するため、落ちた後も同じ draft で再実行すれば二重の副作用なしに
+  各副作用の直前に、Issue の open/closed と `plan` 時点の `state:*`・`wf:*` ラベルを再検査し、自分の
+  `state:planned` 以外の変化があれば exit 2 で止まる。各段は外部の状態との照合で済んだかを判定するため、落ちた後も同じ draft で再実行すれば二重の副作用なしに
   収束する。exit 2 は前提違反・外部状態の相違、exit 3 は remote が先に進んだ等の人手の解決が要る状況。
+
+`watch-triage-<issue>` タブが開いている間は triage を新たに起動せず、`pane_idle` / `log_stall` も出さない。
+ただし新しい run の失敗は `aborted` の event として記録・報告し、そのタブが閉じた後に triage を起動する。
 
 ラベルの契約・event の種類・通知の JSON（schema v1）・`issue-close`・`/run-watched` の動作の詳細は英語正本
 [watch.md](watch.md) を参照する。

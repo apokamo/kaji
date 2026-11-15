@@ -327,6 +327,10 @@ class PlanDeps:
     repo_root: Path
 
 
+#: 段 1 の再検査で snapshot と照合するラベルの接頭辞
+_RECHECK_PREFIXES = ("state:", "wf:")
+
+
 def _labels(issue: Issue) -> tuple[str, ...]:
     return tuple(sorted(label.name for label in issue.labels))
 
@@ -658,15 +662,17 @@ class _Executor:
             view = self.deps.provider.view_issue(key)
             if view.state.lower() != "open":
                 raise self.fail(2, f"#{member.issue} is no longer open")
-            current = {n for n in _labels(view) if n.startswith("state:")}
-            expected = {n for n in snap.labels if n.startswith("state:")}
+            # plan の判断に使った state:* と wf:* を照合する（自分の state:planned だけ許す）
+            current = {n for n in _labels(view) if n.startswith(_RECHECK_PREFIXES)}
+            expected = {n for n in snap.labels if n.startswith(_RECHECK_PREFIXES)}
             allowed = [expected]
             if member.issue in mine:
                 allowed.append(expected | {"state:planned"})
             if current not in allowed:
                 raise self.fail(
                     2,
-                    f"#{member.issue} state labels changed: {sorted(current)} (expected {sorted(expected)})",
+                    f"#{member.issue} state/wf labels changed: {sorted(current)}"
+                    f" (expected {sorted(expected)})",
                 )
         document = collect_status(
             self.deps.artifacts_dir, [str(m.issue) for m in self.draft.members]
@@ -788,16 +794,23 @@ class _Executor:
         command = shlex.join(["kaji", "run-series", self.draft.yaml_path])
         tab = find_tab(herdr.list_tabs(), label)
         pane_id: str | None = None
-        if tab is not None and tab.pane_id is not None:
-            foreground, commands = herdr.pane_foreground(tab.pane_id)
+        tab_pane = tab.pane_id if tab is not None else None
+        receipt = self.receipts.tab
+        if tab is not None and tab_pane is None and receipt is not None:
+            # pane を一覧から解決できないときは、自分が作ったタブの receipt で補う
+            tab_pane = receipt.pane_id if receipt.tab_id == tab.tab_id else None
+        if tab is not None and tab_pane is None:
+            raise self.fail(3, f"cannot resolve the pane of tab {label}")
+        if tab_pane is not None:
+            foreground, commands = herdr.pane_foreground(tab_pane)
             if foreground_has(commands, "run-series"):
-                self.receipts.series_pane = tab.pane_id
+                self.receipts.series_pane = tab_pane
                 self.save()
                 self.done.append("launch")
                 return
             if foreground != "shell_only":
                 raise self.fail(2, f"tab {label} is busy with another command")
-            pane_id = tab.pane_id
+            pane_id = tab_pane
         if pane_id is None:
             tab_id, pane_id = herdr.create_tab(label, self.deps.repo_root)
             self.receipts.tab = TabReceipt(tab_id=tab_id, pane_id=pane_id)

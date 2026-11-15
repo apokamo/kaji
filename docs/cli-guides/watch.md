@@ -97,7 +97,11 @@ Issue that is already `state:aborted` is still detected. Each event is persisted
 label change and launched at most once (`detected` → `launching` → `launched`, or
 `launch_failed` after 3 attempts; then start `/watch-triage <event-file>` by hand).
 No triage tab is launched while a `watch-triage-<issue>` tab is open, or after a `handoff`
-record until the Issue's progress changes.
+record until the Issue's progress changes. While the tab is open, `pane_idle` and `log_stall`
+are not raised, but a new failed run is still recorded as an `aborted` event and reported;
+its triage tab is launched after the open tab is closed. At most one triage tab is launched
+per Issue per poll. Tab panes are resolved by joining `herdr tab list` with `herdr pane list`
+(Herdr's tab rows carry no pane ID).
 
 For each `aborted` event the Issue gets one comment whose first line is
 `<!-- kaji-watch: aborted key=<key> -->` (an existing marker comment is reused), then one
@@ -167,8 +171,9 @@ python -m kaji_harness.scripts.run_watched execute --draft <draft-id>
   overwriting a file with different content) → `kaji validate-series` and
   `kaji run-series --dry-run` → commit of the YAML only and `git push <remote> <sha>:refs/heads/<default>`
   (no force) → `state:planned` on each member → the `kaji-series-<id>` Herdr tab running
-  `kaji run-series <yaml>` → `kaji watch start`. Issue state is re-checked before each side
-  effect; any change other than our own `state:planned` stops with exit 2.
+  `kaji run-series <yaml>` → `kaji watch start`. Issue state (open/closed and the `state:*`
+  and `wf:*` labels saved by `plan`) is re-checked before each side effect; any change other
+  than our own `state:planned` stops with exit 2.
 - Every stage is decided by comparing external state, with receipts saved to the draft before
   (intent) and after (result) each side effect. Re-running `execute` with the same draft after
   a crash skips finished stages: no empty commit, double push, double label, double tab or

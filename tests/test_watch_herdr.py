@@ -55,3 +55,52 @@ def test_triage_command_is_quoted_claude() -> None:
 def test_foreground_has() -> None:
     assert foreground_has(["bash", "kaji run-series x.yaml"], "run-series")
     assert not foreground_has(["bash"], "claude")
+
+
+# Herdr 0.9.5 の実応答の形（TabInfo は pane ID を持たず、PaneInfo が tab_id を持つ）
+_REAL_TABS = [
+    {
+        "agent_status": "unknown",
+        "focused": False,
+        "label": "watch-triage-101",
+        "number": 4,
+        "pane_count": 1,
+        "tab_id": "w36:t9",
+        "workspace_id": "w36",
+    },
+    {
+        "agent_status": "idle",
+        "focused": True,
+        "label": "kaji",
+        "number": 2,
+        "pane_count": 2,
+        "tab_id": "w36:t2",
+        "workspace_id": "w36",
+    },
+]
+_REAL_PANES = [
+    {"pane_id": "w36:p27", "tab_id": "w36:t2", "workspace_id": "w36", "agent_status": "idle"},
+    {"pane_id": "w36:p4N", "tab_id": "w36:t2", "workspace_id": "w36", "agent_status": "unknown"},
+    {"pane_id": "w36:p9A", "tab_id": "w36:t9", "workspace_id": "w36", "agent_status": "unknown"},
+]
+
+
+def test_parse_tabs_resolves_pane_from_pane_list_for_real_herdr_shape() -> None:
+    tabs = parse_tabs(_REAL_TABS, _REAL_PANES)
+    assert tabs == [
+        TabRef(tab_id="w36:t9", pane_id="w36:p9A", label="watch-triage-101"),
+        TabRef(tab_id="w36:t2", pane_id="w36:p27", label="kaji"),
+    ]
+
+
+def test_parse_tabs_without_pane_list_leaves_pane_unknown() -> None:
+    assert parse_tabs(_REAL_TABS)[0].pane_id is None
+
+
+def test_cli_client_list_tabs_joins_pane_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kaji_harness.watch import herdr as herdr_mod
+
+    monkeypatch.setattr(herdr_mod.herdr_cli, "list_tabs", lambda _bin: _REAL_TABS)
+    monkeypatch.setattr(herdr_mod.herdr_cli, "list_panes", lambda _bin: _REAL_PANES)
+    tabs = herdr_mod.CliHerdrClient("herdr").list_tabs()
+    assert find_tab(tabs, "watch-triage-101") == TabRef("w36:t9", "w36:p9A", "watch-triage-101")

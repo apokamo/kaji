@@ -70,8 +70,29 @@ def _str(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def parse_tabs(raw: Iterable[Mapping[str, object]]) -> list[TabRef]:
-    """``herdr tab list`` の要素から ``TabRef`` を作る（label の無いタブは除く）。"""
+def _first_pane_by_tab(panes: Iterable[Mapping[str, object]]) -> dict[str, str]:
+    """``herdr pane list`` の要素から、タブごとに最初に現れる pane ID を返す。"""
+    found: dict[str, str] = {}
+    for pane in panes:
+        tab_id = _str(pane.get("tab_id"))
+        pane_id = _str(pane.get("pane_id"))
+        if tab_id is not None and pane_id is not None:
+            found.setdefault(tab_id, pane_id)
+    return found
+
+
+def parse_tabs(
+    raw: Iterable[Mapping[str, object]],
+    panes: Iterable[Mapping[str, object]] = (),
+) -> list[TabRef]:
+    """``herdr tab list`` の要素から ``TabRef`` を作る（label の無いタブは除く）。
+
+    Herdr 0.9.5 の ``TabInfo`` は pane ID を持たないため、``herdr pane list`` の
+    ``PaneInfo.tab_id`` と結合して root pane を解決する（同じタブに pane が複数あれば、
+    一覧で最初に現れる pane。watch が作るタブは pane が 1 個だけ）。tab 側に
+    ``root_pane`` 等があればそれを優先する。
+    """
+    by_tab = _first_pane_by_tab(panes)
     tabs: list[TabRef] = []
     for tab in raw:
         tab_id = _str(tab.get("tab_id"))
@@ -82,6 +103,8 @@ def parse_tabs(raw: Iterable[Mapping[str, object]]) -> list[TabRef]:
         pane_id = _str(root.get("pane_id")) if isinstance(root, dict) else None
         if pane_id is None:
             pane_id = _str(tab.get("root_pane_id")) or _str(tab.get("pane_id"))
+        if pane_id is None:
+            pane_id = by_tab.get(tab_id)
         tabs.append(TabRef(tab_id=tab_id, pane_id=pane_id, label=label))
     return tabs
 
@@ -93,8 +116,8 @@ class CliHerdrClient:
         self.herdr_bin = herdr_bin
 
     def list_tabs(self) -> list[TabRef]:
-        """label を持つタブの一覧。"""
-        return parse_tabs(herdr_cli.list_tabs(self.herdr_bin))
+        """label を持つタブの一覧（pane ID は ``herdr pane list`` と結合して解決する）。"""
+        return parse_tabs(herdr_cli.list_tabs(self.herdr_bin), herdr_cli.list_panes(self.herdr_bin))
 
     def create_tab(self, label: str, cwd: Path) -> tuple[str, str]:
         """タブを作り ``(tab_id, pane_id)`` を返す。"""

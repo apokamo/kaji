@@ -497,13 +497,21 @@ def test_push_stops_with_exit_3_when_remote_moved(
     assert env.provider.add_calls == []
 
 
-@pytest.mark.parametrize("change", ["closed", "hold"])
+@pytest.mark.parametrize("change", ["closed", "hold", "wf_added", "wf_switched"])
 def test_recheck_stops_before_side_effects_on_external_change(env: Env, change: str) -> None:
+    if change == "wf_switched":
+        env.provider.issues[102].labels.add("wf:dev")
     draft_id = env.plan()
     if change == "closed":
         env.provider.issues[102].state = "CLOSED"
-    else:
+    elif change == "hold":
         env.provider.issues[102].labels.add("state:hold")
+    elif change == "wf_added":
+        # plan --workflow dev の後に wf:docs が付いた: 古い workflow で起動しない
+        env.provider.issues[101].labels.add("wf:docs")
+    else:
+        env.provider.issues[102].labels.discard("wf:dev")
+        env.provider.issues[102].labels.add("wf:docs")
     with pytest.raises(RunWatchedError) as exc:
         run_execute(env.deps(), draft_id)
     assert exc.value.exit_code == 2
@@ -528,6 +536,52 @@ def test_recheck_between_stages_stops_before_labels(
     assert exc.value.exit_code == 2
     assert env.provider.add_calls == []
     assert env.herdr.created == []
+
+
+def test_recheck_between_stages_detects_wf_label_change(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    draft_id = env.plan()
+    original_push = run_watched._Executor.push
+
+    def push_then_relabel(self: Any, sha: str) -> None:
+        original_push(self, sha)
+        env.provider.issues[101].labels.add("wf:docs")
+
+    monkeypatch.setattr(run_watched._Executor, "push", push_then_relabel)
+    with pytest.raises(RunWatchedError) as exc:
+        run_execute(env.deps(), draft_id)
+    assert exc.value.exit_code == 2
+    assert "wf" in str(exc.value)
+    assert env.provider.add_calls == []
+    assert env.herdr.created == []
+
+
+def test_rerun_reuses_own_tab_when_pane_list_lacks_pane(env: Env) -> None:
+    # Herdr の一覧から pane を解決できなくても、自分の receipt でタブを再利用する
+    draft_id = env.plan()
+    env.herdr.fail_after_create = True
+    with pytest.raises(RuntimeError, match="after tab create"):
+        run_execute(env.deps(), draft_id)
+    # 応答を失ったので receipt はない。タブは pane 不明で残る → 人手の解決（exit 3）
+    env.herdr.tabs = [TabRef(t.tab_id, None, t.label) for t in env.herdr.tabs]
+    with pytest.raises(RunWatchedError) as exc:
+        run_execute(env.deps(), draft_id)
+    assert exc.value.exit_code == 3
+    assert env.herdr.created == ["kaji-series-rw-101-102-2611150301"]
+    assert env.herdr.runs == []
+
+
+def test_rerun_after_pane_run_failure_uses_receipt_pane(env: Env) -> None:
+    draft_id = env.plan()
+    env.herdr.fail_after_run = True
+    with pytest.raises(RuntimeError, match="after pane run"):
+        run_execute(env.deps(), draft_id)
+    env.herdr.tabs = [TabRef(t.tab_id, None, t.label) for t in env.herdr.tabs]
+    result = run_execute(env.deps(), draft_id)
+    assert result["series_pane"] == "p_1"
+    assert env.herdr.created == ["kaji-series-rw-101-102-2611150301"]
+    assert len(env.herdr.runs) == 1
 
 
 def test_existing_yaml_with_other_content_is_not_overwritten(env: Env) -> None:

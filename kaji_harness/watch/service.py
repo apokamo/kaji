@@ -115,8 +115,10 @@ def status(deps: WatchDeps) -> JsonDict:
     """``kaji watch status --json`` の文書（schema v1）を作る。GitHub と artifacts に書かない。"""
     store = deps.store
     state = _peek_state(store)
-    plan = run_once(deps, dry_run=True).plan
-    triage = {event.issue: event.triage_pane for event in state.events.values()}
+    result = run_once(deps, dry_run=True)
+    plan = result.plan
+    # 今開いている triage タブだけを表示する（Herdr の外では観測できないので null）
+    triage = {issue: tab.pane_id or tab.tab_id for issue, tab in result.open_triage.items()}
     issues = [
         {
             "issue": entry["issue"],
@@ -126,11 +128,7 @@ def status(deps: WatchDeps) -> JsonDict:
             "hold_reason": entry["hold_reason"],
             "run_id": entry["run_id"],
             "triage_tab": triage.get(entry["issue"]),
-            "suppressed_until_progress": any(
-                record.outcome == "handoff"
-                and record.event_key.split(":", 1)[0] == str(entry["issue"])
-                for record in store.read_records()
-            ),
+            "suppressed_until_progress": entry["issue"] in result.suppressed,
         }
         for entry in plan.get("issues", [])
     ]

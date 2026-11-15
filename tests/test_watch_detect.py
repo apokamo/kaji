@@ -10,6 +10,7 @@ import pytest
 from kaji_harness.watch.detect import (
     DetectTracking,
     Ledger,
+    PaneIdleCounter,
     RecordEntry,
     detect_events,
 )
@@ -162,9 +163,39 @@ def test_log_stall_resets_on_progress() -> None:
     assert moved.events == []
 
 
-def test_open_triage_tab_suppresses() -> None:
+def test_open_triage_tab_still_detects_aborted() -> None:
+    # 抑止 1 は triage の起動だけ。新しい失敗の event（M5 の記録・報告）は出す
     result = _detect(_issue(termination="ended", end_status="ERROR"), open_triage=frozenset({101}))
-    assert result.events == []
+    assert [e.key for e in result.events] == ["101:aborted:261115000000"]
+
+
+def test_open_triage_tab_suppresses_pane_idle_and_log_stall() -> None:
+    tracking = _detect(_issue(), now=NOW).tracking
+    later = NOW + timedelta(seconds=5400)
+    idle = DetectTracking(
+        pane_idle={101: PaneIdleCounter("261115000000", "implement", 1, idle_polls=5)},
+        stall=tracking.stall,
+    )
+    opened = _detect(_issue(), pane="idle", tracking=idle, now=later, open_triage=frozenset({101}))
+    assert opened.events == []
+    closed = _detect(_issue(), pane="idle", tracking=idle, now=later)
+    assert {e.kind for e in closed.events} == {"pane_idle", "log_stall"}
+
+
+def test_suppressed_reports_handoff_until_progress_or_recovered() -> None:
+    key = "101:pane_idle:261115000000:implement:1:0"
+    progress = ("state:running", "261115000000", "implement", 1, 0)
+    handoff = _record(key, "handoff", NOW, progress)
+    ledger = Ledger(event_keys=frozenset({key}), records=(handoff,))
+    assert _detect(_issue(), ledger=ledger).suppressed == frozenset({101})
+    recovered = Ledger(
+        event_keys=frozenset({key}),
+        records=(handoff, _record(key, "recovered", NOW + timedelta(seconds=1), progress)),
+    )
+    assert _detect(_issue(), ledger=recovered).suppressed == frozenset()
+    # 進み具合が変われば（run が失敗して aborted）抑止中ではない
+    failed = _detect(_issue(termination="ended", end_status="ERROR"), ledger=ledger)
+    assert failed.suppressed == frozenset()
 
 
 def test_handoff_suppresses_until_progress_changes() -> None:

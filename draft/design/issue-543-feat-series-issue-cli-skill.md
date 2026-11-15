@@ -122,7 +122,7 @@ kaji watch events [--json] [--workdir DIR]
       "hold_reason": null,                        // null | "unknown_liveness" | "user_label" | "conflict"
       "run_id": "261115113853",                  // latest_run.run_id（なければ null）
       "triage_tab": null,                         // 開いている triage タブの pane_id
-      "suppressed_until_progress": false          // handoff 後の抑止中
+      "suppressed_until_progress": false          // handoff 後の抑止中（recovered・進み具合の変化で解除。検知と同じ比較）
     }
   ],
   "pending_labels": [101],
@@ -233,7 +233,7 @@ python -m kaji_harness.scripts.run_watched execute --draft <draft-id>
 - `execute`: draft の各段を順に実行する。各段は**外部の結果との照合**で済んだかどうかを判定し、draft の完了フラグだけには依存しない（M3）。各段の receipt（識別子と期待状態）を、副作用の直前（intent）と直後（result）に draft へ保存する。
   0. **前提の検証（M7・M8。最初の副作用より前）**: `check_watch_preconditions(require_herdr=True)`（tracked の `[watch]`・6 ラベル・github provider・Herdr）。git の前提は次のとおり。cwd が main checkout で、現在の branch が `default_branch`。index と作業ツリーに、series YAML 以外の staged 変更がない。`git fetch <git_remote> <default_branch>` の後、`HEAD == <git_remote>/<default_branch>` であること（ahead も behind もない）。ただし、HEAD が下記の「自分の commit の照合規則」を満たす再実行の場合は、`HEAD^ == <git_remote>/<default_branch>`（push 前）または `HEAD` が remote の祖先に含まれること（push 済み）を条件とする。照合規則を満たさない ahead commit（無関係な commit）は M8 のとおり exit 2 で拒否する。照合規則を満たすが remote が `intent.parent` から進み、HEAD が remote の祖先でもない場合は、段 4 の push 照合と同じく exit 3（人手の解決。rebase・force push はしない）とする（実装時に段 4・テスト戦略と揃えた）。満たさなければ exit 2 で、何も書かない。
   - **自分の commit の照合規則（`is_own_series_commit(intent, sha)`。段 0 の例外と段 4 の再開で同じ関数を使う）**: commit の intent（commit を実行する**前**に draft へ保存する）は `{parent, yaml_path, yaml_blob, message}` とする。`parent` は fetch した remote の sha、`yaml_blob` は `git hash-object <yaml>` の値、`message` は `chore(series): add <id> for #101, #102` の完全な文字列。`sha` が次をすべて満たすときだけ、自分の commit とみなす。(1) 親が 1 個で、`sha^ == intent.parent`。(2) `git diff-tree --no-commit-id -r --name-status <parent> <sha>` が `A\t<yaml_path>` の 1 行だけ（YAML の新規追加 1 件だけ）。(3) `git rev-parse <sha>:<yaml_path> == intent.yaml_blob`。(4) commit message が `intent.message` と完全に一致する。照合を満たせば、result の receipt（`{sha, parent}`）を復元して保存し、commit を作り直さない。
-  1. **状態の再検査（毎回、各副作用の直前）**: 各 Issue の state・labels を読み直し、**期待状態**と比べる。期待状態は「draft の snapshot に、自分の receipt にある変更（段 5 で付けた `state:planned`）を足したもの」とする。自分の変更以外の違い（close・hold の付与・ほかの `state:*`・別の run の開始など）があれば、そこで止まり（exit 2）、以降の副作用を行わない。済んだ段は報告に書く。この検査は段 2・4・5・6 の直前に毎回行い、再実行でも飛ばさない。
+  1. **状態の再検査（毎回、各副作用の直前）**: 各 Issue の state・labels を読み直し、**期待状態**と比べる。期待状態は「draft の snapshot に、自分の receipt にある変更（段 5 で付けた `state:planned`）を足したもの」とする。自分の変更以外の違い（close・hold の付与・ほかの `state:*`・`wf:*` の追加・変更・削除・別の run の開始など。照合するラベルは `state:*` と `wf:*`。review-code R3）があれば、そこで止まり（exit 2）、以降の副作用を行わない。済んだ段は報告に書く。この検査は段 2・4・5・6 の直前に毎回行い、再実行でも飛ばさない。
   2. **series YAML**: 識別子は draft に固定した `series_id` とパスで、期待状態は生成した内容の sha256。ファイルがなければ、`kaji_harness.series.generator` で生成し、sha256 を receipt に保存する。ファイルがあり、sha256 が receipt（または draft から再生成した内容）と一致する場合は、済んだものとして扱う。一致しなければ exit 2（他者のファイルを上書きしない）。series-id は `rw-<最初の issue>-<最後の issue>-<YYMMDDHHMM>`（`^[a-z0-9][a-z0-9-]{0,63}$` に収まる）で、`plan` の時点で draft に固定する。
   3. **検証**: `kaji validate-series <yaml>` と `kaji run-series <yaml> --dry-run` を毎回実行する（冪等で副作用がない）。どちらかが失敗したら exit 2（ラベル・タブは変えない）。
   4. **commit / push（D7・M8）**:
@@ -408,7 +408,9 @@ run_id は、同じ host の時計による `YYMMDDHHMMSS(-NNN)` の文字列比
   4. 再起動時、または前の周に `launching` のまま残った event は、まず Herdr を照合する。label `watch-triage-<issue>` のタブがあり、その pane の前景に claude がいる場合は、`launched` として記録する。タブはあるが pane がシェルだけの場合（`pane run` の前に落ちた）は、そのタブを閉じてから起動し直す（このタブは watch が作ったもので、label で所有を確認する）。タブがなければ、そのまま起動し直す。
   5. 起動の失敗（Herdr のエラー）は警告して `detected` に戻し、次の周にやり直す。`launch_attempts` が 3 に達したら `launch_failed` にして、それ以上自動では起動しない。`status` に `launch_failed` と event ファイルのパスを表示する（保守者は `/watch-triage <event-file>` を手で起動できる）。
 - `launched` の event は、同じ key では再び起動しない。
-- 抑止 1: その Issue の `watch-triage-<issue>` タブが開いている間は起動しない。
+- 抑止 1: その Issue の `watch-triage-<issue>` タブが開いている間は起動しない。抑止するのは triage の起動だけで、`aborted` の検知・記録・報告（M5）は続ける（起動はタブが閉じた後）。`pane_idle` / `log_stall` はタブが開いている間は event にしない。同じ周に同じ Issue の event が複数あっても、起動を試みるのは Issue ごとに 1 回だけとする（review-code R2・R4 で明確化）。
+- タブの所有: 保存した `triage_tab` が一致するタブは、その event 自身の未完了の起動として照合する（pane run のエラー後も照合・再試行できる）。`triage_tab` が未保存（`create_tab` の応答喪失、`launching` のまま中断）なら、他の event が保存していないタブで、その event が起動を試みたことがある場合に自分のタブとみなす（review-code R5）。
+- pane の解決: Herdr 0.9.5 の `TabInfo` は pane ID を持たないため、`herdr tab list` と `herdr pane list`（`PaneInfo.tab_id`）を結合して root pane を解決する。解決できない場合は保存した receipt（`triage_pane` / run-watched の `receipts.tab`）で補い、それもなければ起動しない（run-watched は exit 3）（review-code R1）。
 - 抑止 2: `handoff` を記録した Issue は、進み具合（目標ラベル・`run_id`・`last_step`・`episode`）が変わるまで、event の種類によらず起動しない。タブを閉じても、監視を起動し直しても解除しない（`records.jsonl` から再構成する）。
 - `still-working` の記録の後は、`STILL_WORKING_SNOOZE_SECONDS` の間、同じ attempt・episode では起動しない。その後も条件が続いていれば、key の末尾に `:r<n>` を付けて再確認する。`not-stalled` の後は、記録から `LOG_STALL_SECONDS` 後に `recheck + 1` で再確認する。
 - `log_stall` は、kamo2 の「`run.log` の更新時刻」ではなく、#540 の文書に現れる進み具合の不変時間で判定する。`run.log` は step の実行中には行が増えないので、kamo2 の判定も実質的には step の境界で進んでいた。dev.yaml の step timeout の最大値は 3600 秒（implement）で、90 分はそれより長い。`kaji status` の契約に新しいフィールドを足さずに済む。

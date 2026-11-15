@@ -148,6 +148,8 @@ class PollResult:
 
     exit: bool
     plan: JsonDict
+    open_triage: dict[int, TabRef] = field(default_factory=dict)
+    suppressed: frozenset[int] = frozenset()
 
 
 def _state_labels(labels: list[str]) -> tuple[str, ...]:
@@ -429,7 +431,9 @@ def run_once(deps: WatchDeps, *, dry_run: bool = False) -> PollResult:
     if dry_run:
         if facts.tabs is None:
             plan["events"] = [e for e in plan["events"] if e["kind"] != "pane_idle"]
-        return PollResult(exit=False, plan=plan)
+        return PollResult(
+            exit=False, plan=plan, open_triage=open_tabs, suppressed=result.suppressed
+        )
 
     issues_by_id = {issue.issue: issue for issue in facts.issues}
     # M4: 処理意図（付け替え・新しい event・報告）をラベル操作より前に 1 回で保存する
@@ -517,33 +521,70 @@ def _apply_labels(
         store.save_state(state)
 
 
+def _owns_tab(state: WatchState, event: EventState, tab: TabRef) -> bool:
+    """label ``watch-triage-<issue>`` のタブが、この event の未完了の起動のものか。
+
+    保存した ``triage_tab`` が一致すれば自分のタブ。``triage_tab`` が未保存（``create_tab``
+    の応答喪失、または ``launching`` のまま中断）のときは、他の event が保存していない
+    タブで、この event が起動を試みたことがある場合だけ自分のタブとみなす。
+    """
+    if event.triage_tab == tab.tab_id:
+        return True
+    claimed = any(
+        other.key != event.key and other.triage_tab == tab.tab_id for other in state.events.values()
+    )
+    return not claimed and (event.launch_status == "launching" or event.launch_attempts > 0)
+
+
 def _launch_triage(
     deps: WatchDeps, store: WatchStore, state: WatchState, tabs: list[TabRef]
 ) -> None:
-    """``detected`` / ``launching`` の event の triage タブを起動する（M4 の照合付き）。"""
+    """``detected`` / ``launching`` の event の triage タブを起動する（M4 の照合付き）。
+
+    同じ周に同じ Issue の event が複数あっても、起動を試みるのは Issue ごとに 1 回だけ。
+    作ったタブは周の中の一覧に反映し、後続の event には抑止 1 を適用する。
+    """
     herdr = deps.herdr
     if herdr is None:
         return
+    current = list(tabs)
+    attempted: set[int] = set()
     for event in list(state.events.values()):
         if event.launch_status not in ("detected", "launching"):
             continue
+        if event.issue in attempted:
+            continue
         label = triage_tab_label(event.issue)
-        tab = find_tab(tabs, label)
-        if tab is not None and tab.pane_id is not None:
-            foreground, commands = herdr.pane_foreground(tab.pane_id)
-            if event.launch_status == "launching":
-                if foreground == "active" and foreground_has(commands, "claude"):
-                    event.launch_status = "launched"
-                    event.triage_tab, event.triage_pane = tab.tab_id, tab.pane_id
-                    store.save_state(state)
-                    continue
-                if foreground == "shell_only":
-                    herdr.close_tab(tab.tab_id)
-                else:
-                    continue
-            else:
+        tab = find_tab(current, label)
+        if tab is not None:
+            if not _owns_tab(state, event, tab):
                 # 抑止 1: 別の event の triage タブが開いている間は起動しない
                 continue
+            pane_id = tab.pane_id
+            if pane_id is None and event.triage_tab == tab.tab_id:
+                pane_id = event.triage_pane
+            if pane_id is None:
+                continue
+            foreground, commands = herdr.pane_foreground(pane_id)
+            if foreground == "active" and foreground_has(commands, "claude"):
+                event.launch_status = "launched"
+                event.triage_tab, event.triage_pane = tab.tab_id, pane_id
+                store.save_state(state)
+                continue
+            if foreground != "shell_only":
+                continue
+            # 自分の起動が pane run の前で止まったタブ: 閉じて起動し直す
+            try:
+                herdr.close_tab(tab.tab_id)
+            except Exception as exc:  # noqa: BLE001 — Herdr の失敗は次の周でやり直す
+                _console.warning(
+                    "triage tab close failed for %s: %s", event.key, type(exc).__name__
+                )
+                continue
+            current = [t for t in current if t.tab_id != tab.tab_id]
+            event.triage_tab, event.triage_pane = None, None
+            store.save_state(state)
+        attempted.add(event.issue)
         event.launch_status = "launching"
         event.launch_attempts += 1
         store.save_state(state)
@@ -551,6 +592,7 @@ def _launch_triage(
             tab_id, pane_id = herdr.create_tab(label, deps.repo_root)
             event.triage_tab, event.triage_pane = tab_id, pane_id
             store.save_state(state)
+            current.append(TabRef(tab_id=tab_id, pane_id=pane_id, label=label))
             herdr.run_in_pane(pane_id, triage_command(Path(event.event_file)))
         except Exception as exc:  # noqa: BLE001 — Herdr の失敗は次の周でやり直す
             _console.warning("triage launch failed for %s: %s", event.key, type(exc).__name__)

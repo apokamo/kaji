@@ -137,6 +137,7 @@ class DetectResult:
 
     events: list[DetectedEvent]
     tracking: DetectTracking
+    suppressed: frozenset[int] = frozenset()
 
 
 def _step_of(issue: WatchIssue) -> tuple[str | None, str | None, int | None]:
@@ -190,12 +191,15 @@ def detect_events(
         tracking: 前の周の追跡状態。
         ledger: 既知の event と record。
         now: 現在時刻（tz 付き）。
-        open_triage: triage タブが開いている Issue（抑止 1）。
+        open_triage: triage タブが開いている Issue。``pane_idle`` / ``log_stall`` の
+            event は出さない（調査中の重複を避ける）。``aborted`` は M5 の記録と報告の
+            ために検知を続け、triage の起動だけを抑止する（抑止 1 は起動側で適用）。
 
     Returns:
-        新しい event と、更新した追跡状態。
+        新しい event、更新した追跡状態、handoff の抑止中の Issue。
     """
     events: list[DetectedEvent] = []
+    suppressed: set[int] = set()
     pane_idle: dict[int, PaneIdleCounter] = {}
     stall: dict[int, StallTracker] = {}
 
@@ -252,9 +256,10 @@ def detect_events(
             attempt,
             episode,
         )
-        if number in open_triage:
-            continue
         handoff = ledger.handoff_progress(number)
+        if _handoff_matches(handoff, target, progress, running=running):
+            suppressed.add(number)
+        tab_open = number in open_triage
 
         candidates: list[DetectedEvent] = []
         if (
@@ -275,7 +280,7 @@ def detect_events(
                         progress=(STATE_ABORTED, target.run_id, step, attempt, 0),
                     )
                 )
-        if counter is not None and counter.idle_polls >= PANE_IDLE_POLLS:
+        if not tab_open and counter is not None and counter.idle_polls >= PANE_IDLE_POLLS:
             base = f"{number}:pane_idle:{run_id}:{step}:{attempt}:{counter.episode}"
             key_or_none = _next_rerun_key(
                 base, ledger, now, "still-working", STILL_WORKING_SNOOZE_SECONDS, ":r"
@@ -292,7 +297,11 @@ def detect_events(
                         progress=(STATE_RUNNING, run_id, step, attempt, counter.episode),
                     )
                 )
-        if tracker is not None and now - tracker.since >= timedelta(seconds=LOG_STALL_SECONDS):
+        if (
+            not tab_open
+            and tracker is not None
+            and now - tracker.since >= timedelta(seconds=LOG_STALL_SECONDS)
+        ):
             key_or_none = _next_stall_key(number, run_id, step, attempt, ledger, now)
             if key_or_none is not None:
                 candidates.append(
@@ -311,7 +320,28 @@ def detect_events(
                 continue
             events.append(candidate)
 
-    return DetectResult(events=events, tracking=DetectTracking(pane_idle=pane_idle, stall=stall))
+    return DetectResult(
+        events=events,
+        tracking=DetectTracking(pane_idle=pane_idle, stall=stall),
+        suppressed=frozenset(suppressed),
+    )
+
+
+def _handoff_matches(
+    handoff: Progress | None, target: Target | None, progress: Progress, *, running: bool
+) -> bool:
+    """今成立しうる候補が handoff で抑止されるか（候補の抑止と同じ比較。``status`` 用）。
+
+    run の実行中は ``pane_idle`` / ``log_stall`` の比較、失敗した run が目標の根拠なら
+    ``aborted`` の比較を使う。どちらでもなければ抑止する候補がないので ``False``。
+    """
+    if handoff is None:
+        return False
+    if running and handoff == (STATE_RUNNING, progress[1], progress[2], progress[3], progress[4]):
+        return True
+    if target is not None and target.basis is TargetBasis.FAILED_RUN and target.run_id is not None:
+        return handoff == (STATE_ABORTED, target.run_id, progress[2], progress[3], 0)
+    return False
 
 
 def _handoff_view(candidate: DetectedEvent, progress: Progress) -> Progress:
