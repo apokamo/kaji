@@ -51,3 +51,39 @@ def test_labels_yml_is_valid(labels_config: dict[str, Any]) -> None:
 
         assert name not in seen, f"duplicate label name: '{name}'"
         seen.add(name)
+
+
+_STATE_LABELS = {
+    "state:planned",
+    "state:running",
+    "state:aborted",
+    "state:done",
+    "state:hold",
+    "state:needs-maintainer",
+}
+_WF_LABELS = {"wf:dev", "wf:dev-thorough", "wf:dev-small", "wf:docs"}
+
+
+@pytest.mark.small
+def test_watch_label_contract(labels_config: dict[str, Any]) -> None:
+    """state:* 6 個と wf:* 4 個だけが定義され、未定義と決めたラベルがない（#543 D2）。"""
+    names = {label["name"] for label in labels_config["labels"]}
+    assert {n for n in names if n.startswith("state:")} == _STATE_LABELS
+    assert {n for n in names if n.startswith("wf:")} == _WF_LABELS
+    assert not any(n.startswith("prio:") for n in names)
+    assert len(names) == 39
+
+
+@pytest.mark.small
+def test_wf_labels_resolve_to_exactly_one_workflow(labels_config: dict[str, Any]) -> None:
+    """``wf:<name>`` が ``.kaji/wf/**/*.yaml`` の ``name:`` にちょうど 1 個ずつ一致する。"""
+    wf_root = LABELS_YML.parent.parent / ".kaji" / "wf"
+    workflow_names: list[str] = []
+    for path in wf_root.rglob("*.yaml"):
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("name"), str):
+            workflow_names.append(data["name"])
+    for label in labels_config["labels"]:
+        name = label["name"]
+        if name.startswith("wf:"):
+            assert workflow_names.count(name.removeprefix("wf:")) == 1, name

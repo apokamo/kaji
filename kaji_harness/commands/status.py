@@ -16,8 +16,8 @@ from ..artifacts import resolve_artifacts_dir
 from ..config import KajiConfig
 from ..errors import ConfigLoadError, ConfigNotFoundError
 from ..providers import normalize_id
-from ..runstate.facts import collect_issue_facts
-from ..runstate.schema import issue_to_json, series_to_json, status_document
+from ..runstate.query import collect_status
+from ..runstate.schema import series_to_json
 from ..series import is_valid_series_id
 from .exit_codes import EXIT_CONFIG_NOT_FOUND, EXIT_INVALID_INPUT, EXIT_OK, EXIT_RUNTIME_ERROR
 
@@ -59,10 +59,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         if series_id is not None:
             series, member_issues = series_to_json(artifacts_dir, series_id)
             issue_ids = [str(issue) for issue in member_issues]
-        documents = [
-            issue_to_json(collect_issue_facts(artifacts_dir, issue_id)) for issue_id in issue_ids
-        ]
-        document = status_document(documents, series=series)
+        document = collect_status(artifacts_dir, issue_ids, series=series)
         if args.json:
             print(json.dumps(document, ensure_ascii=False, indent=2))
         else:

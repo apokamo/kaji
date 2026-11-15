@@ -6,6 +6,7 @@ The directory containing .kaji/ is the repo root.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import tomllib
@@ -17,6 +18,8 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, mo
 
 from .design_dir import validate_design_dir
 from .errors import ConfigLoadError, ConfigNotFoundError, ProviderTypeRemovedError
+
+_console = logging.getLogger("kaji.config")
 
 
 class _DesignDirInput(BaseModel):
@@ -155,6 +158,36 @@ class _IncidentSection(BaseModel):
 
 
 @dataclass(frozen=True)
+class WatchConfig:
+    """``[watch]`` セクション（Issue #543 D1）。table があること自体が opt-in の宣言。
+
+    Attributes:
+        notify_command: 通知を送る argv。``None`` なら通知しない。
+    """
+
+    notify_command: tuple[str, ...] | None = None
+
+
+class _WatchSection(BaseModel):
+    """``[watch]`` の入力境界モデル。検証後は ``WatchConfig`` へ詰め替える。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    notify_command: list[str] | None = None
+
+    @field_validator("notify_command")
+    @classmethod
+    def _validate_notify_command(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("must have at least one element")
+        if any(not item.strip() for item in value):
+            raise ValueError("elements must not be empty or whitespace-only")
+        return value
+
+
+@dataclass(frozen=True)
 class KajiConfig:
     """Top-level kaji configuration.
 
@@ -173,6 +206,7 @@ class KajiConfig:
     provider: ProviderConfig | None = None
     provider_overlay_present: bool = False
     incident: IncidentConfig = field(default_factory=IncidentConfig)
+    watch: WatchConfig | None = None
 
     @property
     def artifacts_dir(self) -> Path:
@@ -250,6 +284,8 @@ class KajiConfig:
 
         incident = cls._parse_incident(path, data)
 
+        watch = cls._parse_watch(path, data, overlay_data, local_overlay_path)
+
         return cls(
             repo_root=repo_root,
             paths=paths,
@@ -257,6 +293,7 @@ class KajiConfig:
             provider=provider,
             provider_overlay_present=overlay_present,
             incident=incident,
+            watch=watch,
         )
 
     @staticmethod
@@ -327,6 +364,47 @@ class KajiConfig:
             )
             raise ConfigLoadError(path, details) from exc
         return IncidentConfig(**model.model_dump())
+
+    @staticmethod
+    def _parse_watch(
+        path: Path,
+        data: dict[str, object],
+        overlay_data: dict[str, object] | None,
+        local_overlay_path: Path,
+    ) -> WatchConfig | None:
+        """Parse the optional ``[watch]`` section (tracked config only, Issue #543 D1).
+
+        ``config.local.toml`` の ``[watch]`` は有効にも無効にもしない（警告して無視する）。
+
+        Returns:
+            宣言されていれば ``WatchConfig``、未宣言なら ``None``。
+
+        Raises:
+            ConfigLoadError: ``watch`` が table でない、または値の検証に失敗した場合。
+        """
+        if overlay_data is not None and "watch" in overlay_data:
+            _console.warning(
+                "%s: [watch] in config.local.toml is ignored (declare it in the tracked "
+                "config.toml)",
+                local_overlay_path,
+            )
+        section = data.get("watch")
+        if section is None:
+            return None
+        if not isinstance(section, dict):
+            raise ConfigLoadError(path, "[watch] must be a table")
+        try:
+            model = _WatchSection.model_validate(section)
+        except ValidationError as e:
+            details = "; ".join(
+                f"watch.{'.'.join(str(part) for part in err['loc'])}: {err['msg']}"
+                if err["loc"]
+                else f"watch: {err['msg']}"
+                for err in e.errors()
+            )
+            raise ConfigLoadError(path, details) from e
+        command = model.notify_command
+        return WatchConfig(notify_command=tuple(command) if command is not None else None)
 
     @staticmethod
     def _read_overlay(local_overlay_path: Path) -> tuple[dict[str, object] | None, bool]:
